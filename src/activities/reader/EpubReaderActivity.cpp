@@ -1,5 +1,6 @@
 #include "EpubReaderActivity.h"
 
+#include <DictIndex.h>
 #include <Epub/Page.h>
 #include <Epub/VerticalSection.h>
 #include <Epub/blocks/TextBlock.h>
@@ -26,6 +27,7 @@
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
+#include "EpubReaderWordLookupActivity.h"
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
@@ -278,9 +280,10 @@ void EpubReaderActivity::loop() {
         bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
       }
       const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+      const bool hasWordLookup = SETTINGS.verticalTextMode && verticalSection && DictIndex::isAvailable();
       startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
                                  renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
-                                 SETTINGS.orientation, !currentPageFootnotes.empty()),
+                                 SETTINGS.orientation, !currentPageFootnotes.empty(), hasWordLookup),
                              [this](const ActivityResult& result) {
                                // Always apply orientation change even if the menu was cancelled
                                const auto& menu = std::get<MenuResult>(result.data);
@@ -626,6 +629,17 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startActivityForResult(
           std::make_unique<EpubReaderBookmarksActivity>(renderer, mappedInput, epub, epub->getPath()),
           progressChangeResultHandler);
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {
+      if (verticalSection) {
+        const VerticalPage* page = verticalSection->getPage();
+        if (page) {
+          startActivityForResult(
+              std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page),
+              [this](const ActivityResult&) { requestUpdate(); });
+        }
+      }
       break;
     }
   }

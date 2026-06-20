@@ -267,6 +267,10 @@ Want to build your own device? Be sure to check out the [de-link](https://github
 
 ---
 
+## Acknowledgements
+
+- The Japanese word lookup feature uses dictionary data from [JMdict/EDICT](https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project), a project of the [Electronic Dictionary Research and Development Group](https://www.edrdg.org/) (EDRDG). JMdict is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
 CrossPoint Reader is **not affiliated with Xteink or any device manufacturer**.
 
 Huge shoutout to [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader), which inspired this project.
