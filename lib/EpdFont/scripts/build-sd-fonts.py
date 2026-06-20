@@ -177,6 +177,19 @@ def build_family(
     except (FileNotFoundError, RuntimeError) as e:
         return name, False, str(e)
 
+    # Resolve per-family fallback fonts (if specified), otherwise use default
+    fallback_specs = family.get("fallback", {})
+    resolved_fallbacks = {}
+    try:
+        for style_name in resolved_styles:
+            if style_name in fallback_specs:
+                resolved_fallbacks[style_name] = resolve_font_path(
+                    fallback_specs[style_name], name, f"fallback-{style_name}")
+            else:
+                resolved_fallbacks[style_name] = DEFAULT_FALLBACK_FONT
+    except (FileNotFoundError, RuntimeError) as e:
+        return name, False, str(e)
+
     # Build the fontconvert_sdcard.py command
     cmd = [sys.executable, str(FONTCONVERT)]
 
@@ -187,14 +200,14 @@ def build_family(
         # Multi-style mode
         for style_name, font_path in resolved_styles.items():
             cmd.extend([f"--{style_name}", str(font_path)])
-            cmd.extend([f"--fallback-{style_name}", str(DEFAULT_FALLBACK_FONT)])
+            cmd.extend([f"--fallback-{style_name}", str(resolved_fallbacks[style_name])])
     else:
         # Single-style mode
         style_name = next(iter(resolved_styles))
         font_path = resolved_styles[style_name]
         cmd.append(str(font_path))
         cmd.extend(["--style", style_name])
-        cmd.extend([f"--fallback-{style_name}", str(DEFAULT_FALLBACK_FONT)])
+        cmd.extend([f"--fallback-{style_name}", str(resolved_fallbacks[style_name])])
 
     cmd.extend(["--intervals", intervals])
     cmd.extend(["--sizes", sizes])

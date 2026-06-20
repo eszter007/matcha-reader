@@ -35,7 +35,7 @@ constexpr const char* BOLD_TAGS[] = {"b", "strong"};
 constexpr const char* ITALIC_TAGS[] = {"i", "em"};
 constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
 constexpr const char* IMAGE_TAGS[] = {"img"};
-constexpr const char* SKIP_TAGS[] = {"head"};
+constexpr const char* SKIP_TAGS[] = {"head", "style", "script", "rp"};
 
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
 
@@ -892,6 +892,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     applyDirectionToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
+  } else if (strcmp(name, "ruby") == 0) {
+    self->inRubyBlock = true;
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+    }
+    self->depth += 1;
+    return;
+  } else if (strcmp(name, "rt") == 0) {
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+    }
+    self->inRtTag = true;
+    self->pendingRubyText.clear();
+    self->depth += 1;
+    return;
   } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
@@ -960,6 +975,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
+    return;
+  }
+
+  if (self->inRtTag) {
+    self->pendingRubyText.append(s, static_cast<size_t>(len));
     return;
   }
 
@@ -1176,6 +1196,19 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   }
 
   self->depth -= 1;
+
+  if (strcmp(name, "rt") == 0 && self->inRtTag) {
+    self->inRtTag = false;
+    if (self->currentTextBlock && !self->pendingRubyText.empty() && !self->currentTextBlock->isEmpty()) {
+      self->currentTextBlock->setLastWordRuby(self->pendingRubyText);
+    }
+    self->pendingRubyText.clear();
+    return;
+  }
+  if (strcmp(name, "ruby") == 0) {
+    self->inRubyBlock = false;
+    return;
+  }
 
   // Closing a footnote link — create entry from collected text and href
   if (self->insideFootnoteLink && self->depth == self->footnoteLinkDepth) {

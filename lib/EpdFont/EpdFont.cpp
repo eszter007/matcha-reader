@@ -154,6 +154,20 @@ uint32_t EpdFont::applyLigatures(uint32_t cp, const char*& text) const {
   return cp;
 }
 
+bool EpdFont::hasGlyph(const uint32_t cp) const {
+  const int count = data->intervalCount;
+  if (count == 0) return false;
+  const EpdUnicodeInterval* intervals = data->intervals;
+  const auto* end = intervals + count;
+  const auto it = std::upper_bound(
+      intervals, end, cp, [](uint32_t value, const EpdUnicodeInterval& interval) { return value < interval.first; });
+  if (it != intervals) {
+    const auto& interval = *(it - 1);
+    if (cp <= interval.last) return true;
+  }
+  return false;
+}
+
 const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
   const int count = data->intervalCount;
   if (count == 0 && !data->glyphMissHandler) return nullptr;

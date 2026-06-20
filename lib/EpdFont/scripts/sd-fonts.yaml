@@ -224,9 +224,12 @@ families:
 
   - name: UDDigiKyokasho
     description: "Japanese textbook font (CJK, Latin)"
-    intervals: cjk,latin-ext
+    intervals: cjk-ext,latin-ext,punctuation,symbols
     sizes: [12, 14, 16, 18]
     force_autohint: true
+    fallback:
+      regular: {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"}
+      bold:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"}
     styles:
       regular:    {url: "https://github.com/Bluemoondragon07/UD-Digi-Kyokasho-Font/raw/main/UDDigiKyokashoN-R-01.ttf"}
       bold:       {url: "https://github.com/Bluemoondragon07/UD-Digi-Kyokasho-Font/raw/main/UDDigiKyokashoN-B-01.ttf"}

@@ -1,6 +1,9 @@
 #pragma once
 
+#include <GfxRenderer.h>
 #include <Epub/VerticalParsedText.h>
+
+struct Rect;
 
 #include <string>
 #include <vector>

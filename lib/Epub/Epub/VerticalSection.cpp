@@ -26,6 +26,7 @@ struct TextExtractor {
   std::vector<RubyRun> currentRuns;
   std::string currentText;
   int blockDepth = 0;
+  int skipDepth = -1;
 
   // Ruby parsing state
   bool inRuby = false;
@@ -33,6 +34,10 @@ struct TextExtractor {
   bool inRp = false;
   std::string rubyBase;
   std::string rubyAnnotation;
+
+  static bool isSkipTag(const char* name) {
+    return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0;
+  }
 
   void flushCurrentText() {
     if (!currentText.empty()) {
@@ -60,6 +65,14 @@ struct TextExtractor {
 
   static void XMLCALL startElement(void* userData, const char* name, const char** /*atts*/) {
     auto* self = static_cast<TextExtractor*>(userData);
+    if (self->skipDepth >= 0) {
+      self->skipDepth++;
+      return;
+    }
+    if (isSkipTag(name)) {
+      self->skipDepth = 1;
+      return;
+    }
     if (isBlockTag(name)) {
       if (self->blockDepth == 0) {
         self->flushParagraph();
@@ -86,6 +99,11 @@ struct TextExtractor {
 
   static void XMLCALL endElement(void* userData, const char* name) {
     auto* self = static_cast<TextExtractor*>(userData);
+    if (self->skipDepth > 0) {
+      self->skipDepth--;
+      if (self->skipDepth == 0) self->skipDepth = -1;
+      return;
+    }
     if (strcasecmp(name, "rp") == 0) {
       self->inRp = false;
       return;
@@ -120,6 +138,7 @@ struct TextExtractor {
 
   static void XMLCALL characterData(void* userData, const char* s, int len) {
     auto* self = static_cast<TextExtractor*>(userData);
+    if (self->skipDepth >= 0) return;
     if (self->inRp) return;
     if (self->inRt) {
       self->rubyAnnotation.append(s, static_cast<size_t>(len));
@@ -259,6 +278,16 @@ bool VerticalSection::extractParagraphsAndLayout(const int fontId, const uint16_
   }
 
   VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
+  bool hasRuby = false;
+  for (const auto& para : extractor.paragraphs) {
+    for (const auto& run : para) {
+      if (!run.rubyText.empty()) { hasRuby = true; break; }
+    }
+    if (hasRuby) break;
+  }
+  if (hasRuby) {
+    layout.setColumnGapPx(renderer.getLineHeight(fontId) * 2 / 3);
+  }
   for (const auto& para : extractor.paragraphs) {
     layout.addAnnotatedParagraph(para);
   }

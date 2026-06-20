@@ -33,14 +33,22 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
   // Standard compressed font prewarm path: loop over all requested styles
   if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return;
 
+  const auto& family = fontMap_.at(fontId);
   for (uint8_t i = 0; i < 4; i++) {
     if (!(styleMask & (1 << i))) continue;
     auto style = static_cast<EpdFontFamily::Style>(i);
-    const EpdFontData* data = fontMap_.at(fontId).getData(style);
-    if (!data || !data->groups) continue;
-    int missed = fontDecompressor_->prewarmCache(data, utf8Text);
-    if (missed > 0) {
-      LOG_DBG("FCM", "prewarmCache: %d glyph(s) not cached for style %d", missed, i);
+    const EpdFontData* data = family.getData(style);
+    if (data && data->groups) {
+      int missed = fontDecompressor_->prewarmCache(data, utf8Text);
+      if (missed > 0) {
+        LOG_DBG("FCM", "prewarmCache: %d glyph(s) not cached for style %d", missed, i);
+      }
+    }
+    if (family.getFallback()) {
+      const EpdFontData* fbData = family.getFallback()->getData(style);
+      if (fbData && fbData != data && fbData->groups) {
+        fontDecompressor_->prewarmCache(fbData, utf8Text);
+      }
     }
   }
 }

@@ -51,6 +51,20 @@ INTERVAL_PRESETS = {
     "punctuation": [(0x2000, 0x206F)],
     "cjk":         [(0x3000, 0x303F), (0x3040, 0x309F), (0x30A0, 0x30FF),
                     (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0xFF00, 0xFFEF)],
+    "cjk-ext":     [(0x2E80, 0x2EFF),   # CJK Radicals Supplement
+                    (0x2F00, 0x2FDF),   # Kangxi Radicals
+                    (0x3000, 0x303F),   # CJK Symbols and Punctuation
+                    (0x3040, 0x309F),   # Hiragana
+                    (0x30A0, 0x30FF),   # Katakana
+                    (0x3100, 0x312F),   # Bopomofo
+                    (0x3190, 0x319F),   # Kanbun
+                    (0x31F0, 0x31FF),   # Katakana Phonetic Extensions
+                    (0x3200, 0x32FF),   # Enclosed CJK Letters and Months
+                    (0x3300, 0x33FF),   # CJK Compatibility
+                    (0x4E00, 0x9FFF),   # CJK Unified Ideographs
+                    (0xF900, 0xFAFF),   # CJK Compatibility Ideographs
+                    (0xFE30, 0xFE4F),   # CJK Compatibility Forms
+                    (0xFF00, 0xFFEF)],  # Halfwidth and Fullwidth Forms
     "hangul":      [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)],
     "cherokee":    [(0x13A0, 0x13FF), (0xAB70, 0xABBF)],
     "tifinagh":    [(0x2D30, 0x2D7F)],

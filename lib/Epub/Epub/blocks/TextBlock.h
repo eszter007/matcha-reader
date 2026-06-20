@@ -15,6 +15,7 @@ class TextBlock final : public Block {
   std::vector<std::string> words;
   std::vector<int16_t> wordXpos;
   std::vector<EpdFontFamily::Style> wordStyles;
+  std::vector<std::string> wordRuby;
   // Per-word focus boundary: N > 0 means the first N bytes of words[i] are rendered bold,
   // the remainder in the base style. 0 means no split (whole word uses wordStyles[i]).
   // N encodes the bold PREFIX length only — bounded to 9 codepoints (≤36 UTF-8 bytes) by
@@ -31,10 +32,12 @@ class TextBlock final : public Block {
  public:
   explicit TextBlock(std::vector<std::string> words, std::vector<int16_t> word_xpos,
                      std::vector<EpdFontFamily::Style> word_styles, std::vector<uint8_t> focus_boundary,
-                     std::vector<uint16_t> focus_suffix_x, const BlockStyle& blockStyle = BlockStyle())
+                     std::vector<uint16_t> focus_suffix_x, const BlockStyle& blockStyle = BlockStyle(),
+                     std::vector<std::string> word_ruby = {})
       : words(std::move(words)),
         wordXpos(std::move(word_xpos)),
         wordStyles(std::move(word_styles)),
+        wordRuby(std::move(word_ruby)),
         wordFocusBoundary(std::move(focus_boundary)),
         wordFocusSuffixX(std::move(focus_suffix_x)),
         blockStyle(blockStyle) {}

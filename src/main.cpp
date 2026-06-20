@@ -99,6 +99,14 @@ EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, 
 EpdFont smallFont(&notosans_8_regular);
 EpdFontFamily smallFontFamily(&smallFont);
 
+EpdFont cjk10RegularFont(&notosanscjk_10_regular);
+EpdFont cjk10BoldFont(&notosanscjk_10_bold);
+EpdFontFamily cjk10FontFamily(&cjk10RegularFont, &cjk10BoldFont);
+
+EpdFont cjk12RegularFont(&notosanscjk_12_regular);
+EpdFont cjk12BoldFont(&notosanscjk_12_bold);
+EpdFontFamily cjk12FontFamily(&cjk12RegularFont, &cjk12BoldFont);
+
 EpdFont ui10RegularFont(&ubuntu_10_regular);
 EpdFont ui10BoldFont(&ubuntu_10_bold);
 EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
@@ -281,17 +289,28 @@ void setupDisplayAndFonts(bool seamless = false) {
   }
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
+  notoserif14FontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(NOTOSERIF_14_FONT_ID, notoserif14FontFamily);
 #ifndef OMIT_FONTS
+  notoserif12FontFamily.setFallback(&cjk12FontFamily);
+  notoserif16FontFamily.setFallback(&cjk12FontFamily);
+  notoserif18FontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(NOTOSERIF_12_FONT_ID, notoserif12FontFamily);
   renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif16FontFamily);
   renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif18FontFamily);
 
+  notosans12FontFamily.setFallback(&cjk12FontFamily);
+  notosans14FontFamily.setFallback(&cjk12FontFamily);
+  notosans16FontFamily.setFallback(&cjk12FontFamily);
+  notosans18FontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
 #endif  // OMIT_FONTS
+  ui10FontFamily.setFallback(&cjk10FontFamily);
+  ui12FontFamily.setFallback(&cjk12FontFamily);
+  smallFontFamily.setFallback(&cjk10FontFamily);
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);

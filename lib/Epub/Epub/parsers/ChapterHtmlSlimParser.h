@@ -88,6 +88,11 @@ class ChapterHtmlSlimParser {
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
 
+  // Ruby tracking for horizontal mode
+  bool inRubyBlock = false;
+  bool inRtTag = false;
+  std::string pendingRubyText;
+
   // Footnote link tracking
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;

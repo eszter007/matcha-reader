@@ -500,7 +500,9 @@ bool SdCardFont::load(const char* path) {
     // Sanity-check counts to reject malformed files before allocating.
     // Kern class counts are uint8 (bounded by type). Entry counts are uint16
     // but in practice a sane font has far fewer than 4096 per-side kern entries.
-    static constexpr uint32_t MAX_INTERVALS = 4096;
+    // CJK fonts can have many sparse intervals (one per contiguous glyph run),
+    // so MAX_INTERVALS is set to 16384 to accommodate full CJK coverage.
+    static constexpr uint32_t MAX_INTERVALS = 16384;
     static constexpr uint32_t MAX_GLYPHS = 65536;
     static constexpr uint32_t MAX_KERN_ENTRIES = 4096;
     if (s.header.intervalCount > MAX_INTERVALS || s.header.glyphCount > MAX_GLYPHS ||
@@ -1308,7 +1310,10 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
 
   // Look up global glyph index via full intervals
   int32_t globalIdx = self->findGlobalGlyphIndex(s, codepoint);
-  if (globalIdx < 0) return nullptr;
+  if (globalIdx < 0) {
+    LOG_DBG("SDCF", "Overflow: missing codepoint U+%04X in active intervals (style %u)", codepoint, styleIdx);
+    return nullptr;
+  }
 
   // Pick overflow slot (ring buffer). Read into temporaries first so the
   // existing slot stays valid if SD I/O fails. Bookkeeping (count/next)

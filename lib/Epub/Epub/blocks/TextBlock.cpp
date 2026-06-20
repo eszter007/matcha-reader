@@ -59,6 +59,15 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       renderer.drawText(fontId, wordX, wordY, words[i].c_str(), true, currentStyle, baseDir);
     }
 
+    if (!scanning && i < wordRuby.size() && !wordRuby[i].empty()) {
+      const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
+      const int wordWidth = renderer.getTextWidth(fontId, words[i].c_str(), currentStyle);
+      const int rubyAdvance = renderer.getTextAdvanceX(fontId, wordRuby[i].c_str(), rubyStyle);
+      const int rubyX = wordX + (wordWidth - rubyAdvance) / 2;
+      const int rubyY = y - ascender * 3 / 4;
+      renderer.drawText(fontId, rubyX, rubyY, wordRuby[i].c_str(), true, rubyStyle);
+    }
+
     if (!scanning && (currentStyle & EpdFontFamily::UNDERLINE) != 0) {
       const std::string& w = words[i];
       int underlineWidth = renderer.getTextWidth(fontId, w.c_str(), currentStyle, baseDir);
@@ -97,6 +106,13 @@ bool TextBlock::serialize(HalFile& file) const {
   if (hasFocus) {
     for (auto b : wordFocusBoundary) serialization::writePod(file, b);
     for (auto sx : wordFocusSuffixX) serialization::writePod(file, sx);
+  }
+
+  // Ruby annotations
+  const bool hasRuby = !wordRuby.empty();
+  serialization::writePod(file, static_cast<uint8_t>(hasRuby ? 1 : 0));
+  if (hasRuby) {
+    for (const auto& r : wordRuby) serialization::writeString(file, r);
   }
 
   // Style (alignment + margins/padding/indent)
@@ -154,6 +170,15 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
     for (auto& sx : wordFocusSuffixX) serialization::readPod(file, sx);
   }
 
+  // Ruby annotations
+  std::vector<std::string> wordRuby;
+  uint8_t hasRuby;
+  serialization::readPod(file, hasRuby);
+  if (hasRuby) {
+    wordRuby.resize(wc);
+    for (auto& r : wordRuby) serialization::readString(file, r);
+  }
+
   // Style (alignment + margins/padding/indent)
   serialization::readPod(file, blockStyle.alignment);
   serialization::readPod(file, blockStyle.textAlignDefined);
@@ -172,5 +197,5 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
 
   return std::unique_ptr<TextBlock>(new TextBlock(std::move(words), std::move(wordXpos), std::move(wordStyles),
                                                   std::move(wordFocusBoundary), std::move(wordFocusSuffixX),
-                                                  blockStyle));
+                                                  blockStyle, std::move(wordRuby)));
 }

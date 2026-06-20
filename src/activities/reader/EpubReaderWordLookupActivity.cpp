@@ -126,8 +126,8 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
     UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID,
                               screen.y + screen.height / 2, tr(STR_NO_MATCH), true);
   } else if (hasResult) {
-    const int maxWidth = screen.width - metrics.horizontalPadding * 2;
-    const int textX = screen.x + metrics.horizontalPadding;
+    const int maxWidth = screen.width - metrics.contentSidePadding * 2;
+    const int textX = screen.x + metrics.contentSidePadding;
 
     std::string posText = std::to_string(cursorIndex + 1) + "/" + std::to_string(selectableGlyphs.size());
     renderer.drawText(SMALL_FONT_ID, textX, contentTop, posText.c_str(), true);

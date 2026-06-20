@@ -52,19 +52,16 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
                                 bool black) const {
   drawGlyphs(renderer, page_, fontId, offsetX, offsetY, black);
 
-  const int rubyLineH = renderer.getLineHeight(rubyFontId);
-  const int rubyAscender = renderer.getFontAscenderSize(rubyFontId);
+  const int rubyLineH = (renderer.getLineHeight(rubyFontId) + 1) / 2;
+  const int rubyAscender = renderer.getFontAscenderSize(rubyFontId) / 2;
   const int baseLineH = renderer.getLineHeight(fontId);
+  const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
 
   for (const VerticalGlyph& g : page_.glyphs) {
     if (g.rubyText.empty() || g.rotated) continue;
 
-    // In vertical text, ruby appears to the right of the base character.
-    // Position: half a base cell to the right of the column's left edge,
-    // vertically centered on the base character's cell.
-    const int rubyX = g.x + offsetX + baseLineH;
+    const int rubyX = g.x + offsetX + baseLineH + 1;
 
-    // Count ruby codepoints to center the annotation vertically on the base cell.
     size_t rubyCharCount = 0;
     {
       size_t ri = 0;
@@ -79,9 +76,8 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     }
 
     const int rubyBlockH = static_cast<int>(rubyCharCount) * rubyLineH;
-    int rubyY = g.y + offsetY - rubyAscender + (baseLineH - rubyBlockH) / 2 + rubyAscender;
+    int rubyY = g.y + offsetY + (baseLineH - rubyBlockH) / 2 - rubyLineH;
 
-    // Draw each ruby character individually, stacked vertically.
     size_t ri = 0;
     while (ri < g.rubyText.size()) {
       const auto c0 = static_cast<unsigned char>(g.rubyText[ri]);
@@ -96,7 +92,7 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
       std::memcpy(buf, g.rubyText.data() + ri, charLen);
       buf[charLen] = '\0';
 
-      renderer.drawText(rubyFontId, rubyX, rubyY, buf, black, static_cast<EpdFontFamily::Style>(kNoStyle));
+      renderer.drawText(rubyFontId, rubyX, rubyY, buf, black, rubyStyle);
       rubyY += rubyLineH;
       ri += charLen;
     }
