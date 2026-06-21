@@ -224,7 +224,7 @@ families:
 
   - name: UDDigiKyokasho
     description: "Japanese textbook font (CJK, Latin)"
-    intervals: cjk-ext,latin-ext,punctuation,symbols
+    intervals: all
     sizes: [12, 14, 16, 18]
     force_autohint: true
     fallback:

@@ -131,6 +131,13 @@ bool isAlwaysUpright(uint32_t codepoint) {
   if (codepoint >= 0xF900 && codepoint <= 0xFAFF) return true; // CJK Compat Ideographs
   if (codepoint >= 0x3000 && codepoint <= 0x303F) return true; // CJK punctuation
   if (codepoint >= 0xFF00 && codepoint <= 0xFFEF) return true; // Fullwidth forms
+  if (codepoint >= 0x2460 && codepoint <= 0x24FF) return true; // Enclosed Alphanumerics ①②③
+  if (codepoint >= 0x2500 && codepoint <= 0x257F) return true; // Box Drawing
+  if (codepoint >= 0x25A0 && codepoint <= 0x25FF) return true; // Geometric Shapes ■●▲
+  if (codepoint >= 0x2600 && codepoint <= 0x26FF) return true; // Miscellaneous Symbols ☀☁☂
+  if (codepoint >= 0x2700 && codepoint <= 0x27BF) return true; // Dingbats ✓✗✠
+  if (codepoint >= 0x3200 && codepoint <= 0x32FF) return true; // Enclosed CJK ㈠㊀
+  if (codepoint >= 0x3300 && codepoint <= 0x33FF) return true; // CJK Compatibility ㌀㍻
   return false;
 }
 

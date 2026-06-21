@@ -110,14 +110,21 @@ def parse_hex_range(s: str) -> tuple[int, int] | None:
 
 
 def resolve_intervals(preset_str):
-    """Resolve comma-separated preset names into a merged, sorted, deduplicated interval list."""
+    """Resolve comma-separated preset names into a merged, sorted, deduplicated interval list.
+
+    The special preset 'all' returns None, signaling that every glyph present in the
+    source font should be exported (no interval filtering).
+    """
+    names = [n.strip().lower() for n in preset_str.split(",")]
+    if "all" in names:
+        return None  # sentinel: export every glyph in the font
+
     all_intervals = []
-    for name in preset_str.split(","):
-        name = name.strip().lower()
+    for name in names:
         unnamed_interval = parse_hex_range(name)
         if name not in INTERVAL_PRESETS and unnamed_interval is None:
             print(f"Error: unknown interval preset '{name}'", file=sys.stderr)
-            print(f"Available presets: {', '.join(sorted(INTERVAL_PRESETS.keys()))}", file=sys.stderr)
+            print(f"Available presets: {', '.join(sorted(INTERVAL_PRESETS.keys()))}, all", file=sys.stderr)
             print("You can also specify unnamed hex ranges like (0x2100-0x214F)", file=sys.stderr)
             sys.exit(1)
 
@@ -567,25 +574,52 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
                 return fallback_face
         return None
 
-    # Validate intervals: remove codepoints not present in the font.
-    # Only check glyph existence via get_char_index — do NOT call
-    # load_glyph here, as that triggers FT_LOAD_RENDER at the target
-    # DPI and doubles total rasterization time for no benefit.
-    print(f"  [{style_label}] Validating intervals against font...", file=sys.stderr)
-    validated_intervals = []
-    for i_start, i_end in intervals:
-        start = i_start
-        for code_point in range(i_start, i_end + 1):
-            has_primary = face.get_char_index(code_point) != 0
-            has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
-            if not has_primary and not has_fallback:
-                if start < code_point:
-                    validated_intervals.append((start, code_point - 1))
-                start = code_point + 1
-        if start <= i_end:
-            validated_intervals.append((start, i_end))
-
-    intervals = validated_intervals
+    # Build or validate intervals.
+    if intervals is None:
+        # "all" mode: walk the charmaps of both primary and fallback fonts to
+        # discover every codepoint that has a glyph, then build intervals from that.
+        print(f"  [{style_label}] Discovering all glyphs in font charmap...", file=sys.stderr)
+        codepoints = set()
+        charcode, gindex = face.get_first_char()
+        while gindex:
+            codepoints.add(charcode)
+            charcode, gindex = face.get_next_char(charcode, gindex)
+        if fallback_face:
+            charcode, gindex = fallback_face.get_first_char()
+            while gindex:
+                codepoints.add(charcode)
+                charcode, gindex = fallback_face.get_next_char(charcode, gindex)
+        # Build sorted interval list from the discovered codepoints.
+        sorted_cps = sorted(codepoints)
+        intervals = []
+        if sorted_cps:
+            start = sorted_cps[0]
+            prev = start
+            for cp in sorted_cps[1:]:
+                if cp == prev + 1:
+                    prev = cp
+                else:
+                    intervals.append((start, prev))
+                    start = cp
+                    prev = cp
+            intervals.append((start, prev))
+        print(f"  [{style_label}] Found {len(sorted_cps)} glyphs in {len(intervals)} intervals", file=sys.stderr)
+    else:
+        # Validate intervals: remove codepoints not present in the font.
+        print(f"  [{style_label}] Validating intervals against font...", file=sys.stderr)
+        validated_intervals = []
+        for i_start, i_end in intervals:
+            start = i_start
+            for code_point in range(i_start, i_end + 1):
+                has_primary = face.get_char_index(code_point) != 0
+                has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
+                if not has_primary and not has_fallback:
+                    if start < code_point:
+                        validated_intervals.append((start, code_point - 1))
+                    start = code_point + 1
+            if start <= i_end:
+                validated_intervals.append((start, i_end))
+        intervals = validated_intervals
     total_glyphs = sum(end - start + 1 for start, end in intervals)
     print(f"  [{style_label}] Validated: {len(intervals)} intervals, {total_glyphs} glyphs", file=sys.stderr)
 

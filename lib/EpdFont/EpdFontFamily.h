@@ -32,7 +32,11 @@ class EpdFontFamily {
   void setFallback(const EpdFontFamily* fb) { fallbackFamily = fb; }
   const EpdFontFamily* getFallback() const { return fallbackFamily; }
 
+  static void setGlobalFallback(const EpdFontFamily* fb) { globalFallback_ = fb; }
+  static const EpdFontFamily* getGlobalFallback() { return globalFallback_; }
+
  private:
+  static inline const EpdFontFamily* globalFallback_ = nullptr;
   const EpdFont* regular;
   const EpdFont* bold;
   const EpdFont* italic;
