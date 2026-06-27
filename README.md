@@ -1,276 +1,241 @@
-# CrossPoint Reader
+# CrossPoint Reader — Japanese Language Learning Fork
 
-[![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
+A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for the Xteink X4, focused on **reading Japanese books** with built-in learning tools. Read native Japanese novels and texts with instant dictionary lookup, verb deinflection, grammar references, and AI-powered page translation — all on an e-ink device.
 
-CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
-
-**Now running on:** ESP32C3-based Xteink [X4](https://www.xteink.com/products/xteink-x4) and [X3](https://www.xteink.com/products/xteink-x3).
-
-![CrossPoint Reader running on Xteink device](./docs/images/cover.jpg)
-
-## What can CrossPoint do?
-
-- **Reader engine**: EPUB 2/3 rendering with embedded-style option, image handling, hyphenation, kerning, chapter navigation, footnotes, bookmarks, go-to-percent, auto page turn, orientation control, focus reading, KOReader progress sync and more. 
-
-- **Various formats**: native handling for `.epub`, `.xtc/.xtch`, `.txt`, and `.bmp`.
-
-- **Screenshots.**
-
-- **Custom fonts**: install your favorite fonts on the SD card.
-
-- **Tilt page turn (X3 only)**.
-
-- **Library workflow**: folder browser, hidden-file toggle, long-press delete, recent books, SD-cache management.
-
-- **Wireless workflows**:
-  
-  - File transfer web UI
-  - EPUB Optimizer
-  - Web settings UI/API (edit many device settings from browser)
-  - WebSocket fast uploads
-  - WebDAV handler
-  - AP mode (hotspot) and STA mode (join existing Wi-Fi), both with QR helpers
-  - Calibre wireless connect flow
-  - OPDS browser with saved servers (up to 8), search, pagination, and direct download
-  - OTA update checks and installs from GitHub releases
-
-- **Customization**: multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes, front/side button remapping, status bar controls, power-button behavior, refresh cadence, and more.
-
-- **Localization**: 24 UI languages and counting. RTL support.
-
-### Coming soon:
-
-- Dictionary lookup — inline word lookup without leaving the reader.
-
-- More themes.
-
-- Much more! stay tuned.
+This fork is fully compatible with upstream CrossPoint and can be flashed onto any supported Xteink X4 device.
 
 ---
 
-## USB-locked devices (Xteink Unlocker)
+## What's Different from Upstream CrossPoint
 
-Some Xteink units purchased from third-party stores (e.g. AliExpress) ship with USB flashing locked from the factory.
-If your device is locked, you will need to use the **Xteink Unlocker** tool available at
-https://crosspointreader.com/#unlock-tool before you can flash CrossPoint.
+This fork adds a complete Japanese reading toolkit on top of the base e-reader:
 
-**You do not need this tool if you bought your device directly from xteink.com.** Those units are not locked.
+### Vertical Japanese Text (Tategaki)
 
-**Not sure if your device is locked?** Power it on, connect the USB-C cable, and try flashing via the web flasher first (see
-[Install firmware](#install-firmware) below). If the browser's serial device picker does not show your device, try a different
-USB port or browser before assuming the device is locked. Only reach for the unlocker if the device still doesn't appear.
+Japanese books are automatically detected from EPUB metadata (`<dc:language>ja</dc:language>`) and rendered in vertical text layout — no manual setting needed. The vertical text engine handles:
 
-> ### ⚠️ WARNING: READ THIS BEFORE USING THE UNLOCKER ⚠️
-> 
-> **The only officially supported firmwares in the unlock tool are CrossPoint and CrossInk.**
-> 
-> Flashing any other firmware on a USB-locked device may **permanently brick the device** or leave it **permanently
-> stuck on that firmware with no recovery path**. Once USB flashing is re-locked, your only way back is via OTA, and if
-> the firmware you flashed doesn't support OTA, **there is no way out**.
-> 
-> **The Papyrix fork has removed OTA update support from its code.** If you flash Papyrix onto a
-> USB-locked unit, you will have **zero update or recovery path** and will be stuck on it forever. **Do not flash
-> Papyrix (or any other unsupported firmware) on a locked device.**
+- Right-to-left column flow with proper line breaking (kinsoku rules)
+- Rotated Latin/numeric runs within vertical columns
+- Small kana (っゃゅょ) positioning
+- Font-adaptive punctuation, bracket, and dash positioning (works with UDDigiKyokasho, Noto Serif, Noto Sans)
+- Bold, italic, and emphasis marks (sesame dots ﹅)
+- A per-book "Vertical Text: ON/OFF" toggle in the reader menu to override auto-detection
 
-## Install firmware
+### Dictionary & Word Lookup
 
-### Web installer (recommended)
+Open the reader menu and select **Word Lookup** to look up any word on the current page. Works in both vertical and horizontal reading modes. Only shown for Japanese books.
 
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), and choose an official CrossPoint release.
+- **JMdict vocabulary** — Full JMdict/Jitendex dictionary with readings, part-of-speech tags, definitions, and example sentences
+- **Verb deinflection** — Conjugated forms resolve to their dictionary base automatically:
+  - te-form: 読んで → 読む
+  - masu: 食べます → 食べる
+  - negative: ありません → ある
+  - past: 食べませんでした → 食べる
+  - volitional: 眠ろう → 眠る
+  - passive: 読まれた → 読む
+  - causative: 食べさせる → 食べる
+  - compound auxiliaries: 読んでいる, 食べてしまう, etc.
+- **Grammar dictionary** — Integrated grammar reference (e.g. "Dictionary of Japanese Grammar" in Yomitan format) surfaces grammar patterns alongside vocabulary
+- **Name dictionary (JMnedict)** — Japanese names recognized and grouped with honorifics (根岸さん, 和樹くん shown as one unit)
+- **Smart word boundaries** — Pre-scans the page to find dictionary-matchable positions. Filters out single-character particles and conjugation fragments from results. Handles compound words and bound suffixes (設計士).
+- **Digit + counter grouping** — Numbers with counters (2年, 15人) shown together with the counter's reading
+- **Multiple readings** — Kanji with multiple dictionary entries show all readings sorted by frequency
+- **Scrollable definitions** — Long entries scroll with Up/Down. Word navigation with Left/Right.
 
-### Web installer (specific version)
+### Page Translation
 
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Download a `firmware.bin` from [Releases](https://github.com/crosspoint-reader/crosspoint-reader/releases), local build, or continuous integration artifact.
-3. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), click "Custom .bin" and upload a `firmware.bin`.
+Select **Translate Page** from the reader menu to translate the current page from Japanese to English via Google's Gemini 2.5 Flash API. Available for all books (not just Japanese). Requires a Gemini API key on the SD card.
 
-### Revert to Official Firmware
+### Furigana (Ruby Text)
 
-To revert to the official firmware, you can also flash the latest official firmware using https://crosspointreader.com/#flash-tools.
+Reading aids rendered above (horizontal) or beside (vertical) kanji, with positioning adjustments so dense furigana doesn't overlap base characters.
 
-### Command line
+### Image Handling
 
-1. Install [`esptool`](https://github.com/espressif/esptool):
+- Dedicated full-page images with aspect-aware rotation
+- No blank pages between consecutive images
+- Status bar respected for rotated images
+
+---
+
+## Setup
+
+### Flash the Firmware
+
+Flash this fork's firmware to your Xteink X4 using the standard CrossPoint flashing process. See the [upstream documentation](https://github.com/crosspoint-reader/crosspoint-reader) for flashing instructions.
+
+### Install Dictionaries
+
+The word lookup feature requires dictionary files on the SD card. Three dictionaries are supported:
+
+#### 1. Vocabulary Dictionary (required)
+
+Download [Jitendex](https://github.com/stephenmk/Jitendex) in Yomitan format, then convert:
 
 ```bash
-pip install esptool
+python3 tools/dict_convert/convert_jmdict.py \
+  --input jitendex-yomitan.zip \
+  --output-dir /path/to/sd/dict/
 ```
 
-2. Download `firmware.bin` from the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases).
-3. Connect your device via USB-C.
-4. Find the device port. On Linux, run `dmesg` after connecting. On macOS:
+This produces `dict/jmdict.idx` and `dict/jmdict.dat` on the SD card.
+
+#### 2. Name Dictionary (optional, recommended)
+
+Download [JMnedict](https://github.com/JMdictProject) in Yomitan format:
 
 ```bash
-log stream --predicate 'subsystem == "com.apple.iokit"' --info
+python3 tools/dict_convert/convert_jmdict.py \
+  --input jmnedict-yomitan.zip \
+  --output-dir /path/to/sd/dict/
 ```
 
-5. Flash:
+Rename the output files to `jmnedict.idx` and `jmnedict.dat` in the `dict/` folder.
+
+#### 3. Grammar Dictionary (optional)
+
+Convert a grammar reference (e.g. "Dictionary of Japanese Grammar") in Yomitan format:
 
 ```bash
-esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 write_flash 0x10000 /path/to/firmware.bin
+python3 tools/dict_convert/convert_jmdict.py \
+  --input grammar-dict-yomitan.zip \
+  --output-dir /path/to/sd/dict/
 ```
 
-Adjust `/dev/ttyACM0` to match your system.
+Rename the output files to `grammar.idx` and `grammar.dat` in the `dict/` folder.
 
-### Manual
+#### SD Card Layout
 
-See [Development quick start](#development-quick-start) below.
+After setup, your SD card `dict/` folder should contain:
+
+```
+/dict/
+  jmdict.idx        # Vocabulary index (required)
+  jmdict.dat        # Vocabulary definitions (required)
+  jmnedict.idx      # Name dictionary index (optional)
+  jmnedict.dat      # Name dictionary definitions (optional)
+  grammar.idx       # Grammar reference index (optional)
+  grammar.dat       # Grammar reference definitions (optional)
+```
+
+### Install Japanese Fonts (optional)
+
+For the best vertical text experience, install Japanese `.cpfont` font files on the SD card. Place them in `/.fonts/` organized by family:
+
+```
+/.fonts/
+  UDDigiKyokasho/
+    regular.cpfont
+    bold.cpfont
+```
+
+UDDigiKyokasho is auto-selected as the default when available. Other supported fonts include Noto Serif JP and Noto Sans JP — the vertical text engine adapts positioning to each font's metrics.
+
+Without SD card fonts, the built-in Noto Serif/Sans fonts work fine for both horizontal and vertical Japanese text.
+
+### Set Up Translation (optional)
+
+To use the "Translate Page" feature:
+
+1. Get a free API key from [Google AI Studio](https://aistudio.google.com/apikey)
+2. Create a file `gemini.key` at the SD card root containing just the API key:
+   ```
+   AIzaSyYOUR_KEY_HERE
+   ```
+
+The device needs WiFi access for translation. The emulator uses libcurl instead (no WiFi needed on desktop).
 
 ---
 
-## Custom SD-card fonts
+## Usage
 
-Convert your own TTF/OTF files into `.cpfont` files that load from the SD card. No firmware reflash is needed.
+### Reading a Japanese Book
 
-1. Go to https://crosspointreader.com/fonts and open the "SD-card font builder" form.
-2. Upload up to four styles (regular, bold, italic, bold-italic), set the family name, point sizes, and Unicode range.
-3. Download the generated `.cpfont` files.
-4. Copy them to your SD card under `/fonts/YourFont/` (or `/.fonts/YourFont/` to hide the folder).
-5. Select the font on the device from the font settings.
+1. Copy a Japanese EPUB to the SD card
+2. Open it from My Library — vertical text mode activates automatically
+3. Press **Confirm/Enter** to open the reader menu
 
-Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` script unmodified, so output matches a local host build.
+### Word Lookup
+
+1. Reader menu → **Word Lookup**
+2. **Up/Down** — navigate between matched words on the page
+3. **Left/Right** — scroll within a long definition
+4. **Back** — return to reading
+
+The position counter (e.g. 10/35) appears in the header. Words are pre-scanned so you only land on positions with actual dictionary matches.
+
+### Translation
+
+1. Reader menu → **Translate Page**
+2. Wait for "Translating..." to complete
+3. **Up/Down** — scroll the translation
+4. **Back** — return to reading
+
+### Toggling Vertical Text
+
+For Japanese books, the reader menu shows **Vertical Text: ON/OFF**. Use this to switch between vertical and horizontal layout for the current book. The setting is per-book and resets when you reopen.
 
 ---
 
-## Documentation
+## Building from Source
 
-- [User Guide](./USER_GUIDE.md)
-- [Web server usage](./docs/webserver.md)
-- [Web server endpoints](./docs/webserver-endpoints.md)
-- [Project scope](./SCOPE.md)
-- [Contributing docs](./docs/contributing/README.md)
-
----
-
-## Development quick start
-
-### Prerequisites
-
-- [pioarduino](https://github.com/pioarduino/pioarduino) or VS Code + pioarduino plugin
-- Python 3.8+
-- `clang-format` 21
-- USB-C cable supporting data transfer
-
-### Setup
+This fork uses the same PlatformIO build system as upstream CrossPoint:
 
 ```bash
-git clone --recursive https://github.com/crosspoint-reader/crosspoint-reader
-cd crosspoint-reader
+# Clone
+git clone https://github.com/eszter007/crosspoint-reader-JP.git
+cd crosspoint-reader-JP
+git checkout claude/vertical-japanese-text-pyosmu
 
-# if cloned without --recursive:
-git submodule update --init --recursive
+# Build
+pio run
+
+# Flash
+pio run -t upload
 ```
 
-### Build / flash / monitor
+### Building for the Desktop Emulator
 
-```bash
-pio run --target upload
-```
-
-### Contributor pre-PR checks
-
-```bash
-./bin/clang-format-fix
-pio check -e default
-pio run -e default
-```
-
-### Debugging
-
-After flashing the new features, it’s recommended to capture detailed logs from the serial port.
-
-First, make sure all required Python packages are installed:
-
-```python
-python3 -m pip install pyserial colorama matplotlib
-```
-
-After that run the script:
-
-```sh
-# For Linux
-# This was tested on Debian and should work on most Linux systems.
-python3 scripts/debugging_monitor.py
-
-# For macOS
-python3 scripts/debugging_monitor.py /dev/cu.usbmodem2101
-```
-
-Minor adjustments may be required for Windows.
+This fork works with the [Crosspoint Emulator](https://github.com/eszter007/Crosspoint-Emulator) for desktop testing. See the emulator's README for setup instructions.
 
 ---
 
-## Internals
+## Dictionary Converter
 
-CrossPoint Reader is pretty aggressive about caching data down to the SD card to minimise RAM usage. The ESP32-C3 only has ~380KB of usable RAM, so we have to be careful. A lot of the decisions made in the design of the firmware were based on this constraint.
+The `tools/dict_convert/convert_jmdict.py` script converts dictionary sources to the binary format the device reads. Supported input formats:
 
-### Data caching
+| Format | Extension | Source |
+|--------|-----------|--------|
+| Yomitan/Yomichan | `.zip` | Jitendex, JMnedict, grammar dicts |
+| JMdict JSON | `.json` / `.tgz` | jmdict-simplified |
+| MDict | `.mdx` | Any MDict dictionary (requires `pip install readmdict`) |
 
-The first time chapters of a book are loaded, they are cached to the SD card. Subsequent loads are served from the
-cache. This cache directory exists at `.crosspoint` on the SD card. The structure is as follows:
+The converter handles:
+- Structured content flattening (Yomitan's nested HTML → plain text with formatting)
+- Redirect resolution (variant spellings → canonical entry with full definition)
+- Frequency-based priority sorting
+- Reading/headword cross-indexing
 
-```text
-.crosspoint/
-├── epub_<hash>/         # one directory per book, named by content hash
-│   ├── progress.bin     # reading position (chapter, page, etc.)
-│   ├── cover.bmp        # generated cover image
-│   ├── book.bin         # metadata: title, author, spine, TOC
-│   ├── css_rules.cache  # parsed CSS rule cache
-│   ├── img_*            # rendered image cache files
-│   └── sections/        # per-chapter layout cache
-│       ├── 0.bin
-│       ├── 1.bin
-│       └── ...
-├── settings.json        # device settings
-├── state.json           # resume/runtime state
-└── recent.json          # recent books list
-```
-
-Removing `/.crosspoint` clears all cached metadata and forces a full regeneration on next open. Book deletes, overwrites, and moves done through the firmware or web UI clear or re-key matching caches; manual SD-card edits may leave stale cache directories behind.
-
-For more details on the internal file structures, see the [file formats document](./docs/file-formats.md).
+Output: binary `.idx` (sorted 40-byte records) + `.dat` (UTF-8 definitions) files optimized for the device's constrained memory (binary search, no full-file loading).
 
 ---
 
-## Contributing
+## Compatibility with Upstream
 
-Contributions are welcome. If you're new to the codebase, start with the [contributing docs](./docs/contributing/README.md). For things to work on, check the [ideas discussion board](https://github.com/crosspoint-reader/crosspoint-reader/discussions/categories/ideas) — leave a comment before starting so we don't duplicate effort.
+This fork tracks upstream CrossPoint and can merge new releases. The Japanese features are additive — they don't modify the base reading experience for non-Japanese books. English and other-language EPUBs work identically to upstream.
 
-Everyone here is a volunteer, so please be respectful and patient. For governance and community expectations, see [GOVERNANCE.md](./GOVERNANCE.md).
-
----
-
-## Community forks
-
-One of the best things about open source is that anyone can take the code in a different direction. If you need something outside CrossPoint's [scope](./SCOPE.md), check out the community forks:
-
-- [CrossInk](https://github.com/uxjulia/CrossInk) — Typography and reading tracking: Bionic Reading (bolds word stems to create fixation points), guide dots between words, improved paragraph indents, and replaces the default fonts with ChareInk/Lexend/Bitter.
-
-- [papyrix-reader](https://github.com/bigbag/papyrix-reader) — Adds FB2 and MD format support. Actively maintained with Arabic script support. Custom themes via SD card.
-
-- [crosspet](https://github.com/trilwu/crosspet) — A Vietnamese fork that adds a Tamagotchi-style virtual chicken that grows based on your reading milestones (pages read, streaks, care). Also: Flashcards, Weather, Pomodoro timer, and mini-games.
-
-- [crosspoint-reader-cjk](https://github.com/aBER0724/crosspoint-reader-cjk) — Purpose-built for Chinese, Japanese, and Korean reading.
-
-- [inx](https://github.com/obijuankenobiii/inx) — Completely reimagines the user interface with tabbed navigation.
-
-- ~~[PlusPoint](https://github.com/ngxson/pluspoint-reader) — custom JS apps support.~~ (Unmaintained)
-
-- [crosspoint-reader-papers3](https://github.com/juicecultus/crosspoint-reader-papers3) — Crosspoint port for M5Stack Paper S3. 
-
-- [t5s3-reader](https://github.com/ShallowGreen123/t5s3-reader) — Crosspoint port for LilyGo T5 ePaper S3 / T5S3 4.7-inch e-paper device.
-
-**Note:** Many of these features will make their way into CrossPoint over time. We maintain a slower pace to ensure rock-solid stability and squash bugs before they reach your device.
-
-Want to build your own device? Be sure to check out the [de-link](https://github.com/iandchasse/de-link) project.
+Key integration points:
+- `lib/Dict/` — Dictionary lookup, deinflection (new library, no upstream conflicts)
+- `lib/Epub/Epub/VerticalSection.*`, `VerticalParsedText.*` — Vertical text engine (new files)
+- `src/activities/reader/EpubReaderWordLookupActivity.*` — Word lookup UI (new activity)
+- `src/activities/reader/EpubReaderTranslationActivity.*` — Translation UI (new activity)
+- `src/activities/reader/EpubReaderActivity.cpp` — Auto-detection and menu wiring (minimal changes to existing code)
+- `lib/I18n/translations/english.yaml` — New UI strings (additive)
 
 ---
 
-## Acknowledgements
+## Credits
 
-- The Japanese word lookup feature uses dictionary data from [JMdict/EDICT](https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project), a project of the [Electronic Dictionary Research and Development Group](https://www.edrdg.org/) (EDRDG). JMdict is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+Built on top of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) — open-source e-reader firmware, community-built, fully hackable, free forever.
 
-CrossPoint Reader is **not affiliated with Xteink or any device manufacturer**.
-
-Huge shoutout to [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader), which inspired this project.
+Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), used under their respective licenses.
