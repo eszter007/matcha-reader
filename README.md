@@ -16,8 +16,6 @@ This fork adds a complete Japanese reading toolkit on top of the base e-reader:
 Japanese books are automatically detected from EPUB metadata (`<dc:language>ja</dc:language>`) and rendered in vertical text layout — no manual setting needed. The vertical text engine handles:
 
 - Right-to-left column flow with proper line breaking (kinsoku rules)
-- Rotated Latin/numeric runs within vertical columns
-- Small kana (っゃゅょ) positioning
 - Font-adaptive punctuation, bracket, and dash positioning (works with UDDigiKyokasho, Noto Serif, Noto Sans)
 - Bold, italic, and emphasis marks (sesame dots ﹅)
 - A per-book "Vertical Text: ON/OFF" toggle in the reader menu to override auto-detection
