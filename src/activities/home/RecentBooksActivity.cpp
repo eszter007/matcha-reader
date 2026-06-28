@@ -513,7 +513,10 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   if (selectedRow < scrollRow) scrollRow = selectedRow;
   if (selectedRow >= scrollRow + visibleRows) scrollRow = selectedRow - visibleRows + 1;
 
-  for (int row = scrollRow; row < std::min(scrollRow + visibleRows, totalRows); row++) {
+  // Render one extra row beyond the visible area so the next row peeks
+  // behind the button bar, hinting that more content is available.
+  const int renderRows = visibleRows + (totalRows > visibleRows ? 1 : 0);
+  for (int row = scrollRow; row < std::min(scrollRow + renderRows, totalRows); row++) {
     for (int col = 0; col < GRID_COLS; col++) {
       const int idx = row * GRID_COLS + col;
       if (idx >= static_cast<int>(recentBooks.size())) break;
@@ -577,12 +580,6 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
     }
   }
 
-  if (totalRows > visibleRows) {
-    const int barX = pageWidth - metrics.scrollBarRightOffset - metrics.scrollBarWidth;
-    const int thumbH = std::max(10, contentHeight * visibleRows / totalRows);
-    const int thumbY = contentTop + (contentHeight - thumbH) * scrollRow / (totalRows - visibleRows);
-    renderer.fillRect(barX, thumbY, metrics.scrollBarWidth, thumbH, true);
-  }
 }
 
 void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
