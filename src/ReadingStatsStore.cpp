@@ -7,7 +7,7 @@
 
 ReadingStatsStore ReadingStatsStore::instance;
 
-static constexpr const char* STATS_PATH = "/.crosspoint/reading_stats.bin";
+static constexpr const char* STATS_PATH = "/reading_stats.bin";
 static constexpr uint8_t STATS_VERSION = 2;
 
 namespace {
@@ -23,7 +23,10 @@ int dowFromDate(uint16_t y, uint8_t m, uint8_t d) {
 
 void subtractDays(uint16_t& y, uint8_t& m, uint8_t& d, int n) {
   int epoch = daysSinceEpoch(y, m, d) - n;
-  int a = epoch + 306;
+  // Inverse of daysSinceEpoch: convert epoch days back to y/m/d.
+  // The forward formula adds d at the end, so the inverse subtracts 1
+  // to get the 0-based day-of-month before re-adding 1.
+  int a = epoch + 305;
   int yy = (4 * a + 3) / 1461;
   int doy = a - (365 * yy + yy / 4 - yy / 100 + yy / 400);
   int mm = (5 * doy + 2) / 153;
@@ -55,7 +58,13 @@ void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, ui
   days[dayCount++] = {year, month, day, minutes};
 }
 
-void ReadingStatsStore::incrementBooksFinished() { booksFinished++; }
+void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
+  for (const auto& p : finishedBookPaths) {
+    if (p == bookPath) return;
+  }
+  finishedBookPaths.push_back(bookPath);
+  booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
+}
 
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {
   for (int i = 0; i < dayCount; i++) {
@@ -163,6 +172,14 @@ bool ReadingStatsStore::saveToFile() const {
   for (int i = 0; i < dayCount; i++) {
     f.write(reinterpret_cast<const uint8_t*>(&days[i]), sizeof(DailyReading));
   }
+  // Write finished book paths
+  uint16_t pathCount = static_cast<uint16_t>(finishedBookPaths.size());
+  f.write(reinterpret_cast<const uint8_t*>(&pathCount), 2);
+  for (const auto& p : finishedBookPaths) {
+    uint16_t len = static_cast<uint16_t>(p.size());
+    f.write(reinterpret_cast<const uint8_t*>(&len), 2);
+    f.write(reinterpret_cast<const uint8_t*>(p.data()), len);
+  }
   f.close();
   return true;
 }
@@ -183,6 +200,19 @@ bool ReadingStatsStore::loadFromFile() {
     DailyReading dr;
     if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
     days[dayCount++] = dr;
+  }
+  // Read finished book paths
+  finishedBookPaths.clear();
+  uint16_t pathCount = 0;
+  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) == 2 && pathCount <= 500) {
+    for (int i = 0; i < pathCount; i++) {
+      uint16_t len = 0;
+      if (f.read(reinterpret_cast<uint8_t*>(&len), 2) != 2 || len > 500) break;
+      std::string p(len, '\0');
+      if (f.read(reinterpret_cast<uint8_t*>(&p[0]), len) != len) break;
+      finishedBookPaths.push_back(std::move(p));
+    }
+    booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
   }
   f.close();
   return true;

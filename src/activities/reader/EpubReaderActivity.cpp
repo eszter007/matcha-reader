@@ -202,6 +202,14 @@ void EpubReaderActivity::onExit() {
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
+  // Record book completion if exiting at end-of-book (only once per book).
+  const bool atEnd = currentSpineIndex > 0 && epub && currentSpineIndex >= epub->getSpineItemsCount();
+  if (atEnd) {
+    READING_STATS.loadFromFile();
+    READING_STATS.markBookFinished(epub->getPath());
+    READING_STATS.saveToFile();
+  }
+
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   section.reset();
@@ -887,6 +895,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   // Show end of book screen
   if (currentSpineIndex == epub->getSpineItemsCount()) {
+    // Save progress at spine=spineCount so the library shows 100%.
+    saveProgress(currentSpineIndex, 0, 1, verticalOverride, furiganaOverride);
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();

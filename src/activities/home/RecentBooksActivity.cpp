@@ -138,7 +138,7 @@ void RecentBooksActivity::loadShelves() {
     std::string name = (lastSlash != std::string::npos && lastSlash < folder.size() - 1)
                            ? folder.substr(lastSlash + 1)
                            : folder;
-    if (folder == "/") name = "All";
+    if (folder == "/") name = "Unsorted";
 
     bool found = false;
     for (auto& shelf : shelves) {

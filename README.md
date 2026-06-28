@@ -82,7 +82,7 @@ The home menu shows an **Insights** entry (between File Transfer and Settings) t
   - Longest streak
 - **Monthly calendar** — navigate months with Left/Right buttons. Days you read are shown as filled black circles. Today is shown with an outline circle. A "X days read" subtitle summarizes each month.
 
-Reading time is recorded automatically when you close a book (minimum 1 minute to count). Stats persist across sessions in `/.crosspoint/reading_stats.bin`.
+Reading time is recorded automatically when you close a book (minimum 1 minute to count). Books finished are counted once per book (no double-counting on re-open). Stats persist in `/reading_stats.bin` on the SD card root — unaffected by cache clears or firmware updates.
 
 ### Font Selection
 

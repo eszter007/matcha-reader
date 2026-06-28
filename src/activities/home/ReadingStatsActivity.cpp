@@ -77,12 +77,11 @@ void ReadingStatsActivity::loop() {
   }
   // Up/Down to scroll
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
-    scrollOffset += 40;
-    requestUpdate();
+    const int maxScroll = 500;
+    if (scrollOffset < maxScroll) { scrollOffset += 40; requestUpdate(); }
   });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
-    if (scrollOffset > 0) { scrollOffset -= 40; if (scrollOffset < 0) scrollOffset = 0; }
-    requestUpdate();
+    if (scrollOffset > 0) { scrollOffset -= 40; if (scrollOffset < 0) scrollOffset = 0; requestUpdate(); }
   });
 }
 
@@ -136,7 +135,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
 
   // Minutes this week
   char weekBuf[48];
-  snprintf(weekBuf, sizeof(weekBuf), "%d minutes read this week", weekMinutes);
+  snprintf(weekBuf, sizeof(weekBuf), "%d %s read this week", weekMinutes, weekMinutes == 1 ? "minute" : "minutes");
   const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
   const int row2Y = row1Y + iconSize + 4;
   renderer.drawText(SMALL_FONT_ID, cardX + (cardW - weekTextW) / 2, row2Y, weekBuf, true);
@@ -207,19 +206,16 @@ void ReadingStatsActivity::render(RenderLock&&) {
 
     renderer.drawRoundedRect(cx, cy, halfW, statCardH, 2, cardRadius, true);
 
-    // Icon in top-right corner
-    const int iconPad = 10;
+    const int topPad = 16;
     if (i < 3) {
-      renderer.drawIcon(cards[i].icon, cx + halfW - iconSm - iconPad, cy + iconPad, iconSm, iconSm);
+      renderer.drawIcon(cards[i].icon, cx + halfW - iconSm - topPad, cy + topPad, iconSm, iconSm);
     } else {
-      renderer.drawIcon(cards[i].icon, cx + halfW - 32 - iconPad + 4, cy + iconPad - 2, 32, 32);
+      renderer.drawIcon(cards[i].icon, cx + halfW - 32 - topPad + 4, cy + topPad - 2, 32, 32);
     }
 
-    // Value on the same line as the icon (vertically centered with it)
-    const int valueY = cy + iconPad + (iconSm - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
-    renderer.drawText(UI_12_FONT_ID, cx + 12, valueY, cards[i].value, true, EpdFontFamily::BOLD);
-    // Label 4px below the number
-    renderer.drawText(SMALL_FONT_ID, cx + 12, valueY + renderer.getLineHeight(UI_12_FONT_ID) + 4, cards[i].label, true);
+    const int valueY = cy + topPad + (iconSm - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
+    renderer.drawText(UI_12_FONT_ID, cx + 10, valueY, cards[i].value, true, EpdFontFamily::BOLD);
+    renderer.drawText(SMALL_FONT_ID, cx + 10, valueY + renderer.getLineHeight(UI_12_FONT_ID) + 2, cards[i].label, true);
   }
 
   y += 2 * (statCardH + cardGap) + 8;

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct DailyReading {
   uint16_t year;
@@ -16,12 +17,13 @@ class ReadingStatsStore {
   DailyReading days[MAX_DAYS] = {};
   int dayCount = 0;
   uint16_t booksFinished = 0;
+  std::vector<std::string> finishedBookPaths;
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
 
   void addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
-  void incrementBooksFinished();
+  void markBookFinished(const std::string& bookPath);
 
   int getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
   int getLongestStreak() const;
