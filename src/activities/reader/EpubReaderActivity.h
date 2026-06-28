@@ -41,6 +41,8 @@ class EpubReaderActivity final : public Activity {
   bool recentsEntryRemoved = false;
   // Per-book vertical text override: -1 = auto (detect from language), 0 = off, 1 = on
   int8_t verticalOverride = -1;
+  // Per-book furigana override: -1 = auto (on by default), 0 = off, 1 = on
+  int8_t furiganaOverride = -1;
   unsigned long bookmarkMessageTime = 0UL;
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
@@ -60,7 +62,7 @@ class EpubReaderActivity final : public Activity {
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
-  bool saveProgress(int spineIndex, int currentPage, int pageCount);
+  bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
@@ -76,6 +78,7 @@ class EpubReaderActivity final : public Activity {
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
   bool useVerticalText() const;
+  bool useFurigana() const;
   bool isJapaneseBook() const;
 
  public:

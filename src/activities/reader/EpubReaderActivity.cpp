@@ -126,6 +126,10 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
 
+  // Swallow the Confirm release that opened this book from the library,
+  // so it doesn't immediately trigger the reader menu.
+  ignoreNextConfirmRelease = true;
+
   if (!epub) {
     return;
   }
@@ -138,23 +142,20 @@ void EpubReaderActivity::onEnter() {
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[6];
-    int dataSize = f.read(data, 6);
-    if (dataSize == 4 || dataSize == 6) {
+    uint8_t data[8];
+    if (f.read(data, 8) == 8) {
       currentSpineIndex = data[0] + (data[1] << 8);
       nextPageNumber = data[2] + (data[3] << 8);
       if (nextPageNumber == UINT16_MAX) {
-        // UINT16_MAX is an in-memory navigation sentinel for "open previous
-        // chapter on its last page". It should never be treated as persisted
-        // resume state after sleep or reopen.
         LOG_DBG("ERS", "Ignoring stale last-page sentinel from progress cache");
         nextPageNumber = 0;
       }
       cachedSpineIndex = currentSpineIndex;
-      LOG_DBG("ERS", "Loaded cache: %d, %d", currentSpineIndex, nextPageNumber);
-    }
-    if (dataSize == 6) {
       cachedChapterTotalPageCount = data[4] + (data[5] << 8);
+      verticalOverride = static_cast<int8_t>(data[6]);
+      furiganaOverride = static_cast<int8_t>(data[7]);
+      LOG_DBG("ERS", "Loaded cache: spine=%d page=%d vertical=%d furigana=%d", currentSpineIndex, nextPageNumber,
+              verticalOverride, furiganaOverride);
     }
   }
   // We may want a better condition to detect if we are opening for the first time.
@@ -288,15 +289,23 @@ void EpubReaderActivity::loop() {
       startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
                                  renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
                                  SETTINGS.orientation, !currentPageFootnotes.empty(), hasWordLookup,
-                                 showVerticalToggle, useVerticalText()),
+                                 showVerticalToggle, useVerticalText(), useFurigana()),
                              [this](const ActivityResult& result) {
-                               // Always apply orientation change even if the menu was cancelled
                                const auto& menu = std::get<MenuResult>(result.data);
                                applyOrientation(menu.orientation);
                                toggleAutoPageTurn(menu.pageTurnOption);
+                               if (menu.verticalOverride >= 0 && menu.verticalOverride != (useVerticalText() ? 1 : 0)) {
+                                 verticalOverride = menu.verticalOverride;
+                                 section.reset();
+                                 verticalSection.reset();
+                               }
+                               if (menu.furiganaOverride >= 0 && menu.furiganaOverride != (useFurigana() ? 1 : 0)) {
+                                 furiganaOverride = menu.furiganaOverride;
+                               }
                                if (!result.isCancelled) {
                                  onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
                                }
+                               requestUpdate();
                              });
     }
   }
@@ -610,7 +619,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           verticalSection.reset();
           epub->clearCache();
           epub->setupCacheDir();
-          if (!saveProgress(backupSpine, backupPage, backupPageCount)) {
+          if (!saveProgress(backupSpine, backupPage, backupPageCount, verticalOverride, furiganaOverride)) {
             LOG_ERR("ERS", "Failed to save progress before cache clear");
           }
         }
@@ -671,13 +680,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       }
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::TOGGLE_VERTICAL: {
-      verticalOverride = useVerticalText() ? 0 : 1;
-      section.reset();
-      verticalSection.reset();
-      requestUpdate();
+    case EpubReaderMenuActivity::MenuAction::TOGGLE_VERTICAL:
+    case EpubReaderMenuActivity::MenuAction::TOGGLE_FURIGANA:
       break;
-    }
   }
 }
 
@@ -708,7 +713,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
 
   // Persist current position so the reader resumes at the right page on return.
   // goToReader() depends on this file, so abort the sync if the write fails.
-  if (!saveProgress(currentSpineIndex, currentPage, totalPages)) {
+  if (!saveProgress(currentSpineIndex, currentPage, totalPages, verticalOverride, furiganaOverride)) {
     LOG_ERR("KOSync", "Aborting sync because current progress could not be saved");
     pendingSyncSaveError = true;
     requestUpdate();
@@ -1015,15 +1020,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         }
       } else {
         VerticalTextBlock block(*vpage);
-        block.render(renderer, SETTINGS.getReaderFontId(), SETTINGS.getRubyFontId(), orientedMarginLeft, orientedMarginTop,
-                     true);
+        if (useFurigana()) {
+          block.render(renderer, SETTINGS.getReaderFontId(), SETTINGS.getRubyFontId(), orientedMarginLeft,
+                       orientedMarginTop, true);
+        } else {
+          block.render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, true);
+        }
       }
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
     }
 
     renderStatusBar();
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
-    saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount);
+    saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride, furiganaOverride);
 
     showPendingSyncSaveError();
 
@@ -1161,7 +1170,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
   }
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
-  saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+  saveProgress(currentSpineIndex, section->currentPage, section->pageCount, verticalOverride, furiganaOverride);
 
   showPendingSyncSaveError();
 
@@ -1225,8 +1234,9 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   }
 }
 
-bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
-  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount);
+bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride,
+                                      int8_t furiOverride) {
+  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride);
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
@@ -1236,14 +1246,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);  // scan pass
+  page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());  // scan pass
   scope.endScanAndPrewarm();
   const auto tPrewarm = millis();
 
   // Force special handling for pages with images when anti-aliasing is on
   bool imagePageWithAA = page->hasImages() && SETTINGS.textAntiAliasing;
 
-  page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+  page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
   renderStatusBar();
   const auto tBwRender = millis();
 
@@ -1260,7 +1270,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       // Re-render page content to restore images into the blanked area
       // Status bar is not re-rendered here to avoid reading stale dynamic values (e.g. battery %)
-      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -1300,7 +1310,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
         renderer.beginStripTarget(scratch.get(), y, rows);
         renderer.clearScreen(0x00);
-        page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+        page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
         renderer.endStripTarget();
         renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
       }
@@ -1312,7 +1322,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
         renderer.beginStripTarget(scratch.get(), y, rows);
         renderer.clearScreen(0x00);
-        page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+        page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
         renderer.endStripTarget();
         renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
       }
@@ -1345,14 +1355,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       renderer.clearScreen(0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
       renderer.copyGrayscaleLsbBuffers();
       const auto tGrayLsb = millis();
 
       // Render and copy to MSB buffer
       renderer.clearScreen(0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
       renderer.copyGrayscaleMsbBuffers();
       const auto tGrayMsb = millis();
 
@@ -1612,4 +1622,10 @@ bool EpubReaderActivity::useVerticalText() const {
   if (verticalOverride == 0) return false;
   if (verticalOverride == 1) return true;
   return isJapaneseBook();
+}
+
+bool EpubReaderActivity::useFurigana() const {
+  if (furiganaOverride == 0) return false;
+  if (furiganaOverride == 1) return true;
+  return true;
 }

@@ -11,6 +11,7 @@ Mission: Provide a lightweight, high-performance reading experience focused on E
 * No Unfounded Claims: Do not claim performance gains or memory savings without explaining the technical mechanism (e.g., DRAM vs IRAM usage).
 * Resource Justification: You must justify any new heap allocation (new, malloc, std::vector) or explain why a stack/static alternative was rejected.
 * Verification: After suggesting a fix, instruct the user on how to verify it (e.g., monitoring heap via Serial or checking a specific cache file).
+* README Maintenance: When adding, changing, or removing a user-facing feature (new menu items, changed keybindings, new setup steps, changed behaviour), update `README.md` in the same commit or PR. The README documents the Japanese learning features for end users — keep the "What's Different", "Usage", and "Setup" sections accurate. Do not let the README drift from the actual firmware behaviour.
 ---
 
 ## Development Environment Awareness

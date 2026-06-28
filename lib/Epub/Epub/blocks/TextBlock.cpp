@@ -7,7 +7,8 @@
 
 #include <cstring>
 
-void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
+void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y,
+                       const bool skipRuby) const {
   // Focus annotations are optional: empty vectors mean no word in this block has a split.
   // When present, they must be sized in lockstep with words[].
   const bool hasFocus = !wordFocusBoundary.empty();
@@ -59,7 +60,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       renderer.drawText(fontId, wordX, wordY, words[i].c_str(), true, currentStyle, baseDir);
     }
 
-    if (!scanning && i < wordRuby.size() && !wordRuby[i].empty()) {
+    if (!scanning && !skipRuby && i < wordRuby.size() && !wordRuby[i].empty()) {
       const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
       const int wordWidth = renderer.getTextWidth(fontId, words[i].c_str(), currentStyle);
       const int rubyAdvance = renderer.getTextAdvanceX(fontId, wordRuby[i].c_str(), rubyStyle);

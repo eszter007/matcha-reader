@@ -13,19 +13,64 @@ class RecentBooksActivity final : public Activity {
  private:
   ButtonNavigator buttonNavigator;
 
-  size_t selectorIndex = 0;
+  int selectedTab = 0;
+  int contentIndex = 0;
+  int scrollRow = 0;
 
-  // Set when a long-press has fired; input is swallowed until Confirm is released
-  // again so the release doesn't also open the book.
   bool longPressFired = false;
 
-  // Recent tab state
+  // Books tab
   std::vector<RecentBook> recentBooks;
 
-  // Data loading
-  void loadRecentBooks();
+  struct BookProgress {
+    int percent = -1;
+  };
+  std::vector<BookProgress> bookProgress;
 
-  // Show an OK/Cancel prompt to remove the given book from the Recent Books list.
+  // Shelves tab
+  struct ShelfInfo {
+    std::string folderPath;
+    std::string folderName;
+    std::string coverBmpPath;
+    // Resolved path to a small (shelf-height) thumbnail that renders 1:1.
+    std::string shelfThumbPath;
+    std::string coverBookPath;  // EPUB path used to generate the shelf thumb
+    int bookCount = 0;
+  };
+  std::vector<ShelfInfo> shelves;
+
+  // Shelf detail view
+  struct ShelfBook {
+    std::string path;
+    std::string title;
+    std::string coverBmpPath;
+  };
+  std::vector<ShelfBook> shelfBooks;
+  std::vector<BookProgress> shelfBookProgress;
+  int openShelfIndex = -1;
+  int shelfContentIndex = 0;
+  int shelfScrollRow = 0;
+
+  static constexpr int TAB_COUNT = 2;
+  static constexpr int GRID_COLS = 3;
+  static constexpr int COVER_PADDING = 4;
+  static constexpr int CELL_TEXT_GAP = 4;
+  static constexpr int SELECTION_RADIUS = 6;
+
+  int getVisibleRows(int cellHeight, int contentHeight) const;
+  int getCellHeight(int cellWidth) const;
+
+  void loadRecentBooks();
+  void loadBookProgress();
+  void loadShelves();
+  void loadShelfBooks(const std::string& folderPath);
+  int readProgressPercent(const std::string& bookPath) const;
+
+  int getContentItemCount() const;
+  void renderBooksTab(int contentTop, int contentHeight);
+  void renderShelvesTab(int contentTop, int contentHeight);
+  void renderShelfBooksView(int contentTop, int contentHeight);
+
   void promptRemoveBook(const std::string& path, const std::string& title);
 
  public:

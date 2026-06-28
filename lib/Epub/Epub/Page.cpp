@@ -92,9 +92,15 @@ std::unique_ptr<PageHorizontalRule> PageHorizontalRule::deserialize(HalFile& fil
   return std::unique_ptr<PageHorizontalRule>(rule);
 }
 
-void Page::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) const {
+void Page::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+                  const bool skipRuby) const {
   for (auto& element : elements) {
-    element->render(renderer, fontId, xOffset, yOffset);
+    if (skipRuby && element->getTag() == TAG_PageLine) {
+      auto* line = static_cast<PageLine*>(element.get());
+      line->getBlock()->render(renderer, fontId, line->xPos + xOffset, line->yPos + yOffset, true);
+    } else {
+      element->render(renderer, fontId, xOffset, yOffset);
+    }
   }
 }
 

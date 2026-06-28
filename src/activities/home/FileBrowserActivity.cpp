@@ -60,7 +60,57 @@ void FileBrowserActivity::loadFiles() {
     }
   }
   root.close();
-  FsHelpers::sortFileList(files);
+
+  // Sort: folders first (alphabetical), then books sorted by recency.
+  // Books that appear in the recent list come first (in recent order),
+  // followed by never-opened books alphabetically.
+  const auto& recents = RECENT_BOOKS.getBooks();
+
+  std::vector<std::string> folders;
+  std::vector<std::string> recentFiles;
+  std::vector<std::string> otherFiles;
+  folders.reserve(files.size());
+  otherFiles.reserve(files.size());
+
+  for (auto& f : files) {
+    if (!f.empty() && f.back() == '/') {
+      folders.push_back(std::move(f));
+    } else {
+      std::string fullPath = basepath;
+      if (fullPath.back() != '/') fullPath += '/';
+      fullPath += f;
+      bool isRecent = false;
+      for (const auto& r : recents) {
+        if (r.path == fullPath) { isRecent = true; break; }
+      }
+      if (isRecent) {
+        recentFiles.push_back(std::move(f));
+      } else {
+        otherFiles.push_back(std::move(f));
+      }
+    }
+  }
+
+  FsHelpers::sortFileList(folders);
+  FsHelpers::sortFileList(otherFiles);
+
+  // Sort recent files by their position in the recents list (most recent first).
+  std::sort(recentFiles.begin(), recentFiles.end(), [&](const std::string& a, const std::string& b) {
+    std::string pathA = basepath + (basepath.back() != '/' ? "/" : "") + a;
+    std::string pathB = basepath + (basepath.back() != '/' ? "/" : "") + b;
+    size_t idxA = recents.size(), idxB = recents.size();
+    for (size_t i = 0; i < recents.size(); i++) {
+      if (recents[i].path == pathA) idxA = i;
+      if (recents[i].path == pathB) idxB = i;
+    }
+    return idxA < idxB;
+  });
+
+  files.clear();
+  files.reserve(folders.size() + recentFiles.size() + otherFiles.size());
+  for (auto& f : folders) files.push_back(std::move(f));
+  for (auto& f : recentFiles) files.push_back(std::move(f));
+  for (auto& f : otherFiles) files.push_back(std::move(f));
 }
 
 void FileBrowserActivity::onEnter() {

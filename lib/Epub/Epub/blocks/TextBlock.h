@@ -48,7 +48,7 @@ class TextBlock final : public Block {
   bool isEmpty() override { return words.empty(); }
   size_t wordCount() const { return words.size(); }
   // given a renderer works out where to break the words into lines
-  void render(const GfxRenderer& renderer, int fontId, int x, int y) const;
+  void render(const GfxRenderer& renderer, int fontId, int x, int y, bool skipRuby = false) const;
   BlockType getType() override { return TEXT_BLOCK; }
   bool serialize(HalFile& file) const;
   static std::unique_ptr<TextBlock> deserialize(HalFile& file);
