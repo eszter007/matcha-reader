@@ -18,10 +18,7 @@ static constexpr size_t TEXT_HEADER_SIZE = 10;
 static uint16_t readU16(const uint8_t* p) { return p[0] | (p[1] << 8); }
 static uint32_t readU32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24); }
 
-// Panel zoom crops are saved as p<page>_<panel>.jpg by the mokuro_convert
-// tools (see tools/mokuro_convert/prepare_panels.py). These live alongside
-// the real page images and must be excluded from the page scan.
-static bool isPanelCropFile(const char* name) {
+bool isPanelCropFile(const char* name) {
   if (name[0] != 'p' && name[0] != 'P') return false;
   const char* p = name + 1;
   if (!isdigit(static_cast<unsigned char>(*p))) return false;
@@ -92,6 +89,7 @@ std::string MangaBook::getCachePath() const {
 bool MangaBook::load() {
   if (!loadIndex()) return false;
   scanImages();
+  loadToc();
   return true;
 }
 
@@ -292,6 +290,58 @@ bool MangaBook::loadPagePanels(uint32_t pageIdx, std::vector<Panel>& panels) con
   }
 
   return true;
+}
+
+void MangaBook::loadToc() {
+  tocEntries.clear();
+
+  std::string tocPath = folderPath;
+  if (tocPath.back() != '/') tocPath += '/';
+  tocPath += "toc.idx";
+
+  if (!Storage.exists(tocPath.c_str())) return;  // optional file -- most manga don't have one
+
+  HalFile f;
+  if (!Storage.openFileForRead("MNG", tocPath, f)) {
+    LOG_ERR("MNG", "Cannot open toc.idx");
+    return;
+  }
+
+  uint8_t header[8];
+  if (f.read(header, sizeof(header)) != sizeof(header)) {
+    LOG_ERR("MNG", "Short read on toc.idx header");
+    return;
+  }
+  const uint32_t entryCount = readU32(header + 4);
+  if (entryCount > 1000) {
+    LOG_ERR("MNG", "Implausible toc.idx entry count: %u", entryCount);
+    return;
+  }
+
+  tocEntries.reserve(entryCount);
+  for (uint32_t i = 0; i < entryCount; i++) {
+    uint8_t entryHeader[6];
+    if (f.read(entryHeader, sizeof(entryHeader)) != sizeof(entryHeader)) {
+      LOG_ERR("MNG", "Short read on toc.idx entry %u header", i);
+      tocEntries.clear();
+      return;
+    }
+    TocEntry entry;
+    entry.pageIndex = readU32(entryHeader);
+    const uint16_t titleLen = readU16(entryHeader + 4);
+    if (titleLen > 0) {
+      auto titleBuf = makeUniqueNoThrow<char[]>(titleLen);
+      if (!titleBuf || f.read(reinterpret_cast<uint8_t*>(titleBuf.get()), titleLen) != titleLen) {
+        LOG_ERR("MNG", "Short read on toc.idx entry %u title", i);
+        tocEntries.clear();
+        return;
+      }
+      entry.title.assign(titleBuf.get(), titleLen);
+    }
+    tocEntries.push_back(std::move(entry));
+  }
+
+  LOG_DBG("MNG", "Loaded toc.idx: %u chapter(s)", static_cast<unsigned>(tocEntries.size()));
 }
 
 }  // namespace manga

@@ -28,6 +28,20 @@ struct PageInfo {
   uint16_t imgHeight;
 };
 
+struct TocEntry {
+  uint32_t pageIndex;
+  std::string title;
+};
+
+// True for panel-zoom crop filenames (p<page>_<panel>.jpg, e.g. "p3_1.jpg")
+// produced by tools/manga_convert/convert_manga.py. These live alongside
+// the real page_NNNN.<ext> images in a manga folder and must be excluded
+// wherever code scans that folder for actual PAGE images (e.g. picking a
+// library cover) -- panel crop names sort alphabetically before
+// "page_NNNN" ('0' < 'a'), so a naive "first image" scan picks one of these
+// fragments instead of the real first page.
+bool isPanelCropFile(const char* name);
+
 class MangaBook {
  public:
   explicit MangaBook(std::string folderPath) : folderPath(std::move(folderPath)) {}
@@ -46,6 +60,11 @@ class MangaBook {
 
   std::string getCachePath() const;
 
+  // Table of contents (toc.idx), optional -- empty when the manga folder
+  // has no toc.idx (most don't; SELECT_CHAPTER falls back to percent jump).
+  const std::vector<TocEntry>& getToc() const { return tocEntries; }
+  bool hasToc() const { return !tocEntries.empty(); }
+
   static bool isMangaFolder(const std::string& folderPath);
 
  private:
@@ -53,9 +72,11 @@ class MangaBook {
   uint32_t pageCount = 0;
   std::vector<PageInfo> pageIndex;
   std::vector<std::string> imageFiles;
+  std::vector<TocEntry> tocEntries;
 
   bool loadIndex();
   bool scanImages();
+  void loadToc();
 };
 
 }  // namespace manga

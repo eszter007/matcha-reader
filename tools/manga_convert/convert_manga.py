@@ -89,6 +89,10 @@ IDX_RECORD = "<IIHH"  # dataOffset(4) + dataLength(4) + imgWidth(2) + imgHeight(
 PANEL_BOX = "<HHHHBBH"  # x(2)+y(2)+w(2)+h(2)+textCount(1)+pad(1)+translationLen(2) = 12 bytes
 TEXT_BLOCK = "<HHHHH"  # x(2) + y(2) + w(2) + h(2) + textLen(2) = 10 bytes
 
+TOC_FORMAT_VERSION = 1
+TOC_HEADER = "<II"  # version(4) + entryCount(4) = 8 bytes
+TOC_ENTRY_HEADER = "<IH"  # pageIndex(4) + titleLen(2) = 6 bytes
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -121,13 +125,21 @@ def is_image(path: str) -> bool:
 def _natural_sort_key(path: str):
     """Natural sort key matching FsHelpers::sortFileList() on the device.
 
-    Case-insensitive; numeric substrings compared by integer value. Used
-    only as the DEFAULT ordering for plain image folders/CBZ -- pass
-    --page-order-file to override when a distributor's filenames don't
-    sort into true reading order (e.g. cover/colophon/insert pages tagged
-    with an unrelated product-code prefix).
+    Case-insensitive; numeric substrings compared by integer value.
+
+    Cover and copyright pages are pinned to the very front (positions 0
+    and 1) regardless of their filename digits, since digital manga
+    exports commonly use a distributor product-code prefix (a long
+    unbroken digit blob, NOT a page-sequence number) that pure natural
+    sort pushes to the very end. Standard book structure is always:
+    cover first, copyright second, then all other content.
     """
     name = os.path.basename(path)
+    lower = name.lower()
+    if 'cover' in lower:
+        return [(-2, 0, '')]
+    if 'copyright' in lower:
+        return [(-1, 0, '')]
     parts: list[tuple] = []
     i = 0
     while i < len(name):
@@ -163,6 +175,8 @@ def collect_pages(input_path: str, work_dir: str, page_order_file: str | None) -
         images = [str(f) for f in Path(extract_dir).iterdir() if is_image(str(f))]
     elif p.suffix.lower() == ".epub":
         images = _extract_epub_pages(str(p), work_dir)
+    elif p.suffix.lower() == ".pdf":
+        images = _extract_pdf_pages(str(p), work_dir)
     else:
         print(f"Error: unsupported input: {p}", file=sys.stderr)
         sys.exit(1)
@@ -211,6 +225,7 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
         spine_ids = re.findall(r'<itemref[^>]*idref="([^"]+)"', opf)
 
         images = []
+        spine_map = []  # (extracted_basename, spine_item_href) -- for TOC resolution
         for idx, item_id in enumerate(spine_ids):
             href = manifest.get(item_id)
             if not href:
@@ -237,10 +252,54 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
             except KeyError:
                 print(f"Warning: image not found in EPUB: {src_in_zip}", file=sys.stderr)
                 continue
-            target = os.path.join(extract_dir, f"spine_{idx:04d}_{os.path.basename(src_in_zip)}")
+            target_basename = f"spine_{idx:04d}_{os.path.basename(src_in_zip)}"
+            # TOC entries reference the SPINE item's own href (the XHTML
+            # wrapper, when there is one) -- record that, not the resolved
+            # embedded-image href, so _extract_epub_native_toc can match.
+            spine_map.append((target_basename, full_href))
+            target = os.path.join(extract_dir, target_basename)
             with open(target, "wb") as f:
                 f.write(data)
             images.append(target)
+
+        # Sidecar map for _extract_epub_native_toc to resolve TOC hrefs
+        # against extracted filenames without changing this function's
+        # return type (still a plain list of image paths).
+        with open(os.path.join(extract_dir, "_spine_map.tsv"), "w", encoding="utf-8") as f:
+            for basename, spine_href in spine_map:
+                f.write(f"{basename}\t{spine_href}\n")
+
+    return images
+
+
+def _extract_pdf_pages(pdf_path: str, work_dir: str) -> list[str]:
+    """Rasterize each PDF page to a PNG, in document order (page 1 first)."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        print(
+            "Error: PDF input requires PyMuPDF. Run: pip install pymupdf",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    extract_dir = os.path.join(work_dir, "pdf_extracted")
+    os.makedirs(extract_dir, exist_ok=True)
+
+    images = []
+    doc = fitz.open(pdf_path)
+    try:
+        # 2x zoom for reasonable resolution -- most manga PDFs embed pages
+        # around 72-150 DPI; this brings them closer to typical e-ink
+        # screen resolution without an excessive file size.
+        matrix = fitz.Matrix(2, 2)
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(matrix=matrix)
+            target = os.path.join(extract_dir, f"pdfpage_{i:04d}.png")
+            pix.save(target)
+            images.append(target)
+    finally:
+        doc.close()
 
     return images
 
@@ -321,6 +380,18 @@ def _dedupe_boxes(boxes_with_conf: list[tuple], overlap_thresh: float = 0.6) -> 
         else:
             kept.append(box)
     return kept
+
+
+def is_full_page_panel(box: list[int], page_w: int, page_h: int, threshold: float = 0.95) -> bool:
+    """True when the panel covers almost the entire page in both dimensions,
+    making a pre-cropped panel image essentially identical to the full page.
+    No panel-crop file is generated for these -- the renderer falls back to
+    full-page display, which is already identical, avoiding a redundant file."""
+    w = max(1, box[2] - box[0])
+    h = max(1, box[3] - box[1])
+    return (w / max(1, page_w)) >= threshold and (h / max(1, page_h)) >= threshold
+
+
 
 
 def is_sliver_panel(box: list[int], page_w: int, page_h: int) -> bool:
@@ -724,6 +795,164 @@ def _write_panel_index(output_dir: str, idx_records: list[tuple], dat_chunks: li
             f.write(chunk)
 
 
+def write_toc(output_dir: str, entries: list[tuple], add_cover: bool = True):
+    """Write toc.idx: a simple (pageIndex, title) chapter list.
+
+    entries: list of (page_index: int, title: str), in any order -- sorted
+    by page_index before writing. Device-side: lib/MangaPanel/MangaPanel.cpp
+    loadToc(). Optional -- a manga folder without toc.idx just falls back
+    to percent-based navigation (see MangaReaderActivity::SELECT_CHAPTER).
+
+    Binary format (toc.idx):
+        uint32  version       (currently 1)
+        uint32  entryCount
+        Per entry (entryCount records):
+            uint32  pageIndex
+            uint16  titleLen
+            bytes   title[titleLen]   UTF-8, not null-terminated
+    """
+    entries = sorted(entries, key=lambda e: e[0])
+    # Always prepend a Cover entry at page 0 unless one already exists there.
+    if add_cover and (not entries or entries[0][0] != 0):
+        entries = [(0, "Cover")] + entries
+    toc_path = os.path.join(output_dir, "toc.idx")
+    with open(toc_path, "wb") as f:
+        f.write(struct.pack(TOC_HEADER, TOC_FORMAT_VERSION, len(entries)))
+        for page_index, title in entries:
+            title_bytes = title.encode("utf-8")
+            if len(title_bytes) > 0xFFFF:
+                title_bytes = title_bytes[:0xFFFF]
+            f.write(struct.pack(TOC_ENTRY_HEADER, page_index, len(title_bytes)))
+            f.write(title_bytes)
+    print(f"  {toc_path}: {len(entries)} chapter(s)")
+
+
+def parse_toc_file(toc_file: str) -> list[tuple]:
+    """Parse a --toc-file: one chapter per line, "<page_index><TAB><title>".
+    page_index is 0-based, referring to the final digital page order (the
+    page_NNNN.<ext> numbering this tool produces) -- not a source filename
+    or a printed page number, since those vary by source format and don't
+    necessarily match the final page sequence (e.g. front matter, dropped
+    duplicate/blank pages).
+    """
+    entries = []
+    with open(toc_file, "r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            line = line.rstrip("\n")
+            if not line.strip():
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) != 2:
+                print(f"Warning: --toc-file line {line_no} not in '<page_index>\\t<title>' format, skipping",
+                     file=sys.stderr)
+                continue
+            try:
+                page_index = int(parts[0].strip())
+            except ValueError:
+                print(f"Warning: --toc-file line {line_no} has a non-integer page index, skipping", file=sys.stderr)
+                continue
+            entries.append((page_index, parts[1].strip()))
+    return entries
+
+
+def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) -> list[tuple]:
+    """Best-effort: read an EPUB's native table of contents (EPUB3 nav.xhtml
+    or EPUB2 toc.ncx) and map each entry to a final digital page index.
+
+    TOC entries reference each spine item's OWN href (the XHTML wrapper
+    page, when there is one) -- not the embedded image inside it. Resolve
+    against the "_spine_map.tsv" sidecar _extract_epub_pages writes
+    (extracted_basename -> original spine href), not the image's own
+    basename, which would never match.
+
+    Returns [] if the EPUB has no nav/ncx, or the sidecar map is missing
+    (e.g. input wasn't an EPUB), or nothing could be resolved -- callers
+    should fall back to --toc-file in that case.
+    """
+    spine_map_path = os.path.join(work_dir, "epub_extracted", "_spine_map.tsv")
+    if not os.path.exists(spine_map_path):
+        return []
+    href_to_basename = {}
+    with open(spine_map_path, "r", encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t", 1)
+            if len(parts) == 2:
+                basename, spine_href = parts
+                href_to_basename[spine_href] = basename
+    try:
+        with zipfile.ZipFile(epub_path, "r") as zf:
+            container = zf.read("META-INF/container.xml").decode("utf-8")
+            m = re.search(r'full-path="([^"]+)"', container)
+            if not m:
+                return []
+            opf_path = m.group(1)
+            opf_dir = os.path.dirname(opf_path)
+            opf = zf.read(opf_path).decode("utf-8")
+
+            # EPUB3: <item properties="nav" href="...">
+            nav_href = None
+            nav_m = re.search(r'<item[^>]*properties="[^"]*\bnav\b[^"]*"[^>]*href="([^"]+)"', opf)
+            if nav_m:
+                nav_href = nav_m.group(1)
+            else:
+                rev_nav_m = re.search(r'<item[^>]*href="([^"]+)"[^>]*properties="[^"]*\bnav\b[^"]*"', opf)
+                if rev_nav_m:
+                    nav_href = rev_nav_m.group(1)
+
+            toc_entries_raw = []  # list of (href_with_optional_anchor, title)
+
+            if nav_href:
+                nav_path = os.path.normpath(os.path.join(opf_dir, nav_href)).replace(os.sep, "/")
+                nav_xhtml = zf.read(nav_path).decode("utf-8", "ignore")
+                nav_dir = os.path.dirname(nav_path)
+                toc_m = re.search(r'<nav[^>]*epub:type="toc"[^>]*>(.*?)</nav>', nav_xhtml, re.DOTALL)
+                if toc_m:
+                    for a_m in re.finditer(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', toc_m.group(1), re.DOTALL):
+                        href = os.path.normpath(os.path.join(nav_dir, a_m.group(1))).replace(os.sep, "/")
+                        title = re.sub(r'<[^>]+>', '', a_m.group(2)).strip()
+                        if title:
+                            toc_entries_raw.append((href, title))
+            else:
+                # EPUB2: <spine toc="ncx-id"> + <item id="ncx-id" href="...">
+                ncx_m = re.search(r'<spine[^>]*toc="([^"]+)"', opf)
+                if ncx_m:
+                    ncx_id = ncx_m.group(1)
+                    href_m = re.search(rf'<item[^>]*id="{re.escape(ncx_id)}"[^>]*href="([^"]+)"', opf)
+                    if not href_m:
+                        href_m = re.search(rf'<item[^>]*href="([^"]+)"[^>]*id="{re.escape(ncx_id)}"', opf)
+                    if href_m:
+                        ncx_path = os.path.normpath(os.path.join(opf_dir, href_m.group(1))).replace(os.sep, "/")
+                        ncx = zf.read(ncx_path).decode("utf-8", "ignore")
+                        ncx_dir = os.path.dirname(ncx_path)
+                        for np_m in re.finditer(r'<navPoint\b.*?</navPoint>', ncx, re.DOTALL):
+                            block = np_m.group(0)
+                            text_m = re.search(r'<text>(.*?)</text>', block, re.DOTALL)
+                            src_m = re.search(r'<content[^>]*src="([^"]+)"', block)
+                            if text_m and src_m:
+                                href = os.path.normpath(os.path.join(ncx_dir, src_m.group(1))).replace(os.sep, "/")
+                                title = text_m.group(1).strip()
+                                if title:
+                                    toc_entries_raw.append((href, title))
+
+            if not toc_entries_raw:
+                return []
+
+            basename_to_index = {os.path.basename(p): idx for idx, p in enumerate(pages)}
+
+            resolved = []
+            for href, title in toc_entries_raw:
+                # TOC entries may include a #fragment (anchor within the
+                # page) -- we can only point at a whole page, so drop it.
+                href_no_anchor = href.split("#", 1)[0]
+                extracted_basename = href_to_basename.get(href_no_anchor)
+                if extracted_basename and extracted_basename in basename_to_index:
+                    resolved.append((basename_to_index[extracted_basename], title))
+
+            return resolved
+    except (KeyError, zipfile.BadZipFile, OSError):
+        return []
+
+
 # ── Main pipeline ─────────────────────────────────────────────────
 
 
@@ -739,6 +968,13 @@ def main():
     parser.add_argument("--no-ocr", action="store_true", help="Skip Gemini OCR -- panel boxes only, no text")
     parser.add_argument("--panel-margin", type=int, default=10, help="Pixels of margin added around cropped panels")
     parser.add_argument("--max-pages", type=int, help="Only process the first N pages (for testing)")
+    parser.add_argument(
+        "--toc-file",
+        help='Chapter list: one per line, "<page_index>\\t<title>" (0-based, referring to the FINAL '
+             "page order this tool produces -- not a source filename or printed page number). "
+             "For EPUB input, the EPUB's own table of contents is used automatically when present; "
+             "--toc-file overrides/supplements that.",
+    )
     args = parser.parse_args()
 
     api_key = None
@@ -762,6 +998,20 @@ def main():
     try:
         print(f"Collecting pages from: {args.input}")
         pages = collect_pages(args.input, work_dir, args.page_order_file)
+
+        # Resolve a table of contents before any --max-pages truncation, so
+        # chapter page indices refer to the full book even when testing
+        # with a truncated run (entries past the truncated range just won't
+        # be reachable, but the index numbering stays correct).
+        toc_entries = []
+        if Path(args.input).suffix.lower() == ".epub":
+            toc_entries = _extract_epub_native_toc(args.input, pages, work_dir)
+            if toc_entries:
+                print(f"Found {len(toc_entries)} chapter(s) in the EPUB's table of contents")
+        if args.toc_file:
+            toc_entries = parse_toc_file(args.toc_file)
+            print(f"Using {len(toc_entries)} chapter(s) from --toc-file")
+
         if args.max_pages:
             pages = pages[: args.max_pages]
         print(f"Found {len(pages)} pages")
@@ -804,18 +1054,24 @@ def main():
                 mx2 = min(img_w, x2 + args.panel_margin)
                 my2 = min(img_h, y2 + args.panel_margin)
 
-                # Always save a panel crop for panel-zoom view, even for a
-                # whole-page single panel (len(boxes)==1) -- keeps panel
-                # zoom available regardless of detection granularity.
-                cropped = img.crop((mx1, my1, mx2, my2))
-                panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.jpg")
-                cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
+                # Skip saving a panel crop when it covers essentially the
+                # whole page -- the renderer falls back to displaying the
+                # full-page image anyway, so the crop is a redundant copy.
+                panel_path = None
+                if not is_full_page_panel(box, img_w, img_h):
+                    cropped = img.crop((mx1, my1, mx2, my2))
+                    panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.jpg")
+                    cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
                 panel_paths.append(panel_path)
                 panel_rects.append((mx1, my1, mx2, my2))
 
             if api_key:
+                # Only call Gemini for panels that have a crop file;
+                # full-page panels (no crop) get an empty result directly.
+                def _ocr_or_empty(p):
+                    return call_gemini_panel_ocr(p, api_key) if p else {"blocks": [], "translation": ""}
                 with ThreadPoolExecutor(max_workers=min(8, max(1, len(panel_paths)))) as pool:
-                    ocr_results = list(pool.map(lambda p: call_gemini_panel_ocr(p, api_key), panel_paths))
+                    ocr_results = list(pool.map(_ocr_or_empty, panel_paths))
             else:
                 ocr_results = [{"blocks": [], "translation": ""} for _ in panel_paths]
 
@@ -868,6 +1124,8 @@ def main():
         print(f"  Total: {(idx_size + dat_size) / 1024:.1f} KB")
         print(f"  Panels: {total_panels} ({total_panels / max(len(pages), 1):.1f}/page avg)")
         print(f"  Text blocks: {total_text_blocks}")
+        if toc_entries:
+            write_toc(args.output_dir, toc_entries)
         print("Done.")
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

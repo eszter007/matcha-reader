@@ -19,6 +19,7 @@
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
+#include "MangaChapterSelectionActivity.h"
 #include "MangaWordLookupActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
@@ -221,7 +222,19 @@ void MangaReaderActivity::loop() {
     if (prevTriggered) prevPanel();
   } else {
     if (nextTriggered) {
-      if (!panels.empty()) {
+      // Only enter panel-zoom if a real crop file exists for the first panel.
+      // Full-page panels (cover, splash pages) have no crop -- they'd just
+      // render the same full image in panel-zoom, requiring an extra click.
+      bool hasPanelCrops = false;
+      if (!panels.empty() && book) {
+        char cropName[64];
+        snprintf(cropName, sizeof(cropName), "p%u_0.jpg", currentPage);
+        std::string cropPath = book->getFolder();
+        if (cropPath.back() != '/') cropPath += '/';
+        cropPath += cropName;
+        hasPanelCrops = Storage.exists(cropPath.c_str());
+      }
+      if (hasPanelCrops) {
         currentPanel = 0;
         viewMode = ViewMode::PanelZoom;
         requestUpdate();
@@ -708,7 +721,24 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
 
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
-      // Manga has no TOC — reuse percent-based page jump
+      if (book && book->hasToc()) {
+        startActivityForResult(
+            std::make_unique<MangaChapterSelectionActivity>(renderer, mappedInput, book->getToc(), currentPage),
+            [this](const ActivityResult& result) {
+              if (!result.isCancelled && book) {
+                const uint32_t targetPage = std::get<PageResult>(result.data).page;
+                if (targetPage < book->getPageCount()) {
+                  currentPage = targetPage;
+                  currentPanel = -1;
+                  viewMode = ViewMode::FullPage;
+                  loadCurrentPagePanels();
+                }
+              }
+              requestUpdate();
+            });
+        return;
+      }
+      // No TOC available — fall back to percent-based page jump
       launchPercentJump();
       break;
     case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {

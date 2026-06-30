@@ -14,6 +14,7 @@
 #include <Epub.h>
 #include <Epub/converters/ImageDecoderFactory.h>
 #include <Epub/converters/ImageToFramebufferDecoder.h>
+#include <MangaPanel.h>
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
@@ -81,25 +82,35 @@ void RecentBooksActivity::loadRecentBooks() {
             book.path = fullPath;
             book.title = std::string(nameBuf.get());
 
-            // Use the first image file (alphabetically) as the cover.
+            // Use the first manga PAGE as the cover -- not just the
+            // alphabetically-first image file, since panel-zoom crop files
+            // (p<page>_<panel>.jpg) sort before page_NNNN.jpg ('0' < 'a')
+            // and would otherwise win, showing a cropped panel fragment
+            // instead of the actual first page.
             auto mangaDir = Storage.open(fullPath.c_str());
             if (mangaDir && mangaDir.isDirectory()) {
               mangaDir.rewindDirectory();
-              std::string firstImage;
+              std::string firstPageImage;   // page_NNNN.<ext> -- preferred
+              std::string firstAnyImage;    // fallback for older/foreign naming
               for (auto mf = mangaDir.openNextFile(); mf; mf = mangaDir.openNextFile()) {
                 char imgName[200];
                 mf.getName(imgName, sizeof(imgName));
-                if (imgName[0] != '.' && !mf.isDirectory()) {
-                  std::string_view imgFn{imgName};
-                  if (FsHelpers::hasJpgExtension(imgFn) || FsHelpers::hasPngExtension(imgFn) ||
-                      FsHelpers::hasBmpExtension(imgFn)) {
-                    if (firstImage.empty() || imgFn < firstImage) firstImage = imgName;
-                  }
+                if (imgName[0] == '.' || mf.isDirectory()) continue;
+                std::string_view imgFn{imgName};
+                if (!FsHelpers::hasJpgExtension(imgFn) && !FsHelpers::hasPngExtension(imgFn) &&
+                    !FsHelpers::hasBmpExtension(imgFn)) {
+                  continue;
+                }
+                if (strncmp(imgName, "page_", 5) == 0) {
+                  if (firstPageImage.empty() || imgFn < firstPageImage) firstPageImage = imgName;
+                } else if (!manga::isPanelCropFile(imgName)) {
+                  if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
                 }
               }
               mangaDir.close();
-              if (!firstImage.empty()) {
-                book.coverBmpPath = fullPath + "/" + firstImage;
+              const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
+              if (!chosen.empty()) {
+                book.coverBmpPath = fullPath + "/" + chosen;
               }
             }
 
@@ -269,7 +280,56 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
     file.getName(nameBuffer.get(), NAME_BUF_SIZE);
     if (nameBuffer[0] == '.') continue;
-    if (file.isDirectory()) continue;
+
+    std::string fullPath = folderPath == "/" ? "/" + std::string(nameBuffer.get())
+                                             : folderPath + "/" + std::string(nameBuffer.get());
+
+    if (file.isDirectory()) {
+      // Manga folders (containing panels.idx) count as books within a shelf.
+      std::string idxPath = fullPath + "/panels.idx";
+      if (!Storage.exists(idxPath.c_str())) continue;
+
+      ShelfBook book;
+      book.path = fullPath;
+      book.title = std::string(nameBuffer.get());
+
+      for (const auto& recent : recentBooks) {
+        if (recent.path == book.path) {
+          if (!recent.title.empty()) book.title = recent.title;
+          book.coverBmpPath = recent.coverBmpPath;
+          break;
+        }
+      }
+      if (book.coverBmpPath.empty()) {
+        // Same first-page selection as loadRecentBooks() -- skip panel crops.
+        auto mangaDir = Storage.open(fullPath.c_str());
+        if (mangaDir && mangaDir.isDirectory()) {
+          mangaDir.rewindDirectory();
+          std::string firstPageImage, firstAnyImage;
+          for (auto mf = mangaDir.openNextFile(); mf; mf = mangaDir.openNextFile()) {
+            char imgName[200];
+            mf.getName(imgName, sizeof(imgName));
+            if (imgName[0] == '.' || mf.isDirectory()) continue;
+            std::string_view imgFn{imgName};
+            if (!FsHelpers::hasJpgExtension(imgFn) && !FsHelpers::hasPngExtension(imgFn) &&
+                !FsHelpers::hasBmpExtension(imgFn)) {
+              continue;
+            }
+            if (strncmp(imgName, "page_", 5) == 0) {
+              if (firstPageImage.empty() || imgFn < firstPageImage) firstPageImage = imgName;
+            } else if (!manga::isPanelCropFile(imgName)) {
+              if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
+            }
+          }
+          mangaDir.close();
+          const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
+          if (!chosen.empty()) book.coverBmpPath = fullPath + "/" + chosen;
+        }
+      }
+
+      shelfBooks.push_back(std::move(book));
+      continue;
+    }
 
     std::string_view filename{nameBuffer.get()};
     if (!FsHelpers::hasEpubExtension(filename) && !FsHelpers::hasXtcExtension(filename) &&
@@ -277,11 +337,7 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
       continue;
 
     ShelfBook book;
-    if (folderPath == "/") {
-      book.path = "/" + std::string(filename);
-    } else {
-      book.path = folderPath + "/" + std::string(filename);
-    }
+    book.path = fullPath;
 
     auto dotPos = filename.find_last_of('.');
     book.title = std::string(dotPos != std::string_view::npos ? filename.substr(0, dotPos) : filename);
