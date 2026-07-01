@@ -62,20 +62,31 @@ void MangaReaderActivity::onEnter() {
 }
 
 void MangaReaderActivity::onExit() {
+  uint16_t minutes = 0;
   if (readingSessionStartMs > 0) {
     unsigned long elapsed = millis() - readingSessionStartMs;
-    uint16_t minutes = static_cast<uint16_t>(elapsed / 60000);
+    minutes = static_cast<uint16_t>(elapsed / 60000);
+  }
+
+  // On the last page (currentPage never advances past pageCount-1 -- see
+  // nextPage()) regardless of how long this particular session lasted.
+  // Previously this was nested inside `minutes > 0` AND compared against
+  // pageCount instead of pageCount-1, so it could never fire -- manga never
+  // got marked finished even at 100% progress, unlike Epub/Txt readers.
+  const bool atLastPage = book && book->getPageCount() > 0 && currentPage >= book->getPageCount() - 1;
+
+  if (minutes > 0 || atLastPage) {
+    READING_STATS.loadFromFile();
     if (minutes > 0) {
       time_t now = time(nullptr);
       struct tm* t = localtime(&now);
-      READING_STATS.loadFromFile();
       READING_STATS.addMinutes(static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
                                static_cast<uint8_t>(t->tm_mday), minutes);
-      if (book && currentPage > 0 && currentPage >= book->getPageCount()) {
-        READING_STATS.markBookFinished(book->getFolder());
-      }
-      READING_STATS.saveToFile();
     }
+    if (atLastPage) {
+      READING_STATS.markBookFinished(book->getFolder());
+    }
+    READING_STATS.saveToFile();
   }
 
   saveProgress();
