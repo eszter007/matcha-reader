@@ -53,9 +53,10 @@ void FileBrowserActivity::loadFiles() {
         if (FsHelpers::checkFileExtension(filename, ".bin")) {
           files.emplace_back(filename);
         }
-      } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-                 FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-                 FsHelpers::hasBmpExtension(filename)) {
+      } else {
+        // Show every file, even unsupported formats -- render() dims entries
+        // isSupportedFile() rejects, so users can see what's on the card
+        // without a format silently vanishing from the listing.
         files.emplace_back(filename);
       }
     }
@@ -324,6 +325,8 @@ void FileBrowserActivity::loop() {
           selectorIndex = 0;
           requestUpdate();
         }
+      } else if (mode == Mode::Books && !isSupportedFile(entry)) {
+        // Grayed-out (unsupported format) file -- nothing to open.
       } else {
         onSelectBook(basepath + entry);
       }
@@ -400,6 +403,12 @@ std::string getFileExtension(std::string filename) {
   return filename.substr(pos);
 }
 
+bool FileBrowserActivity::isSupportedFile(std::string_view filename) {
+  return FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+         FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
+         FsHelpers::hasBmpExtension(filename);
+}
+
 void FileBrowserActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
@@ -426,7 +435,11 @@ void FileBrowserActivity::render(RenderLock&&) {
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
         [this](int index) { return getFileName(files[index]); }, nullptr,
         [this](int index) { return UITheme::getFileIcon(files[index]); },
-        [this](int index) { return getFileExtension(files[index]); }, false);
+        [this](int index) { return getFileExtension(files[index]); }, false,
+        [this](int index) {
+          const std::string& entry = files[index];
+          return entry.back() != '/' && !isSupportedFile(entry);
+        });
   }
 
   // Full path display
