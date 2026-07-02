@@ -68,11 +68,15 @@ Reading aids rendered above (horizontal) or beside (vertical) kanji, with positi
 
 ### Localization
 
-All UI chrome this fork adds — menu items and toggles (Word Lookup, Translate Page, Vertical Text, Furigana, Bookmarks/Toggle Bookmark, manga's Panels indicator), popups, and the bookmarks list screens (both EPUB and manga) — goes through the same `tr()`/i18n system as the rest of CrossPoint, so it follows the device's language setting. Every supported language currently has a translation for these strings (initially machine-translated for the languages that hadn't caught up yet) — corrections are welcome via PR, same as any other string in `lib/I18n/translations/` (see [translators.md](docs/translators.md)). Any string a future PR doesn't cover falls back to English automatically.
+All UI chrome this fork adds — menu items and toggles (Word Lookup, Translate Page, Vertical Text, Furigana, Bookmarks/Toggle Bookmark, manga's Panels indicator), popups, and the bookmarks list screens (both EPUB and manga) — goes through the same `tr()`/i18n system as the rest of CrossPoint, so it follows the device's language setting. The same is true for the base CrossPoint UI (Library tabs, Insights, clock sync, firmware update, OPDS servers, keyboard hints, and everything else) — every `STR_*` key in `lib/I18n/translations/english.yaml` currently has a matching translation in all 26 other supported languages, with no English-fallback gaps. Translations were initially machine-translated for the languages that hadn't caught up yet — corrections are welcome via PR, same as any other string in `lib/I18n/translations/` (see [translators.md](docs/translators.md)).
 
 Two features are intentionally **English-only regardless of device language**, since they're producing English *content*, not displaying translatable UI text:
 - **Dictionary Word Lookup** — definitions, part-of-speech, and grammar notes come from the underlying JMdict-based dictionary data, which is English-language by design.
 - **Page Translation** — the Gemini-powered translation always targets English (Japanese → English), both for EPUB "Translate Page" and manga's pre-extracted panel translations.
+
+### CJK Fallback Font
+
+Non-Japanese-language books that contain occasional CJK characters (e.g. a stray Chinese loanword or Japanese proper noun) render using a curated built-in fallback font covering CJK punctuation, hiragana, katakana, fullwidth forms, and the 2,136 Jōyō kanji (常用漢字, Japan's standard list of common-use kanji) — rather than the full ~21,000-character CJK Unified Ideographs block, which doesn't fit in the available flash budget alongside everything else. The fallback font is regular-weight only (no bold); `EpdFontFamily` falls back to regular for bold requests, which is expected for an occasional-use fallback. Japanese books rendered through the vertical-text engine (see above) use the full font selection path, not this fallback.
 
 ### Manga Panel Reader
 
