@@ -3,6 +3,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 namespace {
@@ -18,6 +20,20 @@ struct DictFileHandles {
   HalFile datFile;
   bool opened = false;
   bool triedOpen = false;  // true once an open has been attempted, success or failure
+
+  // Small read-ahead cache for the index-record accesses in lookupInFile(). Most of the latency
+  // in a single SD read is per-transaction protocol overhead, not the 40-byte payload -- and two
+  // of the three access patterns there are sequential (the "scan backward to find the first
+  // record with this headword" walk, and the "collect up to 5 entries" walk), not the coarse
+  // binary search itself. WordLookup::lookup() calls into here up to 8 window lengths x several
+  // deinflection candidates x up to 3 dictionaries PER CHARACTER on the page, so cutting even the
+  // sequential-phase read count matters a lot in aggregate. Centering the block on whatever index
+  // triggered the miss covers both the backward walk and the forward collect from one fetch in
+  // the common case (same-headword runs are bounded to 5 by kMaxEntries in lookupInFile).
+  static constexpr size_t BLOCK_RECORDS = 32;
+  DictIndexRecord blockCache[BLOCK_RECORDS];
+  size_t blockStart = SIZE_MAX;  // record index blockCache[0] corresponds to; SIZE_MAX = empty
+  size_t blockCount = 0;         // valid records currently in blockCache
 };
 
 DictFileHandles& handlesFor(const char* idxPath) {
@@ -27,6 +43,32 @@ DictFileHandles& handlesFor(const char* idxPath) {
   if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0) return grammar;
   if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0) return names;
   return jmdict;
+}
+
+// Reads index record `idx` (of `recordCount` total), transparently using/filling h's block cache.
+// Semantically identical to a direct seek+read of that one record -- callers don't need to know
+// whether this was served from cache or SD.
+bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictIndexRecord& out) {
+  if (h.blockStart != SIZE_MAX && idx >= h.blockStart && idx < h.blockStart + h.blockCount) {
+    out = h.blockCache[idx - h.blockStart];
+    return true;
+  }
+
+  const size_t half = DictFileHandles::BLOCK_RECORDS / 2;
+  const size_t start = (idx > half) ? (idx - half) : 0;
+  const size_t count = std::min(DictFileHandles::BLOCK_RECORDS, recordCount - start);
+
+  h.idxFile.seek(start * sizeof(DictIndexRecord));
+  const size_t bytesToRead = count * sizeof(DictIndexRecord);
+  if (h.idxFile.read(reinterpret_cast<uint8_t*>(h.blockCache), bytesToRead) != static_cast<int>(bytesToRead)) {
+    h.blockStart = SIZE_MAX;  // invalidate on read failure -- don't serve a partial block later
+    return false;
+  }
+
+  h.blockStart = start;
+  h.blockCount = count;
+  out = h.blockCache[idx - start];
+  return true;
 }
 }  // namespace
 
@@ -72,8 +114,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
 
   while (lo < hi) {
     const size_t mid = lo + (hi - lo) / 2;
-    idxFile.seek(mid * sizeof(DictIndexRecord));
-    if (idxFile.read(reinterpret_cast<uint8_t*>(&rec), sizeof(rec)) != sizeof(rec)) {
+    if (!readIndexRecord(h, mid, recordCount, rec)) {
       break;
     }
 
@@ -86,9 +127,8 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       // Found a match — scan backwards to find the first record with this headword
       size_t first = mid;
       while (first > 0) {
-        idxFile.seek((first - 1) * sizeof(DictIndexRecord));
         DictIndexRecord prevRec;
-        if (idxFile.read(reinterpret_cast<uint8_t*>(&prevRec), sizeof(prevRec)) != sizeof(prevRec)) break;
+        if (!readIndexRecord(h, first - 1, recordCount, prevRec)) break;
         if (std::memcmp(key, prevRec.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         first--;
       }
@@ -99,9 +139,8 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       constexpr int kMaxEntries = 5;
 
       for (size_t idx = first; idx < recordCount && static_cast<int>(entries.size()) < kMaxEntries; idx++) {
-        idxFile.seek(idx * sizeof(DictIndexRecord));
         DictIndexRecord r;
-        if (idxFile.read(reinterpret_cast<uint8_t*>(&r), sizeof(r)) != sizeof(r)) break;
+        if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
 
         datFile.seek(r.offset);
