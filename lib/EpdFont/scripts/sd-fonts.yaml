@@ -239,10 +239,15 @@ families:
     # allocates BmpInterval16[intervalCount] and EpdUnicodeInterval[intervalCount] as a single
     # nothrow allocation (SdCardFont.cpp ~line 584/601) -- an oversized intervalCount can fail that
     # allocation outright on this device's ~220KB heap, which is the load failure that shows up as
-    # "falls back to built-in font". The "cjk" preset (hiragana/katakana/CJK Unified/compat/full-
-    # width, same coverage other CJK SD fonts in this file use) is a handful of large contiguous
-    # ranges instead, keeping intervalCount small while still covering virtually all Japanese text.
-    intervals: cjk
+    # "falls back to built-in font".
+    # First tried "cjk" (hiragana/katakana/CJK Unified/compat/fullwidth) -- confirmed on a real
+    # device this dropped U+FE45/U+FE46 (the tategaki emphasis "sesame dot" marks, CJK
+    # Compatibility Forms block) since that block isn't in the "cjk" preset, causing constant
+    # on-demand-fallback misses for any emphasized text. "cjk-ext" adds CJK Compatibility Forms
+    # (0xFE30-0xFE4F) plus radicals/Bopomofo/Kanbun/enclosed-letters -- still a handful of large
+    # contiguous ranges (bounded intervalCount), just with fuller coverage of what real Japanese
+    # text actually uses.
+    intervals: cjk-ext
     sizes: [12, 14, 16, 18]
     force_autohint: true
     fallback:

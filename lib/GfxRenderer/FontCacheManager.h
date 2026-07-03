@@ -17,6 +17,11 @@ class FontCacheManager {
 
   void clearCache();
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
+  // True if fontId is backed by an SD-card font (SdCardFont::prewarm(), one-open bulk-load path)
+  // rather than a built-in compressed font (FontDecompressor's own group-cache prewarm, which has
+  // a separate, much more limited concurrent-prewarm-buffer budget -- see prewarmCache() callers
+  // that need to avoid competing with normal rendering's own use of that path).
+  bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
   void logStats(const char* label = "render");
   void resetStats();
 

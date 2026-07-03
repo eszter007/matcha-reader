@@ -5,19 +5,54 @@
 
 #include <cstring>
 
+namespace {
+// Re-opening the idx/dat files on every lookup was the dominant cost of building the Word Lookup
+// screen: each SD file open has real filesystem overhead (path resolution, directory traversal),
+// and WordLookup::lookup() calls DictIndex::lookupExact() up to 8 window lengths x several
+// deinflection candidates x up to 3 dictionaries -- per character position on the page. For a
+// full page that's thousands of opens where a handful would do. There are only ever 3 fixed
+// (idx, dat) path pairs (jmdict/grammar/jmnedict) for the process's whole lifetime, so it's safe
+// to open each pair once (lazily, on first use) and keep it open rather than reopening per call.
+struct DictFileHandles {
+  HalFile idxFile;
+  HalFile datFile;
+  bool opened = false;
+  bool triedOpen = false;  // true once an open has been attempted, success or failure
+};
+
+DictFileHandles& handlesFor(const char* idxPath) {
+  static DictFileHandles jmdict;
+  static DictFileHandles grammar;
+  static DictFileHandles names;
+  if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0) return grammar;
+  if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0) return names;
+  return jmdict;
+}
+}  // namespace
+
 bool DictIndex::isAvailable() {
   return Storage.exists(IDX_PATH) && Storage.exists(DAT_PATH);
 }
 
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out) {
-  HalFile idxFile;
-  if (!Storage.openFileForRead("DICT", idxPath, idxFile)) {
-    return false;
+  DictFileHandles& h = handlesFor(idxPath);
+  if (!h.opened) {
+    // Optional dictionaries (grammar, jmnedict) may genuinely not be on the SD card -- without
+    // this latch, every lookup attempt would retry the open (and its filesystem overhead) only to
+    // fail again, once per candidate/window/character for the whole page.
+    if (h.triedOpen) return false;
+    h.triedOpen = true;
+    if (!Storage.openFileForRead("DICT", idxPath, h.idxFile) ||
+        !Storage.openFileForRead("DICT", datPath, h.datFile)) {
+      return false;
+    }
+    h.opened = true;
   }
+  HalFile& idxFile = h.idxFile;
+  HalFile& datFile = h.datFile;
 
   const size_t fileSize = idxFile.size();
   if (fileSize < sizeof(DictIndexRecord)) {
-    idxFile.close();
     return false;
   }
 
@@ -27,7 +62,6 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   std::memset(key, 0, sizeof(key));
   const size_t len = std::strlen(headword);
   if (len >= sizeof(key)) {
-    idxFile.close();
     return false;
   }
   std::memcpy(key, headword, len);
@@ -60,12 +94,6 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       }
 
       // Collect all entries with this headword, pick highest priority and merge
-      HalFile datFile;
-      if (!Storage.openFileForRead("DICT", datPath, datFile)) {
-        idxFile.close();
-        return false;
-      }
-
       struct Entry { std::string def; uint8_t priority; };
       std::vector<Entry> entries;
       constexpr int kMaxEntries = 5;
@@ -83,9 +111,6 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
 
         entries.push_back({std::move(def), r.priority});
       }
-
-      datFile.close();
-      idxFile.close();
 
       if (entries.empty()) return false;
 
@@ -113,17 +138,14 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     }
   }
 
-  idxFile.close();
   return false;
 }
 
 bool DictIndex::lookupExact(const char* headword, DictEntry& out) {
+  // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
+  // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
+  // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
   if (lookupInFile(headword, IDX_PATH, DAT_PATH, out)) return true;
-  if (Storage.exists(GRAMMAR_IDX_PATH)) {
-    if (lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out)) return true;
-  }
-  if (Storage.exists(NAMES_IDX_PATH)) {
-    return lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out);
-  }
-  return false;
+  if (lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out)) return true;
+  return lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out);
 }

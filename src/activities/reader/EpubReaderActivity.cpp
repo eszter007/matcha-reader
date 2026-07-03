@@ -1157,6 +1157,34 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           fitBlock.render(renderer, imgX, imgY);
         }
       } else {
+        // Bulk-load every glyph this page needs before drawing a single one. Without this, each
+        // draw call for a codepoint that isn't already cached falls through to the on-demand
+        // fallback path (for SD-card fonts: a fresh SD file open + two seeks + two reads per
+        // miss, into an 8-slot ring buffer) -- for a page with hundreds of distinct kanji, that's
+        // hundreds of individual SD round-trips. Confirmed on a real device: this was the entire
+        // cause of vertical page turns taking 1.5-2+ seconds of pure render time with an SD font.
+        //
+        // clearCache() first is required, not optional: FontDecompressor's prewarmCache() claims
+        // one of only MAX_PAGE_SLOTS (4) page-buffer slots per call and never self-evicts --
+        // "the caller must call freePageBuffer/clearCache to reset" (FontDecompressor.h). Without
+        // this, every page turn permanently claims more slots; confirmed on a real device that
+        // after ~1 page's worth of prewarm calls, all 4 slots were stuck full, "cannot prewarm"
+        // fired for every subsequent page, and glyphs stopped resolving at all (blank pages).
+        //
+        // styleMask must reflect only the styles ACTUALLY present on this page, not a blanket "all
+        // 4" request: FontCacheManager::prewarmCache() claims one slot per requested style, PLUS
+        // another slot per style for the family's fallback font if it has one -- up to 8 slot
+        // claims against only 4 slots total. Confirmed on a real device: even right after
+        // clearCache(), a single page still hit "all 4 slots full" because the blanket request
+        // needed more slots than exist, wasting them on styles the page doesn't even use.
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          fcm->clearCache();
+          uint8_t styleMask = 0;
+          for (const auto& g : vpage->glyphs) styleMask |= static_cast<uint8_t>(1u << (g.style & 0x03));
+          if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
+          const std::string pageText = PageTextExtractor::fromVerticalPage(*vpage);
+          fcm->prewarmCache(SETTINGS.getReaderFontId(), pageText.c_str(), styleMask);
+        }
         VerticalTextBlock block(*vpage);
         if (useFurigana()) {
           block.render(renderer, SETTINGS.getReaderFontId(), SETTINGS.getRubyFontId(), orientedMarginLeft,

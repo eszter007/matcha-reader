@@ -17,19 +17,14 @@
 
 namespace {
 
-// v49: bumped again past every v48 cache -- v48 eliminated OOM-caused glyph drops entirely
-// (confirmed on a real device: a dense chapter rebuilt with zero drops), but a real device
-// screenshot then showed a DIFFERENT bug: pages missing their left-hand (i.e. later-filled)
-// columns. Root cause: every BATCH_CHARS-triggered flush called layoutPages(), which
-// unconditionally finalized whatever page was currently in progress -- even if only partially
-// filled -- and the NEXT flush started a brand new page instead of continuing the cut-short one.
-// With BATCH_CHARS lowered to 160 this batch (tonight, for the memory fix) that landed mid-page
-// far more often than it used to, making pages come out mostly-empty despite every character
-// technically being laid out SOMEWHERE. Fixed by making the in-progress page/column/row persist
-// across layoutPages() calls (isFinalFlush=false), only truly finalizing the trailing page on the
-// chapter's actual last flush. Pages built under v48 can have missing columns purely from this
-// premature-finalization bug, so they must not be silently reused. See cache format comment below.
-constexpr uint8_t VSECTION_FILE_VERSION = 49;
+// v50: bumped again past every v49 cache -- makeImagePage() now retries a broken image
+// extraction (cached file exists but is empty, from a failed extraction under the same heap
+// pressure this session spent all night fixing) instead of treating "file exists" as "already
+// cached forever". That retry only runs when the chapter's .bin is actually rebuilt, so a chapter
+// already cached with a broken image reference needs a forced rebuild to self-heal -- confirmed
+// on a real device: the same broken image was still blank after the code fix, because the stale
+// v49 cache (built before the fix existed) was still being reused. See cache format comment below.
+constexpr uint8_t VSECTION_FILE_VERSION = 50;
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 
 using RubyRun = VerticalParsedText::RubyRun;
@@ -657,13 +652,29 @@ struct LayoutPageSink final : ParagraphSink {
     if (extPos != std::string::npos) ext = resolvedSrc.substr(extPos);
     const std::string cachedPath = imageBasePath + std::to_string(imgIdx++) + ext;
 
-    // Extract image from EPUB to cache if not already present
-    if (!Storage.exists(cachedPath.c_str())) {
+    // Extract image from EPUB to cache if not already present. A previous attempt that failed
+    // partway (e.g. the zip inflate's 32KB ring buffer allocation failing under the same heap
+    // pressure this session spent all night fixing elsewhere) can leave behind a file that
+    // EXISTS but is empty/truncated -- Storage.exists() alone can't tell a genuinely-cached image
+    // from that broken leftover, so a broken file was never retried, permanently blanking that
+    // page. Checking size > 0 makes this self-healing for images broken by an earlier session.
+    bool needsExtraction = true;
+    if (Storage.exists(cachedPath.c_str())) {
+      HalFile existingFile;
+      if (Storage.openFileForRead("VSC", cachedPath, existingFile) && existingFile.size() > 0) {
+        needsExtraction = false;
+      }
+    }
+    if (needsExtraction) {
       HalFile cachedFile;
       if (Storage.openFileForWrite("VSC", cachedPath, cachedFile)) {
-        epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
+        const bool extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
         cachedFile.flush();
         cachedFile.close();
+        if (!extracted) {
+          LOG_ERR("VSC", "Failed to extract image %s; removing partial cache file", resolvedSrc.c_str());
+          Storage.remove(cachedPath.c_str());
+        }
       }
     }
 
