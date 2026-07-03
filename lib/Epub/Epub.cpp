@@ -395,6 +395,13 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         // Invalidate section caches so they are rebuilt with the new CSS
         Storage.removeDir((cachePath + "/sections").c_str());
       }
+      // The loadFromCache() above was a validity/version CHECK -- don't keep the rule table
+      // resident for the whole reading session. Only horizontal section BUILDS consume it, and
+      // Section.cpp reloads it from the on-disk cache right before parsing. A heavy book's table
+      // (e.g. 608 rules, ~79KB serialized) held in thousands of small string allocations
+      // fragments the heap badly enough that vertical section builds can no longer get their
+      // ~33KB contiguous stream reserve and silently truncate long chapters into sparse pages.
+      cssParser->clear();
     }
     LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
     return true;

@@ -21,7 +21,11 @@ class WordLookup {
  public:
   // Look up the word starting at byteOffset in paragraphText.
   // Returns true and fills `out` if a match was found.
-  static bool lookup(const std::string& paragraphText, size_t byteOffset, WordLookupResult& out);
+  // needDefinition=false skips fetching definition text from the .dat files (out.entry.definition
+  // is left empty; headword and matchLength are still exact). Use it when only the segmentation is
+  // needed (the page pre-scan) -- it saves 1-5 SD reads per match.
+  static bool lookup(const std::string& paragraphText, size_t byteOffset, WordLookupResult& out,
+                     bool needDefinition = true);
 
   // Maximum number of characters to consider in the scanning window.
   static constexpr int MAX_WINDOW_CHARS = 8;

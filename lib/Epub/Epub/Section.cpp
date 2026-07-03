@@ -281,6 +281,9 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     // Explicitly close() file before calling Storage.remove()
     file.close();
     Storage.remove(filePath.c_str());
+    if (cssParser) {
+      cssParser->clear();
+    }
     return false;
   }
 

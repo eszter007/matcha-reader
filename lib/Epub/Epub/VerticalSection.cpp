@@ -27,7 +27,10 @@ namespace {
 // logic and are now stuck cached as "extraction already tried, still missing" until a fresh
 // rebuild gives the fix (more headroom, not just a retry) a chance to actually help. See cache
 // format comment below.
-constexpr uint8_t VSECTION_FILE_VERSION = 51;
+// v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
+// rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
+// stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
+constexpr uint8_t VSECTION_FILE_VERSION = 52;
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 
 using RubyRun = VerticalParsedText::RubyRun;

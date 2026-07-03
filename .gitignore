@@ -11,6 +11,10 @@ lib/I18n/I18nStrings.cpp
 build
 **/__pycache__/
 dev/dict_host_test/dtest
+dev/dict_host_test/scan_bench
+dev/dict_host_test/spx_verify
+dev/dict_host_test/word_dump
+dev/dict_host_test/word_dump_base
 /compile_commands.json
 /.cache
 .history/

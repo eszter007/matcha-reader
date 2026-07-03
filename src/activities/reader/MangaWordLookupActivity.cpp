@@ -1,10 +1,12 @@
 #include "MangaWordLookupActivity.h"
 
+#include <Arduino.h>
 #include <DictIndex.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <WordLookup.h>
 
 #include "CrossPointSettings.h"
@@ -29,7 +31,7 @@ bool isCJK(uint32_t cp) {
          (cp >= 0xF900 && cp <= 0xFAFF);
 }
 
-bool stripTrailingParticle(const std::string& text, WordLookupResult& result) {
+bool stripTrailingParticle(const std::string& text, WordLookupResult& result, bool needDefinition = true) {
   if (result.matchLength == 0) return false;
   size_t pos = 0, lastStart = 0;
   uint32_t lastCp = 0, prevCp = 0;
@@ -53,7 +55,7 @@ bool stripTrailingParticle(const std::string& text, WordLookupResult& result) {
 
   std::string stem = text.substr(0, lastStart);
   WordLookupResult sr;
-  if (WordLookup::lookup(stem, 0, sr) && sr.matchLength == stem.size()) {
+  if (WordLookup::lookup(stem, 0, sr, needDefinition) && sr.matchLength == stem.size()) {
     result = std::move(sr);
     return true;
   }
@@ -79,7 +81,13 @@ MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedIn
     allGlyphs.push_back(GlyphRef{cp});
   }
 
+  // Diagnostic timing for the Word Lookup slowness investigation -- see DictIndex::logAndResetStats().
+  const uint32_t scanStart = millis();
+  LOG_INF("MWLA", "buildSelectableGlyphs: scanning %u characters", static_cast<unsigned>(allGlyphs.size()));
   buildSelectableGlyphs();
+  LOG_INF("MWLA", "buildSelectableGlyphs: done in %u ms, %u selectable", millis() - scanStart,
+          static_cast<unsigned>(selectableGlyphs.size()));
+  DictIndex::logAndResetStats("buildSelectableGlyphs");
 }
 
 void MangaWordLookupActivity::buildSelectableGlyphs() {
@@ -99,9 +107,10 @@ void MangaWordLookupActivity::buildSelectableGlyphs() {
     }
 
     WordLookupResult result;
-    bool hasMatch = !text.empty() && WordLookup::lookup(text, 0, result);
+    // Scan only needs the match length -- definitions are fetched fresh on selection.
+    bool hasMatch = !text.empty() && WordLookup::lookup(text, 0, result, /*needDefinition=*/false);
     if (hasMatch) {
-      stripTrailingParticle(text, result);
+      stripTrailingParticle(text, result, /*needDefinition=*/false);
       int matchChars = 0;
       size_t pos = 0;
       while (pos < result.matchLength && pos < text.size()) {
@@ -134,7 +143,11 @@ void MangaWordLookupActivity::onEnter() {
   requestUpdate();
 }
 
-void MangaWordLookupActivity::onExit() { Activity::onExit(); }
+void MangaWordLookupActivity::onExit() {
+  // Return the dictionary cache memory (~30KB) to the pool -- see EpubReaderWordLookupActivity.
+  DictIndex::releaseCaches();
+  Activity::onExit();
+}
 
 void MangaWordLookupActivity::moveCursor(int delta) {
   if (selectableGlyphs.empty()) return;

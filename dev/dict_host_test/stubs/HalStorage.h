@@ -5,6 +5,13 @@
 #include <cstring>
 #include <string>
 
+// Dev-only SD-read instrumentation: each read()/seek() is one SD transaction on device, so
+// these counters approximate on-device I/O cost. Reset/read from the benchmark harness.
+namespace halstub {
+inline long g_reads = 0;
+inline long g_seeks = 0;
+}  // namespace halstub
+
 // Minimal HalFile stub for host testing — wraps stdio FILE*.
 class HalFile {
   FILE* f_ = nullptr;
@@ -33,11 +40,13 @@ class HalFile {
   }
 
   bool seek(size_t pos) {
+    halstub::g_seeks++;
     return f_ && std::fseek(f_, static_cast<long>(pos), SEEK_SET) == 0;
   }
 
   size_t read(uint8_t* buf, size_t len) {
     if (!f_) return 0;
+    halstub::g_reads++;
     return std::fread(buf, 1, len, f_);
   }
 
@@ -58,8 +67,13 @@ class HalStorage {
     return instance;
   }
 
+  // Dev-only: prepend a root so DictIndex's absolute "/dict/..." paths resolve under a real
+  // sdcard/ directory on the host. Set from CP_SD_ROOT (see spx_verify.cpp).
+  std::string root_;
+  std::string resolve(const std::string& path) const { return root_ + path; }
+
   bool exists(const char* path) const {
-    FILE* f = std::fopen(path, "rb");
+    FILE* f = std::fopen(resolve(path).c_str(), "rb");
     if (f) {
       std::fclose(f);
       return true;
@@ -69,13 +83,13 @@ class HalStorage {
 
   bool openFileForRead(const char* /*tag*/, const std::string& path, HalFile& file) {
     file.close();
-    file.f_ = std::fopen(path.c_str(), "rb");
+    file.f_ = std::fopen(resolve(path).c_str(), "rb");
     return file.f_ != nullptr;
   }
 
   bool openFileForWrite(const char* /*tag*/, const std::string& path, HalFile& file) {
     file.close();
-    file.f_ = std::fopen(path.c_str(), "wb");
+    file.f_ = std::fopen(resolve(path).c_str(), "wb");
     return file.f_ != nullptr;
   }
 

@@ -77,7 +77,7 @@ bool isDigitCp(uint32_t cp) {
 // and the stem alone is itself a valid word, shorten `result` to the stem.
 // Only fires when the char before the particle is a kanji, so hiragana
 // compounds (もの, こと) are left intact.
-bool stripTrailingParticle(const std::string& text, WordLookupResult& result) {
+bool stripTrailingParticle(const std::string& text, WordLookupResult& result, bool needDefinition = true) {
   if (result.matchLength == 0) return false;
   size_t pos = 0, lastStart = 0;
   uint32_t lastCp = 0, prevCp = 0;
@@ -115,7 +115,7 @@ bool stripTrailingParticle(const std::string& text, WordLookupResult& result) {
 
   std::string stem = text.substr(0, lastStart);
   WordLookupResult sr;
-  if (WordLookup::lookup(stem, 0, sr) && sr.matchLength == stem.size()) {
+  if (WordLookup::lookup(stem, 0, sr, needDefinition) && sr.matchLength == stem.size()) {
     result = std::move(sr);
     return true;
   }
@@ -167,7 +167,13 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
     GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, false};
     if (!pushGlyphSafe(allGlyphs, ref)) break;
   }
+  // Diagnostic timing for the Word Lookup slowness investigation -- see DictIndex::logAndResetStats().
+  const uint32_t scanStart = millis();
+  LOG_INF("WLA", "buildSelectableGlyphs (vertical): scanning %u characters", static_cast<unsigned>(allGlyphs.size()));
   buildSelectableGlyphs();
+  LOG_INF("WLA", "buildSelectableGlyphs (vertical): done in %u ms, %u selectable", millis() - scanStart,
+          static_cast<unsigned>(selectableGlyphs.size()));
+  DictIndex::logAndResetStats("buildSelectableGlyphs (vertical)");
 }
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -225,7 +231,14 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       }
     }
   }
+  // Diagnostic timing for the Word Lookup slowness investigation -- see DictIndex::logAndResetStats().
+  const uint32_t scanStart = millis();
+  LOG_INF("WLA", "buildSelectableGlyphs (horizontal): scanning %u characters",
+          static_cast<unsigned>(allGlyphs.size()));
   buildSelectableGlyphs();
+  LOG_INF("WLA", "buildSelectableGlyphs (horizontal): done in %u ms, %u selectable", millis() - scanStart,
+          static_cast<unsigned>(selectableGlyphs.size()));
+  DictIndex::logAndResetStats("buildSelectableGlyphs (horizontal)");
 }
 
 void EpubReaderWordLookupActivity::buildSelectableGlyphs() {
@@ -265,12 +278,17 @@ void EpubReaderWordLookupActivity::buildSelectableGlyphs() {
       charCount++;
     }
 
-    // Try dictionary lookup to find match length
+    // Try dictionary lookup to find match length. The definition text is only consulted by the
+    // hiragana/[kana] suppression check below, which only runs for positions that start with
+    // neither kanji nor katakana -- for every other position, skip fetching definitions from the
+    // .dat file entirely (1-5 SD reads saved per match; the real definition is fetched fresh when
+    // the user selects a word).
+    const bool needDef = !isCJK(allGlyphs[scanStart].codepoint) && !isKatakana(allGlyphs[scanStart].codepoint);
     WordLookupResult result;
-    bool hasMatch = !text.empty() && WordLookup::lookup(text, 0, result);
+    bool hasMatch = !text.empty() && WordLookup::lookup(text, 0, result, needDef);
     int matchChars = 0;
     if (hasMatch) {
-      stripTrailingParticle(text, result);
+      stripTrailingParticle(text, result, needDef);
       size_t pos = 0;
       while (pos < result.matchLength && pos < text.size()) {
         auto c = static_cast<unsigned char>(text[pos]);
@@ -326,7 +344,8 @@ void EpubReaderWordLookupActivity::buildSelectableGlyphs() {
           nc++;
         }
         WordLookupResult nr;
-        if (!nextText.empty() && WordLookup::lookup(nextText, 0, nr)) {
+        // Only the match length is used here -- never fetch definitions.
+        if (!nextText.empty() && WordLookup::lookup(nextText, 0, nr, /*needDefinition=*/false)) {
           int nmc = 0;
           size_t pp = 0;
           while (pp < nr.matchLength && pp < nextText.size()) {
@@ -474,8 +493,9 @@ void EpubReaderWordLookupActivity::buildSelectableGlyphs() {
       lcount++;
     }
     WordLookupResult lr;
-    if (!ltext.empty() && WordLookup::lookup(ltext, 0, lr)) {
-      stripTrailingParticle(ltext, lr);
+    // Only the match length is consulted below -- skip definition fetches.
+    if (!ltext.empty() && WordLookup::lookup(ltext, 0, lr, /*needDefinition=*/false)) {
+      stripTrailingParticle(ltext, lr, /*needDefinition=*/false);
       // Count matched chars
       int mc = 0;
       size_t p = 0;
@@ -534,7 +554,12 @@ void EpubReaderWordLookupActivity::onEnter() {
   requestUpdate();
 }
 
-void EpubReaderWordLookupActivity::onExit() { Activity::onExit(); }
+void EpubReaderWordLookupActivity::onExit() {
+  // Return the dictionary cache memory (~30KB) to the pool -- the reader needs it for heavy
+  // operations like re-pagination (zip inflate wants one contiguous 32KB block).
+  DictIndex::releaseCaches();
+  Activity::onExit();
+}
 
 void EpubReaderWordLookupActivity::moveCursor(int delta) {
   if (selectableGlyphs.empty()) return;
