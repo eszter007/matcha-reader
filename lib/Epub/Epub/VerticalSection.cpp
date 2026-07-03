@@ -1,6 +1,7 @@
 #include "VerticalSection.h"
 
 #include <Arduino.h>
+#include <FontCacheManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
@@ -17,14 +18,16 @@
 
 namespace {
 
-// v50: bumped again past every v49 cache -- makeImagePage() now retries a broken image
-// extraction (cached file exists but is empty, from a failed extraction under the same heap
-// pressure this session spent all night fixing) instead of treating "file exists" as "already
-// cached forever". That retry only runs when the chapter's .bin is actually rebuilt, so a chapter
-// already cached with a broken image reference needs a forced rebuild to self-heal -- confirmed
-// on a real device: the same broken image was still blank after the code fix, because the stale
-// v49 cache (built before the fix existed) was still being reused. See cache format comment below.
-constexpr uint8_t VSECTION_FILE_VERSION = 50;
+// v51: bumped again past every v50 cache -- confirmed on a real device that v50's retry logic ran
+// correctly (logged "removing partial cache file" for several broken images) but several STILL
+// failed extraction on that same rebuild pass: the zip inflate's 32KB contiguous block was
+// competing with the font decompressor's hot-group buffer, still resident from this same
+// chapter's column-fitting text measurements. Now frees that buffer immediately before each image
+// extraction attempt. A chapter rebuilt under v50 can have images that failed even with the retry
+// logic and are now stuck cached as "extraction already tried, still missing" until a fresh
+// rebuild gives the fix (more headroom, not just a retry) a chance to actually help. See cache
+// format comment below.
+constexpr uint8_t VSECTION_FILE_VERSION = 51;
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 
 using RubyRun = VerticalParsedText::RubyRun;
@@ -534,6 +537,7 @@ struct LayoutPageSink final : ParagraphSink {
   HalFile& out;
   std::vector<uint32_t>& pageOffsets;
   Epub& epub;
+  GfxRenderer& renderer;
   const std::string& chapterDir;
   const std::string& imageBasePath;
   const uint16_t viewportWidth;
@@ -560,12 +564,13 @@ struct LayoutPageSink final : ParagraphSink {
   static constexpr size_t BATCH_CHARS = 160;
 
   LayoutPageSink(VerticalParsedText& layout, HalFile& out, std::vector<uint32_t>& pageOffsets, Epub& epub,
-                 const std::string& chapterDir, const std::string& imageBasePath, uint16_t viewportWidth,
-                 uint16_t viewportHeight)
+                 GfxRenderer& renderer, const std::string& chapterDir, const std::string& imageBasePath,
+                 uint16_t viewportWidth, uint16_t viewportHeight)
       : layout(layout),
         out(out),
         pageOffsets(pageOffsets),
         epub(epub),
+        renderer(renderer),
         chapterDir(chapterDir),
         imageBasePath(imageBasePath),
         viewportWidth(viewportWidth),
@@ -666,6 +671,14 @@ struct LayoutPageSink final : ParagraphSink {
       }
     }
     if (needsExtraction) {
+      // Extraction needs one contiguous 32KB block for the zip inflate window (InflateReader::
+      // init(true)) -- confirmed on a real device that this fails on chapters with both many
+      // images and dense text, where the font decompressor's hot-group buffer (regrown during
+      // this same chapter's column-fitting measurements) is still resident and competing for that
+      // headroom. Free it right before the allocation that actually needs it.
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        fcm->clearCache();
+      }
       HalFile cachedFile;
       if (Storage.openFileForWrite("VSC", cachedPath, cachedFile)) {
         const bool extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
@@ -770,7 +783,8 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     layout.setRightPaddingPx((lineH / 2) < 2 ? 2 : (lineH / 2));
   }
 
-  LayoutPageSink sink(layout, out, pageOffsets_, *epub, chapterDir, imageBasePath, viewportWidth, viewportHeight);
+  LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
+                      viewportHeight);
 
   TextExtractor extractor;
   extractor.sink = &sink;
