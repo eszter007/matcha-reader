@@ -1,6 +1,7 @@
 #include "MangaWordLookupActivity.h"
 
 #include <DictIndex.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -138,17 +139,15 @@ void MangaWordLookupActivity::onExit() { Activity::onExit(); }
 void MangaWordLookupActivity::moveCursor(int delta) {
   if (selectableGlyphs.empty()) return;
   const int maxIdx = static_cast<int>(selectableGlyphs.size()) - 1;
-  const int step = (delta > 0) ? 1 : -1;
-  const int startIdx = cursorIndex;
-
-  for (int attempts = 0; attempts < 30; attempts++) {
-    cursorIndex += (attempts == 0) ? delta : step;
-    if (cursorIndex < 0) { cursorIndex = 0; performLookup(); return; }
-    if (cursorIndex > maxIdx) { cursorIndex = maxIdx; performLookup(); return; }
-    if (cursorIndex == startIdx) { performLookup(); return; }
-    performLookup();
-    if (hasResult) return;
-  }
+  // selectableGlyphs is already the pre-filtered list of positions buildSelectableGlyphs()
+  // confirmed have a dictionary match -- every index in it is valid by construction. Same fix as
+  // EpubReaderWordLookupActivity::moveCursor(): the previous retry-skip loop re-validated via a
+  // fresh performLookup() and kept advancing past any position that didn't independently agree,
+  // silently skipping entries ("every second entry is skipped" during navigation).
+  cursorIndex += delta;
+  if (cursorIndex < 0) cursorIndex = 0;
+  if (cursorIndex > maxIdx) cursorIndex = maxIdx;
+  performLookup();
 }
 
 void MangaWordLookupActivity::encodeUtf8(uint32_t cp, std::string& out) {
@@ -311,6 +310,24 @@ void MangaWordLookupActivity::loop() {
 void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
   auto metrics = UITheme::getInstance().getMetrics();
   const int jaFont = SETTINGS.getReaderFontId();
+
+  // Bulk-load every glyph the headword + definition need before drawing/measuring any of them.
+  // Without this, each drawText()/getTextWidth() call for a character that isn't already cached
+  // falls through the slow one-by-one fallback path -- confirmed on a real device as 12-18 SECOND
+  // render times for a single Word Lookup screen (same root cause as the vertical-page-turn
+  // slowness fixed earlier: dictionary definitions merge up to 5 entries and can run to hundreds
+  // of characters spanning many different compressed font groups, each a cache miss without this).
+  if (hasResult) {
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+      // Scoped to the exact style each is drawn with below (headword: BOLD; definition: REGULAR)
+      // -- a blanket "all 4 styles" request can itself exhaust the font decompressor's 4-slot
+      // page buffer (each style, plus one more per style if the font has a fallback), same trap
+      // found and fixed for vertical-page rendering earlier this session.
+      fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+    }
+  }
 
   if (selectableGlyphs.empty() || !hasResult) {
     UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID,

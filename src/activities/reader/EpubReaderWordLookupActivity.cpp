@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <DictIndex.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -756,6 +757,19 @@ void EpubReaderWordLookupActivity::loop() {
 void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
   auto metrics = UITheme::getInstance().getMetrics();
   const int jaFont = SETTINGS.getReaderFontId();
+
+  // Bulk-load every glyph the headword + definition need before drawing/measuring any of them --
+  // same fix, and same root cause, as the vertical-page-turn slowness fixed earlier this session.
+  // Without this, dictionary definitions (which merge up to 5 entries and can run to hundreds of
+  // characters spanning many different compressed font groups) fall through the slow one-by-one
+  // glyph fallback path a character at a time.
+  if (hasResult) {
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+      fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+    }
+  }
 
   if (selectableGlyphs.empty() || !hasResult) {
     UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID,
