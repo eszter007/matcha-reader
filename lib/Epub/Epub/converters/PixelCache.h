@@ -8,6 +8,24 @@
 #include <cstring>
 #include <string>
 
+class GfxRenderer;
+
+// Shared by every caller that decodes a bitmap image to the framebuffer across multiple render
+// passes (BW + grayscale planes) for the same on-screen image: ImageBlock (EPUB embedded images)
+// and MangaReaderActivity (full-page and panel-zoom manga views). See PixelCache below for why
+// this exists -- decoding once and reading the cache back for the other passes turns e.g. ~3
+// full JPEG decodes per page into 1 decode + 2 cheap sequential reads.
+namespace PixelCacheIO {
+// Replaces imagePath's extension with .pxc (pixel cache).
+std::string pathFor(const std::string& imagePath);
+
+// Renders from an existing cache file written by a prior PixelCache-backed decode. Returns false
+// (nothing drawn) if the cache doesn't exist or its dimensions don't match expectedWidth/Height
+// (within 1px, for rounding) -- the caller should then fall back to a full decode.
+bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
+                     int expectedHeight);
+}  // namespace PixelCacheIO
+
 // Streaming cache writer for 2-bit pixels (4 levels). Packs 4 pixels per byte,
 // MSB first.
 //

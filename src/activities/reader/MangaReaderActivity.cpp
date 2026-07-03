@@ -4,6 +4,7 @@
 #include <DictIndex.h>
 #include <Epub/converters/ImageDecoderFactory.h>
 #include <Epub/converters/ImageToFramebufferDecoder.h>
+#include <Epub/converters/PixelCache.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -365,13 +366,18 @@ void MangaReaderActivity::renderFullPage() {
   }
 
   int x = 0, y = 0;
+  int destWidth = dims.width, destHeight = dims.height;
   float ratio = static_cast<float>(dims.width) / static_cast<float>(dims.height);
   float screenRatio = static_cast<float>(screenW) / static_cast<float>(screenH);
   if (dims.width > screenW || dims.height > screenH) {
     if (ratio > screenRatio) {
       y = static_cast<int>((screenH - screenW / ratio) / 2.0f);
+      destWidth = screenW;
+      destHeight = screenH - 2 * y;
     } else {
       x = static_cast<int>((screenW - screenH * ratio) / 2.0f);
+      destWidth = screenW - 2 * x;
+      destHeight = screenH;
     }
   } else {
     x = (screenW - dims.width) / 2;
@@ -390,7 +396,12 @@ void MangaReaderActivity::renderFullPage() {
   config.useDithering = true;
   config.cachePath = cachePath;
 
-  // BW pass — render to framebuffer but don't display yet
+  // BW pass — decode to framebuffer AND stream a pixel cache to disk (config.cachePath) so the
+  // two grayscale passes below can read the already-decoded pixels back instead of re-running the
+  // full JPEG decode. Confirmed on a real device: without this, every manga page turn ran the
+  // decode 3 times (BW + LSB + MSB), each a full JPEG parse/IDCT/scale -- the dominant cost of
+  // "turning pages in manga is slow". ImageBlock (regular EPUB images) already had this same
+  // cache-read optimization; manga bypassed ImageBlock entirely and never got it.
   decoder->decodeToFramebuffer(imgPath, renderer, config);
 
   // Status bar: page number
@@ -407,14 +418,20 @@ void MangaReaderActivity::renderFullPage() {
   renderer.storeBwBuffer();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
+  // Read the pixels the BW pass just cached instead of re-decoding the JPEG. Falls back to a
+  // real decode if the cache write failed (e.g. under memory pressure) or wasn't enabled.
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  decoder->decodeToFramebuffer(imgPath, renderer, config);
+  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+    decoder->decodeToFramebuffer(imgPath, renderer, config);
+  }
   renderer.copyGrayscaleLsbBuffers();
 
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  decoder->decodeToFramebuffer(imgPath, renderer, config);
+  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+    decoder->decodeToFramebuffer(imgPath, renderer, config);
+  }
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();
@@ -535,14 +552,20 @@ void MangaReaderActivity::renderPanelZoom() {
   renderer.storeBwBuffer();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
+  // Read back the pixels the BW pass cached instead of re-decoding the JPEG for each grayscale
+  // plane -- same fix as renderFullPage(), see the comment there for the full rationale.
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+    decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+  }
   renderer.copyGrayscaleLsbBuffers();
 
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+    decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+  }
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();

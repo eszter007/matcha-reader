@@ -538,17 +538,16 @@ void EpubReaderWordLookupActivity::onExit() { Activity::onExit(); }
 void EpubReaderWordLookupActivity::moveCursor(int delta) {
   if (selectableGlyphs.empty()) return;
   const int maxIdx = static_cast<int>(selectableGlyphs.size()) - 1;
-  const int step = (delta > 0) ? 1 : -1;
-  const int startIdx = cursorIndex;
-
-  for (int attempts = 0; attempts < 30; attempts++) {
-    cursorIndex += (attempts == 0) ? delta : step;
-    if (cursorIndex < 0) { cursorIndex = 0; performLookup(); return; }
-    if (cursorIndex > maxIdx) { cursorIndex = maxIdx; performLookup(); return; }
-    if (cursorIndex == startIdx) { performLookup(); return; }
-    performLookup();
-    if (hasResult) return;
-  }
+  // selectableGlyphs is already the pre-filtered list of positions buildSelectableGlyphs()
+  // confirmed have a dictionary match -- every index in it is valid by construction, so this just
+  // moves one step and shows whatever's there. The previous version re-validated via
+  // performLookup() and kept advancing past any position where that didn't independently agree
+  // with the scan, silently skipping entries end-users could never reach -- confirmed on a real
+  // device as "every second entry is skipped" during navigation (1, 3, 5, 7, ...).
+  cursorIndex += delta;
+  if (cursorIndex < 0) cursorIndex = 0;
+  if (cursorIndex > maxIdx) cursorIndex = maxIdx;
+  performLookup();
 }
 
 void EpubReaderWordLookupActivity::encodeUtf8(uint32_t cp, std::string& out) {
