@@ -1,9 +1,11 @@
 #include "EpubReaderWordLookupActivity.h"
 
+#include <Arduino.h>
 #include <DictIndex.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <WordLookup.h>
 
 #include "CrossPointSettings.h"
@@ -15,6 +17,16 @@
 
 namespace {
 constexpr int kMaxLookupChars = 8;
+
+// Bare vector growth (reserve()/push_back() past capacity) calls operator new, which aborts the
+// whole device on OOM under -fno-exceptions instead of returning nullptr (see CLAUDE.md). Word
+// Lookup can be opened right after a heap-starved chapter build (a furigana-dense CJK page can
+// leave the heap down to ~15-20KB, confirmed on a real device: an unguarded reserve() here
+// aborted with exactly that heap profile). Same doubling-then-linear-fallback guard as
+// VerticalParsedText.cpp's pushGlyph()/canPushStreamChar() -- a dropped glyph here just means one
+// character isn't selectable for lookup, a far better failure mode than crashing the reader.
+constexpr uint32_t SMALL_ALLOC_MARGIN = 16 * 1024;
+constexpr size_t LINEAR_GROWTH_STEP = 32;
 
 // Returns true for any character that could be part of a Japanese word.
 // Punctuation, whitespace, and formatting marks are excluded.
@@ -110,14 +122,49 @@ bool stripTrailingParticle(const std::string& text, WordLookupResult& result) {
 }
 }
 
+void EpubReaderWordLookupActivity::reserveGlyphsSafe(std::vector<GlyphRef>& vec, size_t count) {
+  if (count <= vec.capacity()) return;
+  const size_t requestBytes = count * sizeof(GlyphRef);
+  if (ESP.getMaxAllocHeap() < requestBytes + SMALL_ALLOC_MARGIN) {
+    LOG_ERR("WLKP", "Skipping glyph reserve (%u bytes doesn't fit, free=%u); growing incrementally",
+            static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
+    return;
+  }
+  vec.reserve(count);
+}
+
+bool EpubReaderWordLookupActivity::pushGlyphSafe(std::vector<GlyphRef>& vec, const GlyphRef& g) {
+  if (vec.size() < vec.capacity()) {
+    vec.push_back(g);
+    return true;
+  }
+  const size_t doubledCapacity = vec.capacity() == 0 ? 8 : vec.capacity() * 2;
+  const size_t doubledBytes = doubledCapacity * sizeof(GlyphRef);
+  if (ESP.getMaxAllocHeap() >= doubledBytes + SMALL_ALLOC_MARGIN) {
+    vec.reserve(doubledCapacity);
+    vec.push_back(g);
+    return true;
+  }
+  const size_t linearCapacity = vec.capacity() + LINEAR_GROWTH_STEP;
+  const size_t linearBytes = linearCapacity * sizeof(GlyphRef);
+  if (ESP.getMaxAllocHeap() >= linearBytes + SMALL_ALLOC_MARGIN) {
+    vec.reserve(linearCapacity);
+    vec.push_back(g);
+    return true;
+  }
+  LOG_ERR("WLKP", "Low heap (%u bytes, need ~%u); dropping glyph", ESP.getMaxAllocHeap(),
+          static_cast<unsigned>(linearBytes));
+  return false;
+}
+
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                             const VerticalPage& page)
     : Activity("WordLookup", renderer, mappedInput) {
-  allGlyphs.reserve(page.glyphs.size());
+  reserveGlyphsSafe(allGlyphs, page.glyphs.size());
   for (const auto& g : page.glyphs) {
     if (g.renderKind == VerticalGlyph::RotatedRun) continue;
     GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, false};
-    allGlyphs.push_back(ref);
+    if (!pushGlyphSafe(allGlyphs, ref)) break;
   }
   buildSelectableGlyphs();
 }
@@ -132,16 +179,22 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
   };
   uint32_t lastCp = 0;
+  bool oom = false;
   for (const auto& el : page.elements) {
+    if (oom) break;
     if (el->getTag() != TAG_PageLine) continue;
     const auto& line = static_cast<const PageLine&>(*el);
     if (!line.getBlock()) continue;
     for (const auto& word : line.getBlock()->getWords()) {
+      if (oom) break;
       if (word.empty()) continue;
       // Insert a separating space only between two ASCII-word boundaries.
       if (lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&
           isAsciiWord(static_cast<unsigned char>(word[0]))) {
-        allGlyphs.push_back(GlyphRef{0, 0, 0, 0, ' ', 0, false});
+        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, ' ', 0, false})) {
+          oom = true;
+          break;
+        }
       }
       size_t b = 0;
       while (b < word.size()) {
@@ -163,7 +216,10 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
                (static_cast<unsigned char>(word[b + 3]) & 0x3F);
           b += 4;
         }
-        allGlyphs.push_back(GlyphRef{0, 0, 0, 0, cp, 0, false});
+        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, false})) {
+          oom = true;
+          break;
+        }
         lastCp = cp;
       }
     }
@@ -176,7 +232,7 @@ void EpubReaderWordLookupActivity::buildSelectableGlyphs() {
   // word boundaries. Characters inside a matched word are skipped.
   // Filtered particles (は、が etc.) are still checked — if they start a
   // multi-char match (e.g. という, ことになる), they become selectable.
-  selectableGlyphs.reserve(allGlyphs.size());
+  reserveGlyphsSafe(selectableGlyphs, allGlyphs.size());
   size_t skipUntil = 0;
   for (size_t i = 0; i < allGlyphs.size(); i++) {
     const auto& g = allGlyphs[i];
@@ -313,8 +369,10 @@ void EpubReaderWordLookupActivity::buildSelectableGlyphs() {
 
     // Include this position if it has a dictionary match
     if (hasMatch) {
+      // Push selectableGlyphs first -- if it can't grow, the heap is exhausted, so stop the scan
+      // rather than push a mismatched selectToAllIdx entry with no corresponding glyph.
+      if (!pushGlyphSafe(selectableGlyphs, g)) break;
       selectToAllIdx.push_back(i);
-      selectableGlyphs.push_back(g);
     }
   }
 

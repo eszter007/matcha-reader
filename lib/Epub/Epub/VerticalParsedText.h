@@ -103,10 +103,41 @@ class VerticalParsedText {
 
   void addAnnotatedParagraph(const std::vector<RubyRun>& runs);
 
-  // Runs the column-fill layout algorithm over everything added so far and
-  // returns one VerticalPage per screen's worth of content. Call this once
-  // after all paragraphs for a chapter have been added via addParagraph().
-  std::vector<VerticalPage> layoutPages();
+  // Called for a page as soon as it's confirmed safe to write -- i.e. one page has already been
+  // completed after it, so the "oikomi" pull-back check (which only ever looks at the single most
+  // recently completed page) can no longer touch it. ctx is caller-supplied context.
+  using PageReadyCallback = void (*)(void* ctx, VerticalPage&& page);
+
+  // Runs the column-fill layout algorithm over everything added since the last layoutPages() call
+  // (i.e. since construction, or since the most recent call) and returns one VerticalPage per
+  // screen's worth of content.
+  //
+  // When onPageReady is non-null, completed pages are streamed out through it as soon as they're
+  // safe to detach (see PageReadyCallback), rather than all being held in the returned vector for
+  // the whole call -- confirmed on a real device as a real peak-memory problem: for a large batch
+  // (several pages), every page's glyph buffer (13KB+ each) stayed resident simultaneously until
+  // the whole function returned, on top of the stream_ buffer still being alive at the same time.
+  // With a callback, at most ~2 pages' worth of glyph buffers are ever resident at once.
+  //
+  // isFinalFlush controls what happens to the trailing, possibly-not-yet-full page (the one still
+  // being filled when this call's input runs out):
+  //   - true (the default -- correct for a one-shot "lay out this whole chapter" caller, and the
+  //     only behavior this function had before batched callers existed): the trailing page is
+  //     finalized as-is and included in the return value, exactly as before.
+  //   - false: a caller that's batching a long chapter across MULTIPLE layoutPages() calls (to
+  //     bound peak memory -- see LayoutPageSink::onParagraph()/flushText() in VerticalSection.cpp)
+  //     passes false for every call except the chapter's true last one. The trailing page is then
+  //     held internally (NOT returned/streamed) and CONTINUED by the next layoutPages() call
+  //     instead of being finalized early. Without this, a batch boundary landing mid-page (which,
+  //     with a small enough batch size, is the common case) would finalize a page that's only
+  //     partially filled and start a fresh one for the remainder -- confirmed on a real device via
+  //     screenshot as pages missing their left-hand columns, i.e. never actually cut short in the
+  //     source, just artificially split into two half-empty pages by the batch boundary.
+  // The return value only contains page(s) actually finalized by this call (0-2: the trailing page
+  // from the PREVIOUS call if it just got completed by this call's input, plus this call's own
+  // trailing page if isFinalFlush) -- callers must still write those, same as before.
+  std::vector<VerticalPage> layoutPages(void* ctx = nullptr, PageReadyCallback onPageReady = nullptr,
+                                        bool isFinalFlush = true);
 
   // Column-to-column gap in pixels, added on top of the character cell
   // size when advancing to a new column. Mirrors the role
@@ -158,6 +189,22 @@ class VerticalParsedText {
   // are silently dropped instead of risking an OOM abort inside stream_'s reallocation (see
   // canPushStreamChar()).
   bool oom_ = false;
+
+  // The page currently being filled by layoutPages(), plus its fill position -- persists ACROSS
+  // layoutPages() calls (when isFinalFlush=false) so a batch boundary landing mid-page continues
+  // the same page on the next call instead of finalizing it early and starting a fresh one. See
+  // layoutPages()'s isFinalFlush doc comment for the full rationale.
+  VerticalPage pendingPage_;
+  uint16_t pendingColumn_ = 0;
+  uint16_t pendingRow_ = 0;
+  bool pendingPageValid_ = false;  // false until the first layoutPages() call initializes pendingPage_
+  // True once any page (streamed via callback or returned) has been produced across the whole
+  // chapter, i.e. across every layoutPages() call since construction. Used only at the final flush
+  // to decide whether an otherwise-empty trailing page still needs to be emitted so a genuinely
+  // empty chapter gets one (possibly blank) page rather than zero -- checking the local `pages`
+  // vector alone isn't enough once pages can be streamed out mid-call and earlier batches may
+  // already have produced real pages.
+  bool anyPageEverProduced_ = false;
 
   // Call before every stream_.push_back(). Only checks free heap when the vector is actually
   // about to reallocate (size == capacity) -- cheap in the common case where capacity headroom

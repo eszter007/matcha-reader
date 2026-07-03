@@ -13,7 +13,19 @@ namespace {
 // A reserve() big enough to satisfy this margin should always succeed even under pressure --
 // below it, skip reserving and let the vector grow incrementally (smaller, more-likely-to-succeed
 // allocations) rather than attempt one large upfront allocation that's more likely to fail outright.
-constexpr uint32_t MIN_FREE_HEAP_FOR_RESERVE = 32 * 1024;
+//
+// Was 32KB, then 16KB -- both confirmed on a real device to be actively counterproductive for
+// large legitimate requests. At 32KB: a furigana-dense paragraph's bulk stream_ reserve needed
+// 38600 bytes with 65524 available (comfortably enough) but was skipped because 38600+32768
+// exceeded 65524. At 16KB: the per-page glyphs reserve (13824 bytes) was refused with 29684 free
+// because 13824+16384 overshot by 524 bytes. Each refusal forces incremental doubling growth --
+// hundreds to 1000+ separate reallocations for the same data -- which fragments the heap far
+// worse (a measured ~22KB net loss) than the single bulk reserve it was "protecting" against.
+// The getMaxAllocHeap() check already guarantees the reserve() itself succeeds; this constant is
+// only cushion for OTHER allocations during the build, and while a chapter build runs the rest of
+// the app is quiescent (largest concurrent needs: SD write buffers and log lines, low KBs). 8KB
+// matches SMALL_ALLOC_MARGIN, the equivalent cushion used for per-push growth in this file.
+constexpr uint32_t MIN_FREE_HEAP_FOR_RESERVE = 8 * 1024;
 }  // namespace
 
 namespace {
@@ -190,16 +202,31 @@ void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
 bool VerticalParsedText::canPushStreamChar() {
   if (oom_) return false;
   if (stream_.size() < stream_.capacity()) return true;  // no reallocation needed, cheap path
-  // Check against the actual next allocation (vector growth roughly doubles capacity), not a
-  // flat margin -- using MIN_FREE_HEAP_FOR_RESERVE (sized for a full bulk reserve) here made this
-  // latch on ordinary low-but-survivable heap and silently drop the rest of the batch. See the
-  // identical fix (and its real-device-crash-confirmed rationale) on pushGlyph() in layoutPages().
-  const size_t nextCapacity = stream_.capacity() == 0 ? 1 : stream_.capacity() * 2;
-  const size_t requestBytes = nextCapacity * sizeof(PendingChar);
-  constexpr uint32_t SMALL_ALLOC_MARGIN = 16 * 1024;
-  if (ESP.getMaxAllocHeap() >= requestBytes + SMALL_ALLOC_MARGIN) return true;
+  // Same trap as pushGlyph() in layoutPages(): plain doubling means one failed growth attempt
+  // permanently blocks every later char in this batch (oom_ latches, and the doubled request
+  // never gets smaller on its own) -- confirmed on a real device as the actual cause of "sparse"
+  // pages surviving even after pushGlyph() was fixed, because the text never made it into the
+  // stream for layoutPages() to place in the first place. Fall back to a small linear growth step
+  // before giving up, so a later char (after some other allocation frees up) has a real chance.
+  constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;
+  constexpr size_t LINEAR_GROWTH_STEP = 64;  // PendingChar elements; keeps stalled retries cheap
+
+  const size_t doubledCapacity = stream_.capacity() == 0 ? 1 : stream_.capacity() * 2;
+  const size_t doubledBytes = doubledCapacity * sizeof(PendingChar);
+  if (ESP.getMaxAllocHeap() >= doubledBytes + SMALL_ALLOC_MARGIN) {
+    stream_.reserve(doubledCapacity);
+    return true;
+  }
+
+  const size_t linearCapacity = stream_.capacity() + LINEAR_GROWTH_STEP;
+  const size_t linearBytes = linearCapacity * sizeof(PendingChar);
+  if (ESP.getMaxAllocHeap() >= linearBytes + SMALL_ALLOC_MARGIN) {
+    stream_.reserve(linearCapacity);
+    return true;
+  }
+
   LOG_ERR("VPT", "Low heap (%u bytes, need ~%u) while building vertical text stream; truncating batch",
-          ESP.getMaxAllocHeap(), static_cast<unsigned>(requestBytes));
+          ESP.getMaxAllocHeap(), static_cast<unsigned>(linearBytes));
   oom_ = true;
   return false;
 }
@@ -263,9 +290,19 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs)
     if (run.baseText.empty()) continue;
 
     // Decode base text into codepoints, then distribute ruby across them.
+    // These are fresh, unreserved local vectors on every run -- for a furigana-dense paragraph
+    // (many short RubyRun entries, one per annotated word) that's several unguarded doubling-growth
+    // vectors PER RUN, repeated for every run in the paragraph. Confirmed on a real device as a
+    // major, previously-unaccounted-for contributor: a single 26-run/2.9KB paragraph cost ~20KB of
+    // contiguous heap inside this function alone. Reserving by byte count (a safe upper bound on
+    // codepoint count for UTF-8) eliminates that internal churn; the vectors are still freed at the
+    // end of each loop iteration since they're loop-local, so this doesn't increase steady-state
+    // memory, only removes the many small alloc/realloc/free cycles getting there.
     std::vector<size_t> baseOffsets;
     std::vector<uint32_t> baseCps;
     std::vector<size_t> breakBeforeBaseIndex;
+    baseOffsets.reserve(run.baseText.size());
+    baseCps.reserve(run.baseText.size());
     {
       size_t i = 0;
       while (i < run.baseText.size()) {
@@ -309,6 +346,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs)
     } else {
       // Decode ruby codepoints to distribute evenly across base characters.
       std::vector<uint32_t> rubyCps;
+      rubyCps.reserve(run.rubyText.size());
       {
         size_t ri = 0;
         while (ri < run.rubyText.size()) {
@@ -360,9 +398,10 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs)
   }
 }
 
-std::vector<VerticalPage> VerticalParsedText::layoutPages() {
+std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCallback onPageReady, bool isFinalFlush) {
   std::vector<VerticalPage> pages;
-  if (stream_.empty()) return pages;
+  // Nothing new to lay out AND nothing left over from a previous non-final call to finalize.
+  if (stream_.empty() && !(isFinalFlush && pendingPageValid_)) return pages;
 
   const int cellPx = std::max(1, charAdvancePx());
   const int columnAdvancePx = cellPx + columnGapPx_;
@@ -430,36 +469,76 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages() {
   // MIN_FREE_HEAP_FOR_RESERVE (32KB) as a flat per-glyph margin meant that once free heap sat
   // anywhere below 32KB -- which is otherwise completely survivable for a ~50-byte push -- every
   // single glyph was dropped, silently blanking entire pages.
+  // Exponential (x2) growth here is a trap once the heap is tight: if one doubling attempt fails,
+  // capacity stays put, so *every* subsequent push_back needs that exact same (large, ever-doubling)
+  // contiguous block and fails identically -- silently dropping every remaining glyph on the page,
+  // not just the one that triggered it. This is what produced the "sparse page" bug reports: a
+  // single transient dip below the doubled-capacity requirement blanked the rest of the page.
+  // Falling back to a small LINEAR growth step once doubling would be too big keeps each retry's
+  // request small and roughly constant, so a later push (after some other allocation frees up) has
+  // a real chance to succeed instead of being permanently walled off behind the same big ask.
   auto pushGlyph = [](std::vector<VerticalGlyph>& glyphs, const VerticalGlyph& g) {
     if (glyphs.size() < glyphs.capacity()) {
       glyphs.push_back(g);
       return true;
     }
-    const size_t nextCapacity = glyphs.capacity() == 0 ? 1 : glyphs.capacity() * 2;
-    const size_t requestBytes = nextCapacity * sizeof(VerticalGlyph);
-    constexpr uint32_t SMALL_ALLOC_MARGIN = 16 * 1024;  // headroom for the rest of the app, not the reserve() margin
-    if (ESP.getMaxAllocHeap() >= requestBytes + SMALL_ALLOC_MARGIN) {
+    constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;  // headroom for the rest of the app, not the reserve() margin
+    constexpr size_t LINEAR_GROWTH_STEP = 16;  // elements; keeps a stalled page's retries cheap
+
+    const size_t doubledCapacity = glyphs.capacity() == 0 ? 1 : glyphs.capacity() * 2;
+    const size_t doubledBytes = doubledCapacity * sizeof(VerticalGlyph);
+    if (ESP.getMaxAllocHeap() >= doubledBytes + SMALL_ALLOC_MARGIN) {
+      glyphs.reserve(doubledCapacity);
       glyphs.push_back(g);
       return true;
     }
+
+    const size_t linearCapacity = glyphs.capacity() + LINEAR_GROWTH_STEP;
+    const size_t linearBytes = linearCapacity * sizeof(VerticalGlyph);
+    if (ESP.getMaxAllocHeap() >= linearBytes + SMALL_ALLOC_MARGIN) {
+      glyphs.reserve(linearCapacity);
+      glyphs.push_back(g);
+      return true;
+    }
+
     LOG_ERR("VPT", "Low heap (%u bytes, need ~%u); dropping glyph", ESP.getMaxAllocHeap(),
-            static_cast<unsigned>(requestBytes));
+            static_cast<unsigned>(linearBytes));
     return false;
   };
 
-  VerticalPage page;
-  page.columnCount = columnsPerPage;
-  page.rowsPerColumn = rowsPerColumn;
-  reservePageGlyphs(page);
-
-  uint16_t column = 0;
-  uint16_t row = 0;
+  // First call ever (or first since the last isFinalFlush=true call): start a fresh page. A
+  // resumed call (pendingPageValid_ already true) picks up exactly where the previous non-final
+  // call left off -- same page object, same column/row -- so a batch boundary never truncates a
+  // page that isn't actually full.
+  if (!pendingPageValid_) {
+    pendingPage_ = VerticalPage{};
+    pendingPage_.columnCount = columnsPerPage;
+    pendingPage_.rowsPerColumn = rowsPerColumn;
+    reservePageGlyphs(pendingPage_);
+    pendingColumn_ = 0;
+    pendingRow_ = 0;
+    pendingPageValid_ = true;
+  }
+  VerticalPage& page = pendingPage_;
+  uint16_t& column = pendingColumn_;
+  uint16_t& row = pendingRow_;
 
   auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - col * columnAdvancePx; };
 
   auto finalizePageIfNeeded = [&]() {
     if (column >= columnsPerPage) {
       pages.push_back(std::move(page));
+      anyPageEverProduced_ = true;
+      // Stream out everything except the single most-recently-completed page: the oikomi
+      // pull-back check below only ever looks at pages.back() (the page immediately before the
+      // one currently being started), so once THIS page is pushed, any earlier page in `pages`
+      // can never be touched again and is safe to write out and free now.
+      if (onPageReady) {
+        while (pages.size() > 1) {
+          onPageReady(ctx, std::move(pages.front()));
+          pages.erase(pages.begin());
+        }
+      }
       page = VerticalPage{};
       page.columnCount = columnsPerPage;
       page.rowsPerColumn = rowsPerColumn;
@@ -850,8 +929,17 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages() {
     idx++;
   }
 
-  if (!page.glyphs.empty() || pages.empty()) {
-    pages.push_back(std::move(page));
+  if (isFinalFlush) {
+    if (!page.glyphs.empty() || !anyPageEverProduced_) {
+      pages.push_back(std::move(page));
+      anyPageEverProduced_ = true;
+    }
+    // Chapter done -- next layoutPages() call (if any, e.g. a new VerticalParsedText/chapter)
+    // should start a fresh page rather than resuming this one.
+    pendingPageValid_ = false;
+    anyPageEverProduced_ = false;
   }
+  // Non-final flush: the trailing page is intentionally NOT pushed here -- it's held in
+  // pendingPage_ and continued by the next layoutPages() call instead of being cut short.
   return pages;
 }

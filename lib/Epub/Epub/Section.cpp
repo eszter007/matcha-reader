@@ -11,7 +11,12 @@
 
 namespace {
 // v27: words NFC-composed at layout time; bump invalidates NFD section caches.
-constexpr uint8_t SECTION_FILE_VERSION = 29;
+// v30: CssParser's low-heap rule-skip guard switched from ESP.getFreeHeap() (total free heap) to
+// ESP.getMaxAllocHeap() (largest contiguous block) -- a real fragmentation-vs-total-free gap this
+// session confirmed is often large on this device, so CSS rules that were silently skipped while
+// this section was originally cached may now parse successfully, changing layout. Cached section
+// files built under the old guard must not be reused as-is.
+constexpr uint8_t SECTION_FILE_VERSION = 30;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +

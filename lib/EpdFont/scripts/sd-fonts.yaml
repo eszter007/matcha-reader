@@ -233,7 +233,16 @@ families:
 
   - name: UDDigiKyokasho
     description: "Japanese textbook font (CJK, Latin)"
-    intervals: all
+    # Was "all" -- that preset auto-discovers EVERY glyph present in the source TTF and builds one
+    # interval per contiguous run, which for a comprehensive Japanese textbook font (multiple JIS
+    # levels, radicals, symbols) produces thousands of small intervals. SdCardFont::load()
+    # allocates BmpInterval16[intervalCount] and EpdUnicodeInterval[intervalCount] as a single
+    # nothrow allocation (SdCardFont.cpp ~line 584/601) -- an oversized intervalCount can fail that
+    # allocation outright on this device's ~220KB heap, which is the load failure that shows up as
+    # "falls back to built-in font". The "cjk" preset (hiragana/katakana/CJK Unified/compat/full-
+    # width, same coverage other CJK SD fonts in this file use) is a handful of large contiguous
+    # ranges instead, keeping intervalCount small while still covering virtually all Japanese text.
+    intervals: cjk
     sizes: [12, 14, 16, 18]
     force_autohint: true
     fallback:

@@ -21,6 +21,12 @@ class EpubReaderActivity final : public Activity {
   // expensive build (indexing an entire chapter) again -- observed on a real device as an
   // indefinite "Indexing" popup that silently re-failed every ~12 seconds with no visible error.
   int failedVerticalSpineIndex = -1;
+  // Same guard as failedVerticalSpineIndex, for horizontal-mode Section builds. Without this,
+  // section.reset() on a build failure leaves `!section` true, so the next render() retries the
+  // same build immediately -- observed as an indefinite "Indexing" popup on a chapter whose
+  // horizontal build fails for the same reason vertical builds can (a hard-to-satisfy contiguous
+  // allocation, e.g. the zip inflate window, failing under a tight/fragmented heap).
+  int failedSectionSpineIndex = -1;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   std::optional<uint16_t> pendingPageJump;

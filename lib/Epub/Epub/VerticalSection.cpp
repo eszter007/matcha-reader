@@ -17,10 +17,19 @@
 
 namespace {
 
-// v38: bumped past every cache written during this session's debugging (v37 covers several
-// low-memory bugs, since fixed, that silently dropped glyphs into the cache on save -- a device
-// that already wrote a v37 cache for this book must not reuse it) -- see cache format comment below
-constexpr uint8_t VSECTION_FILE_VERSION = 38;
+// v49: bumped again past every v48 cache -- v48 eliminated OOM-caused glyph drops entirely
+// (confirmed on a real device: a dense chapter rebuilt with zero drops), but a real device
+// screenshot then showed a DIFFERENT bug: pages missing their left-hand (i.e. later-filled)
+// columns. Root cause: every BATCH_CHARS-triggered flush called layoutPages(), which
+// unconditionally finalized whatever page was currently in progress -- even if only partially
+// filled -- and the NEXT flush started a brand new page instead of continuing the cut-short one.
+// With BATCH_CHARS lowered to 160 this batch (tonight, for the memory fix) that landed mid-page
+// far more often than it used to, making pages come out mostly-empty despite every character
+// technically being laid out SOMEWHERE. Fixed by making the in-progress page/column/row persist
+// across layoutPages() calls (isFinalFlush=false), only truly finalizing the trailing page on the
+// chapter's actual last flush. Pages built under v48 can have missing columns purely from this
+// premature-finalization bug, so they must not be silently reused. See cache format comment below.
+constexpr uint8_t VSECTION_FILE_VERSION = 49;
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 
 using RubyRun = VerticalParsedText::RubyRun;
@@ -79,6 +88,19 @@ struct TextExtractor {
 
   bool hasEmphasis() const { return emphasisDepth > 0; }
 
+  // Diagnostic: bisects a ~11KB drop seen accumulating within a single furigana-dense paragraph's
+  // SAX processing, too large to be explained by RubyRun/string vector growth alone. Call at the
+  // top of each SAX callback -- logs only on a drop since the last checkpoint, so a normal chapter
+  // stays quiet and only the actual culprit tag/callback prints. Remove once found.
+  uint32_t lastCheckpointMaxAlloc = 0;
+  void checkHeap(const char* phase, const char* tag = "") {
+    const uint32_t now = ESP.getMaxAllocHeap();
+    if (lastCheckpointMaxAlloc != 0 && now + 256 < lastCheckpointMaxAlloc) {
+      LOG_DBG("VSC", "heap drop at %s(%s): %u -> %u", phase, tag, lastCheckpointMaxAlloc, now);
+    }
+    lastCheckpointMaxAlloc = now;
+  }
+
   static bool isBoldTag(const char* name) {
     return strcasecmp(name, "b") == 0 || strcasecmp(name, "strong") == 0;
   }
@@ -96,18 +118,44 @@ struct TextExtractor {
     return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0;
   }
 
+  // std::move()-ing currentText/currentRuns into the sink hands off their heap buffer and leaves
+  // the local variable at capacity 0 -- so without a reserve() right after, the NEXT run/paragraph
+  // has to regrow from scratch via std::string/vector's own doubling, one malloc+free cycle at a
+  // time. For furigana-dense text (ruby annotations on nearly every kanji, e.g. "kyokasho"-style
+  // textbook readings) that's dozens to hundreds of tiny alloc/free cycles per paragraph -- exactly
+  // the kind of churn that fragments a ~220KB heap. These hints are small requests sized for the
+  // common case (a handful of CJK characters / a handful of runs between markup boundaries), not a
+  // correctness requirement -- an unusually long run still grows normally via doubling.
+  static constexpr size_t TEXT_RESERVE_HINT = 128;   // bytes
+  static constexpr size_t RUBY_RESERVE_HINT = 32;    // bytes
+  static constexpr size_t RUNS_RESERVE_HINT = 16;    // elements
+
   void flushCurrentText() {
     if (!currentText.empty()) {
       currentRuns.push_back(RubyRun{std::move(currentText), {}, currentStyle(), hasEmphasis()});
       currentText.clear();
+      currentText.reserve(TEXT_RESERVE_HINT);
     }
   }
 
   void flushParagraph() {
     flushCurrentText();
     if (!currentRuns.empty()) {
-      if (sink) sink->onParagraph(std::move(currentRuns));
+      if (sink) {
+        // Diagnostic: bisects where a chapter's heap actually drops -- was the paragraph itself
+        // already large/run-heavy going INTO onParagraph (accumulation phase, this SAX callback
+        // layer), or does the drop happen INSIDE onParagraph (stream-building/layout phase,
+        // VerticalParsedText)? Remove once the sparse-page root cause is found.
+        size_t totalBytes = 0;
+        for (const auto& r : currentRuns) totalBytes += r.baseText.size() + r.rubyText.size();
+        LOG_DBG("VSC", "flushParagraph: %u runs, %u bytes, maxAlloc=%u before onParagraph",
+                static_cast<unsigned>(currentRuns.size()), static_cast<unsigned>(totalBytes),
+                ESP.getMaxAllocHeap());
+        sink->onParagraph(std::move(currentRuns));
+        LOG_DBG("VSC", "flushParagraph: maxAlloc=%u after onParagraph", ESP.getMaxAllocHeap());
+      }
       currentRuns.clear();
+      currentRuns.reserve(RUNS_RESERVE_HINT);
     }
   }
 
@@ -139,6 +187,7 @@ struct TextExtractor {
 
   static void XMLCALL startElement(void* userData, const char* name, const char** atts) {
     auto* self = static_cast<TextExtractor*>(userData);
+    self->checkHeap("startElement", name);
     self->elementDepth++;
     if (self->skipDepth >= 0) {
       self->skipDepth++;
@@ -158,10 +207,13 @@ struct TextExtractor {
       self->flushCurrentText();
       self->inRuby = true;
       self->rubyBase.clear();
+      self->rubyBase.reserve(RUBY_RESERVE_HINT);
       self->rubyAnnotation.clear();
+      self->rubyAnnotation.reserve(RUBY_RESERVE_HINT);
     } else if (strcasecmp(name, "rt") == 0) {
       self->inRt = true;
       self->rubyAnnotation.clear();
+      self->rubyAnnotation.reserve(RUBY_RESERVE_HINT);
     } else if (strcasecmp(name, "rp") == 0) {
       self->inRp = true;
     }
@@ -213,6 +265,7 @@ struct TextExtractor {
 
   static void XMLCALL endElement(void* userData, const char* name) {
     auto* self = static_cast<TextExtractor*>(userData);
+    self->checkHeap("endElement", name);
     self->elementDepth--;
     if (self->skipDepth > 0) {
       self->skipDepth--;
@@ -230,8 +283,10 @@ struct TextExtractor {
         self->currentRuns.push_back(
             RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation), self->currentStyle(), self->hasEmphasis()});
         self->rubyBase.clear();
+        self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
       self->rubyAnnotation.clear();
+      self->rubyAnnotation.reserve(RUBY_RESERVE_HINT);
       return;
     }
     if (strcasecmp(name, "ruby") == 0) {
@@ -239,6 +294,7 @@ struct TextExtractor {
       if (!self->rubyBase.empty()) {
         self->currentRuns.push_back(RubyRun{std::move(self->rubyBase), {}, self->currentStyle(), self->hasEmphasis()});
         self->rubyBase.clear();
+        self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
       self->inRuby = false;
       return;
@@ -269,6 +325,7 @@ struct TextExtractor {
 
   static void XMLCALL characterData(void* userData, const char* s, int len) {
     auto* self = static_cast<TextExtractor*>(userData);
+    self->checkHeap("characterData");
     if (self->skipDepth >= 0) return;
     if (self->inRp) return;
     if (self->inRt) {
@@ -279,6 +336,7 @@ struct TextExtractor {
       // Forced split for markup-less mega-paragraphs; see MAX_PARAGRAPH_BYTES. (Not applied
       // inside <ruby> -- ruby runs are a handful of characters by nature.)
       if (self->currentText.size() + static_cast<size_t>(len) > MAX_PARAGRAPH_BYTES) {
+        LOG_DBG("VSC", "MAX_PARAGRAPH_BYTES forced split at %u bytes", static_cast<unsigned>(self->currentText.size()));
         self->flushParagraph();
       }
       self->currentText.append(s, static_cast<size_t>(len));
@@ -491,7 +549,20 @@ struct LayoutPageSink final : ParagraphSink {
   // ~1-2 screens of text per layout batch. A batch boundary lands between paragraphs, which
   // already force a fresh column, so the only observable effect is an occasional page that ends
   // at a paragraph boundary instead of mid-paragraph -- same behavior as an image boundary.
-  static constexpr size_t BATCH_CHARS = 640;
+  //
+  // Was 640. Confirmed on a real device that at 640, the stream_ buffer needed to hold one batch
+  // (33-43KB for furigana-dense text, each RubyRun carrying its own PendingChar-per-character
+  // cost) and layoutPages()'s own per-page glyph buffers (13824+ bytes each) are BOTH alive at
+  // flush time -- stream_ isn't freed until after layoutPages() returns and reset() runs. Peak
+  // memory is the SUM of both, and for dense chapters that sum exceeded available heap, dropping
+  // glyphs on the hardest paragraphs even after the chunking fix bounded stream_'s own reserve.
+  // Halving the batch roughly halves stream_'s peak size, leaving proportionally more headroom
+  // for layoutPages() at the cost of more (individually smaller, safer) flush cycles. Was 640,
+  // then 320 -- still measurably dropped glyphs on the single most furigana-dense paragraph in a
+  // real test chapter (71 runs), on top of the chunk-sizing estimate bug fixed alongside this
+  // (see onParagraph()). Halved again; the trend across both prior reductions has been strictly
+  // more real content preserved with each halving.
+  static constexpr size_t BATCH_CHARS = 160;
 
   LayoutPageSink(VerticalParsedText& layout, HalFile& out, std::vector<uint32_t>& pageOffsets, Epub& epub,
                  const std::string& chapterDir, const std::string& imageBasePath, uint16_t viewportWidth,
@@ -507,7 +578,40 @@ struct LayoutPageSink final : ParagraphSink {
 
   void onParagraph(std::vector<RubyRun>&& runs) override {
     if (failed) return;
-    layout.addAnnotatedParagraph(runs);
+    // A single paragraph (one <p>/<div>, or many furigana-annotated RubyRuns) can itself hold
+    // thousands of characters -- MAX_PARAGRAPH_BYTES (16KB, ~5000+ CJK chars) only bounds the
+    // SAX-side accumulation buffers, not this batch's memory budget, and ordinary long-form prose
+    // routinely exceeds BATCH_CHARS on its own without ever hitting that limit. Feeding the whole
+    // paragraph to addAnnotatedParagraph() in one call let a single paragraph's stream_ growth
+    // blow past the intended batch size entirely -- confirmed on a real device: a 71-run/12KB
+    // paragraph needed a single ~160KB stream_ reserve, far more than the device's entire heap,
+    // well before pendingCount() ever got a chance to trigger a flush. Chunking runs here gives
+    // pendingCount() >= BATCH_CHARS a chance to fire (and flush) partway through a large paragraph
+    // instead of only after the whole thing is already buffered. Splitting mid-paragraph this way
+    // is the same accepted tradeoff as the existing MAX_PARAGRAPH_BYTES forced split (a stray
+    // column break where none existed in the source -- harmless compared to the alternative, OOM).
+    std::vector<RubyRun> chunk;
+    size_t chunkEstimatedChars = 0;
+    for (auto& run : runs) {
+      // UTF-8 CJK runs ~3 bytes/char. Only baseText contributes actual stream_ entries --
+      // rubyText is folded into each base character's PendingChar.rubyText field, not pushed as
+      // separate entries -- so counting rubyText bytes here overestimated the actual pendingCount()
+      // contribution roughly 2x for furigana-dense runs, letting chunks (and therefore stream_)
+      // grow bigger than intended before a flush actually triggered.
+      const size_t runEstimatedChars = run.baseText.size() / 3 + 1;
+      chunk.push_back(std::move(run));
+      chunkEstimatedChars += runEstimatedChars;
+      if (layout.pendingCount() + chunkEstimatedChars >= BATCH_CHARS) {
+        layout.addAnnotatedParagraph(chunk);
+        chunk.clear();
+        chunkEstimatedChars = 0;
+        if (layout.pendingCount() >= BATCH_CHARS) flushText();
+        if (failed) return;
+      }
+    }
+    if (!chunk.empty()) {
+      layout.addAnnotatedParagraph(chunk);
+    }
     runs.clear();  // free this paragraph's text now -- layout owns its own copy in the stream
     if (layout.pendingCount() >= BATCH_CHARS) flushText();
   }
@@ -518,9 +622,20 @@ struct LayoutPageSink final : ParagraphSink {
     writeOne(makeImagePage(src));
   }
 
-  void flushText() {
-    if (failed || layout.pendingCount() == 0) return;
-    auto pages = layout.layoutPages();
+  static void writePageCallback(void* ctx, VerticalPage&& page) { static_cast<LayoutPageSink*>(ctx)->writeOne(page); }
+
+  // isFinalFlush must be true ONLY for the chapter's true last flush (see the caller in
+  // streamParseAndLayout(), after extractor.flushParagraph()) -- every mid-chapter call (the
+  // BATCH_CHARS trigger below, onImage()'s pre-image flush) must pass false so a batch boundary
+  // that lands mid-page continues that page on the next call instead of finalizing it early. See
+  // VerticalParsedText::layoutPages()'s isFinalFlush doc comment for the full rationale.
+  void flushText(bool isFinalFlush = false) {
+    if (failed) return;
+    if (!isFinalFlush && layout.pendingCount() == 0) return;
+    // Streaming pages out via callback as they're finalized keeps at most ~2 pages' worth of
+    // glyph buffers resident at once instead of the whole batch's -- see PageReadyCallback in
+    // VerticalParsedText.h for why this is safe (oikomi only ever looks one page back).
+    auto pages = layout.layoutPages(this, &writePageCallback, isFinalFlush);
     layout.reset();
     for (const auto& p : pages) writeOne(p);
   }
@@ -585,7 +700,14 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = 1 + sizeof(int) + 2 * sizeof(uint16_t
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
                                            const uint16_t viewportHeight) {
-  LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u", spineIndex, ESP.getFreeHeap());
+  // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
+  // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
+  // whether that low contiguous budget is a fresh drop from THIS chapter's own parsing, or whether
+  // the heap was already this fragmented (from earlier chapters/navigation this session) before
+  // this chapter's build even started. free=getFreeHeap() (total) was already logged; maxAlloc=
+  // getMaxAllocHeap() (largest contiguous block) is new.
+  LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(),
+          ESP.getMaxAllocHeap());
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_v" + std::to_string(spineIndex) + ".html";
 
@@ -612,8 +734,13 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     LOG_ERR("VSC", "Failed to stream chapter HTML");
     return false;
   }
+  // Diagnostic: bisecting a ~10KB drop seen between chapter start and the first paragraph flush --
+  // isolates whether it's the HTML-to-tempfile copy (zip inflate window), the ruby-tag scan, or
+  // XML_ParserCreate's own setup.
+  LOG_DBG("VSC", "after readItemContentsToStream: maxAlloc=%u", ESP.getMaxAllocHeap());
 
   const bool hasRuby = fileContainsRubyTag(tmpHtmlPath);
+  LOG_DBG("VSC", "after fileContainsRubyTag: maxAlloc=%u", ESP.getMaxAllocHeap());
 
   // Resolve image paths relative to the chapter's directory in the EPUB.
   const auto& spineItem = epub->getSpineItem(spineIndex);
@@ -636,6 +763,12 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   TextExtractor extractor;
   extractor.sink = &sink;
+  // Pre-size the small scratch buffers so the very first run of the chapter doesn't pay the same
+  // grow-from-empty cost the reserve() calls after each flush avoid for every later run.
+  extractor.currentText.reserve(TextExtractor::TEXT_RESERVE_HINT);
+  extractor.currentRuns.reserve(TextExtractor::RUNS_RESERVE_HINT);
+  extractor.rubyBase.reserve(TextExtractor::RUBY_RESERVE_HINT);
+  extractor.rubyAnnotation.reserve(TextExtractor::RUBY_RESERVE_HINT);
 
   XML_Parser parser = XML_ParserCreate(nullptr);
   if (!parser) {
@@ -643,6 +776,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     Storage.remove(tmpHtmlPath.c_str());
     return false;
   }
+  LOG_DBG("VSC", "after XML_ParserCreate: maxAlloc=%u", ESP.getMaxAllocHeap());
 
   XML_SetDefaultHandlerExpand(parser, TextExtractor::defaultHandler);
   XML_SetUserData(parser, &extractor);
@@ -687,7 +821,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   if (!parseOk) return false;
 
   extractor.flushParagraph();
-  sink.flushText();
+  sink.flushText(/*isFinalFlush=*/true);
 
   if (sink.failed) return false;
 

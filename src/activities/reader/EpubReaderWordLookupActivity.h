@@ -62,6 +62,11 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Pre-scan allGlyphs (already populated) to build selectableGlyphs/selectToAllIdx.
   void buildSelectableGlyphs();
 
+  // Heap-aware growth helpers -- bare vector reserve()/push_back() aborts the whole device on OOM
+  // under -fno-exceptions (see CLAUDE.md). See EpubReaderWordLookupActivity.cpp for the rationale.
+  static void reserveGlyphsSafe(std::vector<GlyphRef>& vec, size_t count);
+  static bool pushGlyphSafe(std::vector<GlyphRef>& vec, const GlyphRef& g);
+
   static void encodeUtf8(uint32_t cp, std::string& out);
 
   bool initialRenderDone = false;

@@ -353,7 +353,16 @@ void EpubReaderActivity::loop() {
         bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
       }
       const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
-      const bool hasWordLookup = isJapaneseBook() && (verticalSection || section) && DictIndex::isAvailable();
+      // Word Lookup is about the text's language, not its layout direction, so it must not be
+      // gated by verticalOverride==0 (explicitly reading a Japanese book horizontally shouldn't
+      // hide the dictionary) -- but a book whose EPUB metadata doesn't declare dc:language=ja
+      // (isJapaneseBook() false) should still get it if the user has explicitly forced vertical
+      // mode on for it, since that's the same signal useVerticalText() already treats as
+      // sufficient evidence of Japanese content. Previously this used isJapaneseBook() alone,
+      // so a mis-tagged EPUB with vertical text manually forced on would render vertically but
+      // never show Word Lookup at all.
+      const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
+      const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
       const bool showVerticalToggle = isJapaneseBook();
       bool hasPageText = false;
       if (verticalSection) {
@@ -757,6 +766,20 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         pageText = section->getTextFromSectionFile();
       }
       if (!pageText.empty()) {
+        // The extracted text is all Translation needs -- the Section/VerticalSection object
+        // itself (current page's resident glyphs, page index) is dead weight for the duration of
+        // the activity, and Translation's TLS handshake needs every contiguous byte it can get
+        // (see MIN_HEAP_FOR_TLS in EpubReaderTranslationActivity.cpp). Sync nextPageNumber first
+        // so the normal reload-from-cache path in render() resumes on the same page when we
+        // return -- same pattern as the page-turn/spine-change call sites in this file.
+        nextPageNumber = verticalSection ? verticalSection->currentPage
+                         : section       ? section->currentPage
+                                         : nextPageNumber;
+        section.reset();
+        verticalSection.reset();
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          fcm->clearCache();
+        }
         startActivityForResult(
             std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pageText)),
             [this](const ActivityResult&) { requestUpdate(); });
@@ -1163,6 +1186,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
 
   // --- Horizontal text mode path (existing) ---
+  if (failedSectionSpineIndex == currentSpineIndex) {
+    // This spine index already failed to build this session -- show a real error instead of
+    // silently re-attempting the same expensive build every render (see failedVerticalSpineIndex).
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    renderStatusBar();
+    renderer.displayBuffer();
+    automaticPageTurnActive = false;
+    showPendingSyncSaveError();
+    return;
+  }
+
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
@@ -1178,11 +1213,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
 
+      // Building can need a large single contiguous allocation (e.g. the zip inflate window) --
+      // free the font decompressor's hot-group buffer first to hand that headroom to the build,
+      // same rationale as the identical call on the vertical-mode build path above.
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        fcm->clearCache();
+      }
+
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                       SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, popupFn)) {
         LOG_ERR("ERS", "Failed to persist page data to SD");
+        failedSectionSpineIndex = currentSpineIndex;
         section.reset();
         showPendingSyncSaveError();
         return;

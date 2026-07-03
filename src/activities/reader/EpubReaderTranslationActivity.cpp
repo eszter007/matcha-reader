@@ -1,6 +1,7 @@
 #include "EpubReaderTranslationActivity.h"
 
 #include <ArduinoJson.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -19,6 +20,15 @@ namespace {
 
 constexpr int HTTP_BUF_SIZE = 2048;
 constexpr uint32_t MIN_HEAP_FOR_TLS = 55000;
+// esp_wifi_init() (triggered by the first WiFi.mode(WIFI_STA) call) allocates its own TX/RX
+// buffer pools, NVS state, and wpa_supplicant/RRM tables -- many small-to-medium allocations, not
+// one big contiguous block, so this checks total free heap rather than getMaxAllocHeap(). Confirmed
+// on a real device: entering Translation right after reading a memory-heavy CJK chapter (free heap
+// down to ~37KB) crashed with a null-pointer fault inside wpa_supplicant's eloop_cancel_timeout --
+// some internal allocation failed and the driver didn't null-check it before dereferencing. There's
+// no public API to ask ESP-IDF's WiFi driver "do you have enough heap", so this margin is a
+// conservative empirical floor above the crash point, not a documented ESP-IDF constant.
+constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
 constexpr const char* API_KEY_PATH = "/system/gemini.key";
 constexpr const char* GEMINI_MODEL = "gemini-2.5-flash";
 
@@ -75,6 +85,25 @@ void EpubReaderTranslationActivity::onEnter() {
     return;
   }
 
+  // The reader activity underneath is only paused, not destroyed, so its font decompressor's
+  // hot-group buffer (up to tens of KB, see FontDecompressor.cpp) is still resident and dead
+  // weight here -- free it before WiFi init needs the headroom, same rationale as the identical
+  // call before a chapter build in EpubReaderActivity.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  LOG_DBG("XLAT", "Entering translation (free heap: %u)", static_cast<unsigned>(freeHeap));
+  if (freeHeap < MIN_HEAP_FOR_WIFI_INIT) {
+    LOG_ERR("XLAT", "Insufficient heap for WiFi init: %u < %u", static_cast<unsigned>(freeHeap),
+            static_cast<unsigned>(MIN_HEAP_FOR_WIFI_INIT));
+    errorMessage = tr(STR_TRANSLATION_LOW_MEMORY);
+    state = ERROR;
+    requestUpdate();
+    return;
+  }
+
   WiFi.mode(WIFI_STA);
 
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
@@ -112,10 +141,16 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   url += ":generateContent?key=";
   url += apiKey;
 
-  const uint32_t freeHeap = ESP.getFreeHeap();
-  LOG_DBG("XLAT", "Calling Gemini (heap: %u)", static_cast<unsigned>(freeHeap));
-  if (freeHeap < MIN_HEAP_FOR_TLS) {
-    LOG_ERR("XLAT", "Insufficient heap for TLS: %u < %u", static_cast<unsigned>(freeHeap),
+  // TLS/HTTP client init needs one large *contiguous* buffer (record buffers, X.509 parsing,
+  // etc.), so the gate must check the largest allocatable block, not total free heap -- on a
+  // fragmented heap (e.g. after CJK font/vertical-text work, which this session found leaves the
+  // heap more fragmented than plain-text reading) total free can look comfortably above
+  // MIN_HEAP_FOR_TLS while no single block that size actually exists, silently passing this check
+  // only to fail deeper inside the TLS handshake instead of with this clear message.
+  const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+  LOG_DBG("XLAT", "Calling Gemini (max alloc: %u)", static_cast<unsigned>(maxAllocHeap));
+  if (maxAllocHeap < MIN_HEAP_FOR_TLS) {
+    LOG_ERR("XLAT", "Insufficient contiguous heap for TLS: %u < %u", static_cast<unsigned>(maxAllocHeap),
             static_cast<unsigned>(MIN_HEAP_FOR_TLS));
     errorMessage = tr(STR_TRANSLATION_LOW_MEMORY);
     return false;
