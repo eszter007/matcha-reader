@@ -54,6 +54,28 @@ class MangaReaderActivity final : public Activity {
   enum class ViewMode { FullPage, PanelZoom, TextOverlay };
   ViewMode viewMode = ViewMode::FullPage;
 
+  // Set when a full page finishes rendering; the idle prefetch below warms the NEXT page's pixel
+  // cache once per displayed page, after a short dwell, so forward page turns hit the cache
+  // instead of running a fresh JPEG decode.
+  bool nextPagePrefetched = true;  // true until the first full-page render arms it
+  unsigned long fullPageRenderedMs = 0;
+
+  // Geometry of a full-page image on the (possibly temporarily rotated) screen. Shared by
+  // renderFullPage() and prefetchNextPageCache() so the prefetch-written pixel cache has exactly
+  // the dimensions the later render expects.
+  struct FullPageGeom {
+    int x = 0, y = 0;
+    int destWidth = 0, destHeight = 0;
+    int screenW = 0, screenH = 0;
+    bool rotated = false;
+    int savedOrientation = 0;  // GfxRenderer::Orientation of the caller, restored after use
+  };
+  // NOTE: sets the renderer orientation when rotation is needed -- the caller must restore
+  // savedOrientation when done.
+  FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
+
+  void prefetchNextPageCache();
+
   void loadCurrentPagePanels();
   void renderFullPage();
   void renderPanelZoom();

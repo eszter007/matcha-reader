@@ -33,6 +33,10 @@ constexpr int COVER_ASPECT_DEN = 3;
 constexpr int SHELF_THUMB_WIDTH = 36;
 constexpr int SHELF_THUMB_HEIGHT = 54;
 
+// Diagnostic artifact written by HalSystem::checkPanic() to the SD root -- a .txt file the
+// library walk would otherwise list as a book.
+bool isCrashReportFile(const char* name) { return strcmp(name, "crash_report.txt") == 0; }
+
 // Mirrors MangaBook::getCachePath() -- same hash of the folder path, same prefix -- so the
 // Library's manga thumbs live alongside the manga's other cached artifacts.
 std::string mangaCacheDir(const std::string& mangaFolder) {
@@ -225,6 +229,7 @@ void RecentBooksActivity::loadRecentBooks() {
       if (!FsHelpers::hasEpubExtension(fn) && !FsHelpers::hasXtcExtension(fn) &&
           !FsHelpers::hasTxtExtension(fn) && !FsHelpers::hasMarkdownExtension(fn))
         continue;
+      if (isCrashReportFile(nameBuf.get())) continue;
 
       bool alreadyInRecents = false;
       for (const auto& r : recentBooks) {
@@ -325,6 +330,7 @@ void RecentBooksActivity::loadShelves() {
         continue;
       }
       std::string_view fn{countBuf};
+      if (isCrashReportFile(countBuf)) continue;
       if (FsHelpers::hasEpubExtension(fn) || FsHelpers::hasXtcExtension(fn) || FsHelpers::hasTxtExtension(fn)) {
         count++;
       }
@@ -445,6 +451,7 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
     if (!FsHelpers::hasEpubExtension(filename) && !FsHelpers::hasXtcExtension(filename) &&
         !FsHelpers::hasTxtExtension(filename))
       continue;
+    if (isCrashReportFile(nameBuffer.get())) continue;
 
     ShelfBook book;
     book.path = fullPath;

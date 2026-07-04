@@ -254,7 +254,15 @@ void MangaReaderActivity::loop() {
   }
 
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
-  if (!prevTriggered && !nextTriggered) return;
+  if (!prevTriggered && !nextTriggered) {
+    // Idle tick: after a short dwell on a full page, warm the NEXT page's pixel cache so the
+    // upcoming forward page turn renders from cache instead of running its JPEG decode. The
+    // dwell gate keeps rapid back-to-back turns from queueing a blocking decode between them.
+    if (viewMode == ViewMode::FullPage && !nextPagePrefetched && (millis() - fullPageRenderedMs) > 400) {
+      prefetchNextPageCache();
+    }
+    return;
+  }
 
   if (viewMode == ViewMode::PanelZoom) {
     if (nextTriggered) nextPanel();
@@ -320,6 +328,49 @@ void MangaReaderActivity::render(RenderLock&&) {
   }
 }
 
+MangaReaderActivity::FullPageGeom MangaReaderActivity::applyFullPageGeometry(const int imgWidth,
+                                                                             const int imgHeight) {
+  FullPageGeom g;
+  g.savedOrientation = renderer.getOrientation();
+  g.screenW = renderer.getScreenWidth();
+  g.screenH = renderer.getScreenHeight();
+
+  // Rotate when the page's aspect doesn't match the screen's -- same
+  // fill-the-screen behavior as panel-zoom (renderPanelZoom): this lets a
+  // portrait manga page fill a landscape-oriented screen edge-to-edge
+  // instead of shrinking to a small centered box. The user tilts the
+  // device to read a rotated page.
+  const bool screenIsPortrait = g.screenH > g.screenW;
+  const bool pageIsLandscape = imgWidth > imgHeight;
+  g.rotated = screenIsPortrait == pageIsLandscape;
+  if (g.rotated) {
+    const auto rotatedOrientation = static_cast<GfxRenderer::Orientation>((g.savedOrientation + 3) % 4);
+    renderer.setOrientation(rotatedOrientation);
+    g.screenW = renderer.getScreenWidth();
+    g.screenH = renderer.getScreenHeight();
+  }
+
+  g.destWidth = imgWidth;
+  g.destHeight = imgHeight;
+  const float ratio = static_cast<float>(imgWidth) / static_cast<float>(imgHeight);
+  const float screenRatio = static_cast<float>(g.screenW) / static_cast<float>(g.screenH);
+  if (imgWidth > g.screenW || imgHeight > g.screenH) {
+    if (ratio > screenRatio) {
+      g.y = static_cast<int>((g.screenH - g.screenW / ratio) / 2.0f);
+      g.destWidth = g.screenW;
+      g.destHeight = g.screenH - 2 * g.y;
+    } else {
+      g.x = static_cast<int>((g.screenW - g.screenH * ratio) / 2.0f);
+      g.destWidth = g.screenW - 2 * g.x;
+      g.destHeight = g.screenH;
+    }
+  } else {
+    g.x = (g.screenW - imgWidth) / 2;
+    g.y = (g.screenH - imgHeight) / 2;
+  }
+  return g;
+}
+
 void MangaReaderActivity::renderFullPage() {
   renderer.clearScreen();
 
@@ -331,58 +382,27 @@ void MangaReaderActivity::renderFullPage() {
     return;
   }
 
-  int screenW = renderer.getScreenWidth();
-  int screenH = renderer.getScreenHeight();
-
   // Use the image decoder (supports JPG/PNG/BMP) for proper grayscale rendering.
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imgPath);
   if (!decoder) {
-    renderer.drawCenteredText(UI_12_FONT_ID, screenH / 2, tr(STR_PAGE_LOAD_ERROR), true);
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true);
     renderer.displayBuffer();
     return;
   }
 
   ImageDimensions dims = {0, 0};
   if (!decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
-    renderer.drawCenteredText(UI_12_FONT_ID, screenH / 2, tr(STR_PAGE_LOAD_ERROR), true);
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true);
     renderer.displayBuffer();
     return;
   }
 
-  // Rotate when the page's aspect doesn't match the screen's -- same
-  // fill-the-screen behavior as panel-zoom (renderPanelZoom): this lets a
-  // portrait manga page fill a landscape-oriented screen edge-to-edge
-  // instead of shrinking to a small centered box. The user tilts the
-  // device to read a rotated page.
-  const auto savedOrientation = renderer.getOrientation();
-  const bool screenIsPortrait = screenH > screenW;
-  const bool pageIsLandscape = dims.width > dims.height;
-  const bool rotatePage = screenIsPortrait == pageIsLandscape;
-  if (rotatePage) {
-    const auto rotatedOrientation = static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4);
-    renderer.setOrientation(rotatedOrientation);
-    screenW = renderer.getScreenWidth();
-    screenH = renderer.getScreenHeight();
-  }
-
-  int x = 0, y = 0;
-  int destWidth = dims.width, destHeight = dims.height;
-  float ratio = static_cast<float>(dims.width) / static_cast<float>(dims.height);
-  float screenRatio = static_cast<float>(screenW) / static_cast<float>(screenH);
-  if (dims.width > screenW || dims.height > screenH) {
-    if (ratio > screenRatio) {
-      y = static_cast<int>((screenH - screenW / ratio) / 2.0f);
-      destWidth = screenW;
-      destHeight = screenH - 2 * y;
-    } else {
-      x = static_cast<int>((screenW - screenH * ratio) / 2.0f);
-      destWidth = screenW - 2 * x;
-      destHeight = screenH;
-    }
-  } else {
-    x = (screenW - dims.width) / 2;
-    y = (screenH - dims.height) / 2;
-  }
+  const FullPageGeom g = applyFullPageGeometry(dims.width, dims.height);
+  const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
+  const bool rotatePage = g.rotated;
+  const int x = g.x, y = g.y;
+  const int destWidth = g.destWidth, destHeight = g.destHeight;
+  const int screenW = g.screenW, screenH = g.screenH;
 
   // Cache path for decoded pixel data (avoids re-decoding JPG on grayscale passes)
   std::string cachePath = book->getCachePath() + "/page_" + std::to_string(currentPage) + ".2bp";
@@ -396,13 +416,17 @@ void MangaReaderActivity::renderFullPage() {
   config.useDithering = true;
   config.cachePath = cachePath;
 
-  // BW pass — decode to framebuffer AND stream a pixel cache to disk (config.cachePath) so the
-  // two grayscale passes below can read the already-decoded pixels back instead of re-running the
-  // full JPEG decode. Confirmed on a real device: without this, every manga page turn ran the
-  // decode 3 times (BW + LSB + MSB), each a full JPEG parse/IDCT/scale -- the dominant cost of
-  // "turning pages in manga is slow". ImageBlock (regular EPUB images) already had this same
-  // cache-read optimization; manga bypassed ImageBlock entirely and never got it.
-  decoder->decodeToFramebuffer(imgPath, renderer, config);
+  // BW pass — a page visited before (or warmed by the idle prefetch) has its decoded pixels
+  // cached on SD; render those directly and skip the JPEG decode entirely. Otherwise decode to
+  // framebuffer AND stream the pixel cache to disk (config.cachePath) so the two grayscale passes
+  // below can read the already-decoded pixels back instead of re-running the full JPEG decode.
+  // Confirmed on a real device: without the cache, every manga page turn ran the decode 3 times
+  // (BW + LSB + MSB), each a full JPEG parse/IDCT/scale -- the dominant cost of "turning pages in
+  // manga is slow". ImageBlock (regular EPUB images) already had this same cache-read
+  // optimization; manga bypassed ImageBlock entirely and never got it.
+  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+    decoder->decodeToFramebuffer(imgPath, renderer, config);
+  }
 
   // Status bar: page number
   char statusBuf[32];
@@ -441,6 +465,68 @@ void MangaReaderActivity::renderFullPage() {
   if (rotatePage) {
     renderer.setOrientation(savedOrientation);
   }
+
+  // Arm the idle prefetch of the next page's pixel cache (see loop()).
+  nextPagePrefetched = false;
+  fullPageRenderedMs = millis();
+}
+
+void MangaReaderActivity::prefetchNextPageCache() {
+  if (!book) {
+    nextPagePrefetched = true;
+    return;
+  }
+  const uint32_t nextPage = currentPage + 1;
+  if (nextPage >= book->getPageCount()) {
+    nextPagePrefetched = true;
+    return;
+  }
+  const std::string cachePath = book->getCachePath() + "/page_" + std::to_string(nextPage) + ".2bp";
+  if (Storage.exists(cachePath.c_str())) {
+    nextPagePrefetched = true;
+    return;
+  }
+  // The decode needs working buffers plus the 48KB framebuffer snapshot below; under pressure,
+  // skip permanently for this page (the page-turn decode handles it as before).
+  if (ESP.getMaxAllocHeap() < 60000) {
+    nextPagePrefetched = true;
+    return;
+  }
+  // The renderer belongs to the render task; only touch it under the rendering mutex, and don't
+  // stall a queued render -- retry on a later idle tick instead.
+  if (RenderLock::peek()) return;
+
+  const std::string imgPath = book->getPageImagePath(nextPage);
+  ImageToFramebufferDecoder* decoder = imgPath.empty() ? nullptr : ImageDecoderFactory::getDecoder(imgPath);
+  ImageDimensions dims = {0, 0};
+  if (!decoder || !decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
+    nextPagePrefetched = true;
+    return;
+  }
+
+  RenderLock lock;
+  // The decode scribbles the framebuffer (RAM only -- nothing is displayed here); snapshot and
+  // restore it so the on-screen frame survives for later partial redraws and overlays.
+  if (!renderer.storeBwBuffer()) {
+    nextPagePrefetched = true;
+    return;
+  }
+  LOG_DBG("MRA", "Prefetching pixel cache for page %u", static_cast<unsigned>(nextPage));
+  const FullPageGeom g = applyFullPageGeometry(dims.width, dims.height);
+  RenderConfig config;
+  config.x = g.x;
+  config.y = g.y;
+  config.maxWidth = g.screenW;
+  config.maxHeight = g.screenH;
+  config.useGrayscale = true;
+  config.useDithering = true;
+  config.cachePath = cachePath;
+  decoder->decodeToFramebuffer(imgPath, renderer, config);
+  if (g.rotated) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>(g.savedOrientation));
+  }
+  renderer.restoreBwBuffer();
+  nextPagePrefetched = true;
 }
 
 void MangaReaderActivity::renderPanelZoom() {
@@ -524,8 +610,11 @@ void MangaReaderActivity::renderPanelZoom() {
   config.useDithering = true;
   config.cachePath = cachePath;
 
-  // BW pass
-  decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+  // BW pass -- a revisited panel renders from its pixel cache and skips the crop-JPEG decode,
+  // same as renderFullPage().
+  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+    decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+  }
 
   // Panel indicator and status
   char statusBuf[48];
