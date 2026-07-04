@@ -742,18 +742,24 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {
+      // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
+      const std::string scanCachePath = epub->getCachePath() + "/wlscan.bin";
       if (verticalSection) {
         const VerticalPage* page = verticalSection->getPage();
         if (page) {
           startActivityForResult(
-              std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page),
+              std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
+                                                             static_cast<uint16_t>(currentSpineIndex),
+                                                             static_cast<uint16_t>(verticalSection->currentPage)),
               [this](const ActivityResult&) { requestUpdate(); });
         }
       } else if (section) {
         auto page = section->loadPageFromSectionFile();
         if (page) {
           startActivityForResult(
-              std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page),
+              std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
+                                                             static_cast<uint16_t>(currentSpineIndex),
+                                                             static_cast<uint16_t>(section->currentPage)),
               [this](const ActivityResult&) { requestUpdate(); });
         }
       }

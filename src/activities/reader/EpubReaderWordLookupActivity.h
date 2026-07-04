@@ -16,13 +16,17 @@ class Page;
 class EpubReaderWordLookupActivity final : public Activity {
  public:
   // Progressive open (see WordSelectionScan): the constructor only scans far enough to show the
-  // first word (~300ms); the rest of the page is mapped in the background from loop().
+  // first word (~300ms); the rest of the page is mapped in the background from loop(). When
+  // scanCachePath is given, a completed scan is persisted there keyed by (spine, page) -- a
+  // later re-open of the same unchanged page loads it back and skips scanning entirely.
   // Vertical (tategaki) reading mode.
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                        const VerticalPage& page);
+                                        const VerticalPage& page, std::string scanCachePath = "",
+                                        uint16_t spineIndex = 0, uint16_t pageIndex = 0);
   // Horizontal (yokogaki) reading mode.
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                        const Page& page);
+                                        const Page& page, std::string scanCachePath = "",
+                                        uint16_t spineIndex = 0, uint16_t pageIndex = 0);
 
   void onEnter() override;
   void onExit() override;
@@ -50,6 +54,13 @@ class EpubReaderWordLookupActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
 
+  // Scan-result persistence (empty path = disabled).
+  std::string scanCachePath;
+  uint16_t scanSpine = 0;
+  uint16_t scanPage = 0;
+  bool scanCacheSaved = false;
+
+  void initScanFromCacheOrBurst(const char* label);
   void runInitialBurst(const char* label);
   void moveCursor(int delta);
   void performLookup();

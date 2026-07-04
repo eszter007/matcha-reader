@@ -37,11 +37,21 @@ class WordSelectionScan {
   void initFromVerticalPage(const VerticalPage& page);
   // Horizontal (yokogaki) mode: flattens the page's lines into one continuous character stream.
   void initFromPage(const Page& page);
+  // Manga mode: a plain UTF-8 text blob (panel or combined page text). Newlines are dropped.
+  void initFromUtf8Text(const std::string& text);
 
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).
   // Returns true when the scan is fully done.
   bool step(uint32_t maxMillis);
   bool isDone() const { return phase == Phase::Done; }
+
+  // Single-slot per-book result cache: the completed selectable map for ONE (spine, page),
+  // self-validated by a hash of allGlyphs (so a section rebuild with different layout/content
+  // invalidates it) and the main dictionary's file size (so a dictionary swap does too).
+  // tryLoadCache: call after initFrom*(); on a hit fills the selectable map and marks the scan
+  // Done -- the multi-second page scan is skipped entirely. saveCache: call once when isDone().
+  bool tryLoadCache(const std::string& path, uint16_t spineIndex, uint16_t pageIndex);
+  bool saveCache(const std::string& path, uint16_t spineIndex, uint16_t pageIndex) const;
 
   std::vector<GlyphRef> allGlyphs;          // Full glyph list for building lookup text
   std::vector<GlyphRef> selectableGlyphs;   // Positions with a dictionary match
@@ -72,6 +82,7 @@ class WordSelectionScan {
   size_t skipUntil = 0;  // characters inside an already-matched word are skipped
 
   void reset();
+  uint32_t glyphContentHash() const;
   void scanOnePosition();
   // The display filter (bare particles, conjugation fragments), applied to a matched position
   // before it is added to selectableGlyphs.

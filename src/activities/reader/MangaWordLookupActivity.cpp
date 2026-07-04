@@ -14,127 +14,41 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-namespace {
-
-bool isLookupableChar(uint32_t cp) {
-  if (cp < 0x30) return false;
-  if (cp >= 0x3040 && cp <= 0x309F) return true;
-  if (cp >= 0x30A0 && cp <= 0x30FF) return true;
-  if (cp >= 0x4E00 && cp <= 0x9FFF) return true;
-  if (cp >= 0x3400 && cp <= 0x4DBF) return true;
-  if (cp >= 0xF900 && cp <= 0xFAFF) return true;
-  return cp >= 0x80;
-}
-
-bool isCJK(uint32_t cp) {
-  return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
-         (cp >= 0xF900 && cp <= 0xFAFF);
-}
-
-bool stripTrailingParticle(const std::string& text, WordLookupResult& result, bool needDefinition = true) {
-  if (result.matchLength == 0) return false;
-  size_t pos = 0, lastStart = 0;
-  uint32_t lastCp = 0, prevCp = 0;
-  int chars = 0;
-  while (pos < result.matchLength && pos < text.size()) {
-    prevCp = lastCp;
-    lastStart = pos;
-    auto c = static_cast<unsigned char>(text[pos]);
-    if (c < 0x80) { lastCp = c; pos += 1; }
-    else if ((c & 0xE0) == 0xC0) { lastCp = ((c & 0x1F) << 6) | (text[pos + 1] & 0x3F); pos += 2; }
-    else if ((c & 0xF0) == 0xE0) { lastCp = ((c & 0x0F) << 12) | ((text[pos + 1] & 0x3F) << 6) | (text[pos + 2] & 0x3F); pos += 3; }
-    else { lastCp = 0; pos += 4; }
-    chars++;
-  }
-  if (chars < 2) return false;
-
-  const bool isParticle = lastCp == 0x306E || lastCp == 0x306F || lastCp == 0x304C || lastCp == 0x3092 ||
-                          lastCp == 0x306B || lastCp == 0x3078 || lastCp == 0x3082 || lastCp == 0x3068;
-  if (!isParticle) return false;
-  if (!isCJK(prevCp)) return false;
-
-  std::string stem = text.substr(0, lastStart);
-  WordLookupResult sr;
-  if (WordLookup::lookup(stem, 0, sr, needDefinition) && sr.matchLength == stem.size()) {
-    result = std::move(sr);
-    return true;
-  }
-  return false;
-}
-
-}  // namespace
-
 MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                  std::string panelText)
-    : Activity("MangaWordLookup", renderer, mappedInput) {
-  // Decode UTF-8 text into codepoints
-  size_t b = 0;
-  while (b < panelText.size()) {
-    auto c0 = static_cast<unsigned char>(panelText[b]);
-    uint32_t cp;
-    if (c0 < 0x80) { cp = c0; b += 1; }
-    else if ((c0 & 0xE0) == 0xC0) { cp = (c0 & 0x1F) << 6 | (panelText[b + 1] & 0x3F); b += 2; }
-    else if ((c0 & 0xF0) == 0xE0) { cp = (c0 & 0x0F) << 12 | ((panelText[b + 1] & 0x3F) << 6) | (panelText[b + 2] & 0x3F); b += 3; }
-    else { cp = (c0 & 0x07) << 18 | ((panelText[b + 1] & 0x3F) << 12) | ((panelText[b + 2] & 0x3F) << 6) | (panelText[b + 3] & 0x3F); b += 4; }
-
-    if (cp == '\n' || cp == '\r') continue;
-    allGlyphs.push_back(GlyphRef{cp});
-  }
-
-  // Diagnostic timing for the Word Lookup slowness investigation -- see DictIndex::logAndResetStats().
-  const uint32_t scanStart = millis();
-  LOG_INF("MWLA", "buildSelectableGlyphs: scanning %u characters", static_cast<unsigned>(allGlyphs.size()));
-  buildSelectableGlyphs();
-  LOG_INF("MWLA", "buildSelectableGlyphs: done in %u ms, %u selectable", millis() - scanStart,
-          static_cast<unsigned>(selectableGlyphs.size()));
-  DictIndex::logAndResetStats("buildSelectableGlyphs");
+                                                 std::string panelText, std::string scanCachePath,
+                                                 const uint16_t pageIndex, const uint16_t panelIndex)
+    : Activity("MangaWordLookup", renderer, mappedInput),
+      scanCachePath(std::move(scanCachePath)),
+      scanPage(pageIndex),
+      scanPanel(panelIndex) {
+  scan.initFromUtf8Text(panelText);
+  initScanFromCacheOrBurst();
 }
 
-void MangaWordLookupActivity::buildSelectableGlyphs() {
-  selectableGlyphs.reserve(allGlyphs.size());
-  selectToAllIdx.reserve(allGlyphs.size());
-
-  size_t skipUntil = 0;
-  for (size_t i = 0; i < allGlyphs.size(); i++) {
-    if (i < skipUntil) continue;
-    if (!isLookupableChar(allGlyphs[i].codepoint)) continue;
-
-    std::string text;
-    int charCount = 0;
-    for (size_t j = i; j < allGlyphs.size() && charCount < kMaxLookupChars; j++) {
-      encodeUtf8(allGlyphs[j].codepoint, text);
-      charCount++;
-    }
-
-    WordLookupResult result;
-    // Scan only needs the match length -- definitions are fetched fresh on selection.
-    bool hasMatch = !text.empty() && WordLookup::lookup(text, 0, result, /*needDefinition=*/false);
-    if (hasMatch) {
-      stripTrailingParticle(text, result, /*needDefinition=*/false);
-      int matchChars = 0;
-      size_t pos = 0;
-      while (pos < result.matchLength && pos < text.size()) {
-        auto c = static_cast<unsigned char>(text[pos]);
-        if (c < 0x80) pos += 1;
-        else if ((c & 0xE0) == 0xC0) pos += 2;
-        else if ((c & 0xF0) == 0xE0) pos += 3;
-        else pos += 4;
-        matchChars++;
-      }
-
-      if (matchChars > 1) {
-        skipUntil = i + matchChars;
-      }
-
-      selectToAllIdx.push_back(i);
-      selectableGlyphs.push_back(allGlyphs[i]);
-    }
+// A persisted scan for this exact text skips all scanning; otherwise start progressively.
+void MangaWordLookupActivity::initScanFromCacheOrBurst() {
+  if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanPage, scanPanel)) {
+    scanCacheSaved = true;  // already on disk
+    return;
   }
+  runInitialBurst();
+}
+
+// Progressive open: scan only far enough to find the FIRST selectable word; the rest of the
+// text is mapped incrementally from loop(). Manga texts are short, so this usually completes
+// in well under a second anyway -- the burst just guarantees a fast open on long combined text.
+void MangaWordLookupActivity::runInitialBurst() {
+  const uint32_t scanStart = millis();
+  LOG_INF("MWLA", "progressive scan: %u characters", static_cast<unsigned>(scan.allGlyphs.size()));
+  while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
+    scan.step(50);
+  }
+  LOG_INF("MWLA", "progressive scan: first word after %u ms", millis() - scanStart);
 }
 
 void MangaWordLookupActivity::onEnter() {
   Activity::onEnter();
-  const int maxIdx = static_cast<int>(selectableGlyphs.size()) - 1;
+  const int maxIdx = static_cast<int>(scan.selectableGlyphs.size()) - 1;
   for (cursorIndex = 0; cursorIndex <= maxIdx; cursorIndex++) {
     performLookup();
     if (hasResult) break;
@@ -150,9 +64,17 @@ void MangaWordLookupActivity::onExit() {
 }
 
 void MangaWordLookupActivity::moveCursor(int delta) {
-  if (selectableGlyphs.empty()) return;
-  const int maxIdx = static_cast<int>(selectableGlyphs.size()) - 1;
-  // selectableGlyphs is already the pre-filtered list of positions buildSelectableGlyphs()
+  // Moving past the last already-discovered word while the background scan is still running:
+  // scan forward just enough to reveal the next one (see EpubReaderWordLookupActivity).
+  if (delta > 0 && !scan.isDone() && cursorIndex + delta >= static_cast<int>(scan.selectableGlyphs.size())) {
+    const size_t want = static_cast<size_t>(cursorIndex + delta) + 1;
+    while (!scan.isDone() && scan.selectableGlyphs.size() < want) {
+      scan.step(50);
+    }
+  }
+  if (scan.selectableGlyphs.empty()) return;
+  const int maxIdx = static_cast<int>(scan.selectableGlyphs.size()) - 1;
+  // scan.selectableGlyphs is already the pre-filtered list of positions buildSelectableGlyphs()
   // confirmed have a dictionary match -- every index in it is valid by construction. Same fix as
   // EpubReaderWordLookupActivity::moveCursor(): the previous retry-skip loop re-validated via a
   // fresh performLookup() and kept advancing past any position that didn't independently agree,
@@ -163,38 +85,27 @@ void MangaWordLookupActivity::moveCursor(int delta) {
   performLookup();
 }
 
-void MangaWordLookupActivity::encodeUtf8(uint32_t cp, std::string& out) {
-  if (cp < 0x80) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp < 0x800) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp < 0x10000) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
 std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
   std::string text;
-  if (startIdx >= selectToAllIdx.size()) return text;
+  if (startIdx >= scan.selectToAllIdx.size()) return text;
 
-  const size_t allStart = selectToAllIdx[startIdx];
+  const size_t allStart = scan.selectToAllIdx[startIdx];
   int charCount = 0;
-  for (size_t i = allStart; i < allGlyphs.size() && charCount < kMaxLookupChars; i++) {
-    encodeUtf8(allGlyphs[i].codepoint, text);
+  for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < WordSelectionScan::kMaxLookupChars; i++) {
+    WordSelectionScan::encodeUtf8(scan.allGlyphs[i].codepoint, text);
     charCount++;
   }
   return text;
 }
 
 void MangaWordLookupActivity::performLookup() {
+  // Render shows "Loading..." instead of "No match found" while this runs (fast navigation).
+  lookupInFlight = true;
+  performLookupImpl();
+  lookupInFlight = false;
+}
+
+void MangaWordLookupActivity::performLookupImpl() {
   hasResult = false;
   resultHeadword.clear();
   resultDefinition.clear();
@@ -207,7 +118,7 @@ void MangaWordLookupActivity::performLookup() {
 
   WordLookupResult result;
   if (WordLookup::lookup(text, 0, result)) {
-    stripTrailingParticle(text, result);
+    WordSelectionScan::stripTrailingParticle(text, result);
     hasResult = true;
     resultHeadword = result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
@@ -247,8 +158,8 @@ void MangaWordLookupActivity::performLookup() {
   }
 
   // Grammar scan
-  if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) && cursorIndex < static_cast<int>(selectToAllIdx.size())) {
-    const size_t allStart = selectToAllIdx[cursorIndex];
+  if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) && cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
+    const size_t allStart = scan.selectToAllIdx[cursorIndex];
     int bestGramLen = 0;
     std::string bestGramHw, bestGramDef;
 
@@ -258,8 +169,8 @@ void MangaWordLookupActivity::performLookup() {
 
       std::string gramText;
       int gCharCount = 0;
-      for (size_t j = scanStart; j < allGlyphs.size() && gCharCount < 12; j++) {
-        encodeUtf8(allGlyphs[j].codepoint, gramText);
+      for (size_t j = scanStart; j < scan.allGlyphs.size() && gCharCount < 12; j++) {
+        WordSelectionScan::encodeUtf8(scan.allGlyphs[j].codepoint, gramText);
         gCharCount++;
       }
 
@@ -318,6 +229,25 @@ void MangaWordLookupActivity::loop() {
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
     if (scrollOffset > 0) { scrollOffset = std::max(0, scrollOffset - 5); requestUpdate(); }
   });
+
+  // Progressive background scan + one-time result persistence -- same structure as
+  // EpubReaderWordLookupActivity::loop(), see there for the full rationale.
+  if (!scan.isDone()) {
+    const bool done = scan.step(40);
+    if (!hasResult && !scan.selectableGlyphs.empty()) {
+      performLookup();
+      requestUpdate();
+    }
+    if (done) {
+      DictIndex::logAndResetStats("progressive scan complete");
+      requestUpdate();
+    }
+  } else if (!scanCacheSaved) {
+    if (!scanCachePath.empty()) {
+      scan.saveCache(scanCachePath, scanPage, scanPanel);
+    }
+    scanCacheSaved = true;
+  }
 }
 
 void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
@@ -342,9 +272,10 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
     }
   }
 
-  if (selectableGlyphs.empty() || !hasResult) {
+  if (scan.selectableGlyphs.empty() || !hasResult) {
+    const bool stillWorking = lookupInFlight || !scan.isDone();
     UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID,
-                              screen.y + screen.height / 2, tr(STR_NO_MATCH), true);
+                              screen.y + screen.height / 2, stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
     return;
   }
 
@@ -447,8 +378,9 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
 
   std::string posText;
-  if (hasResult && !selectableGlyphs.empty()) {
-    posText = std::to_string(cursorIndex + 1) + "/" + std::to_string(selectableGlyphs.size());
+  if (hasResult && !scan.selectableGlyphs.empty()) {
+    posText = std::to_string(cursorIndex + 1) + "/" +
+              (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
   }
   const Rect headerRect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight};
 

@@ -16,17 +16,34 @@
 #include "fontIds.h"
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                           const VerticalPage& page)
-    : Activity("WordLookup", renderer, mappedInput) {
+                                                           const VerticalPage& page, std::string scanCachePath,
+                                                           const uint16_t spineIndex, const uint16_t pageIndex)
+    : Activity("WordLookup", renderer, mappedInput),
+      scanCachePath(std::move(scanCachePath)),
+      scanSpine(spineIndex),
+      scanPage(pageIndex) {
   scan.initFromVerticalPage(page);
-  runInitialBurst("vertical");
+  initScanFromCacheOrBurst("vertical");
 }
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                           const Page& page)
-    : Activity("WordLookup", renderer, mappedInput) {
+                                                           const Page& page, std::string scanCachePath,
+                                                           const uint16_t spineIndex, const uint16_t pageIndex)
+    : Activity("WordLookup", renderer, mappedInput),
+      scanCachePath(std::move(scanCachePath)),
+      scanSpine(spineIndex),
+      scanPage(pageIndex) {
   scan.initFromPage(page);
-  runInitialBurst("horizontal");
+  initScanFromCacheOrBurst("horizontal");
+}
+
+// A persisted scan for this exact page skips all scanning; otherwise start progressively.
+void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
+  if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanSpine, scanPage)) {
+    scanCacheSaved = true;  // already on disk
+    return;
+  }
+  runInitialBurst(label);
 }
 
 // Progressive open: scan only far enough to find the FIRST selectable word so the panel can show
@@ -295,6 +312,13 @@ void EpubReaderWordLookupActivity::loop() {
       DictIndex::logAndResetStats("progressive scan complete");
       requestUpdate();  // redraw the position counter with the final total
     }
+  } else if (!scanCacheSaved) {
+    // Persist the completed scan (regardless of which path finished it) so re-opening Word
+    // Lookup on this page -- the common flow -- skips the scan entirely next time.
+    if (!scanCachePath.empty()) {
+      scan.saveCache(scanCachePath, scanSpine, scanPage);
+    }
+    scanCacheSaved = true;
   }
 }
 

@@ -1,6 +1,8 @@
 #include "WordSelectionScan.h"
 
 #include <Arduino.h>
+#include <DictIndex.h>
+#include <HalStorage.h>
 #include <Logging.h>
 #include <WordLookup.h>
 
@@ -240,6 +242,33 @@ void WordSelectionScan::initFromPage(const Page& page) {
   reserveGlyphsSafe(selectableGlyphs, allGlyphs.size());
 }
 
+void WordSelectionScan::initFromUtf8Text(const std::string& text) {
+  reset();
+  size_t b = 0;
+  while (b < text.size()) {
+    auto c0 = static_cast<unsigned char>(text[b]);
+    uint32_t cp;
+    if (c0 < 0x80) {
+      cp = c0;
+      b += 1;
+    } else if ((c0 & 0xE0) == 0xC0) {
+      cp = (c0 & 0x1F) << 6 | (static_cast<unsigned char>(text[b + 1]) & 0x3F);
+      b += 2;
+    } else if ((c0 & 0xF0) == 0xE0) {
+      cp = (c0 & 0x0F) << 12 | (static_cast<unsigned char>(text[b + 1]) & 0x3F) << 6 |
+           (static_cast<unsigned char>(text[b + 2]) & 0x3F);
+      b += 3;
+    } else {
+      cp = (c0 & 0x07) << 18 | (static_cast<unsigned char>(text[b + 1]) & 0x3F) << 12 |
+           (static_cast<unsigned char>(text[b + 2]) & 0x3F) << 6 | (static_cast<unsigned char>(text[b + 3]) & 0x3F);
+      b += 4;
+    }
+    if (cp == '\n' || cp == '\r') continue;
+    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, false})) break;
+  }
+  reserveGlyphsSafe(selectableGlyphs, allGlyphs.size());
+}
+
 bool WordSelectionScan::step(const uint32_t maxMillis) {
   const uint32_t start = millis();
   while (phase != Phase::Done) {
@@ -251,6 +280,106 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
     if (millis() - start >= maxMillis) break;
   }
   return phase == Phase::Done;
+}
+
+namespace {
+constexpr uint32_t WLSCAN_MAGIC = 0x31534C57;  // "WLS1"
+
+// Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
+// scans (segmentation depends on the dictionary). File size is not a perfect identity, but any
+// realistic dictionary swap changes it.
+uint32_t dictFingerprint() {
+  HalFile f;
+  if (!Storage.openFileForRead("WLS", DictIndex::IDX_PATH, f)) return 0;
+  return static_cast<uint32_t>(f.size());
+}
+}  // namespace
+
+// FNV-1a over the glyph stream's content-identity fields. Any change in the page's text or
+// segmentation-relevant structure (paragraph boundaries) produces a different hash, so a cached
+// scan can never be applied to a page it wasn't computed from.
+uint32_t WordSelectionScan::glyphContentHash() const {
+  uint32_t h = 2166136261u;
+  auto mix = [&h](uint32_t v) {
+    for (int b = 0; b < 4; b++) {
+      h ^= (v >> (b * 8)) & 0xFF;
+      h *= 16777619u;
+    }
+  };
+  mix(static_cast<uint32_t>(allGlyphs.size()));
+  for (const auto& g : allGlyphs) {
+    mix(g.codepoint);
+    mix(g.paragraphIndex);
+  }
+  return h;
+}
+
+bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex) {
+  HalFile f;
+  if (!Storage.openFileForRead("WLS", path, f)) return false;
+
+  struct Header {
+    uint32_t magic;
+    uint16_t spine;
+    uint16_t page;
+    uint32_t glyphHash;
+    uint32_t dictSize;
+    uint16_t count;
+  } __attribute__((packed)) hdr;
+  if (f.read(reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr)) != static_cast<int>(sizeof(hdr))) return false;
+  if (hdr.magic != WLSCAN_MAGIC || hdr.spine != spineIndex || hdr.page != pageIndex) return false;
+  if (hdr.glyphHash != glyphContentHash() || hdr.dictSize != dictFingerprint()) return false;
+  if (hdr.count > allGlyphs.size()) return false;
+
+  selectableGlyphs.clear();
+  selectToAllIdx.clear();
+  reserveGlyphsSafe(selectableGlyphs, hdr.count);
+  selectToAllIdx.reserve(hdr.count);
+  for (uint16_t i = 0; i < hdr.count; i++) {
+    uint32_t idx;
+    if (f.read(reinterpret_cast<uint8_t*>(&idx), sizeof(idx)) != static_cast<int>(sizeof(idx)) ||
+        idx >= allGlyphs.size()) {
+      selectableGlyphs.clear();
+      selectToAllIdx.clear();
+      return false;
+    }
+    if (!pushGlyphSafe(selectableGlyphs, allGlyphs[idx])) {
+      selectableGlyphs.clear();
+      selectToAllIdx.clear();
+      return false;
+    }
+    selectToAllIdx.push_back(idx);
+  }
+  phase = Phase::Done;
+  LOG_INF("WLS", "Scan cache hit for spine=%u page=%u (%u selectable)", spineIndex, pageIndex, hdr.count);
+  return true;
+}
+
+bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex) const {
+  if (!isDone()) return false;
+  HalFile f;
+  if (!Storage.openFileForWrite("WLS", path, f)) return false;
+
+  struct Header {
+    uint32_t magic;
+    uint16_t spine;
+    uint16_t page;
+    uint32_t glyphHash;
+    uint32_t dictSize;
+    uint16_t count;
+  } __attribute__((packed)) hdr;
+  hdr.magic = WLSCAN_MAGIC;
+  hdr.spine = spineIndex;
+  hdr.page = pageIndex;
+  hdr.glyphHash = glyphContentHash();
+  hdr.dictSize = dictFingerprint();
+  hdr.count = static_cast<uint16_t>(selectToAllIdx.size());
+  f.write(reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
+  for (const size_t idx : selectToAllIdx) {
+    const uint32_t v = static_cast<uint32_t>(idx);
+    f.write(reinterpret_cast<const uint8_t*>(&v), sizeof(v));
+  }
+  return true;
 }
 
 // Pre-scan step: examine ONE character position, doing dictionary lookups to find word

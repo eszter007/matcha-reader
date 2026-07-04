@@ -769,9 +769,13 @@ void MangaReaderActivity::launchWordLookup() {
 
   if (combined.empty()) return;
 
-  // Use the MangaWordLookup sub-activity with raw text
+  // Use the MangaWordLookup sub-activity with raw text. The scan cache makes a re-open of the
+  // same panel/page text instant (validated by content hash, so the key is just a hint).
   startActivityForResult(
-      std::make_unique<MangaWordLookupActivity>(renderer, mappedInput, std::move(combined)),
+      std::make_unique<MangaWordLookupActivity>(renderer, mappedInput, std::move(combined),
+                                                book->getCachePath() + "/wlscan.bin",
+                                                static_cast<uint16_t>(currentPage),
+                                                static_cast<uint16_t>(currentPanel + 1)),
       [this](const ActivityResult&) {
         viewMode = ViewMode::PanelZoom;
         requestUpdate();
@@ -1020,7 +1024,10 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       }
       if (!combined.empty() && DictIndex::isAvailable()) {
         startActivityForResult(
-            std::make_unique<MangaWordLookupActivity>(renderer, mappedInput, std::move(combined)),
+            std::make_unique<MangaWordLookupActivity>(renderer, mappedInput, std::move(combined),
+                                                      book->getCachePath() + "/wlscan.bin",
+                                                      static_cast<uint16_t>(currentPage),
+                                                      static_cast<uint16_t>(currentPanel + 1)),
             [this, returnMode](const ActivityResult&) {
               viewMode = returnMode;
               requestUpdate();
