@@ -5,6 +5,7 @@
 #include <Utf8.h>
 
 #include <cstdlib>
+#include <cstring>
 
 FontDecompressor::~FontDecompressor() { deinit(); }
 
@@ -13,14 +14,64 @@ bool FontDecompressor::init() {
   return true;
 }
 
-void FontDecompressor::deinit() {
-  freePageBuffer();
-  freeHotGroup();
-}
+void FontDecompressor::deinit() { freeGlyphSlab(); }
 
 void FontDecompressor::clearCache() {
   freePageBuffer();
   freeHotGroup();
+}
+
+void FontDecompressor::freeGlyphSlab() {
+  clearCache();
+  free(slabBuf);
+  free(slabEntries);
+  slabBuf = nullptr;
+  slabEntries = nullptr;
+  slabEntryCount = 0;
+  slabUsed = 0;
+}
+
+const uint8_t* FontDecompressor::slabLookup(const EpdFontData* fontData, const uint32_t glyphIndex) const {
+  if (!slabBuf) return nullptr;
+  for (uint16_t i = 0; i < slabEntryCount; i++) {
+    if (slabEntries[i].fontData == fontData && slabEntries[i].glyphIndex == glyphIndex) {
+      return &slabBuf[slabEntries[i].offset];
+    }
+  }
+  return nullptr;
+}
+
+const uint8_t* FontDecompressor::slabInsert(const EpdFontData* fontData, const uint32_t glyphIndex,
+                                            const uint8_t* data, const uint32_t len) {
+  if (len == 0 || len > SLAB_BYTES) return nullptr;
+  if (!slabBuf) {
+    // Lazy allocation: the slab only costs RAM once non-prewarmed compressed-font glyphs are
+    // actually drawn (i.e. non-Latin text outside a prewarm). malloc, not new: this class
+    // already manages raw buffers with explicit free(), and a failed allocation here must
+    // degrade (no caching) rather than abort.
+    slabBuf = static_cast<uint8_t*>(malloc(SLAB_BYTES));
+    slabEntries = static_cast<SlabEntry*>(malloc(sizeof(SlabEntry) * SLAB_MAX_ENTRIES));
+    if (!slabBuf || !slabEntries) {
+      free(slabBuf);
+      free(slabEntries);
+      slabBuf = nullptr;
+      slabEntries = nullptr;
+      return nullptr;
+    }
+    slabEntryCount = 0;
+    slabUsed = 0;
+  }
+  if (slabUsed + len > SLAB_BYTES || slabEntryCount >= SLAB_MAX_ENTRIES) {
+    // Generational reset: drop everything and refill with the current working set. Simpler and
+    // fragmentation-free compared to per-entry eviction inside a bump-allocated slab.
+    slabEntryCount = 0;
+    slabUsed = 0;
+  }
+  memcpy(&slabBuf[slabUsed], data, len);
+  slabEntries[slabEntryCount] = {fontData, glyphIndex, slabUsed};
+  slabEntryCount++;
+  slabUsed += len;
+  return &slabBuf[slabUsed - len];
 }
 
 void FontDecompressor::freePageBuffer() {
@@ -162,6 +213,13 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     break;  // Found the right slot but glyph wasn't in it; don't check other slots
   }
 
+  // Persistent slab: glyphs drawn on a previous render without a prewarm (non-Latin UI labels).
+  if (const uint8_t* cached = slabLookup(fontData, glyphIndex)) {
+    stats.cacheHits++;
+    stats.getBitmapTimeUs += micros() - tStart;
+    return cached;
+  }
+
   // Fallback: hot group slot
   uint16_t groupIndex = getGroupIndex(fontData, glyphIndex);
   if (groupIndex >= fontData->groupCount) {
@@ -217,6 +275,11 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
   uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
   compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf.data(), glyph->width, glyph->height);
   stats.getBitmapTimeUs += micros() - tStart;
+  // Remember the compacted glyph so the NEXT render of this label costs a RAM lookup instead of
+  // a group decompression. Falls back to the scratch buffer if the slab can't take it.
+  if (const uint8_t* cached = slabInsert(fontData, glyphIndex, hotGlyphBuf.data(), glyph->dataLength)) {
+    return cached;
+  }
   return hotGlyphBuf.data();
 }
 
@@ -270,6 +333,11 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
     int32_t glyphIdx = findGlyphIndex(fontData, cp);
     if (glyphIdx < 0) continue;
+
+    // Already in the persistent slab from an earlier render -- getBitmap() serves it from RAM,
+    // so don't spend a group decompression (or a page-slot byte) on it. When a screen's whole
+    // text is slab-cached, the prewarm becomes a no-op and repeat renders cost nothing.
+    if (slabLookup(fontData, static_cast<uint32_t>(glyphIdx)) != nullptr) continue;
 
     // Deduplicate
     bool found = false;
@@ -486,6 +554,11 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
     // Extract needed glyphs directly from the byte-aligned temp buffer, compacting on the fly.
     // alignedOffset was pre-computed in step 3b — no full-group compact scan needed.
+    // UI-sized batches (menus, list rows -- not whole reading pages, which would generationally
+    // churn the slab every page turn) are ALSO copied into the persistent slab, so the NEXT
+    // render of this screen skips the prewarm's group decompressions entirely.
+    constexpr uint16_t SLAB_PREWARM_MAX_GLYPHS = 64;
+    const bool alsoSlab = glyphCount <= SLAB_PREWARM_MAX_GLYPHS;
     for (uint16_t i = 0; i < slot.glyphCount; i++) {
       if (slot.glyphs[i].bufferOffset != UINT32_MAX) continue;  // already extracted
       if (getGroupIndex(fontData, slot.glyphs[i].glyphIndex) != groupIdx) continue;
@@ -493,6 +566,9 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
       const EpdGlyph& glyph = fontData->glyph[slot.glyphs[i].glyphIndex];
       compactSingleGlyph(&tempBuf[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width, glyph.height);
       slot.glyphs[i].bufferOffset = writeOffset;
+      if (alsoSlab) {
+        slabInsert(fontData, slot.glyphs[i].glyphIndex, &slot.buffer[writeOffset], glyph.dataLength);
+      }
       writeOffset += glyph.dataLength;
     }
 

@@ -112,7 +112,7 @@ void EpubReaderTranslationActivity::onEnter() {
   // weight here -- free it before WiFi init needs the headroom, same rationale as the identical
   // call before a chapter build in EpubReaderActivity.
   if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->clearCache();
+    fcm->releaseAllFontMemory();
   }
 
   const uint32_t freeHeap = ESP.getFreeHeap();

@@ -224,4 +224,17 @@ class BaseTheme {
   static constexpr int batteryPercentSpacing = 4;
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
+
+ protected:
+  // Prewarm the font cache for rows [first, end) of a list/menu before drawing them. Non-Latin
+  // labels (Japanese file names, or the whole UI language set to Japanese) otherwise go through
+  // FontDecompressor's single hot-group fallback: one full ~64KB group decompression per glyph
+  // that lands in a different group, i.e. seconds per render. Pure-ASCII text skips the prewarm
+  // entirely (the hot group already serves it), so English screens pay nothing.
+  // Claims page slots from a tiny shared pool -- when it returns true, callers MUST pair with
+  // releaseRowPrewarm() after drawing (see LyraTheme::drawRecentBookCover for what an unreleased
+  // prewarm does). Returns false (nothing claimed, nothing to release) for pure-ASCII text.
+  bool prewarmRows(const GfxRenderer& renderer, int fontId, uint8_t styleMask, int first, int end,
+                   const std::function<std::string(int index)>& label) const;
+  void releaseRowPrewarm(const GfxRenderer& renderer) const;
 };

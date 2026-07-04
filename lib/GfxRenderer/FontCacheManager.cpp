@@ -19,6 +19,11 @@ void FontCacheManager::clearCache() {
   }
 }
 
+void FontCacheManager::releaseAllFontMemory() {
+  clearCache();
+  if (fontDecompressor_) fontDecompressor_->freeGlyphSlab();
+}
+
 void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);

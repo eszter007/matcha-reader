@@ -680,7 +680,7 @@ struct LayoutPageSink final : ParagraphSink {
       // this same chapter's column-fitting measurements) is still resident and competing for that
       // headroom. Free it right before the allocation that actually needs it.
       if (auto* fcm = renderer.getFontCacheManager()) {
-        fcm->clearCache();
+        fcm->releaseAllFontMemory();
       }
       HalFile cachedFile;
       if (Storage.openFileForWrite("VSC", cachedPath, cachedFile)) {

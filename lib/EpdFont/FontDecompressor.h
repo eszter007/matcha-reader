@@ -21,8 +21,15 @@ class FontDecompressor {
   // Checks the page buffer (from prewarm) first, then falls back to the hot group slot.
   const uint8_t* getBitmap(const EpdFontData* fontData, const EpdGlyph* glyph, uint32_t glyphIndex);
 
-  // Free all cached data (page buffer + hot group).
+  // Free all cached data (page buffer + hot group). The glyph slab below deliberately SURVIVES
+  // this: clearCache() is called as per-render pool hygiene all over the UI, while the slab's
+  // whole purpose is persistence across renders.
   void clearCache();
+
+  // Free the persistent glyph slab too (plus everything clearCache() frees). For memory-critical
+  // moments only -- chapter builds, TLS setup -- where every KB of contiguous heap counts. The
+  // slab re-fills lazily afterwards.
+  void freeGlyphSlab();
 
   // Pre-scan UTF-8 text and extract needed glyph bitmaps into a flat page buffer.
   // Each group is decompressed once into a temp buffer; only needed glyphs are kept.
@@ -80,6 +87,27 @@ class FontDecompressor {
   // Scratch buffer for compacting a single glyph from the hot group.
   // Valid until the next getBitmap() call.
   std::vector<uint8_t> hotGlyphBuf;
+
+  // Persistent glyph-bitmap slab: compacted bitmaps of glyphs served via the hot-group fallback,
+  // keyed by (fontData, glyphIndex). Makes REPEAT renders of the same non-Latin UI text (cursor
+  // navigation with the UI language set to Japanese, Japanese file names) hit RAM instead of
+  // re-decompressing a ~64KB group per glyph. Lazily allocated on first use; reset generationally
+  // when full; freed only by freeGlyphSlab()/deinit(). Prewarmed glyphs never land here (the page
+  // slots answer first), so during reading it only ever holds stray fallback glyphs.
+  static constexpr uint32_t SLAB_BYTES = 24 * 1024;
+  static constexpr uint16_t SLAB_MAX_ENTRIES = 256;
+  struct SlabEntry {
+    const EpdFontData* fontData;
+    uint32_t glyphIndex;
+    uint32_t offset;  // into slabBuf
+  };
+  uint8_t* slabBuf = nullptr;
+  SlabEntry* slabEntries = nullptr;
+  uint16_t slabEntryCount = 0;
+  uint32_t slabUsed = 0;
+
+  const uint8_t* slabLookup(const EpdFontData* fontData, uint32_t glyphIndex) const;
+  const uint8_t* slabInsert(const EpdFontData* fontData, uint32_t glyphIndex, const uint8_t* data, uint32_t len);
 
   void freePageBuffer();
   void freeHotGroup();

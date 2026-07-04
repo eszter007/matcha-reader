@@ -228,6 +228,7 @@ void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int butt
                                       const std::function<std::string(int index)>& buttonLabel,
                                       const std::function<UIIcon(int index)>& rowIcon) const {
   (void)rowIcon;
+  const bool prewarmed = prewarmRows(renderer, kTitleFontId, 1 << EpdFontFamily::BOLD, 0, buttonCount, buttonLabel);
   const int sidePadding = RoundedRaffMetrics::values.contentSidePadding;
   const int rowX = rect.x + sidePadding;
   const int rowHeight = renderer.getLineHeight(kTitleFontId) + 20;  // 10px top + 10px bottom
@@ -261,6 +262,7 @@ void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int butt
   }
 
   drawScrollBar(renderer, rect, buttonCount, pageStartIndex, pageItems);
+  if (prewarmed) releaseRowPrewarm(renderer);
 }
 
 void RoundedRaffTheme::drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode,
@@ -360,6 +362,19 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
   const int rowX = rect.x + sidePadding;
   const int rowWidth = rect.width - sidePadding * 2;
 
+  const int pageEndIndex = std::min(itemCount, pageStartIndex + pageItems);
+  bool prewarmed =
+      prewarmRows(renderer, kTitleFontId, (1 << EpdFontFamily::BOLD) | (1 << EpdFontFamily::REGULAR), pageStartIndex,
+                  pageEndIndex, [&](int i) {
+                    std::string s = rowTitle(i);
+                    if (rowValue != nullptr) s += rowValue(i);
+                    return s;
+                  });
+  if (rowSubtitle != nullptr) {
+    prewarmed |= prewarmRows(renderer, kSubtitleFontId, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
+                             rowSubtitle);
+  }
+
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int rowY = rect.y + (i % pageItems) * rowStep;
     const bool isSelected = i == selectedIndex;
@@ -412,6 +427,7 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
   }
 
   drawScrollBar(renderer, rect, itemCount, pageStartIndex, pageItems);
+  if (prewarmed) releaseRowPrewarm(renderer);
 }
 
 void RoundedRaffTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,

@@ -16,6 +16,11 @@ class FontCacheManager {
   void setFontDecompressor(FontDecompressor* d);
 
   void clearCache();
+  // clearCache() plus the FontDecompressor's persistent glyph slab (~24KB). For memory-critical
+  // moments (chapter builds, image extraction, TLS setup) where contiguous heap matters more
+  // than warm glyphs; the slab re-fills lazily afterwards. Ordinary per-render cache hygiene
+  // should keep calling clearCache() so non-Latin UI navigation stays fast.
+  void releaseAllFontMemory();
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
   // True if fontId is backed by an SD-card font (SdCardFont::prewarm(), one-open bulk-load path)
   // rather than a built-in compressed font (FontDecompressor's own group-cache prewarm, which has

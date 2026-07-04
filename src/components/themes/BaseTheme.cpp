@@ -1,5 +1,6 @@
 #include "BaseTheme.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalPowerManager.h>
@@ -255,6 +256,36 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return contentHeight / rowHeight;
 }
 
+bool BaseTheme::prewarmRows(const GfxRenderer& renderer, const int fontId, const uint8_t styleMask, const int first,
+                            const int end, const std::function<std::string(int index)>& label) const {
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm) return false;
+  std::string buf;
+  buf.reserve(512);
+  for (int i = first; i < end; i++) {
+    buf += label(i);
+    buf += ' ';
+  }
+  // Pure-ASCII text renders fine from the hot group -- don't spend a group decompression on it
+  // (and don't make the caller clear a hot group that ASCII screens keep reusing).
+  bool hasNonAscii = false;
+  for (const char c : buf) {
+    if (static_cast<unsigned char>(c) >= 0x80) {
+      hasNonAscii = true;
+      break;
+    }
+  }
+  if (!hasNonAscii) return false;
+  fcm->prewarmCache(fontId, buf.c_str(), styleMask);
+  return true;
+}
+
+void BaseTheme::releaseRowPrewarm(const GfxRenderer& renderer) const {
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+}
+
 void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,
@@ -300,6 +331,17 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // Draw all items
   const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  const int pageEndIndex = std::min(itemCount, pageStartIndex + pageItems);
+  bool prewarmed =
+      prewarmRows(renderer, UI_10_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex, [&](int i) {
+        std::string s = rowTitle(i);
+        if (rowValue != nullptr) s += rowValue(i);
+        return s;
+      });
+  if (rowSubtitle != nullptr) {
+    prewarmed |= prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
+                             rowSubtitle);
+  }
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
 
@@ -349,6 +391,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                         valueY, valueText.c_str(), i != selectedIndex);
     }
   }
+
+  if (prewarmed) releaseRowPrewarm(renderer);
 }
 
 void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const {
@@ -666,6 +710,7 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  const bool prewarmed = prewarmRows(renderer, UI_10_FONT_ID, 1 << EpdFontFamily::REGULAR, 0, buttonCount, buttonLabel);
   for (int i = 0; i < buttonCount; ++i) {
     const int tileY = BaseMetrics::values.verticalSpacing + rect.y +
                       static_cast<int>(i) * (BaseMetrics::values.menuRowHeight + BaseMetrics::values.menuSpacing);
@@ -690,6 +735,7 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     // Invert text when the tile is selected, to contrast with the filled background
     renderer.drawText(UI_10_FONT_ID, textX, textY, label, selectedIndex != i);
   }
+  if (prewarmed) releaseRowPrewarm(renderer);
 }
 
 Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {

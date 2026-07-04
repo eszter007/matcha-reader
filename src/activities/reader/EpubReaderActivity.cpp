@@ -778,7 +778,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         section.reset();
         verticalSection.reset();
         if (auto* fcm = renderer.getFontCacheManager()) {
-          fcm->clearCache();
+          fcm->releaseAllFontMemory();
         }
         startActivityForResult(
             std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pageText)),
@@ -1040,9 +1040,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // needing 50-100+ KB of headroom for image-heavy Japanese chapters). FontDecompressor's
         // "hot group" buffer (up to ~64KB, retained across renders for reuse -- see
         // FontDecompressor.cpp) is dead weight at this exact moment since nothing has been drawn
-        // yet; free it here to hand that headroom to the extraction/layout step that needs it most.
+        // yet; free it (and the persistent glyph slab) to hand that headroom to the
+        // extraction/layout step that needs it most.
         if (auto* fcm = renderer.getFontCacheManager()) {
-          fcm->clearCache();
+          fcm->releaseAllFontMemory();
         }
 
         if (!verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight)) {
@@ -1242,10 +1243,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
 
       // Building can need a large single contiguous allocation (e.g. the zip inflate window) --
-      // free the font decompressor's hot-group buffer first to hand that headroom to the build,
-      // same rationale as the identical call on the vertical-mode build path above.
+      // free the font decompressor's buffers (hot group + glyph slab) first to hand that
+      // headroom to the build, same rationale as the identical call on the vertical-mode build
+      // path above.
       if (auto* fcm = renderer.getFontCacheManager()) {
-        fcm->clearCache();
+        fcm->releaseAllFontMemory();
       }
 
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),

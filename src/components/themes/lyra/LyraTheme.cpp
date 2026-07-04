@@ -262,6 +262,17 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // Draw all items
   const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  const int pageEndIndex = std::min(itemCount, pageStartIndex + pageItems);
+  bool prewarmed =
+      prewarmRows(renderer, UI_10_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex, [&](int i) {
+        std::string s = rowTitle(i);
+        if (rowValue != nullptr) s += rowValue(i);
+        return s;
+      });
+  if (rowSubtitle != nullptr) {
+    prewarmed |= prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
+                             rowSubtitle);
+  }
   int iconY = (rowSubtitle != nullptr) ? 16 : 10;
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
@@ -322,6 +333,8 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                         valueY, valueText.c_str(), !(i == selectedIndex && highlightValue));
     }
   }
+
+  if (prewarmed) releaseRowPrewarm(renderer);
 }
 
 void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
@@ -576,6 +589,7 @@ void LyraTheme::drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) c
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  const bool prewarmed = prewarmRows(renderer, UI_12_FONT_ID, 1 << EpdFontFamily::REGULAR, 0, buttonCount, buttonLabel);
   for (int i = 0; i < buttonCount; ++i) {
     int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
     Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding,
@@ -606,4 +620,5 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
 
     renderer.drawText(UI_12_FONT_ID, textX, textY, label, true);
   }
+  if (prewarmed) releaseRowPrewarm(renderer);
 }
