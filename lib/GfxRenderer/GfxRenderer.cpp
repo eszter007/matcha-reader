@@ -1116,6 +1116,15 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
   }
   LOG_DBG("GFX", "Scaling by %f - %s", scale, isScaled ? "scaled" : "not scaled");
 
+  // ESP32-C3 has no FPU -- a float multiply+floor per PIXEL is two soft-float library calls,
+  // which dominated cover drawing in profiling. 16.16 fixed point gives identical results for
+  // screen-scale values (arithmetic >>16 floors, matching std::floor for the negative
+  // pre-crop rows too).
+  const int32_t scaleFP = static_cast<int32_t>(scale * 65536.0f);
+
+  // One SD transaction instead of one per row; false = fall back to row-wise reads.
+  bitmap.preload();
+
   // Calculate output row size (2 bits per pixel, packed into bytes)
   // IMPORTANT: Use int, not uint8_t, to avoid overflow for images > 1020 pixels wide
   const int outputRowSize = (bitmap.getWidth() + 3) / 4;
@@ -1134,7 +1143,7 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     // Screen's (0, 0) is the top-left corner.
     int screenY = -cropPixY + (bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY);
     if (isScaled) {
-      screenY = std::floor(screenY * scale);
+      screenY = (screenY * scaleFP) >> 16;
     }
     screenY += y;  // the offset should not be scaled
     if (screenY >= getScreenHeight()) {
@@ -1160,7 +1169,7 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     for (int bmpX = cropPixX; bmpX < bitmap.getWidth() - cropPixX; bmpX++) {
       int screenX = bmpX - cropPixX;
       if (isScaled) {
-        screenX = std::floor(screenX * scale);
+        screenX = (screenX * scaleFP) >> 16;
       }
       screenX += x;  // the offset should not be scaled
       if (screenX >= getScreenWidth()) {
@@ -1199,6 +1208,11 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     isScaled = true;
   }
 
+  // Same fixed-point + preload treatment as drawBitmap() -- no FPU, so per-pixel float math
+  // and per-row SD reads dominated this path too.
+  const int32_t scaleFP = static_cast<int32_t>(scale * 65536.0f);
+  bitmap.preload();
+
   // For 1-bit BMP, output is still 2-bit packed (for consistency with readNextRow)
   const int outputRowSize = (bitmap.getWidth() + 3) / 4;
   auto* outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
@@ -1222,7 +1236,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
 
     // Calculate screen Y based on whether BMP is top-down or bottom-up
     const int bmpYOffset = bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY;
-    int screenY = y + (isScaled ? static_cast<int>(std::floor(bmpYOffset * scale)) : bmpYOffset);
+    int screenY = y + (isScaled ? ((bmpYOffset * scaleFP) >> 16) : bmpYOffset);
     if (screenY >= getScreenHeight()) {
       continue;  // Continue reading to keep row counter in sync
     }
@@ -1231,7 +1245,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     }
 
     for (int bmpX = 0; bmpX < bitmap.getWidth(); bmpX++) {
-      int screenX = x + (isScaled ? static_cast<int>(std::floor(bmpX * scale)) : bmpX);
+      int screenX = x + (isScaled ? ((bmpX * scaleFP) >> 16) : bmpX);
       if (screenX >= getScreenWidth()) {
         break;
       }

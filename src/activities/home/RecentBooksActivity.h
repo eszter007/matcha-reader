@@ -71,6 +71,37 @@ class RecentBooksActivity final : public Activity {
   void renderShelvesTab(int contentTop, int contentHeight);
   void renderShelfBooksView(int contentTop, int contentHeight);
 
+  // Shared cell/row painters, used by both the full renders above and the partial fast path.
+  void drawGridCell(int cellX, int cellY, int cellWidth, int cellHeight, const std::string& coverBmpPath,
+                    const std::string& title, int progressPercent, bool selected);
+  void drawShelfRow(int shelfIdx, int itemY, bool selected);
+
+  // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
+  // cell's padding margin. Because it never overlaps the cover, moving the selection is two of
+  // these calls (erase old with on=false, draw new) -- no cover re-decode, a few ms total.
+  void drawGridSelectionBorder(int cellX, int cellY, int cellWidth, int cellHeight, bool on);
+
+  // Selection-only fast path: when the previous full render is still in the framebuffer and ONLY
+  // the selection moved within the same scroll window, repaint the two affected cells/rows over
+  // the existing frame instead of re-rendering the whole screen (covers, header, tabs). This is
+  // the difference between ~585ms and tens of ms per cursor move. Returns false when a full
+  // render is required (scroll, tab switch, data reload, first render).
+  bool tryPartialSelectionRedraw();
+
+  // What the framebuffer currently shows; compared by tryPartialSelectionRedraw() and refreshed
+  // after every render. valid=false whenever the frame may not match this state anymore (data
+  // reloads, sub-activity overlays like the delete confirmation).
+  struct RenderedState {
+    bool valid = false;
+    int openShelf = -1;
+    int tab = -1;
+    int contentIndex = -1;
+    int scrollRow = -1;
+    int shelfContentIndex = -1;
+    int shelfScrollRow = -1;
+  };
+  RenderedState lastRendered;
+
   void promptRemoveBook(const std::string& path, const std::string& title);
 
  public:

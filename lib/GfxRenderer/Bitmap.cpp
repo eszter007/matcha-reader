@@ -177,10 +177,34 @@ BmpReaderError Bitmap::parseHeaders() {
   return BmpReaderError::Ok;
 }
 
+bool Bitmap::preload() const {
+  if (preloadBuf) return true;
+  // Cap: a full-screen 1-bit BMP is 48KB; anything larger stays row-wise rather than demanding
+  // a big contiguous block from a possibly-tight heap.
+  constexpr size_t PRELOAD_MAX_BYTES = 48 * 1024;
+  const size_t total = static_cast<size_t>(rowBytes) * static_cast<size_t>(height);
+  if (total == 0 || total > PRELOAD_MAX_BYTES) return false;
+  std::unique_ptr<uint8_t[]> buf(new (std::nothrow) uint8_t[total]);
+  if (!buf) return false;  // not an error: reader falls back to row-wise file reads
+  if (!file.seek(bfOffBits)) return false;
+  if (file.read(buf.get(), total) != static_cast<int>(total)) return false;
+  preloadBuf = std::move(buf);
+  preloadPos = 0;
+  return true;
+}
+
 // packed 2bpp output, 0 = black, 1 = dark gray, 2 = light gray, 3 = white
 BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   // Note: rowBuffer should be pre-allocated by the caller to size 'rowBytes'
-  if (file.read(rowBuffer, rowBytes) != rowBytes) return BmpReaderError::ShortReadRow;
+  if (preloadBuf) {
+    if (preloadPos + static_cast<size_t>(rowBytes) > static_cast<size_t>(rowBytes) * height) {
+      return BmpReaderError::ShortReadRow;
+    }
+    memcpy(rowBuffer, preloadBuf.get() + preloadPos, rowBytes);
+    preloadPos += rowBytes;
+  } else if (file.read(rowBuffer, rowBytes) != rowBytes) {
+    return BmpReaderError::ShortReadRow;
+  }
 
   prevRowY += 1;
 
@@ -283,7 +307,9 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
 }
 
 BmpReaderError Bitmap::rewindToData() const {
-  if (!file.seek(bfOffBits)) {
+  if (preloadBuf) {
+    preloadPos = 0;
+  } else if (!file.seek(bfOffBits)) {
     return BmpReaderError::SeekPixelDataFailed;
   }
 

@@ -15,7 +15,9 @@
 #include <Epub.h>
 #include <Epub/converters/ImageDecoderFactory.h>
 #include <Epub/converters/ImageToFramebufferDecoder.h>
+#include <JpegToBmpConverter.h>
 #include <MangaPanel.h>
+#include <PngToBmpConverter.h>
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
@@ -30,6 +32,54 @@ constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
 constexpr int SHELF_THUMB_WIDTH = 36;
 constexpr int SHELF_THUMB_HEIGHT = 54;
+
+// Mirrors MangaBook::getCachePath() -- same hash of the folder path, same prefix -- so the
+// Library's manga thumbs live alongside the manga's other cached artifacts.
+std::string mangaCacheDir(const std::string& mangaFolder) {
+  return "/.crosspoint/manga_" + std::to_string(std::hash<std::string>{}(mangaFolder));
+}
+
+// Generate (once) 1-bit BMP cover thumbnails for a manga folder from its first page image, at
+// the two heights the Library draws: the cover grid / shelf-book rows (metrics.homeCoverHeight)
+// and the shelves tab (SHELF_THUMB_HEIGHT). Decoding the raw page JPEG straight to the
+// framebuffer cost ~430ms per visible manga cover on EVERY render; the cached BMPs draw in a
+// few ms via the same fast path as EPUB covers. Returns the [HEIGHT]-templated thumb path, or
+// empty on any failure (caller keeps the raw image path -- the old, slow-but-working behavior).
+std::string ensureMangaCoverThumb(const std::string& mangaFolder, const std::string& coverImagePath) {
+  const bool isJpg = FsHelpers::hasJpgExtension(coverImagePath);
+  const bool isPng = FsHelpers::hasPngExtension(coverImagePath);
+  if (!isJpg && !isPng) return "";  // .bmp page images: no converter, keep the raw path
+
+  const std::string cacheDir = mangaCacheDir(mangaFolder);
+  const std::string tmpl = cacheDir + "/thumb_[HEIGHT].bmp";
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
+  const int heights[2] = {gridHeight, SHELF_THUMB_HEIGHT};
+
+  for (const int h : heights) {
+    const std::string thumbPath = UITheme::getCoverThumbPath(tmpl, h);
+    if (Storage.exists(thumbPath.c_str())) continue;
+    Storage.mkdir(cacheDir.c_str());
+
+    HalFile src;
+    if (!Storage.openFileForRead("LIB", coverImagePath, src)) return "";
+    HalFile out;
+    if (!Storage.openFileForWrite("LIB", thumbPath, out)) return "";
+    // Manga pages are ~2:3 portrait; a 0.7*h width bound keeps the converter's fit scale driven
+    // by the height, same approach as Epub::generateThumbBmp.
+    const bool ok = isJpg ? JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, out, (h * 7) / 10, h)
+                          : PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, out, (h * 7) / 10, h);
+    // Explicit close() before Storage.remove() on the same path (required despite
+    // DESTRUCTOR_CLOSES_FILE); a partial thumb must not survive to masquerade as a cached one.
+    out.close();
+    if (!ok) {
+      Storage.remove(thumbPath.c_str());
+      LOG_ERR("LIB", "Manga thumb generation failed for %s (h=%d)", coverImagePath.c_str(), h);
+      return "";
+    }
+  }
+  return tmpl;
+}
 }  // namespace
 
 int RecentBooksActivity::getCellHeight(int cellWidth) const {
@@ -50,6 +100,7 @@ int RecentBooksActivity::getContentItemCount() const {
 }
 
 void RecentBooksActivity::loadRecentBooks() {
+  lastRendered.valid = false;  // content changing under the frame -> next render must be full
   // Start with recent books (most recently opened first).
   recentBooks = RECENT_BOOKS.getBooks();
 
@@ -99,13 +150,28 @@ void RecentBooksActivity::loadRecentBooks() {
             recentBooks.push_back(std::move(newBook));
             existing = &recentBooks.back();
           }
-          if (existing->coverBmpPath.empty()) {
-            // Populate cover -- runs both for new entries and for
-            // existing ones that were stored without a cover (e.g. when
-            // addBook was called from the reader with an empty cover path).
+          // Runs for new entries, entries stored without a cover, AND entries whose stored cover
+          // is a raw page image (the recents store persists the raw path when a manga is opened
+          // from the reader) -- rendering a raw page JPEG costs ~430ms per frame, so those must
+          // be routed through the cached-thumb path too.
+          const bool coverIsRawImage =
+              !existing->coverBmpPath.empty() && existing->coverBmpPath.find("[HEIGHT]") == std::string::npos &&
+              (FsHelpers::hasJpgExtension(existing->coverBmpPath) || FsHelpers::hasPngExtension(existing->coverBmpPath));
+          if (existing->coverBmpPath.empty() || coverIsRawImage) {
             RecentBook& book = *existing;
-            {
-
+            const std::string coverBefore = book.coverBmpPath;
+            // A previously generated thumb short-circuits everything, including the manga-folder
+            // file scan below (hundreds of page files iterated per manga, per Library open).
+            const std::string tmpl = mangaCacheDir(fullPath) + "/thumb_[HEIGHT].bmp";
+            const auto& metrics = UITheme::getInstance().getMetrics();
+            const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
+            if (Storage.exists(UITheme::getCoverThumbPath(tmpl, gridHeight).c_str())) {
+              book.coverBmpPath = tmpl;
+            } else if (coverIsRawImage) {
+              // The stored raw path already tells us the cover source -- no folder scan needed.
+              const std::string thumb = ensureMangaCoverThumb(fullPath, book.coverBmpPath);
+              if (!thumb.empty()) book.coverBmpPath = thumb;
+            } else {
             // Use the first manga PAGE as the cover -- not just the
             // alphabetically-first image file, since panel-zoom crop files
             // (p<page>_<panel>.jpg) sort before page_NNNN.jpg ('0' < 'a')
@@ -134,10 +200,19 @@ void RecentBooksActivity::loadRecentBooks() {
               mangaDir.close();
               const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
               if (!chosen.empty()) {
-                book.coverBmpPath = fullPath + "/" + chosen;
+                const std::string sourcePath = fullPath + "/" + chosen;
+                const std::string thumb = ensureMangaCoverThumb(fullPath, sourcePath);
+                book.coverBmpPath = !thumb.empty() ? thumb : sourcePath;
               }
             }
             }  // close cover scan block
+            // Persist a raw-image -> cached-thumb upgrade back to the store so the Home screen's
+            // Continue Reading card (which reads the store directly) also stops decoding the raw
+            // page JPEG. One write per upgraded entry, ever -- later opens see the template and
+            // never enter this branch. No-op for scan-discovered manga not in the store.
+            if (coverIsRawImage && book.coverBmpPath != coverBefore) {
+              RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+            }
           }  // close coverBmpPath.empty() check
         } else {
           // Not a manga folder itself -- descend into it to find books/manga nested deeper.
@@ -261,9 +336,21 @@ void RecentBooksActivity::loadShelves() {
   std::sort(shelves.begin(), shelves.end(),
             [](const ShelfInfo& a, const ShelfInfo& b) { return a.folderName < b.folderName; });
 
-  // Generate a shelf-height thumbnail for each shelf's cover so it renders 1:1
+  // Resolve a shelf-height thumbnail for each shelf's cover so it renders 1:1
   // (the bitmap downscaler produces all-black at heavy reductions).
   for (auto& shelf : shelves) {
+    // Any [HEIGHT]-templated cover (EPUB or manga) may already have its 54px variant on SD --
+    // resolve it with a pure existence check. Constructing and load()ing an Epub per shelf just
+    // to have generateThumbBmp() discover the file exists cost several hundred ms PER SHELF on
+    // every Library open (measured as the bulk of an 11s open, together with one first-time
+    // thumb generation).
+    if (!shelf.coverBmpPath.empty() && shelf.coverBmpPath.find("[HEIGHT]") != std::string::npos) {
+      const std::string p = UITheme::getCoverThumbPath(shelf.coverBmpPath, SHELF_THUMB_HEIGHT);
+      if (Storage.exists(p.c_str())) {
+        shelf.shelfThumbPath = p;
+        continue;
+      }
+    }
     if (shelf.coverBookPath.empty() || !FsHelpers::hasEpubExtension(shelf.coverBookPath)) continue;
     Epub epub(shelf.coverBookPath, "/.crosspoint");
     if (epub.load(true, true) && epub.generateThumbBmp(SHELF_THUMB_HEIGHT)) {
@@ -273,6 +360,7 @@ void RecentBooksActivity::loadShelves() {
 }
 
 void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
+  lastRendered.valid = false;  // content changing under the frame -> next render must be full
   shelfBooks.clear();
   shelfBookProgress.clear();
 
@@ -311,6 +399,13 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
         }
       }
       if (book.coverBmpPath.empty()) {
+        // A previously generated thumb short-circuits the folder scan (same as loadRecentBooks).
+        const std::string tmpl = mangaCacheDir(fullPath) + "/thumb_[HEIGHT].bmp";
+        const auto& metrics = UITheme::getInstance().getMetrics();
+        const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
+        if (Storage.exists(UITheme::getCoverThumbPath(tmpl, gridHeight).c_str())) {
+          book.coverBmpPath = tmpl;
+        } else {
         // Same first-page selection as loadRecentBooks() -- skip panel crops.
         auto mangaDir = Storage.open(fullPath.c_str());
         if (mangaDir && mangaDir.isDirectory()) {
@@ -333,7 +428,12 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
           }
           mangaDir.close();
           const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
-          if (!chosen.empty()) book.coverBmpPath = fullPath + "/" + chosen;
+          if (!chosen.empty()) {
+            const std::string sourcePath = fullPath + "/" + chosen;
+            const std::string thumb = ensureMangaCoverThumb(fullPath, sourcePath);
+            book.coverBmpPath = !thumb.empty() ? thumb : sourcePath;
+          }
+        }
         }
       }
 
@@ -601,6 +701,9 @@ void RecentBooksActivity::loop() {
 
 void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::string& title) {
   auto handler = [this, path](const ActivityResult& res) {
+    // The confirmation dialog painted over our frame (whether confirmed or cancelled), so the
+    // next render must be a full one -- a partial redraw would leave dialog remnants on screen.
+    lastRendered.valid = false;
     if (res.isCancelled) {
       LOG_DBG("RBA", "Remove from recents cancelled");
       return;
@@ -622,6 +725,106 @@ void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::s
   startActivityForResult(
       std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_REMOVE_FROM_RECENTS), title),
       std::move(handler));
+}
+
+void RecentBooksActivity::drawGridSelectionBorder(const int cellX, const int cellY, const int cellWidth,
+                                                  const int cellHeight, const bool on) {
+  (void)cellHeight;
+  const int coverWidth = cellWidth - 2 * COVER_PADDING;
+  const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
+  const int coverX = cellX + COVER_PADDING;
+  const int coverY = cellY + COVER_PADDING;
+  // Two nested 1px rects = a 2px ring at offsets -2/-3 from the cover box: a 1px white gap
+  // separates it from the cover's own 1px outline, and it stays clear of the progress label
+  // below (labelY = cover bottom + CELL_TEXT_GAP).
+  renderer.drawRect(coverX - 2, coverY - 2, coverWidth + 4, coverHeight + 4, on);
+  renderer.drawRect(coverX - 3, coverY - 3, coverWidth + 6, coverHeight + 6, on);
+}
+
+void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const int cellWidth, const int cellHeight,
+                                       const std::string& coverBmpPath, const std::string& title,
+                                       const int progressPercent, const bool selected) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int coverWidth = cellWidth - 2 * COVER_PADDING;
+  const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
+  const int thumbHeight = metrics.homeCoverHeight;
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int coverX = cellX + COVER_PADDING;
+  const int coverY = cellY + COVER_PADDING;
+
+  if (selected) {
+    drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, true);
+  }
+
+  bool hasCover = false;
+  if (!coverBmpPath.empty()) {
+    const std::string coverPath = UITheme::getCoverThumbPath(coverBmpPath, thumbHeight);
+    if (FsHelpers::hasJpgExtension(coverPath) || FsHelpers::hasPngExtension(coverPath)) {
+      ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverPath);
+      if (decoder) {
+        ImageDimensions dims = {0, 0};
+        if (decoder->getDimensions(coverPath, dims) && dims.width > 0 && dims.height > 0) {
+          RenderConfig config;
+          config.x = coverX;
+          config.y = coverY;
+          config.maxWidth = coverWidth;
+          config.maxHeight = coverHeight;
+          config.useGrayscale = false;
+          config.useDithering = true;
+          // Manga covers are raw page images (not pre-cropped like Epub
+          // BMP thumbnails below) -- fill the cell and crop the overflow
+          // (bottom-cropped, top stays put) instead of letterboxing.
+          config.fillCrop = true;
+          config.cropWidth = coverWidth;
+          config.cropHeight = coverHeight;
+          if (decoder->decodeToFramebuffer(coverPath, renderer, config)) {
+            hasCover = true;
+          }
+        }
+      }
+    } else {
+      HalFile file;
+      if (Storage.openFileForRead("LIB", coverPath, file)) {
+        Bitmap bitmap(file);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+          const float bmpRatio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
+          const float cellRatio = static_cast<float>(coverWidth) / static_cast<float>(coverHeight);
+          float cropX = 0.0f, cropY = 0.0f;
+          if (bmpRatio > cellRatio) {
+            cropX = 1.0f - (cellRatio / bmpRatio);
+          } else {
+            cropY = 1.0f - (bmpRatio / cellRatio);
+          }
+          renderer.drawBitmap(bitmap, coverX, coverY, coverWidth, coverHeight, cropX, cropY);
+          hasCover = true;
+        }
+        file.close();
+      }
+    }
+  }
+
+  renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
+
+  if (!hasCover) {
+    renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32, 32);
+    auto titleLines = renderer.wrappedText(SMALL_FONT_ID, title.c_str(), coverWidth - 8, 3);
+    int textY = coverY + (coverHeight - 32) / 2 + 36;
+    for (const auto& line : titleLines) {
+      if (textY + lineHeight > coverY + coverHeight) break;
+      const int textW = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
+      const int textX = coverX + (coverWidth - textW) / 2;
+      renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str(), true);
+      textY += lineHeight;
+    }
+  }
+
+  const int labelY = coverY + coverHeight + CELL_TEXT_GAP;
+  if (progressPercent >= 0) {
+    char pctBuf[8];
+    snprintf(pctBuf, sizeof(pctBuf), "%d%%", progressPercent);
+    const int pctW = renderer.getTextWidth(SMALL_FONT_ID, pctBuf);
+    renderer.drawText(SMALL_FONT_ID, coverX + (coverWidth - pctW) / 2, labelY, pctBuf, true);
+  }
 }
 
 void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
@@ -672,88 +875,11 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
     for (int col = 0; col < GRID_COLS; col++) {
       const int idx = row * GRID_COLS + col;
       if (idx >= static_cast<int>(recentBooks.size())) break;
-
-      const auto& book = recentBooks[idx];
       const int cellX = metrics.contentSidePadding + col * cellWidth;
       const int cellY = contentTop + (row - scrollRow) * cellHeight;
-      const int coverX = cellX + COVER_PADDING;
-      const int coverY = cellY + COVER_PADDING;
-      const bool selected = (idx == selectedItem);
-
-      if (selected) {
-        renderer.fillRoundedRect(cellX + 2, cellY + 2, cellWidth - 4, cellHeight - 4, SELECTION_RADIUS,
-                                 Color::LightGray);
-      }
-
-      bool hasCover = false;
-      if (!book.coverBmpPath.empty()) {
-        const std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, thumbHeight);
-        if (FsHelpers::hasJpgExtension(coverPath) || FsHelpers::hasPngExtension(coverPath)) {
-          ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverPath);
-          if (decoder) {
-            ImageDimensions dims = {0, 0};
-            if (decoder->getDimensions(coverPath, dims) && dims.width > 0 && dims.height > 0) {
-              RenderConfig config;
-              config.x = coverX;
-              config.y = coverY;
-              config.maxWidth = coverWidth;
-              config.maxHeight = coverHeight;
-              config.useGrayscale = false;
-              config.useDithering = true;
-              // Manga covers are raw page images (not pre-cropped like Epub
-              // BMP thumbnails below) -- fill the cell and crop the overflow
-              // (bottom-cropped, top stays put) instead of letterboxing.
-              config.fillCrop = true;
-              config.cropWidth = coverWidth;
-              config.cropHeight = coverHeight;
-              if (decoder->decodeToFramebuffer(coverPath, renderer, config)) {
-                hasCover = true;
-              }
-            }
-          }
-        } else {
-          HalFile file;
-          if (Storage.openFileForRead("LIB", coverPath, file)) {
-            Bitmap bitmap(file);
-            if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-              const float bmpRatio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
-              const float cellRatio = static_cast<float>(coverWidth) / static_cast<float>(coverHeight);
-              float cropX = 0.0f, cropY = 0.0f;
-              if (bmpRatio > cellRatio) {
-                cropX = 1.0f - (cellRatio / bmpRatio);
-              } else {
-                cropY = 1.0f - (bmpRatio / cellRatio);
-              }
-              renderer.drawBitmap(bitmap, coverX, coverY, coverWidth, coverHeight, cropX, cropY);
-              hasCover = true;
-            }
-            file.close();
-          }
-        }
-      }
-
-      renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
-
-      if (!hasCover) {
-        renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32, 32);
-        auto titleLines = renderer.wrappedText(SMALL_FONT_ID, book.title.c_str(), coverWidth - 8, 3);
-        int textY = coverY + (coverHeight - 32) / 2 + 36;
-        for (const auto& line : titleLines) {
-          if (textY + lineHeight > coverY + coverHeight) break;
-          const int textW = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
-          const int textX = coverX + (coverWidth - textW) / 2;
-          renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str(), true);
-          textY += lineHeight;
-        }
-      }
-
-      const int labelY = coverY + coverHeight + CELL_TEXT_GAP;
-      if (idx < static_cast<int>(bookProgress.size()) && bookProgress[idx].percent >= 0) {
-        char pctBuf[8];
-        snprintf(pctBuf, sizeof(pctBuf), "%d%%", bookProgress[idx].percent);
-        const int pctW = renderer.getTextWidth(SMALL_FONT_ID, pctBuf);
-        renderer.drawText(SMALL_FONT_ID, coverX + (coverWidth - pctW) / 2, labelY, pctBuf, true);
-      }
+      const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
+      drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
+                   idx == selectedItem);
     }
   }
 
@@ -763,6 +889,90 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->clearCache();
   }
+}
+
+void RecentBooksActivity::drawShelfRow(const int shelfIdx, const int itemY, const bool selected) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const int rowHeight = metrics.listWithSubtitleRowHeight;
+  const int chevronMargin = 15;
+  const auto& shelf = shelves[shelfIdx];
+
+  if (selected) {
+    renderer.fillRoundedRect(metrics.contentSidePadding - 6, itemY - 4,
+                             pageWidth - 2 * metrics.contentSidePadding + 12, rowHeight + 8, SELECTION_RADIUS,
+                             Color::LightGray);
+  }
+
+  int thumbX = metrics.contentSidePadding + 4;
+  int thumbY = itemY + (rowHeight - SHELF_THUMB_HEIGHT) / 2;
+
+  bool hasThumb = false;
+  // The shelf-height thumbnail (generated in loadShelves) renders 1:1, avoiding
+  // the bitmap downscaler that produces all-black at heavy reductions.
+  if (!shelf.shelfThumbPath.empty()) {
+    HalFile file;
+    if (Storage.openFileForRead("LIB", shelf.shelfThumbPath, file)) {
+      Bitmap bitmap(file);
+      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+        // Center the (already small) thumb in the slot; no scaling needed.
+        const int bw = bitmap.getWidth();
+        const int bh = bitmap.getHeight();
+        const int dx = thumbX + (SHELF_THUMB_WIDTH - bw) / 2;
+        const int dy = thumbY + (SHELF_THUMB_HEIGHT - bh) / 2;
+        renderer.drawBitmap(bitmap, dx, dy, bw, bh);
+        hasThumb = true;
+      }
+      file.close();
+    }
+  } else if (!shelf.coverBmpPath.empty() && (FsHelpers::hasJpgExtension(shelf.coverBmpPath) ||
+                                             FsHelpers::hasPngExtension(shelf.coverBmpPath))) {
+    // Manga covers are JPG/PNG page images (no pre-rendered shelf thumb) --
+    // decode and scale directly into the thumb slot.
+    ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(shelf.coverBmpPath);
+    if (decoder) {
+      ImageDimensions dims = {0, 0};
+      if (decoder->getDimensions(shelf.coverBmpPath, dims) && dims.width > 0 && dims.height > 0) {
+        const int drawW = SHELF_THUMB_HEIGHT * dims.width / dims.height;
+        RenderConfig config;
+        config.x = thumbX + (SHELF_THUMB_WIDTH - drawW) / 2;
+        config.y = thumbY;
+        config.maxWidth = drawW;
+        config.maxHeight = SHELF_THUMB_HEIGHT;
+        config.useGrayscale = false;
+        config.useDithering = true;
+        if (decoder->decodeToFramebuffer(shelf.coverBmpPath, renderer, config)) {
+          hasThumb = true;
+        }
+      }
+    }
+  }
+
+  if (!hasThumb) {
+    renderer.drawRect(thumbX, thumbY, SHELF_THUMB_WIDTH, SHELF_THUMB_HEIGHT, true);
+  }
+
+  const int textX = thumbX + SHELF_THUMB_WIDTH + 12;
+  const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
+  const int nameY = itemY + rowHeight / 2 - smallLH;
+
+  renderer.drawText(UI_10_FONT_ID, textX, nameY, shelf.folderName.c_str(), true, EpdFontFamily::BOLD);
+
+  char countBuf[32];
+  if (shelf.bookCount == 1) {
+    snprintf(countBuf, sizeof(countBuf), "%s", tr(STR_SHELF_BOOK_COUNT_1));
+  } else {
+    snprintf(countBuf, sizeof(countBuf), tr(STR_SHELF_BOOK_COUNT_N), shelf.bookCount);
+  }
+  renderer.drawText(SMALL_FONT_ID, textX, nameY + smallLH + 1, countBuf, true);
+
+  const int chevronSize = 6;
+  const int chevronX = pageWidth - metrics.contentSidePadding - chevronMargin;
+  const int chevronY = itemY + rowHeight / 2;
+  renderer.drawLine(chevronX, chevronY - chevronSize, chevronX + chevronSize, chevronY, true);
+  renderer.drawLine(chevronX + chevronSize, chevronY, chevronX, chevronY + chevronSize, true);
+  renderer.drawLine(chevronX + 1, chevronY - chevronSize, chevronX + chevronSize + 1, chevronY, true);
+  renderer.drawLine(chevronX + chevronSize + 1, chevronY, chevronX + 1, chevronY + chevronSize, true);
 }
 
 void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
@@ -802,85 +1012,8 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
   }
 
   for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
-    const auto& shelf = shelves[i];
     const int itemY = contentTop + (i - scrollOffset) * rowHeight;
-    const bool selected = (i == selectedItem);
-
-    if (selected) {
-      renderer.fillRoundedRect(metrics.contentSidePadding - 6, itemY - 4,
-                               pageWidth - 2 * metrics.contentSidePadding + 12, rowHeight + 8,
-                               SELECTION_RADIUS, Color::LightGray);
-    }
-
-    int thumbX = metrics.contentSidePadding + 4;
-    int thumbY = itemY + (rowHeight - SHELF_THUMB_HEIGHT) / 2;
-
-    bool hasThumb = false;
-    // The shelf-height thumbnail (generated in loadShelves) renders 1:1, avoiding
-    // the bitmap downscaler that produces all-black at heavy reductions.
-    if (!shelf.shelfThumbPath.empty()) {
-      HalFile file;
-      if (Storage.openFileForRead("LIB", shelf.shelfThumbPath, file)) {
-        Bitmap bitmap(file);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          // Center the (already small) thumb in the slot; no scaling needed.
-          const int bw = bitmap.getWidth();
-          const int bh = bitmap.getHeight();
-          const int dx = thumbX + (SHELF_THUMB_WIDTH - bw) / 2;
-          const int dy = thumbY + (SHELF_THUMB_HEIGHT - bh) / 2;
-          renderer.drawBitmap(bitmap, dx, dy, bw, bh);
-          hasThumb = true;
-        }
-        file.close();
-      }
-    } else if (!shelf.coverBmpPath.empty() && (FsHelpers::hasJpgExtension(shelf.coverBmpPath) ||
-                                               FsHelpers::hasPngExtension(shelf.coverBmpPath))) {
-      // Manga covers are JPG/PNG page images (no pre-rendered shelf thumb) --
-      // decode and scale directly into the thumb slot.
-      ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(shelf.coverBmpPath);
-      if (decoder) {
-        ImageDimensions dims = {0, 0};
-        if (decoder->getDimensions(shelf.coverBmpPath, dims) && dims.width > 0 && dims.height > 0) {
-          const int drawW = SHELF_THUMB_HEIGHT * dims.width / dims.height;
-          RenderConfig config;
-          config.x = thumbX + (SHELF_THUMB_WIDTH - drawW) / 2;
-          config.y = thumbY;
-          config.maxWidth = drawW;
-          config.maxHeight = SHELF_THUMB_HEIGHT;
-          config.useGrayscale = false;
-          config.useDithering = true;
-          if (decoder->decodeToFramebuffer(shelf.coverBmpPath, renderer, config)) {
-            hasThumb = true;
-          }
-        }
-      }
-    }
-
-    if (!hasThumb) {
-      renderer.drawRect(thumbX, thumbY, SHELF_THUMB_WIDTH, SHELF_THUMB_HEIGHT, true);
-    }
-
-    const int textX = thumbX + SHELF_THUMB_WIDTH + 12;
-    const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
-    const int nameY = itemY + rowHeight / 2 - smallLH;
-
-    renderer.drawText(UI_10_FONT_ID, textX, nameY, shelf.folderName.c_str(), true, EpdFontFamily::BOLD);
-
-    char countBuf[32];
-    if (shelf.bookCount == 1) {
-      snprintf(countBuf, sizeof(countBuf), "%s", tr(STR_SHELF_BOOK_COUNT_1));
-    } else {
-      snprintf(countBuf, sizeof(countBuf), tr(STR_SHELF_BOOK_COUNT_N), shelf.bookCount);
-    }
-    renderer.drawText(SMALL_FONT_ID, textX, nameY + smallLH + 1, countBuf, true);
-
-    const int chevronSize = 6;
-    const int chevronX = pageWidth - metrics.contentSidePadding - chevronMargin;
-    const int chevronY = itemY + rowHeight / 2;
-    renderer.drawLine(chevronX, chevronY - chevronSize, chevronX + chevronSize, chevronY, true);
-    renderer.drawLine(chevronX + chevronSize, chevronY, chevronX, chevronY + chevronSize, true);
-    renderer.drawLine(chevronX + 1, chevronY - chevronSize, chevronX + chevronSize + 1, chevronY, true);
-    renderer.drawLine(chevronX + chevronSize + 1, chevronY, chevronX + 1, chevronY + chevronSize, true);
+    drawShelfRow(i, itemY, i == selectedItem);
   }
 
   if (shelfCount > visibleItems) {
@@ -940,88 +1073,11 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
     for (int col = 0; col < GRID_COLS; col++) {
       const int idx = row * GRID_COLS + col;
       if (idx >= static_cast<int>(shelfBooks.size())) break;
-
-      const auto& book = shelfBooks[idx];
       const int cellX = metrics.contentSidePadding + col * cellWidth;
       const int cellY = contentTop + (row - shelfScrollRow) * cellHeight;
-      const int coverX = cellX + COVER_PADDING;
-      const int coverY = cellY + COVER_PADDING;
-      const bool selected = (idx == shelfContentIndex);
-
-      if (selected) {
-        renderer.fillRoundedRect(cellX + 2, cellY + 2, cellWidth - 4, cellHeight - 4, SELECTION_RADIUS,
-                                 Color::LightGray);
-      }
-
-      bool hasCover = false;
-      if (!book.coverBmpPath.empty()) {
-        const std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, thumbHeight);
-        if (FsHelpers::hasJpgExtension(coverPath) || FsHelpers::hasPngExtension(coverPath)) {
-          ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverPath);
-          if (decoder) {
-            ImageDimensions dims = {0, 0};
-            if (decoder->getDimensions(coverPath, dims) && dims.width > 0 && dims.height > 0) {
-              RenderConfig config;
-              config.x = coverX;
-              config.y = coverY;
-              config.maxWidth = coverWidth;
-              config.maxHeight = coverHeight;
-              config.useGrayscale = false;
-              config.useDithering = true;
-              // Manga covers are raw page images (not pre-cropped like Epub
-              // BMP thumbnails below) -- fill the cell and crop the overflow
-              // (bottom-cropped, top stays put) instead of letterboxing.
-              config.fillCrop = true;
-              config.cropWidth = coverWidth;
-              config.cropHeight = coverHeight;
-              if (decoder->decodeToFramebuffer(coverPath, renderer, config)) {
-                hasCover = true;
-              }
-            }
-          }
-        } else {
-          HalFile file;
-          if (Storage.openFileForRead("LIB", coverPath, file)) {
-            Bitmap bitmap(file);
-            if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-              const float bmpRatio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
-              const float cellRatio = static_cast<float>(coverWidth) / static_cast<float>(coverHeight);
-              float cropX = 0.0f, cropY = 0.0f;
-              if (bmpRatio > cellRatio) {
-                cropX = 1.0f - (cellRatio / bmpRatio);
-              } else {
-                cropY = 1.0f - (bmpRatio / cellRatio);
-              }
-              renderer.drawBitmap(bitmap, coverX, coverY, coverWidth, coverHeight, cropX, cropY);
-              hasCover = true;
-            }
-            file.close();
-          }
-        }
-      }
-
-      renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
-
-      if (!hasCover) {
-        renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32, 32);
-        auto titleLines = renderer.wrappedText(SMALL_FONT_ID, book.title.c_str(), coverWidth - 8, 3);
-        int textY = coverY + (coverHeight - 32) / 2 + 36;
-        for (const auto& line : titleLines) {
-          if (textY + lineHeight > coverY + coverHeight) break;
-          const int textW = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
-          const int textX = coverX + (coverWidth - textW) / 2;
-          renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str(), true);
-          textY += lineHeight;
-        }
-      }
-
-      const int labelY = coverY + coverHeight + CELL_TEXT_GAP;
-      if (idx < static_cast<int>(shelfBookProgress.size()) && shelfBookProgress[idx].percent >= 0) {
-        char pctBuf[8];
-        snprintf(pctBuf, sizeof(pctBuf), "%d%%", shelfBookProgress[idx].percent);
-        const int pctW = renderer.getTextWidth(SMALL_FONT_ID, pctBuf);
-        renderer.drawText(SMALL_FONT_ID, coverX + (coverWidth - pctW) / 2, labelY, pctBuf, true);
-      }
+      const int pct = idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1;
+      drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
+                   idx == shelfContentIndex);
     }
   }
 
@@ -1039,7 +1095,110 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
   }
 }
 
+bool RecentBooksActivity::tryPartialSelectionRedraw() {
+  if (!lastRendered.valid) return false;
+  if (openShelfIndex != lastRendered.openShelf || selectedTab != lastRendered.tab) return false;
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  auto* fcm = renderer.getFontCacheManager();
+
+  if (openShelfIndex >= 0) {
+    // Shelf-books grid: pure cell-to-cell move within the rendered scroll window.
+    const int oldIdx = lastRendered.shelfContentIndex;
+    const int newIdx = shelfContentIndex;
+    if (contentIndex != lastRendered.contentIndex) return false;
+    if (oldIdx == newIdx || oldIdx < 0 || newIdx < 0) return false;
+    if (newIdx >= static_cast<int>(shelfBooks.size()) || oldIdx >= static_cast<int>(shelfBooks.size())) return false;
+
+    const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+    const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+    const int gridWidth = pageWidth - 2 * metrics.contentSidePadding;
+    const int cellWidth = gridWidth / GRID_COLS;
+    const int cellHeight = getCellHeight(cellWidth);
+    const int visibleRows = getVisibleRows(cellHeight, contentHeight);
+    const int newRow = newIdx / GRID_COLS;
+    // The move must not scroll (renderShelfBooksView would adjust shelfScrollRow).
+    if (newRow < shelfScrollRow || newRow >= shelfScrollRow + visibleRows) return false;
+    if (shelfScrollRow != lastRendered.shelfScrollRow) return false;
+
+    // The border ring never overlaps cell content, so the move is just erase + draw.
+    for (const int idx : {oldIdx, newIdx}) {
+      const int row = idx / GRID_COLS;
+      const int col = idx % GRID_COLS;
+      const int cellX = metrics.contentSidePadding + col * cellWidth;
+      const int cellY = contentTop + (row - shelfScrollRow) * cellHeight;
+      drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, idx == newIdx);
+    }
+    return true;
+  }
+
+  // Main view: index 0 is the tab bar -- entering/leaving it changes the tab bar highlight, so
+  // only moves between two real items qualify.
+  const int oldIdx = lastRendered.contentIndex;
+  const int newIdx = contentIndex;
+  if (oldIdx == newIdx || oldIdx < 1 || newIdx < 1) return false;
+
+  const int tabBarY = metrics.topPadding + metrics.headerHeight;
+  const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+
+  if (selectedTab == 0) {
+    if (newIdx > static_cast<int>(recentBooks.size()) || oldIdx > static_cast<int>(recentBooks.size())) return false;
+    const int gridWidth = pageWidth - 2 * metrics.contentSidePadding;
+    const int cellWidth = gridWidth / GRID_COLS;
+    const int cellHeight = getCellHeight(cellWidth);
+    const int visibleRows = getVisibleRows(cellHeight, contentHeight);
+    const int newRow = (newIdx - 1) / GRID_COLS;
+    // The move must not scroll (renderBooksTab would adjust scrollRow).
+    if (newRow < scrollRow || newRow >= scrollRow + visibleRows) return false;
+    if (scrollRow != lastRendered.scrollRow) return false;
+
+    // The border ring never overlaps cell content, so the move is just erase + draw.
+    for (const int idx : {oldIdx - 1, newIdx - 1}) {
+      const int row = idx / GRID_COLS;
+      const int col = idx % GRID_COLS;
+      const int cellX = metrics.contentSidePadding + col * cellWidth;
+      const int cellY = contentTop + (row - scrollRow) * cellHeight;
+      drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, idx == newIdx - 1);
+    }
+    return true;
+  }
+
+  // Shelves list rows.
+  if (newIdx > static_cast<int>(shelves.size()) || oldIdx > static_cast<int>(shelves.size())) return false;
+  const int rowHeight = metrics.listWithSubtitleRowHeight;
+  const int visibleItems = std::max(1, contentHeight / rowHeight);
+  auto scrollOffsetFor = [visibleItems](const int selectedItem) {
+    return selectedItem >= visibleItems ? selectedItem - visibleItems + 1 : 0;
+  };
+  if (scrollOffsetFor(newIdx - 1) != scrollOffsetFor(oldIdx - 1)) return false;
+  const int scrollOffset = scrollOffsetFor(newIdx - 1);
+
+  if (fcm) {
+    fcm->prewarmCache(UI_10_FONT_ID, (shelves[oldIdx - 1].folderName + ' ' + shelves[newIdx - 1].folderName).c_str(),
+                      1 << EpdFontFamily::BOLD);
+  }
+  for (const int idx : {oldIdx - 1, newIdx - 1}) {
+    const int itemY = contentTop + (idx - scrollOffset) * rowHeight;
+    // Clear the full row footprint including the selection highlight's -6/-4 overhang.
+    renderer.fillRect(metrics.contentSidePadding - 6, itemY - 4, pageWidth - 2 * metrics.contentSidePadding + 12,
+                      rowHeight + 8, false);
+    drawShelfRow(idx, itemY, idx == newIdx - 1);
+  }
+  if (fcm) fcm->clearCache();
+  return true;
+}
+
 void RecentBooksActivity::render(RenderLock&&) {
+  if (tryPartialSelectionRedraw()) {
+    lastRendered.contentIndex = contentIndex;
+    lastRendered.shelfContentIndex = shelfContentIndex;
+    renderer.displayBuffer();
+    return;
+  }
+
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
@@ -1058,6 +1217,7 @@ void RecentBooksActivity::render(RenderLock&&) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+    lastRendered = {true, openShelfIndex, selectedTab, contentIndex, scrollRow, shelfContentIndex, shelfScrollRow};
     renderer.displayBuffer();
     return;
   }
@@ -1083,5 +1243,6 @@ void RecentBooksActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  lastRendered = {true, openShelfIndex, selectedTab, contentIndex, scrollRow, shelfContentIndex, shelfScrollRow};
   renderer.displayBuffer();
 }

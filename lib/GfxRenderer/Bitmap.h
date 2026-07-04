@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 
 #include <cstdint>
+#include <memory>
 
 #include "BitmapHelpers.h"
 
@@ -69,6 +70,13 @@ class Bitmap {
   BmpReaderError parseHeaders();
   BmpReaderError readNextRow(uint8_t* data, uint8_t* rowBuffer) const;
   BmpReaderError rewindToData() const;
+  // Read the whole pixel array into RAM with ONE SD transaction so readNextRow() becomes a
+  // memcpy. Every SD read pays a fixed mutex+transaction cost, so row-by-row reading of a
+  // 226-row cover thumb costs ~226 transactions (~100ms) for ~10KB of data. Call after
+  // parseHeaders() and BEFORE the first readNextRow() (it rewinds to the start of pixel data).
+  // A false return (image above the size cap, or no heap) is not an error -- readNextRow()
+  // just keeps reading row-wise from the file.
+  bool preload() const;
   int getWidth() const { return width; }
   int getHeight() const { return height; }
   bool isTopDown() const { return topDown; }
@@ -92,6 +100,10 @@ class Bitmap {
   bool nativePalette = false;  // true if all palette entries map to native gray levels
   int rowBytes = 0;
   uint8_t paletteLum[256] = {};
+
+  // Preloaded pixel array (see preload()); mutable because the draw paths take const Bitmap&.
+  mutable std::unique_ptr<uint8_t[]> preloadBuf;
+  mutable size_t preloadPos = 0;
 
   // Dithering state (mutable for const methods)
   mutable int16_t* errorCurRow = nullptr;
