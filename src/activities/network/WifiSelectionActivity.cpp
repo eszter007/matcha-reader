@@ -244,10 +244,11 @@ void WifiSelectionActivity::checkConnectionStatus() {
     connectedIP = ipStr;
     autoConnecting = false;
 
-    // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
-    // drifts ~2 ppm so one sync is enough; users can force a re-sync from
-    // Settings > Customise Status Bar > Sync clock now.
-    if (halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
+    // Sync the clock from NTP on the first successful WiFi connection (the DS3231 drifts ~2 ppm
+    // so once is enough on X3), and ALSO whenever the system time is clearly unset -- RTC-less
+    // devices (X4) lose the system clock on full power-off, and reading-stats dates come from
+    // time(nullptr), so any WiFi use is a free chance to make "today" exact again.
+    if (!SETTINGS.clockHasBeenSynced || !HalClock::systemTimeValid()) {
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();

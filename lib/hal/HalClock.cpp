@@ -1,13 +1,46 @@
 #include "HalClock.h"
 
+#include <HalStorage.h>
 #include <Logging.h>
 #include <WiFi.h>
 #include <esp_sntp.h>
+#include <sys/time.h>
 #include <time.h>
 
 #include <cassert>
+#include <cstdlib>
+#include <cstring>
 
 HalClock halClock;  // Singleton instance
+
+namespace {
+// Epoch stash for RTC-less devices; a plain decimal epoch in a tiny SD file.
+constexpr const char* CLOCK_STASH_PATH = "/system/.clock";
+
+// The firmware build date as an epoch -- the absolute "time can't be before this" floor.
+// Computed once from the compiler-provided __DATE__/__TIME__ ("Jul  4 2026" / "12:34:56").
+time_t buildEpoch() {
+  static time_t cached = [] {
+    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char* d = __DATE__;
+    struct tm t = {};
+    for (int i = 0; i < 12; i++) {
+      if (strncmp(d, months + i * 3, 3) == 0) {
+        t.tm_mon = i;
+        break;
+      }
+    }
+    t.tm_mday = atoi(d + 4);
+    t.tm_year = atoi(d + 7) - 1900;
+    const char* tt = __TIME__;
+    t.tm_hour = atoi(tt);
+    t.tm_min = atoi(tt + 3);
+    t.tm_sec = atoi(tt + 6);
+    return mktime(&t);  // TZ is unset on this firmware, so mktime treats t as UTC
+  }();
+  return cached;
+}
+}  // namespace
 
 // DS3231 register layout (BCD encoded):
 //   0x00: Seconds  (bits 6-4 = tens, bits 3-0 = ones)
@@ -150,8 +183,6 @@ bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
 }
 
 bool HalClock::syncFromNTP() {
-  if (!_available) return false;
-
   if (WiFi.status() != WL_CONNECTED) {
     LOG_ERR("CLK", "WiFi not connected, cannot sync NTP");
     return false;
@@ -168,15 +199,63 @@ bool HalClock::syncFromNTP() {
       struct tm timeinfo;
       gmtime_r(&now, &timeinfo);
 
-      if (writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
-        LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-        return true;
+      // Stash the freshly-synced epoch so RTC-less devices survive the next power-off with a
+      // plausible date (see restoreSystemTime).
+      persistSystemTime();
+
+      if (_available) {
+        // DS3231 present (X3): mirror the time into the hardware RTC too.
+        if (writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
+          LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+        } else {
+          return false;
+        }
+      } else {
+        LOG_INF("CLK", "System time set to %02d:%02d:%02d UTC (no hardware RTC)", timeinfo.tm_hour, timeinfo.tm_min,
+                timeinfo.tm_sec);
       }
-      return false;
+      return true;
     }
     delay(100);
   }
 
   LOG_ERR("CLK", "NTP sync timed out");
   return false;
+}
+
+bool HalClock::systemTimeValid() { return time(nullptr) >= buildEpoch(); }
+
+void HalClock::restoreSystemTime() const {
+  if (systemTimeValid()) return;  // internal RTC timer survived (deep sleep / soft reset)
+
+  time_t best = buildEpoch();
+  char buf[24] = {};
+  if (Storage.readFileToBuffer(CLOCK_STASH_PATH, buf, sizeof(buf) - 1) > 0) {
+    const long long stashed = atoll(buf);
+    if (stashed > static_cast<long long>(best)) best = static_cast<time_t>(stashed);
+  }
+
+  const timeval tv = {best, 0};
+  settimeofday(&tv, nullptr);
+  struct tm timeinfo;
+  gmtime_r(&best, &timeinfo);
+  LOG_INF("CLK", "System time restored to %04d-%02d-%02d %02d:%02d UTC (stash/build-date; sync via WiFi for exact)",
+          timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min);
+}
+
+void HalClock::persistSystemTime() const {
+  if (!systemTimeValid()) return;
+  Storage.mkdir("/system");  // no-op when it already exists
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(time(nullptr)));
+  HalFile f;
+  if (Storage.openFileForWrite("CLK", CLOCK_STASH_PATH, f)) {
+    f.write(reinterpret_cast<const uint8_t*>(buf), strlen(buf));
+  }
+}
+
+time_t HalClock::localEpoch(uint8_t utcOffsetQuarterHoursBiased) {
+  if (utcOffsetQuarterHoursBiased > 104) utcOffsetQuarterHoursBiased = 104;  // same clamp as formatTime
+  const int offsetQuarterHours = static_cast<int>(utcOffsetQuarterHoursBiased) - 48;
+  return time(nullptr) + static_cast<time_t>(offsetQuarterHours) * 15 * 60;
 }

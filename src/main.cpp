@@ -269,6 +269,10 @@ void enterDeepSleep(bool fromTimeout = false) {
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
   APP_STATE.saveToFile();
+  // Stash the system clock alongside: if the battery dies (or is pulled) during this sleep, the
+  // next boot restores a from-this-moment epoch instead of January 1970. Deep sleep itself keeps
+  // the clock ticking; this covers the power-loss case.
+  halClock.persistSystemTime();
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
@@ -386,6 +390,12 @@ void setup() {
 
   SETTINGS.loadFromFile();
   APP_STATE.loadFromFile();
+
+  // Seed the system clock on RTC-less devices (X4): after a full power-off, time(nullptr)
+  // restarts at the 1970 epoch, which put reading stats and the Insights calendar in January
+  // 1970. Restores from the periodic SD stash below (or the firmware build date), so "today"
+  // stays plausible; a WiFi connection re-syncs it exactly via NTP.
+  halClock.restoreSystemTime();
   RECENT_BOOKS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
@@ -554,6 +564,17 @@ void loop() {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
             ESP.getHeapSize(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
     lastMemPrint = millis();
+  }
+
+  // Stash the system clock to SD every 15 minutes so the next full power-off resumes from a
+  // recent epoch instead of January 1970 (see HalClock::restoreSystemTime). One tiny SD write
+  // per interval; skipped entirely while the clock is unset.
+  {
+    static unsigned long lastClockPersist = 0;
+    if (millis() - lastClockPersist >= 15UL * 60UL * 1000UL) {
+      halClock.persistSystemTime();
+      lastClockPersist = millis();
+    }
   }
 
   // Handle incoming serial commands,

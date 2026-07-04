@@ -199,6 +199,10 @@ bool ReadingStatsStore::loadFromFile() {
   for (int i = 0; i < count; i++) {
     DailyReading dr;
     if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
+    // Drop entries recorded while the system clock was unset (RTC-less devices booted at the
+    // 1970 epoch before HalClock::restoreSystemTime existed) -- they are misdated garbage that
+    // pollutes streaks, totals, and the calendar.
+    if (dr.year < 2020) continue;
     days[dayCount++] = dr;
   }
   // Read finished book paths

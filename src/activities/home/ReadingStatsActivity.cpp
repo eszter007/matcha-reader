@@ -1,12 +1,14 @@
 #include "ReadingStatsActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <I18n.h>
 
 #include <cmath>
 #include <cstdio>
 #include <ctime>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "components/UITheme.h"
@@ -22,8 +24,9 @@ struct Today {
 };
 
 Today getToday() {
-  time_t now = time(nullptr);
-  struct tm* t = localtime(&now);
+  // Local-midnight day boundary, matching how the readers record stats.
+  time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
+  struct tm* t = gmtime(&now);
   return {static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
           static_cast<uint8_t>(t->tm_mday), (t->tm_wday + 6) % 7};
 }

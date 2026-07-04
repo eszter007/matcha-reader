@@ -17,6 +17,8 @@
 #include <cstring>
 #include <ctime>
 
+#include <HalClock.h>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
@@ -84,8 +86,9 @@ void MangaReaderActivity::onExit() {
   if (minutes > 0 || atLastPage) {
     READING_STATS.loadFromFile();
     if (minutes > 0) {
-      time_t now = time(nullptr);
-      struct tm* t = localtime(&now);
+      // Local-midnight day boundary -- see the matching call in EpubReaderActivity.
+      time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
+      struct tm* t = gmtime(&now);
       READING_STATS.addMinutes(static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
                                static_cast<uint8_t>(t->tm_mday), minutes);
     }
