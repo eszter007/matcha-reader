@@ -68,13 +68,35 @@ esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
 }  // namespace
 
 EpubReaderTranslationActivity::EpubReaderTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                             std::string sourceText, std::string preTranslatedText)
-    : Activity("Translation", renderer, mappedInput), sourceText(std::move(sourceText)) {
+                                                             std::string sourceText, std::string preTranslatedText,
+                                                             const bool resumedAfterRestart)
+    : Activity("Translation", renderer, mappedInput),
+      sourceText(std::move(sourceText)),
+      resumedAfterRestart(resumedAfterRestart) {
   if (!preTranslatedText.empty()) {
     translatedText = std::move(preTranslatedText);
     hasPreTranslation = true;
     state = SHOWING_RESULT;
   }
+}
+
+bool EpubReaderTranslationActivity::stashAndRestart() {
+  HalFile stash;
+  if (!Storage.openFileForWrite("XLAT", TRANSLATE_STASH_PATH, stash)) {
+    LOG_ERR("XLAT", "Could not write translation stash; showing low-memory error instead");
+    return false;
+  }
+  const size_t written = stash.write(reinterpret_cast<const uint8_t*>(sourceText.data()), sourceText.size());
+  stash.close();
+  if (written != sourceText.size()) {
+    LOG_ERR("XLAT", "Short write on translation stash (%u/%u); showing low-memory error instead",
+            static_cast<unsigned>(written), static_cast<unsigned>(sourceText.size()));
+    Storage.remove(TRANSLATE_STASH_PATH);
+    return false;
+  }
+  LOG_DBG("XLAT", "Stashed %u bytes; restarting for a fresh heap", static_cast<unsigned>(sourceText.size()));
+  silentRestartToTranslation();  // does not return
+  return true;
 }
 
 void EpubReaderTranslationActivity::onEnter() {
@@ -98,6 +120,11 @@ void EpubReaderTranslationActivity::onEnter() {
   if (freeHeap < MIN_HEAP_FOR_WIFI_INIT) {
     LOG_ERR("XLAT", "Insufficient heap for WiFi init: %u < %u", static_cast<unsigned>(freeHeap),
             static_cast<unsigned>(MIN_HEAP_FOR_WIFI_INIT));
+    // A long reading session (Word Lookup, chapter builds) can leave the heap too fragmented for
+    // the WiFi/TLS stack even after everything reclaimable was freed -- but a silent restart
+    // clears it completely (~110KB contiguous right after boot). Stash the text and retry once
+    // on a fresh heap; only a post-restart failure is a real error worth showing.
+    if (!resumedAfterRestart && stashAndRestart()) return;
     errorMessage = tr(STR_TRANSLATION_LOW_MEMORY);
     state = ERROR;
     requestUpdate();
@@ -152,6 +179,10 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   if (maxAllocHeap < MIN_HEAP_FOR_TLS) {
     LOG_ERR("XLAT", "Insufficient contiguous heap for TLS: %u < %u", static_cast<unsigned>(maxAllocHeap),
             static_cast<unsigned>(MIN_HEAP_FOR_TLS));
+    // Fragmentation, not exhaustion: total free is typically ~100KB+ here with no 55KB hole (the
+    // WiFi driver's own init sprinkles allocations through whatever holes the reading session
+    // left). Retry once on a pristine post-restart heap; see onEnter() for the rationale.
+    if (!resumedAfterRestart && stashAndRestart()) return false;
     errorMessage = tr(STR_TRANSLATION_LOW_MEMORY);
     return false;
   }

@@ -25,8 +25,10 @@
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "SilentRestart.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/reader/EpubReaderTranslationActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -128,6 +130,7 @@ RTC_NOINIT_ATTR uint32_t silentRebootTarget;
 constexpr uint32_t SILENT_REBOOT_MAGIC = 0xC1EAB007;
 constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
+constexpr uint32_t SILENT_REBOOT_TARGET_TRANSLATE = 2;  // keep highest: bounds the setup() range check
 
 // How the device is coming back to life, resolved once at boot. Both resume
 // flows suppress the splash and leave the panel holding its pre-boot frame; a
@@ -165,6 +168,16 @@ void silentRestartToReader() {
   silentRebootTarget = SILENT_REBOOT_TARGET_READER;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=reader)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToTranslation() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_TRANSLATE;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=translate)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
@@ -349,7 +362,7 @@ void setup() {
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t snapshotTarget =
-      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_READER) ? silentRebootTarget : 0;
+      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_TRANSLATE) ? silentRebootTarget : 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
 
@@ -456,6 +469,14 @@ void setup() {
       break;
   }
 
+  // Consume (read + delete) the pending-translation stash BEFORE routing so a parse/boot problem
+  // later can never replay a stale translation on some future silent reboot.
+  std::string translateStashText;
+  if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_TRANSLATE) {
+    translateStashText = Storage.readFile(TRANSLATE_STASH_PATH).c_str();
+    Storage.remove(TRANSLATE_STASH_PATH);
+  }
+
   if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(
@@ -463,8 +484,20 @@ void setup() {
   } else if (HalSystem::isRebootFromPanic()) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
-  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_TRANSLATE &&
+             !translateStashText.empty()) {
+    // Restarted specifically to run a translation on a pristine heap (the TLS/WiFi heap gates
+    // failed mid-session; see EpubReaderTranslationActivity::stashAndRestart). The stash was
+    // read and deleted before the routing chain. On exit the activity silent-restarts to the
+    // reader, which resumes the open book through the normal target=reader path above.
+    activityManager.replaceActivity(std::make_unique<EpubReaderTranslationActivity>(
+        renderer, mappedInputManager, std::move(translateStashText), "", /*resumedAfterRestart=*/true));
+  } else if (resume == BootResume::Silent &&
+             (snapshotTarget == SILENT_REBOOT_TARGET_READER ||
+              snapshotTarget == SILENT_REBOOT_TARGET_TRANSLATE) &&
              !APP_STATE.openEpubPath.empty()) {
+    // Plain reader resume -- also the fallback for a translate target whose stash was
+    // missing/unreadable: land back in the book rather than home.
     activityManager.goToReader(APP_STATE.openEpubPath);
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall

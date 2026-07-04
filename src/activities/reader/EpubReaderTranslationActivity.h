@@ -10,8 +10,14 @@ class EpubReaderTranslationActivity final : public Activity {
   // preTranslatedText: if non-empty, the activity shows it directly without
   // any network call (used when a translation was already extracted offline
   // during manga conversion and stored alongside the page data).
+  // resumedAfterRestart: true only when setup() re-created this activity from the
+  // TRANSLATE_STASH_PATH stash after a silent restart. Gates the stash-and-restart
+  // fallback to one attempt -- on a pristine post-boot heap a second gate failure
+  // is a real error, not fragmentation, so it must show the message instead of
+  // restart-looping.
   explicit EpubReaderTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                         std::string sourceText, std::string preTranslatedText = "");
+                                         std::string sourceText, std::string preTranslatedText = "",
+                                         bool resumedAfterRestart = false);
 
   void onEnter() override;
   void onExit() override;
@@ -32,6 +38,12 @@ class EpubReaderTranslationActivity final : public Activity {
   std::string translatedText;
   std::string errorMessage;
   bool hasPreTranslation = false;
+  bool resumedAfterRestart = false;
+
+  // Write sourceText to TRANSLATE_STASH_PATH and silent-restart into a fresh-heap
+  // translation (see SilentRestart.h). Returns false if the stash could not be
+  // written -- caller then falls back to the low-memory error message.
+  bool stashAndRestart();
 
   int scrollOffset = 0;
   int maxScrollOffset = 0;
