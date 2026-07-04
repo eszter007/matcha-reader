@@ -9,11 +9,14 @@ class Page;
 #include <string>
 #include <vector>
 
+#include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
 class EpubReaderWordLookupActivity final : public Activity {
  public:
+  // Progressive open (see WordSelectionScan): the constructor only scans far enough to show the
+  // first word (~300ms); the rest of the page is mapped in the background from loop().
   // Vertical (tategaki) reading mode.
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         const VerticalPage& page);
@@ -25,21 +28,13 @@ class EpubReaderWordLookupActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // Full CPU + fast main-loop ticks while the progressive scan is running, so the between-poll
+  // scan slices stay short enough that button presses are never missed.
+  bool skipLoopDelay() override { return !scan.isDone(); }
 
  private:
-  struct GlyphRef {
-    uint16_t x;
-    uint16_t y;
-    uint16_t column;
-    uint16_t row;
-    uint32_t codepoint;
-    uint32_t paragraphIndex;
-    bool rotated;
-  };
+  WordSelectionScan scan;
 
-  std::vector<GlyphRef> selectableGlyphs;
-  std::vector<GlyphRef> allGlyphs;  // Full glyph list for building lookup text
-  std::vector<size_t> selectToAllIdx;  // Maps selectableGlyphs index → allGlyphs index
   int cursorIndex = 0;
 
   bool hasResult = false;
@@ -55,19 +50,14 @@ class EpubReaderWordLookupActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
 
+  void runInitialBurst(const char* label);
   void moveCursor(int delta);
   void performLookup();
+  void performLookupImpl();
+  // True while performLookup() is executing; render() shows "Loading..." instead of
+  // "No match found" so fast navigation never flashes a false negative.
+  bool lookupInFlight = false;
   std::string buildLookupText(size_t startIdx) const;
-
-  // Pre-scan allGlyphs (already populated) to build selectableGlyphs/selectToAllIdx.
-  void buildSelectableGlyphs();
-
-  // Heap-aware growth helpers -- bare vector reserve()/push_back() aborts the whole device on OOM
-  // under -fno-exceptions (see CLAUDE.md). See EpubReaderWordLookupActivity.cpp for the rationale.
-  static void reserveGlyphsSafe(std::vector<GlyphRef>& vec, size_t count);
-  static bool pushGlyphSafe(std::vector<GlyphRef>& vec, const GlyphRef& g);
-
-  static void encodeUtf8(uint32_t cp, std::string& out);
 
   bool initialRenderDone = false;
   int fastRefreshCount = 0;
