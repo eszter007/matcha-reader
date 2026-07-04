@@ -37,6 +37,18 @@ constexpr int SHELF_THUMB_HEIGHT = 54;
 // library walk would otherwise list as a book.
 bool isCrashReportFile(const char* name) { return strcmp(name, "crash_report.txt") == 0; }
 
+// A cached cover thumb is only usable when it is exactly the requested height -- earlier builds
+// generated aspect-fill thumbs that could come out TALLER than requested (e.g. 232px for a 226px
+// request), which the home screen letterboxes into a white right stripe inside the cover frame.
+bool thumbHeightValid(const std::string& thumbPath, const int h) {
+  HalFile f;
+  if (!Storage.openFileForRead("LIB", thumbPath, f)) return false;
+  Bitmap bmp(f);
+  const bool ok = bmp.parseHeaders() == BmpReaderError::Ok && bmp.getHeight() == h;
+  f.close();
+  return ok;
+}
+
 // Mirrors MangaBook::getCachePath() -- same hash of the folder path, same prefix -- so the
 // Library's manga thumbs live alongside the manga's other cached artifacts.
 std::string mangaCacheDir(const std::string& mangaFolder) {
@@ -62,17 +74,20 @@ std::string ensureMangaCoverThumb(const std::string& mangaFolder, const std::str
 
   for (const int h : heights) {
     const std::string thumbPath = UITheme::getCoverThumbPath(tmpl, h);
-    if (Storage.exists(thumbPath.c_str())) continue;
+    if (thumbHeightValid(thumbPath, h)) continue;
+    Storage.remove(thumbPath.c_str());  // stale aspect-fill thumb (see thumbHeightValid); rebuild
     Storage.mkdir(cacheDir.c_str());
 
     HalFile src;
     if (!Storage.openFileForRead("LIB", coverImagePath, src)) return "";
     HalFile out;
     if (!Storage.openFileForWrite("LIB", thumbPath, out)) return "";
-    // Manga pages are ~2:3 portrait; a 0.7*h width bound keeps the converter's fit scale driven
-    // by the height, same approach as Epub::generateThumbBmp.
-    const bool ok = isJpg ? JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, out, (h * 7) / 10, h)
-                          : PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, out, (h * 7) / 10, h);
+    // The converter aspect-FILLS: scale = max(targetW/srcW, targetH/srcH), and the output is the
+    // full scaled image (no trim). A width bound that wins that max() makes the output TALLER
+    // than h, which the home screen letterboxes into a white right stripe. Pass a 1px width
+    // bound so the height ratio always wins: output is exactly h tall with natural aspect width.
+    const bool ok = isJpg ? JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, out, 1, h)
+                          : PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, out, 1, h);
     // Explicit close() before Storage.remove() on the same path (required despite
     // DESTRUCTOR_CLOSES_FILE); a partial thumb must not survive to masquerade as a cached one.
     out.close();
@@ -154,22 +169,24 @@ void RecentBooksActivity::loadRecentBooks() {
             recentBooks.push_back(std::move(newBook));
             existing = &recentBooks.back();
           }
-          // Runs for new entries, entries stored without a cover, AND entries whose stored cover
-          // is a raw page image (the recents store persists the raw path when a manga is opened
-          // from the reader) -- rendering a raw page JPEG costs ~430ms per frame, so those must
-          // be routed through the cached-thumb path too.
+          // Runs for new entries, entries stored without a cover, entries whose stored cover is a
+          // raw page image (the recents store persists the raw path when a manga is opened from
+          // the reader -- rendering a raw page JPEG costs ~430ms per frame), AND templated
+          // entries whose cached thumb is missing or the wrong height (see thumbHeightValid).
+          const bool coverIsTemplate = existing->coverBmpPath.find("[HEIGHT]") != std::string::npos;
           const bool coverIsRawImage =
-              !existing->coverBmpPath.empty() && existing->coverBmpPath.find("[HEIGHT]") == std::string::npos &&
+              !existing->coverBmpPath.empty() && !coverIsTemplate &&
               (FsHelpers::hasJpgExtension(existing->coverBmpPath) || FsHelpers::hasPngExtension(existing->coverBmpPath));
-          if (existing->coverBmpPath.empty() || coverIsRawImage) {
+          const std::string tmpl = mangaCacheDir(fullPath) + "/thumb_[HEIGHT].bmp";
+          const auto& metrics = UITheme::getInstance().getMetrics();
+          const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
+          const bool thumbOk = thumbHeightValid(UITheme::getCoverThumbPath(tmpl, gridHeight), gridHeight);
+          if (existing->coverBmpPath.empty() || coverIsRawImage || (coverIsTemplate && !thumbOk)) {
             RecentBook& book = *existing;
             const std::string coverBefore = book.coverBmpPath;
-            // A previously generated thumb short-circuits everything, including the manga-folder
-            // file scan below (hundreds of page files iterated per manga, per Library open).
-            const std::string tmpl = mangaCacheDir(fullPath) + "/thumb_[HEIGHT].bmp";
-            const auto& metrics = UITheme::getInstance().getMetrics();
-            const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
-            if (Storage.exists(UITheme::getCoverThumbPath(tmpl, gridHeight).c_str())) {
+            // A previously generated (and valid) thumb short-circuits everything, including the
+            // manga-folder file scan below (hundreds of page files iterated per manga, per open).
+            if (thumbOk) {
               book.coverBmpPath = tmpl;
             } else if (coverIsRawImage) {
               // The stored raw path already tells us the cover source -- no folder scan needed.
@@ -405,11 +422,12 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
         }
       }
       if (book.coverBmpPath.empty()) {
-        // A previously generated thumb short-circuits the folder scan (same as loadRecentBooks).
+        // A previously generated (valid) thumb short-circuits the folder scan (same as
+        // loadRecentBooks).
         const std::string tmpl = mangaCacheDir(fullPath) + "/thumb_[HEIGHT].bmp";
         const auto& metrics = UITheme::getInstance().getMetrics();
         const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
-        if (Storage.exists(UITheme::getCoverThumbPath(tmpl, gridHeight).c_str())) {
+        if (thumbHeightValid(UITheme::getCoverThumbPath(tmpl, gridHeight), gridHeight)) {
           book.coverBmpPath = tmpl;
         } else {
         // Same first-page selection as loadRecentBooks() -- skip panel crops.
