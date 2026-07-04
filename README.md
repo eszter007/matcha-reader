@@ -395,3 +395,5 @@ Built on top of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-rea
 Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), used under their respective licenses.
 
 Icons by [Tabler Icons](https://tabler.io/icons) (MIT license).
+
+Logo in Sleep & Boot Screen by [https://iconbu.com/](ふにゃ猫 – funyaneko).
