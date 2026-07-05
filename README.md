@@ -396,4 +396,4 @@ Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [J
 
 Icons by [Tabler Icons](https://tabler.io/icons) (MIT license).
 
-Logo in Sleep & Boot Screen by [https://iconbu.com/](ふにゃ猫 – funyaneko).
+Logo in Sleep & Boot Screen by [ふにゃ猫 – funyaneko](https://iconbu.com/).
