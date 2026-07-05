@@ -137,6 +137,9 @@ std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
 }
 
 void MangaWordLookupActivity::performLookup() {
+  // Serialize against the render task, which reads the result strings concurrently -- see
+  // EpubReaderWordLookupActivity::performLookup() for the confirmed tear/abort.
+  RenderLock lock;
   // Render shows "Loading..." instead of "No match found" while this runs (fast navigation).
   lookupInFlight = true;
   performLookupImpl();

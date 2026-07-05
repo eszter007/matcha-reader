@@ -76,7 +76,7 @@ Two features are intentionally **English-only regardless of device language**, s
 
 ### CJK Fallback Font
 
-Non-Japanese-language books that contain occasional CJK characters (e.g. a stray Chinese loanword or Japanese proper noun) render using a curated built-in fallback font covering CJK punctuation, hiragana, katakana, fullwidth forms, and the 2,136 Jōyō kanji (常用漢字, Japan's standard list of common-use kanji) — rather than the full ~21,000-character CJK Unified Ideographs block, which doesn't fit in the available flash budget alongside everything else. The fallback font is regular-weight only (no bold); `EpdFontFamily` falls back to regular for bold requests, which is expected for an occasional-use fallback. Japanese books rendered through the vertical-text engine (see above) use the full font selection path, not this fallback.
+Non-Japanese-language books that contain occasional CJK characters (e.g. a stray Chinese loanword or Japanese proper noun) render using a curated built-in fallback font covering CJK punctuation, hiragana, katakana, fullwidth forms, and the 2,136 Jōyō kanji (常用漢字, Japan's standard list of common-use kanji) plus the 863 Jinmeiyō kanji (人名用漢字, name kanji that also appear regularly in fiction — 杖, 苺, 廻 …) — rather than the full ~21,000-character CJK Unified Ideographs block, which doesn't fit in the available flash budget alongside everything else. The fallback font is regular-weight only (no bold); `EpdFontFamily` falls back to regular for bold requests, which is expected for an occasional-use fallback. Japanese books rendered through the vertical-text engine (see above) use the full font selection path, not this fallback.
 
 ### Manga Panel Reader
 
@@ -218,6 +218,8 @@ For the best vertical text experience, install Japanese `.cpfont` font files on 
 ```
 
 UDDigiKyokasho is auto-selected as the default when available. Other supported fonts include Noto Serif JP and Noto Sans JP — the vertical text engine adapts positioning to each font's metrics.
+
+While any SD-card Japanese font is loaded as the reader font, it also serves as a global glyph fallback: rare kanji missing from the built-in fonts (dictionary headwords and definitions, book titles) load from it on demand instead of rendering blank. A full-JIS-coverage NotoSansJP `.cpfont` set can be generated with `lib/EpdFont/scripts/build-sd-fonts.py --only NotoSansJP`.
 
 Without SD card fonts, the built-in Noto Serif/Sans fonts work fine for both horizontal and vertical Japanese text.
 

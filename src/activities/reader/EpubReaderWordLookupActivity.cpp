@@ -164,6 +164,13 @@ std::string EpubReaderWordLookupActivity::buildLookupText(size_t startIdx) const
 }
 
 void EpubReaderWordLookupActivity::performLookup() {
+  // Hold the rendering mutex while the result strings are rebuilt: the render task wraps and
+  // draws resultDefinition/resultHeadword CONCURRENTLY on its own task, and mutating them
+  // mid-render tears the string under the renderer -- confirmed crash_report: out_of_range
+  // abort inside DefinitionText::drawWrapped when navigation triggered a lookup during a slow
+  // (multi-second) e-ink refresh. The lock briefly delays one render; requestUpdate() then
+  // redraws with the fresh result.
+  RenderLock lock;
   // Signals render() to show "Loading..." instead of "No match found" while the lookup below
   // runs -- fast navigation otherwise briefly flashes the no-match text in the window between
   // clearing the previous result and the next lookup (~100-300ms) completing.

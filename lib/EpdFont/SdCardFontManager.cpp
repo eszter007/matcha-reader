@@ -72,12 +72,29 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
   EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
   renderer.insertFont(fontId, fontFamily);
 
+  // Rare-glyph safety net: built-in families fall back to a jōyō-only CJK subset, so any
+  // non-jōyō kanji (杖, 頷, ...) rendered in a built-in font -- dictionary definitions and
+  // headwords in Word Lookup, book titles, UI strings -- simply disappeared. This SD font can
+  // load ANY glyph on demand via its glyphMissHandler, so while it is loaded, make it the
+  // global last-resort fallback. A fallback glyph renders at the SD font's loaded point size
+  // (slightly oversized inside small UI text) -- far better than a blank gap. The renderer's
+  // fontMap is a std::map, so the pointer into it stays valid until removeFont().
+  prevGlobalFallback_ = EpdFontFamily::getGlobalFallback();
+  EpdFontFamily::setGlobalFallback(&renderer.getFontMap().at(fontId));
+  globalFallbackOverridden_ = true;
+
   loadedFamilyName_ = family.name;
   loadedPointSize_ = selected->pointSize;
   return true;
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
+  // Restore the built-in fallback BEFORE the family object is erased from the renderer's map.
+  if (globalFallbackOverridden_) {
+    EpdFontFamily::setGlobalFallback(prevGlobalFallback_);
+    prevGlobalFallback_ = nullptr;
+    globalFallbackOverridden_ = false;
+  }
   renderer.clearSdCardFonts();
   for (auto& lf : loaded_) {
     renderer.removeFont(lf.fontId);
