@@ -1,5 +1,7 @@
 #include "MangaWordLookupActivity.h"
 
+#include "DefinitionTextRenderer.h"
+
 #include <Arduino.h>
 #include <DictIndex.h>
 #include <FontCacheManager.h>
@@ -297,7 +299,11 @@ void MangaWordLookupActivity::loop() {
 
 void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
   auto metrics = UITheme::getInstance().getMetrics();
-  const int jaFont = SETTINGS.getReaderFontId();
+  // Built-in font on purpose, NOT SETTINGS.getReaderFontId(): the lookup panel's definitions
+  // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
+  // the headword a different typeface than the rest of the view -- and pulled whole SD font
+  // groups (16KB decompression buffers each) into a heap that is already at its tightest here.
+  const int jaFont = NOTOSERIF_16_FONT_ID;
 
   // Bulk-load every glyph the headword + definition need before drawing/measuring any of them.
   // Without this, each drawText()/getTextWidth() call for a character that isn't already cached
@@ -339,78 +345,12 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
 
   const int defFont = SMALL_FONT_ID;
   const int defLineH = renderer.getLineHeight(defFont);
-  int linesDrawn = 0;
-  int lineIndex = 0;
   const int maxDefY = screen.y + screen.height - 2;
   const int firstDefY = defY;
+  const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH,
+                                                maxWidth, maxDefY, scrollOffset);
 
-  size_t nlPos = 0;
-  std::string defText = resultDefinition;
-  while (nlPos <= defText.size() && linesDrawn < 999) {
-    size_t nextNl = defText.find('\n', nlPos);
-    std::string paragraph = (nextNl == std::string::npos)
-        ? defText.substr(nlPos) : defText.substr(nlPos, nextNl - nlPos);
-    nlPos = (nextNl == std::string::npos) ? defText.size() + 1 : nextNl + 1;
-
-    if (paragraph.empty()) {
-      lineIndex++;
-      if (lineIndex > scrollOffset) defY += defLineH / 2;
-      continue;
-    }
-
-    std::string rem = paragraph;
-    while (!rem.empty() && linesDrawn < 999) {
-      if (renderer.getTextWidth(defFont, rem.c_str()) <= maxWidth) {
-        lineIndex++;
-        if (lineIndex > scrollOffset && defY + defLineH <= maxDefY) {
-          renderer.drawText(defFont, textX, defY, rem.c_str(), true);
-          defY += defLineH;
-          linesDrawn++;
-        }
-        break;
-      }
-
-      std::string accum;
-      size_t lastSpaceBreak = std::string::npos;
-      const char* p = rem.c_str();
-      while (*p) {
-        size_t charLen = 1;
-        auto c0 = static_cast<unsigned char>(*p);
-        if (c0 >= 0xF0) charLen = 4;
-        else if (c0 >= 0xE0) charLen = 3;
-        else if (c0 >= 0xC0) charLen = 2;
-        std::string test = accum + std::string(p, charLen);
-        if (renderer.getTextWidth(defFont, test.c_str()) > maxWidth) break;
-        accum = test;
-        if (*p == ' ') lastSpaceBreak = accum.size();
-        p += charLen;
-      }
-
-      if (accum.empty()) {
-        auto c0 = static_cast<unsigned char>(rem[0]);
-        size_t cl = 1;
-        if (c0 >= 0xF0) cl = 4; else if (c0 >= 0xE0) cl = 3; else if (c0 >= 0xC0) cl = 2;
-        accum = rem.substr(0, cl);
-        rem = rem.substr(cl);
-      } else if (lastSpaceBreak != std::string::npos && lastSpaceBreak > 0) {
-        std::string line = accum.substr(0, lastSpaceBreak);
-        rem = rem.substr(lastSpaceBreak);
-        if (!rem.empty() && rem[0] == ' ') rem = rem.substr(1);
-        accum = line;
-      } else {
-        rem = rem.substr(accum.size());
-      }
-
-      lineIndex++;
-      if (lineIndex > scrollOffset && defY + defLineH <= maxDefY) {
-        renderer.drawText(defFont, textX, defY, accum.c_str(), true);
-        defY += defLineH;
-        linesDrawn++;
-      }
-    }
-  }
-
-  totalLines = lineIndex;
+  totalLines = wrap.totalLines;
   const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
   maxScroll = std::max(0, totalLines - visibleCapacity);
 }

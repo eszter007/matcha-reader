@@ -1,5 +1,7 @@
 #include "EpubReaderWordLookupActivity.h"
 
+#include "DefinitionTextRenderer.h"
+
 #include <Arduino.h>
 #include <DictIndex.h>
 #include <FontCacheManager.h>
@@ -378,7 +380,11 @@ void EpubReaderWordLookupActivity::loop() {
 
 void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
   auto metrics = UITheme::getInstance().getMetrics();
-  const int jaFont = SETTINGS.getReaderFontId();
+  // Built-in font on purpose, NOT SETTINGS.getReaderFontId(): the lookup panel's definitions
+  // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
+  // the headword a different typeface than the rest of the view -- and pulled whole SD font
+  // groups (16KB decompression buffers each) into a heap that is already at its tightest here.
+  const int jaFont = NOTOSERIF_16_FONT_ID;
 
   // Bulk-load every glyph the headword + definition need before drawing/measuring any of them --
   // same fix, and same root cause, as the vertical-page-turn slowness fixed earlier this session.
@@ -418,95 +424,14 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
 
     const int defFont = SMALL_FONT_ID;
     const int defLineH = renderer.getLineHeight(defFont);
-    int linesDrawn = 0;
-    int lineIndex = 0;
     // screen.height already excludes the button-hints band, so its bottom edge
     // is the top of the buttons; stay a hair above it.
     const int maxDefY = screen.y + screen.height - 2;
     const int firstDefY = defY;
-    const int kMaxDefLines = 999;
-    std::string defText = resultDefinition;
-    size_t nlPos = 0;
-    while (nlPos <= defText.size() && linesDrawn < kMaxDefLines) {
-      size_t nextNl = defText.find('\n', nlPos);
-      std::string paragraph = (nextNl == std::string::npos)
-          ? defText.substr(nlPos) : defText.substr(nlPos, nextNl - nlPos);
-      nlPos = (nextNl == std::string::npos) ? defText.size() + 1 : nextNl + 1;
+    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH,
+                                                  maxWidth, maxDefY, scrollOffset);
 
-      if (paragraph.empty()) {
-        lineIndex++;
-        if (lineIndex > scrollOffset) defY += defLineH / 2;
-        continue;
-      }
-      // Try space-based wrapping first (for Latin text), then fall back to
-      // character-level wrapping (for CJK text without spaces).
-      std::string rem = paragraph;
-      while (!rem.empty() && linesDrawn < kMaxDefLines) {
-        if (renderer.getTextWidth(defFont, rem.c_str()) <= maxWidth) {
-          lineIndex++;
-          if (lineIndex > scrollOffset && defY + defLineH <= maxDefY) {
-            renderer.drawText(defFont, textX, defY, rem.c_str(), true);
-            defY += defLineH;
-            linesDrawn++;
-          }
-          break;
-        }
-        // Try to break at the last space that fits
-        std::string bestLine;
-        size_t lastSpaceBreak = std::string::npos;
-        std::string accum;
-        const char* p = rem.c_str();
-        while (*p) {
-          size_t charLen = 1;
-          auto c0 = static_cast<unsigned char>(*p);
-          if (c0 >= 0xF0) charLen = 4;
-          else if (c0 >= 0xE0) charLen = 3;
-          else if (c0 >= 0xC0) charLen = 2;
-          std::string test = accum + std::string(p, charLen);
-          if (renderer.getTextWidth(defFont, test.c_str()) > maxWidth) {
-            // Never orphan sentence-ending punctuation on its own line
-            uint32_t nextCp = 0;
-            if (charLen == 3) nextCp = ((c0 & 0x0F) << 12) | ((static_cast<unsigned char>(p[1]) & 0x3F) << 6) | (static_cast<unsigned char>(p[2]) & 0x3F);
-            else if (charLen == 1) nextCp = c0;
-            if (nextCp == 0x3002 || nextCp == 0x3001 || nextCp == 0xFF01 || nextCp == 0xFF1F ||
-                nextCp == '.' || nextCp == ',' || nextCp == '!' || nextCp == '?') {
-              accum = test;
-              p += charLen;
-            }
-            break;
-          }
-          accum = test;
-          if (*p == ' ') lastSpaceBreak = accum.size();
-          p += charLen;
-        }
-        if (accum.empty()) {
-          // Single char wider than maxWidth — force it
-          auto c0 = static_cast<unsigned char>(rem[0]);
-          size_t cl = 1;
-          if (c0 >= 0xF0) cl = 4; else if (c0 >= 0xE0) cl = 3; else if (c0 >= 0xC0) cl = 2;
-          accum = rem.substr(0, cl);
-          rem = rem.substr(cl);
-        } else if (lastSpaceBreak != std::string::npos && lastSpaceBreak > 0) {
-          // Break at last space to keep Latin words intact
-          std::string line = accum.substr(0, lastSpaceBreak);
-          rem = rem.substr(lastSpaceBreak);
-          // Skip leading space
-          if (!rem.empty() && rem[0] == ' ') rem = rem.substr(1);
-          accum = line;
-        } else {
-          // No space found — break at character boundary (CJK text)
-          rem = rem.substr(accum.size());
-        }
-        lineIndex++;
-        if (lineIndex > scrollOffset && defY + defLineH <= maxDefY) {
-          renderer.drawText(defFont, textX, defY, accum.c_str(), true);
-          defY += defLineH;
-          linesDrawn++;
-        }
-      }
-    }
-
-    totalLines = lineIndex;
+    totalLines = wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
     const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
     maxScroll = std::max(0, totalLines - visibleCapacity);

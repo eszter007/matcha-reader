@@ -183,7 +183,11 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
     GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, false};
     if (!pushGlyphSafe(allGlyphs, ref)) break;
   }
-  reserveGlyphsSafe(selectableGlyphs, allGlyphs.size());
+  // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
+  // reserving allGlyphs.size() entries pinned ~15KB for a dense page across the whole lookup
+  // lifetime -- exactly the margin the font decompressor needed while rendering definitions
+  // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
+  // with guarded doubling instead.
 }
 
 void WordSelectionScan::initFromPage(const Page& page) {
@@ -240,7 +244,11 @@ void WordSelectionScan::initFromPage(const Page& page) {
       }
     }
   }
-  reserveGlyphsSafe(selectableGlyphs, allGlyphs.size());
+  // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
+  // reserving allGlyphs.size() entries pinned ~15KB for a dense page across the whole lookup
+  // lifetime -- exactly the margin the font decompressor needed while rendering definitions
+  // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
+  // with guarded doubling instead.
 }
 
 void WordSelectionScan::initFromUtf8Text(const std::string& text) {
@@ -267,7 +275,11 @@ void WordSelectionScan::initFromUtf8Text(const std::string& text) {
     if (cp == '\n' || cp == '\r') continue;
     if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, false})) break;
   }
-  reserveGlyphsSafe(selectableGlyphs, allGlyphs.size());
+  // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
+  // reserving allGlyphs.size() entries pinned ~15KB for a dense page across the whole lookup
+  // lifetime -- exactly the margin the font decompressor needed while rendering definitions
+  // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
+  // with guarded doubling instead.
 }
 
 bool WordSelectionScan::step(const uint32_t maxMillis) {
