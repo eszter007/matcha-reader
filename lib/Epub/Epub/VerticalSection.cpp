@@ -30,7 +30,7 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 52;
+constexpr uint8_t VSECTION_FILE_VERSION = 53;
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 
 using RubyRun = VerticalParsedText::RubyRun;
@@ -595,6 +595,10 @@ struct LayoutPageSink final : ParagraphSink {
     // column break where none existed in the source -- harmless compared to the alternative, OOM).
     std::vector<RubyRun> chunk;
     size_t chunkEstimatedChars = 0;
+    // Only the paragraph's FIRST chunk starts a new paragraph in the layout engine; later
+    // chunks continue it (no break recorded), so a flush between chunks no longer decides
+    // whether a stray column break appears -- see addAnnotatedParagraph's doc comment.
+    bool firstChunkOfParagraph = true;
     for (auto& run : runs) {
       // UTF-8 CJK runs ~3 bytes/char. Only baseText contributes actual stream_ entries --
       // rubyText is folded into each base character's PendingChar.rubyText field, not pushed as
@@ -605,7 +609,8 @@ struct LayoutPageSink final : ParagraphSink {
       chunk.push_back(std::move(run));
       chunkEstimatedChars += runEstimatedChars;
       if (layout.pendingCount() + chunkEstimatedChars >= BATCH_CHARS) {
-        layout.addAnnotatedParagraph(chunk);
+        layout.addAnnotatedParagraph(chunk, !firstChunkOfParagraph);
+        firstChunkOfParagraph = false;
         chunk.clear();
         chunkEstimatedChars = 0;
         if (layout.pendingCount() >= BATCH_CHARS) flushText();
@@ -613,7 +618,7 @@ struct LayoutPageSink final : ParagraphSink {
       }
     }
     if (!chunk.empty()) {
-      layout.addAnnotatedParagraph(chunk);
+      layout.addAnnotatedParagraph(chunk, !firstChunkOfParagraph);
     }
     runs.clear();  // free this paragraph's text now -- layout owns its own copy in the stream
     if (layout.pendingCount() >= BATCH_CHARS) flushText();
@@ -621,7 +626,14 @@ struct LayoutPageSink final : ParagraphSink {
 
   void onImage(const std::string& src) override {
     if (failed) return;
+    // Lay out any buffered text, then FINALIZE the in-progress page before the image page is
+    // written. Without this, the image page was written while the half-filled text page stayed
+    // pending: the pending page (whose content PRECEDES the image) landed in the cache AFTER
+    // the image page, and post-image text silently merged onto it -- confirmed on a real device
+    // as dialogue continuing mid-column across a scene-break graphic instead of starting fresh.
     flushText();
+    VerticalPage pendingTail;
+    if (layout.finalizePendingPage(pendingTail)) writeOne(pendingTail);
     writeOne(makeImagePage(src));
   }
 

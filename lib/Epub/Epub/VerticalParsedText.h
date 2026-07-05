@@ -101,7 +101,15 @@ class VerticalParsedText {
     bool emphasis = false;
   };
 
-  void addAnnotatedParagraph(const std::vector<RubyRun>& runs);
+  // continuesPreviousParagraph: pass true when this call carries the NEXT CHUNK of a paragraph
+  // whose earlier chunks were already added (VerticalSection chunks large paragraphs to bound
+  // stream_ memory) -- no paragraph break is recorded, so after an intervening flush/reset the
+  // text continues seamlessly mid-column. Pass false (default) for a genuinely new paragraph so
+  // layoutPages() forces the fresh column even when a batch boundary lands exactly here (the
+  // old code recorded a break either way and then unconditionally skipped the batch's first
+  // break, silently merging a real paragraph into the previous one's column whenever a flush
+  // coincided with a paragraph boundary -- always the case right after an inline image).
+  void addAnnotatedParagraph(const std::vector<RubyRun>& runs, bool continuesPreviousParagraph = false);
 
   // Called for a page as soon as it's confirmed safe to write -- i.e. one page has already been
   // completed after it, so the "oikomi" pull-back check (which only ever looks at the single most
@@ -138,6 +146,16 @@ class VerticalParsedText {
   // trailing page if isFinalFlush) -- callers must still write those, same as before.
   std::vector<VerticalPage> layoutPages(void* ctx = nullptr, PageReadyCallback onPageReady = nullptr,
                                         bool isFinalFlush = true);
+
+  // Detach and return the in-progress page (the one held across isFinalFlush=false calls) so a
+  // caller can splice a standalone page -- an image -- into the page sequence in document order.
+  // Returns false (and emits nothing) when there is no pending page or it has no glyphs, so an
+  // image at a chapter/batch start never produces a spurious blank page. Deliberately NOT the
+  // same as a layoutPages(isFinalFlush=true) call: that path also resets anyPageEverProduced_
+  // (end-of-chapter bookkeeping), which mid-chapter would let a later genuinely-final flush emit
+  // a stray blank page in image-heavy chapters. Call only after the pending stream is laid out
+  // (i.e. right after a layoutPages() call / when pendingCount() == 0).
+  bool finalizePendingPage(VerticalPage& out);
 
   // Column-to-column gap in pixels, added on top of the character cell
   // size when advancing to a new column. Mirrors the role

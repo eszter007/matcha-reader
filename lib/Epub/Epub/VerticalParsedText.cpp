@@ -276,9 +276,18 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
   }
 }
 
-void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs) {
-  const uint32_t paragraphIndex = static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size());
-  paragraphBreaksBeforeIndex_.push_back(stream_.size());
+void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
+                                                const bool continuesPreviousParagraph) {
+  // A continuation chunk belongs to the paragraph already in flight: no break is recorded and
+  // the glyphs share the previous chunk's paragraph index (see the header doc comment).
+  uint32_t paragraphIndex;
+  if (continuesPreviousParagraph) {
+    const size_t breaks = paragraphBreaksBeforeIndex_.size();
+    paragraphIndex = breaks == 0 ? 0 : static_cast<uint32_t>(breaks - 1);
+  } else {
+    paragraphIndex = static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size());
+    paragraphBreaksBeforeIndex_.push_back(stream_.size());
+  }
 
   {
     size_t totalBaseBytes = 0;
@@ -415,8 +424,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
   // Index into paragraphBreaksBeforeIndex_ of the *next* paragraph start,
   // so we know when we've crossed into a new paragraph and should force a
-  // fresh column.
-  size_t nextParagraphBreakIdx = 1; // index 0 is the very first paragraph, already "started"
+  // fresh column. For a chapter-fresh call (no pending page), index 0 is the chapter's very
+  // first paragraph, already "started" at the top of a fresh page -- skip it. For a RESUMED
+  // call (pendingPageValid_, checked before the init block below sets it), a break recorded at
+  // stream index 0 is a real paragraph starting exactly at the batch boundary and must force
+  // its fresh column like any other; continuation chunks no longer record one (see
+  // addAnnotatedParagraph), so honoring it can't split a paragraph mid-flow anymore.
+  size_t nextParagraphBreakIdx = pendingPageValid_ ? 0 : 1;
 
   // One page's cell grid is fixed by screen geometry -- reserving it up front turns what used to
   // be several dozen incremental (and, on a fragmented heap, crash-prone) reallocations per page
@@ -942,4 +956,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Non-final flush: the trailing page is intentionally NOT pushed here -- it's held in
   // pendingPage_ and continued by the next layoutPages() call instead of being cut short.
   return pages;
+}
+
+bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
+  if (!pendingPageValid_) return false;
+  pendingPageValid_ = false;  // next layoutPages() call starts a fresh page either way
+  if (pendingPage_.glyphs.empty()) return false;
+  out = std::move(pendingPage_);
+  anyPageEverProduced_ = true;  // set, NOT reset -- see the header doc comment
+  return true;
 }
