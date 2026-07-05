@@ -1,4 +1,4 @@
-# Sakura Reader — Japanese Language Learning Fork
+# Matcha Reader — Japanese Language Learning Fork
 
 A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for the Xteink X4, focused on **reading Japanese books** with built-in learning tools. Read native Japanese novels and texts with instant dictionary lookup, verb deinflection, grammar references, and AI-powered page translation — all on an e-ink device.
 
