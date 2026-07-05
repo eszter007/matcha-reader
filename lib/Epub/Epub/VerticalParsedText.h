@@ -213,6 +213,9 @@ class VerticalParsedText {
   // the same page on the next call instead of finalizing it early and starting a fresh one. See
   // layoutPages()'s isFinalFlush doc comment for the full rationale.
   VerticalPage pendingPage_;
+  // A paragraph break recorded at exactly the end of a batch's stream (trailing newline) --
+  // carried across reset() and re-recorded at the start of the next batch. See layoutPages().
+  bool pendingTrailingBreak_ = false;
   uint16_t pendingColumn_ = 0;
   uint16_t pendingRow_ = 0;
   bool pendingPageValid_ = false;  // false until the first layoutPages() call initializes pendingPage_

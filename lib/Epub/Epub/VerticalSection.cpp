@@ -30,7 +30,7 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 53;
+constexpr uint8_t VSECTION_FILE_VERSION = 54;
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 
 using RubyRun = VerticalParsedText::RubyRun;

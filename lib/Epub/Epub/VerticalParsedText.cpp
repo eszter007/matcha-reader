@@ -278,6 +278,19 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
 
 void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
                                                 const bool continuesPreviousParagraph) {
+  // A paragraph break recorded at the very END of the previous batch (a trailing '\n' in the
+  // last run) could never fire there -- the layout loop only visits indices < stream size --
+  // and reset() would have discarded it. layoutPages() flags it instead; re-record it here at
+  // the start of the new batch so the break lands where the next character actually goes.
+  // This is DELIBERATELY independent of continuesPreviousParagraph: the flag comes from a
+  // real newline in the source, not from the sink's memory-bound chunking.
+  if (pendingTrailingBreak_) {
+    if (paragraphBreaksBeforeIndex_.empty() || paragraphBreaksBeforeIndex_.back() != stream_.size()) {
+      paragraphBreaksBeforeIndex_.push_back(stream_.size());
+    }
+    pendingTrailingBreak_ = false;
+  }
+
   // A continuation chunk belongs to the paragraph already in flight: no break is recorded and
   // the glyphs share the previous chunk's paragraph index (see the header doc comment).
   uint32_t paragraphIndex;
@@ -342,7 +355,20 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
       }
     }
 
-    if (baseCps.empty()) continue;
+    // Record the run's newline breaks BEFORE the empty-run skip: a run consisting only of
+    // newlines (e.g. the inter-tag whitespace between </p> and <p> arriving as its own run at
+    // a style boundary) has no characters to push but its break is a real paragraph boundary.
+    // The old order silently dropped exactly those breaks, merging the following paragraph
+    // into the current column.
+    if (baseCps.empty()) {
+      for (size_t relIdx : breakBeforeBaseIndex) {
+        const size_t absBreakIdx = stream_.size() + relIdx;  // relIdx is always 0 here
+        if (paragraphBreaksBeforeIndex_.empty() || paragraphBreaksBeforeIndex_.back() != absBreakIdx) {
+          paragraphBreaksBeforeIndex_.push_back(absBreakIdx);
+        }
+      }
+      continue;
+    }
 
     const size_t runStartStreamIndex = stream_.size();
 
@@ -409,6 +435,16 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
 
 std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCallback onPageReady, bool isFinalFlush) {
   std::vector<VerticalPage> pages;
+  // A break recorded at exactly stream-end (a trailing '\n' in this batch's last run) can never
+  // fire in the loop below (it visits idx < stream size). Carry it across the caller's reset()
+  // as a flag; addAnnotatedParagraph() re-records it at the next batch's start. Without this,
+  // paragraph boundaries landing exactly on a batch boundary silently merged -- confirmed with
+  // the full-pipeline host repro on a real chapter (books that wrap chapters in one <div> feed
+  // whole paragraphs as embedded newlines, so this fired constantly).
+  if (!paragraphBreaksBeforeIndex_.empty() && paragraphBreaksBeforeIndex_.back() == stream_.size() &&
+      !stream_.empty()) {
+    pendingTrailingBreak_ = true;
+  }
   // Nothing new to lay out AND nothing left over from a previous non-final call to finalize.
   if (stream_.empty() && !(isFinalFlush && pendingPageValid_)) return pages;
 
@@ -642,8 +678,16 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // Force a fresh column at the start of every paragraph after the
     // first, the same way horizontal layout starts a new line per
     // paragraph.
+    // Tracks whether a forced paragraph break just fired for THIS position, so the kinsoku
+    // line-start pull-back below can be suppressed: a paragraph the author starts with
+    // prohibited punctuation (……でも) must keep its fresh column -- oikomi would otherwise
+    // drag its opening characters back into the previous paragraph's column, visually merging
+    // the two (confirmed with the full-pipeline host repro). Kinsoku governs WRAPPED line
+    // starts, not author-intended paragraph openings.
+    bool paraBreakJustFired = false;
     while (nextParagraphBreakIdx < paragraphBreaksBeforeIndex_.size() &&
            idx == paragraphBreaksBeforeIndex_[nextParagraphBreakIdx]) {
+      paraBreakJustFired = true;
       if (row != 0 || column == 0) {
         column++;
         row = 0;
@@ -877,7 +921,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
     // Single upright CJK/kana/punctuation character.
     bool startingNewColumn = (row == 0);
-    if (startingNewColumn && Kinsoku::isLineStartProhibited(pc.codepoint)) {
+    if (startingNewColumn && !paraBreakJustFired && Kinsoku::isLineStartProhibited(pc.codepoint)) {
       if (!page.glyphs.empty()) {
         // Oikomi (追い込み): pull this character back into the previous
         // column as an extra row.
