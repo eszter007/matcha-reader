@@ -1,5 +1,7 @@
 #include "RecentBooksActivity.h"
 
+#include "EpubProgressUtil.h"
+
 #include <Bitmap.h>
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
@@ -541,40 +543,10 @@ int RecentBooksActivity::readProgressPercent(const std::string& bookPath) const 
     return -1;
   }
 
-  HalFile f;
-  if (!Storage.openFileForRead("LIB", cachePath + "/progress.bin", f)) {
-    return 0;
-  }
-
   if (FsHelpers::hasEpubExtension(bookPath)) {
-    uint8_t data[6];
-    if (f.read(data, 6) != 6) return 0;
-    uint16_t spineIndex = data[0] | (data[1] << 8);
-    uint16_t currentPage = data[2] | (data[3] << 8);
-    uint16_t pageCount = data[4] | (data[5] << 8);
-    if (pageCount == 0) return 0;
-
-    HalFile bookFile;
-    if (Storage.openFileForRead("LIB", cachePath + "/book.bin", bookFile)) {
-      uint8_t version;
-      uint32_t lutOffset;
-      uint16_t spineCount;
-      if (bookFile.read(&version, 1) == 1) {
-        bookFile.read(reinterpret_cast<uint8_t*>(&lutOffset), 4);
-        bookFile.read(reinterpret_cast<uint8_t*>(&spineCount), 2);
-        if (spineCount > 0) {
-          float sectionProgress = static_cast<float>(currentPage) / static_cast<float>(pageCount);
-          float overallProgress = (static_cast<float>(spineIndex) + sectionProgress) / static_cast<float>(spineCount);
-          int pct = static_cast<int>(overallProgress * 100.0f + 0.5f);
-          return std::clamp(pct, 0, 100);
-        }
-      }
-    }
-
-    int pct = static_cast<int>((static_cast<float>(currentPage) / static_cast<float>(pageCount)) * 100.0f + 0.5f);
-    return std::clamp(pct, 0, 100);
+    const int pct = EpubProgress::percentFromCache(cachePath, "LIB");
+    return pct < 0 ? 0 : pct;
   }
-
   return -1;
 }
 

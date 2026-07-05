@@ -1,5 +1,7 @@
 #include "HomeActivity.h"
 
+#include "EpubProgressUtil.h"
+
 #include <Bitmap.h>
 #include <Epub.h>
 #include <FsHelpers.h>
@@ -81,38 +83,9 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
       }
     }
     if (!cachePath.empty()) {
-      HalFile f;
-      if (Storage.openFileForRead("HOME", cachePath + "/progress.bin", f)) {
-        uint8_t data[6];
-        if (f.read(data, 6) == 6) {
-          uint16_t spineIndex = data[0] | (data[1] << 8);
-          uint16_t currentPage = data[2] | (data[3] << 8);
-          uint16_t pageCount = data[4] | (data[5] << 8);
-          f.close();
-          // Use spine-aware progress (same as library) for whole-book percentage.
-          HalFile bookFile;
-          if (Storage.openFileForRead("HOME", cachePath + "/book.bin", bookFile)) {
-            uint8_t version;
-            uint32_t lutOffset;
-            uint16_t spineCount;
-            if (bookFile.read(&version, 1) == 1) {
-              bookFile.read(reinterpret_cast<uint8_t*>(&lutOffset), 4);
-              bookFile.read(reinterpret_cast<uint8_t*>(&spineCount), 2);
-              if (spineCount > 0 && pageCount > 0) {
-                float sectionProgress = static_cast<float>(currentPage) / static_cast<float>(pageCount);
-                float overallProgress = (static_cast<float>(spineIndex) + sectionProgress) / static_cast<float>(spineCount);
-                currentBookProgress = static_cast<int>(overallProgress * 100.0f + 0.5f);
-                if (currentBookProgress > 100) currentBookProgress = 100;
-              }
-            }
-          }
-          if (currentBookProgress < 0 && pageCount > 0) {
-            currentBookProgress = currentPage * 100 / pageCount;
-          }
-        } else {
-          f.close();
-        }
-      }
+      // Byte-weighted whole-book percentage, same math as the reader and Library -- see
+      // EpubProgress::percentFromCache.
+      currentBookProgress = EpubProgress::percentFromCache(cachePath, "HOME");
     }
   }
 }
