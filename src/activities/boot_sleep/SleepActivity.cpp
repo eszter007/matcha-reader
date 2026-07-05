@@ -13,7 +13,7 @@
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "images/Logo160.h"
+#include "GrayLogo.h"
 #include "images/MoonIcon.h"
 
 // Real hardware never reaches loop() while asleep: enterDeepSleep() ends by
@@ -177,17 +177,22 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
+  const int logoX = (pageWidth - GrayLogo::SIZE) / 2;
+  const int logoY = (pageHeight - GrayLogo::SIZE) / 2 - 24;
+  // Sleep screen is dark unless light is selected in settings; the logo's gray passes need to
+  // know so the base and the dark/light nudge planes stay consistent post-inversion.
+  const bool inverted = SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT;
   renderer.clearScreen();
-  renderer.drawImage(Logo160, (pageWidth - 160) / 2, (pageHeight - 160) / 2 - 24, 160, 160);
+  GrayLogo::drawBase(renderer, logoX, logoY, inverted);
   renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
 
-  // Make sleep screen dark unless light is selected in settings
-  if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
+  if (inverted) {
     renderer.invertScreen();
   }
 
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  GrayLogo::flushGrayPasses(renderer, logoX, logoY, inverted);
 }
 
 void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
