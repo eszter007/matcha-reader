@@ -39,6 +39,20 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
 
 // A persisted scan for this exact page skips all scanning; otherwise start progressively.
 void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
+  // Self-heal fragmentation before the lookup allocates its scan vectors and dict caches.
+  // Device telemetry showed maxAlloc degrading monotonically across open/close cycles
+  // (28.7K -> 22.5K -> 19.4K ...) while total free fully recovered: font hot-group/slab
+  // buffers regrown while RENDERING definitions persist past onExit and split the large
+  // block the dict caches vacate. Left unchecked this ends in an allocation abort() a few
+  // pages later (confirmed crash_report). Freeing font memory coalesces the heap; fonts
+  // reload lazily, and the reader re-warms its caches on return anyway.
+  if (ESP.getMaxAllocHeap() < 28 * 1024) {
+    LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+  }
   if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanSpine, scanPage)) {
     return;
   }
@@ -60,6 +74,10 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
 
 void EpubReaderWordLookupActivity::onEnter() {
   Activity::onEnter();
+  // Heap telemetry for the word-lookup OOM crash hunt (crash_report showed abort() on a tiny
+  // string allocation inside performLookupImpl -- heap exhausted, cause unknown). Logged at
+  // enter AND exit so a leak per open/close cycle shows as a declining series.
+  LOG_INF("WLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // A scan-cache hit remembers the position the user was last at on this exact page -- resume
   // there instead of making them click back through every entry they've already seen.
   if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
@@ -80,6 +98,7 @@ void EpubReaderWordLookupActivity::onEnter() {
 }
 
 void EpubReaderWordLookupActivity::onExit() {
+  LOG_INF("WLA", "onExit heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // Persist the current cursor position (a no-op if the scan never finished, or the cache path
   // is unset) so the next open of this exact page resumes here instead of at word one.
   if (!scanCachePath.empty()) {
@@ -238,7 +257,13 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   hasGrammar = false;
   grammarHeadword.clear();
   grammarDefinition.clear();
-  if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
+  // The grammar overlay is a nicety on top of the main result. Its lookups build several
+  // transient strings and read whole grammar entries; under a near-exhausted heap those
+  // allocations abort() (-fno-exceptions) -- confirmed by a real device crash_report with a
+  // ~30-byte string allocation failing in this block. Show the plain result instead of crashing.
+  if (ESP.getMaxAllocHeap() < 16 * 1024) {
+    LOG_ERR("WLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
     const size_t allStart = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
     const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
 
@@ -289,7 +314,20 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   // Merge grammar into the definition so the single scroll-aware render loop
   // handles it (gets maxDefY clamping and scroll offset for free).
   if (hasGrammar) {
-    resultDefinition += "\n\n— Grammar: " + grammarHeadword + " —\n" + grammarDefinition;
+    // Built with one guarded reserve + appends: the old `a + b + c` temporary chain peaked at
+    // roughly twice the combined definition size in contiguous heap -- an abort() risk exactly
+    // when definitions are long. If even the reserve doesn't fit, keep the main result alone.
+    const size_t mergedLen =
+        resultDefinition.size() + grammarHeadword.size() + grammarDefinition.size() + 32;
+    if (ESP.getMaxAllocHeap() > mergedLen + 8 * 1024) {
+      resultDefinition.reserve(mergedLen);
+      resultDefinition += "\n\n— Grammar: ";
+      resultDefinition += grammarHeadword;
+      resultDefinition += " —\n";
+      resultDefinition += grammarDefinition;
+    } else {
+      LOG_ERR("WLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+    }
   }
 
   requestUpdate();

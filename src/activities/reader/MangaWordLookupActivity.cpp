@@ -27,6 +27,20 @@ MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedIn
 
 // A persisted scan for this exact text skips all scanning; otherwise start progressively.
 void MangaWordLookupActivity::initScanFromCacheOrBurst() {
+  // Self-heal fragmentation before the lookup allocates its scan vectors and dict caches.
+  // Device telemetry showed maxAlloc degrading monotonically across open/close cycles
+  // (28.7K -> 22.5K -> 19.4K ...) while total free fully recovered: font hot-group/slab
+  // buffers regrown while RENDERING definitions persist past onExit and split the large
+  // block the dict caches vacate. Left unchecked this ends in an allocation abort() a few
+  // pages later (confirmed crash_report). Freeing font memory coalesces the heap; fonts
+  // reload lazily, and the reader re-warms its caches on return anyway.
+  if (ESP.getMaxAllocHeap() < 28 * 1024) {
+    LOG_INF("MWLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("MWLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+  }
   if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanPage, scanPanel)) {
     return;
   }
@@ -47,6 +61,8 @@ void MangaWordLookupActivity::runInitialBurst() {
 
 void MangaWordLookupActivity::onEnter() {
   Activity::onEnter();
+  // Heap telemetry for the word-lookup OOM crash hunt -- see EpubReaderWordLookupActivity.
+  LOG_INF("MWLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // A scan-cache hit remembers the last cursor position for this exact panel/page text -- see
   // EpubReaderWordLookupActivity::onEnter().
   if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
@@ -66,6 +82,7 @@ void MangaWordLookupActivity::onEnter() {
 }
 
 void MangaWordLookupActivity::onExit() {
+  LOG_INF("MWLA", "onExit heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // Persist the current cursor position -- see EpubReaderWordLookupActivity::onExit().
   if (!scanCachePath.empty()) {
     scan.saveCache(scanCachePath, scanPage, scanPanel, static_cast<uint16_t>(cursorIndex));
@@ -177,7 +194,11 @@ void MangaWordLookupActivity::performLookupImpl() {
   }
 
   // Grammar scan
-  if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) && cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
+  // Nicety on top of the main result; skip under memory pressure instead of risking an
+  // allocation abort() -- see EpubReaderWordLookupActivity's grammar scan.
+  if (ESP.getMaxAllocHeap() < 16 * 1024) {
+    LOG_ERR("MWLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) && cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
     const size_t allStart = scan.selectToAllIdx[cursorIndex];
     int bestGramLen = 0;
     std::string bestGramHw, bestGramDef;
@@ -219,7 +240,17 @@ void MangaWordLookupActivity::performLookupImpl() {
     }
 
     if (bestGramLen > 0) {
-      resultDefinition += "\n\n— Grammar: " + bestGramHw + " —\n" + bestGramDef;
+      // Guarded reserve + appends instead of a temporary chain -- see the EPUB activity.
+      const size_t mergedLen = resultDefinition.size() + bestGramHw.size() + bestGramDef.size() + 32;
+      if (ESP.getMaxAllocHeap() > mergedLen + 8 * 1024) {
+        resultDefinition.reserve(mergedLen);
+        resultDefinition += "\n\n— Grammar: ";
+        resultDefinition += bestGramHw;
+        resultDefinition += " —\n";
+        resultDefinition += bestGramDef;
+      } else {
+        LOG_ERR("MWLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+      }
     }
   }
 
