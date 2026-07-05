@@ -28,7 +28,6 @@ MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedIn
 // A persisted scan for this exact text skips all scanning; otherwise start progressively.
 void MangaWordLookupActivity::initScanFromCacheOrBurst() {
   if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanPage, scanPanel)) {
-    scanCacheSaved = true;  // already on disk
     return;
   }
   runInitialBurst();
@@ -48,6 +47,15 @@ void MangaWordLookupActivity::runInitialBurst() {
 
 void MangaWordLookupActivity::onEnter() {
   Activity::onEnter();
+  // A scan-cache hit remembers the last cursor position for this exact panel/page text -- see
+  // EpubReaderWordLookupActivity::onEnter().
+  if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
+      scan.restoredCursorIndex < scan.selectableGlyphs.size()) {
+    cursorIndex = scan.restoredCursorIndex;
+    performLookup();
+    requestUpdate();
+    return;
+  }
   const int maxIdx = static_cast<int>(scan.selectableGlyphs.size()) - 1;
   for (cursorIndex = 0; cursorIndex <= maxIdx; cursorIndex++) {
     performLookup();
@@ -58,6 +66,10 @@ void MangaWordLookupActivity::onEnter() {
 }
 
 void MangaWordLookupActivity::onExit() {
+  // Persist the current cursor position -- see EpubReaderWordLookupActivity::onExit().
+  if (!scanCachePath.empty()) {
+    scan.saveCache(scanCachePath, scanPage, scanPanel, static_cast<uint16_t>(cursorIndex));
+  }
   // Return the dictionary cache memory (~30KB) to the pool -- see EpubReaderWordLookupActivity.
   DictIndex::releaseCaches();
   Activity::onExit();
@@ -79,9 +91,16 @@ void MangaWordLookupActivity::moveCursor(int delta) {
   // EpubReaderWordLookupActivity::moveCursor(): the previous retry-skip loop re-validated via a
   // fresh performLookup() and kept advancing past any position that didn't independently agree,
   // silently skipping entries ("every second entry is skipped" during navigation).
-  cursorIndex += delta;
-  if (cursorIndex < 0) cursorIndex = 0;
-  if (cursorIndex > maxIdx) cursorIndex = maxIdx;
+  int newIndex = cursorIndex + delta;
+  if (scan.isDone()) {
+    // Full text mapped -- cycle past the ends instead of dead-ending (see EPUB activity).
+    if (newIndex < 0) newIndex = maxIdx;
+    else if (newIndex > maxIdx) newIndex = 0;
+  } else {
+    if (newIndex < 0) newIndex = 0;
+    if (newIndex > maxIdx) newIndex = maxIdx;
+  }
+  cursorIndex = newIndex;
   performLookup();
 }
 
@@ -242,11 +261,6 @@ void MangaWordLookupActivity::loop() {
       DictIndex::logAndResetStats("progressive scan complete");
       requestUpdate();
     }
-  } else if (!scanCacheSaved) {
-    if (!scanCachePath.empty()) {
-      scan.saveCache(scanCachePath, scanPage, scanPanel);
-    }
-    scanCacheSaved = true;
   }
 }
 

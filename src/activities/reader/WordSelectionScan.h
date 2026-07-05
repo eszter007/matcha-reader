@@ -47,11 +47,19 @@ class WordSelectionScan {
 
   // Single-slot per-book result cache: the completed selectable map for ONE (spine, page),
   // self-validated by a hash of allGlyphs (so a section rebuild with different layout/content
-  // invalidates it) and the main dictionary's file size (so a dictionary swap does too).
+  // invalidates it) and the main dictionary's file size (so a dictionary swap does too). Also
+  // carries the cursor position the user was last at, so re-opening the same page resumes where
+  // they left off instead of restarting at the first word.
   // tryLoadCache: call after initFrom*(); on a hit fills the selectable map and marks the scan
-  // Done -- the multi-second page scan is skipped entirely. saveCache: call once when isDone().
+  // Done -- the multi-second page scan is skipped entirely -- and sets restoredCursorIndex.
+  // saveCache: call once isDone(), with the cursor position to remember for next time.
   bool tryLoadCache(const std::string& path, uint16_t spineIndex, uint16_t pageIndex);
-  bool saveCache(const std::string& path, uint16_t spineIndex, uint16_t pageIndex) const;
+  bool saveCache(const std::string& path, uint16_t spineIndex, uint16_t pageIndex, uint16_t cursorIndex) const;
+
+  // Set by a successful tryLoadCache() to the cursor position at last exit; kNoRestoredCursor
+  // (the reset() default) means no cache hit occurred, so the caller should start at word one.
+  static constexpr uint16_t kNoRestoredCursor = 0xFFFF;
+  uint16_t restoredCursorIndex = kNoRestoredCursor;
 
   std::vector<GlyphRef> allGlyphs;          // Full glyph list for building lookup text
   std::vector<GlyphRef> selectableGlyphs;   // Positions with a dictionary match

@@ -46,7 +46,6 @@ class MangaWordLookupActivity final : public Activity {
   std::string scanCachePath;
   uint16_t scanPage = 0;
   uint16_t scanPanel = 0;
-  bool scanCacheSaved = false;
 
   void initScanFromCacheOrBurst();
   void runInitialBurst();

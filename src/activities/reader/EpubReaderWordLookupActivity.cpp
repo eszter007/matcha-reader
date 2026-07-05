@@ -40,7 +40,6 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
 // A persisted scan for this exact page skips all scanning; otherwise start progressively.
 void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
   if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanSpine, scanPage)) {
-    scanCacheSaved = true;  // already on disk
     return;
   }
   runInitialBurst(label);
@@ -61,6 +60,15 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
 
 void EpubReaderWordLookupActivity::onEnter() {
   Activity::onEnter();
+  // A scan-cache hit remembers the position the user was last at on this exact page -- resume
+  // there instead of making them click back through every entry they've already seen.
+  if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
+      scan.restoredCursorIndex < scan.selectableGlyphs.size()) {
+    cursorIndex = scan.restoredCursorIndex;
+    performLookup();
+    requestUpdate();
+    return;
+  }
   // Find first position with a match
   const int maxIdx = static_cast<int>(scan.selectableGlyphs.size()) - 1;
   for (cursorIndex = 0; cursorIndex <= maxIdx; cursorIndex++) {
@@ -72,6 +80,11 @@ void EpubReaderWordLookupActivity::onEnter() {
 }
 
 void EpubReaderWordLookupActivity::onExit() {
+  // Persist the current cursor position (a no-op if the scan never finished, or the cache path
+  // is unset) so the next open of this exact page resumes here instead of at word one.
+  if (!scanCachePath.empty()) {
+    scan.saveCache(scanCachePath, scanSpine, scanPage, static_cast<uint16_t>(cursorIndex));
+  }
   // Return the dictionary cache memory (~30KB) to the pool -- the reader needs it for heavy
   // operations like re-pagination (zip inflate wants one contiguous 32KB block).
   DictIndex::releaseCaches();
@@ -96,9 +109,19 @@ void EpubReaderWordLookupActivity::moveCursor(int delta) {
   // performLookup() and kept advancing past any position where that didn't independently agree
   // with the scan, silently skipping entries end-users could never reach -- confirmed on a real
   // device as "every second entry is skipped" during navigation (1, 3, 5, 7, ...).
-  cursorIndex += delta;
-  if (cursorIndex < 0) cursorIndex = 0;
-  if (cursorIndex > maxIdx) cursorIndex = maxIdx;
+  int newIndex = cursorIndex + delta;
+  if (scan.isDone()) {
+    // The full page is mapped, so "the end" is real -- cycle past it instead of dead-ending,
+    // matching how e-reader dictionaries commonly let you loop through a page's word list.
+    if (newIndex < 0) newIndex = maxIdx;
+    else if (newIndex > maxIdx) newIndex = 0;
+  } else {
+    // Background scan still running: "the end" isn't final yet, so clamp instead of cycling --
+    // wrapping to word one here would be surprising and skip words not yet discovered.
+    if (newIndex < 0) newIndex = 0;
+    if (newIndex > maxIdx) newIndex = maxIdx;
+  }
+  cursorIndex = newIndex;
   performLookup();
 }
 
@@ -312,13 +335,6 @@ void EpubReaderWordLookupActivity::loop() {
       DictIndex::logAndResetStats("progressive scan complete");
       requestUpdate();  // redraw the position counter with the final total
     }
-  } else if (!scanCacheSaved) {
-    // Persist the completed scan (regardless of which path finished it) so re-opening Word
-    // Lookup on this page -- the common flow -- skips the scan entirely next time.
-    if (!scanCachePath.empty()) {
-      scan.saveCache(scanCachePath, scanSpine, scanPage);
-    }
-    scanCacheSaved = true;
   }
 }
 

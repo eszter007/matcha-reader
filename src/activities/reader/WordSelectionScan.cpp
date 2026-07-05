@@ -172,6 +172,7 @@ void WordSelectionScan::reset() {
   phase = Phase::Scan;
   scanPos = 0;
   skipUntil = 0;
+  restoredCursorIndex = kNoRestoredCursor;
 }
 
 void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
@@ -283,7 +284,7 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 }
 
 namespace {
-constexpr uint32_t WLSCAN_MAGIC = 0x31534C57;  // "WLS1"
+constexpr uint32_t WLSCAN_MAGIC = 0x32534C57;  // "WLS2" -- bumped for the added lastCursor field
 
 // Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
 // scans (segmentation depends on the dictionary). File size is not a perfect identity, but any
@@ -325,6 +326,7 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
     uint32_t glyphHash;
     uint32_t dictSize;
     uint16_t count;
+    uint16_t lastCursor;
   } __attribute__((packed)) hdr;
   if (f.read(reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr)) != static_cast<int>(sizeof(hdr))) return false;
   if (hdr.magic != WLSCAN_MAGIC || hdr.spine != spineIndex || hdr.page != pageIndex) return false;
@@ -351,11 +353,14 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
     selectToAllIdx.push_back(idx);
   }
   phase = Phase::Done;
-  LOG_INF("WLS", "Scan cache hit for spine=%u page=%u (%u selectable)", spineIndex, pageIndex, hdr.count);
+  restoredCursorIndex = hdr.lastCursor < hdr.count ? hdr.lastCursor : kNoRestoredCursor;
+  LOG_INF("WLS", "Scan cache hit for spine=%u page=%u (%u selectable, cursor=%u)", spineIndex, pageIndex, hdr.count,
+          restoredCursorIndex);
   return true;
 }
 
-bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex) const {
+bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex,
+                                  const uint16_t cursorIndex) const {
   if (!isDone()) return false;
   HalFile f;
   if (!Storage.openFileForWrite("WLS", path, f)) return false;
@@ -367,6 +372,7 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
     uint32_t glyphHash;
     uint32_t dictSize;
     uint16_t count;
+    uint16_t lastCursor;
   } __attribute__((packed)) hdr;
   hdr.magic = WLSCAN_MAGIC;
   hdr.spine = spineIndex;
@@ -374,6 +380,7 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
   hdr.glyphHash = glyphContentHash();
   hdr.dictSize = dictFingerprint();
   hdr.count = static_cast<uint16_t>(selectToAllIdx.size());
+  hdr.lastCursor = cursorIndex < hdr.count ? cursorIndex : 0;
   f.write(reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
   for (const size_t idx : selectToAllIdx) {
     const uint32_t v = static_cast<uint32_t>(idx);
