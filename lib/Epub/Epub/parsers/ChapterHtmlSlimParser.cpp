@@ -803,6 +803,27 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       entry.depth = self->depth;
       entry.hasUnderline = true;
       entry.underline = true;
+      // Carry the link's own resolved CSS bits too: footnote references are typically made
+      // superscript via a class on the <a> itself (.apnb { vertical-align: 70% }) -- the early
+      // return below otherwise skips the generic inline-CSS path entirely and the reference
+      // rendered as a full-size digit on the baseline.
+      if (cssStyle.hasVerticalAlign()) {
+        if (cssStyle.verticalAlign == CssVerticalAlign::Super) {
+          entry.hasSup = true;
+          entry.sup = true;
+        } else if (cssStyle.verticalAlign == CssVerticalAlign::Sub) {
+          entry.hasSub = true;
+          entry.sub = true;
+        }
+      }
+      if (cssStyle.hasFontWeight()) {
+        entry.hasBold = true;
+        entry.bold = cssStyle.fontWeight == CssFontWeight::Bold;
+      }
+      if (cssStyle.hasFontStyle()) {
+        entry.hasItalic = true;
+        entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
+      }
       applyDirectionToEntry(entry, cssStyle);
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -1449,6 +1470,9 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   auto footnoteIt = pendingFootnotes.begin();
   while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
     currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
+      sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), footnoteIt->second});
+    }
     ++footnoteIt;
   }
   pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
@@ -1496,6 +1520,9 @@ void ChapterHtmlSlimParser::makePages() {
   if (!pendingFootnotes.empty() && currentPage) {
     for (const auto& [idx, fn] : pendingFootnotes) {
       currentPage->addFootnote(fn.number, fn.href);
+      if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
+        sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), fn});
+      }
     }
     pendingFootnotes.clear();
   }

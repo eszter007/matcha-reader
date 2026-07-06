@@ -377,7 +377,8 @@ void EpubReaderActivity::loop() {
       }
       startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
                                  renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
-                                 SETTINGS.orientation, !currentPageFootnotes.empty(), !cachedBookmarks.empty(),
+                                 SETTINGS.orientation, !sectionFootnotes.empty() || !currentPageFootnotes.empty(),
+                                 !cachedBookmarks.empty(),
                                  hasWordLookup, showVerticalToggle, useVerticalText(), useFurigana(), hasPageText),
                              [this](const ActivityResult& result) {
                                const auto& menu = std::get<MenuResult>(result.data);
@@ -454,19 +455,7 @@ void EpubReaderActivity::loop() {
     if (footnoteDepth > 0) {
       restoreSavedPosition();
     } else {
-      if (currentPageFootnotes.size() == 1) {
-        navigateToHref(currentPageFootnotes[0].href, true);
-      } else if (currentPageFootnotes.size() > 1) {
-        startActivityForResult(
-            std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
-            [this](const ActivityResult& result) {
-              if (!result.isCancelled) {
-                const auto& footnoteResult = std::get<FootnoteResult>(result.data);
-                navigateToHref(footnoteResult.href, true);
-              }
-              requestUpdate();
-            });
-      }
+      openFootnotesPanel();
     }
     return;
   }
@@ -651,14 +640,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::FOOTNOTES: {
-      startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
-                             [this](const ActivityResult& result) {
-                               if (!result.isCancelled) {
-                                 const auto& footnoteResult = std::get<FootnoteResult>(result.data);
-                                 navigateToHref(footnoteResult.href, true);
-                               }
-                               requestUpdate();
-                             });
+      openFootnotesPanel();
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
@@ -1039,6 +1021,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!verticalSection) {
       LOG_DBG("ERS", "Loading vertical section, index: %d", currentSpineIndex);
       verticalSection = std::unique_ptr<VerticalSection>(new VerticalSection(epub, currentSpineIndex, renderer));
+      sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
       const int fontId = SETTINGS.getReaderFontId();
       if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight)) {
@@ -1274,6 +1257,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Cache found, skipping build...");
     }
 
+    section->loadSectionFootnotes(sectionFootnotes);
+    if (!sectionFootnotes.empty()) {
+      LOG_DBG("ERS", "Chapter footnotes: %u", static_cast<unsigned>(sectionFootnotes.size()));
+    }
+
     if (pendingPageJump.has_value()) {
       if (section->pageCount == 0) {
         section->currentPage = 0;
@@ -1364,6 +1352,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     // Collect footnotes from the loaded page
     currentPageFootnotes = std::move(p->footnotes);
+    if (!currentPageFootnotes.empty()) {
+      LOG_DBG("ERS", "Page footnotes: %u (first '%s')", static_cast<unsigned>(currentPageFootnotes.size()),
+              currentPageFootnotes[0].number);
+    }
 
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
@@ -1650,6 +1642,40 @@ void EpubReaderActivity::renderStatusBar() const {
   }
 
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked);
+}
+
+void EpubReaderActivity::openFootnotesPanel() {
+  // Prefer the chapter-wide list (section file v32+); fall back to the current page's own
+  // footnotes for sections built by older firmware. The panel opens at the footnote nearest
+  // the current page: the first one ON the page, else the most recently passed one.
+  footnotePanelEntries.clear();
+  int startIndex = 0;
+  if (!sectionFootnotes.empty()) {
+    const int curPage = section ? section->currentPage : 0;
+    int lastBefore = -1;
+    int onPage = -1;
+    footnotePanelEntries.reserve(sectionFootnotes.size());
+    for (size_t i = 0; i < sectionFootnotes.size(); i++) {
+      const auto& [pageIdx, fn] = sectionFootnotes[i];
+      if (onPage < 0 && pageIdx == curPage) onPage = static_cast<int>(i);
+      if (pageIdx < curPage) lastBefore = static_cast<int>(i);
+      footnotePanelEntries.push_back(fn);
+    }
+    startIndex = onPage >= 0 ? onPage : (lastBefore >= 0 ? lastBefore : 0);
+  } else if (!currentPageFootnotes.empty()) {
+    footnotePanelEntries = currentPageFootnotes;
+  }
+  if (footnotePanelEntries.empty()) return;
+
+  startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, footnotePanelEntries,
+                                                                       epub.get(), currentSpineIndex, startIndex),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled) {
+                             const auto& footnoteResult = std::get<FootnoteResult>(result.data);
+                             navigateToHref(footnoteResult.href, true);
+                           }
+                           requestUpdate();
+                         });
 }
 
 void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool savePosition) {

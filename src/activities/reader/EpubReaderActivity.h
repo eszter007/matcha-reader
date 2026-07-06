@@ -67,6 +67,12 @@ class EpubReaderActivity final : public Activity {
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
+  // Chapter-wide footnote list from the section file's footnote table (v32+): the panel shows
+  // ALL of the chapter's notes, opening at the one nearest the current page.
+  std::vector<std::pair<uint16_t, FootnoteEntry>> sectionFootnotes;
+  // Flattened entries handed to the footnote panel (must outlive the activity, which keeps a
+  // reference); rebuilt on each open.
+  std::vector<FootnoteEntry> footnotePanelEntries;
   struct SavedPosition {
     int spineIndex;
     int pageNumber;
@@ -95,6 +101,7 @@ class EpubReaderActivity final : public Activity {
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
+  void openFootnotesPanel();
   void restoreSavedPosition();
   bool useVerticalText() const;
   bool useFurigana() const;

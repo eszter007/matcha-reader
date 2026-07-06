@@ -16,7 +16,7 @@ namespace {
 // session confirmed is often large on this device, so CSS rules that were silently skipped while
 // this section was originally cached may now parse successfully, changing layout. Cached section
 // files built under the old guard must not be reused as-is.
-constexpr uint8_t SECTION_FILE_VERSION = 30;
+constexpr uint8_t SECTION_FILE_VERSION = 33;  // v33: superscript footnote refs + section-wide footnote table
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
@@ -307,6 +307,22 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     serialization::writePod(file, entry.listItemIndex);
   }
 
+  // Section-wide footnote table: every footnote reference in the chapter with the page it
+  // appears on, so the footnote panel can show the whole chapter's notes (not just the
+  // current page's). Located via its offset in the file's FINAL 4 bytes -- appending instead
+  // of widening the header keeps every HEADER_SIZE-relative seek untouched.
+  {
+    const uint32_t footnoteTableOffset = static_cast<uint32_t>(file.position());
+    const auto& sectionFootnotes = visitor.getSectionFootnotes();
+    serialization::writePod(file, static_cast<uint16_t>(sectionFootnotes.size()));
+    for (const auto& [pageIdx, fn] : sectionFootnotes) {
+      serialization::writePod(file, pageIdx);
+      file.write(reinterpret_cast<const uint8_t*>(fn.number), sizeof(fn.number));
+      file.write(reinterpret_cast<const uint8_t*>(fn.href), sizeof(fn.href));
+    }
+    serialization::writePod(file, footnoteTableOffset);
+  }
+
   // Patch header with final pageCount, lutOffset, anchorMapOffset, paragraphLutOffset, and liLutOffset
   file.seek(HEADER_SIZE - sizeof(uint32_t) * 4 - sizeof(pageCount));
   serialization::writePod(file, pageCount);
@@ -525,4 +541,36 @@ std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex)
   }
 
   return resultPage;
+}
+
+bool Section::loadSectionFootnotes(std::vector<std::pair<uint16_t, FootnoteEntry>>& out) {
+  out.clear();
+  HalFile f;
+  if (!Storage.openFileForRead("SCT", filePath, f)) return false;
+  const size_t fileSize = f.size();
+  if (fileSize < sizeof(uint32_t)) return false;
+  f.seek(fileSize - sizeof(uint32_t));
+  uint32_t tableOffset = 0;
+  serialization::readPod(f, tableOffset);
+  if (tableOffset == 0 || tableOffset >= fileSize - sizeof(uint32_t)) return false;
+  f.seek(tableOffset);
+  uint16_t count = 0;
+  serialization::readPod(f, count);
+  constexpr uint16_t MAX_ENTRIES = 128;  // mirrors the parser-side cap
+  if (count > MAX_ENTRIES) return false;
+  out.reserve(count);
+  for (uint16_t i = 0; i < count; i++) {
+    uint16_t pageIdx = 0;
+    FootnoteEntry fn;
+    serialization::readPod(f, pageIdx);
+    if (f.read(reinterpret_cast<uint8_t*>(fn.number), sizeof(fn.number)) != sizeof(fn.number) ||
+        f.read(reinterpret_cast<uint8_t*>(fn.href), sizeof(fn.href)) != sizeof(fn.href)) {
+      out.clear();
+      return false;
+    }
+    fn.number[sizeof(fn.number) - 1] = '\0';
+    fn.href[sizeof(fn.href) - 1] = '\0';
+    out.push_back({pageIdx, fn});
+  }
+  return true;
 }
