@@ -1938,8 +1938,12 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     const int closingBias = std::max(1, cellSize / 6 + extraNudge * 2);
     drawY = cellTopY + cellSize - rotatedH + closingBias;
   } else if (shiftType == 3) {   // opening bracket/quote
-    const int openingBias = std::max(1, (cellSize * 2) / 3 + extraNudge);
+    // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
+    // deep, the bracket read as hanging low/left of the character it opens (device photos with
+    // UDDigiKyokasho). The maxX clamp below already grants opening brackets right overhang.
+    const int openingBias = std::max(1, cellSize / 2 + extraNudge);
     drawY = cellTopY + cellSize + openingBias;
+    drawX += cellSize / 4;
   }
 
   int minX = cellLeftX;
