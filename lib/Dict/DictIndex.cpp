@@ -394,6 +394,19 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
 
+        // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions --
+        // confirmed by a real device crash_report with the heap run down mid-lookup-session.
+        // Skip entries that don't comfortably fit (the user gets a shorter definition instead
+        // of a reboot). The size sanity cap also rejects a corrupt/misread record length
+        // before it can become a huge allocation request.
+        constexpr uint32_t MAX_DEF_BYTES = 16 * 1024;
+        if (r.length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < r.length + 8 * 1024) {
+          LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(r.length),
+                  ESP.getMaxAllocHeap());
+          if (entries.empty()) continue;  // keep trying: a later sibling entry may be smaller
+          break;
+        }
+
         datFile.seek(r.offset);
         std::string def;
         def.resize(r.length);
@@ -418,10 +431,21 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       if (entries.size() == 1) {
         out.definition = std::move(entries[0].def);
       } else {
-        // Merge: show best entry, then separator + other entries
-        out.definition = entries[0].def;
-        for (size_t e = 1; e < entries.size(); e++) {
-          out.definition += "\n\n---\n" + entries[e].def;
+        // Merge: show best entry, then separator + other entries. One guarded reserve and
+        // plain appends -- the old `a + b` temporary chain doubled the peak allocation, and
+        // under a tight heap the merge is droppable (the best entry alone is still useful).
+        size_t mergedLen = 0;
+        for (const auto& en : entries) mergedLen += en.def.size() + 8;
+        if (ESP.getMaxAllocHeap() < mergedLen + 8 * 1024) {
+          LOG_ERR("DICT", "Skipping entry merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+          out.definition = std::move(entries[0].def);
+        } else {
+          out.definition.reserve(mergedLen);
+          out.definition = entries[0].def;
+          for (size_t e = 1; e < entries.size(); e++) {
+            out.definition += "\n\n---\n";
+            out.definition += entries[e].def;
+          }
         }
       }
       return true;
