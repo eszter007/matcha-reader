@@ -1451,7 +1451,14 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+  int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+
+  // Furigana renders ABOVE the line's ascender: without extra leading it overlaps the
+  // previous line's text (and clips at the page top -- the same headroom fixes both, since a
+  // fresh page starts at the padded offset too). Applied per ruby-carrying line at LAYOUT
+  // time so the section cache stays independent of the display-side furigana toggle.
+  const int rubyExtra = line->hasRuby() ? renderer.getFontAscenderSize(fontId) / 2 : 0;
+  lineHeight += rubyExtra;
 
   if (!currentPage) {
     currentPage.reset(new Page());
@@ -1479,7 +1486,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
 
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
-  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
+  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY + rubyExtra));
   currentPageNextY += lineHeight;
 }
 

@@ -30,6 +30,15 @@ class TextBlock final : public Block {
   BlockStyle blockStyle;
 
  public:
+  // True when any word on this line carries a furigana annotation -- layout gives such lines
+  // extra leading so the ruby doesn't invade the line above (or clip at the page top).
+  bool hasRuby() const {
+    for (const auto& r : wordRuby) {
+      if (!r.empty()) return true;
+    }
+    return false;
+  }
+
   explicit TextBlock(std::vector<std::string> words, std::vector<int16_t> word_xpos,
                      std::vector<EpdFontFamily::Style> word_styles, std::vector<uint8_t> focus_boundary,
                      std::vector<uint16_t> focus_suffix_x, const BlockStyle& blockStyle = BlockStyle(),
