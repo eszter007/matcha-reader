@@ -102,6 +102,7 @@ class EpubReaderActivity final : public Activity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
+  void openWordLookupPanel();
   // The font the book is actually laid out and rendered in. Normally the user's selection;
   // when that font can't carry the book's PRIMARY script (built-in or Latin font with a
   // Japanese book, CJK-only font with a Latin book), the loaded companion font substitutes so

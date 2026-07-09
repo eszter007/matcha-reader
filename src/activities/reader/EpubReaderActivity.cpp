@@ -469,6 +469,14 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Handle short power button press for word lookup
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
+      mappedInput.wasReleased(MappedInputManager::Button::Power) &&
+      !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+    openWordLookupPanel();
+    return;
+  }
+
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
     return;
@@ -733,27 +741,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {
-      // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
-      const std::string scanCachePath = epub->getCachePath() + "/wlscan.bin";
-      if (verticalSection) {
-        const VerticalPage* page = verticalSection->getPage();
-        if (page) {
-          startActivityForResult(
-              std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
-                                                             static_cast<uint16_t>(currentSpineIndex),
-                                                             static_cast<uint16_t>(verticalSection->currentPage)),
-              [this](const ActivityResult&) { requestUpdate(); });
-        }
-      } else if (section) {
-        auto page = section->loadPageFromSectionFile();
-        if (page) {
-          startActivityForResult(
-              std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
-                                                             static_cast<uint16_t>(currentSpineIndex),
-                                                             static_cast<uint16_t>(section->currentPage)),
-              [this](const ActivityResult&) { requestUpdate(); });
-        }
-      }
+      openWordLookupPanel();
       break;
     }
     case EpubReaderMenuActivity::MenuAction::TRANSLATE_PAGE: {
@@ -1664,6 +1652,31 @@ int EpubReaderActivity::effectiveReaderFontId() const {
     }
   }
   return SETTINGS.getReaderFontId();
+}
+
+void EpubReaderActivity::openWordLookupPanel() {
+  if (!epub || !DictIndex::isAvailable()) return;
+  // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
+  const std::string scanCachePath = epub->getCachePath() + "/wlscan.bin";
+  if (verticalSection) {
+    const VerticalPage* page = verticalSection->getPage();
+    if (page) {
+      startActivityForResult(
+          std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
+                                                         static_cast<uint16_t>(currentSpineIndex),
+                                                         static_cast<uint16_t>(verticalSection->currentPage)),
+          [this](const ActivityResult&) { requestUpdate(); });
+    }
+  } else if (section) {
+    auto page = section->loadPageFromSectionFile();
+    if (page) {
+      startActivityForResult(
+          std::make_unique<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
+                                                         static_cast<uint16_t>(currentSpineIndex),
+                                                         static_cast<uint16_t>(section->currentPage)),
+          [this](const ActivityResult&) { requestUpdate(); });
+    }
+  }
 }
 
 void EpubReaderActivity::openFootnotesPanel() {

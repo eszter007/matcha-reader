@@ -254,6 +254,8 @@ The device needs WiFi access for translation. The emulator uses libcurl instead 
 
 The position counter (e.g. 10/35) appears in the header. Words are pre-scanned so you only land on positions with actual dictionary matches.
 
+For one-click access, set **Settings → Controls → Short power button click** to **Word Lookup** — a short press of the power button then opens Word Lookup directly from the reading page (EPUB and manga).
+
 ### Translation
 
 1. Reader menu → **Translate Page**
