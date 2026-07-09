@@ -1657,8 +1657,11 @@ int EpubReaderActivity::effectiveReaderFontId() const {
   const int companion = sdFontSystem.companionFontId();
   if (companion != 0) {
     const bool jpBook = isJapaneseBook() || useVerticalText();
-    if (jpBook && !sdFontSystem.selectedFontCovers(0x3042)) return companion;
-    if (!jpBook && !sdFontSystem.selectedFontCovers('a')) return companion;
+    const bool coversPrimary = sdFontSystem.selectedFontCovers(jpBook ? 0x3042 : 'a');
+    if (!coversPrimary) {
+      LOG_DBG("ERS", "Effective font: companion %d (jp=%d, selected lacks primary script)", companion, jpBook);
+      return companion;
+    }
   }
   return SETTINGS.getReaderFontId();
 }

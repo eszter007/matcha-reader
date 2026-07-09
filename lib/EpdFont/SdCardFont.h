@@ -233,6 +233,16 @@ class SdCardFont {
   // amortizes SD reads. Cleared only on font unload or clearPersistentCache().
   static constexpr uint32_t ADVANCE_CACHE_LIMIT = 768;
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
+  // Kana and kanji are drawn on the full em in CJK fonts: one measured advance covers the
+  // entire range, so layout never does per-kanji SD reads (a chapter has thousands of unique
+  // kanji vs one 18-byte read). 0 = not yet measured.
+  uint16_t fullWidthAdvance_[MAX_STYLES] = {};
+  static bool isUniformFullWidth(uint32_t cp) {
+    return (cp >= 0x3041 && cp <= 0x30FF)     // hiragana + katakana
+           || (cp >= 0x3400 && cp <= 0x4DBF)  // CJK ext A
+           || (cp >= 0x4E00 && cp <= 0x9FFF)  // CJK unified
+           || (cp >= 0xF900 && cp <= 0xFAFF); // CJK compat
+  }
   uint32_t advanceTableSize_[MAX_STYLES] = {};
   bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;
   // Merge sortedNew (sorted by codepoint, no overlap with existing) into the

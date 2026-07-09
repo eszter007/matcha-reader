@@ -250,6 +250,7 @@ void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
 
 void SdCardFontSystem::setJpFallbackNeeded(GfxRenderer& renderer, const bool needed) {
   if (jpFallbackNeeded_ == needed) return;
+  LOG_DBG("SDFS", "JP fallback needed: %d", needed);
   jpFallbackNeeded_ = needed;
   ensureJpFallback(renderer, fontSizeEnumFromSettings());
   updateGlobalFallback(renderer);

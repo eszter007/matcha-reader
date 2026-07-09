@@ -16,7 +16,7 @@ namespace {
 // session confirmed is often large on this device, so CSS rules that were silently skipped while
 // this section was originally cached may now parse successfully, changing layout. Cached section
 // files built under the old guard must not be reused as-is.
-constexpr uint8_t SECTION_FILE_VERSION = 36;  // v36: per-line furigana leading
+constexpr uint8_t SECTION_FILE_VERSION = 37;  // v37: synthesized space width (layouts built with zero-width spaces)
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
@@ -187,7 +187,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+    success = epub->readItemContentsToStream(localPath, tmpHtml, 4096);  // 4KB chunks: see VerticalSection PARSE_BUFFER_SIZE
     fileSize = tmpHtml.size();
     // Explicitly close() file before calling Storage.remove()
     tmpHtml.close();

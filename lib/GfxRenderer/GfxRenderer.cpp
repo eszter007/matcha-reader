@@ -1603,7 +1603,11 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   }
 
   const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
-  return spaceGlyph ? fp4::toPixel(spaceGlyph->advanceX) : 0;  // snap 12.4 fixed-point to nearest pixel
+  if (spaceGlyph && spaceGlyph->advanceX != 0) return fp4::toPixel(spaceGlyph->advanceX);
+  // No usable space glyph anywhere in the chain (some cpfonts ship without one, and without a
+  // replacement glyph the advance table can't stage it either): synthesize the typographic
+  // default of ~1/4 em rather than collapsing every word gap to zero.
+  return std::max(2, getLineHeight(fontId) / 4);
 }
 
 int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
@@ -1623,7 +1627,11 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   if (fontIt == fontMap.end()) return 0;
   const auto& font = fontIt->second;
   const EpdGlyph* spaceGlyph = font.getGlyph(' ', style);
-  const int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
+  int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
+  if (spaceAdvanceFP == 0) {
+    // Synthesized ~1/4 em space -- see getSpaceWidth. (12.4 fixed-point: px << 4.)
+    return std::max(2, getLineHeight(fontId) / 4);
+  }
   // Combine space advance + flanking kern into one fixed-point sum before snapping.
   // Snapping the combined value avoids the +/-1 px error from snapping each component separately.
   const int32_t kernFP = static_cast<int32_t>(font.getKerning(leftCp, ' ', style)) +

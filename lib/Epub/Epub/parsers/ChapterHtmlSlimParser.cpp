@@ -20,7 +20,7 @@
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
-constexpr size_t PARSE_BUFFER_SIZE = 1024;
+constexpr size_t PARSE_BUFFER_SIZE = 4096;  // 4KB: SD reads are latency-bound (see VerticalSection)
 
 // Hard cap on the number of anchor IDs recorded per chapter. Legitimate navigation
 // anchors (TOC entries, footnotes, cross-references) rarely exceed a few hundred per
@@ -1353,6 +1353,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 }
 
 bool ChapterHtmlSlimParser::parseAndBuildPages() {
+  const uint32_t buildStartMs = millis();
+  struct BuildTimer {
+    uint32_t start;
+    ~BuildTimer() { LOG_INF("EHP", "parseAndBuildPages: %u ms", millis() - start); }
+  } buildTimer{buildStartMs};
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
   // text-align inherit it correctly through getCombinedBlockStyle.
