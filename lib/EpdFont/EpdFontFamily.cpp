@@ -45,6 +45,21 @@ const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) co
   return f->getGlyph(cp);
 }
 
+const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style style) const {
+  const EpdFont* f = getFont(style);
+  if (f->hasGlyph(cp)) return f->getGlyph(cp);
+  if (fallbackFamily) {
+    const EpdFont* fbFont = fallbackFamily->getFont(style);
+    if (fbFont->hasGlyph(cp)) return fbFont->getGlyph(cp);
+  }
+  if (globalFallback_ && globalFallback_ != this && globalFallback_ != fallbackFamily) {
+    const EpdFont* gf = globalFallback_->getFont(style);
+    if (gf->hasGlyph(cp)) return gf->getGlyph(cp);
+    // Deliberately NO glyphMissHandler here.
+  }
+  return nullptr;
+}
+
 const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style) const {
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->data;

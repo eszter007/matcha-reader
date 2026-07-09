@@ -8,8 +8,6 @@ class GfxRenderer;
 class SdCardFont;
 struct SdCardFontFamilyInfo;
 
-class EpdFontFamily;
-
 class SdCardFontManager {
  public:
   SdCardFontManager() = default;
@@ -34,16 +32,14 @@ class SdCardFontManager {
   // Get name of currently loaded family (empty if none).
   const std::string& currentFamilyName() const { return loadedFamilyName_; };
 
+  // The loaded SdCardFont object (nullptr when nothing loaded) -- for coverage queries.
+  SdCardFont* loadedFont() const { return loaded_.empty() ? nullptr : loaded_.front().font; }
+
   // Point size that was actually loaded.
   // 0 if nothing loaded.
   uint8_t currentPointSize() const { return loadedPointSize_; };
 
  private:
-  // Global-fallback override bookkeeping (see loadFamily): saved so unloadAll() can restore
-  // the built-in jōyō-subset fallback when the SD font goes away.
-  const EpdFontFamily* prevGlobalFallback_ = nullptr;
-  bool globalFallbackOverridden_ = false;
-
   struct LoadedFont {
     SdCardFont* font;  // heap-allocated, owned
     int fontId;

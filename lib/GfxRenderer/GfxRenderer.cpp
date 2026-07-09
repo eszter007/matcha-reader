@@ -1588,7 +1588,12 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    int32_t advFP = sdIt->second->getAdvance(' ', resolvedStyle);
+    // A CJK-only SD font (UDDigiKyokasho) has no space glyph: 0 here collapsed every word gap
+    // and Latin text rendered overlapping. The companion's advance table supplies the space
+    // without any SD I/O.
+    if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
+    if (advFP != 0) return fp4::toPixel(advFP);
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -1609,7 +1614,9 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    int32_t advFP = sdIt->second->getAdvance(' ', resolvedStyle);
+    if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
+    if (advFP != 0) return fp4::toPixel(advFP);  // 0 = no space glyph anywhere: fallback chain below
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -1650,8 +1657,14 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
       if (advFP == 0 && !utf8IsCombiningMark(cp)) {
-        const EpdGlyph* glyph = font.getGlyph(cp, style);
-        advFP = glyph ? glyph->advanceX : 0;
+        // Missing from the selected SD font: price it from the companion's advance table
+        // (resident RAM), else any already-resident fallback glyph -- never the on-demand SD
+        // loader, which costs a seek+read per glyph and cripples indexing.
+        if (fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(cp, styleIdx);
+        if (advFP == 0) {
+          const EpdGlyph* glyph = font.getGlyphResident(cp, style);
+          advFP = glyph ? glyph->advanceX : 0;
+        }
       }
       widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
     }
@@ -1682,8 +1695,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       widthPx += fp4::toPixel(prevAdvanceFP + kernFP);         // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    const EpdGlyph* glyph = font.getGlyphResident(cp, style);
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if (prevAdvanceFP == 0 && fallbackSdFont_) {
+      // Not resident anywhere: companion SD font's advance table (RAM), never the on-demand
+      // glyph loader -- measurement must not do per-glyph SD reads (indexing speed).
+      prevAdvanceFP = fallbackSdFont_->getAdvance(cp, 0);
+    }
     if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
     }

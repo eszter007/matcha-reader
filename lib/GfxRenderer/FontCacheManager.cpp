@@ -1,5 +1,9 @@
 #include "FontCacheManager.h"
 
+#include <Utf8.h>
+
+#include <string>
+
 #include <FontDecompressor.h>
 #include <Logging.h>
 #include <SdCardFont.h>
@@ -24,6 +28,26 @@ void FontCacheManager::releaseAllFontMemory() {
   if (fontDecompressor_) fontDecompressor_->freeGlyphSlab();
 }
 
+namespace {
+void appendUtf8(std::string& out, const uint32_t cp) {
+  if (cp < 0x80) {
+    out.push_back(static_cast<char>(cp));
+  } else if (cp < 0x800) {
+    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else if (cp < 0x10000) {
+    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else {
+    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  }
+}
+}  // namespace
+
 void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
@@ -31,6 +55,18 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
     int missed = it->second->prewarm(utf8Text, styleMask);
     if (missed > 0) {
       LOG_DBG("FCM", "prewarmCache(SD): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
+      // Warm the companion with exactly the codepoints this font lacks (a CJK-only reader
+      // font showing Latin text, or vice versa) -- otherwise every one of them is loaded
+      // through the on-demand SD miss handler again on EVERY page render.
+      if (fallbackSdFont_ && fallbackSdFont_ != it->second) {
+        std::string missing;
+        const auto* p = reinterpret_cast<const unsigned char*>(utf8Text);
+        uint32_t cp;
+        while ((cp = utf8NextCodepoint(&p)) != 0) {
+          if (!it->second->coversCodepoint(cp)) appendUtf8(missing, cp);
+        }
+        if (!missing.empty()) fallbackSdFont_->prewarm(missing.c_str(), styleMask);
+      }
     }
     return;
   }
@@ -55,6 +91,19 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
         fontDecompressor_->prewarmCache(fbData, utf8Text);
       }
     }
+  }
+
+  // Codepoints no built-in font in the chain covers (e.g. every kanji when the reader font is
+  // built-in and the JP companion provides the glyphs): warm the companion SD font once here
+  // instead of per-glyph on-demand loads on every page render.
+  if (fallbackSdFont_) {
+    std::string missing;
+    const auto* p = reinterpret_cast<const unsigned char*>(utf8Text);
+    uint32_t cp;
+    while ((cp = utf8NextCodepoint(&p)) != 0) {
+      if (!family.getGlyphResident(cp)) appendUtf8(missing, cp);
+    }
+    if (!missing.empty()) fallbackSdFont_->prewarm(missing.c_str(), styleMask);
   }
 }
 

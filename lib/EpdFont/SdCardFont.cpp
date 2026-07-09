@@ -638,6 +638,11 @@ bool SdCardFont::load(const char* path) {
 
 // --- Codepoint lookup ---
 
+bool SdCardFont::coversCodepoint(const uint32_t cp, const uint8_t styleId) const {
+  if (styleId >= MAX_STYLES || !styles_[styleId].present) return false;
+  return findGlobalGlyphIndex(styles_[styleId], cp) >= 0;
+}
+
 int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const {
   int left = 0;
   int right = static_cast<int>(s.header.intervalCount) - 1;

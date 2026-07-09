@@ -102,6 +102,12 @@ class EpubReaderActivity final : public Activity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
+  // The font the book is actually laid out and rendered in. Normally the user's selection;
+  // when that font can't carry the book's PRIMARY script (built-in or Latin font with a
+  // Japanese book, CJK-only font with a Latin book), the loaded companion font substitutes so
+  // measurement and the vertical engine's font-adaptive positioning all derive from one font
+  // that really contains the glyphs -- per-glyph fallback stays only for rare stragglers.
+  int effectiveReaderFontId() const;
   void restoreSavedPosition();
   bool useVerticalText() const;
   bool useFurigana() const;

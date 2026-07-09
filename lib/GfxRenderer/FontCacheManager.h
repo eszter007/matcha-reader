@@ -27,6 +27,11 @@ class FontCacheManager {
   // a separate, much more limited concurrent-prewarm-buffer budget -- see prewarmCache() callers
   // that need to avoid competing with normal rendering's own use of that path).
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
+
+  // Companion/fallback SD font (nullptr when none): prewarmCache() warms it with the
+  // codepoints the requested font can't cover, so rendering fallback glyphs doesn't hit the
+  // per-glyph on-demand SD loader on every page turn.
+  void setFallbackSdFont(SdCardFont* font) { fallbackSdFont_ = font; }
   void logStats(const char* label = "render");
   void resetStats();
 
@@ -55,6 +60,7 @@ class FontCacheManager {
   PrewarmScope createPrewarmScope();
 
  private:
+  SdCardFont* fallbackSdFont_ = nullptr;
   const std::map<int, EpdFontFamily>& fontMap_;
   const std::map<int, SdCardFont*>& sdCardFonts_;
   FontDecompressor* fontDecompressor_ = nullptr;

@@ -16,7 +16,7 @@ namespace {
 // session confirmed is often large on this device, so CSS rules that were silently skipped while
 // this section was originally cached may now parse successfully, changing layout. Cached section
 // files built under the old guard must not be reused as-is.
-constexpr uint8_t SECTION_FILE_VERSION = 33;  // v33: superscript footnote refs + section-wide footnote table
+constexpr uint8_t SECTION_FILE_VERSION = 35;  // v35: space-advance fallback for CJK-only SD fonts (layouts built with collapsed word gaps)
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +

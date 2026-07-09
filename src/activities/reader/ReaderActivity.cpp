@@ -120,12 +120,14 @@ void ReaderActivity::onGoToBmpViewer(const std::string& path) {
 }
 
 void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
+  sdFontSystem.setJpFallbackNeeded(renderer, false);
   const auto xtcPath = xtc->getPath();
   currentBookPath = xtcPath;
   activityManager.replaceActivity(std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc)));
 }
 
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
+  sdFontSystem.setJpFallbackNeeded(renderer, false);
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
   activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
@@ -143,6 +145,8 @@ void ReaderActivity::onEnter() {
 
   currentBookPath = initialBookPath;
   if (isMangaFolder(initialBookPath)) {
+    // Manga is Japanese content (OCR text overlays, lookup): needs the JP fallback font.
+    sdFontSystem.setJpFallbackNeeded(renderer, true);
     auto manga = loadManga(initialBookPath);
     if (!manga) {
       onGoBack();

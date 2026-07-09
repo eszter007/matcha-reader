@@ -242,6 +242,16 @@ families:
       regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"}
       bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"}
 
+  - name: NotoSerifJP
+    description: "Japanese serif, full JIS coverage (CJK, Latin)"
+    # Serif counterpart to NotoSansJP: auto-hidden from font pickers and used as the Japanese
+    # glyph fallback (see SdCardFontSystem::isBuiltinJpExtension).
+    intervals: latin-ext,cjk-ext
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/Japanese/NotoSerifCJKjp-Regular.otf"}
+      bold:       {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/Japanese/NotoSerifCJKjp-Bold.otf"}
+
   - name: UDDigiKyokasho
     description: "Japanese textbook font (CJK, Latin)"
     # Was "all" -- that preset auto-discovers EVERY glyph present in the source TTF and builds one

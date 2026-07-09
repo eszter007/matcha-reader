@@ -1,5 +1,7 @@
 #include "EpubReaderActivity.h"
 
+#include "SdCardFontSystem.h"
+
 #include <DictIndex.h>
 #include <Epub/Page.h>
 #include <Epub/PageTextExtractor.h>
@@ -206,6 +208,10 @@ void EpubReaderActivity::onEnter() {
     }
   }
 
+  // Japanese books (or forced vertical text) need the proper-size JP fallback font; plain
+  // Latin books must not pay its SD load / RAM (user-reported).
+  sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+
   // Save current epub as last opened epub and add to recent books
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
@@ -388,6 +394,9 @@ void EpubReaderActivity::loop() {
                                  verticalOverride = menu.verticalOverride;
                                  section.reset();
                                  verticalSection.reset();
+                                 // Forcing vertical text on a non-ja book is the same signal
+                                 // isJapaneseBook() covers at open: JP fallback follows it.
+                                 sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
                                }
                                if (menu.furiganaOverride >= 0 && menu.furiganaOverride != (useFurigana() ? 1 : 0)) {
                                  furiganaOverride = menu.furiganaOverride;
@@ -1023,7 +1032,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       verticalSection = std::unique_ptr<VerticalSection>(new VerticalSection(epub, currentSpineIndex, renderer));
       sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
-      const int fontId = SETTINGS.getReaderFontId();
+      const int fontId = effectiveReaderFontId();
       if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
         GUI.drawPopup(renderer, tr(STR_INDEXING));
@@ -1177,14 +1186,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           for (const auto& g : vpage->glyphs) styleMask |= static_cast<uint8_t>(1u << (g.style & 0x03));
           if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
           const std::string pageText = PageTextExtractor::fromVerticalPage(*vpage);
-          fcm->prewarmCache(SETTINGS.getReaderFontId(), pageText.c_str(), styleMask);
+          fcm->prewarmCache(effectiveReaderFontId(), pageText.c_str(), styleMask);
         }
         VerticalTextBlock block(*vpage);
         if (useFurigana()) {
-          block.render(renderer, SETTINGS.getReaderFontId(), SETTINGS.getRubyFontId(), orientedMarginLeft,
+          block.render(renderer, effectiveReaderFontId(), SETTINGS.getRubyFontId(), orientedMarginLeft,
                        orientedMarginTop, true);
         } else {
-          block.render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop, true);
+          block.render(renderer, effectiveReaderFontId(), orientedMarginLeft, orientedMarginTop, true);
         }
       }
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
@@ -1225,7 +1234,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
 
-    if (!section->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+    if (!section->loadSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                   viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                   SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
@@ -1243,7 +1252,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         fcm->releaseAllFontMemory();
       }
 
-      if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+      if (!section->createSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                       SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, popupFn)) {
@@ -1385,7 +1394,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
 
     VerticalSection nextVSection(epub, nextSpineIndex, renderer);
-    const int fontId = SETTINGS.getReaderFontId();
+    const int fontId = effectiveReaderFontId();
     if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight)) return;
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d", nextSpineIndex);
@@ -1410,7 +1419,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   }
 
   Section nextSection(epub, nextSpineIndex, renderer);
-  if (nextSection.loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+  if (nextSection.loadSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                   viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                   SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
@@ -1418,7 +1427,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   }
 
   LOG_DBG("ERS", "Silently indexing next chapter: %d", nextSpineIndex);
-  if (!nextSection.createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+  if (!nextSection.createSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                      SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
@@ -1434,7 +1443,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginRight, const int orientedMarginBottom,
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
-  const int fontId = SETTINGS.getReaderFontId();
+  const int fontId = effectiveReaderFontId();
 
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   auto* fcm = renderer.getFontCacheManager();
@@ -1642,6 +1651,16 @@ void EpubReaderActivity::renderStatusBar() const {
   }
 
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked);
+}
+
+int EpubReaderActivity::effectiveReaderFontId() const {
+  const int companion = sdFontSystem.companionFontId();
+  if (companion != 0) {
+    const bool jpBook = isJapaneseBook() || useVerticalText();
+    if (jpBook && !sdFontSystem.selectedFontCovers(0x3042)) return companion;
+    if (!jpBook && !sdFontSystem.selectedFontCovers('a')) return companion;
+  }
+  return SETTINGS.getReaderFontId();
 }
 
 void EpubReaderActivity::openFootnotesPanel() {

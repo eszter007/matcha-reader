@@ -58,11 +58,23 @@ void FontSelectionActivity::onEnter() {
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
+      // CJK extension families (NotoSansJP) aren't listed: they serve automatically as the
+      // Japanese glyph fallback for whichever font is selected (see SdCardFontSystem).
+      if (SdCardFontSystem::isBuiltinJpExtension(families[i].name)) continue;
       fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
     }
   }
 
-  selectedIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+  // Map the current selection to its LIST position (settingIndex keeps the true registry
+  // index, so with hidden entries position and value no longer coincide).
+  const int currentValue = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+  selectedIndex_ = 0;
+  for (int i = 0; i < static_cast<int>(fonts_.size()); i++) {
+    if (fonts_[i].settingIndex == currentValue) {
+      selectedIndex_ = i;
+      break;
+    }
+  }
   previewFontIndex_ = selectedIndex_;
 
   requestUpdate();
