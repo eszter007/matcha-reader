@@ -117,6 +117,8 @@ class RecentBooksActivity final : public Activity {
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   void applyLibraryScan();
+  void finishLibraryScan();
+  uint32_t lastInputMs = 0;  // idle gate for the heavy thumb/indexing slices
   void scanOneDirectory(const std::string& dirPath);
   // Progress percentages fill progressively from loop() (PROGRESS_PENDING sentinel) instead of
   // ~5 file reads per book up front.

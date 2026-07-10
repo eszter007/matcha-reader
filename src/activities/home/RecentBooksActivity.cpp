@@ -193,6 +193,19 @@ bool RecentBooksActivity::stepLibraryScan() {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
       const auto& title = epub.getTitle();
       if (!title.empty()) book.title = title;
+      // Surface the new cover immediately (the list was already applied after the walk).
+      {
+        RenderLock lock;
+        for (auto& live : recentBooks) {
+          if (live.path == book.path) {
+            live.coverBmpPath = book.coverBmpPath;
+            if (!title.empty()) live.title = book.title;
+            lastRendered.valid = false;
+            break;
+          }
+        }
+      }
+      requestUpdate();
     }
     scan_.thumbIndex++;
     return false;  // thumb generation is the heavy step: one per slice
@@ -344,10 +357,6 @@ void RecentBooksActivity::applyLibraryScan() {
     }
   }
 
-  RecentBooksStore cache;
-  cache.setBooks(scan_.results);
-  JsonSettingsIO::saveRecentBooks(cache, LIBRARY_CACHE_JSON);
-
   if (changed) {
     RenderLock lock;  // the render task reads these lists concurrently
     recentBooks = std::move(fresh);
@@ -356,9 +365,17 @@ void RecentBooksActivity::applyLibraryScan() {
     lastRendered.valid = false;
     LOG_DBG("RBA", "Library scan applied: %u books", static_cast<unsigned>(recentBooks.size()));
   }
+  // scan_.results stays alive: the idle-time thumb pass still iterates it, and the cache is
+  // persisted (with the covers it generates) in finishLibraryScan().
+  if (changed) requestUpdate();
+}
+
+void RecentBooksActivity::finishLibraryScan() {
+  RecentBooksStore cache;
+  cache.setBooks(scan_.results);
+  JsonSettingsIO::saveRecentBooks(cache, LIBRARY_CACHE_JSON);
   scan_.results.clear();
   scan_.results.shrink_to_fit();
-  if (changed) requestUpdate();
 }
 
 void RecentBooksActivity::loadBookProgress() {
@@ -793,8 +810,18 @@ void RecentBooksActivity::loop() {
 
   // Background work, one slice per tick: re-scan the card (stale-while-revalidate) and fill
   // pending progress percentages. Runs after input handling so button latency is unaffected.
+  // Walk slices are cheap (one directory listing each) and run every tick; the list is applied
+  // the moment the walk completes so a new book appears within a second. The thumb/metadata
+  // slices are HEAVY (a new epub costs full metadata indexing + a cover decode, ~2-3s
+  // observed) -- they only run while the user is idle so a press never lands mid-slice.
+  if (mappedInput.wasAnyPressed()) lastInputMs = millis();
   if (scan_.active) {
-    if (stepLibraryScan()) applyLibraryScan();
+    if (!scan_.walkDone) {
+      stepLibraryScan();
+      if (scan_.walkDone) applyLibraryScan();  // books show up now; covers trickle in after
+    } else if (millis() - lastInputMs > 700) {
+      if (stepLibraryScan()) finishLibraryScan();
+    }
   } else {
     fillPendingProgress(3);
   }
