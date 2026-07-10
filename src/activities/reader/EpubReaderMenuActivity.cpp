@@ -176,7 +176,8 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         const auto value = menuItems[index].action;
         return value == MenuAction::WORD_LOOKUP || value == MenuAction::TRANSLATE_PAGE ||
                value == MenuAction::DISPLAY_QR;
-      });
+      },
+      /*showScrollbar=*/false);
 
   // Footer / Hints
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

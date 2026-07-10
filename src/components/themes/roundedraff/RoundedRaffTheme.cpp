@@ -341,7 +341,7 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
                                 const std::function<std::string(int index)>& rowSubtitle,
                                 const std::function<UIIcon(int index)>& rowIcon,
                                 const std::function<std::string(int index)>& rowValue, bool highlightValue,
-                                const std::function<bool(int index)>& rowDimmed) const {
+                                const std::function<bool(int index)>& rowDimmed, const bool showScrollbar) const {
   (void)rowIcon;
   (void)highlightValue;
   (void)rowDimmed;
@@ -426,7 +426,7 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
     }
   }
 
-  drawScrollBar(renderer, rect, itemCount, pageStartIndex, pageItems);
+  if (showScrollbar) drawScrollBar(renderer, rect, itemCount, pageStartIndex, pageItems);
   if (prewarmed) releaseRowPrewarm(renderer);
 }
 
