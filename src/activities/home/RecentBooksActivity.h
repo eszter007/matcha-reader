@@ -102,6 +102,28 @@ class RecentBooksActivity final : public Activity {
   };
   RenderedState lastRendered;
 
+  // Background library scan (stale-while-revalidate): onEnter() shows the persisted book list
+  // instantly; loop() re-walks the SD card one directory per slice and applies/saves changes
+  // when the pass completes. The full walk used to run synchronously on every Library open --
+  // every folder on the card plus per-book cover repair -- which dominated the open time.
+  struct LibraryScanState {
+    bool active = false;
+    bool walkDone = false;
+    std::vector<std::string> dirStack;
+    std::vector<RecentBook> results;
+    size_t thumbIndex = 0;  // epub cover-thumb pass cursor over results
+  };
+  LibraryScanState scan_;
+  void startLibraryScan();
+  bool stepLibraryScan();  // one slice; returns true when the whole pass is done
+  void applyLibraryScan();
+  void scanOneDirectory(const std::string& dirPath);
+  // Progress percentages fill progressively from loop() (PROGRESS_PENDING sentinel) instead of
+  // ~5 file reads per book up front.
+  static constexpr int PROGRESS_PENDING = -2;
+  void markAllProgressPending();
+  bool fillPendingProgress(int maxCount);
+
   void promptRemoveBook(const std::string& path, const std::string& title);
 
  public:

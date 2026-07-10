@@ -25,6 +25,9 @@ class RecentBooksStore {
   friend bool JsonSettingsIO::loadRecentBooks(RecentBooksStore&, const char*);
 
  public:
+  // Populate directly (library scan cache reuses this store's JSON schema for a second file).
+  void setBooks(std::vector<RecentBook> books) { recentBooks = std::move(books); }
+
   ~RecentBooksStore() = default;
 
   // Get singleton instance

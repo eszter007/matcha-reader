@@ -291,13 +291,13 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<std::string(int index)>& rowSubtitle,
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
-                         const std::function<bool(int index)>& rowDimmed) const {
+                         const std::function<bool(int index)>& rowDimmed, const bool showScrollbar) const {
   int rowHeight =
       (rowSubtitle != nullptr) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
   int pageItems = rect.height / rowHeight;
 
   const int totalPages = (itemCount + pageItems - 1) / pageItems;
-  if (totalPages > 1) {
+  if (showScrollbar && totalPages > 1) {
     constexpr int indicatorWidth = 20;
     constexpr int arrowSize = 6;
     constexpr int margin = 15;  // Offset from right edge

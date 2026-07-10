@@ -65,8 +65,10 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       const int wordWidth = renderer.getTextWidth(fontId, words[i].c_str(), currentStyle);
       const int rubyAdvance = renderer.getTextAdvanceX(fontId, wordRuby[i].c_str(), rubyStyle);
       const int rubyX = wordX + (wordWidth - rubyAdvance) / 2;
-      // Nudge ruby slightly down toward the base text so it sits closer.
-      const int rubyY = y - ascender + std::max(1, ascender / 6);
+      // Slightly above the ascender: fonts whose glyphs fill the em to the top (UDDigiKyokasho)
+      // overlapped their own base word with the old downward nudge; the layout's per-line ruby
+      // leading (see ChapterHtmlSlimParser::addLineToPage) provides the room above.
+      const int rubyY = y - ascender - std::max(1, ascender / 12);
       renderer.drawText(fontId, rubyX, rubyY, wordRuby[i].c_str(), true, rubyStyle);
     }
 

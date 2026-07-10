@@ -638,6 +638,11 @@ bool SdCardFont::load(const char* path) {
 
 // --- Codepoint lookup ---
 
+bool SdCardFont::coversCodepoint(const uint32_t cp, const uint8_t styleId) const {
+  if (styleId >= MAX_STYLES || !styles_[styleId].present) return false;
+  return findGlobalGlyphIndex(styles_[styleId], cp) >= 0;
+}
+
 int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const {
   int left = 0;
   int right = static_cast<int>(s.header.intervalCount) - 1;
@@ -1072,6 +1077,7 @@ bool SdCardFont::hasAdvanceTable() const {
 
 uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   style &= (MAX_STYLES - 1);
+  if (isUniformFullWidth(codepoint) && fullWidthAdvance_[style] != 0) return fullWidthAdvance_[style];
   if (!advanceTable_[style]) return 0;
   const AdvanceEntry* table = advanceTable_[style];
   const uint32_t size = advanceTableSize_[style];
@@ -1122,8 +1128,16 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     uint32_t needCount = 0;
     uint32_t missedThisStyle = 0;
     const int32_t replacementIdx = findGlobalGlyphIndex(s, REPLACEMENT_GLYPH);
+    bool fullWidthProbePending = false;
     for (uint32_t i = 0; i < cpCount; i++) {
       const uint32_t cp = codepoints[i];
+      if (isUniformFullWidth(cp)) {
+        // One representative per style is enough -- getAdvance() serves the whole range from
+        // fullWidthAdvance_. Without this a Japanese chapter fetched thousands of per-kanji
+        // records (the dominant indexing cost measured on device).
+        if (fullWidthAdvance_[si] != 0 || fullWidthProbePending) continue;
+        fullWidthProbePending = true;  // let exactly this one through to the SD read below
+      }
       if (advanceTableLookup(si, cp, nullptr)) continue;  // already cached
       int32_t idx = findGlobalGlyphIndex(s, cp);
       if (idx < 0) {
@@ -1183,6 +1197,11 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     file.close();
 
     if (fetched > 0) {
+      for (uint32_t i = 0; i < fetched; i++) {
+        if (fullWidthAdvance_[si] == 0 && isUniformFullWidth(staged[i].codepoint) && staged[i].advanceX != 0) {
+          fullWidthAdvance_[si] = staged[i].advanceX;
+        }
+      }
       // Sort staged by codepoint, then merge into the persistent table.
       std::sort(staged.get(), staged.get() + fetched,
                 [](const AdvanceEntry& a, const AdvanceEntry& b) { return a.codepoint < b.codepoint; });
@@ -1227,6 +1246,28 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
     LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate",
             MAX_UNIQUE_CODEPOINTS);
   }
+
+  // One-time Latin seed: layout calls this per paragraph with that paragraph's handful of new
+  // codepoints, which turned chapter indexing into ~100 open/seek/close cycles fetching 1-6
+  // records each (measured on device). Front-loading the common Latin ranges into the FIRST
+  // fetch turns that into one mostly-sequential bulk read; later calls find everything cached
+  // and return before touching the card. Seeds are filtered by actual coverage so a CJK-only
+  // font doesn't cache replacement-glyph advances for Latin it can't render.
+  if (advanceTableSize_[0] == 0 && !hitCap) {
+    static constexpr struct { uint32_t first, last; } kSeedRanges[] = {
+        {0x20, 0x7E},      // ASCII
+        {0xA0, 0xFF},      // Latin-1 (French/German accents)
+        {0x2010, 0x2027},  // dashes, curly quotes, ellipsis
+        {0x3000, 0x303F},  // CJK punctuation (、。「」 -- not em-uniform, so not shortcut-able)
+        {0xFF01, 0xFF5E},  // fullwidth forms (！？ etc.)
+    };
+    for (const auto& r : kSeedRanges) {
+      for (uint32_t cp = r.first; cp <= r.last && cpCount < MAX_UNIQUE_CODEPOINTS; cp++) {
+        if (coversCodepoint(cp, 0)) codepoints[cpCount++] = cp;
+      }
+    }
+  }
+
   std::sort(codepoints, codepoints + cpCount);
   int totalMissed = fetchAdvancesForCodepoints(codepoints, cpCount, styleMask);
   delete[] codepoints;

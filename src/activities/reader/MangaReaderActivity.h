@@ -94,6 +94,7 @@ class MangaReaderActivity final : public Activity {
   void addBookmark();
 
   void launchWordLookup();
+  void launchWordLookupCurrentView();
   void launchMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);

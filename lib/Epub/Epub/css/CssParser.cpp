@@ -407,6 +407,16 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     } else if (iequalsAscii(value, "sub")) {
       style.verticalAlign = CssVerticalAlign::Sub;
       style.defined.verticalAlign = 1;
+    } else {
+      // Numeric offsets: publishers commonly write footnote references as
+      // ".apnb { vertical-align: 70%; font-size: 60% }" instead of the super/sub keywords.
+      // Any positive raise reads as superscript, any negative as subscript; keyword values
+      // like baseline/middle fail tryInterpretLength and stay ignored.
+      CssLength len;
+      if (tryInterpretLength(stripTrailingImportant(value), len) && len.value != 0.0f) {
+        style.verticalAlign = len.value > 0 ? CssVerticalAlign::Super : CssVerticalAlign::Sub;
+        style.defined.verticalAlign = 1;
+      }
     }
   }
 }

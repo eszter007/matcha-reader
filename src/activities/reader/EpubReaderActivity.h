@@ -67,6 +67,12 @@ class EpubReaderActivity final : public Activity {
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
+  // Chapter-wide footnote list from the section file's footnote table (v32+): the panel shows
+  // ALL of the chapter's notes, opening at the one nearest the current page.
+  std::vector<std::pair<uint16_t, FootnoteEntry>> sectionFootnotes;
+  // Flattened entries handed to the footnote panel (must outlive the activity, which keeps a
+  // reference); rebuilt on each open.
+  std::vector<FootnoteEntry> footnotePanelEntries;
   struct SavedPosition {
     int spineIndex;
     int pageNumber;
@@ -95,6 +101,38 @@ class EpubReaderActivity final : public Activity {
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
+  void openFootnotesPanel();
+  void openWordLookupPanel();
+  // Page numbering across the logical ToC chapter: spine files without their own ToC entry
+  // (inline illustration files etc.) inherit the previous entry's tocIndex, so the "page X/Y"
+  // counter runs to the next REAL chapter instead of resetting at every spine-file boundary.
+  // Sibling counts come from a cheap header-only cache peek; unbuilt siblings are estimated
+  // from byte size. Cached per (spine, live page count, mode); mutable so the const render
+  // path can refresh it.
+  void updateChapterPageSpan(uint16_t viewportWidth, uint16_t viewportHeight) const;
+  // Page-based book progress (pages read / total pages, like Apple Books) instead of the
+  // byte-weighted estimate: furigana markup inflates ruby-dense chapters' byte share, so the
+  // byte model lags several percent behind the rendered-page position on Japanese books.
+  // Real counts come from section-cache headers; unindexed chapters are estimated from their
+  // byte share of the already-indexed ones and refine as sections get built.
+  int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
+  mutable int chapterSpanSpine = -1;
+  mutable int chapterSpanLivePages = -1;
+  mutable bool chapterSpanVertical = false;
+  mutable int chapterPagesBefore = 0;
+  mutable int chapterPagesTotal = 0;
+  mutable std::vector<uint16_t> spinePagesReal;       // 0 = not indexed yet
+  mutable std::vector<uint16_t> spinePagesEffective;  // real or byte-estimated, never 0
+  mutable int bookPagesBefore = 0;
+  mutable int bookPagesTotal = 0;
+  mutable uint16_t lastViewportWidth = 0;
+  mutable uint16_t lastViewportHeight = 0;
+  // The font the book is actually laid out and rendered in. Normally the user's selection;
+  // when that font can't carry the book's PRIMARY script (built-in or Latin font with a
+  // Japanese book, CJK-only font with a Latin book), the loaded companion font substitutes so
+  // measurement and the vertical engine's font-adaptive positioning all derive from one font
+  // that really contains the glyphs -- per-glyph fallback stays only for rare stragglers.
+  int effectiveReaderFontId() const;
   void restoreSavedPosition();
   bool useVerticalText() const;
   bool useFurigana() const;

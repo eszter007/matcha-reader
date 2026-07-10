@@ -216,6 +216,15 @@ void MangaReaderActivity::loop() {
     return;
   }
 
+  // Handle short power button press for word lookup (mirrors the EPUB reader's shortcut).
+  // Skipped when Down is also released so the screenshot combo doesn't trigger it.
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
+      mappedInput.wasReleased(MappedInputManager::Button::Power) &&
+      !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+    launchWordLookupCurrentView();
+    return;
+  }
+
   if (viewMode == ViewMode::TextOverlay) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       viewMode = ViewMode::PanelZoom;
@@ -753,6 +762,38 @@ void MangaReaderActivity::renderTextOverlay() {
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
+void MangaReaderActivity::launchWordLookupCurrentView() {
+  // In panel zoom, look up just that panel's text. In full-page view,
+  // combine every panel's text on the page so lookup still works
+  // without having to zoom into each panel individually.
+  if (!book || !DictIndex::isAvailable()) return;
+  const ViewMode returnMode = viewMode;
+  std::string combined;
+  if (currentPanel >= 0 && currentPanel < static_cast<int>(panels.size())) {
+    for (const auto& tb : panels[currentPanel].textBlocks) {
+      if (!combined.empty()) combined += '\n';
+      combined += tb.text;
+    }
+  } else {
+    for (const auto& panel : panels) {
+      for (const auto& tb : panel.textBlocks) {
+        if (!combined.empty()) combined += '\n';
+        combined += tb.text;
+      }
+    }
+  }
+  if (combined.empty()) return;
+  startActivityForResult(
+      std::make_unique<MangaWordLookupActivity>(renderer, mappedInput, std::move(combined),
+                                                book->getCachePath() + "/wlscan.bin",
+                                                static_cast<uint16_t>(currentPage),
+                                                static_cast<uint16_t>(currentPanel + 1)),
+      [this, returnMode](const ActivityResult&) {
+        viewMode = returnMode;
+        requestUpdate();
+      });
+}
+
 void MangaReaderActivity::launchWordLookup() {
   if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) return;
   if (!DictIndex::isAvailable()) return;
@@ -1004,36 +1045,7 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       launchPercentJump();
       break;
     case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {
-      // In panel zoom, look up just that panel's text. In full-page view,
-      // combine every panel's text on the page so lookup still works
-      // without having to zoom into each panel individually.
-      ViewMode returnMode = viewMode;
-      std::string combined;
-      if (currentPanel >= 0 && currentPanel < static_cast<int>(panels.size())) {
-        for (const auto& tb : panels[currentPanel].textBlocks) {
-          if (!combined.empty()) combined += '\n';
-          combined += tb.text;
-        }
-      } else {
-        for (const auto& panel : panels) {
-          for (const auto& tb : panel.textBlocks) {
-            if (!combined.empty()) combined += '\n';
-            combined += tb.text;
-          }
-        }
-      }
-      if (!combined.empty() && DictIndex::isAvailable()) {
-        startActivityForResult(
-            std::make_unique<MangaWordLookupActivity>(renderer, mappedInput, std::move(combined),
-                                                      book->getCachePath() + "/wlscan.bin",
-                                                      static_cast<uint16_t>(currentPage),
-                                                      static_cast<uint16_t>(currentPanel + 1)),
-            [this, returnMode](const ActivityResult&) {
-              viewMode = returnMode;
-              requestUpdate();
-            });
-        return;
-      }
+      launchWordLookupCurrentView();
       break;
     }
     case EpubReaderMenuActivity::MenuAction::TRANSLATE_PAGE: {

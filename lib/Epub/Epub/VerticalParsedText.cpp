@@ -172,6 +172,12 @@ int VerticalParsedText::charAdvancePx() const {
   // true em-square size. For CJK fonts this matches advanceY; for
   // Latin-oriented fonts (NotoSerif) where advanceY includes extra
   // interline spacing, this gives the correct tighter cell size.
+  // SD fonts measure through their advance table; make sure the reference glyph is in it.
+  // Without this, a freshly loaded SD font (e.g. the JP companion serving as the effective
+  // reader font) measured 漢 as 0 and the cell size fell back to getLineHeight() -- for CJK
+  // fonts that includes interline spacing, blowing cells up from ~1em to ~1.45em (visibly
+  // "very wide" character spacing).
+  renderer_.ensureSdCardFontReady(fontId_, "\xe6\xbc\xa2", 0x01);
   const int cjkAdvance = renderer_.getTextAdvanceX(
       fontId_, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));  // 漢
   if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 6;
@@ -712,6 +718,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         std::string runUtf8;
         encodeDigitUtf8(stream_[idx].codepoint, runUtf8);
         encodeDigitUtf8(stream_[idx + 1].codepoint, runUtf8);
+        renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
         const int runWidthPx =
             renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
 
@@ -744,6 +751,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           encodeDigitUtf8(stream_[i].codepoint, runUtf8);
         }
 
+        renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
         const int runWidthPx =
             renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
         const uint16_t rowsNeeded =
@@ -808,6 +816,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       }
 
       // Split the run into chunks that fit in columns, breaking at spaces.
+      renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
       const int maxColumnPx = rowsPerColumn * cellPx;
       std::string remaining = runUtf8;
 

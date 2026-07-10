@@ -1,21 +1,40 @@
 #include "EpubReaderFootnotesActivity.h"
 
+#include <Epub.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 
+#include "DefinitionTextRenderer.h"
+#include "FootnoteTextExtractor.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 void EpubReaderFootnotesActivity::onEnter() {
   Activity::onEnter();
-  selectedIndex = 0;
-  requestUpdate();
+  selectFootnote(startIndex);
 }
 
 void EpubReaderFootnotesActivity::onExit() { Activity::onExit(); }
+
+void EpubReaderFootnotesActivity::selectFootnote(const int index) {
+  if (footnotes.empty()) return;
+  selectedIndex = ((index % static_cast<int>(footnotes.size())) + static_cast<int>(footnotes.size())) %
+                  static_cast<int>(footnotes.size());
+  scrollOffset = 0;
+  totalLines = 0;
+  maxScroll = 0;
+  noteLoaded = epub && FootnoteText::extract(*epub, currentSpineIndex, footnotes[selectedIndex].href, noteText);
+  if (!noteLoaded) {
+    // Extraction failed (unresolvable href, unreadable target): show the raw target so the
+    // panel still says WHERE Confirm would jump.
+    noteText = footnotes[selectedIndex].href;
+  }
+  requestUpdate();
+}
 
 void EpubReaderFootnotesActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -35,77 +54,93 @@ void EpubReaderFootnotesActivity::loop() {
     return;
   }
 
-  buttonNavigator.onNext([this] {
-    if (!footnotes.empty()) {
-      selectedIndex = (selectedIndex + 1) % footnotes.size();
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right},
+                                       [this] { selectFootnote(selectedIndex + 1); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left},
+                                       [this] { selectFootnote(selectedIndex - 1); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+    if (scrollOffset < maxScroll) {
+      scrollOffset = std::min(maxScroll, scrollOffset + 5);
       requestUpdate();
     }
   });
-
-  buttonNavigator.onPrevious([this] {
-    if (!footnotes.empty()) {
-      selectedIndex = (selectedIndex - 1 + footnotes.size()) % footnotes.size();
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+    if (scrollOffset > 0) {
+      scrollOffset = std::max(0, scrollOffset - 5);
       requestUpdate();
     }
   });
 }
 
-void EpubReaderFootnotesActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto orientation = renderer.getOrientation();
-  // Landscape orientation: reserve a horizontal gutter for button hints.
-  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  // Inverted portrait: reserve vertical space for hints at the top.
-  const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? 30 : 0;
-  // Landscape CW places hints on the left edge; CCW keeps them on the right.
-  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
-  const int contentWidth = pageWidth - hintGutterWidth;
-  const int hintGutterHeight = isPortraitInverted ? 50 : 0;
-  const int contentY = hintGutterHeight;
-
-  // Manual centering to honor content gutters.
-  const int titleX =
-      contentX + (contentWidth - renderer.getTextWidth(UI_12_FONT_ID, tr(STR_FOOTNOTES), EpdFontFamily::BOLD)) / 2;
-  renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentY, tr(STR_FOOTNOTES), true, EpdFontFamily::BOLD);
+void EpubReaderFootnotesActivity::renderContentArea(const Rect& screen, const int contentTop) {
+  auto metrics = UITheme::getInstance().getMetrics();
+  const int maxWidth = screen.width - metrics.contentSidePadding * 2;
+  const int textX = screen.x + metrics.contentSidePadding;
 
   if (footnotes.empty()) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 90 + contentY, tr(STR_NO_FOOTNOTES));
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2, tr(STR_NO_FOOTNOTES),
+                              true);
     return;
   }
 
-  constexpr int lineHeight = 36;
-  const int screenWidth = renderer.getScreenWidth();
-  const int marginLeft = contentX + 20;
+  // No headline: the note text itself starts with its number ("2. ..."), so a number title
+  // would just duplicate it. The header's position counter already says which note this is.
+  // Larger font than Word Lookup's definitions -- notes are prose meant to be read, not
+  // dictionary entries to skim.
+  const int defY = contentTop;
+  const int defFont = UI_12_FONT_ID;
+  const int defLineH = renderer.getLineHeight(defFont);
+  const int maxDefY = screen.y + screen.height - 2;
+  const int firstDefY = defY;
+  const auto wrap =
+      DefinitionText::drawWrapped(renderer, defFont, noteText, textX, defY, defLineH, maxWidth, maxDefY, scrollOffset);
 
-  const int visibleCount = std::max(1, (renderer.getScreenHeight() - contentY) / lineHeight);
-  if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
-  if (selectedIndex >= scrollOffset + visibleCount) scrollOffset = selectedIndex - visibleCount + 1;
+  totalLines = wrap.totalLines;
+  const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
+  maxScroll = std::max(0, totalLines - visibleCapacity);
+}
 
-  for (int i = scrollOffset; i < static_cast<int>(footnotes.size()) && i < scrollOffset + visibleCount; i++) {
-    const int y = 60 + contentY + (i - scrollOffset) * lineHeight;
-    const bool isSelected = (i == selectedIndex);
+void EpubReaderFootnotesActivity::render(RenderLock&&) {
+  auto& theme = UITheme::getInstance();
+  auto metrics = theme.getMetrics();
+  Rect screen = theme.getScreenSafeArea(renderer, true, false);
 
-    if (isSelected) {
-      renderer.fillRect(0, y, screenWidth, lineHeight, true);
-    }
+  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
 
-    // Show footnote number and abbreviated href
-    std::string label = footnotes[i].number;
-    if (label.empty()) {
-      label = tr(STR_LINK);
-    }
-    renderer.drawText(UI_10_FONT_ID, marginLeft, y + 4, label.c_str(), !isSelected);
+  std::string posText;
+  if (!footnotes.empty()) {
+    posText = std::to_string(selectedIndex + 1) + "/" + std::to_string(footnotes.size());
   }
+  const Rect headerRect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight};
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (!initialRenderDone) {
+    renderer.clearScreen();
+    GUI.drawHeader(renderer, headerRect, tr(STR_FOOTNOTES), posText.empty() ? nullptr : posText.c_str());
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+    renderContentArea(screen, contentTop);
+
+    renderer.displayBuffer();
+    initialRenderDone = true;
+    fastRefreshCount = 0;
+  } else {
+    // Same partial-redraw scheme as Word Lookup: clear from the content top to the physical
+    // bottom, redraw header (position counter) and hints, fast-refresh with periodic settles.
+    const int physBottom = renderer.getScreenHeight();
+    renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
+    GUI.drawHeader(renderer, headerRect, tr(STR_FOOTNOTES), posText.empty() ? nullptr : posText.c_str());
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+
+    renderContentArea(screen, contentTop);
+
+    fastRefreshCount++;
+    if (fastRefreshCount >= kFullRefreshInterval) {
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      fastRefreshCount = 0;
+    } else {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
+  }
 }

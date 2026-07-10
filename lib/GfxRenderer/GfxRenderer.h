@@ -56,6 +56,7 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  SdCardFont* fallbackSdFont_ = nullptr;
 
   // Mutable because drawText() is const but needs to delegate scan-mode
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
@@ -113,6 +114,11 @@ class GfxRenderer {
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
+
+  // The companion/fallback SD font's advance table (nullptr when none). Measurement paths use
+  // it to price glyphs the selected font lacks WITHOUT loading their bitmaps from SD -- the
+  // on-demand glyphMissHandler path made indexing do a seek+read per missing glyph.
+  void setFallbackSdFont(SdCardFont* font) { fallbackSdFont_ = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
   void clearSdCardFonts() { sdCardFonts_.clear(); }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }

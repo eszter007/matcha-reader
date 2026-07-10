@@ -140,6 +140,16 @@ void MangaWordLookupActivity::performLookup() {
   // Serialize against the render task, which reads the result strings concurrently -- see
   // EpubReaderWordLookupActivity::performLookup() for the confirmed tear/abort.
   RenderLock lock;
+  // Mid-session self-heal: the open-time check can't help when the heap degrades DURING a long
+  // navigation session (font glyphs loaded per rendered definition accumulate; a crash_report
+  // showed the definition read inside DictIndex aborting after renders had slowed from 1.2s to
+  // 6.3s as the heap ran down). Same release as at open; fonts reload lazily.
+  if (ESP.getMaxAllocHeap() < 20 * 1024) {
+    LOG_INF("MWLA", "Low heap mid-session (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+    }
+  }
   // Render shows "Loading..." instead of "No match found" while this runs (fast navigation).
   lookupInFlight = true;
   performLookupImpl();

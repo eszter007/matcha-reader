@@ -3,8 +3,11 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "Epub.h"
+#include "FootnoteEntry.h"
 
 class Page;
 class GfxRenderer;
@@ -35,6 +38,9 @@ class Section {
                        uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                        uint8_t imageRendering, bool focusReadingEnabled);
   bool clearCache() const;
+  // Reads the section-wide footnote table (v32+): (pageIndex, entry) in document order.
+  // Returns false (empty out) for pre-table files or on any read error.
+  bool loadSectionFootnotes(std::vector<std::pair<uint16_t, FootnoteEntry>>& out);
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                          uint8_t imageRendering, bool focusReadingEnabled,

@@ -1,5 +1,7 @@
 #include "RecentBooksActivity.h"
 
+#include "JsonSettingsIO.h"
+
 #include "EpubProgressUtil.h"
 
 #include <Bitmap.h>
@@ -120,160 +122,70 @@ int RecentBooksActivity::getContentItemCount() const {
   return static_cast<int>(shelves.size());
 }
 
+namespace {
+constexpr const char* LIBRARY_CACHE_JSON = "/.crosspoint/library_cache.json";
+}  // namespace
+
 void RecentBooksActivity::loadRecentBooks() {
   lastRendered.valid = false;  // content changing under the frame -> next render must be full
-  // Start with recent books (most recently opened first).
+  // Recents first (most recently opened first), then the persisted result of the last card
+  // scan -- instantly, without touching the card tree. A background re-scan (see
+  // startLibraryScan) refreshes and re-persists the list afterwards.
   recentBooks = RECENT_BOOKS.getBooks();
 
-  constexpr size_t NAME_BUF = 500;
-  auto nameBuf = makeUniqueNoThrow<char[]>(NAME_BUF);
-  if (!nameBuf) return;
-
-  // Iterative (stack-based, not recursive) directory walk so manga/book
-  // folders are found at ANY nesting depth -- not just the SD root or one
-  // level down. A manga folder (contains panels.idx) is a leaf: its
-  // contents are page images, not something to descend into further.
-  std::vector<std::string> dirStack;
-  dirStack.reserve(16);
-  dirStack.push_back("/");
-
-  while (!dirStack.empty()) {
-    std::string dirPath = std::move(dirStack.back());
-    dirStack.pop_back();
-
-    auto dir = Storage.open(dirPath.c_str());
-    if (!dir || !dir.isDirectory()) continue;
-    dir.rewindDirectory();
-
-    for (auto f = dir.openNextFile(); f; f = dir.openNextFile()) {
-      f.getName(nameBuf.get(), NAME_BUF);
-      if (nameBuf[0] == '.') continue;
-      if (strcmp(nameBuf.get(), "System Volume Information") == 0) continue;
-      if (strcmp(nameBuf.get(), "dict") == 0) continue;
-
-      std::string fullPath = dirPath;
-      if (fullPath.back() != '/') fullPath += '/';
-      fullPath += nameBuf.get();
-
-      if (f.isDirectory()) {
-        // Check if this directory is a manga folder (contains panels.idx)
-        std::string idxPath = fullPath + "/panels.idx";
-        if (Storage.exists(idxPath.c_str())) {
-          // Find existing recents entry -- may exist but with empty cover.
-          RecentBook* existing = nullptr;
-          for (auto& r : recentBooks) {
-            if (r.path == fullPath) { existing = &r; break; }
+  const String cacheJson = Storage.readFile(LIBRARY_CACHE_JSON);
+  if (cacheJson.length() > 0) {
+    RecentBooksStore cache;
+    if (JsonSettingsIO::loadRecentBooks(cache, cacheJson.c_str())) {
+      for (const auto& b : cache.getBooks()) {
+        bool known = false;
+        for (const auto& r : recentBooks) {
+          if (r.path == b.path) {
+            known = true;
+            break;
           }
-          if (existing == nullptr) {
-            RecentBook newBook;
-            newBook.path = fullPath;
-            newBook.title = std::string(nameBuf.get());
-            recentBooks.push_back(std::move(newBook));
-            existing = &recentBooks.back();
-          }
-          // Runs for new entries, entries stored without a cover, entries whose stored cover is a
-          // raw page image (the recents store persists the raw path when a manga is opened from
-          // the reader -- rendering a raw page JPEG costs ~430ms per frame), AND templated
-          // entries whose cached thumb is missing or the wrong height (see thumbHeightValid).
-          const bool coverIsTemplate = existing->coverBmpPath.find("[HEIGHT]") != std::string::npos;
-          const bool coverIsRawImage =
-              !existing->coverBmpPath.empty() && !coverIsTemplate &&
-              (FsHelpers::hasJpgExtension(existing->coverBmpPath) || FsHelpers::hasPngExtension(existing->coverBmpPath));
-          const std::string tmpl = mangaCacheDir(fullPath) + "/thumb_[HEIGHT].bmp";
-          const auto& metrics = UITheme::getInstance().getMetrics();
-          const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
-          const bool thumbOk = thumbHeightValid(UITheme::getCoverThumbPath(tmpl, gridHeight), gridHeight);
-          if (existing->coverBmpPath.empty() || coverIsRawImage || (coverIsTemplate && !thumbOk)) {
-            RecentBook& book = *existing;
-            const std::string coverBefore = book.coverBmpPath;
-            // A previously generated (and valid) thumb short-circuits everything, including the
-            // manga-folder file scan below (hundreds of page files iterated per manga, per open).
-            if (thumbOk) {
-              book.coverBmpPath = tmpl;
-            } else if (coverIsRawImage) {
-              // The stored raw path already tells us the cover source -- no folder scan needed.
-              const std::string thumb = ensureMangaCoverThumb(fullPath, book.coverBmpPath);
-              if (!thumb.empty()) book.coverBmpPath = thumb;
-            } else {
-            // Use the first manga PAGE as the cover -- not just the
-            // alphabetically-first image file, since panel-zoom crop files
-            // (p<page>_<panel>.jpg) sort before page_NNNN.jpg ('0' < 'a')
-            // and would otherwise win, showing a cropped panel fragment
-            // instead of the actual first page.
-            auto mangaDir = Storage.open(fullPath.c_str());
-            if (mangaDir && mangaDir.isDirectory()) {
-              mangaDir.rewindDirectory();
-              std::string firstPageImage;   // page_NNNN.<ext> -- preferred
-              std::string firstAnyImage;    // fallback for older/foreign naming
-              for (auto mf = mangaDir.openNextFile(); mf; mf = mangaDir.openNextFile()) {
-                char imgName[200];
-                mf.getName(imgName, sizeof(imgName));
-                if (imgName[0] == '.' || mf.isDirectory()) continue;
-                std::string_view imgFn{imgName};
-                if (!FsHelpers::hasJpgExtension(imgFn) && !FsHelpers::hasPngExtension(imgFn) &&
-                    !FsHelpers::hasBmpExtension(imgFn)) {
-                  continue;
-                }
-                if (strncmp(imgName, "page_", 5) == 0) {
-                  if (firstPageImage.empty() || imgFn < firstPageImage) firstPageImage = imgName;
-                } else if (!manga::isPanelCropFile(imgName)) {
-                  if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
-                }
-              }
-              mangaDir.close();
-              const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
-              if (!chosen.empty()) {
-                const std::string sourcePath = fullPath + "/" + chosen;
-                const std::string thumb = ensureMangaCoverThumb(fullPath, sourcePath);
-                book.coverBmpPath = !thumb.empty() ? thumb : sourcePath;
-              }
-            }
-            }  // close cover scan block
-            // Persist a raw-image -> cached-thumb upgrade back to the store so the Home screen's
-            // Continue Reading card (which reads the store directly) also stops decoding the raw
-            // page JPEG. One write per upgraded entry, ever -- later opens see the template and
-            // never enter this branch. No-op for scan-discovered manga not in the store.
-            if (coverIsRawImage && book.coverBmpPath != coverBefore) {
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
-            }
-          }  // close coverBmpPath.empty() check
-        } else {
-          // Not a manga folder itself -- descend into it to find books/manga nested deeper.
-          dirStack.push_back(std::move(fullPath));
         }
-        continue;
+        if (!known) recentBooks.push_back(b);
       }
-
-      std::string_view fn{nameBuf.get()};
-      if (!FsHelpers::hasEpubExtension(fn) && !FsHelpers::hasXtcExtension(fn) &&
-          !FsHelpers::hasTxtExtension(fn) && !FsHelpers::hasMarkdownExtension(fn))
-        continue;
-      if (isCrashReportFile(nameBuf.get())) continue;
-
-      bool alreadyInRecents = false;
-      for (const auto& r : recentBooks) {
-        if (r.path == fullPath) { alreadyInRecents = true; break; }
-      }
-      if (alreadyInRecents) continue;
-      RecentBook book;
-      book.path = std::move(fullPath);
-      auto dot = fn.find_last_of('.');
-      book.title = std::string(dot != std::string_view::npos ? fn.substr(0, dot) : fn);
-      recentBooks.push_back(std::move(book));
     }
-    dir.close();
+  }
+}
+
+void RecentBooksActivity::startLibraryScan() {
+  scan_ = LibraryScanState{};
+  scan_.active = true;
+  scan_.dirStack.reserve(16);
+  scan_.dirStack.push_back("/");
+}
+
+bool RecentBooksActivity::stepLibraryScan() {
+  if (!scan_.active) return false;
+
+  if (!scan_.walkDone) {
+    if (scan_.dirStack.empty()) {
+      scan_.walkDone = true;
+      return false;
+    }
+    std::string dirPath = std::move(scan_.dirStack.back());
+    scan_.dirStack.pop_back();
+    scanOneDirectory(dirPath);
+    return false;
   }
 
-  // Generate cover thumbnails for books that don't have one yet.
+  // Epub cover-thumb pass, one book per slice.
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int thumbH = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
-  for (auto& book : recentBooks) {
-    if (!book.coverBmpPath.empty()) continue;
-    if (!FsHelpers::hasEpubExtension(book.path)) continue;
+  while (scan_.thumbIndex < scan_.results.size()) {
+    RecentBook& book = scan_.results[scan_.thumbIndex];
+    if (!book.coverBmpPath.empty() || !FsHelpers::hasEpubExtension(book.path)) {
+      scan_.thumbIndex++;
+      continue;
+    }
     std::string cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(book.path));
     std::string thumbPath = cachePath + "/thumb_" + std::to_string(thumbH) + ".bmp";
     if (Storage.exists(thumbPath.c_str())) {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
+      scan_.thumbIndex++;
       continue;
     }
     Epub epub(book.path, "/.crosspoint");
@@ -282,17 +194,200 @@ void RecentBooksActivity::loadRecentBooks() {
       const auto& title = epub.getTitle();
       if (!title.empty()) book.title = title;
     }
+    scan_.thumbIndex++;
+    return false;  // thumb generation is the heavy step: one per slice
   }
+
+  scan_.active = false;
+  return true;
+}
+
+
+void RecentBooksActivity::scanOneDirectory(const std::string& dirPath) {
+  constexpr size_t NAME_BUF = 500;
+  auto nameBuf = makeUniqueNoThrow<char[]>(NAME_BUF);
+  if (!nameBuf) return;
+
+  auto dir = Storage.open(dirPath.c_str());
+  if (!dir || !dir.isDirectory()) return;
+  dir.rewindDirectory();
+
+  for (auto f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    f.getName(nameBuf.get(), NAME_BUF);
+    if (nameBuf[0] == '.') continue;
+    if (strcmp(nameBuf.get(), "System Volume Information") == 0) continue;
+    if (strcmp(nameBuf.get(), "dict") == 0) continue;
+
+    std::string fullPath = dirPath;
+    if (fullPath.back() != '/') fullPath += '/';
+    fullPath += nameBuf.get();
+
+    if (f.isDirectory()) {
+      const std::string idxPath = fullPath + "/panels.idx";
+      if (!Storage.exists(idxPath.c_str())) {
+        // Not a manga folder -- descend to find books/manga nested deeper.
+        scan_.dirStack.push_back(std::move(fullPath));
+        continue;
+      }
+
+      // Manga folder: seed from the current list (recents/cache) so stored covers are honored.
+      RecentBook entry;
+      entry.path = fullPath;
+      entry.title = std::string(nameBuf.get());
+      for (const auto& r : recentBooks) {
+        if (r.path == fullPath) {
+          entry = r;
+          break;
+        }
+      }
+
+      const bool coverIsTemplate = entry.coverBmpPath.find("[HEIGHT]") != std::string::npos;
+      const bool coverIsRawImage =
+          !entry.coverBmpPath.empty() && !coverIsTemplate &&
+          (FsHelpers::hasJpgExtension(entry.coverBmpPath) || FsHelpers::hasPngExtension(entry.coverBmpPath));
+      const std::string tmpl = mangaCacheDir(fullPath) + "/thumb_[HEIGHT].bmp";
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      const int gridHeight = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
+      const bool thumbOk = thumbHeightValid(UITheme::getCoverThumbPath(tmpl, gridHeight), gridHeight);
+      if (entry.coverBmpPath.empty() || coverIsRawImage || (coverIsTemplate && !thumbOk)) {
+        const std::string coverBefore = entry.coverBmpPath;
+        if (thumbOk) {
+          entry.coverBmpPath = tmpl;
+        } else if (coverIsRawImage) {
+          const std::string thumb = ensureMangaCoverThumb(fullPath, entry.coverBmpPath);
+          if (!thumb.empty()) entry.coverBmpPath = thumb;
+        } else {
+          // First manga PAGE as cover (page_NNNN preferred over panel-crop files).
+          auto mangaDir = Storage.open(fullPath.c_str());
+          if (mangaDir && mangaDir.isDirectory()) {
+            mangaDir.rewindDirectory();
+            std::string firstPageImage;
+            std::string firstAnyImage;
+            for (auto mf = mangaDir.openNextFile(); mf; mf = mangaDir.openNextFile()) {
+              char imgName[200];
+              mf.getName(imgName, sizeof(imgName));
+              if (imgName[0] == '.' || mf.isDirectory()) continue;
+              std::string_view imgFn{imgName};
+              if (!FsHelpers::hasJpgExtension(imgFn) && !FsHelpers::hasPngExtension(imgFn) &&
+                  !FsHelpers::hasBmpExtension(imgFn)) {
+                continue;
+              }
+              if (strncmp(imgName, "page_", 5) == 0) {
+                if (firstPageImage.empty() || imgFn < firstPageImage) firstPageImage = imgName;
+              } else if (!manga::isPanelCropFile(imgName)) {
+                if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
+              }
+            }
+            mangaDir.close();
+            const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
+            if (!chosen.empty()) {
+              const std::string sourcePath = fullPath + "/" + chosen;
+              const std::string thumb = ensureMangaCoverThumb(fullPath, sourcePath);
+              entry.coverBmpPath = !thumb.empty() ? thumb : sourcePath;
+            }
+          }
+        }
+        // Persist a raw-image -> cached-thumb upgrade so the Home screen also benefits.
+        if (coverIsRawImage && entry.coverBmpPath != coverBefore) {
+          RECENT_BOOKS.updateBook(entry.path, entry.title, entry.author, entry.coverBmpPath);
+        }
+      }
+      scan_.results.push_back(std::move(entry));
+      continue;
+    }
+
+    std::string_view fn{nameBuf.get()};
+    if (!FsHelpers::hasEpubExtension(fn) && !FsHelpers::hasXtcExtension(fn) && !FsHelpers::hasTxtExtension(fn) &&
+        !FsHelpers::hasMarkdownExtension(fn))
+      continue;
+    if (isCrashReportFile(nameBuf.get())) continue;
+
+    RecentBook book;
+    book.path = fullPath;
+    auto dot = fn.find_last_of('.');
+    book.title = std::string(dot != std::string_view::npos ? fn.substr(0, dot) : fn);
+    // Seed title/author/cover from the current list so cached metadata survives the re-scan.
+    for (const auto& r : recentBooks) {
+      if (r.path == fullPath) {
+        book = r;
+        break;
+      }
+    }
+    scan_.results.push_back(std::move(book));
+  }
+  dir.close();
+}
+
+void RecentBooksActivity::applyLibraryScan() {
+  // Rebuild the list as recents + this pass's results: cached entries whose files vanished
+  // drop out, covers repaired by the scan take effect, and the cache is re-persisted.
+  std::vector<RecentBook> fresh = RECENT_BOOKS.getBooks();
+  for (const auto& r : scan_.results) {
+    bool known = false;
+    for (auto& existing : fresh) {
+      if (existing.path == r.path) {
+        if (!r.coverBmpPath.empty()) existing.coverBmpPath = r.coverBmpPath;
+        known = true;
+        break;
+      }
+    }
+    if (!known) fresh.push_back(r);
+  }
+
+  bool changed = fresh.size() != recentBooks.size();
+  if (!changed) {
+    for (size_t i = 0; i < fresh.size(); i++) {
+      if (fresh[i].path != recentBooks[i].path || fresh[i].coverBmpPath != recentBooks[i].coverBmpPath) {
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  RecentBooksStore cache;
+  cache.setBooks(scan_.results);
+  JsonSettingsIO::saveRecentBooks(cache, LIBRARY_CACHE_JSON);
+
+  if (changed) {
+    RenderLock lock;  // the render task reads these lists concurrently
+    recentBooks = std::move(fresh);
+    markAllProgressPending();
+    loadShelves();
+    lastRendered.valid = false;
+    LOG_DBG("RBA", "Library scan applied: %u books", static_cast<unsigned>(recentBooks.size()));
+  }
+  scan_.results.clear();
+  scan_.results.shrink_to_fit();
+  if (changed) requestUpdate();
 }
 
 void RecentBooksActivity::loadBookProgress() {
+  // Progress is filled progressively from loop() -- ~5 file reads per book made the old
+  // upfront pass a visible chunk of the Library open time.
+  markAllProgressPending();
+}
+
+void RecentBooksActivity::markAllProgressPending() {
   bookProgress.clear();
-  bookProgress.reserve(recentBooks.size());
-  for (const auto& book : recentBooks) {
-    BookProgress bp;
-    bp.percent = readProgressPercent(book.path);
-    bookProgress.push_back(bp);
+  BookProgress pending;
+  pending.percent = PROGRESS_PENDING;
+  bookProgress.resize(recentBooks.size(), pending);
+}
+
+bool RecentBooksActivity::fillPendingProgress(const int maxCount) {
+  int filled = 0;
+  bool anyPending = false;
+  for (size_t i = 0; i < bookProgress.size() && i < recentBooks.size(); i++) {
+    if (bookProgress[i].percent != PROGRESS_PENDING) continue;
+    if (filled >= maxCount) {
+      anyPending = true;
+      break;
+    }
+    bookProgress[i].percent = readProgressPercent(recentBooks[i].path);
+    filled++;
   }
+  if (filled > 0 && !anyPending) requestUpdate();  // labels appear once the batch completes
+  return anyPending || filled > 0;
 }
 
 void RecentBooksActivity::loadShelves() {
@@ -560,6 +655,7 @@ void RecentBooksActivity::onEnter() {
   loadRecentBooks();
   loadBookProgress();
   loadShelves();
+  startLibraryScan();
 
   selectedTab = 0;
   contentIndex = 0;
@@ -693,6 +789,14 @@ void RecentBooksActivity::loop() {
   if (hasChangedTab) {
     contentIndex = (contentIndex == 0) ? 0 : 1;
     scrollRow = 0;
+  }
+
+  // Background work, one slice per tick: re-scan the card (stale-while-revalidate) and fill
+  // pending progress percentages. Runs after input handling so button latency is unaffected.
+  if (scan_.active) {
+    if (stepLibraryScan()) applyLibraryScan();
+  } else {
+    fillPendingProgress(3);
   }
 }
 

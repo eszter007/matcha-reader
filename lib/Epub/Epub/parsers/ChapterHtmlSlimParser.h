@@ -82,6 +82,8 @@ class ChapterHtmlSlimParser {
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
+  static constexpr size_t MAX_SECTION_FOOTNOTES = 128;
+  std::vector<std::pair<uint16_t, FootnoteEntry>> sectionFootnoteData;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;          // deferred until after previous text block is flushed
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
@@ -150,4 +152,7 @@ class ChapterHtmlSlimParser {
   bool parseAndBuildPages();
   void addLineToPage(std::shared_ptr<TextBlock> line);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+  // Every footnote reference in the section with the page it appears on (same page counter as
+  // getAnchors), for the section-wide footnote table -- see Section::loadSectionFootnotes().
+  const std::vector<std::pair<uint16_t, FootnoteEntry>>& getSectionFootnotes() const { return sectionFootnoteData; }
 };

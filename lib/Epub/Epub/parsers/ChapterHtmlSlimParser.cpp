@@ -20,7 +20,7 @@
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
-constexpr size_t PARSE_BUFFER_SIZE = 1024;
+constexpr size_t PARSE_BUFFER_SIZE = 4096;  // 4KB: SD reads are latency-bound (see VerticalSection)
 
 // Hard cap on the number of anchor IDs recorded per chapter. Legitimate navigation
 // anchors (TOC entries, footnotes, cross-references) rarely exceed a few hundred per
@@ -498,7 +498,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
               cachedImageFile.flush();
               cachedImageFile.close();
-              delay(50);  // Give SD card time to sync
             }
 
             if (extractSuccess) {
@@ -803,6 +802,27 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       entry.depth = self->depth;
       entry.hasUnderline = true;
       entry.underline = true;
+      // Carry the link's own resolved CSS bits too: footnote references are typically made
+      // superscript via a class on the <a> itself (.apnb { vertical-align: 70% }) -- the early
+      // return below otherwise skips the generic inline-CSS path entirely and the reference
+      // rendered as a full-size digit on the baseline.
+      if (cssStyle.hasVerticalAlign()) {
+        if (cssStyle.verticalAlign == CssVerticalAlign::Super) {
+          entry.hasSup = true;
+          entry.sup = true;
+        } else if (cssStyle.verticalAlign == CssVerticalAlign::Sub) {
+          entry.hasSub = true;
+          entry.sub = true;
+        }
+      }
+      if (cssStyle.hasFontWeight()) {
+        entry.hasBold = true;
+        entry.bold = cssStyle.fontWeight == CssFontWeight::Bold;
+      }
+      if (cssStyle.hasFontStyle()) {
+        entry.hasItalic = true;
+        entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
+      }
       applyDirectionToEntry(entry, cssStyle);
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -1332,6 +1352,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 }
 
 bool ChapterHtmlSlimParser::parseAndBuildPages() {
+  const uint32_t buildStartMs = millis();
+  struct BuildTimer {
+    uint32_t start;
+    ~BuildTimer() { LOG_INF("EHP", "parseAndBuildPages: %u ms", millis() - start); }
+  } buildTimer{buildStartMs};
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
   // text-align inherit it correctly through getCombinedBlockStyle.
@@ -1430,7 +1455,14 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+  int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+
+  // Furigana renders ABOVE the line's ascender: without extra leading it overlaps the
+  // previous line's text (and clips at the page top -- the same headroom fixes both, since a
+  // fresh page starts at the padded offset too). Applied per ruby-carrying line at LAYOUT
+  // time so the section cache stays independent of the display-side furigana toggle.
+  const int rubyExtra = line->hasRuby() ? renderer.getFontAscenderSize(fontId) / 2 : 0;
+  lineHeight += rubyExtra;
 
   if (!currentPage) {
     currentPage.reset(new Page());
@@ -1449,13 +1481,16 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   auto footnoteIt = pendingFootnotes.begin();
   while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
     currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
+      sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), footnoteIt->second});
+    }
     ++footnoteIt;
   }
   pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
 
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
-  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
+  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY + rubyExtra));
   currentPageNextY += lineHeight;
 }
 
@@ -1496,6 +1531,9 @@ void ChapterHtmlSlimParser::makePages() {
   if (!pendingFootnotes.empty() && currentPage) {
     for (const auto& [idx, fn] : pendingFootnotes) {
       currentPage->addFootnote(fn.number, fn.href);
+      if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
+        sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), fn});
+      }
     }
     pendingFootnotes.clear();
   }

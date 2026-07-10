@@ -1588,7 +1588,12 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    int32_t advFP = sdIt->second->getAdvance(' ', resolvedStyle);
+    // A CJK-only SD font (UDDigiKyokasho) has no space glyph: 0 here collapsed every word gap
+    // and Latin text rendered overlapping. The companion's advance table supplies the space
+    // without any SD I/O.
+    if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
+    if (advFP != 0) return fp4::toPixel(advFP);
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -1598,7 +1603,11 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   }
 
   const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
-  return spaceGlyph ? fp4::toPixel(spaceGlyph->advanceX) : 0;  // snap 12.4 fixed-point to nearest pixel
+  if (spaceGlyph && spaceGlyph->advanceX != 0) return fp4::toPixel(spaceGlyph->advanceX);
+  // No usable space glyph anywhere in the chain (some cpfonts ship without one, and without a
+  // replacement glyph the advance table can't stage it either): synthesize the typographic
+  // default of ~1/4 em rather than collapsing every word gap to zero.
+  return std::max(2, getLineHeight(fontId) / 4);
 }
 
 int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
@@ -1609,14 +1618,20 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    int32_t advFP = sdIt->second->getAdvance(' ', resolvedStyle);
+    if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
+    if (advFP != 0) return fp4::toPixel(advFP);  // 0 = no space glyph anywhere: fallback chain below
   }
 
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) return 0;
   const auto& font = fontIt->second;
   const EpdGlyph* spaceGlyph = font.getGlyph(' ', style);
-  const int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
+  int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
+  if (spaceAdvanceFP == 0) {
+    // Synthesized ~1/4 em space -- see getSpaceWidth. (12.4 fixed-point: px << 4.)
+    return std::max(2, getLineHeight(fontId) / 4);
+  }
   // Combine space advance + flanking kern into one fixed-point sum before snapping.
   // Snapping the combined value avoids the +/-1 px error from snapping each component separately.
   const int32_t kernFP = static_cast<int32_t>(font.getKerning(leftCp, ' ', style)) +
@@ -1650,8 +1665,14 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
       if (advFP == 0 && !utf8IsCombiningMark(cp)) {
-        const EpdGlyph* glyph = font.getGlyph(cp, style);
-        advFP = glyph ? glyph->advanceX : 0;
+        // Missing from the selected SD font: price it from the companion's advance table
+        // (resident RAM), else any already-resident fallback glyph -- never the on-demand SD
+        // loader, which costs a seek+read per glyph and cripples indexing.
+        if (fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(cp, styleIdx);
+        if (advFP == 0) {
+          const EpdGlyph* glyph = font.getGlyphResident(cp, style);
+          advFP = glyph ? glyph->advanceX : 0;
+        }
       }
       widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
     }
@@ -1682,8 +1703,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       widthPx += fp4::toPixel(prevAdvanceFP + kernFP);         // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    const EpdGlyph* glyph = font.getGlyphResident(cp, style);
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if (prevAdvanceFP == 0 && fallbackSdFont_) {
+      // Not resident anywhere: companion SD font's advance table (RAM), never the on-demand
+      // glyph loader -- measurement must not do per-glyph SD reads (indexing speed).
+      prevAdvanceFP = fallbackSdFont_->getAdvance(cp, 0);
+    }
     if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
     }
@@ -1925,9 +1951,22 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   const int ascender = fontData ? fontData->ascender : cellSize;
   const int fontPct = (cellSize > 0) ? (ascender * 100 / cellSize) : 100;
   const int extraNudge = (fontPct > 100) ? (cellSize * (fontPct - 100) / 30) : 0;
+  // How much lower this font's upright neighbors sit in their cells than a compact font's:
+  // upright glyphs hang from the baseline at `ascender`, and cellSize = em * 7/6, so any
+  // ascender beyond the em height pushes the surrounding ink down by that surplus. Rotated
+  // punctuation is placed by its own ink box and must follow, or it floats high relative to
+  // the column (NotoSansJP asc 34 / cell 33 vs UDDigiKyokasho asc 26 / cell 33).
+  const int baselineExcess = std::max(0, ascender - (cellSize * 6) / 7);
 
   int drawX = cellLeftX + (cellSize - rotatedW) / 2;
   int drawY = cellTopY + (cellSize - rotatedH) / 2 + cellSize / 3 + extraNudge * 2;
+  if (shiftType == 4) {
+    // Dashes/chōonpu read slightly right of the column axis when purely ink-centered
+    // (device photo, kyokasho) -- bias them a touch left. Tall fonts (Noto) additionally
+    // need one more nudge unit down or the stroke floats high in its cell.
+    drawX -= std::max(1, cellSize / 10);
+    drawY += baselineExcess * 2;
+  }
 
   if (shiftType == 2) {          // closing bracket/quote
     const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3009 || cp == 0x300B ||
@@ -1938,8 +1977,17 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     const int closingBias = std::max(1, cellSize / 6 + extraNudge * 2);
     drawY = cellTopY + cellSize - rotatedH + closingBias;
   } else if (shiftType == 3) {   // opening bracket/quote
-    const int openingBias = std::max(1, (cellSize * 2) / 3 + extraNudge);
+    // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
+    // deep, the bracket read as hanging low/left of the character it opens (device photos with
+    // UDDigiKyokasho). The maxX clamp below already grants opening brackets right overhang.
+    // Round parens stay purely ink-centered: the corner-bracket right shift pushed their
+    // rotated arc off the column axis (device photos, kyokasho).
+    const bool roundParen = (cp == 0xFF08);
+    // baselineExcess: tall fonts (Noto) left the opening bracket hanging too high above the
+    // character it opens (kyokasho, baselineExcess 0, is unaffected).
+    const int openingBias = std::max(1, cellSize / 2 + extraNudge + baselineExcess);
     drawY = cellTopY + cellSize + openingBias;
+    if (!roundParen) drawX += cellSize / 4;
   }
 
   int minX = cellLeftX;
@@ -1951,7 +1999,7 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     minY -= cellSize / 2;
   }
   if (shiftType == 3) {
-    maxX += std::max(1, cellSize / 3);
+    maxX += std::max(1, cellSize / 2);
   }
   drawX = std::clamp(drawX, minX, maxX);
   drawY = std::clamp(drawY, minY, maxY);
@@ -1962,6 +2010,13 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   // Solve for cursor so the rotated bbox starts at (drawX, drawY).
   const int cursorX = (drawX + rotatedW - 1) - glyph->top;
   const int cursorY = drawY - glyph->left;
+
+  // TEMP diagnostics for vertical punctuation tuning (strip with the other telemetry)
+  if (cp == 0x30FC || shiftType == 3) {
+    LOG_DBG("VROT", "cp=%04X shift=%d cell=%d asc=%d pct=%d nudge=%d rotW=%d rotH=%d gTop=%d gLeft=%d cellTopY=%d drawX=%d drawY=%d",
+            (unsigned)cp, shiftType, cellSize, ascender, fontPct, extraNudge, rotatedW, rotatedH, glyph->top,
+            glyph->left, cellTopY, drawX, drawY);
+  }
 
   renderCharImpl<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorX, cursorY, black, style);
 }

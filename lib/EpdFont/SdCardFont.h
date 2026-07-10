@@ -37,6 +37,12 @@ class SdCardFont {
   // Returns true on success.
   bool load(const char* path);
 
+  // True when this font FILE contains the codepoint, per the FULL interval table loaded at
+  // load(). EpdFont::hasGlyph() on an SD font only answers residency in the current mini
+  // font (on-demand glyphs resolve via glyphMissHandler), so it must not be used to judge
+  // coverage -- confirmed on device: probing hasGlyph made every SD font look CJK-less.
+  bool coversCodepoint(uint32_t cp, uint8_t styleId = 0) const;
+
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
   // Default 0x0F = all present styles.
@@ -227,6 +233,16 @@ class SdCardFont {
   // amortizes SD reads. Cleared only on font unload or clearPersistentCache().
   static constexpr uint32_t ADVANCE_CACHE_LIMIT = 768;
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
+  // Kana and kanji are drawn on the full em in CJK fonts: one measured advance covers the
+  // entire range, so layout never does per-kanji SD reads (a chapter has thousands of unique
+  // kanji vs one 18-byte read). 0 = not yet measured.
+  uint16_t fullWidthAdvance_[MAX_STYLES] = {};
+  static bool isUniformFullWidth(uint32_t cp) {
+    return (cp >= 0x3041 && cp <= 0x30FF)     // hiragana + katakana
+           || (cp >= 0x3400 && cp <= 0x4DBF)  // CJK ext A
+           || (cp >= 0x4E00 && cp <= 0x9FFF)  // CJK unified
+           || (cp >= 0xF900 && cp <= 0xFAFF); // CJK compat
+  }
   uint32_t advanceTableSize_[MAX_STYLES] = {};
   bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;
   // Merge sortedNew (sorted by codepoint, no overlap with existing) into the

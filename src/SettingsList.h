@@ -13,6 +13,7 @@
 #include "CrossPointSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "activities/settings/SettingsActivity.h"
+#include "SdCardFontSystem.h"
 
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
@@ -26,8 +27,11 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   if (registry) {
     const auto& families = registry->getFamilies();
     enumStringValues.reserve(families.size());
-    std::transform(families.begin(), families.end(), std::back_inserter(enumStringValues),
-                   [](const SdCardFontFamilyInfo& f) { return f.name; });
+    for (const auto& f : families) {
+      // Hidden everywhere the picker hides them -- see SdCardFontSystem::isBuiltinJpExtension.
+      if (SdCardFontSystem::isBuiltinJpExtension(f.name)) continue;
+      enumStringValues.push_back(f.name);
+    }
   }
 
   // Capture the SD font count for the lambdas
@@ -53,13 +57,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   s.category = StrId::STR_CAT_READER;
 
   // Capture registry families by copy for the lambdas
-  std::vector<std::string> sdFamilyNames;
-  if (registry) {
-    const auto& families = registry->getFamilies();
-    sdFamilyNames.reserve(families.size());
-    std::transform(families.begin(), families.end(), std::back_inserter(sdFamilyNames),
-                   [](const SdCardFontFamilyInfo& f) { return f.name; });
-  }
+  std::vector<std::string> sdFamilyNames = enumStringValues;  // same filtered list, same order
 
   s.valueGetter = [sdFamilyNames]() -> uint8_t {
     // If an SD card font is selected, find its index
@@ -177,7 +175,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(
             StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
+            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
+             StrId::STR_WORD_LOOKUP},
             "shortPwrBtn", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),

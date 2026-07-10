@@ -30,8 +30,11 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 54;
-constexpr size_t PARSE_BUFFER_SIZE = 1024;
+constexpr uint8_t VSECTION_FILE_VERSION = 55;  // v55: cell metrics from SD advance table (companion-font layouts built with lineHeight cells)
+// 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
+// staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
+// the chunk quarters the transaction count for ~12KB of transient buffers.
+constexpr size_t PARSE_BUFFER_SIZE = 4096;
 
 using RubyRun = VerticalParsedText::RubyRun;
 
@@ -745,6 +748,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // the heap was already this fragmented (from earlier chapters/navigation this session) before
   // this chapter's build even started. free=getFreeHeap() (total) was already logged; maxAlloc=
   // getMaxAllocHeap() (largest contiguous block) is new.
+  const uint32_t buildStartMs = millis();
   LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(),
           ESP.getMaxAllocHeap());
   const auto localPath = epub->getSpineItem(spineIndex).href;
@@ -865,6 +869,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   if (sink.failed) return false;
 
+  LOG_INF("VSC", "streamParseAndLayout: %u ms", millis() - buildStartMs);
   LOG_INF("VSC", "streamParseAndLayout end spine=%d pages=%zu free=%u", spineIndex, pageOffsets_.size(),
           ESP.getFreeHeap());
   return true;
