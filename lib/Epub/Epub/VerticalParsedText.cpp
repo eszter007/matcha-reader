@@ -830,11 +830,17 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       // Split the run into chunks that fit in columns, breaking at spaces.
       renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
       const int maxColumnPx = rowsPerColumn * cellPx;
+      // A rotated run drawn flush at its cell top starts inside the preceding upright
+      // character's ink (device photo: ...デザイン bookwall with the ン touching the b).
+      // Start it a third of a cell lower; the shift is included in every rows-needed
+      // computation below so the run's tail can't creep into the FOLLOWING character.
+      const int runDownNudge = std::max(4, cellPx / 2);
       std::string remaining = runUtf8;
 
       while (!remaining.empty()) {
         const int remWidthPx = renderer_.getTextAdvanceX(fontId_, remaining.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
-        const uint16_t remRows = static_cast<uint16_t>(std::max(1, static_cast<int>(std::ceil(static_cast<double>(remWidthPx) / cellPx))));
+        const uint16_t remRows = static_cast<uint16_t>(
+            std::max(1, static_cast<int>(std::ceil(static_cast<double>(remWidthPx + runDownNudge) / cellPx))));
         const uint16_t availRows = rowsPerColumn - row;
 
         if (remRows <= availRows) {
@@ -845,7 +851,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.column = column;
           g.row = row;
           g.x = static_cast<uint16_t>(columnLeftX(column) + cellPx - ascender);
-          g.y = static_cast<uint16_t>(topY);
+          g.y = static_cast<uint16_t>(topY + runDownNudge);
           g.paragraphIndex = pc.paragraphIndex;
           g.byteOffset = pc.byteOffset;
           g.style = pc.style;
@@ -867,7 +873,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         for (size_t sp = remaining.rfind(' '); sp != std::string::npos; sp = (sp == 0) ? std::string::npos : remaining.rfind(' ', sp - 1)) {
           std::string prefix = remaining.substr(0, sp);
           const int prefixPx = renderer_.getTextAdvanceX(fontId_, prefix.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
-          const uint16_t prefixRows = static_cast<uint16_t>(std::max(1, static_cast<int>(std::ceil(static_cast<double>(prefixPx) / cellPx))));
+          const uint16_t prefixRows = static_cast<uint16_t>(
+              std::max(1, static_cast<int>(std::ceil(static_cast<double>(prefixPx + runDownNudge) / cellPx))));
           if (prefixRows <= availRows) {
             breakAt = sp;
             break;
@@ -883,13 +890,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           } else {
             // Already at top of column and still doesn't fit — force-place
             // the whole thing to avoid an infinite loop.
-            const int topY = 0;
             VerticalGlyph g;
             g.codepoint = 0;
             g.column = column;
             g.row = 0;
             g.x = static_cast<uint16_t>(columnLeftX(column) + cellPx - ascender);
-            g.y = static_cast<uint16_t>(topY);
+            g.y = static_cast<uint16_t>(runDownNudge);
             g.paragraphIndex = pc.paragraphIndex;
             g.byteOffset = pc.byteOffset;
             g.renderKind = VerticalGlyph::RotatedRun;
@@ -909,7 +915,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // Place the prefix chunk.
         std::string chunk = remaining.substr(0, breakAt);
         const int chunkPx = renderer_.getTextAdvanceX(fontId_, chunk.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
-        const uint16_t chunkRows = static_cast<uint16_t>(std::max(1, static_cast<int>(std::ceil(static_cast<double>(chunkPx) / cellPx))));
+        const uint16_t chunkRows = static_cast<uint16_t>(
+            std::max(1, static_cast<int>(std::ceil(static_cast<double>(chunkPx + runDownNudge) / cellPx))));
 
         const int topY = row * cellPx;
         VerticalGlyph g;
@@ -917,7 +924,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         g.column = column;
         g.row = row;
         g.x = static_cast<uint16_t>(columnLeftX(column) + cellPx - ascender);
-        g.y = static_cast<uint16_t>(topY);
+        g.y = static_cast<uint16_t>(topY + runDownNudge);
         g.paragraphIndex = pc.paragraphIndex;
         g.byteOffset = pc.byteOffset;
         g.style = pc.style;

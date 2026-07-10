@@ -30,7 +30,7 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 55;  // v55: cell metrics from SD advance table (companion-font layouts built with lineHeight cells)
+constexpr uint8_t VSECTION_FILE_VERSION = 57;  // v57: rotated Latin runs start 1/2 cell lower; inter-tag whitespace dropped (phantom blank pages)
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -372,6 +372,20 @@ struct TextExtractor {
       if (self->currentText.size() + static_cast<size_t>(len) > MAX_PARAGRAPH_BYTES) {
         LOG_DBG("VSC", "MAX_PARAGRAPH_BYTES forced split at %u bytes", static_cast<unsigned>(self->currentText.size()));
         self->flushParagraph();
+      }
+      // Drop inter-tag whitespace (the "\n" text nodes between <p>/<div> in pretty-printed
+      // xhtml): laid out as real paragraphs they produced phantom blank pages -- e.g. an
+      // empty page BEFORE a cover chapter's image page. Only leading whitespace is dropped;
+      // intentional blank lines arrive as explicit '\n' from <br/> in startElement, and
+      // whitespace inside running text lands with currentText already non-empty.
+      if (self->currentText.empty()) {
+        int firstInk = 0;
+        while (firstInk < len && (s[firstInk] == '\n' || s[firstInk] == '\r' || s[firstInk] == '\t' || s[firstInk] == ' ')) {
+          firstInk++;
+        }
+        if (firstInk == len) return;
+        s += firstInk;
+        len -= firstInk;
       }
       self->currentText.append(s, static_cast<size_t>(len));
       // Streaming cadence: hand the buffered text onward as a seamless continuation well
