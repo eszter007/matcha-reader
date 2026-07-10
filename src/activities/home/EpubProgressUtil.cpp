@@ -9,9 +9,13 @@ namespace EpubProgress {
 int percentFromCache(const std::string& cachePath, const char* logTag) {
   HalFile f;
   if (!Storage.openFileForRead(logTag, cachePath + "/progress.bin", f)) return -1;
-  uint8_t data[6];
-  if (f.read(data, 6) != 6) return -1;
+  uint8_t data[9];
+  const int got = f.read(data, 9);
+  if (got < 6) return -1;
   f.close();
+  // Newer progress files carry the reader's page-based book percent (pages read / total
+  // pages) directly -- use it so the Library matches the reader exactly. 0xFF = unknown.
+  if (got >= 9 && data[8] <= 100) return data[8];
   const uint16_t spineIndex = data[0] | (data[1] << 8);
   const uint16_t currentPage = data[2] | (data[3] << 8);
   const uint16_t pageCount = data[4] | (data[5] << 8);

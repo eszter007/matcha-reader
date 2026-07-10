@@ -357,13 +357,16 @@ void EpubReaderActivity::loop() {
       const int sectionPageCount = verticalSection ? verticalSection->pageCount
                                    : section       ? section->pageCount
                                                    : 0;
+      // The menu header shows the same ToC-chapter-wide numbering and page-based book
+      // progress as the status bar.
+      updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
       float bookProgress = 0.0f;
-      if (epub->getBookSize() > 0 && (section || verticalSection) && sectionPageCount > 0) {
+      if (bookPagesTotal > 0) {
+        bookProgress = 100.0f * static_cast<float>(bookPagesBefore + sectionPage) / static_cast<float>(bookPagesTotal);
+      } else if (epub->getBookSize() > 0 && (section || verticalSection) && sectionPageCount > 0) {
         const float chapterProgress = static_cast<float>(sectionPage - 1) / static_cast<float>(sectionPageCount);
         bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
       }
-      // The menu header shows the same ToC-chapter-wide numbering as the status bar.
-      updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
       const int currentPage = chapterPagesBefore + sectionPage;
       const int totalPages = std::max(chapterPagesTotal, currentPage);
       const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
@@ -570,7 +573,38 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   // Normalize input to 0-100 to avoid invalid jumps.
   percent = clampPercent(percent);
 
-  // Convert percent into a byte-like absolute position across the spine sizes.
+  // Page-based jump matching the displayed page-based progress: percent -> absolute page
+  // index -> containing spine + fraction within it.
+  updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
+  if (bookPagesTotal > 0 && !spinePagesEffective.empty()) {
+    const int targetPage = std::clamp((percent * bookPagesTotal + 50) / 100, 1, bookPagesTotal);
+    int acc = 0;
+    int targetSpine = static_cast<int>(spinePagesEffective.size()) - 1;
+    int pageInSpine = spinePagesEffective.back();
+    for (size_t i = 0; i < spinePagesEffective.size(); i++) {
+      if (targetPage <= acc + spinePagesEffective[i]) {
+        targetSpine = static_cast<int>(i);
+        pageInSpine = targetPage - acc;
+        break;
+      }
+      acc += spinePagesEffective[i];
+    }
+    // Fraction within the spine; the real page resolves after the section loads (estimated
+    // counts may differ slightly from the built section's).
+    pendingSpineProgress = (spinePagesEffective[targetSpine] > 0)
+                               ? static_cast<float>(pageInSpine - 1) / static_cast<float>(spinePagesEffective[targetSpine])
+                               : 0.0f;
+    pendingSpineProgress = std::clamp(pendingSpineProgress, 0.0f, 1.0f);
+    RenderLock lock(*this);
+    currentSpineIndex = targetSpine;
+    nextPageNumber = 0;
+    pendingPercentJump = true;
+    section.reset();
+    verticalSection.reset();
+    return;
+  }
+
+  // Fallback (no page model yet): convert percent into a byte-like absolute position across the spine sizes.
   // Use an overflow-safe computation: (bookSize / 100) * percent + (bookSize % 100) * percent / 100
   size_t targetSize =
       (bookSize / 100) * static_cast<size_t>(percent) + (bookSize % 100) * static_cast<size_t>(percent) / 100;
@@ -1436,7 +1470,8 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
 
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride,
                                       int8_t furiOverride) {
-  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride);
+  const uint8_t percent = static_cast<uint8_t>(pageBasedPercent(spineIndex, currentPage + 1));
+  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride, percent);
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
@@ -1615,53 +1650,96 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   chapterSpanVertical = vertical;
   chapterPagesBefore = 0;
   chapterPagesTotal = std::max(1, livePages);
+  bookPagesBefore = 0;
+  bookPagesTotal = 0;
+  spinePagesEffective.clear();
 
   if (!epub) return;
+  const int spineCount = epub->getSpineItemsCount();
+  if (spineCount <= 0) return;
+  if (static_cast<int>(spinePagesReal.size()) != spineCount) spinePagesReal.assign(spineCount, 0);
+
+  // Collect real page counts: the live section plus a cheap header-only cache peek for every
+  // spine not seen yet this session (a missing cache is a fast failed open).
+  const int fontId = effectiveReaderFontId();
+  size_t knownBytes = 0;
+  uint32_t knownPages = 0;
+  for (int i = 0; i < spineCount; i++) {
+    if (i == currentSpineIndex && livePages > 0) {
+      spinePagesReal[i] = static_cast<uint16_t>(std::min(livePages, 0xFFFF));
+    } else if (spinePagesReal[i] == 0) {
+      if (vertical) {
+        VerticalSection sibling(epub, i, renderer);
+        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight)) spinePagesReal[i] = sibling.pageCount;
+      } else {
+        Section sibling(epub, i, renderer);
+        if (sibling.loadSectionFile(fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+                                    SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+                                    SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
+                                    SETTINGS.focusReadingEnabled)) {
+          spinePagesReal[i] = sibling.pageCount;
+        }
+      }
+    }
+    if (spinePagesReal[i] > 0) {
+      knownPages += spinePagesReal[i];
+      const size_t prev = (i >= 1) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
+      knownBytes += epub->getCumulativeSpineItemSize(i) - prev;
+    }
+  }
+
+  // Effective counts: real where known, byte-share estimate (against the known chapters'
+  // pages-per-byte ratio) where not.
+  spinePagesEffective.assign(spineCount, 1);
+  for (int i = 0; i < spineCount; i++) {
+    if (spinePagesReal[i] > 0) {
+      spinePagesEffective[i] = spinePagesReal[i];
+      continue;
+    }
+    if (knownBytes > 0 && knownPages > 0) {
+      const size_t prev = (i >= 1) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
+      const size_t sz = epub->getCumulativeSpineItemSize(i) - prev;
+      const uint64_t est = (static_cast<uint64_t>(sz) * knownPages + knownBytes / 2) / knownBytes;
+      spinePagesEffective[i] = static_cast<uint16_t>(std::clamp<uint64_t>(est, 1, 0xFFFF));
+    }
+  }
+  for (int i = 0; i < spineCount; i++) {
+    if (i < currentSpineIndex) bookPagesBefore += spinePagesEffective[i];
+    bookPagesTotal += spinePagesEffective[i];
+  }
+
+  // ToC-chapter span for the page X/Y display (spines without their own ToC entry inherit
+  // the previous entry's tocIndex).
   const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
   if (tocIdx < 0) return;  // no ToC entry covers this spine -- keep per-file numbering
-
   int start = currentSpineIndex;
   while (start > 0 && epub->getTocIndexForSpineIndex(start - 1) == tocIdx) start--;
   int end = currentSpineIndex;
-  const int spineCount = epub->getSpineItemsCount();
   while (end + 1 < spineCount && epub->getTocIndexForSpineIndex(end + 1) == tocIdx) end++;
   if (start == end) return;
-
-  const size_t curSizePrev = (currentSpineIndex >= 1) ? epub->getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
-  const size_t curSize = epub->getCumulativeSpineItemSize(currentSpineIndex) - curSizePrev;
-  const int fontId = effectiveReaderFontId();
 
   int before = 0;
   int total = 0;
   for (int i = start; i <= end; i++) {
-    int pages = -1;
-    if (i == currentSpineIndex) {
-      pages = std::max(1, livePages);
-    } else if (vertical) {
-      VerticalSection sibling(epub, i, renderer);
-      if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight)) pages = sibling.pageCount;
-    } else {
-      Section sibling(epub, i, renderer);
-      if (sibling.loadSectionFile(fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-                                  SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
-                                  SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
-                                  SETTINGS.focusReadingEnabled)) {
-        pages = sibling.pageCount;
-      }
-    }
-    if (pages < 0) {
-      // Sibling not indexed yet: estimate from its byte share relative to the live section.
-      const size_t prev = (i >= 1) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
-      const size_t sz = epub->getCumulativeSpineItemSize(i) - prev;
-      pages = (livePages > 0 && curSize > 0)
-                  ? std::max(1, static_cast<int>((sz * static_cast<size_t>(livePages) + curSize / 2) / curSize))
-                  : 1;
-    }
-    if (i < currentSpineIndex) before += pages;
-    total += pages;
+    if (i < currentSpineIndex) before += spinePagesEffective[i];
+    total += spinePagesEffective[i];
   }
   chapterPagesBefore = before;
-  chapterPagesTotal = total;
+  chapterPagesTotal = std::max(1, total);
+}
+
+int EpubReaderActivity::pageBasedPercent(const int spineIndex, const int sectionPage) const {
+  if (bookPagesTotal <= 0 || spinePagesEffective.empty()) {
+    // Model unavailable (e.g. no section loaded yet) -- fall back to byte weighting.
+    if (!epub || epub->getBookSize() == 0) return 0;
+    return clampPercent(static_cast<int>(epub->calculateProgress(spineIndex, 0.0f) * 100.0f + 0.5f));
+  }
+  int before = 0;
+  for (int i = 0; i < spineIndex && i < static_cast<int>(spinePagesEffective.size()); i++) {
+    before += spinePagesEffective[i];
+  }
+  const int read = before + std::max(1, sectionPage);
+  return clampPercent((read * 100 + bookPagesTotal / 2) / bookPagesTotal);
 }
 
 void EpubReaderActivity::renderStatusBar() const {
@@ -1679,13 +1757,19 @@ void EpubReaderActivity::renderStatusBar() const {
       (rawPageCount > 0) ? std::clamp(rawCurrentPage + 1, 1, rawPageCount) : 1;
   const int sectionPageCount = (rawPageCount > 0) ? rawPageCount : 1;
 
-  const float sectionChapterProg = (rawPageCount > 0) ? (static_cast<float>(sectionPage) / sectionPageCount) : 0.0f;
-  const float bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
-
-  // Display page numbering spans the ToC chapter, not just this spine file.
+  // Display page numbering spans the ToC chapter, not just this spine file; book progress is
+  // page-based (pages read / total pages) with byte weighting only as a bootstrap fallback.
   updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
   const int currentPage = chapterPagesBefore + sectionPage;
   const int pageCount = std::max(chapterPagesTotal, currentPage);
+
+  float bookProgress;
+  if (bookPagesTotal > 0) {
+    bookProgress = 100.0f * static_cast<float>(bookPagesBefore + sectionPage) / static_cast<float>(bookPagesTotal);
+  } else {
+    const float sectionChapterProg = (rawPageCount > 0) ? (static_cast<float>(sectionPage) / sectionPageCount) : 0.0f;
+    bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
+  }
 
   std::string title;
 

@@ -110,11 +110,21 @@ class EpubReaderActivity final : public Activity {
   // from byte size. Cached per (spine, live page count, mode); mutable so the const render
   // path can refresh it.
   void updateChapterPageSpan(uint16_t viewportWidth, uint16_t viewportHeight) const;
+  // Page-based book progress (pages read / total pages, like Apple Books) instead of the
+  // byte-weighted estimate: furigana markup inflates ruby-dense chapters' byte share, so the
+  // byte model lags several percent behind the rendered-page position on Japanese books.
+  // Real counts come from section-cache headers; unindexed chapters are estimated from their
+  // byte share of the already-indexed ones and refine as sections get built.
+  int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
   mutable bool chapterSpanVertical = false;
   mutable int chapterPagesBefore = 0;
   mutable int chapterPagesTotal = 0;
+  mutable std::vector<uint16_t> spinePagesReal;       // 0 = not indexed yet
+  mutable std::vector<uint16_t> spinePagesEffective;  // real or byte-estimated, never 0
+  mutable int bookPagesBefore = 0;
+  mutable int bookPagesTotal = 0;
   mutable uint16_t lastViewportWidth = 0;
   mutable uint16_t lastViewportHeight = 0;
   // The font the book is actually laid out and rendered in. Normally the user's selection;

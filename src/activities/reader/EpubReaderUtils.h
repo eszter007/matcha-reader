@@ -9,13 +9,15 @@ namespace EpubReaderUtils {
 
 // Persists reader progress for an EPUB to its cache directory. Returns true on success.
 inline bool saveProgress(const Epub& epub, int spineIndex, int pageNumber, int pageCount,
-                         int8_t verticalOverride, int8_t furiganaOverride) {
+                         int8_t verticalOverride, int8_t furiganaOverride, uint8_t pageBasedPercent = 0xFF) {
   if (spineIndex < 0 || spineIndex > 0xFFFF || pageNumber < 0 || pageNumber > 0xFFFF || pageCount < 0 ||
       pageCount > 0xFFFF) {
     LOG_ERR("ERS", "Progress values out of range: spine=%d page=%d count=%d", spineIndex, pageNumber, pageCount);
     return false;
   }
-  uint8_t data[8];
+  // data[8]: page-based book percent (0-100) for the Library/Home labels; 0xFF = unknown,
+  // readers then fall back to the legacy byte-weighted computation. Old 8-byte files stay valid.
+  uint8_t data[9];
   data[0] = spineIndex & 0xFF;
   data[1] = (spineIndex >> 8) & 0xFF;
   data[2] = pageNumber & 0xFF;
@@ -24,6 +26,7 @@ inline bool saveProgress(const Epub& epub, int spineIndex, int pageNumber, int p
   data[5] = (pageCount >> 8) & 0xFF;
   data[6] = static_cast<uint8_t>(verticalOverride);
   data[7] = static_cast<uint8_t>(furiganaOverride);
+  data[8] = pageBasedPercent;
   if (!ProgressFile::writeAtomic(epub.getCachePath(), data, sizeof(data))) {
     return false;
   }
