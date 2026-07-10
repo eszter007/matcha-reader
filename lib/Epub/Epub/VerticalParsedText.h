@@ -170,6 +170,14 @@ class VerticalParsedText {
     paragraphBreaksBeforeIndex_.clear();
     oom_ = false;
   }
+  // Pin stream_'s backing store once at build start, while the heap is freshest. Mid-build
+  // growth (alloc-copy-free every few dozen entries) interleaved with ruby-string churn walks
+  // the buffer through the heap and shreds the largest contiguous block -- observed on a real
+  // device collapsing maxAlloc 59K -> 4K over one furigana-dense chapter until an unrelated
+  // allocation aborted. With the batch cadence (BATCH_CHARS=160) and run slicing
+  // (RUN_SLICE_CHARS=170, exact char counting) 512 entries are never exceeded, so after this
+  // call stream_ never reallocates for the whole build. clear() in reset() keeps capacity.
+  void preallocateStream();
   // Number of characters currently buffered for layout. Callers batching a long chapter use this
   // to flush layoutPages()+reset() periodically so stream_ stays O(batch) instead of O(chapter)
   // -- a whole chapter's worth of PendingChars (32 bytes each) cannot fit in RAM on-device.

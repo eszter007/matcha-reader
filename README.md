@@ -126,6 +126,12 @@ Tab switching uses the same pattern as Settings: Confirm cycles tabs when the ta
 
 Browsing shows every file on the SD card, not just supported formats — files CrossPoint can't open (unsupported extensions) are still listed, grayed out, so nothing on the card is hidden from view. Opening a folder that contains a `panels.idx` (a converted manga) launches the manga reader directly, regardless of where that folder lives.
 
+### Chapter splitting for single-file novels
+
+Many Japanese EPUBs ship a whole novel as one or two huge XHTML files whose chapters exist only as visual number headings (a paragraph containing just `１`, `２`, `三`, …). Those books show a single giant chapter: no ToC navigation and page counters that span the whole book.
+
+When you upload an EPUB through the device's web file transfer with **Optimize EPUB** enabled, such books are split automatically: every detected number heading becomes its own chapter file with a real ToC entry, so chapter navigation, per-chapter page counters, and progress all work normally. Books without this pattern are left untouched. The same transform is available as a standalone PC script: `tools/epub_split_chapters.py input.epub output.epub`.
+
 ### Insights
 
 The home menu shows an **Insights** entry (between File Transfer and Settings) that tracks your reading activity:

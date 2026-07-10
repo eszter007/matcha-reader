@@ -1150,6 +1150,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     updateBookmarkFlag();
 
+    bool imagePageDisplayed = false;
     {
       const auto* vpage = verticalSection->getPage();
       if (!vpage) {
@@ -1168,25 +1169,72 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         const int reserve = UITheme::getInstance().getStatusBarHeight() +
                             UITheme::getInstance().getMetrics().statusBarVerticalMargin +
                             SETTINGS.screenMargin;
-        ImageBlock imgBlock(vpage->imagePath, vpage->imageWidth, vpage->imageHeight);
-        if (vpage->imageRotated) {
-          imgBlock.setRotated(true, static_cast<int16_t>(reserve));
-          imgBlock.render(renderer, 0, 0);  // ImageBlock handles rotation + centering
-        } else {
-          int iw = vpage->imageWidth;
-          int ih = vpage->imageHeight;
-          if (iw > viewportWidth || ih > viewportHeight) {
-            const float sx = static_cast<float>(viewportWidth) / iw;
-            const float sy = static_cast<float>(viewportHeight) / ih;
-            const float s = (sx < sy) ? sx : sy;
-            iw = static_cast<int>(iw * s + 0.5f);
-            ih = static_cast<int>(ih * s + 0.5f);
+        const auto drawImagePage = [&]() {
+          if (vpage->imageRotated) {
+            ImageBlock imgBlock(vpage->imagePath, vpage->imageWidth, vpage->imageHeight);
+            imgBlock.setRotated(true, static_cast<int16_t>(reserve));
+            imgBlock.render(renderer, 0, 0);  // ImageBlock handles rotation + centering
+          } else {
+            int iw = vpage->imageWidth;
+            int ih = vpage->imageHeight;
+            if (iw > viewportWidth || ih > viewportHeight) {
+              const float sx = static_cast<float>(viewportWidth) / iw;
+              const float sy = static_cast<float>(viewportHeight) / ih;
+              const float s = (sx < sy) ? sx : sy;
+              iw = static_cast<int>(iw * s + 0.5f);
+              ih = static_cast<int>(ih * s + 0.5f);
+            }
+            ImageBlock fitBlock(vpage->imagePath, static_cast<int16_t>(iw), static_cast<int16_t>(ih));
+            const int imgX = orientedMarginLeft + (viewportWidth - iw) / 2;
+            const int imgY = orientedMarginTop + (viewportHeight - ih) / 2;
+            fitBlock.render(renderer, imgX, imgY);
           }
-          ImageBlock fitBlock(vpage->imagePath, static_cast<int16_t>(iw), static_cast<int16_t>(ih));
-          const int imgX = orientedMarginLeft + (viewportWidth - iw) / 2;
-          const int imgY = orientedMarginTop + (viewportHeight - ih) / 2;
-          fitBlock.render(renderer, imgX, imgY);
+        };
+
+        // Same display sequence as the manga reader: one FAST BW pass, then the grayscale
+        // planes. The image was decoded with 4-level Bayer dithering, and a plain BW display
+        // renders gray levels 0-1 as solid black -- a mid-dark cover half showed as one black
+        // blob until the grayscale planes lift the dark tones. (No blank-white intermediate
+        // pass: it read as a distracting flash on full-page images.)
+        drawImagePage();
+        renderStatusBar();
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+
+        if (renderer.supportsStripGrayscale()) {
+          constexpr int STRIP_ROWS = 80;
+          const int gh = renderer.getDisplayHeight();
+          const int gwBytes = renderer.getDisplayWidthBytes();
+          auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+          if (!scratch) {
+            LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); image stays BW this page",
+                    gwBytes * STRIP_ROWS);
+          } else {
+            renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+            for (int y = 0; y < gh; y += STRIP_ROWS) {
+              const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+              renderer.beginStripTarget(scratch.get(), y, rows);
+              renderer.clearScreen(0x00);
+              drawImagePage();
+              renderer.endStripTarget();
+              renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
+            }
+            renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+            for (int y = 0; y < gh; y += STRIP_ROWS) {
+              const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+              renderer.beginStripTarget(scratch.get(), y, rows);
+              renderer.clearScreen(0x00);
+              drawImagePage();
+              renderer.endStripTarget();
+              renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
+            }
+            renderer.setRenderMode(GfxRenderer::BW);
+            renderer.displayGrayBuffer();
+            renderer.cleanupGrayscaleWithFrameBuffer();
+          }
         }
+        // Gray charge in the image region needs the HALF ghost-cleanup on the next page.
+        pagesUntilFullRefresh = 1;
+        imagePageDisplayed = true;
       } else {
         // Bulk-load every glyph this page needs before drawing a single one. Without this, each
         // draw call for a codepoint that isn't already cached falls through to the on-demand
@@ -1227,8 +1275,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
     }
 
-    renderStatusBar();
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
+      renderStatusBar();
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    }
     saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride, furiganaOverride);
 
     showPendingSyncSaveError();

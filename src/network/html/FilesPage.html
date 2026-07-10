@@ -4637,6 +4637,199 @@ async function processImage(data, imageState = 0, imagePath = '') {
   });
 }
 
+// --- Chapter splitting for single-file novels -------------------------------------------
+// Many Japanese EPUBs ship the whole novel as one or two huge XHTML files whose chapters
+// exist only as visual number headings (a paragraph containing nothing but 1 / ２ / 三).
+// Detect those, split the file at each heading into its own XHTML (real ToC entries, per-
+// chapter page counters on the device, far less RAM pressure while paginating), rewrite
+// the OPF spine/manifest plus nav/NCX. Returns {blob, chapters} or null when there is
+// nothing to split. Mirror of tools/epub_split_chapters.py -- keep the two in sync.
+const MRCH_NUM = '(?:[0-9]{1,3}|[０-９]{1,3}|[〇一二三四五六七八九十百]{1,4})';
+const MRCH_HEADING_RE = new RegExp(
+  '(?:<div[^>]*>\\s*)?<p[^>]*>\\s*(?:<span[^>]*>\\s*)?(' + MRCH_NUM + ')\\s*(?:<\\/span>\\s*)?<\\/p>\\s*(?:<\\/div>)?', 'gs');
+
+function mrchFindHeadings(html) {
+  const out = [];
+  let m;
+  MRCH_HEADING_RE.lastIndex = 0;
+  while ((m = MRCH_HEADING_RE.exec(html)) !== null) {
+    const before = html.slice(0, m.index).trimEnd();
+    if (before && !before.endsWith('>')) continue;  // must be a standalone block
+    out.push({ offset: m.index, title: m[1] });
+  }
+  return out;
+}
+
+function mrchOpenBlocks(html, upto) {
+  const stack = [];
+  const re = /<(\/?)(body|div|section)([^>]*)>/gis;
+  let m;
+  while ((m = re.exec(html)) !== null && m.index < upto) {
+    if (m[3].trimEnd().endsWith('/')) continue;
+    const name = m[2].toLowerCase();
+    if (m[1]) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].name === name) { stack.splice(i, 1); break; }
+      }
+    } else {
+      stack.push({ name, tag: m[0] });
+    }
+  }
+  return stack;
+}
+
+function mrchSplitFile(html, offsets) {
+  const stack = mrchOpenBlocks(html, offsets[0]);
+  const prefixDoc = stack.length ? html.slice(0, html.indexOf(stack[0].tag)) : '';
+  const openTags = stack.map(s => s.tag).join('');
+  const closeTags = '\n' + stack.slice().reverse().map(s => '</' + s.name + '>').join('') + '\n</html>';
+  const parts = [];
+  for (let i = 0; i < offsets.length; i++) {
+    const start = i === 0 ? 0 : offsets[i];
+    const end = i + 1 < offsets.length ? offsets[i + 1] : null;
+    const body = end !== null ? html.slice(start, end) : html.slice(start);
+    const head = i === 0 ? '' : prefixDoc + openTags + '\n';
+    parts.push(head + body + (end !== null ? closeTags : ''));  // final part keeps original tail
+  }
+  return parts;
+}
+
+async function splitEpubChapters(file) {
+  const zip = await JSZip.loadAsync(file);
+  const dec = new TextDecoder();
+  const readText = async p => zip.files[p] ? dec.decode(await zip.files[p].async('arraybuffer')) : null;
+
+  const container = await readText('META-INF/container.xml');
+  if (!container) return null;
+  const opfPath = (container.match(/full-path="([^"]+)"/) || [])[1];
+  if (!opfPath) return null;
+  const opfDir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+  let opf = await readText(opfPath);
+  if (!opf) return null;
+
+  const manifest = {};
+  let navPath = null, ncxPath = null;
+  for (const tag of opf.match(/<item\b[^>]*>/g) || []) {
+    const id = (tag.match(/id="([^"]+)"/) || [])[1];
+    const href = (tag.match(/href="([^"]+)"/) || [])[1];
+    if (id && href) manifest[id] = href;
+    if (href && tag.includes('properties="nav"')) navPath = opfDir + href;
+    if (href && tag.includes('media-type="application/x-dtbncx+xml"')) ncxPath = opfDir + href;
+  }
+  const spineIds = (opf.match(/<itemref[^>]*idref="([^"]+)"/g) || []).map(s => s.match(/idref="([^"]+)"/)[1]);
+
+  const newFiles = {};
+  const tocAdditions = [];   // {href (opf-relative), title}
+  let anySplit = false;
+  let chapterCount = 0;
+
+  for (const idref of spineIds) {
+    const href = manifest[idref];
+    if (!href || !/\.x?html?$/i.test(href)) continue;
+    const html = await readText(opfDir + href);
+    if (!html) continue;
+    const headings = mrchFindHeadings(html);
+    if (headings.length < 2) continue;
+
+    const parts = mrchSplitFile(html, headings.map(h => h.offset));
+    const dot = href.lastIndexOf('.');
+    const stem = href.slice(0, dot), ext = href.slice(dot);
+    let extraRefs = '';
+    for (let i = 0; i < parts.length; i++) {
+      // Part 1 keeps the original name so existing hrefs/anchors stay valid.
+      const partHref = i === 0 ? href : stem + '_mr' + (i + 1) + ext;
+      const partId = i === 0 ? idref : idref + '-mr' + (i + 1);
+      newFiles[opfDir + partHref] = parts[i];
+      tocAdditions.push({ href: partHref, title: headings[i].title });
+      if (i > 0) {
+        opf = opf.replace('</manifest>',
+          '<item id="' + partId + '" href="' + partHref + '" media-type="application/xhtml+xml"/>\n</manifest>');
+        extraRefs += '\n<itemref idref="' + partId + '" linear="yes"/>';
+      }
+    }
+    const refMatch = opf.match(new RegExp('<itemref[^>]*idref="' + idref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*\\/>'));
+    if (refMatch) opf = opf.replace(refMatch[0], refMatch[0] + extraRefs);
+    anySplit = true;
+    chapterCount += parts.length;
+  }
+  if (!anySplit) return null;
+
+  const splitNames = new Set(tocAdditions.map(t => t.href.split('/').pop()));
+  const baseName = p => (p.split('#')[0]).split('/').pop();
+
+  // Nav: numbered entries REPLACE any existing entries pointing into the split files (a
+  // whole-novel title entry would otherwise be listed as if it were a chapter).
+  if (navPath) {
+    let nav = await readText(navPath);
+    if (nav) {
+      const navDir = navPath.includes('/') ? navPath.slice(0, navPath.lastIndexOf('/') + 1) : '';
+      const rel = h => {
+        const target = opfDir + h;
+        return target.startsWith(navDir) ? target.slice(navDir.length) : '../' + target;
+      };
+      const items = tocAdditions.map(t => '<li><a href="' + rel(t.href) + '">' + t.title + '</a></li>\n').join('');
+      const liRe = /<li>[\s\S]*?<\/li>\s*/g;
+      let insertAt = -1, mLi, spans = [];
+      while ((mLi = liRe.exec(nav)) !== null) {
+        const h = (mLi[0].match(/href="([^"]+)"/) || [])[1];
+        if (h && splitNames.has(baseName(h))) spans.push([mLi.index, liRe.lastIndex]);
+      }
+      if (spans.length) {
+        insertAt = spans[0][0];
+        for (let i = spans.length - 1; i >= 0; i--) nav = nav.slice(0, spans[i][0]) + nav.slice(spans[i][1]);
+      } else {
+        const mOl = nav.match(/<nav[^>]*epub:type="toc"[\s\S]*?(<\/ol>)/);
+        if (mOl) insertAt = nav.indexOf(mOl[1], mOl.index);
+      }
+      if (insertAt >= 0) newFiles[navPath] = nav.slice(0, insertAt) + items + nav.slice(insertAt);
+    }
+  }
+
+  // NCX: same replacement semantics.
+  if (ncxPath) {
+    let ncx = await readText(ncxPath);
+    if (ncx) {
+      const ncxDir = ncxPath.includes('/') ? ncxPath.slice(0, ncxPath.lastIndexOf('/') + 1) : '';
+      const rel = h => {
+        const target = opfDir + h;
+        return target.startsWith(ncxDir) ? target.slice(ncxDir.length) : '../' + target;
+      };
+      const points = tocAdditions.map((t, i) =>
+        '<navPoint id="mrch-' + (i + 1) + '" playOrder="' + (1000 + i) + '"><navLabel><text>' + t.title +
+        '</text></navLabel><content src="' + rel(t.href) + '"/></navPoint>\n').join('');
+      const npRe = /<navPoint\b(?:(?!<\/navPoint>)[\s\S])*<\/navPoint>\s*/g;
+      let mNp, spans = [];
+      while ((mNp = npRe.exec(ncx)) !== null) {
+        const h = (mNp[0].match(/src="([^"]+)"/) || [])[1];
+        if (h && splitNames.has(baseName(h))) spans.push([mNp.index, npRe.lastIndex]);
+      }
+      if (spans.length) {
+        const insertAt = spans[0][0];
+        for (let i = spans.length - 1; i >= 0; i--) ncx = ncx.slice(0, spans[i][0]) + ncx.slice(spans[i][1]);
+        ncx = ncx.slice(0, insertAt) + points + ncx.slice(insertAt);
+      } else {
+        ncx = ncx.replace('</navMap>', points + '</navMap>');
+      }
+      newFiles[ncxPath] = ncx;
+    }
+  }
+  newFiles[opfPath] = opf;
+
+  const out = new JSZip();
+  if (zip.files['mimetype']) {
+    out.file('mimetype', await zip.files['mimetype'].async('arraybuffer'), { compression: 'STORE' });
+  }
+  for (const [path, f] of Object.entries(zip.files)) {
+    if (f.dir || path === 'mimetype' || newFiles[path] !== undefined) continue;
+    out.file(path, await f.async('arraybuffer'), { compression: 'DEFLATE' });
+  }
+  for (const [path, text] of Object.entries(newFiles)) {
+    out.file(path, text, { compression: 'DEFLATE' });
+  }
+  const blob = await out.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  return { blob, chapters: chapterCount };
+}
+
 // Convert EPUB file - returns converted blob
 async function convertEpubFile(file, progressCallback) {
   const startTime = Date.now();
@@ -5329,6 +5522,19 @@ function uploadFile() {
         // Snapshot before the `file =` reassignment below, which swaps in the
         // converted blob and makes file.size point at the optimised size.
         const origFileSize = file.size;
+
+        // Chapter splitting pre-pass: single-file novels whose chapters exist only as
+        // number headings get real per-chapter files + ToC entries (see splitEpubChapters).
+        try {
+          const split = await splitEpubChapters(file);
+          if (split) {
+            log(`Chapter split: ${split.chapters} number-heading chapters extracted`, '', 'INFO');
+            file = new File([split.blob], file.name, { type: 'application/epub+zip' });
+          }
+        } catch (splitError) {
+          console.error('Chapter split error:', splitError);
+          log(`Chapter split skipped: ${splitError.message}`, 'warning', 'INFO');
+        }
 
         try {
           const convertedBlob = await convertEpubFile(file, (percent) => {

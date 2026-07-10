@@ -143,6 +143,22 @@ families:
       italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/vollkorn/Vollkorn-Italic%5Bwght%5D.ttf", variable: {wght: 400}}
       bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/vollkorn/Vollkorn-Italic%5Bwght%5D.ttf", variable: {wght: 700}}
 
+  - name: Pagella
+    description: "TeX Gyre Pagella, the free Palatino (Latin, Cyrillic)"
+    # Palatino itself is a commercial Linotype typeface and cannot be
+    # redistributed. TeX Gyre Pagella (GUST Font License) is the standard
+    # open implementation, derived from URW Palladio L -- URW's licensed
+    # digitization of Palatino -- so it is metrically and visually the same
+    # design. Greek is omitted: Pagella lacks the accented monotonic vowels
+    # (U+03AA-U+03B0), so modern Greek text would render with gaps.
+    intervals: latin-ext,cyrillic
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://mirrors.ctan.org/fonts/tex-gyre/opentype/texgyrepagella-regular.otf"}
+      bold:       {url: "https://mirrors.ctan.org/fonts/tex-gyre/opentype/texgyrepagella-bold.otf"}
+      italic:     {url: "https://mirrors.ctan.org/fonts/tex-gyre/opentype/texgyrepagella-italic.otf"}
+      bolditalic: {url: "https://mirrors.ctan.org/fonts/tex-gyre/opentype/texgyrepagella-bolditalic.otf"}
+
   # ── Sans-serif ─────────────────────────────────────────────────────────
 
   - name: NotoSansExtended
