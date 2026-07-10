@@ -351,17 +351,21 @@ void EpubReaderActivity::loop() {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else {
-      const int currentPage = verticalSection ? verticalSection->currentPage + 1
+      const int sectionPage = verticalSection ? verticalSection->currentPage + 1
                               : section       ? section->currentPage + 1
                                               : 0;
-      const int totalPages = verticalSection ? verticalSection->pageCount
-                             : section       ? section->pageCount
-                                             : 0;
+      const int sectionPageCount = verticalSection ? verticalSection->pageCount
+                                   : section       ? section->pageCount
+                                                   : 0;
       float bookProgress = 0.0f;
-      if (epub->getBookSize() > 0 && (section || verticalSection) && totalPages > 0) {
-        const float chapterProgress = static_cast<float>(currentPage - 1) / static_cast<float>(totalPages);
+      if (epub->getBookSize() > 0 && (section || verticalSection) && sectionPageCount > 0) {
+        const float chapterProgress = static_cast<float>(sectionPage - 1) / static_cast<float>(sectionPageCount);
         bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
       }
+      // The menu header shows the same ToC-chapter-wide numbering as the status bar.
+      updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
+      const int currentPage = chapterPagesBefore + sectionPage;
+      const int totalPages = std::max(chapterPagesTotal, currentPage);
       const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
       // Word Lookup is about the text's language, not its layout direction, so it must not be
       // gated by verticalOverride==0 (explicitly reading a Japanese book horizontally shouldn't
@@ -999,6 +1003,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  lastViewportWidth = viewportWidth;
+  lastViewportHeight = viewportHeight;
 
   // --- Vertical text mode path ---
   if (useVerticalText()) {
@@ -1375,8 +1381,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
 void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   if (useVerticalText()) {
-    if (!epub || !verticalSection || verticalSection->pageCount < 2) return;
-    if (verticalSection->currentPage != verticalSection->pageCount - 2) return;
+    // Fire on the last two pages, and on single-page chapters (image-only illustration
+    // chapters are one page each -- with the old penultimate-page-only trigger a run of
+    // them showed the Indexing popup on every page turn).
+    if (!epub || !verticalSection || verticalSection->pageCount < 1) return;
+    if (verticalSection->currentPage < verticalSection->pageCount - 2) return;
 
     const int nextSpineIndex = currentSpineIndex + 1;
     if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
@@ -1392,12 +1401,14 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     return;
   }
 
-  if (!epub || !section || section->pageCount < 2) {
+  if (!epub || !section || section->pageCount < 1) {
     return;
   }
 
-  // Build the next chapter cache while the penultimate page is on screen.
-  if (section->currentPage != section->pageCount - 2) {
+  // Build the next chapter cache while the last two pages are on screen. Also fires for
+  // single-page chapters (image-only illustration chapters are one page each -- with the
+  // old penultimate-page-only trigger a run of them showed Indexing on every page turn).
+  if (section->currentPage < section->pageCount - 2) {
     return;
   }
 
@@ -1593,6 +1604,66 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
 }
 
+void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, const uint16_t viewportHeight) const {
+  const int livePages = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
+  const bool vertical = useVerticalText();
+  if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical) {
+    return;
+  }
+  chapterSpanSpine = currentSpineIndex;
+  chapterSpanLivePages = livePages;
+  chapterSpanVertical = vertical;
+  chapterPagesBefore = 0;
+  chapterPagesTotal = std::max(1, livePages);
+
+  if (!epub) return;
+  const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
+  if (tocIdx < 0) return;  // no ToC entry covers this spine -- keep per-file numbering
+
+  int start = currentSpineIndex;
+  while (start > 0 && epub->getTocIndexForSpineIndex(start - 1) == tocIdx) start--;
+  int end = currentSpineIndex;
+  const int spineCount = epub->getSpineItemsCount();
+  while (end + 1 < spineCount && epub->getTocIndexForSpineIndex(end + 1) == tocIdx) end++;
+  if (start == end) return;
+
+  const size_t curSizePrev = (currentSpineIndex >= 1) ? epub->getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
+  const size_t curSize = epub->getCumulativeSpineItemSize(currentSpineIndex) - curSizePrev;
+  const int fontId = effectiveReaderFontId();
+
+  int before = 0;
+  int total = 0;
+  for (int i = start; i <= end; i++) {
+    int pages = -1;
+    if (i == currentSpineIndex) {
+      pages = std::max(1, livePages);
+    } else if (vertical) {
+      VerticalSection sibling(epub, i, renderer);
+      if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight)) pages = sibling.pageCount;
+    } else {
+      Section sibling(epub, i, renderer);
+      if (sibling.loadSectionFile(fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+                                  SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+                                  SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
+                                  SETTINGS.focusReadingEnabled)) {
+        pages = sibling.pageCount;
+      }
+    }
+    if (pages < 0) {
+      // Sibling not indexed yet: estimate from its byte share relative to the live section.
+      const size_t prev = (i >= 1) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
+      const size_t sz = epub->getCumulativeSpineItemSize(i) - prev;
+      pages = (livePages > 0 && curSize > 0)
+                  ? std::max(1, static_cast<int>((sz * static_cast<size_t>(livePages) + curSize / 2) / curSize))
+                  : 1;
+    }
+    if (i < currentSpineIndex) before += pages;
+    total += pages;
+  }
+  chapterPagesBefore = before;
+  chapterPagesTotal = total;
+}
+
 void EpubReaderActivity::renderStatusBar() const {
   // Calculate progress in book
   const int rawCurrentPage = verticalSection ? verticalSection->currentPage
@@ -1604,12 +1675,17 @@ void EpubReaderActivity::renderStatusBar() const {
 
   // Keep status bar sane on empty chapters: show a single skippable page (1/1)
   // instead of sentinel/underflow values like 65536/0.
-  const int currentPage =
+  const int sectionPage =
       (rawPageCount > 0) ? std::clamp(rawCurrentPage + 1, 1, rawPageCount) : 1;
-  const int pageCount = (rawPageCount > 0) ? rawPageCount : 1;
+  const int sectionPageCount = (rawPageCount > 0) ? rawPageCount : 1;
 
-  const float sectionChapterProg = (rawPageCount > 0) ? (static_cast<float>(currentPage) / pageCount) : 0.0f;
+  const float sectionChapterProg = (rawPageCount > 0) ? (static_cast<float>(sectionPage) / sectionPageCount) : 0.0f;
   const float bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
+
+  // Display page numbering spans the ToC chapter, not just this spine file.
+  updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
+  const int currentPage = chapterPagesBefore + sectionPage;
+  const int pageCount = std::max(chapterPagesTotal, currentPage);
 
   std::string title;
 

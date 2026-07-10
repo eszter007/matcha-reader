@@ -103,6 +103,20 @@ class EpubReaderActivity final : public Activity {
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
   void openWordLookupPanel();
+  // Page numbering across the logical ToC chapter: spine files without their own ToC entry
+  // (inline illustration files etc.) inherit the previous entry's tocIndex, so the "page X/Y"
+  // counter runs to the next REAL chapter instead of resetting at every spine-file boundary.
+  // Sibling counts come from a cheap header-only cache peek; unbuilt siblings are estimated
+  // from byte size. Cached per (spine, live page count, mode); mutable so the const render
+  // path can refresh it.
+  void updateChapterPageSpan(uint16_t viewportWidth, uint16_t viewportHeight) const;
+  mutable int chapterSpanSpine = -1;
+  mutable int chapterSpanLivePages = -1;
+  mutable bool chapterSpanVertical = false;
+  mutable int chapterPagesBefore = 0;
+  mutable int chapterPagesTotal = 0;
+  mutable uint16_t lastViewportWidth = 0;
+  mutable uint16_t lastViewportHeight = 0;
   // The font the book is actually laid out and rendered in. Normally the user's selection;
   // when that font can't carry the book's PRIMARY script (built-in or Latin font with a
   // Japanese book, CJK-only font with a Latin book), the loaded companion font substitutes so
