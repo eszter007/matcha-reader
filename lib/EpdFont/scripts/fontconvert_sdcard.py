@@ -52,7 +52,13 @@ INTERVAL_PRESETS = {
     "punctuation": [(0x2000, 0x206F)],
     "cjk":         [(0x3000, 0x303F), (0x3040, 0x309F), (0x30A0, 0x30FF),
                     (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0xFF00, 0xFFEF)],
-    "cjk-ext":     [(0x2E80, 0x2EFF),   # CJK Radicals Supplement
+    "cjk-ext":     [(0x2100, 0x214F),   # Letterlike Symbols (℃ № ℓ)
+                    (0x2150, 0x218F),   # Number Forms (Roman numerals)
+                    (0x2190, 0x21FF),   # Arrows
+                    (0x2460, 0x24FF),   # Enclosed Alphanumerics (circled numbers)
+                    (0x25A0, 0x25FF),   # Geometric Shapes (■□●○◎◆)
+                    (0x2600, 0x26FF),   # Miscellaneous Symbols (★☆♪)
+                    (0x2E80, 0x2EFF),   # CJK Radicals Supplement
                     (0x2F00, 0x2FDF),   # Kangxi Radicals
                     (0x3000, 0x303F),   # CJK Symbols and Punctuation
                     (0x3040, 0x309F),   # Hiragana
