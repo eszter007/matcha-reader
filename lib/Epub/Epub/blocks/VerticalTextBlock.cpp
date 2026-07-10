@@ -27,6 +27,10 @@ void encodeCodepoint(uint32_t cp, std::string& out) {
 }
 
 int computeCellPx(GfxRenderer& renderer, int fontId) {
+  // A cold SD-font advance table measures 漢 as 0 and silently falls back to getLineHeight,
+  // so the draw-time cell no longer matches the layout-time cell and every rotated-punct
+  // nudge lands wrong for that frame (seen live: cell flapping 42 -> 33 on NotoSansJP).
+  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
   const int cjkAdvance = renderer.getTextAdvanceX(
       fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));
   if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 6;
@@ -53,8 +57,12 @@ void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int
 
     if (g.renderKind == VerticalGlyph::RotatedPunct) {
       const int shiftType = Kinsoku::verticalShiftType(g.codepoint);
-      if (g.codepoint == 0x2025 || g.codepoint == 0x2026 || shiftType == 4) {
+      if (g.codepoint == 0x2025 || g.codepoint == 0x2026) {
         dy += std::max(1, (cellPx * 5) / 8);
+      } else if (shiftType == 4) {
+        // Dashes/chōonpu sat visibly low in their cell (device photo, kyokasho) -- a
+        // quarter cell less down-shift than the ellipsis dot stack.
+        dy += std::max(1, (cellPx * 3) / 8);
       }
       renderer.drawCharVerticalRotatedInCell(fontId, dx, dy, cellPx, g.codepoint, shiftType, black,
                                              static_cast<EpdFontFamily::Style>(g.style));

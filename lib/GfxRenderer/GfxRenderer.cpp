@@ -1951,9 +1951,22 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   const int ascender = fontData ? fontData->ascender : cellSize;
   const int fontPct = (cellSize > 0) ? (ascender * 100 / cellSize) : 100;
   const int extraNudge = (fontPct > 100) ? (cellSize * (fontPct - 100) / 30) : 0;
+  // How much lower this font's upright neighbors sit in their cells than a compact font's:
+  // upright glyphs hang from the baseline at `ascender`, and cellSize = em * 7/6, so any
+  // ascender beyond the em height pushes the surrounding ink down by that surplus. Rotated
+  // punctuation is placed by its own ink box and must follow, or it floats high relative to
+  // the column (NotoSansJP asc 34 / cell 33 vs UDDigiKyokasho asc 26 / cell 33).
+  const int baselineExcess = std::max(0, ascender - (cellSize * 6) / 7);
 
   int drawX = cellLeftX + (cellSize - rotatedW) / 2;
   int drawY = cellTopY + (cellSize - rotatedH) / 2 + cellSize / 3 + extraNudge * 2;
+  if (shiftType == 4) {
+    // Dashes/chōonpu read slightly right of the column axis when purely ink-centered
+    // (device photo, kyokasho) -- bias them a touch left. Tall fonts (Noto) additionally
+    // need one more nudge unit down or the stroke floats high in its cell.
+    drawX -= std::max(1, cellSize / 10);
+    drawY += baselineExcess * 2;
+  }
 
   if (shiftType == 2) {          // closing bracket/quote
     const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3009 || cp == 0x300B ||
@@ -1967,9 +1980,14 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
     // deep, the bracket read as hanging low/left of the character it opens (device photos with
     // UDDigiKyokasho). The maxX clamp below already grants opening brackets right overhang.
-    const int openingBias = std::max(1, cellSize / 2 + extraNudge);
+    // Round parens stay purely ink-centered: the corner-bracket right shift pushed their
+    // rotated arc off the column axis (device photos, kyokasho).
+    const bool roundParen = (cp == 0xFF08);
+    // baselineExcess: tall fonts (Noto) left the opening bracket hanging too high above the
+    // character it opens (kyokasho, baselineExcess 0, is unaffected).
+    const int openingBias = std::max(1, cellSize / 2 + extraNudge + baselineExcess);
     drawY = cellTopY + cellSize + openingBias;
-    drawX += cellSize / 4;
+    if (!roundParen) drawX += cellSize / 4;
   }
 
   int minX = cellLeftX;
@@ -1981,7 +1999,7 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     minY -= cellSize / 2;
   }
   if (shiftType == 3) {
-    maxX += std::max(1, cellSize / 3);
+    maxX += std::max(1, cellSize / 2);
   }
   drawX = std::clamp(drawX, minX, maxX);
   drawY = std::clamp(drawY, minY, maxY);
@@ -1992,6 +2010,13 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   // Solve for cursor so the rotated bbox starts at (drawX, drawY).
   const int cursorX = (drawX + rotatedW - 1) - glyph->top;
   const int cursorY = drawY - glyph->left;
+
+  // TEMP diagnostics for vertical punctuation tuning (strip with the other telemetry)
+  if (cp == 0x30FC || shiftType == 3) {
+    LOG_DBG("VROT", "cp=%04X shift=%d cell=%d asc=%d pct=%d nudge=%d rotW=%d rotH=%d gTop=%d gLeft=%d cellTopY=%d drawX=%d drawY=%d",
+            (unsigned)cp, shiftType, cellSize, ascender, fontPct, extraNudge, rotatedW, rotatedH, glyph->top,
+            glyph->left, cellTopY, drawX, drawY);
+  }
 
   renderCharImpl<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorX, cursorY, black, style);
 }
