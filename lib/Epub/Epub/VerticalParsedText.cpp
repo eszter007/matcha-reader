@@ -205,6 +205,18 @@ void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
   stream_.reserve(needed);
 }
 
+void VerticalParsedText::preallocateStream() {
+  constexpr size_t STREAM_STABLE_ENTRIES = 512;
+  const size_t bytes = STREAM_STABLE_ENTRIES * sizeof(PendingChar);
+  if (stream_.capacity() >= STREAM_STABLE_ENTRIES) return;
+  if (ESP.getMaxAllocHeap() >= bytes + MIN_FREE_HEAP_FOR_RESERVE) {
+    stream_.reserve(STREAM_STABLE_ENTRIES);
+  } else {
+    LOG_ERR("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
+            static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
+  }
+}
+
 bool VerticalParsedText::canPushStreamChar() {
   if (oom_) return false;
   if (stream_.size() < stream_.capacity()) return true;  // no reallocation needed, cheap path

@@ -1051,6 +1051,9 @@ void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sor
     LOG_ERR("SDCF", "mergeIntoAdvanceTable: alloc failed (%u entries) style %u", mergedCap, styleIdx);
     return;
   }
+  // TEMP diagnostics for the vertical-build heap collapse (strip with the rest)
+  LOG_DBG("SDCF", "advance merge: style %u %u+%u -> %u entries, maxAlloc=%u", styleIdx, oldSize, newCount, mergedCap,
+          ESP.getMaxAllocHeap());
 
   const AdvanceEntry* a = advanceTable_[styleIdx];
   const AdvanceEntry* b = sortedNew;
