@@ -84,6 +84,9 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
                               const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                               const uint8_t imageRendering, const bool focusReadingEnabled) {
+  // Missing cache file is the normal case for unbuilt chapters (the book-progress counter
+  // probes every spine per page turn) -- check silently instead of logging per probe.
+  if (!Storage.exists(filePath.c_str())) return false;
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return false;
   }
@@ -224,6 +227,14 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     if (cssParser) {
       if (!cssParser->loadFromCache()) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
+        // Low heap is the one failure where retrying can succeed: the cache file is VALID, the
+        // rule table just doesn't fit right now. Building anyway would persist this chapter
+        // UNSTYLED as a valid section -- permanent wrong layout. Abort; the next open retries.
+        // A genuinely missing/absent cache (flag false) still builds unstyled, as before.
+        if (cssParser->cacheLoadFailedForHeap()) {
+          LOG_ERR("SCT", "CSS cache didn't fit in heap; aborting section build for retry");
+          return false;
+        }
       }
     }
   }

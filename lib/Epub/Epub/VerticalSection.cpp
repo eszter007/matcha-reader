@@ -1049,6 +1049,10 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
 }
 
 bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight) {
+  // A missing cache file is the NORMAL case here, not an error: the book-progress counter probes
+  // every spine's section on each page turn, and unbuilt chapters simply don't have one yet.
+  // openFileForRead would print "File does not exist" per spine per probe -- pure log spam.
+  if (!Storage.exists(filePath.c_str())) return false;
   HalFile file;
   if (!Storage.openFileForRead("VSC", filePath, file)) {
     return false;
