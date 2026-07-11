@@ -55,6 +55,10 @@ namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 // pages per minute, first item is 1 to prevent division by zero if accessed
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
+// Below this largest-contiguous-block, the render path first reclaims font memory (see
+// render()). Chosen above the word-lookup self-heal floor (28K) so the reader hands off a
+// coalesced heap BEFORE the dictionary activity opens on top of it.
+constexpr uint32_t RESUME_HEAP_FLOOR = 40 * 1024;
 constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 
@@ -1039,6 +1043,26 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
   lastViewportWidth = viewportWidth;
   lastViewportHeight = viewportHeight;
+
+  // Low-heap floor for the resume-into-book path. A sleep wake reboots straight into the reader
+  // (lastSleepFromReader) and renders on whatever fragmented heap the boot produced -- unlike
+  // opening from home, which the reporter confirms is always clean. On the X3 the wider 528px
+  // viewport packs more glyphs per page (bigger prewarm + font slab) than the X4's 480px, so a
+  // marginal render that survives on X4 (device log: maxAlloc bottoms at ~16-34K here) OOMs
+  // partway on X3: missing glyph chunks, then the dictionary can't claim its caches on top of
+  // the resident font buffers ("no matches"), then home titles fail -- all cleared by going
+  // home, which frees this activity. Reclaiming the font decompressor's hot-group + glyph slab
+  // now coalesces the heap before the render/prewarm and the following word lookup, matching
+  // what the cache-MISS build path already does. Gated so normal reading (maxAlloc 34K+ in the
+  // log) is untouched; fonts reload lazily on the next prewarm.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+    if (maxAlloc < RESUME_HEAP_FLOOR) {
+      LOG_INF("ERS", "Low heap before render (maxAlloc=%u < %u); releasing font memory", maxAlloc, RESUME_HEAP_FLOOR);
+      fcm->releaseAllFontMemory();
+      LOG_INF("ERS", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+  }
 
   // --- Vertical text mode path ---
   if (useVerticalText()) {

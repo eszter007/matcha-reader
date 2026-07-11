@@ -48,7 +48,13 @@ void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
   // block the dict caches vacate. Left unchecked this ends in an allocation abort() a few
   // pages later (confirmed crash_report). Freeing font memory coalesces the heap; fonts
   // reload lazily, and the reader re-warms its caches on return anyway.
-  if (ESP.getMaxAllocHeap() < 28 * 1024) {
+  // Raised 28K -> 40K: on the X3 (wider 528px viewport) the reader's resident font slab is
+  // larger, so the dict caches can fail to find contiguous space even above the old floor,
+  // surfacing as an empty scan ("no matches found"). The reader now also coalesces on its own
+  // low-heap render (see EpubReaderActivity RESUME_HEAP_FLOOR); this is the belt to that
+  // suspenders for the case where the lookup opens on a page that rendered fine but left the
+  // heap fragmented. Fonts reload lazily and the reader re-warms on return.
+  if (ESP.getMaxAllocHeap() < 40 * 1024) {
     LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->releaseAllFontMemory();
