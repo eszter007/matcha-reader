@@ -1,8 +1,8 @@
 # Matcha Reader — Japanese Language Learning CrossPoint Fork
 
-A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for the Xteink X4, focused on **reading Japanese books** with built-in learning tools. Read native Japanese novels and texts with instant dictionary lookup, verb deinflection, grammar references, and AI-powered page translation — all on an e-ink device.
+A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for the Xteink X4 & X3, focused on **reading Japanese books** with built-in learning tools. Read native Japanese novels and texts with instant dictionary lookup, verb deinflection, grammar references, and AI-powered page translation — all on an e-ink device.
 
-This fork is fully compatible with upstream CrossPoint and can be flashed onto any supported Xteink X4 device.
+This fork is fully compatible with upstream CrossPoint and can be flashed onto any supported Xteink X4 or X3 device.
 It can be tested in an emulator before flashing: https://github.com/eszter007/Crosspoint-Emulator-Matcha
 
 <p align="center">
