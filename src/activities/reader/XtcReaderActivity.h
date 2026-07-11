@@ -11,14 +11,34 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "BookmarkEntry.h"
 #include "activities/Activity.h"
+#include "activities/reader/EpubReaderMenuActivity.h"
 
 class XtcReaderActivity final : public Activity {
   std::shared_ptr<Xtc> xtc;
 
   uint32_t currentPage = 0;
   int pagesUntilFullRefresh = 0;
+
+  // Reader menu / bookmarks / screenshot state (page-based, mirrors the manga reader).
+  std::vector<BookmarkEntry> cachedBookmarks;
+  bool currentPageBookmarked = false;
+  bool showBookmarkMessage = false;
+  bool bookmarkRemoved = false;
+  uint32_t bookmarkMessageTime = 0;
+  bool pendingScreenshot = false;
+  // Swallow the Confirm release that opened this book (from the library) so it doesn't
+  // immediately open the reader menu -- which would freePageBuffer() mid first-render.
+  bool ignoreNextConfirmRelease = true;
+
+  void launchMenu();
+  void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  void addBookmark();
+  void loadCachedBookmarks();
+  void updateBookmarkFlag();
 
   // Page pixel buffer, allocated once (a full XTH 2-bit page is ~104KB) and reused for every page
   // turn. Page dimensions are fixed per file, so one buffer serves all pages -- avoids a large

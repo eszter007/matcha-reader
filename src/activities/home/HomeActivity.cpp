@@ -1,6 +1,7 @@
 #include "HomeActivity.h"
 
 #include "EpubProgressUtil.h"
+#include "XtcProgressUtil.h"
 
 #include <Bitmap.h>
 #include <Epub.h>
@@ -61,9 +62,9 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
     std::string cachePath;
     if (FsHelpers::hasEpubExtension(path))
       cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(path));
-    else if (FsHelpers::hasXtcExtension(path))
-      cachePath = "/.crosspoint/xtc_" + std::to_string(std::hash<std::string>{}(path));
-    else if (manga::MangaBook::isMangaFolder(path)) {
+    else if (FsHelpers::hasXtcExtension(path)) {
+      currentBookProgress = XtcProgress::percentForBook(path);  // page-based; -1 if none yet
+    } else if (manga::MangaBook::isMangaFolder(path)) {
       std::string mangaCache = "/.crosspoint/manga_" + std::to_string(std::hash<std::string>{}(path));
       HalFile f;
       if (Storage.openFileForRead("HOME", mangaCache + "/progress.bin", f)) {

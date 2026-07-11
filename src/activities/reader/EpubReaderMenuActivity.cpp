@@ -13,10 +13,10 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
                                                const bool hasFootnotes, const bool hasBookmarks,
                                                const bool hasWordLookup, const bool showVerticalToggle,
                                                const bool verticalEnabled, const bool furiganaEnabled,
-                                               const bool hasPageText)
+                                               const bool hasPageText, const bool imageReaderMinimal)
     : Activity("EpubReaderMenu", renderer, mappedInput),
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, showVerticalToggle, verticalEnabled,
-                               furiganaEnabled)),
+                               furiganaEnabled, imageReaderMinimal)),
       hasPageText(hasPageText),
       title(title),
       pendingOrientation(currentOrientation),
@@ -31,9 +31,24 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
                                                                                      bool hasWordLookup,
                                                                                      bool showVerticalToggle,
                                                                                      bool verticalEnabled,
-                                                                                     bool furiganaEnabled) {
+                                                                                     bool furiganaEnabled,
+                                                                                     bool imageReaderMinimal) {
   std::vector<MenuItem> items;
   items.reserve(16);
+
+  // Minimal menu for the image readers (XTC): a page-based format has no text/footnotes/vertical
+  // toggles, so only chapter select (when present), Go-to-page, bookmarks, screenshot and
+  // clear-cache apply. hasFootnotes is repurposed as "has chapters" in this mode.
+  if (imageReaderMinimal) {
+    if (hasFootnotes) items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
+    items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+    items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+    if (hasBookmarks) items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
+    items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
+    items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+    return items;
+  }
+
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
