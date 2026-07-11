@@ -7,15 +7,20 @@
 
 #include "XtcReaderActivity.h"
 
+#include <Arduino.h>
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <JsonSettingsIO.h>
 
 #include <algorithm>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "EpubReaderPercentSelectionActivity.h"
+#include "MangaBookmarksActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
@@ -23,6 +28,8 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookmarkUtil.h"
+#include "util/ScreenshotUtil.h"
 
 void XtcReaderActivity::onEnter() {
   Activity::onEnter();
@@ -35,6 +42,7 @@ void XtcReaderActivity::onEnter() {
 
   // Load saved progress
   loadProgress();
+  loadCachedBookmarks();
 
   // Save current XTC as last opened book and add to recent books
   APP_STATE.openEpubPath = xtc->getPath();
@@ -48,23 +56,27 @@ void XtcReaderActivity::onEnter() {
 void XtcReaderActivity::onExit() {
   Activity::onExit();
 
+  freePageBuffer();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   xtc.reset();
 }
 
 void XtcReaderActivity::loop() {
-  // Enter chapter selection activity
+  // Auto-dismiss the bookmark toast.
+  if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
+    showBookmarkMessage = false;
+    requestUpdate();
+  }
+
+  // Open the reader menu on Confirm (swallow the release that opened the book from the library).
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
-      startActivityForResult(
-          std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
-              currentPage = std::get<PageResult>(result.data).page;
-            }
-          });
+    if (ignoreNextConfirmRelease) {
+      ignoreNextConfirmRelease = false;
+    } else {
+      launchMenu();
     }
+    return;
   }
 
   // Long press BACK (1s+) goes to file selection
@@ -130,8 +142,180 @@ void XtcReaderActivity::render(RenderLock&&) {
     return;
   }
 
+  updateBookmarkFlag();
   renderPage();
   saveProgress();
+
+  if (pendingScreenshot) {
+    pendingScreenshot = false;
+    ScreenshotUtil::takeScreenshot(renderer);
+  }
+  if (showBookmarkMessage) {
+    GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));
+  }
+}
+
+void XtcReaderActivity::launchMenu() {
+  if (!xtc) return;
+  // Free the ~104KB page buffer while the menu is on top: the reader doesn't render underneath a
+  // pushed activity, and holding it left too little heap for the menu to load the (Japanese)
+  // title glyphs -- the header rendered blank. render() re-allocates it on return. Take the
+  // render lock so the render task can't be mid-use of the buffer when it's freed.
+  {
+    RenderLock lock;
+    freePageBuffer();
+  }
+  const int totalPages = static_cast<int>(xtc->getPageCount());
+  const int curPage = static_cast<int>(currentPage) + 1;
+  const int bookProgressPercent = totalPages > 0 ? static_cast<int>((currentPage + 1) * 100 / totalPages) : 0;
+  const bool hasChapters = xtc->hasChapters() && !xtc->getChapters().empty();
+
+  // imageReaderMinimal=true builds the compact XTC menu (chapter-if-present, Go-to-page,
+  // bookmarks, screenshot, clear cache). hasFootnotes is repurposed as "has chapters" there.
+  startActivityForResult(
+      std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, xtc->getTitle(), curPage, totalPages,
+                                               bookProgressPercent, SETTINGS.orientation, /*hasFootnotes=*/hasChapters,
+                                               /*hasBookmarks=*/!cachedBookmarks.empty(), /*hasWordLookup=*/false,
+                                               /*showVerticalToggle=*/false, /*verticalEnabled=*/false,
+                                               /*furiganaEnabled=*/true, /*hasPageText=*/false,
+                                               /*imageReaderMinimal=*/true),
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          const auto& menu = std::get<MenuResult>(result.data);
+          onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
+        }
+        requestUpdate();
+      });
+}
+
+void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
+  switch (action) {
+    case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
+      if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
+        startActivityForResult(
+            std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
+            [this](const ActivityResult& result) {
+              if (!result.isCancelled) currentPage = std::get<PageResult>(result.data).page;
+              requestUpdate();
+            });
+      }
+      break;
+    case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
+      if (!xtc || xtc->getPageCount() == 0) break;
+      const int totalPages = static_cast<int>(xtc->getPageCount());
+      const int initialPercent = static_cast<int>((currentPage + 1) * 100 / totalPages);
+      startActivityForResult(
+          std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled && xtc) {
+              const int percent = std::get<PercentResult>(result.data).percent;
+              const uint32_t total = xtc->getPageCount();
+              uint32_t target = static_cast<uint32_t>(static_cast<float>(percent) / 100.0f * total);
+              if (target >= total && total > 0) target = total - 1;
+              currentPage = target;
+            }
+            requestUpdate();
+          });
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::TOGGLE_BOOKMARK:
+      addBookmark();
+      showBookmarkMessage = true;
+      bookmarkMessageTime = millis();
+      requestUpdate();
+      break;
+    case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
+      if (!xtc) break;
+      startActivityForResult(
+          std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, xtc->getPath(),
+                                                   std::vector<manga::TocEntry>{}),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled && xtc) {
+              const uint32_t target = std::get<PageResult>(result.data).page;
+              if (target < xtc->getPageCount()) currentPage = target;
+            }
+            requestUpdate();
+          });
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::SCREENSHOT:
+      pendingScreenshot = true;
+      requestUpdate();
+      break;
+    case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
+      if (xtc) {
+        const std::string cachePath = xtc->getCachePath();
+        if (Storage.exists(cachePath.c_str())) Storage.removeDir(cachePath.c_str());
+      }
+      onGoHome();
+      return;
+    }
+    default:
+      break;
+  }
+}
+
+// Page-based bookmarks, mirroring the manga reader: BookmarkEntry with computedSpineIndex=0 and
+// computedChapterPageCount / computedChapterProgress holding the total page count / bookmarked
+// page. The bookmark file is keyed by the XTC file path (BookmarkUtil::getBookmarkPath).
+void XtcReaderActivity::loadCachedBookmarks() {
+  cachedBookmarks.clear();
+  if (!xtc) return;
+  const std::string bmPath = BookmarkUtil::getBookmarkPath(xtc->getPath());
+  if (Storage.exists(bmPath.c_str())) {
+    String json = Storage.readFile(bmPath.c_str());
+    if (!json.isEmpty()) JsonSettingsIO::loadBookmarks(cachedBookmarks, json.c_str());
+  }
+  updateBookmarkFlag();
+}
+
+void XtcReaderActivity::updateBookmarkFlag() {
+  if (!xtc || cachedBookmarks.empty()) {
+    currentPageBookmarked = false;
+    return;
+  }
+  const uint32_t pageCount = xtc->getPageCount();
+  currentPageBookmarked = std::any_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& b) {
+    return b.computedSpineIndex == 0 && b.computedChapterPageCount == pageCount &&
+           b.computedChapterProgress == currentPage;
+  });
+}
+
+void XtcReaderActivity::addBookmark() {
+  if (!xtc) return;
+  const uint32_t pageCount = xtc->getPageCount();
+  if (pageCount == 0) return;
+
+  const size_t countBefore = cachedBookmarks.size();
+  cachedBookmarks.erase(std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
+                                       [&](const BookmarkEntry& b) {
+                                         return b.computedSpineIndex == 0 &&
+                                                b.computedChapterPageCount == pageCount &&
+                                                b.computedChapterProgress == currentPage;
+                                       }),
+                        cachedBookmarks.end());
+  if (cachedBookmarks.size() != countBefore) {
+    bookmarkRemoved = true;
+    currentPageBookmarked = false;
+  } else {
+    BookmarkEntry entry;
+    entry.percentage = static_cast<float>(currentPage) / static_cast<float>(pageCount);
+    char buf[32];
+    snprintf(buf, sizeof(buf), tr(STR_PAGE_NUMBER_FORMAT), currentPage + 1);
+    entry.summary = buf;
+    entry.computedSpineIndex = 0;
+    entry.computedChapterPageCount = static_cast<uint16_t>(std::min<uint32_t>(pageCount, 0xFFFF));
+    entry.computedChapterProgress = static_cast<uint16_t>(std::min<uint32_t>(currentPage, 0xFFFF));
+    cachedBookmarks.insert(cachedBookmarks.begin(), entry);
+    bookmarkRemoved = false;
+    currentPageBookmarked = true;
+  }
+
+  const std::string path = BookmarkUtil::getBookmarkPath(xtc->getPath());
+  Storage.mkdir(BookmarkUtil::getBookmarksDir().c_str());
+  if (!JsonSettingsIO::saveBookmarks(cachedBookmarks, path.c_str())) {
+    LOG_ERR("XTR", "Failed to save bookmarks to: %s", path.c_str());
+  }
 }
 
 XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
@@ -204,6 +388,33 @@ void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition po
   GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
 }
 
+void XtcReaderActivity::freePageBuffer() {
+  free(pageBuffer);
+  pageBuffer = nullptr;
+  pageBufferSize = 0;
+}
+
+// Allocate the page buffer once (or grow it if a later page is somehow larger). A full XTH 2-bit
+// page is ~104KB -- larger than the biggest free block once the library warmed the font caches
+// (device log: free 124K, maxAlloc 69K, so the malloc failed and showed a memory error). Reclaim
+// the font decompressor's hot-group + glyph slab first to coalesce the heap (same as the EPUB
+// build path); doing it once here, not per page turn, keeps turns fast. Fonts re-warm lazily.
+bool XtcReaderActivity::ensurePageBuffer(size_t needed) {
+  if (pageBuffer && pageBufferSize >= needed) return true;
+  freePageBuffer();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (ESP.getMaxAllocHeap() < needed + 8 * 1024) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("XTR", "Freed font memory for page buffer: maxAlloc=%u (need %lu)", ESP.getMaxAllocHeap(),
+              static_cast<unsigned long>(needed));
+    }
+  }
+  pageBuffer = static_cast<uint8_t*>(malloc(needed));
+  if (!pageBuffer) return false;
+  pageBufferSize = needed;
+  return true;
+}
+
 void XtcReaderActivity::renderPage() {
   const uint16_t pageWidth = xtc->getPageWidth();
   const uint16_t pageHeight = xtc->getPageHeight();
@@ -212,17 +423,18 @@ void XtcReaderActivity::renderPage() {
   // Calculate buffer size for one page
   // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
   // XTH (2-bit): Two bit planes, column-major, ((width * height + 7) / 8) * 2 bytes
-  size_t pageBufferSize;
+  size_t neededSize;
   if (bitDepth == 2) {
-    pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
+    neededSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
   } else {
-    pageBufferSize = ((pageWidth + 7) / 8) * pageHeight;
+    neededSize = ((pageWidth + 7) / 8) * pageHeight;
   }
 
-  // Allocate page buffer
-  uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(pageBufferSize));
-  if (!pageBuffer) {
-    LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes)", pageBufferSize);
+  // Reuse a single page buffer for the whole session (allocated on first render). See
+  // ensurePageBuffer(): it coalesces the heap once and grabs the ~104KB block, instead of a
+  // large malloc/free on every page turn.
+  if (!ensurePageBuffer(neededSize)) {
+    LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes, maxAlloc=%u)", neededSize, ESP.getMaxAllocHeap());
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -230,11 +442,10 @@ void XtcReaderActivity::renderPage() {
   }
 
   // Load page data
-  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, pageBufferSize);
+  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, neededSize);
   if (bytesRead == 0) {
-    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, pageBufferSize,
-            bitDepth, xtc::errorToString(xtc->getLastError()));
-    free(pageBuffer);
+    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, neededSize, bitDepth,
+            xtc::errorToString(xtc->getLastError()));
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -349,8 +560,6 @@ void XtcReaderActivity::renderPage() {
     // Cleanup grayscale buffers with current frame buffer
     renderer.cleanupGrayscaleWithFrameBuffer();
 
-    free(pageBuffer);
-
     LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
     return;
   } else {
@@ -373,8 +582,6 @@ void XtcReaderActivity::renderPage() {
     }
   }
   // White pixels are already cleared by clearScreen()
-
-  free(pageBuffer);
 
   if (SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
     renderStatusBarOverlay(StatusBarOverlayPosition::Top);

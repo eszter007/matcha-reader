@@ -347,9 +347,11 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   // Note: this call should be inlined for better performance
   rotateCoordinates(orientation, x, y, &phyX, &phyY, panelWidth, panelHeight);
 
-  // Bounds checking against runtime panel dimensions
+  // Bounds checking against runtime panel dimensions. Silently CLIP out-of-range pixels --
+  // this is normal for content larger than the panel (e.g. an XTC page authored for a wider
+  // device). Logging here was per-pixel on the hot path: an oversized page produced tens of
+  // thousands of LOG_ERR lines per render, and the serial I/O made page turns crawl.
   if (phyX < 0 || phyX >= panelWidth || phyY < 0 || phyY >= panelHeight) {
-    LOG_ERR("GFX", "!! Outside range (%d, %d) -> (%d, %d)", x, y, phyX, phyY);
     return;
   }
 

@@ -3,6 +3,7 @@
 #include "JsonSettingsIO.h"
 
 #include "EpubProgressUtil.h"
+#include "XtcProgressUtil.h"
 
 #include <Bitmap.h>
 #include <FontCacheManager.h>
@@ -635,7 +636,7 @@ int RecentBooksActivity::readProgressPercent(const std::string& bookPath) const 
   if (FsHelpers::hasEpubExtension(bookPath)) {
     cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(bookPath));
   } else if (FsHelpers::hasXtcExtension(bookPath)) {
-    cachePath = "/.crosspoint/xtc_" + std::to_string(std::hash<std::string>{}(bookPath));
+    return XtcProgress::percentForBook(bookPath);
   } else if (manga::MangaBook::isMangaFolder(bookPath)) {
     std::string mangaCachePath = "/.crosspoint/manga_" + std::to_string(std::hash<std::string>{}(bookPath));
     HalFile f;

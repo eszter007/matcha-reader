@@ -88,6 +88,11 @@ class WordSelectionScan {
   Phase phase = Phase::Scan;
   size_t scanPos = 0;    // next allGlyphs index the scan will examine
   size_t skipUntil = 0;  // characters inside an already-matched word are skipped
+  // Set true when initFrom*() or step() had to abandon work because the heap couldn't grow a
+  // vector (dropped glyphs / partial scan). A truncated scan finds too few (often zero)
+  // selectable words; persisting that result to the on-SD cache would poison every later open
+  // of this page -- even after the heap recovers -- so saveCache() refuses when this is set.
+  bool scanTruncated = false;
 
   void reset();
   uint32_t glyphContentHash() const;

@@ -59,6 +59,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   uint16_t scanSpine = 0;
   uint16_t scanPage = 0;
 
+  void reclaimFontHeap();
   void initScanFromCacheOrBurst(const char* label);
   void runInitialBurst(const char* label);
   void moveCursor(int delta);

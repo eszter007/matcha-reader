@@ -33,7 +33,8 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 7;  // v7: numeric vertical-align parsed as super/sub
+  // v8: discard caches written by builds that saved partial (heap-truncated) rule tables
+  static constexpr uint8_t CSS_CACHE_VERSION = 8;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -83,6 +84,22 @@ class CssParser {
   void clear() { rulesBySelector_.clear(); }
 
   /**
+   * True if a parse had to drop selectors because the heap ran low (transient condition, NOT
+   * the deterministic MAX_RULES cap). A partial rule table must not be persisted: the cached
+   * rule count becomes the permanent styling for every future open, even after the heap
+   * recovers. Callers check this before saveToCache().
+   */
+  [[nodiscard]] bool wasHeapTruncated() const { return heapTruncated_; }
+
+  /**
+   * True if the last loadFromCache() aborted because the heap was too low to hold the rule
+   * table -- the cache FILE itself is valid. Callers must treat this as "retry next open",
+   * NOT as a stale cache: deleting it triggers a full CSS re-parse (worse heap pressure than
+   * the load) plus a section-cache invalidation cascade on every subsequent boot.
+   */
+  [[nodiscard]] bool cacheLoadFailedForHeap() const { return cacheLoadFailedForHeap_; }
+
+  /**
    * Check if CSS rules cache file exists
    */
   bool hasCache() const;
@@ -104,6 +121,28 @@ class CssParser {
    * @return true if cache was loaded successfully
    */
   bool loadFromCache();
+
+  /**
+   * Structurally validate the cache file WITHOUT materializing the rule map. Book open only
+   * needs to know "is the cache present and readable" -- building the full map (thousands of
+   * small allocations for a heavy book) just to throw it away was itself the low-heap failure
+   * that triggered the delete/re-parse cascade. Walks version, rule count, and every record's
+   * framing using a few stack bytes. Removes the file on version mismatch (like loadFromCache).
+   */
+  bool validateCache() const;
+
+  /**
+   * Incremental cache writing, one flush per parsed CSS file, so only ONE file's rules are ever
+   * resident while parsing (a heavy book's full table blocked the remaining files from parsing
+   * at all: 818 resident rules left ~23KB free vs the 64KB the next parse needs).
+   * Usage: beginCacheAppend() once, then per file: parse -> appendRulesToCache() -> clear().
+   * Finish with endCacheAppend(discard): discard=true (or zero rules) deletes the file instead.
+   * Duplicate selectors across files are resolved at load time (loadFromCache merges like the
+   * parser does).
+   */
+  bool beginCacheAppend();
+  bool appendRulesToCache();
+  bool endCacheAppend(bool discard);
 
  private:
   // Lookup key for a multi-piece selector. The pieces are hashed and compared
@@ -139,6 +178,15 @@ class CssParser {
 
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
+  bool heapTruncated_ = false;           // see wasHeapTruncated()
+  bool cacheLoadFailedForHeap_ = false;  // see cacheLoadFailedForHeap()
+
+  // Incremental cache writing state (beginCacheAppend/appendRulesToCache/endCacheAppend).
+  HalFile cacheAppendFile_;
+  uint16_t appendedRuleCount_ = 0;
+  bool cacheAppendActive_ = false;
+
+  static void writeRuleRecord(HalFile& file, const std::string& selector, const CssStyle& style);
 
   std::string cachePath;
 

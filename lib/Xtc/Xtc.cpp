@@ -10,6 +10,9 @@
 #include <Bitmap.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
+
+#include <cstring>
 
 bool Xtc::load() {
   LOG_DBG("XTC", "Loading XTC: %s", filepath.c_str());
@@ -337,6 +340,14 @@ bool Xtc::generateThumbBmp(int height) const {
   }
   uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(bitmapSize));
   if (!pageBuffer) {
+    // The full page buffer (~104KB for a 2-bit 528x792 page) doesn't fit the largest contiguous
+    // block on a fragmented heap (e.g. the Home screen). For 2-bit pages, fall back to a
+    // low-memory streaming generator that reads the cover column-by-column (~5KB). 1-bit pages
+    // are half the size and keep the simple path.
+    if (bitDepth == 2) {
+      LOG_INF("XTC", "Page buffer (%lu bytes) OOM; using streaming thumb generator", bitmapSize);
+      return generateThumbBmpStreamed(height, pageInfo, thumbWidth, thumbHeight, scale);
+    }
     LOG_ERR("XTC", "Failed to allocate page buffer (%lu bytes)", bitmapSize);
     return false;
   }
@@ -477,6 +488,75 @@ bool Xtc::generateThumbBmp(int height) const {
   free(pageBuffer);
 
   LOG_DBG("XTC", "Generated thumb BMP (%dx%d): %s", thumbWidth, thumbHeight, getThumbBmpPath(height).c_str());
+  return true;
+}
+
+// Low-memory cover thumbnail for 2-bit (XTH) pages: streams the cover's first bit plane
+// column-by-column instead of holding the whole ~104KB page. XTH is column-major (colBytes per
+// column), and the plane-1 bit alone gives a good black/white classification (bit1=1 -> dark).
+// Point-samples one source pixel per thumb pixel (last source column mapping to a thumb column
+// wins). Peak RAM: one source column (~100 B) + the packed 1-bit thumb (~4.5 KB).
+bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, uint16_t thumbWidth,
+                                   uint16_t thumbHeight, float scale) const {
+  if (thumbWidth == 0 || thumbHeight == 0 || pageInfo.width == 0 || pageInfo.height == 0) return false;
+
+  const size_t colBytes = (static_cast<size_t>(pageInfo.height) + 7) / 8;
+  const size_t planeSize = (static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8;
+  const uint32_t rowSize = (static_cast<uint32_t>(thumbWidth) + 31) / 32 * 4;
+  const uint32_t scaleInv_fp = static_cast<uint32_t>(65536.0f / scale);
+
+  auto thumb = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(rowSize) * thumbHeight);
+  auto colBuf = makeUniqueNoThrow<uint8_t[]>(colBytes);
+  if (!thumb || !colBuf) {
+    LOG_ERR("XTC", "Streaming thumb OOM (thumb=%lu, col=%lu)", static_cast<unsigned long>(rowSize) * thumbHeight,
+            static_cast<unsigned long>(colBytes));
+    return false;
+  }
+  memset(thumb.get(), 0xFF, static_cast<size_t>(rowSize) * thumbHeight);  // all white (bit set)
+
+  size_t colFill = 0;
+  uint32_t colIndex = 0;
+  const_cast<Xtc*>(this)->loadPageStreaming(
+      0,
+      [&](const uint8_t* data, size_t size, size_t offset) {
+        for (size_t i = 0; i < size; i++) {
+          if (offset + i >= planeSize) return;  // plane 1 only; ignore plane 2
+          if (colIndex >= pageInfo.width) return;
+          colBuf[colFill++] = data[i];
+          if (colFill < colBytes) continue;
+          colFill = 0;
+          // Column colIndex holds source x = width-1-colIndex (XTH scans right-to-left).
+          const uint32_t srcX = pageInfo.width - 1 - colIndex;
+          uint32_t dstX = (srcX * static_cast<uint32_t>(thumbWidth)) / pageInfo.width;
+          if (dstX >= thumbWidth) dstX = thumbWidth - 1;
+          const size_t dstByte = dstX / 8;
+          const uint8_t dstMask = static_cast<uint8_t>(1 << (7 - (dstX % 8)));
+          for (uint16_t dstY = 0; dstY < thumbHeight; dstY++) {
+            uint32_t srcY = (static_cast<uint32_t>(dstY) * scaleInv_fp) >> 16;
+            if (srcY >= pageInfo.height) srcY = pageInfo.height - 1;
+            const uint8_t bit1 = (colBuf[srcY / 8] >> (7 - (srcY % 8))) & 1;
+            uint8_t* cell = &thumb[static_cast<size_t>(dstY) * rowSize + dstByte];
+            if (bit1)
+              *cell &= ~dstMask;  // dark -> black (clear)
+            else
+              *cell |= dstMask;  // light -> white (set); overwrite so last column wins
+          }
+          colIndex++;
+        }
+      },
+      4096);
+
+  HalFile thumbBmp;
+  if (!Storage.openFileForWrite("XTC", getThumbBmpPath(height), thumbBmp)) {
+    LOG_ERR("XTC", "Failed to create streaming thumb BMP file");
+    return false;
+  }
+  BmpHeader bmpHeader;
+  createBmpHeader(&bmpHeader, thumbWidth, thumbHeight, BmpRowOrder::TopDown);
+  thumbBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(bmpHeader));
+  thumbBmp.write(thumb.get(), static_cast<size_t>(rowSize) * thumbHeight);
+  LOG_DBG("XTC", "Generated streaming thumb BMP (%dx%d): %s", thumbWidth, thumbHeight,
+          getThumbBmpPath(height).c_str());
   return true;
 }
 

@@ -67,6 +67,10 @@ class Xtc {
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   bool generateThumbBmp(int height) const;
+  // Low-memory streaming fallback for 2-bit cover thumbnails (used when the full page buffer
+  // can't be allocated on a fragmented heap). Column-by-column, ~5KB peak.
+  bool generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, uint16_t thumbWidth, uint16_t thumbHeight,
+                                float scale) const;
 
   // Page access
   uint32_t getPageCount() const;

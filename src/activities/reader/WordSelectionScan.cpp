@@ -172,6 +172,7 @@ void WordSelectionScan::reset() {
   phase = Phase::Scan;
   scanPos = 0;
   skipUntil = 0;
+  scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
 }
 
@@ -181,7 +182,10 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
   for (const auto& g : page.glyphs) {
     if (g.renderKind == VerticalGlyph::RotatedRun) continue;
     GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, false};
-    if (!pushGlyphSafe(allGlyphs, ref)) break;
+    if (!pushGlyphSafe(allGlyphs, ref)) {
+      scanTruncated = true;
+      break;
+    }
   }
   // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
   // reserving allGlyphs.size() entries pinned ~15KB for a dense page across the whole lookup
@@ -244,6 +248,7 @@ void WordSelectionScan::initFromPage(const Page& page) {
       }
     }
   }
+  scanTruncated = oom;
   // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
   // reserving allGlyphs.size() entries pinned ~15KB for a dense page across the whole lookup
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
@@ -273,7 +278,10 @@ void WordSelectionScan::initFromUtf8Text(const std::string& text) {
       b += 4;
     }
     if (cp == '\n' || cp == '\r') continue;
-    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, false})) break;
+    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, false})) {
+      scanTruncated = true;
+      break;
+    }
   }
   // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
   // reserving allGlyphs.size() entries pinned ~15KB for a dense page across the whole lookup
@@ -296,7 +304,7 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 }
 
 namespace {
-constexpr uint32_t WLSCAN_MAGIC = 0x32534C57;  // "WLS2" -- bumped for the added lastCursor field
+constexpr uint32_t WLSCAN_MAGIC = 0x33534C57;  // "WLS3" -- bumped to discard low-heap-poisoned caches
 
 // Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
 // scans (segmentation depends on the dictionary). File size is not a perfect identity, but any
@@ -374,6 +382,15 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
 bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex,
                                   const uint16_t cursorIndex) const {
   if (!isDone()) return false;
+  // Never persist a scan that ran out of heap mid-build: allGlyphs (or selectableGlyphs) was
+  // truncated, so it found too few -- often zero -- selectable words. Caching that would make
+  // "no matches" stick on this page for every future open, even once the heap recovers (the
+  // X3-under-a-huge-CSS-book failure the reporter hit). Drop it; the next open re-scans.
+  if (scanTruncated) {
+    LOG_INF("WLS", "Scan truncated by low heap (%u selectable); not caching to avoid poisoning",
+            static_cast<unsigned>(selectToAllIdx.size()));
+    return false;
+  }
   HalFile f;
   if (!Storage.openFileForWrite("WLS", path, f)) return false;
 
@@ -556,6 +573,7 @@ void WordSelectionScan::scanOnePosition() {
     // rather than push a mismatched selectToAllIdx entry with no corresponding glyph.
     if (!pushGlyphSafe(selectableGlyphs, g)) {
       scanPos = allGlyphs.size();  // abort the remainder of the scan
+      scanTruncated = true;        // partial result -- don't let saveCache() persist it
       return;
     }
     selectToAllIdx.push_back(i);
