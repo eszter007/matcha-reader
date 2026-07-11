@@ -1,5 +1,6 @@
 #include "ReaderActivity.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <MangaPanel.h>
@@ -46,10 +47,23 @@ void ReaderActivity::onGoToMangaReader(std::unique_ptr<manga::MangaBook> manga) 
   activityManager.replaceActivity(std::make_unique<MangaReaderActivity>(renderer, mappedInput, std::move(manga)));
 }
 
-std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
+std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) const {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
+  }
+
+  // Coalesce the heap BEFORE Epub::load(): its CSS cache load aborts below 48KB contiguous and
+  // a CSS re-parse wants 64KB free. On the resume-from-sleep path the boot screen leaves font
+  // caches warm and an X3 arrives here at ~49KB maxAlloc -- just under the threshold -- which
+  // cascaded into a per-boot CSS re-parse + section-cache invalidation (reporter log). Fonts
+  // reload lazily; the reader re-warms them for the first page render anyway.
+  if (ESP.getMaxAllocHeap() < 64 * 1024) {
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      LOG_INF("READER", "Low heap before book load (maxAlloc=%u); releasing font memory", ESP.getMaxAllocHeap());
+      fcm->releaseAllFontMemory();
+      LOG_INF("READER", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
   }
 
   auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");

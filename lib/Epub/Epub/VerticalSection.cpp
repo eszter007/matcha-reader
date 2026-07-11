@@ -976,6 +976,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   if (sink.failed) return false;
 
+  lastBuildDroppedForHeap_ = layout.everDroppedForHeap();
   LOG_INF("VSC", "streamParseAndLayout: %u ms", millis() - buildStartMs);
   LOG_INF("VSC", "streamParseAndLayout end spine=%d pages=%zu free=%u", spineIndex, pageOffsets_.size(),
           ESP.getFreeHeap());
@@ -1030,6 +1031,17 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   }
   serialization::writePod(file, pageCount);
   serialization::writePod(file, indexOffset);
+  // A build that dropped content on low heap produced sparse pages. Keep the file usable for
+  // THIS session (offsets are in RAM, pages read back fine) but stamp version 0 so the next
+  // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
+  // ideally, a healthier heap -- instead of the truncation being persisted as a valid cache.
+  if (lastBuildDroppedForHeap_) {
+    LOG_ERR("VSC", "Build dropped glyphs on low heap; marking section stale for rebuild on next open");
+    if (file.seek(0)) {
+      const uint8_t staleVersion = 0;
+      serialization::writePod(file, staleVersion);
+    }
+  }
   file.close();
 
   LOG_DBG("VSC", "Cached %u vertical pages (streamed)", pageCount);

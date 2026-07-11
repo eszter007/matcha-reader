@@ -504,6 +504,7 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
             LOG_ERR("CSS", "Low heap (%u bytes) while parsing CSS rules; skipping remaining selectors",
                     ESP.getMaxAllocHeap());
             limitReached = true;
+            heapTruncated_ = true;  // transient drop -- blocks saveToCache (unlike the MAX_RULES cap)
             return;
           }
           rulesBySelector_.emplace(std::string(sel), style);
@@ -718,6 +719,15 @@ bool CssParser::saveToCache() const {
   if (cachePath.empty()) {
     return false;
   }
+  // A heap-truncated parse dropped selectors mid-file. Persisting the partial table would make
+  // it THE styling for every future open of this book (confirmed on an X3: 604 of 818 rules
+  // cached after a low-heap re-parse). Skip the save; the next open re-parses with -- ideally --
+  // a healthier heap.
+  if (heapTruncated_) {
+    LOG_ERR("CSS", "Parse was heap-truncated (%zu rules); refusing to cache partial rule table",
+            rulesBySelector_.size());
+    return false;
+  }
 
   HalFile file;
   if (!Storage.openFileForWrite("CSS", cachePath + rulesCache, file)) {
@@ -794,6 +804,7 @@ bool CssParser::saveToCache() const {
 }
 
 bool CssParser::loadFromCache() {
+  cacheLoadFailedForHeap_ = false;
   if (cachePath.empty()) {
     return false;
   }
@@ -853,6 +864,7 @@ bool CssParser::loadFromCache() {
       LOG_ERR("CSS", "Low heap (%u bytes) while loading CSS cache at rule %u/%u; aborting cache load",
               ESP.getMaxAllocHeap(), i, ruleCount);
       rulesBySelector_.clear();
+      cacheLoadFailedForHeap_ = true;  // cache file is VALID -- caller must not delete/rebuild it
       return false;
     }
 

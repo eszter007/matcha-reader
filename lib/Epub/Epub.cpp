@@ -302,6 +302,7 @@ void Epub::parseCssFiles() const {
   }
 
   // No cache yet - parse CSS files
+  bool skippedFileForHeap = false;
   for (const auto& cssPath : cssFiles) {
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
@@ -310,6 +311,7 @@ void Epub::parseCssFiles() const {
     if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
               MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+      skippedFileForHeap = true;
       continue;
     }
 
@@ -352,8 +354,12 @@ void Epub::parseCssFiles() const {
     Storage.remove(tmpCssPath.c_str());
   }
 
-  // Save to cache for next time
-  if (!cssParser->saveToCache()) {
+  // Save to cache for next time. A parse that skipped whole files for lack of heap is partial
+  // for the same reason a heap-truncated in-file parse is: caching it would freeze the degraded
+  // rule set permanently (saveToCache itself refuses the in-file case via wasHeapTruncated).
+  if (skippedFileForHeap) {
+    LOG_ERR("EBP", "CSS parse skipped file(s) on low heap; not caching partial rules");
+  } else if (!cssParser->saveToCache()) {
     LOG_ERR("EBP", "Failed to save CSS rules to cache");
   }
 
@@ -375,6 +381,18 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     if (!skipLoadingCss) {
       // Rebuild CSS cache when missing or when cache version changed (loadFromCache removes stale file)
       if (!cssParser->hasCache() || !cssParser->loadFromCache()) {
+        // A low-heap load abort is NOT a stale cache: the file is valid, the heap just can't
+        // hold the rule table right now. Deleting it here started a per-boot death spiral on
+        // the X3 (reporter log): delete -> full re-parse (free heap fell to 4KB) -> partial
+        // rule table cached -> section caches nuked below -> chapters re-laid-out under
+        // pressure -> next boot repeats. Keep the cache and read this session unstyled; the
+        // pre-load font release in ReaderActivity makes the next attempt succeed.
+        if (cssParser->cacheLoadFailedForHeap()) {
+          LOG_ERR("EBP", "CSS cache load hit low heap; keeping cache, reading unstyled this session");
+          cssParser->clear();
+          LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
+          return true;
+        }
         LOG_DBG("EBP", "CSS rules cache missing or stale, attempting to parse CSS files");
         cssParser->deleteCache();
 

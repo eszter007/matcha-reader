@@ -12,7 +12,8 @@ namespace manga { class MangaBook; }
 class ReaderActivity final : public Activity {
   std::string initialBookPath;
   std::string currentBookPath;  // Track current book path for navigation
-  static std::unique_ptr<Epub> loadEpub(const std::string& path);
+  // Non-static: needs renderer to release font caches before the heap-hungry Epub::load().
+  std::unique_ptr<Epub> loadEpub(const std::string& path) const;
   static std::unique_ptr<Xtc> loadXtc(const std::string& path);
   static std::unique_ptr<Txt> loadTxt(const std::string& path);
   static std::unique_ptr<manga::MangaBook> loadManga(const std::string& path);

@@ -170,6 +170,11 @@ class VerticalParsedText {
     paragraphBreaksBeforeIndex_.clear();
     oom_ = false;
   }
+  // Whether ANY char/glyph was dropped for lack of heap across the whole build. Unlike oom_
+  // this is never cleared by reset(): the section build reads it at the end, because a build
+  // that dropped content produced sparse pages and must not be persisted as a VALID cache --
+  // that makes the truncation permanent. Fresh object per build, so no explicit clear needed.
+  bool everDroppedForHeap() const { return everDroppedForHeap_; }
   // Pin stream_'s backing store once at build start, while the heap is freshest. Mid-build
   // growth (alloc-copy-free every few dozen entries) interleaved with ruby-string churn walks
   // the buffer through the heap and shreds the largest contiguous block -- observed on a real
@@ -215,6 +220,7 @@ class VerticalParsedText {
   // are silently dropped instead of risking an OOM abort inside stream_'s reallocation (see
   // canPushStreamChar()).
   bool oom_ = false;
+  bool everDroppedForHeap_ = false;  // see everDroppedForHeap()
 
   // The page currently being filled by layoutPages(), plus its fill position -- persists ACROSS
   // layoutPages() calls (when isFinalFlush=false) so a batch boundary landing mid-page continues

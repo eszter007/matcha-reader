@@ -83,6 +83,22 @@ class CssParser {
   void clear() { rulesBySelector_.clear(); }
 
   /**
+   * True if a parse had to drop selectors because the heap ran low (transient condition, NOT
+   * the deterministic MAX_RULES cap). A partial rule table must not be persisted: the cached
+   * rule count becomes the permanent styling for every future open, even after the heap
+   * recovers. Callers check this before saveToCache().
+   */
+  [[nodiscard]] bool wasHeapTruncated() const { return heapTruncated_; }
+
+  /**
+   * True if the last loadFromCache() aborted because the heap was too low to hold the rule
+   * table -- the cache FILE itself is valid. Callers must treat this as "retry next open",
+   * NOT as a stale cache: deleting it triggers a full CSS re-parse (worse heap pressure than
+   * the load) plus a section-cache invalidation cascade on every subsequent boot.
+   */
+  [[nodiscard]] bool cacheLoadFailedForHeap() const { return cacheLoadFailedForHeap_; }
+
+  /**
    * Check if CSS rules cache file exists
    */
   bool hasCache() const;
@@ -139,6 +155,8 @@ class CssParser {
 
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
+  bool heapTruncated_ = false;         // see wasHeapTruncated()
+  bool cacheLoadFailedForHeap_ = false;  // see cacheLoadFailedForHeap()
 
   std::string cachePath;
 

@@ -24,6 +24,7 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
+  reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
   initScanFromCacheOrBurst("vertical");
 }
@@ -35,26 +36,35 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
+  reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromPage(page);
   initScanFromCacheOrBurst("horizontal");
 }
 
-// A persisted scan for this exact page skips all scanning; otherwise start progressively.
-void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
-  // Self-heal fragmentation before the lookup allocates its scan vectors and dict caches.
-  // Device telemetry showed maxAlloc degrading monotonically across open/close cycles
-  // (28.7K -> 22.5K -> 19.4K ...) while total free fully recovered: font hot-group/slab
-  // buffers regrown while RENDERING definitions persist past onExit and split the large
-  // block the dict caches vacate. Left unchecked this ends in an allocation abort() a few
-  // pages later (confirmed crash_report). Freeing font memory coalesces the heap; fonts
-  // reload lazily, and the reader re-warms its caches on return anyway.
-  if (ESP.getMaxAllocHeap() < 28 * 1024) {
+// Self-heal fragmentation BEFORE the scan builds its glyph vectors. Two reasons this must run
+// first, not after initFrom*():
+//   1) Building allGlyphs on a fragmented heap truncates it (pushGlyphSafe can't grow), so the
+//      scan finds too few/zero selectable words. Coalescing first gives it room to complete.
+//   2) Device telemetry showed maxAlloc degrading monotonically across open/close cycles
+//      (28.7K -> 22.5K -> 19.4K ...) while total free fully recovered: font hot-group/slab
+//      buffers regrown while RENDERING definitions persist past onExit and split the large
+//      block the dict caches vacate. Left unchecked this ends in an allocation abort() a few
+//      pages later (confirmed crash_report).
+// Fonts reload lazily when a definition is rendered, and the reader re-warms on return. The
+// threshold matches EpubReaderActivity's RESUME_HEAP_FLOOR so the tight X3-resume path (huge
+// CSS book, maxAlloc bottoming near 7K) reliably reclaims before the scan runs.
+void EpubReaderWordLookupActivity::reclaimFontHeap() {
+  if (ESP.getMaxAllocHeap() < 40 * 1024) {
     LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->releaseAllFontMemory();
       LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
     }
   }
+}
+
+// A persisted scan for this exact page skips all scanning; otherwise start progressively.
+void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
   if (!scanCachePath.empty() && scan.tryLoadCache(scanCachePath, scanSpine, scanPage)) {
     return;
   }

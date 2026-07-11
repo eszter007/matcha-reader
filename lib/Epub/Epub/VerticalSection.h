@@ -37,6 +37,12 @@ class VerticalSection {
 
   bool streamParseAndLayout(HalFile& out, int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
 
+  // Set by streamParseAndLayout when the layout dropped chars/glyphs on low heap. The pages that
+  // made it to disk are readable (this session keeps working), but createSectionFile stamps the
+  // file with version 0 so the next open sees a version mismatch and rebuilds the chapter --
+  // instead of the truncation living on disk as a permanently sparse chapter.
+  bool lastBuildDroppedForHeap_ = false;
+
  public:
   uint16_t pageCount = 0;
   int currentPage = 0;

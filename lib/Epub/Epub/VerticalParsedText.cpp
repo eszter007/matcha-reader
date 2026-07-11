@@ -246,6 +246,7 @@ bool VerticalParsedText::canPushStreamChar() {
   LOG_ERR("VPT", "Low heap (%u bytes, need ~%u) while building vertical text stream; truncating batch",
           ESP.getMaxAllocHeap(), static_cast<unsigned>(linearBytes));
   oom_ = true;
+  everDroppedForHeap_ = true;
   return false;
 }
 
@@ -545,7 +546,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Falling back to a small LINEAR growth step once doubling would be too big keeps each retry's
   // request small and roughly constant, so a later push (after some other allocation frees up) has
   // a real chance to succeed instead of being permanently walled off behind the same big ask.
-  auto pushGlyph = [](std::vector<VerticalGlyph>& glyphs, const VerticalGlyph& g) {
+  auto pushGlyph = [this](std::vector<VerticalGlyph>& glyphs, const VerticalGlyph& g) {
     if (glyphs.size() < glyphs.capacity()) {
       glyphs.push_back(g);
       return true;
@@ -571,6 +572,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
     LOG_ERR("VPT", "Low heap (%u bytes, need ~%u); dropping glyph", ESP.getMaxAllocHeap(),
             static_cast<unsigned>(linearBytes));
+    everDroppedForHeap_ = true;
     return false;
   };
 
