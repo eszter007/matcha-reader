@@ -50,9 +50,11 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
 //      buffers regrown while RENDERING definitions persist past onExit and split the large
 //      block the dict caches vacate. Left unchecked this ends in an allocation abort() a few
 //      pages later (confirmed crash_report).
-// Fonts reload lazily when a definition is rendered, and the reader re-warms on return. The
-// threshold matches EpubReaderActivity's RESUME_HEAP_FLOOR so the tight X3-resume path (huge
-// CSS book, maxAlloc bottoming near 7K) reliably reclaims before the scan runs.
+// Threshold is 40K (not the historical 28K): on the X3 (wider 528px viewport) the reader's
+// resident font slab is larger, so the dict caches can fail to find contiguous space even above
+// the old floor, surfacing as an empty scan ("no matches found"). Matches EpubReaderActivity's
+// RESUME_HEAP_FLOOR so the tight X3-resume path (huge CSS book, maxAlloc bottoming near 7K)
+// reliably reclaims before the scan runs. Fonts reload lazily; the reader re-warms on return.
 void EpubReaderWordLookupActivity::reclaimFontHeap() {
   if (ESP.getMaxAllocHeap() < 40 * 1024) {
     LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
