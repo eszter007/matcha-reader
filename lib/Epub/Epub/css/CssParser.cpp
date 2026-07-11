@@ -440,6 +440,18 @@ CssStyle CssParser::parseDeclarations(std::string_view declBlock) {
 // Rule processing
 
 void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style) {
+  // With an active incremental cache append, keep the resident map SMALL by flushing it to the
+  // cache file periodically -- even mid-stylesheet. One real book's 818-rule stylesheet needs
+  // ~100KB as a map, more than the warm-path heap has, so without this the parse truncates at
+  // ~90% every time and the (partial) cache is discarded on every open. The map is only a write
+  // buffer here: duplicate selectors across flush boundaries become separate records that
+  // loadFromCache merges back in order (applyOver), same as a live parse would.
+  constexpr size_t CACHE_FLUSH_RULE_THRESHOLD = 200;  // ~25KB resident worst case
+  if (cacheAppendActive_ && rulesBySelector_.size() >= CACHE_FLUSH_RULE_THRESHOLD) {
+    appendRulesToCache();
+    rulesBySelector_.clear();
+  }
+
   // Check if we've reached the rule limit before processing
   if (rulesBySelector_.size() >= MAX_RULES) {
     LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);
@@ -743,63 +755,153 @@ bool CssParser::saveToCache() const {
 
   // Write each rule: selector string + CssStyle fields
   for (const auto& pair : rulesBySelector_) {
-    // Write selector string (length-prefixed)
-    const auto selectorLen = static_cast<uint16_t>(pair.first.size());
-    file.write(reinterpret_cast<const uint8_t*>(&selectorLen), sizeof(selectorLen));
-    file.write(reinterpret_cast<const uint8_t*>(pair.first.data()), selectorLen);
-
-    // Write CssStyle fields (all are POD types)
-    const CssStyle& style = pair.second;
-    file.write(static_cast<uint8_t>(style.textAlign));
-    file.write(static_cast<uint8_t>(style.fontStyle));
-    file.write(static_cast<uint8_t>(style.fontWeight));
-    file.write(static_cast<uint8_t>(style.textDecoration));
-    file.write(static_cast<uint8_t>(style.direction));
-
-    // Write CssLength fields (value + unit)
-    auto writeLength = [&file](const CssLength& len) {
-      file.write(reinterpret_cast<const uint8_t*>(&len.value), sizeof(len.value));
-      file.write(static_cast<uint8_t>(len.unit));
-    };
-
-    writeLength(style.textIndent);
-    writeLength(style.marginTop);
-    writeLength(style.marginBottom);
-    writeLength(style.marginLeft);
-    writeLength(style.marginRight);
-    writeLength(style.paddingTop);
-    writeLength(style.paddingBottom);
-    writeLength(style.paddingLeft);
-    writeLength(style.paddingRight);
-    writeLength(style.imageHeight);
-    writeLength(style.imageWidth);
-    file.write(static_cast<uint8_t>(style.display));
-    file.write(static_cast<uint8_t>(style.verticalAlign));
-
-    // Write defined flags as uint32_t
-    uint32_t definedBits = 0;
-    if (style.defined.textAlign) definedBits |= 1 << 0;
-    if (style.defined.fontStyle) definedBits |= 1 << 1;
-    if (style.defined.fontWeight) definedBits |= 1 << 2;
-    if (style.defined.textDecoration) definedBits |= 1 << 3;
-    if (style.defined.textIndent) definedBits |= 1 << 4;
-    if (style.defined.marginTop) definedBits |= 1 << 5;
-    if (style.defined.marginBottom) definedBits |= 1 << 6;
-    if (style.defined.marginLeft) definedBits |= 1 << 7;
-    if (style.defined.marginRight) definedBits |= 1 << 8;
-    if (style.defined.paddingTop) definedBits |= 1 << 9;
-    if (style.defined.paddingBottom) definedBits |= 1 << 10;
-    if (style.defined.paddingLeft) definedBits |= 1 << 11;
-    if (style.defined.paddingRight) definedBits |= 1 << 12;
-    if (style.defined.imageHeight) definedBits |= 1 << 13;
-    if (style.defined.imageWidth) definedBits |= 1 << 14;
-    if (style.defined.display) definedBits |= 1 << 15;
-    if (style.defined.direction) definedBits |= 1 << 16;
-    if (style.defined.verticalAlign) definedBits |= 1 << 17;
-    file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
+    writeRuleRecord(file, pair.first, pair.second);
   }
 
   LOG_DBG("CSS", "Saved %u rules to cache", ruleCount);
+  return true;
+}
+
+// One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 11 CssLength
+// (float value + unit byte) + display + verticalAlign + definedBits(4).
+void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, const CssStyle& style) {
+  const auto selectorLen = static_cast<uint16_t>(selector.size());
+  file.write(reinterpret_cast<const uint8_t*>(&selectorLen), sizeof(selectorLen));
+  file.write(reinterpret_cast<const uint8_t*>(selector.data()), selectorLen);
+
+  file.write(static_cast<uint8_t>(style.textAlign));
+  file.write(static_cast<uint8_t>(style.fontStyle));
+  file.write(static_cast<uint8_t>(style.fontWeight));
+  file.write(static_cast<uint8_t>(style.textDecoration));
+  file.write(static_cast<uint8_t>(style.direction));
+
+  auto writeLength = [&file](const CssLength& len) {
+    file.write(reinterpret_cast<const uint8_t*>(&len.value), sizeof(len.value));
+    file.write(static_cast<uint8_t>(len.unit));
+  };
+
+  writeLength(style.textIndent);
+  writeLength(style.marginTop);
+  writeLength(style.marginBottom);
+  writeLength(style.marginLeft);
+  writeLength(style.marginRight);
+  writeLength(style.paddingTop);
+  writeLength(style.paddingBottom);
+  writeLength(style.paddingLeft);
+  writeLength(style.paddingRight);
+  writeLength(style.imageHeight);
+  writeLength(style.imageWidth);
+  file.write(static_cast<uint8_t>(style.display));
+  file.write(static_cast<uint8_t>(style.verticalAlign));
+
+  uint32_t definedBits = 0;
+  if (style.defined.textAlign) definedBits |= 1 << 0;
+  if (style.defined.fontStyle) definedBits |= 1 << 1;
+  if (style.defined.fontWeight) definedBits |= 1 << 2;
+  if (style.defined.textDecoration) definedBits |= 1 << 3;
+  if (style.defined.textIndent) definedBits |= 1 << 4;
+  if (style.defined.marginTop) definedBits |= 1 << 5;
+  if (style.defined.marginBottom) definedBits |= 1 << 6;
+  if (style.defined.marginLeft) definedBits |= 1 << 7;
+  if (style.defined.marginRight) definedBits |= 1 << 8;
+  if (style.defined.paddingTop) definedBits |= 1 << 9;
+  if (style.defined.paddingBottom) definedBits |= 1 << 10;
+  if (style.defined.paddingLeft) definedBits |= 1 << 11;
+  if (style.defined.paddingRight) definedBits |= 1 << 12;
+  if (style.defined.imageHeight) definedBits |= 1 << 13;
+  if (style.defined.imageWidth) definedBits |= 1 << 14;
+  if (style.defined.display) definedBits |= 1 << 15;
+  if (style.defined.direction) definedBits |= 1 << 16;
+  if (style.defined.verticalAlign) definedBits |= 1 << 17;
+  file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
+}
+
+// See CssParser.h. Runs at every book open in place of a full loadFromCache -- must not
+// allocate; a heavy book's rule map (818 rules) is what used to fail here.
+bool CssParser::validateCache() const {
+  if (cachePath.empty()) return false;
+
+  HalFile file;
+  if (!Storage.openFileForRead("CSS", cachePath + rulesCache, file)) return false;
+
+  uint8_t version = 0;
+  if (file.read(&version, 1) != 1 || version != CssParser::CSS_CACHE_VERSION) {
+    LOG_DBG("CSS", "Cache version mismatch (got %u, expected %u), removing stale cache for rebuild", version,
+            CssParser::CSS_CACHE_VERSION);
+    file.close();
+    Storage.remove((cachePath + rulesCache).c_str());
+    return false;
+  }
+
+  uint16_t ruleCount = 0;
+  if (file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount)) return false;
+  if (ruleCount == 0 || ruleCount > MAX_RULES) {
+    LOG_DBG("CSS", "Invalid cache rule count (%u)", ruleCount);
+    return false;
+  }
+
+  // selectorLen is followed by this many fixed bytes (see writeRuleRecord).
+  constexpr size_t RULE_FIXED_BYTES = 5 + 11 * (sizeof(float) + 1) + 2 + sizeof(uint32_t);
+  for (uint16_t i = 0; i < ruleCount; ++i) {
+    uint16_t selectorLen = 0;
+    if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) return false;
+    if (selectorLen == 0 || selectorLen > MAX_SELECTOR_LENGTH) {
+      LOG_DBG("CSS", "Invalid selector length in cache: %u", selectorLen);
+      return false;
+    }
+    const size_t skip = selectorLen + RULE_FIXED_BYTES;
+    if (static_cast<size_t>(file.available()) < skip) {
+      LOG_DBG("CSS", "Truncated CSS cache at rule %u/%u", i, ruleCount);
+      return false;
+    }
+    if (!file.seekCur(static_cast<int64_t>(skip))) return false;
+  }
+  return true;
+}
+
+bool CssParser::beginCacheAppend() {
+  appendedRuleCount_ = 0;
+  cacheAppendActive_ = false;
+  if (cachePath.empty()) return false;
+  if (!Storage.openFileForWrite("CSS", cachePath + rulesCache, cacheAppendFile_)) return false;
+  cacheAppendFile_.write(CssParser::CSS_CACHE_VERSION);
+  // Rule-count placeholder; patched by endCacheAppend (write mode is O_RDWR, not append, so the
+  // seek-back write lands in place -- same pattern as VerticalSection's header patch).
+  const uint16_t placeholder = 0;
+  cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&placeholder), sizeof(placeholder));
+  cacheAppendActive_ = true;
+  return true;
+}
+
+bool CssParser::appendRulesToCache() {
+  if (!cacheAppendActive_) return false;
+  for (const auto& pair : rulesBySelector_) {
+    if (appendedRuleCount_ >= MAX_RULES) {
+      LOG_DBG("CSS", "Reached max rules limit (%zu) while caching, dropping remainder", MAX_RULES);
+      break;
+    }
+    writeRuleRecord(cacheAppendFile_, pair.first, pair.second);
+    ++appendedRuleCount_;
+  }
+  return true;
+}
+
+bool CssParser::endCacheAppend(const bool discard) {
+  if (!cacheAppendActive_) return false;
+  cacheAppendActive_ = false;
+  if (discard || appendedRuleCount_ == 0) {
+    cacheAppendFile_.close();
+    Storage.remove((cachePath + rulesCache).c_str());
+    return false;
+  }
+  if (!cacheAppendFile_.seek(1)) {  // patch the rule-count placeholder after the version byte
+    cacheAppendFile_.close();
+    Storage.remove((cachePath + rulesCache).c_str());
+    return false;
+  }
+  cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&appendedRuleCount_), sizeof(appendedRuleCount_));
+  cacheAppendFile_.close();
+  LOG_DBG("CSS", "Saved %u rules to cache (incremental)", appendedRuleCount_);
   return true;
 }
 
@@ -1006,7 +1108,14 @@ bool CssParser::loadFromCache() {
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
 
-    rulesBySelector_[selector] = style;
+    // The incremental (per-file) cache writer can emit the same selector once per CSS file, so
+    // replicate the parser's semantics here: later occurrences MERGE onto the earlier entry
+    // (applyOver), exactly like a later file's rule block does during a live parse.
+    if (auto it = rulesBySelector_.find(selector); it != rulesBySelector_.end()) {
+      it->second.applyOver(style);
+    } else {
+      rulesBySelector_[selector] = style;
+    }
   }
 
   LOG_DBG("CSS", "Loaded %u rules from cache", ruleCount);

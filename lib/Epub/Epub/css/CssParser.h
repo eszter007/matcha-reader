@@ -33,7 +33,8 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 7;  // v7: numeric vertical-align parsed as super/sub
+  // v8: discard caches written by builds that saved partial (heap-truncated) rule tables
+  static constexpr uint8_t CSS_CACHE_VERSION = 8;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -121,6 +122,28 @@ class CssParser {
    */
   bool loadFromCache();
 
+  /**
+   * Structurally validate the cache file WITHOUT materializing the rule map. Book open only
+   * needs to know "is the cache present and readable" -- building the full map (thousands of
+   * small allocations for a heavy book) just to throw it away was itself the low-heap failure
+   * that triggered the delete/re-parse cascade. Walks version, rule count, and every record's
+   * framing using a few stack bytes. Removes the file on version mismatch (like loadFromCache).
+   */
+  bool validateCache() const;
+
+  /**
+   * Incremental cache writing, one flush per parsed CSS file, so only ONE file's rules are ever
+   * resident while parsing (a heavy book's full table blocked the remaining files from parsing
+   * at all: 818 resident rules left ~23KB free vs the 64KB the next parse needs).
+   * Usage: beginCacheAppend() once, then per file: parse -> appendRulesToCache() -> clear().
+   * Finish with endCacheAppend(discard): discard=true (or zero rules) deletes the file instead.
+   * Duplicate selectors across files are resolved at load time (loadFromCache merges like the
+   * parser does).
+   */
+  bool beginCacheAppend();
+  bool appendRulesToCache();
+  bool endCacheAppend(bool discard);
+
  private:
   // Lookup key for a multi-piece selector. The pieces are hashed and compared
   // as if concatenated, so callers can look up composite keys without
@@ -155,8 +178,15 @@ class CssParser {
 
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
-  bool heapTruncated_ = false;         // see wasHeapTruncated()
+  bool heapTruncated_ = false;           // see wasHeapTruncated()
   bool cacheLoadFailedForHeap_ = false;  // see cacheLoadFailedForHeap()
+
+  // Incremental cache writing state (beginCacheAppend/appendRulesToCache/endCacheAppend).
+  HalFile cacheAppendFile_;
+  uint16_t appendedRuleCount_ = 0;
+  bool cacheAppendActive_ = false;
+
+  static void writeRuleRecord(HalFile& file, const std::string& selector, const CssStyle& style);
 
   std::string cachePath;
 

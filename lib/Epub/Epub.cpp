@@ -301,8 +301,17 @@ void Epub::parseCssFiles() const {
     return;
   }
 
-  // No cache yet - parse CSS files
+  // No cache yet - parse CSS files ONE AT A TIME, flushing each file's rules to the cache and
+  // clearing the map before the next file. Keeping every parsed file's rules resident was what
+  // starved the later files: one heavy 818-rule stylesheet left ~23KB free against the 64KB the
+  // next parse needs, so the tail files were skipped on every single open and the cache -- being
+  // partial -- was never written, re-triggering this whole parse at each book open.
   bool skippedFileForHeap = false;
+  size_t totalRulesParsed = 0;
+  bool cacheOk = cssParser->beginCacheAppend();
+  if (!cacheOk) {
+    LOG_ERR("EBP", "Could not open CSS cache for writing; parsing without caching");
+  }
   for (const auto& cssPath : cssFiles) {
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
@@ -352,19 +361,27 @@ void Epub::parseCssFiles() const {
     // Explicitly close() file before calling Storage.remove()
     tempCssFile.close();
     Storage.remove(tmpCssPath.c_str());
+
+    // Flush this file's rules to the cache and free the map before the next file starts.
+    totalRulesParsed += cssParser->ruleCount();
+    if (cacheOk) cacheOk = cssParser->appendRulesToCache();
+    cssParser->clear();
   }
 
-  // Save to cache for next time. A parse that skipped whole files for lack of heap is partial
-  // for the same reason a heap-truncated in-file parse is: caching it would freeze the degraded
-  // rule set permanently (saveToCache itself refuses the in-file case via wasHeapTruncated).
-  if (skippedFileForHeap) {
-    LOG_ERR("EBP", "CSS parse skipped file(s) on low heap; not caching partial rules");
-  } else if (!cssParser->saveToCache()) {
+  // A parse that skipped whole files (heap) or dropped selectors mid-file (wasHeapTruncated,
+  // latched across files) is partial: caching it would freeze the degraded rule set permanently,
+  // so discard and let the next open retry. Consumers (section builds) load rules from this
+  // cache, so on discard this session's sections build with reduced styling -- same outcome as
+  // the skipped files themselves, and self-healing once a later open completes the parse.
+  const bool partial = skippedFileForHeap || cssParser->wasHeapTruncated();
+  if (partial) {
+    LOG_ERR("EBP", "CSS parse incomplete on low heap; discarding partial cache for retry next open");
+  }
+  if (!cssParser->endCacheAppend(/*discard=*/partial || !cacheOk) && !partial && cacheOk) {
     LOG_ERR("EBP", "Failed to save CSS rules to cache");
   }
 
-  LOG_DBG("EBP", "Loaded %zu CSS style rules from %zu files", cssParser->ruleCount(), cssFiles.size());
-  cssParser->clear();
+  LOG_DBG("EBP", "Parsed %zu CSS style rules from %zu files", totalRulesParsed, cssFiles.size());
 }
 
 // load in the meta data for the epub file
@@ -379,20 +396,12 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
     if (!skipLoadingCss) {
-      // Rebuild CSS cache when missing or when cache version changed (loadFromCache removes stale file)
-      if (!cssParser->hasCache() || !cssParser->loadFromCache()) {
-        // A low-heap load abort is NOT a stale cache: the file is valid, the heap just can't
-        // hold the rule table right now. Deleting it here started a per-boot death spiral on
-        // the X3 (reporter log): delete -> full re-parse (free heap fell to 4KB) -> partial
-        // rule table cached -> section caches nuked below -> chapters re-laid-out under
-        // pressure -> next boot repeats. Keep the cache and read this session unstyled; the
-        // pre-load font release in ReaderActivity makes the next attempt succeed.
-        if (cssParser->cacheLoadFailedForHeap()) {
-          LOG_ERR("EBP", "CSS cache load hit low heap; keeping cache, reading unstyled this session");
-          cssParser->clear();
-          LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
-          return true;
-        }
+      // Rebuild CSS cache when missing or when cache version changed. validateCache streams
+      // through the file WITHOUT materializing the rule map -- the old loadFromCache-as-check
+      // built the full table (90KB+ for a heavy book) just to throw it away, which is exactly
+      // what used to abort on the post-wake heap and cascade into delete/re-parse/section-nuke.
+      // It removes the file itself on a version mismatch, like loadFromCache does.
+      if (!cssParser->hasCache() || !cssParser->validateCache()) {
         LOG_DBG("EBP", "CSS rules cache missing or stale, attempting to parse CSS files");
         cssParser->deleteCache();
 
@@ -413,12 +422,12 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         // Invalidate section caches so they are rebuilt with the new CSS
         Storage.removeDir((cachePath + "/sections").c_str());
       }
-      // The loadFromCache() above was a validity/version CHECK -- don't keep the rule table
-      // resident for the whole reading session. Only horizontal section BUILDS consume it, and
-      // Section.cpp reloads it from the on-disk cache right before parsing. A heavy book's table
-      // (e.g. 608 rules, ~79KB serialized) held in thousands of small string allocations
-      // fragments the heap badly enough that vertical section builds can no longer get their
-      // ~33KB contiguous stream reserve and silently truncate long chapters into sparse pages.
+      // Nothing is kept resident here: validateCache never materializes rules, and
+      // parseCssFiles clears the map after each per-file cache flush. Only horizontal section
+      // BUILDS consume the table, and Section.cpp reloads it from the on-disk cache right
+      // before parsing. (Historically a 608-rule table held here in thousands of small string
+      // allocations fragmented the heap enough that vertical section builds lost their ~33KB
+      // contiguous stream reserve and silently truncated long chapters into sparse pages.)
       cssParser->clear();
     }
     LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
