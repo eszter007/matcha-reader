@@ -6,6 +6,7 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <MangaPanel.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -136,6 +137,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
             }
             GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+            // The XTH cover page needs a large contiguous buffer (~104KB for 2-bit 528x792) --
+            // more than the largest free block once the font caches are warm, so the thumb
+            // generation would fail and the cover would be missing. Coalesce the heap first.
+            if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
             bool success = xtc.generateThumbBmp(coverHeight);
             if (!success) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");

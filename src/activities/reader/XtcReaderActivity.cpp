@@ -7,6 +7,8 @@
 
 #include "XtcReaderActivity.h"
 
+#include <Arduino.h>
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -48,6 +50,7 @@ void XtcReaderActivity::onEnter() {
 void XtcReaderActivity::onExit() {
   Activity::onExit();
 
+  freePageBuffer();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   xtc.reset();
@@ -204,6 +207,33 @@ void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition po
   GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
 }
 
+void XtcReaderActivity::freePageBuffer() {
+  free(pageBuffer);
+  pageBuffer = nullptr;
+  pageBufferSize = 0;
+}
+
+// Allocate the page buffer once (or grow it if a later page is somehow larger). A full XTH 2-bit
+// page is ~104KB -- larger than the biggest free block once the library warmed the font caches
+// (device log: free 124K, maxAlloc 69K, so the malloc failed and showed a memory error). Reclaim
+// the font decompressor's hot-group + glyph slab first to coalesce the heap (same as the EPUB
+// build path); doing it once here, not per page turn, keeps turns fast. Fonts re-warm lazily.
+bool XtcReaderActivity::ensurePageBuffer(size_t needed) {
+  if (pageBuffer && pageBufferSize >= needed) return true;
+  freePageBuffer();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (ESP.getMaxAllocHeap() < needed + 8 * 1024) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("XTR", "Freed font memory for page buffer: maxAlloc=%u (need %lu)", ESP.getMaxAllocHeap(),
+              static_cast<unsigned long>(needed));
+    }
+  }
+  pageBuffer = static_cast<uint8_t*>(malloc(needed));
+  if (!pageBuffer) return false;
+  pageBufferSize = needed;
+  return true;
+}
+
 void XtcReaderActivity::renderPage() {
   const uint16_t pageWidth = xtc->getPageWidth();
   const uint16_t pageHeight = xtc->getPageHeight();
@@ -212,17 +242,18 @@ void XtcReaderActivity::renderPage() {
   // Calculate buffer size for one page
   // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
   // XTH (2-bit): Two bit planes, column-major, ((width * height + 7) / 8) * 2 bytes
-  size_t pageBufferSize;
+  size_t neededSize;
   if (bitDepth == 2) {
-    pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
+    neededSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
   } else {
-    pageBufferSize = ((pageWidth + 7) / 8) * pageHeight;
+    neededSize = ((pageWidth + 7) / 8) * pageHeight;
   }
 
-  // Allocate page buffer
-  uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(pageBufferSize));
-  if (!pageBuffer) {
-    LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes)", pageBufferSize);
+  // Reuse a single page buffer for the whole session (allocated on first render). See
+  // ensurePageBuffer(): it coalesces the heap once and grabs the ~104KB block, instead of a
+  // large malloc/free on every page turn.
+  if (!ensurePageBuffer(neededSize)) {
+    LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes, maxAlloc=%u)", neededSize, ESP.getMaxAllocHeap());
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -230,11 +261,10 @@ void XtcReaderActivity::renderPage() {
   }
 
   // Load page data
-  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, pageBufferSize);
+  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, neededSize);
   if (bytesRead == 0) {
-    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, pageBufferSize,
-            bitDepth, xtc::errorToString(xtc->getLastError()));
-    free(pageBuffer);
+    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, neededSize, bitDepth,
+            xtc::errorToString(xtc->getLastError()));
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -349,8 +379,6 @@ void XtcReaderActivity::renderPage() {
     // Cleanup grayscale buffers with current frame buffer
     renderer.cleanupGrayscaleWithFrameBuffer();
 
-    free(pageBuffer);
-
     LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
     return;
   } else {
@@ -373,8 +401,6 @@ void XtcReaderActivity::renderPage() {
     }
   }
   // White pixels are already cleared by clearScreen()
-
-  free(pageBuffer);
 
   if (SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
     renderStatusBarOverlay(StatusBarOverlayPosition::Top);

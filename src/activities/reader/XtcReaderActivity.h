@@ -20,6 +20,14 @@ class XtcReaderActivity final : public Activity {
   uint32_t currentPage = 0;
   int pagesUntilFullRefresh = 0;
 
+  // Page pixel buffer, allocated once (a full XTH 2-bit page is ~104KB) and reused for every page
+  // turn. Page dimensions are fixed per file, so one buffer serves all pages -- avoids a large
+  // malloc/free on every turn (slow) and grabs the block once while the heap is freshest.
+  uint8_t* pageBuffer = nullptr;
+  size_t pageBufferSize = 0;
+  bool ensurePageBuffer(size_t needed);
+  void freePageBuffer();
+
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {
     int currentPage;
