@@ -231,7 +231,12 @@ class SdCardFont {
   // Bounded to ADVANCE_CACHE_LIMIT entries; persists across layout passes
   // (across calls to clearCache()) so repeated indexing of the same font
   // amortizes SD reads. Cleared only on font unload or clearPersistentCache().
-  static constexpr uint32_t ADVANCE_CACHE_LIMIT = 768;
+  // 1536, not 768: a single kanji-heavy chapter (100KB text) exceeds 768 unique codepoints,
+  // and every capped-out codepoint falls back to an approximate width at layout time --
+  // observed on device first as overlapping words (zero fallback), then as visibly loose
+  // spacing (em fallback). 1536 entries x 8B = 12KB per active style; measurement accuracy is
+  // worth that.
+  static constexpr uint32_t ADVANCE_CACHE_LIMIT = 1536;
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
   // Kana and kanji are drawn on the full em in CJK fonts: one measured advance covers the
   // entire range, so layout never does per-kanji SD reads (a chapter has thousands of unique

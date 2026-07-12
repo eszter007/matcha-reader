@@ -1712,6 +1712,7 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       // glyph loader -- measurement must not do per-glyph SD reads (indexing speed).
       prevAdvanceFP = fallbackSdFont_->getAdvance(cp, 0);
     }
+
     if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
     }
