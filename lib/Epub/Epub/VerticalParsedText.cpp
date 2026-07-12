@@ -736,11 +736,40 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         const int runWidthPx =
             renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
 
+        // Center the run on its INK box, not its advance width. drawText puts ink at
+        // pen + firstGlyph.left, and digit advances carry trailing whitespace, so advance-based
+        // centering sat the run visibly right of the column's kanji (device photo, 「築26年」).
+        // Mirrors the single-digit ink centering in placeUprightAt.
+        int runX = columnLeftX(column) + std::max(0, (cellPx - runWidthPx) / 2);
+        {
+          const uint32_t cpFirst = stream_[idx].codepoint;
+          const uint32_t cpLast = stream_[idx + 1].codepoint;
+          int l1 = 0, w1 = 0, t1 = 0, h1 = 0, lN = 0, wN = 0, tN = 0, hN = 0;
+          if (renderer_.getGlyphMetrics(fontId_, cpFirst, static_cast<EpdFontFamily::Style>(kNoStyle), &l1, &w1, &t1,
+                                        &h1) &&
+              renderer_.getGlyphMetrics(fontId_, cpLast, static_cast<EpdFontFamily::Style>(kNoStyle), &lN, &wN, &tN,
+                                        &hN)) {
+            std::string lastUtf8;
+            encodeDigitUtf8(cpLast, lastUtf8);
+            const int lastAdvance =
+                renderer_.getTextAdvanceX(fontId_, lastUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+            // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
+            const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
+            if (inkWidth > 0 && inkWidth <= cellPx) {
+              // Extra left nudge on top of ink centering: the surrounding kanji's ink sits
+              // slightly left of the cell center (CJK glyphs carry a touch more right-side
+              // bearing), so a mathematically centered run still reads right-shifted next to
+              // them. Tuned on device photos with Kyokasho ("築26年").
+              runX = columnLeftX(column) + (cellPx - inkWidth) / 2 - l1 - 1 - std::max(4, cellPx / 4);
+            }
+          }
+        }
+
         VerticalGlyph g;
         g.codepoint = 0;
         g.column = column;
         g.row = row;
-        g.x = static_cast<uint16_t>(columnLeftX(column) + std::max(0, (cellPx - runWidthPx) / 2));
+        g.x = static_cast<uint16_t>(std::max(0, runX));
         g.y = static_cast<uint16_t>(row * cellPx + ascender);
         g.paragraphIndex = pc.paragraphIndex;
         g.byteOffset = pc.byteOffset;
