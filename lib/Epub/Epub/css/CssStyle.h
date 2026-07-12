@@ -81,6 +81,7 @@ struct CssPropertyFlags {
   uint16_t display : 1;
   uint16_t direction : 1;
   uint16_t verticalAlign : 1;
+  uint16_t border : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -100,7 +101,8 @@ struct CssPropertyFlags {
         imageWidth(0),
         display(0),
         direction(0),
-        verticalAlign(0) {}
+        verticalAlign(0),
+        border(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
@@ -143,6 +145,16 @@ struct CssStyle {
   CssLength imageWidth;     // Width for img when both or only width set
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
+  // Border edges bitmask (TOP/RIGHT/BOTTOM/LEFT). A full 4-side mask is a boxed/kakomi block;
+  // a TOP-only mask is a separator rule above the block (EBPAJ .k-solid-top). See the
+  // border-style parsing in CssParser.cpp.
+  static constexpr uint8_t BORDER_TOP = 1 << 0;
+  static constexpr uint8_t BORDER_RIGHT = 1 << 1;
+  static constexpr uint8_t BORDER_BOTTOM = 1 << 2;
+  static constexpr uint8_t BORDER_LEFT = 1 << 3;
+  static constexpr uint8_t BORDER_ALL = 0x0F;
+  uint8_t borderEdges = 0;
+  [[nodiscard]] bool isFullBorderBox() const { return defined.border && borderEdges == BORDER_ALL; }
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -221,6 +233,10 @@ struct CssStyle {
       verticalAlign = base.verticalAlign;
       defined.verticalAlign = 1;
     }
+    if (base.hasBorder()) {
+      borderEdges = base.borderEdges;
+      defined.border = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -241,6 +257,7 @@ struct CssStyle {
   [[nodiscard]] bool hasDisplay() const { return defined.display; }
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
+  [[nodiscard]] bool hasBorder() const { return defined.border; }
 
   void reset() {
     textAlign = CssTextAlign::Left;

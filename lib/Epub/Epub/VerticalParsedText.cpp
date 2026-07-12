@@ -487,6 +487,25 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // addAnnotatedParagraph), so honoring it can't split a paragraph mid-flow anymore.
   size_t nextParagraphBreakIdx = pendingPageValid_ ? 0 : 1;
 
+  // Snapshot the geometry for box-rect building: finalizePendingPage() runs OUTSIDE this
+  // function and must still be able to close an open box on the final page.
+  boxGeomCellPx_ = cellPx;
+  boxGeomColumnAdvancePx_ = columnAdvancePx;
+  boxGeomUsableWidthPx_ = usableWidthPx;
+  boxGeomRowsPerColumn_ = rowsPerColumn;
+
+  // Re-record box markers carried across a batch boundary (see reset()) at index 0.
+  if (boxEndCarry_) {
+    boxEndsBeforeIndex_.insert(boxEndsBeforeIndex_.begin(), 0);
+    boxEndCarry_ = false;
+  }
+  if (boxStartCarry_) {
+    boxStartsBeforeIndex_.insert(boxStartsBeforeIndex_.begin(), 0);
+    boxStartCarry_ = false;
+  }
+  size_t nextBoxStartIdx = 0;
+  size_t nextBoxEndIdx = 0;
+
   // One page's cell grid is fixed by screen geometry -- reserving it up front turns what used to
   // be several dozen incremental (and, on a fragmented heap, crash-prone) reallocations per page
   // into a single allocation. Confirmed via a real device crash inside this exact glyphs vector's
@@ -595,8 +614,29 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
   auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - col * columnAdvancePx; };
 
+  // Row where a fresh column starts: 0 normally; inside a styled block, the block's start
+  // offset (start-Xem), plus the hanging indent (h-indent-Xem) when the column continues a
+  // wrapped paragraph line rather than beginning a new paragraph.
+  auto columnStartRow = [&](const bool paragraphStart) -> uint16_t {
+    if (!inBox_) return 0;
+    const int startRows = static_cast<int>(activeBlock_.startEm + 0.5f);
+    const int hangRows = paragraphStart ? 0 : static_cast<int>(activeBlock_.hangEm + 0.5f);
+    return static_cast<uint16_t>(std::min<int>(rowsPerColumn - 1, std::max(0, startRows + hangRows)));
+  };
+
   auto finalizePageIfNeeded = [&]() {
     if (column >= columnsPerPage) {
+      // A box spanning the page boundary gets one rect per page: close it at this page's last
+      // column and continue from column 0 on the next page.
+      if (inBox_) {
+        appendBoxRectToPage(page, boxStartCol_, static_cast<uint16_t>(columnsPerPage - 1),
+                            /*openLeft=*/true, /*openRight=*/boxContinuedFromPrevPage_);
+        if (activeBlock_.alignCenter) {
+          centerBlockColumns(page, boxStartCol_, static_cast<uint16_t>(columnsPerPage - 1));
+        }
+        boxStartCol_ = 0;
+        boxContinuedFromPrevPage_ = true;
+      }
       pages.push_back(std::move(page));
       anyPageEverProduced_ = true;
       // Stream out everything except the single most-recently-completed page: the oikomi
@@ -704,6 +744,32 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // drag its opening characters back into the previous paragraph's column, visually merging
     // the two (confirmed with the full-pipeline host repro). Kinsoku governs WRAPPED line
     // starts, not author-intended paragraph openings.
+    // Box END before the paragraph break: the box's content ended with the previous glyph, so
+    // its rect closes at the CURRENT column -- the break below then advances to a fresh one.
+    while (nextBoxEndIdx < boxEndsBeforeIndex_.size() && idx == boxEndsBeforeIndex_[nextBoxEndIdx]) {
+      if (inBox_) {
+        appendBoxRectToPage(page, boxStartCol_, column, /*openLeft=*/false,
+                            /*openRight=*/boxContinuedFromPrevPage_);
+        if (activeBlock_.alignCenter) centerBlockColumns(page, boxStartCol_, column);
+        const bool wantAfterGap = activeBlock_.afterEm >= 0.75f;
+        inBox_ = false;
+        boxContinuedFromPrevPage_ = false;
+        // Content after the block must not share its last column.
+        if (row != 0) {
+          column++;
+          row = 0;
+          finalizePageIfNeeded();
+        }
+        // m-after-Xem approximation: one blank column of extra separation.
+        if (wantAfterGap && column != 0) {
+          column++;
+          row = 0;
+          finalizePageIfNeeded();
+        }
+      }
+      nextBoxEndIdx++;
+    }
+
     bool paraBreakJustFired = false;
     while (nextParagraphBreakIdx < paragraphBreaksBeforeIndex_.size() &&
            idx == paragraphBreaksBeforeIndex_[nextParagraphBreakIdx]) {
@@ -713,7 +779,41 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         row = 0;
         finalizePageIfNeeded();
       }
+      row = columnStartRow(true);
       nextParagraphBreakIdx++;
+    }
+
+    // Box START after the paragraph break has advanced to the box's first (fresh) column.
+    while (nextBoxStartIdx < boxStartsBeforeIndex_.size() && idx == boxStartsBeforeIndex_[nextBoxStartIdx]) {
+      // Consume this marker's params unconditionally -- markers and queue entries are recorded
+      // 1:1, and skipping a pop (e.g. a start while already in a block) would desync every
+      // later block's params.
+      VerticalBlockParams params;
+      if (!blockParamsQueue_.empty()) {
+        params = blockParamsQueue_.front();
+        blockParamsQueue_.erase(blockParamsQueue_.begin());
+      }
+      if (!inBox_) {
+        // Defensive: if no break fired (block element without a <p>), still start fresh.
+        if (row != 0) {
+          column++;
+          row = 0;
+          finalizePageIfNeeded();
+        }
+        // m-before-Xem approximation: one blank column of extra separation.
+        if (params.beforeEm >= 0.75f && column != 0) {
+          column++;
+          row = 0;
+          finalizePageIfNeeded();
+        }
+        activeBlock_ = params;
+        inBox_ = true;
+        boxStartCol_ = column;
+        row = columnStartRow(true);
+        LOG_DBG("VPT", "block active at col=%u row=%u start=%.1f hang=%.1f edges=0x%X", column, row,
+                activeBlock_.startEm, activeBlock_.hangEm, activeBlock_.borderEdges);
+      }
+      nextBoxStartIdx++;
     }
 
     const size_t boundaryLimit =
@@ -783,6 +883,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           column++;
           row = 0;
           finalizePageIfNeeded();
+          row = columnStartRow(false);
         }
         idx = digitEnd;
         continue;
@@ -804,6 +905,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           column++;
           row = 0;
           finalizePageIfNeeded();
+          row = columnStartRow(false);
         }
 
         const int topY = row * cellPx;
@@ -828,6 +930,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           column++;
           row = 0;
           finalizePageIfNeeded();
+          row = columnStartRow(false);
         }
         idx = digitEnd;
         continue;
@@ -840,6 +943,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         column++;
         row = 0;
         finalizePageIfNeeded();
+        row = columnStartRow(false);
       }
       idx++;
       continue;
@@ -894,6 +998,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
             column++;
             row = 0;
             finalizePageIfNeeded();
+            row = columnStartRow(false);
           }
           break;
         }
@@ -918,6 +1023,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
             column++;
             row = 0;
             finalizePageIfNeeded();
+            row = columnStartRow(false);
           } else {
             // Already at top of column and still doesn't fit — force-place
             // the whole thing to avoid an infinite loop.
@@ -937,6 +1043,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
               column++;
               row = 0;
               finalizePageIfNeeded();
+              row = columnStartRow(false);
             }
             break;
           }
@@ -968,6 +1075,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           column++;
           row = 0;
           finalizePageIfNeeded();
+          row = columnStartRow(false);
         }
 
         // Skip the space and continue with the rest.
@@ -1034,6 +1142,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       column++;
       row = 0;
       finalizePageIfNeeded();
+      row = columnStartRow(false);
     }
 
     placeUpright(pc);
@@ -1042,6 +1151,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       column++;
       row = 0;
       finalizePageIfNeeded();
+      row = columnStartRow(false);
     }
     idx++;
   }
@@ -1061,10 +1171,80 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   return pages;
 }
 
+// Build the pixel rect for a box spanning columns [startCol..endCol] (startCol is the RIGHTMOST
+// column in tategaki order) and append it to the page. Full column height, with the border lines
+// centered in the surrounding column gaps / padded by a fraction of the cell vertically.
+void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t startCol, const uint16_t endCol,
+                                              const bool openLeft, const bool openRight) const {
+  if (boxGeomCellPx_ <= 0 || activeBlock_.borderEdges == 0) return;
+  const int gap = boxGeomColumnAdvancePx_ - boxGeomCellPx_;
+  const int padX = std::max(2, gap / 2);
+  const int padTop = std::max(2, boxGeomCellPx_ / 6);
+  // The last row's glyph ink reaches ascender+descender past its cell top, plus the renderer's
+  // global down-nudge -- and the reference rendering (Apple Books) leaves roughly a full
+  // character of air below the last line. The bottom-reserved strip has the room.
+  const int padBottom = std::max(6, (boxGeomCellPx_ * 5) / 4);
+  auto colLeft = [&](const uint16_t c) -> int {
+    return boxGeomUsableWidthPx_ - boxGeomCellPx_ - static_cast<int>(c) * boxGeomColumnAdvancePx_;
+  };
+  const int right = colLeft(startCol) + boxGeomCellPx_ + padX;
+  const int left = colLeft(endCol) - padX;
+  VerticalBoxRect r;
+  r.x = static_cast<int16_t>(left);
+  r.y = static_cast<int16_t>(-padTop);
+  r.w = static_cast<int16_t>(right - left);
+  r.h = static_cast<int16_t>(static_cast<int>(boxGeomRowsPerColumn_) * boxGeomCellPx_ + padTop + padBottom);
+  // CSS physical edges map 1:1 to draw bits; a page-boundary side loses its vertical line and
+  // gains the extend flag instead (half-open print style).
+  r.edges = activeBlock_.borderEdges;
+  if (openLeft) {
+    r.edges &= static_cast<uint8_t>(~VerticalBoxRect::DRAW_LEFT);
+    r.edges |= VerticalBoxRect::EXTEND_LEFT;
+  }
+  if (openRight) {
+    r.edges &= static_cast<uint8_t>(~VerticalBoxRect::DRAW_RIGHT);
+    r.edges |= VerticalBoxRect::EXTEND_RIGHT;
+  }
+  p.boxes.push_back(r);
+}
+
+// Vertically center the glyphs of columns [startCol..endCol] within the column height
+// (text-align: center in vertical writing). Runs once when a centered block closes on a page.
+void VerticalParsedText::centerBlockColumns(VerticalPage& p, const uint16_t startCol, const uint16_t endCol) const {
+  if (boxGeomCellPx_ <= 0 || boxGeomRowsPerColumn_ == 0) return;
+  for (uint16_t c = startCol; c <= endCol; c++) {
+    int maxRow = -1;
+    int minRow = boxGeomRowsPerColumn_;
+    for (const auto& g : p.glyphs) {
+      if (g.column != c) continue;
+      maxRow = std::max(maxRow, static_cast<int>(g.row));
+      minRow = std::min(minRow, static_cast<int>(g.row));
+    }
+    if (maxRow < 0) continue;
+    const int usedRows = maxRow - minRow + 1;
+    const int shiftPx = ((static_cast<int>(boxGeomRowsPerColumn_) - usedRows) * boxGeomCellPx_) / 2 -
+                        minRow * boxGeomCellPx_;
+    if (shiftPx == 0) continue;
+    for (auto& g : p.glyphs) {
+      if (g.column != c) continue;
+      g.y = static_cast<uint16_t>(std::max(0, static_cast<int>(g.y) + shiftPx));
+    }
+  }
+}
+
 bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
   if (!pendingPageValid_) return false;
   pendingPageValid_ = false;  // next layoutPages() call starts a fresh page either way
   if (pendingPage_.glyphs.empty()) return false;
+  // Chapter ended while inside a box (end marker carried past the last batch, or a truncated
+  // chapter): close the rect on this final page so the border isn't silently dropped.
+  if (inBox_) {
+    appendBoxRectToPage(pendingPage_, boxStartCol_, pendingColumn_, /*openLeft=*/false,
+                        /*openRight=*/boxContinuedFromPrevPage_);
+    if (activeBlock_.alignCenter) centerBlockColumns(pendingPage_, boxStartCol_, pendingColumn_);
+    inBox_ = false;
+    boxContinuedFromPrevPage_ = false;
+  }
   out = std::move(pendingPage_);
   anyPageEverProduced_ = true;  // set, NOT reset -- see the header doc comment
   return true;

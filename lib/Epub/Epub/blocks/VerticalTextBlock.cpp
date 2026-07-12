@@ -40,6 +40,24 @@ int computeCellPx(GfxRenderer& renderer, int fontId) {
 void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
   const int cellPx = computeCellPx(renderer, fontId);
   const int globalDownNudge = std::max(1, (cellPx * 3) / 8);
+
+  // Styled-block borders (kakomi boxes, .k-solid-top separator rules). Rects share the glyphs'
+  // logical coordinate space; glyph y values are baseline-based while rect y is cell-top-based,
+  // but both get the same offsets. `edges` says which lines to draw; EXTEND_* runs the
+  // horizontal lines through to the screen edge (half-open box across a page boundary).
+  for (const VerticalBoxRect& b : page.boxes) {
+    const bool extendLeft = (b.edges & VerticalBoxRect::EXTEND_LEFT) != 0;
+    const bool extendRight = (b.edges & VerticalBoxRect::EXTEND_RIGHT) != 0;
+    const int yTop = b.y + offsetY + globalDownNudge;
+    const int yBottom = yTop + b.h;
+    const int xLeft = extendLeft ? 0 : b.x + offsetX;
+    const int xRight = extendRight ? renderer.getScreenWidth() - 1 : b.x + b.w + offsetX;
+    if (b.edges & VerticalBoxRect::DRAW_TOP) renderer.drawLine(xLeft, yTop, xRight, yTop, black);
+    if (b.edges & VerticalBoxRect::DRAW_BOTTOM) renderer.drawLine(xLeft, yBottom, xRight, yBottom, black);
+    if (b.edges & VerticalBoxRect::DRAW_LEFT) renderer.drawLine(xLeft, yTop, xLeft, yBottom, black);
+    if (b.edges & VerticalBoxRect::DRAW_RIGHT) renderer.drawLine(xRight, yTop, xRight, yBottom, black);
+  }
+
   for (const VerticalGlyph& g : page.glyphs) {
     const int dx = g.x + offsetX;
     int dy = g.y + offsetY + globalDownNudge;

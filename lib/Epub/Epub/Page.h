@@ -14,6 +14,7 @@ enum PageElementTag : uint8_t {
   TAG_PageLine = 1,
   TAG_PageImage = 2,
   TAG_PageHorizontalRule = 3,
+  TAG_PageBox = 4,
 };
 
 // represents something that has been added to a page
@@ -68,6 +69,24 @@ class PageHorizontalRule final : public PageElement {
   bool serialize(HalFile& file) override;
   PageElementTag getTag() const override { return TAG_PageHorizontalRule; }
   static std::unique_ptr<PageHorizontalRule> deserialize(HalFile& file);
+};
+
+// Border rectangle for a boxed (kakomi) block -- a block element whose CSS defines borders.
+// `edges` uses CssStyle::BORDER_* bits (TOP/RIGHT/BOTTOM/LEFT); a box split across a page
+// boundary omits the edge at the seam (half-open, print style).
+class PageBox final : public PageElement {
+  int16_t width;
+  int16_t height;
+  uint8_t edges;
+
+ public:
+  PageBox(const int16_t width, const int16_t height, const uint8_t edges, const int16_t xPos, const int16_t yPos)
+      : PageElement(xPos, yPos), width(width), height(height), edges(edges) {}
+
+  void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) override;
+  bool serialize(HalFile& file) override;
+  PageElementTag getTag() const override { return TAG_PageBox; }
+  static std::unique_ptr<PageBox> deserialize(HalFile& file);
 };
 
 class Page {

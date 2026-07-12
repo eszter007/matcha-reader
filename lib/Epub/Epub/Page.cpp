@@ -1,5 +1,7 @@
 #include "Page.h"
 
+#include "css/CssStyle.h"
+
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
@@ -72,6 +74,44 @@ void PageHorizontalRule::render(GfxRenderer& renderer, const int fontId, const i
   }
 
   renderer.drawLine(xPos + xOffset, yPos + yOffset, xPos + xOffset + width - 1, yPos + yOffset, thickness, true);
+}
+
+void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  (void)fontId;
+  if (width <= 0 || height <= 0) return;
+  const int x = xPos + xOffset;
+  const int y = yPos + yOffset;
+  if (edges & CssStyle::BORDER_TOP) renderer.drawLine(x, y, x + width, y, true);
+  if (edges & CssStyle::BORDER_BOTTOM) renderer.drawLine(x, y + height, x + width, y + height, true);
+  if (edges & CssStyle::BORDER_LEFT) renderer.drawLine(x, y, x, y + height, true);
+  if (edges & CssStyle::BORDER_RIGHT) renderer.drawLine(x + width, y, x + width, y + height, true);
+}
+
+bool PageBox::serialize(HalFile& file) {
+  serialization::writePod(file, xPos);
+  serialization::writePod(file, yPos);
+  serialization::writePod(file, width);
+  serialization::writePod(file, height);
+  serialization::writePod(file, edges);
+  return true;
+}
+
+std::unique_ptr<PageBox> PageBox::deserialize(HalFile& file) {
+  int16_t xPos = 0;
+  int16_t yPos = 0;
+  int16_t width = 0;
+  int16_t height = 0;
+  uint8_t edges = 0;
+  serialization::readPod(file, xPos);
+  serialization::readPod(file, yPos);
+  serialization::readPod(file, width);
+  serialization::readPod(file, height);
+  serialization::readPod(file, edges);
+  if (width <= 0 || height <= 0) {
+    LOG_ERR("PGE", "Deserialization failed: invalid box metadata (w=%d h=%d)", width, height);
+    return nullptr;
+  }
+  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, edges, xPos, yPos));
 }
 
 bool PageHorizontalRule::serialize(HalFile& file) {
@@ -173,6 +213,12 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
         return nullptr;
       }
       page->elements.push_back(std::move(rule));
+    } else if (tag == TAG_PageBox) {
+      auto box = PageBox::deserialize(file);
+      if (!box) {
+        return nullptr;
+      }
+      page->elements.push_back(std::move(box));
     } else {
       LOG_ERR("PGE", "Deserialization failed: Unknown tag %u", tag);
       return nullptr;

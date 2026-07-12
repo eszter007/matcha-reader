@@ -50,8 +50,41 @@ struct VerticalGlyph {
 // on entries where rotated == true, which needs a length-prefixed write/read
 // (see docs/vertical-text-design.md for the proposed vsections/*.bin layout)
 // rather than a flat memcpy of the vector.
+// Pixel-space border rectangle for a boxed (kakomi) block on this page, in the same logical
+// coordinate space as VerticalGlyph::x/y (the renderer adds its offsets identically).
+struct VerticalBoxRect {
+  // `edges` says which border lines to DRAW (a kakomi box has all four; a .k-solid-top
+  // separator only TOP) plus extension flags: a box spanning a page boundary renders
+  // HALF-OPEN, like print typesetting -- the open side omits its vertical line and runs the
+  // horizontal lines through to the screen edge (tategaki flows right-to-left, so "continues
+  // to next page" = open LEFT edge, and a continuation page comes in from the RIGHT edge).
+  static constexpr uint8_t DRAW_TOP = 1 << 0;
+  static constexpr uint8_t DRAW_RIGHT = 1 << 1;
+  static constexpr uint8_t DRAW_BOTTOM = 1 << 2;
+  static constexpr uint8_t DRAW_LEFT = 1 << 3;
+  static constexpr uint8_t EXTEND_LEFT = 1 << 4;   // horizontal lines run to the left screen edge
+  static constexpr uint8_t EXTEND_RIGHT = 1 << 5;  // horizontal lines run to the right screen edge
+  int16_t x = 0;
+  int16_t y = 0;
+  int16_t w = 0;
+  int16_t h = 0;
+  uint8_t edges = 0;
+};
+
+// Distilled block-level layout parameters for the vertical engine (from CSS via
+// CssParser::collectVerticalStyles; plain floats here to avoid a CssParser include).
+struct VerticalBlockParams {
+  float startEm = 0;   // every column of the block starts this many cells down
+  float beforeEm = 0;  // extra gap before the block's first column
+  float afterEm = 0;   // extra gap after the block's last column
+  float hangEm = 0;    // hanging indent: wrapped (non-paragraph-start) columns start this much lower
+  bool alignCenter = false;
+  uint8_t borderEdges = 0;  // CSS physical TOP/RIGHT/BOTTOM/LEFT bits (match DRAW_* order)
+};
+
 struct VerticalPage {
   std::vector<VerticalGlyph> glyphs;
+  std::vector<VerticalBoxRect> boxes;
   uint16_t columnCount = 0;
   uint16_t rowsPerColumn = 0;
   // If non-empty, this page is an image page — render the image instead of glyphs.
@@ -166,10 +199,28 @@ class VerticalParsedText {
   // "this chapter is unbuildable" -- latching it across batches would silently truncate every
   // batch after the first transient low-memory moment, for the rest of the chapter.
   void reset() {
+    // Carry box markers sitting exactly at the batch boundary into the next batch: they were
+    // recorded for content that hasn't been added yet, so the layout loop (idx < stream size)
+    // never visited them. layoutPages() re-records a carried marker at index 0.
+    boxStartCarry_ = boxStartCarry_ || (!boxStartsBeforeIndex_.empty() && boxStartsBeforeIndex_.back() == stream_.size());
+    boxEndCarry_ = boxEndCarry_ || (!boxEndsBeforeIndex_.empty() && boxEndsBeforeIndex_.back() == stream_.size());
     stream_.clear();
     paragraphBreaksBeforeIndex_.clear();
+    boxStartsBeforeIndex_.clear();
+    boxEndsBeforeIndex_.clear();
+    // blockParamsQueue_ is NOT cleared: entries are consumed by the layout loop in marker
+    // order, and a carried start marker still owns its queued params.
     oom_ = false;
   }
+  // Styled-block boundaries, called by the extraction sink in stream order. A styled block wraps
+  // whole columns: the layout forces a column break at each boundary, applies the params to its
+  // columns (start offset, hanging indent, centering), and records a border rect per page when
+  // borderEdges is set; a block spanning pages gets one rect on each page.
+  void markBlockStart(const VerticalBlockParams& params) {
+    boxStartsBeforeIndex_.push_back(stream_.size());
+    blockParamsQueue_.push_back(params);
+  }
+  void markBlockEnd() { boxEndsBeforeIndex_.push_back(stream_.size()); }
   // Whether ANY char/glyph was dropped for lack of heap across the whole build. Unlike oom_
   // this is never cleared by reset(): the section build reads it at the end, because a build
   // that dropped content produced sparse pages and must not be persisted as a VALID cache --
@@ -221,6 +272,27 @@ class VerticalParsedText {
   // canPushStreamChar()).
   bool oom_ = false;
   bool everDroppedForHeap_ = false;  // see everDroppedForHeap()
+
+  // Boxed-block state. inBox_/boxStartCol_ persist across batches (a box can span many flushes);
+  // the marker vectors are per-batch (cleared in reset(), with boundary carry flags above).
+  std::vector<size_t> boxStartsBeforeIndex_;
+  std::vector<size_t> boxEndsBeforeIndex_;
+  bool boxStartCarry_ = false;
+  bool boxEndCarry_ = false;
+  bool inBox_ = false;
+  uint16_t boxStartCol_ = 0;
+  std::vector<VerticalBlockParams> blockParamsQueue_;  // FIFO, one entry per markBlockStart
+  VerticalBlockParams activeBlock_;                    // valid while inBox_
+  bool blockContinuationColumn_ = false;               // current column wraps mid-paragraph
+  // Geometry snapshot from the last layoutPages() call so finalizePendingPage() (called outside
+  // layoutPages) can still close an open box rect on the final page.
+  int boxGeomCellPx_ = 0;
+  int boxGeomColumnAdvancePx_ = 0;
+  int boxGeomUsableWidthPx_ = 0;
+  uint16_t boxGeomRowsPerColumn_ = 0;
+  bool boxContinuedFromPrevPage_ = false;
+  void appendBoxRectToPage(VerticalPage& p, uint16_t startCol, uint16_t endCol, bool openLeft, bool openRight) const;
+  void centerBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;
 
   // The page currently being filled by layoutPages(), plus its fill position -- persists ACROSS
   // layoutPages() calls (when isFinalFlush=false) so a batch boundary landing mid-page continues

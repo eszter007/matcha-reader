@@ -352,6 +352,34 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.marginLeft = count >= 4 ? interpretLength(margins[3]) : style.marginRight;
       style.defined.marginTop = style.defined.marginRight = style.defined.marginBottom = style.defined.marginLeft = 1;
     }
+  } else if (iequalsAscii(name, "border-style")) {
+    // Per-edge mask following the CSS 1/2/3/4-value edge rule (top, right, bottom, left).
+    // A full mask is a boxed/kakomi block; a partial mask (e.g. "solid none none none",
+    // EBPAJ .k-solid-top) is a separator rule on that edge.
+    std::string_view sides[4];
+    const size_t count = collectEdgeValueTokens(value, sides);
+    uint8_t edges = 0;
+    if (count > 0) {
+      auto styled = [&](const std::string_view v) { return !iequalsAscii(v, "none") && !iequalsAscii(v, "hidden"); };
+      const std::string_view top = sides[0];
+      const std::string_view right = count >= 2 ? sides[1] : sides[0];
+      const std::string_view bottom = count >= 3 ? sides[2] : sides[0];
+      const std::string_view left = count >= 4 ? sides[3] : right;
+      if (styled(top)) edges |= CssStyle::BORDER_TOP;
+      if (styled(right)) edges |= CssStyle::BORDER_RIGHT;
+      if (styled(bottom)) edges |= CssStyle::BORDER_BOTTOM;
+      if (styled(left)) edges |= CssStyle::BORDER_LEFT;
+    }
+    style.borderEdges = edges;
+    style.defined.border = 1;
+  } else if (iequalsAscii(name, "border")) {
+    // Shorthand ("1px solid #000" / "none"): a stroke-style keyword means all four sides.
+    const bool styled = value.find("solid") != std::string_view::npos ||
+                        value.find("double") != std::string_view::npos ||
+                        value.find("dashed") != std::string_view::npos ||
+                        value.find("dotted") != std::string_view::npos;
+    style.borderEdges = styled ? CssStyle::BORDER_ALL : 0;
+    style.defined.border = 1;
   } else if (iequalsAscii(name, "padding-top")) {
     style.paddingTop = interpretLength(value);
     style.defined.paddingTop = 1;
@@ -485,8 +513,32 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         //   '*'  wildcard
         //   ' '  descendant combinator
         // Single-pass scan via find_first_of instead of eight sequential find() calls.
-        constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~* ";
-        if (sel.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos) return;
+        //
+        // ONE descendant form IS supported: the EBPAJ template's writing-mode scoping,
+        // `.hltr X` / `.vrtl X` (the body carries class hltr or vrtl). These carry the entire
+        // h/v split of the standard Japanese template (margins, indents, rules) -- dropping
+        // them dropped all of that styling. They are stored under a scope-prefixed key
+        // ("h|X" / "v|X"; '|' can never appear in a real selector) that only scope-aware
+        // lookups (resolveStyle's "h|", the vertical collector's "v|") ever find.
+        constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~*";
+        std::string scopedKey;
+        if (const size_t sp = sel.find(' '); sp != std::string_view::npos) {
+          const std::string_view first = trimCssWhitespace(sel.substr(0, sp));
+          const std::string_view rest = trimCssWhitespace(sel.substr(sp + 1));
+          const bool hScope = iequalsAscii(first, ".hltr");
+          const bool vScope = iequalsAscii(first, ".vrtl");
+          if ((!hScope && !vScope) || rest.empty() ||
+              rest.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos ||
+              rest.find(' ') != std::string_view::npos) {
+            return;  // unsupported descendant selector
+          }
+          scopedKey.reserve(rest.size() + 2);
+          scopedKey += hScope ? "h|" : "v|";
+          scopedKey.append(rest.data(), rest.size());
+          sel = scopedKey;
+        } else if (sel.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos) {
+          return;
+        }
 
         // Skip if this would exceed the rule limit
         if (rulesBySelector_.size() >= MAX_RULES) {
@@ -684,30 +736,33 @@ CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view clas
 
   CssStyle result;
 
+  // At each cascade level, the base rule applies first and the "h|"-scoped rule (the EBPAJ
+  // template's `.hltr X` horizontal-mode variant) applies over it: this resolver feeds the
+  // HORIZONTAL layout engine, which renders exactly what those rules describe. The vertical
+  // engine reads the "v|" scope through collectVerticalStyles() instead.
+  auto applyBoth = [&](auto&&... keyPieces) {
+    if (auto it = rulesBySelector_.find(CompositeKey{keyPieces...}); it != rulesBySelector_.end()) {
+      result.applyOver(it->second);
+    }
+    if (auto it = rulesBySelector_.find(CompositeKey{"h|", keyPieces...}); it != rulesBySelector_.end()) {
+      result.applyOver(it->second);
+    }
+  };
+
   // 1. Apply element-level style (lowest priority). The map's hash/equal are
   // case-insensitive, so the raw tagName view can be used as the lookup key.
-  if (auto it = rulesBySelector_.find(tagName); it != rulesBySelector_.end()) {
-    result.applyOver(it->second);
-  }
+  applyBoth(tagName);
 
   if (classAttr.empty()) return result;
 
   // TODO: Support combinations of classes (e.g. style on .class1.class2)
   // 2. Apply class styles (medium priority). The transparent hash/equal accept
   // a CompositeKey, so we never materialize the concatenation.
-  forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) {
-    if (auto it = rulesBySelector_.find(CompositeKey{".", cls}); it != rulesBySelector_.end()) {
-      result.applyOver(it->second);
-    }
-  });
+  forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) { applyBoth(".", cls); });
 
   // TODO: Support combinations of classes (e.g. style on p.class1.class2)
   // 3. Apply element.class styles (higher priority).
-  forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) {
-    if (auto it = rulesBySelector_.find(CompositeKey{tagName, ".", cls}); it != rulesBySelector_.end()) {
-      result.applyOver(it->second);
-    }
-  });
+  forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) { applyBoth(tagName, ".", cls); });
 
   return result;
 }
@@ -793,6 +848,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   writeLength(style.imageWidth);
   file.write(static_cast<uint8_t>(style.display));
   file.write(static_cast<uint8_t>(style.verticalAlign));
+  file.write(style.borderEdges);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -813,6 +869,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   if (style.defined.display) definedBits |= 1 << 15;
   if (style.defined.direction) definedBits |= 1 << 16;
   if (style.defined.verticalAlign) definedBits |= 1 << 17;
+  if (style.defined.border) definedBits |= 1 << 18;
   file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
 }
 
@@ -841,7 +898,7 @@ bool CssParser::validateCache() const {
   }
 
   // selectorLen is followed by this many fixed bytes (see writeRuleRecord).
-  constexpr size_t RULE_FIXED_BYTES = 5 + 11 * (sizeof(float) + 1) + 2 + sizeof(uint32_t);
+  constexpr size_t RULE_FIXED_BYTES = 5 + 11 * (sizeof(float) + 1) + 3 + sizeof(uint32_t);
   for (uint16_t i = 0; i < ruleCount; ++i) {
     uint16_t selectorLen = 0;
     if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) return false;
@@ -857,6 +914,102 @@ bool CssParser::validateCache() const {
     if (!file.seekCur(static_cast<int64_t>(skip))) return false;
   }
   return true;
+}
+
+// Stream the on-disk rules cache and collect (selector -> VerticalBlockStyle) for selectors
+// with vertical-relevant properties. Unscoped rules and the EBPAJ "v|" scope both apply (the
+// "v|" record's fields override the unscoped ones per property); "h|"-scoped rules are the
+// horizontal engine's business (resolveStyle). No rule map is materialized.
+size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, VerticalBlockStyle>>& out,
+                                        const size_t maxOut) const {
+  out.clear();
+  if (cachePath.empty()) return 0;
+
+  HalFile file;
+  if (!Storage.openFileForRead("CSS", cachePath + rulesCache, file)) return 0;
+
+  uint8_t version = 0;
+  if (file.read(&version, 1) != 1 || version != CssParser::CSS_CACHE_VERSION) return 0;
+  uint16_t ruleCount = 0;
+  if (file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount)) return 0;
+  if (ruleCount > MAX_RULES) return 0;
+
+  auto emOf = [](const float v, const uint8_t unit) -> float {
+    return unit == static_cast<uint8_t>(CssUnit::Em) || unit == static_cast<uint8_t>(CssUnit::Rem) ? v : 0.0f;
+  };
+
+  std::string selector;
+  for (uint16_t i = 0; i < ruleCount && out.size() < maxOut; i++) {
+    uint16_t selectorLen = 0;
+    if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) break;
+    if (selectorLen == 0 || selectorLen > MAX_SELECTOR_LENGTH) break;
+    selector.resize(selectorLen);
+    if (file.read(selector.data(), selectorLen) != selectorLen) break;
+
+    uint8_t enums[5];  // textAlign, fontStyle, fontWeight, textDecoration, direction
+    if (file.read(enums, 5) != 5) break;
+    struct RawLen {
+      float v;
+      uint8_t u;
+    } lens[11];  // textIndent, mT, mB, mL, mR, pT, pB, pL, pR, imgH, imgW
+    bool lenOk = true;
+    for (auto& l : lens) {
+      if (file.read(&l.v, sizeof(float)) != sizeof(float) || file.read(&l.u, 1) != 1) {
+        lenOk = false;
+        break;
+      }
+    }
+    if (!lenOk) break;
+    uint8_t displayVal, verticalAlignVal, borderVal;
+    uint32_t definedBits = 0;
+    if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
+        file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
+      break;
+    }
+
+    // Only unscoped and "v|"-scoped selectors feed the vertical engine.
+    if (selector.size() >= 2 && selector[1] == '|') {
+      if (selector[0] != 'v') continue;
+      selector.erase(0, 2);
+    }
+
+    VerticalBlockStyle vs;
+    const bool defTextIndent = definedBits & (1u << 4);
+    const bool defMarginTop = definedBits & (1u << 5);
+    const bool defMarginLeft = definedBits & (1u << 7);
+    const bool defMarginRight = definedBits & (1u << 8);
+    const bool defPaddingTop = definedBits & (1u << 9);
+    if (defMarginTop) vs.startEm = emOf(lens[1].v, lens[1].u);
+    if (defMarginRight) vs.beforeEm = emOf(lens[4].v, lens[4].u);
+    if (defMarginLeft) vs.afterEm = emOf(lens[3].v, lens[3].u);
+    if (defPaddingTop && defTextIndent && emOf(lens[0].v, lens[0].u) < 0) {
+      vs.hangEm = emOf(lens[5].v, lens[5].u);
+    }
+    if ((definedBits & (1u << 0)) && enums[0] == static_cast<uint8_t>(CssTextAlign::Center)) vs.alignCenter = true;
+    if (definedBits & (1u << 18)) vs.borderEdges = borderVal;
+    if (!vs.any()) continue;
+
+    // Merge with an existing entry for the same selector (later record overrides per property).
+    bool merged = false;
+    for (auto& [sel, existing] : out) {
+      if (sel == selector) {
+        if (vs.startEm > 0) existing.startEm = vs.startEm;
+        if (vs.beforeEm > 0) existing.beforeEm = vs.beforeEm;
+        if (vs.afterEm > 0) existing.afterEm = vs.afterEm;
+        if (vs.hangEm > 0) existing.hangEm = vs.hangEm;
+        existing.alignCenter = existing.alignCenter || vs.alignCenter;
+        if (vs.borderEdges != 0) existing.borderEdges = vs.borderEdges;
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) out.emplace_back(selector, vs);
+  }
+  if (out.size() >= maxOut) {
+    LOG_ERR("CSS", "collectVerticalStyles hit the %u-entry cap; later rules (e.g. borders) may be dropped",
+            static_cast<unsigned>(maxOut));
+  }
+  return out.size();
 }
 
 bool CssParser::beginCacheAppend() {
@@ -905,7 +1058,7 @@ bool CssParser::endCacheAppend(const bool discard) {
   return true;
 }
 
-bool CssParser::loadFromCache() {
+bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
   cacheLoadFailedForHeap_ = false;
   if (cachePath.empty()) {
     return false;
@@ -1083,6 +1236,14 @@ bool CssParser::loadFromCache() {
     }
     style.verticalAlign = static_cast<CssVerticalAlign>(verticalAlignVal);
 
+    // Read border edge mask (v9+)
+    uint8_t borderVal;
+    if (file.read(&borderVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.borderEdges = borderVal;
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
@@ -1107,6 +1268,31 @@ bool CssParser::loadFromCache() {
     style.defined.display = (definedBits & 1 << 15) != 0;
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+    style.defined.border = (definedBits & 1 << 18) != 0;
+
+    // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
+    // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.
+    // Materializing them here grew the resident map by hundreds of EBPAJ rules and pushed the
+    // in-session section build over its heap budget (observed: every rebuild aborting with
+    // "CSS cache didn't fit in heap").
+    if (selector.size() >= 2 && selector[0] == 'v' && selector[1] == '|') continue;
+
+    // Chapter-usage filter: skip class selectors the chapter never references (see header doc).
+    if (usedClasses != nullptr) {
+      std::string_view sel(selector);
+      if (sel.size() >= 2 && sel[0] == 'h' && sel[1] == '|') sel.remove_prefix(2);
+      if (const size_t dot = sel.find('.'); dot != std::string_view::npos) {
+        const std::string_view cls = sel.substr(dot + 1);
+        bool used = false;
+        for (const auto& u : *usedClasses) {
+          if (u.size() == cls.size() && strncasecmp(u.c_str(), cls.data(), cls.size()) == 0) {
+            used = true;
+            break;
+          }
+        }
+        if (!used) continue;
+      }
+    }
 
     // The incremental (per-file) cache writer can emit the same selector once per CSS file, so
     // replicate the parser's semantics here: later occurrences MERGE onto the earlier entry

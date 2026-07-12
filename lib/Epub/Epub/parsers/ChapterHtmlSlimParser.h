@@ -40,6 +40,19 @@ class ChapterHtmlSlimParser {
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+
+  // Boxed (kakomi) block tracking: a block element whose CSS defines a full 4-side border gets
+  // a PageBox rect around its laid-out lines; a box split across pages renders half-open at the
+  // seam. TOP-only borders (EBPAJ .k-solid-top) emit a full-width separator rule instead.
+  int boxDepth = -1;
+  uint8_t boxEdges = 0;
+  int16_t boxStartY = 0;
+  bool boxContinued = false;         // continued from the previous page: omit the top edge
+  bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
+  void flushPendingBlockLayout();
+  void emitBoxRect(bool openBottom);
+  void maybeEmitOpenBoxForPageBreak();
+  void closeBoxBlock();
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;

@@ -30,7 +30,7 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 62;  // v58-62: tate-chu-yoko digit runs centered on ink + tuned left nudge
+constexpr uint8_t VSECTION_FILE_VERSION = 69;  // v63-69: styled blocks (boxes/rules/indents), tate-chu-yoko ink centering
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -52,6 +52,10 @@ struct ParagraphSink {
   // paragraph break must be recorded before them.
   virtual void onParagraph(std::vector<RubyRun>& runs, bool continuesPrevious) = 0;
   virtual void onImage(const std::string& src) = 0;
+  // Styled-block boundaries -- a block element whose CSS carries vertical layout parameters
+  // (border box, start offset, hanging indent, centering, before/after gaps).
+  virtual void onBlockStyleStart(const VerticalBlockParams& /*params*/) {}
+  virtual void onBlockStyleEnd() {}
 };
 
 struct TextExtractor {
@@ -71,6 +75,11 @@ struct TextExtractor {
   // flushes pages to SD), keeping extraction O(bounded-paragraph) instead of O(chapter). A forced
   // split starts a new column mid-paragraph; harmless compared to the alternative (OOM).
   static constexpr size_t MAX_PARAGRAPH_BYTES = 16 * 1024;
+
+  // Styled-block detection: (selector -> vertical layout params) distilled from the CSS cache.
+  // boxOpenedAtDepth is the elementDepth of the styled element while inside one, else -1.
+  const std::vector<std::pair<std::string, CssParser::VerticalBlockStyle>>* blockStyles = nullptr;
+  int boxOpenedAtDepth = -1;
 
   // Ruby parsing state
   bool inRuby = false;
@@ -199,6 +208,38 @@ struct TextExtractor {
     return false;
   }
 
+  // Merge every matching styled-block entry for this element into params. Supports the selector
+  // forms the CSS map stores: "tag", ".class", "tag.class" (case-insensitive, class-attr token
+  // match). Returns true if anything matched.
+  bool resolveBlockStyle(const char* name, const char** atts, VerticalBlockParams& params) const {
+    if (!blockStyles || blockStyles->empty()) return false;
+    bool matched = false;
+    for (const auto& [sel, vs] : *blockStyles) {
+      if (sel.empty()) continue;
+      bool hit = false;
+      if (sel[0] == '.') {
+        hit = hasClass(atts, sel.c_str() + 1);
+      } else {
+        const size_t dot = sel.find('.');
+        if (dot == std::string::npos) {
+          hit = strcasecmp(sel.c_str(), name) == 0;
+        } else {
+          hit = strlen(name) == dot && strncasecmp(sel.c_str(), name, dot) == 0 &&
+                hasClass(atts, sel.c_str() + dot + 1);
+        }
+      }
+      if (!hit) continue;
+      matched = true;
+      if (vs.startEm > 0) params.startEm = vs.startEm;
+      if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
+      if (vs.afterEm > 0) params.afterEm = vs.afterEm;
+      if (vs.hangEm > 0) params.hangEm = vs.hangEm;
+      params.alignCenter = params.alignCenter || vs.alignCenter;
+      if (vs.borderEdges != 0) params.borderEdges = vs.borderEdges;
+    }
+    return matched;
+  }
+
   static bool hasClass(const char** atts, const char* cls) {
     if (!atts) return false;
     for (int i = 0; atts[i]; i += 2) {
@@ -227,6 +268,19 @@ struct TextExtractor {
     if (isSkipTag(name)) {
       self->skipDepth = 1;
       return;
+    }
+    if (self->boxOpenedAtDepth < 0) {
+      VerticalBlockParams params;
+      if (self->resolveBlockStyle(name, atts, params) &&
+          (params.startEm > 0 || params.beforeEm > 0 || params.afterEm > 0 || params.hangEm > 0 ||
+           params.alignCenter || params.borderEdges != 0)) {
+        self->flushParagraph();
+        LOG_DBG("VSC", "styled block open: <%s> start=%.1f hang=%.1f before=%.1f after=%.1f center=%d edges=0x%X",
+                name, params.startEm, params.hangEm, params.beforeEm, params.afterEm, params.alignCenter,
+                params.borderEdges);
+        if (self->sink) self->sink->onBlockStyleStart(params);
+        self->boxOpenedAtDepth = self->elementDepth;
+      }
     }
     if (isBlockTag(name)) {
       if (self->blockDepth == 0) {
@@ -302,6 +356,11 @@ struct TextExtractor {
       self->skipDepth--;
       if (self->skipDepth == 0) self->skipDepth = -1;
       return;
+    }
+    if (self->boxOpenedAtDepth >= 0 && self->elementDepth == self->boxOpenedAtDepth - 1) {
+      self->flushParagraph();
+      if (self->sink) self->sink->onBlockStyleEnd();
+      self->boxOpenedAtDepth = -1;
     }
     if (strcasecmp(name, "rp") == 0) {
       self->inRp = false;
@@ -461,6 +520,17 @@ bool writePage(HalFile& file, const VerticalPage& page) {
   serialization::writePod(file, page.columnCount);
   serialization::writePod(file, page.rowsPerColumn);
 
+  // Boxed-block border rects (v63+). Bounded small (a page holds at most a handful of boxes).
+  const auto boxCount = static_cast<uint8_t>(std::min<size_t>(page.boxes.size(), 8));
+  serialization::writePod(file, boxCount);
+  for (uint8_t bi = 0; bi < boxCount; bi++) {
+    serialization::writePod(file, page.boxes[bi].x);
+    serialization::writePod(file, page.boxes[bi].y);
+    serialization::writePod(file, page.boxes[bi].w);
+    serialization::writePod(file, page.boxes[bi].h);
+    serialization::writePod(file, page.boxes[bi].edges);
+  }
+
   for (const auto& g : page.glyphs) {
     serialization::writePod(file, g.codepoint);
     serialization::writePod(file, g.column);
@@ -492,6 +562,7 @@ bool writePage(HalFile& file, const VerticalPage& page) {
 
 bool readPage(HalFile& file, VerticalPage& page) {
   page.glyphs.clear();
+  page.boxes.clear();
   page.imagePath.clear();
 
   bool isImg = false;
@@ -508,6 +579,23 @@ bool readPage(HalFile& file, VerticalPage& page) {
   serialization::readPod(file, glyphCount);
   serialization::readPod(file, page.columnCount);
   serialization::readPod(file, page.rowsPerColumn);
+
+  uint8_t boxCount = 0;
+  serialization::readPod(file, boxCount);
+  if (boxCount > 8) {
+    LOG_ERR("VSC", "Corrupt page record: %u boxes", boxCount);
+    return false;
+  }
+  page.boxes.reserve(boxCount);
+  for (uint8_t bi = 0; bi < boxCount; bi++) {
+    VerticalBoxRect r;
+    serialization::readPod(file, r.x);
+    serialization::readPod(file, r.y);
+    serialization::readPod(file, r.w);
+    serialization::readPod(file, r.h);
+    serialization::readPod(file, r.edges);
+    page.boxes.push_back(r);
+  }
 
   // One page is bounded by screen geometry (a few hundred cells); a corrupt count must not
   // drive a huge reserve on a heap that can't take it.
@@ -597,6 +685,9 @@ struct LayoutPageSink final : ParagraphSink {
   const uint16_t viewportHeight;
   size_t imgIdx = 0;
   bool failed = false;
+
+  void onBlockStyleStart(const VerticalBlockParams& params) override { layout.markBlockStart(params); }
+  void onBlockStyleEnd() override { layout.markBlockEnd(); }
 
   // ~1-2 screens of text per layout batch. A batch boundary lands between paragraphs, which
   // already force a fresh column, so the only observable effect is an occasional page that ends
@@ -907,8 +998,20 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
                       viewportHeight);
 
+  // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
+  // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
+  // rule map (heap!).
+  std::vector<std::pair<std::string, CssParser::VerticalBlockStyle>> blockStyles;
+  if (epub->getCssParser()) {
+    epub->getCssParser()->collectVerticalStyles(blockStyles);
+    if (!blockStyles.empty()) {
+      LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(blockStyles.size()));
+    }
+  }
+
   TextExtractor extractor;
   extractor.sink = &sink;
+  extractor.blockStyles = &blockStyles;
   // Pin every buffer that lives across the whole build to its worst case NOW, while the heap
   // is freshest -- mid-build growth (doubling alloc-copy-free) plants persistent blocks in
   // the region the per-flush transients need, shredding the largest contiguous block over the

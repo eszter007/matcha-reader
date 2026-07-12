@@ -1,11 +1,67 @@
 #include "Section.h"
 
+#include <FontCacheManager.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
 
 #include "Epub/css/CssParser.h"
 #include "Page.h"
+
+namespace {
+// Stream an (X)HTML file and collect its distinct class-attribute tokens (case-insensitive,
+// bounded). Rolling prefix matching handles `class="` split across read-chunk boundaries.
+// Used to filter the CSS cache load down to the chapter's actual vocabulary.
+void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, const size_t maxOut) {
+  out.clear();
+  HalFile f;
+  if (!HalStorage::getInstance().openFileForRead("SCT", path, f)) return;
+  constexpr char NEEDLE[] = "class=\"";
+  constexpr size_t NLEN = sizeof(NEEDLE) - 1;
+  uint8_t buf[512];
+  size_t matched = 0;
+  bool inValue = false;
+  std::string token;
+  auto commit = [&]() {
+    if (token.empty()) return;
+    for (const auto& u : out) {
+      if (u.size() == token.size() && strcasecmp(u.c_str(), token.c_str()) == 0) {
+        token.clear();
+        return;
+      }
+    }
+    if (out.size() < maxOut) out.push_back(token);
+    token.clear();
+  };
+  size_t n;
+  while ((n = f.read(buf, sizeof(buf))) > 0 && out.size() < maxOut) {
+    for (size_t i = 0; i < n; i++) {
+      const char c = static_cast<char>(buf[i]);
+      if (inValue) {
+        if (c == '"') {
+          commit();
+          inValue = false;
+        } else if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+          commit();
+        } else if (token.size() < 48) {
+          token.push_back(c);
+        }
+        continue;
+      }
+      if (c == NEEDLE[matched]) {
+        matched++;
+        if (matched == NLEN) {
+          inValue = true;
+          matched = 0;
+        }
+      } else {
+        matched = (c == NEEDLE[0]) ? 1 : 0;
+      }
+    }
+  }
+}
+}  // namespace
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
@@ -16,7 +72,7 @@ namespace {
 // session confirmed is often large on this device, so CSS rules that were silently skipped while
 // this section was originally cached may now parse successfully, changing layout. Cached section
 // files built under the old guard must not be reused as-is.
-constexpr uint8_t SECTION_FILE_VERSION = 37;  // v37: synthesized space width (layouts built with zero-width spaces)
+constexpr uint8_t SECTION_FILE_VERSION = 44;  // v39: zero-advance fallback (overlapping words past the advance-table cap)
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
@@ -138,6 +194,13 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
   serialization::readPod(file, pageCount);
   // Explicit close() required: member variable persists beyond function scope
   file.close();
+  // A 0-page section is never legitimate for a real chapter -- it means a build went wrong.
+  // Treating it as valid would show an empty chapter forever (cache poisoning); rebuild instead.
+  if (pageCount == 0) {
+    LOG_ERR("SCT", "Cached section has 0 pages; discarding for rebuild");
+    clearCache();
+    return false;
+  }
   LOG_DBG("SCT", "Deserialization succeeded: %d pages", pageCount);
   return true;
 }
@@ -225,7 +288,23 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   if (embeddedStyle) {
     cssParser = epub->getCssParser();
     if (cssParser) {
-      if (!cssParser->loadFromCache()) {
+      // The rule map needs tens of KB of small allocations; mid-session the font caches
+      // usually hold the largest blocks. Release them first (they reload lazily) instead of
+      // letting the load abort and the build retry forever.
+      if (ESP.getMaxAllocHeap() < 64 * 1024) {
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          LOG_INF("SCT", "Low heap before CSS load (maxAlloc=%u); releasing font memory", ESP.getMaxAllocHeap());
+          fcm->releaseAllFontMemory();
+        }
+      }
+      // Load only the rules this chapter can actually use: the temp HTML is already on disk,
+      // so scan its class attributes and filter the cache load on them. The full EBPAJ table
+      // (observed at the 1500-rule cap) cannot fit mid-session; a chapter's own vocabulary is
+      // a few dozen classes.
+      std::vector<std::string> usedClasses;
+      collectHtmlClasses(tmpHtmlPath, usedClasses, 64);
+      LOG_DBG("SCT", "%u distinct classes in chapter html", static_cast<unsigned>(usedClasses.size()));
+      if (!cssParser->loadFromCache(&usedClasses)) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
         // Low heap is the one failure where retrying can succeed: the cache file is VALID, the
         // rule table just doesn't fit right now. Building anyway would persist this chapter

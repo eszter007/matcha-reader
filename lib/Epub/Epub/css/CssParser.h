@@ -33,8 +33,8 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  // v8: discard caches written by builds that saved partial (heap-truncated) rule tables
-  static constexpr uint8_t CSS_CACHE_VERSION = 8;
+  // v10: border byte became a per-edge mask (v9 briefly stored a bool -- same size, new meaning)
+  static constexpr uint8_t CSS_CACHE_VERSION = 10;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -118,9 +118,14 @@ class CssParser {
   /**
    * Load CSS rules from a cache file.
    * Clears any existing rules before loading.
+   * usedClasses (optional): class names actually present in the chapter being built. When set,
+   * class-based selectors whose class is not in the list are skipped -- the full EBPAJ template
+   * defines hundreds of utility-class variants per writing mode, and materializing all of them
+   * (observed: the 1500-rule cap) cannot fit in a mid-session heap, while a single chapter uses
+   * a few dozen. Tag-type selectors are always loaded.
    * @return true if cache was loaded successfully
    */
-  bool loadFromCache();
+  bool loadFromCache(const std::vector<std::string>* usedClasses = nullptr);
 
   /**
    * Structurally validate the cache file WITHOUT materializing the rule map. Book open only
@@ -143,6 +148,30 @@ class CssParser {
   bool beginCacheAppend();
   bool appendRulesToCache();
   bool endCacheAppend(bool discard);
+
+  /**
+   * Distilled per-block layout parameters the VERTICAL engine consumes, in em units (the
+   * layout converts em -> cells). Populated from unscoped rules plus the EBPAJ "v|" scope.
+   */
+  struct VerticalBlockStyle {
+    float startEm = 0;       // v margin-top: every column of the block starts this many cells down
+    float beforeEm = 0;      // v margin-right: extra gap before the block's first column
+    float afterEm = 0;       // v margin-left: extra gap after the block's last column
+    float hangEm = 0;        // v padding-top + negative text-indent: hanging indent for wrapped lines
+    bool alignCenter = false;  // text-align: center -> column content vertically centered
+    uint8_t borderEdges = 0;   // CssStyle::BORDER_* mask (full = box, TOP = separator rule)
+    [[nodiscard]] bool any() const {
+      return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0;
+    }
+  };
+
+  /**
+   * Stream the on-disk rules cache and collect (selector -> VerticalBlockStyle) for every
+   * selector with at least one vertical-relevant property, without materializing the rule map.
+   * Returns the number collected (bounded by maxOut).
+   */
+  size_t collectVerticalStyles(std::vector<std::pair<std::string, VerticalBlockStyle>>& out,
+                               size_t maxOut = 256) const;
 
  private:
   // Lookup key for a multi-piece selector. The pieces are hashed and compared
