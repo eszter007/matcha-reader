@@ -121,7 +121,7 @@ A new **Transparent** option under Settings → Display → Sleep Screen overlay
 
 The home menu's **Library** has two tabs:
 
-- **Books** — All books on the SD card as a paginated cover grid (6 per page, page indicator bottom right), sorted by recency (recently opened first, then alphabetical). The title sits below each cover, and reading progress is a badge on the cover: "New" for unstarted books, "Read" for finished ones, else the percentage. Covers and titles are auto-generated from EPUB metadata on first visit; manga covers use the first page image and title/author from `meta.bin`. The scan walks every folder on the card, at any depth, so books and manga don't need to sit at the SD card root or one level down.
+- **Books** — All books on the SD card as a 3-column cover grid, sorted by recency (recently opened first, then alphabetical). The title sits below each cover, and reading progress is a badge on the cover: "New" for unstarted books, "Read" for finished ones, else the percentage. A third row peeks out behind the button bar as a hint that more content is below. Covers and titles are auto-generated from EPUB metadata on first visit; manga covers use the first page image and title/author from `meta.bin`. The scan walks every folder on the card, at any depth, so books and manga don't need to sit at the SD card root or one level down.
 - **Shelves** — Folders on the SD card that contain books, shown as a list with a cover thumbnail, folder name, book count, and a chevron. Tap a shelf to see all books in that folder as a cover grid with progress.
 
 Tab switching uses the same pattern as Settings: Confirm cycles tabs when the tab row is focused, hold Up/Down to switch tabs from anywhere.

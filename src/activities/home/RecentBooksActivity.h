@@ -53,8 +53,6 @@ class RecentBooksActivity final : public Activity {
 
   static constexpr int TAB_COUNT = 2;
   static constexpr int GRID_COLS = 3;
-  static constexpr int GRID_ROWS_PER_PAGE = 2;
-  static constexpr int BOOKS_PER_PAGE = GRID_COLS * GRID_ROWS_PER_PAGE;
   static constexpr int GRID_ROW_GAP = 16;
   static constexpr int COVER_PADDING = 4;
   static constexpr int CELL_TEXT_GAP = 4;
@@ -70,7 +68,6 @@ class RecentBooksActivity final : public Activity {
   int readProgressPercent(const std::string& bookPath) const;
   void fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,
                            const std::vector<ShelfBook>* sBooks, int firstIdx, int lastIdx);
-  void drawPageIndicator(int page, int totalPages, int contentTop, int contentHeight);
 
   int getContentItemCount() const;
   void renderBooksTab(int contentTop, int contentHeight);
@@ -79,7 +76,7 @@ class RecentBooksActivity final : public Activity {
 
   // Shared cell/row painters, used by both the full renders above and the partial fast path.
   void drawGridCell(int cellX, int cellY, int cellWidth, int cellHeight, const std::string& coverBmpPath,
-                    const std::string& title, int progressPercent, bool selected);
+                    const std::string& title, int progressPercent, bool selected, bool drawTitle = true);
   void drawShelfRow(int shelfIdx, int itemY, bool selected);
 
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
