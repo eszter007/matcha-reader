@@ -1087,7 +1087,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     }
 
     // Single upright CJK/kana/punctuation character.
-    bool startingNewColumn = (row == 0);
+    // A column start is NOT always row 0: styled blocks (start-Xem, hanging indents) open their
+    // columns further down, which used to dodge this check and let 。/、 head an indented column.
+    // "Nothing placed in this column yet" is the real condition -- glyphs are appended in layout
+    // order, so the last glyph sitting in an earlier column (or an empty page) means this
+    // character would be the column's first.
+    const bool startingNewColumn = page.glyphs.empty() || page.glyphs.back().column < column;
     if (startingNewColumn && !paraBreakJustFired && Kinsoku::isLineStartProhibited(pc.codepoint)) {
       if (!page.glyphs.empty()) {
         // Oikomi (追い込み): pull this character back into the previous
