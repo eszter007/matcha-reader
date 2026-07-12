@@ -28,6 +28,12 @@ struct RenderConfig {
   bool fillCrop = false;
   int cropWidth = 0;   // If >0, clip final output width to this value
   int cropHeight = 0;  // If >0, clip final output height to this value
+
+  // Treat the source alpha channel as a hard mask (sleep-screen overlays): pixels with
+  // alpha < 128 are skipped so the retained framebuffer shows through, and every other
+  // pixel is written opaquely -- including white, which the normal BW path leaves
+  // untouched. Sources without an alpha channel render fully opaque. PNG only.
+  bool alphaMask = false;
 };
 
 class ImageToFramebufferDecoder {

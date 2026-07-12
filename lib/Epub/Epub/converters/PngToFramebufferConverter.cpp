@@ -38,6 +38,7 @@ struct PngContext {
   bool caching{false};
 
   uint8_t* grayLineBuffer{nullptr};
+  uint8_t* alphaLineBuffer{nullptr};  // per-pixel source alpha; only allocated for alphaMask
 };
 
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
@@ -165,6 +166,28 @@ void convertLineToGray(uint8_t* pPixels, uint8_t* grayLine, int width, int pixel
   }
 }
 
+// Extract the per-pixel source alpha for the mask path (no blending -- the mask needs the
+// raw coverage decision, not a white-composited gray). Types without alpha are fully opaque.
+void extractLineAlpha(uint8_t* pPixels, uint8_t* alphaLine, int width, int pixelType, uint8_t* palette, int hasAlpha) {
+  switch (pixelType) {
+    case PNG_PIXEL_INDEXED:
+      if (palette && hasAlpha) {
+        for (int x = 0; x < width; x++) alphaLine[x] = palette[768 + pPixels[x]];
+        return;
+      }
+      break;
+    case PNG_PIXEL_GRAY_ALPHA:
+      for (int x = 0; x < width; x++) alphaLine[x] = pPixels[x * 2 + 1];
+      return;
+    case PNG_PIXEL_TRUECOLOR_ALPHA:
+      for (int x = 0; x < width; x++) alphaLine[x] = pPixels[x * 4 + 3];
+      return;
+    default:
+      break;
+  }
+  memset(alphaLine, 255, width);
+}
+
 int pngDrawCallback(PNGDRAW* pDraw) {
   PngContext* ctx = reinterpret_cast<PngContext*>(pDraw->pUser);
   if (!ctx || !ctx->config || !ctx->renderer || !ctx->grayLineBuffer) return 0;
@@ -189,6 +212,11 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   // Convert entire source line to grayscale (improves cache locality)
   convertLineToGray(pDraw->pPixels, ctx->grayLineBuffer, srcWidth, pDraw->iPixelType, pDraw->pPalette,
                     pDraw->iHasAlpha);
+  const bool alphaMask = ctx->config->alphaMask && ctx->alphaLineBuffer != nullptr;
+  if (alphaMask) {
+    extractLineAlpha(pDraw->pPixels, ctx->alphaLineBuffer, srcWidth, pDraw->iPixelType, pDraw->pPalette,
+                     pDraw->iHasAlpha);
+  }
 
   // Render scaled row using Bresenham-style integer stepping (no floating-point division).
   // dstWidth is also the ratio denominator below (error >= dstWidth) -- must stay the true,
@@ -225,7 +253,9 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 
   for (int dstX = 0; dstX < loopWidth; dstX++) {
     int outX = outXBase + dstX;
-    if (outX < screenWidth) {
+    // Alpha-masked pixels are dropped entirely (the retained framebuffer shows through);
+    // everything else is written opaquely, including white -- see RenderConfig::alphaMask.
+    if (outX < screenWidth && !(alphaMask && ctx->alphaLineBuffer[srcX] < 128)) {
       uint8_t gray = ctx->grayLineBuffer[srcX];
 
       uint8_t ditheredGray;
@@ -235,7 +265,11 @@ int pngDrawCallback(PNGDRAW* pDraw) {
         ditheredGray = gray / 85;
         if (ditheredGray > 3) ditheredGray = 3;
       }
-      pw.writePixel(outX, ditheredGray);
+      if (alphaMask) {
+        pw.writePixelOpaque(outX, ditheredGray);
+      } else {
+        pw.writePixel(outX, ditheredGray);
+      }
       if (caching) cw.writePixel(outX, ditheredGray);
     }
 
@@ -369,6 +403,15 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     LOG_ERR("PNG", "Failed to allocate gray line buffer");
     return false;
   }
+  if (config.alphaMask) {
+    ctx.alphaLineBuffer = static_cast<uint8_t*>(malloc(grayBufSize));
+    if (!ctx.alphaLineBuffer) {
+      LOG_ERR("PNG", "Failed to allocate alpha line buffer");
+      free(ctx.grayLineBuffer);
+      ctx.grayLineBuffer = nullptr;
+      return false;
+    }
+  }
 
   // Stream the pixel cache to disk. PNGdec delivers source scanlines top to
   // bottom and we emit at most one (downscaled) output row per callback, so the
@@ -390,6 +433,8 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   free(ctx.grayLineBuffer);
   ctx.grayLineBuffer = nullptr;
+  free(ctx.alphaLineBuffer);
+  ctx.alphaLineBuffer = nullptr;
 
   if (rc != PNG_SUCCESS) {
     LOG_ERR("PNG", "Decode failed: %d", rc);

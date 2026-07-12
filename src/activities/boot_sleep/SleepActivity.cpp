@@ -1,6 +1,7 @@
 #include "SleepActivity.h"
 
 #include <Epub.h>
+#include <Epub/converters/PngToFramebufferConverter.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -52,6 +53,15 @@ void SleepActivity::onEnter() {
     return renderLastScreenSleepScreen();
   }
 
+  // Transparent mode keeps the reader's page in the framebuffer and overlays the wallpaper,
+  // so it must exit before the "Entering sleep" popup paints over that page -- same early
+  // return the quick-resume screen uses. Outside the reader there is no page to peek
+  // through; the switch below falls back to the custom wallpaper screen.
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT &&
+      APP_STATE.lastSleepFromReader) {
+    return renderTransparentSleepScreen();
+  }
+
   // Show popup with reader orientation only when going to sleep from reader
   if (APP_STATE.lastSleepFromReader) {
     ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
@@ -74,19 +84,17 @@ void SleepActivity::onEnter() {
       } else {
         return renderCustomSleepScreen();
       }
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT):
+      return renderCustomSleepScreen();
     default:
       return renderDefaultSleepScreen();
   }
 }
 
 void SleepActivity::renderCustomSleepScreen() const {
-  // Check if we have a /.sleep (preferred) or /sleep directory
-  const char* sleepDir = nullptr;
-  auto dir = Storage.open("/.sleep");
-
   // Look for sleep.bmp on the root of the sd card to determine if we should
   // render a custom sleep screen instead of the default.
-  // This takes priority over the /sleep folder.
+  // This takes priority over the /.sleep (preferred) and /sleep folders.
   HalFile file;
   if (Storage.openFileForRead("SLP", "/sleep.bmp", file)) {
     Bitmap bitmap(file, true);
@@ -94,83 +102,132 @@ void SleepActivity::renderCustomSleepScreen() const {
       LOG_DBG("SLP", "Loading: /sleep.bmp");
       renderBitmapSleepScreen(bitmap);
       file.close();
-      if (dir) dir.close();
       return;
     }
     file.close();
   }
 
-  if (dir && dir.isDirectory()) {
-    sleepDir = "/.sleep";
-  } else {
-    dir = Storage.open("/sleep");
-    if (dir && dir.isDirectory()) {
-      sleepDir = "/sleep";
-    }
-  }
-
-  if (sleepDir) {
-    std::vector<std::string> files;
-    char name[500];
-    // collect all valid BMP files
-    for (auto dirFile = dir.openNextFile(); dirFile; dirFile = dir.openNextFile()) {
-      if (dirFile.isDirectory()) {
-        dirFile.close();
-        continue;
-      }
-      dirFile.getName(name, sizeof(name));
-      auto filename = std::string(name);
-      if (filename[0] == '.') {
-        dirFile.close();
-        continue;
-      }
-
-      if (!FsHelpers::hasBmpExtension(filename)) {
-        LOG_DBG("SLP", "Skipping non-.bmp file name: %s", name);
-        dirFile.close();
-        continue;
-      }
-      Bitmap bitmap(dirFile);
-      if (bitmap.parseHeaders() != BmpReaderError::Ok) {
-        LOG_DBG("SLP", "Skipping invalid BMP file: %s", name);
-        dirFile.close();
-        continue;
-      }
-      files.emplace_back(filename);
-      dirFile.close();
-    }
-    const auto numFiles = files.size();
-    if (numFiles > 0) {
-      // Pick a random wallpaper, excluding recently shown ones.
-      // Window: up to SLEEP_RECENT_COUNT entries, capped at numFiles-1.
-      const uint16_t fileCount = static_cast<uint16_t>(std::min(numFiles, static_cast<size_t>(UINT16_MAX)));
-      const uint8_t window =
-          static_cast<uint8_t>(std::min(static_cast<size_t>(APP_STATE.recentSleepFill), numFiles - 1));
-      auto randomFileIndex = static_cast<uint16_t>(random(fileCount));
-      for (uint8_t attempt = 0; attempt < 20 && APP_STATE.isRecentSleep(randomFileIndex, window); attempt++) {
-        randomFileIndex = static_cast<uint16_t>(random(fileCount));
-      }
-      APP_STATE.pushRecentSleep(randomFileIndex);
-      APP_STATE.saveToFile();
-      const auto filename = std::string(sleepDir) + "/" + files[randomFileIndex];
-      HalFile randFile;
-      if (Storage.openFileForRead("SLP", filename, randFile)) {
-        LOG_DBG("SLP", "Randomly loading: %s/%s", sleepDir, files[randomFileIndex].c_str());
-        delay(100);
-        Bitmap bitmap(randFile, true);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          renderBitmapSleepScreen(bitmap);
-          randFile.close();
-          dir.close();
-          return;
-        }
-        randFile.close();
-      }
-    }
-  }
-  if (dir) dir.close();
+  if (renderRandomSleepImage("/.sleep", false)) return;
+  if (renderRandomSleepImage("/sleep", false)) return;
 
   renderDefaultSleepScreen();
+}
+
+// Overlay wallpapers live in a "transparent" subfolder (the custom scan skips directories, so
+// the two collections never mix). The framebuffer still holds the page the reader was showing.
+// PNGs use their real alpha channel as the mask (opaque white renders white); BMPs have no
+// alpha, so their white pixels are the transparent areas (the BW bitmap path only paints black
+// pixels). Without any overlay image the plain custom screen is the fallback.
+void SleepActivity::renderTransparentSleepScreen() const {
+  if (renderRandomSleepImage("/.sleep/transparent", true)) return;
+  if (renderRandomSleepImage("/sleep/transparent", true)) return;
+  renderCustomSleepScreen();
+}
+
+// PNG overlays render through the shared PNG->framebuffer decoder with alphaMask set:
+// alpha < 128 keeps the book page, everything else -- including white -- covers it.
+bool SleepActivity::renderPngOverlaySleepImage(const std::string& path) const {
+  ImageDimensions dims{};
+  if (!PngToFramebufferConverter::getDimensionsStatic(path, dims)) return false;
+  if (dims.width <= 0 || dims.height <= 0) return false;
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  // Mirror the decoder's fit-inside scale so the (possibly downscaled) image can be centered.
+  float scale = std::min(static_cast<float>(pageWidth) / static_cast<float>(dims.width),
+                         static_cast<float>(pageHeight) / static_cast<float>(dims.height));
+  if (scale > 1.0f) scale = 1.0f;
+  const int dstWidth = static_cast<int>(dims.width * scale);
+  const int dstHeight = static_cast<int>(dims.height * scale);
+
+  RenderConfig config{};
+  config.x = (pageWidth - dstWidth) / 2;
+  config.y = (pageHeight - dstHeight) / 2;
+  config.maxWidth = pageWidth;
+  config.maxHeight = pageHeight;
+  config.useGrayscale = false;
+  config.alphaMask = true;
+
+  PngToFramebufferConverter converter;
+  if (!converter.decodeToFramebuffer(path, renderer, config)) return false;
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  return true;
+}
+
+bool SleepActivity::renderRandomSleepImage(const char* dirPath, const bool overlay) const {
+  auto dir = Storage.open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+
+  std::vector<std::string> files;
+  char name[500];
+  // collect all valid BMP files (plus PNGs in overlay mode, validated at decode time)
+  for (auto dirFile = dir.openNextFile(); dirFile; dirFile = dir.openNextFile()) {
+    if (dirFile.isDirectory()) {
+      dirFile.close();
+      continue;
+    }
+    dirFile.getName(name, sizeof(name));
+    auto filename = std::string(name);
+    if (filename[0] == '.') {
+      dirFile.close();
+      continue;
+    }
+
+    if (overlay && FsHelpers::hasPngExtension(filename)) {
+      files.emplace_back(filename);
+      dirFile.close();
+      continue;
+    }
+    if (!FsHelpers::hasBmpExtension(filename)) {
+      LOG_DBG("SLP", "Skipping unsupported file name: %s", name);
+      dirFile.close();
+      continue;
+    }
+    Bitmap bitmap(dirFile);
+    if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+      LOG_DBG("SLP", "Skipping invalid BMP file: %s", name);
+      dirFile.close();
+      continue;
+    }
+    files.emplace_back(filename);
+    dirFile.close();
+  }
+  dir.close();
+
+  const auto numFiles = files.size();
+  if (numFiles == 0) return false;
+
+  // Pick a random wallpaper, excluding recently shown ones.
+  // Window: up to SLEEP_RECENT_COUNT entries, capped at numFiles-1.
+  const uint16_t fileCount = static_cast<uint16_t>(std::min(numFiles, static_cast<size_t>(UINT16_MAX)));
+  const uint8_t window = static_cast<uint8_t>(std::min(static_cast<size_t>(APP_STATE.recentSleepFill), numFiles - 1));
+  auto randomFileIndex = static_cast<uint16_t>(random(fileCount));
+  for (uint8_t attempt = 0; attempt < 20 && APP_STATE.isRecentSleep(randomFileIndex, window); attempt++) {
+    randomFileIndex = static_cast<uint16_t>(random(fileCount));
+  }
+  APP_STATE.pushRecentSleep(randomFileIndex);
+  APP_STATE.saveToFile();
+
+  const auto filename = std::string(dirPath) + "/" + files[randomFileIndex];
+  if (FsHelpers::hasPngExtension(filename)) {
+    LOG_DBG("SLP", "Randomly loading PNG overlay: %s", filename.c_str());
+    return renderPngOverlaySleepImage(filename);
+  }
+  HalFile randFile;
+  if (!Storage.openFileForRead("SLP", filename, randFile)) return false;
+  LOG_DBG("SLP", "Randomly loading: %s", filename.c_str());
+  delay(100);
+  Bitmap bitmap(randFile, true);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+    randFile.close();
+    return false;
+  }
+  renderBitmapSleepScreen(bitmap, overlay);
+  randFile.close();
+  return true;
 }
 
 void SleepActivity::renderDefaultSleepScreen() const {
@@ -195,7 +252,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
   GrayLogo::flushGrayPasses(renderer, logoX, logoY, inverted);
 }
 
-void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
+void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool overlay) const {
   int x, y;
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -236,14 +293,19 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
   }
 
   LOG_DBG("SLP", "drawing to %d x %d", x, y);
-  renderer.clearScreen();
+  // Overlay mode composites onto the retained framebuffer: no clear (the book page must stay),
+  // no invert (it would flip the page too), and no grayscale passes (they repaint the whole
+  // panel from cleared buffers). The BW bitmap path only paints black pixels, which is what
+  // makes the image's white areas transparent.
+  if (!overlay) renderer.clearScreen();
 
-  const bool hasGreyscale = bitmap.hasGreyscale() &&
+  const bool hasGreyscale = !overlay && bitmap.hasGreyscale() &&
                             SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
 
   renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
 
-  if (SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
+  if (!overlay &&
+      SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
     renderer.invertScreen();
   }
 

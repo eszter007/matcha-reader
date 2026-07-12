@@ -113,6 +113,10 @@ Read manga with real panel detection, dictionary lookup, and pre-extracted trans
 - Reading progress percentage shown below the author on the "Continue Reading" card
 - Progress uses spine-aware calculation (matches the Library view)
 
+### Transparent Sleep Screen
+
+A new **Transparent** option under Settings → Display → Sleep Screen overlays a wallpaper on the page you were reading, so the book peeks through underneath. Put the overlay images in a `transparent` folder inside your sleep-images folder (`/.sleep/transparent` or `/sleep/transparent`); one is picked at random on each sleep, avoiding recent repeats. PNGs use their real alpha channel — transparent pixels show the book, opaque pixels (including white) cover it. BMPs have no alpha channel, so their white pixels are the see-through areas instead. When sleep starts outside the reader (or no overlay image exists), it falls back to the regular custom sleep screen.
+
 ### Library
 
 The home menu's **Library** has two tabs:

@@ -184,6 +184,32 @@ struct DirectPixelWriter {
       fb[byteIndex] |= bitMask;  // Set bit (draw white)
     }
   }
+
+  // Alpha-mask overlay path: unlike writePixel(), value 3 writes WHITE in BW mode instead
+  // of leaving the framebuffer untouched -- the mask already decided this pixel is opaque,
+  // so it must cover whatever the framebuffer holds. Grayscale nudge passes keep the normal
+  // semantics (they only ever lighten pixels the base pass drew).
+  inline void writePixelOpaque(int logicalX, uint8_t pixelValue) const {
+    if (mode != GfxRenderer::BW) {
+      writePixel(logicalX, pixelValue);
+      return;
+    }
+
+    const int phyX = rowPhyXBase + logicalX * phyXStepX;
+    const int phyY = rowPhyYBase + logicalX * phyYStepX;
+
+    const int sy = phyY - originY;
+    if (static_cast<unsigned>(sy) >= static_cast<unsigned>(clipRows)) return;
+
+    const uint16_t byteIndex = static_cast<uint16_t>(sy * displayWidthBytes + (phyX >> 3));
+    const uint8_t bitMask = 1 << (7 - (phyX & 7));
+
+    if (pixelValue < 3) {
+      fb[byteIndex] &= ~bitMask;  // Clear bit (draw black)
+    } else {
+      fb[byteIndex] |= bitMask;  // Set bit (draw white)
+    }
+  }
 };
 
 // Direct cache writer that eliminates per-pixel overhead from PixelCache::setPixel().
