@@ -58,11 +58,10 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   }
   items.push_back({MenuAction::TRANSLATE_PAGE, StrId::STR_TRANSLATE_PAGE});
   if (showVerticalToggle) {
-    items.push_back({MenuAction::TOGGLE_VERTICAL,
-                     verticalEnabled ? StrId::STR_VERTICAL_TEXT_ON : StrId::STR_VERTICAL_TEXT_OFF});
-    items.push_back({MenuAction::TOGGLE_FURIGANA,
-                     furiganaEnabled ? StrId::STR_FURIGANA_ON : StrId::STR_FURIGANA_OFF});
+    items.push_back({MenuAction::TOGGLE_VERTICAL, StrId::STR_VERTICAL_TEXT_LABEL});
+    items.push_back({MenuAction::TOGGLE_FURIGANA, StrId::STR_FURIGANA_LABEL});
   }
+  items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
   if (hasBookmarks) {
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
@@ -114,16 +113,12 @@ void EpubReaderMenuActivity::loop() {
 
     if (selectedAction == MenuAction::TOGGLE_VERTICAL) {
       pendingVerticalEnabled = !pendingVerticalEnabled;
-      menuItems[selectedIndex].labelId =
-          pendingVerticalEnabled ? StrId::STR_VERTICAL_TEXT_ON : StrId::STR_VERTICAL_TEXT_OFF;
       requestUpdate();
       return;
     }
 
     if (selectedAction == MenuAction::TOGGLE_FURIGANA) {
       pendingFuriganaEnabled = !pendingFuriganaEnabled;
-      menuItems[selectedIndex].labelId =
-          pendingFuriganaEnabled ? StrId::STR_FURIGANA_ON : StrId::STR_FURIGANA_OFF;
       requestUpdate();
       return;
     }
@@ -181,6 +176,10 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         } else if (value == MenuAction::AUTO_PAGE_TURN) {
           // Render current page turn value on the right edge of the content area.
           return pageTurnLabels[selectedPageTurnOption];
+        } else if (value == MenuAction::TOGGLE_VERTICAL) {
+          return I18N.get(pendingVerticalEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
+        } else if (value == MenuAction::TOGGLE_FURIGANA) {
+          return I18N.get(pendingFuriganaEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
         } else {
           return "";
         }

@@ -31,6 +31,7 @@
 #include "CrossPointState.h"
 #include "EpubReaderBookmarksActivity.h"
 #include "EpubReaderChapterSelectionActivity.h"
+#include "activities/settings/SettingsActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
@@ -355,68 +356,7 @@ void EpubReaderActivity::loop() {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else {
-      const int sectionPage = verticalSection ? verticalSection->currentPage + 1
-                              : section       ? section->currentPage + 1
-                                              : 0;
-      const int sectionPageCount = verticalSection ? verticalSection->pageCount
-                                   : section       ? section->pageCount
-                                                   : 0;
-      // The menu header shows the same ToC-chapter-wide numbering and page-based book
-      // progress as the status bar.
-      updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
-      float bookProgress = 0.0f;
-      if (bookPagesTotal > 0) {
-        bookProgress = 100.0f * static_cast<float>(bookPagesBefore + sectionPage) / static_cast<float>(bookPagesTotal);
-      } else if (epub->getBookSize() > 0 && (section || verticalSection) && sectionPageCount > 0) {
-        const float chapterProgress = static_cast<float>(sectionPage - 1) / static_cast<float>(sectionPageCount);
-        bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
-      }
-      const int currentPage = chapterPagesBefore + sectionPage;
-      const int totalPages = std::max(chapterPagesTotal, currentPage);
-      const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
-      // Word Lookup is about the text's language, not its layout direction, so it must not be
-      // gated by verticalOverride==0 (explicitly reading a Japanese book horizontally shouldn't
-      // hide the dictionary) -- but a book whose EPUB metadata doesn't declare dc:language=ja
-      // (isJapaneseBook() false) should still get it if the user has explicitly forced vertical
-      // mode on for it, since that's the same signal useVerticalText() already treats as
-      // sufficient evidence of Japanese content. Previously this used isJapaneseBook() alone,
-      // so a mis-tagged EPUB with vertical text manually forced on would render vertically but
-      // never show Word Lookup at all.
-      const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
-      const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
-      const bool showVerticalToggle = isJapaneseBook();
-      bool hasPageText = false;
-      if (verticalSection) {
-        const VerticalPage* page = verticalSection->getPage();
-        hasPageText = page && !PageTextExtractor::fromVerticalPage(*page).empty();
-      } else if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
-        hasPageText = !section->getTextFromSectionFile().empty();
-      }
-      startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
-                                 renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
-                                 SETTINGS.orientation, !sectionFootnotes.empty() || !currentPageFootnotes.empty(),
-                                 !cachedBookmarks.empty(),
-                                 hasWordLookup, showVerticalToggle, useVerticalText(), useFurigana(), hasPageText),
-                             [this](const ActivityResult& result) {
-                               const auto& menu = std::get<MenuResult>(result.data);
-                               applyOrientation(menu.orientation);
-                               toggleAutoPageTurn(menu.pageTurnOption);
-                               if (menu.verticalOverride >= 0 && menu.verticalOverride != (useVerticalText() ? 1 : 0)) {
-                                 verticalOverride = menu.verticalOverride;
-                                 section.reset();
-                                 verticalSection.reset();
-                                 // Forcing vertical text on a non-ja book is the same signal
-                                 // isJapaneseBook() covers at open: JP fallback follows it.
-                                 sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
-                               }
-                               if (menu.furiganaOverride >= 0 && menu.furiganaOverride != (useFurigana() ? 1 : 0)) {
-                                 furiganaOverride = menu.furiganaOverride;
-                               }
-                               if (!result.isCancelled) {
-                                 onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
-                               }
-                               requestUpdate();
-                             });
+      openReaderMenu();
     }
   }
 
@@ -657,6 +597,72 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   }
 }
 
+void EpubReaderActivity::openReaderMenu() {
+  const int sectionPage = verticalSection ? verticalSection->currentPage + 1
+                          : section       ? section->currentPage + 1
+                                          : 0;
+  const int sectionPageCount = verticalSection ? verticalSection->pageCount
+                               : section       ? section->pageCount
+                                               : 0;
+  // The menu header shows the same ToC-chapter-wide numbering and page-based book
+  // progress as the status bar.
+  updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
+  float bookProgress = 0.0f;
+  if (bookPagesTotal > 0) {
+    bookProgress = 100.0f * static_cast<float>(bookPagesBefore + sectionPage) / static_cast<float>(bookPagesTotal);
+  } else if (epub->getBookSize() > 0 && (section || verticalSection) && sectionPageCount > 0) {
+    const float chapterProgress = static_cast<float>(sectionPage - 1) / static_cast<float>(sectionPageCount);
+    bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
+  }
+  const int currentPage = chapterPagesBefore + sectionPage;
+  const int totalPages = std::max(chapterPagesTotal, currentPage);
+  const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+  // Word Lookup is about the text's language, not its layout direction, so it must not be
+  // gated by verticalOverride==0 (explicitly reading a Japanese book horizontally shouldn't
+  // hide the dictionary) -- but a book whose EPUB metadata doesn't declare dc:language=ja
+  // (isJapaneseBook() false) should still get it if the user has explicitly forced vertical
+  // mode on for it, since that's the same signal useVerticalText() already treats as
+  // sufficient evidence of Japanese content. Previously this used isJapaneseBook() alone,
+  // so a mis-tagged EPUB with vertical text manually forced on would render vertically but
+  // never show Word Lookup at all.
+  const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
+  const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
+  const bool showVerticalToggle = isJapaneseBook();
+  bool hasPageText = false;
+  if (verticalSection) {
+    const VerticalPage* page = verticalSection->getPage();
+    hasPageText = page && !PageTextExtractor::fromVerticalPage(*page).empty();
+  } else if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
+    hasPageText = !section->getTextFromSectionFile().empty();
+  }
+  startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
+                             renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
+                             SETTINGS.orientation, !sectionFootnotes.empty() || !currentPageFootnotes.empty(),
+                             !cachedBookmarks.empty(),
+                             hasWordLookup, showVerticalToggle, useVerticalText(), useFurigana(), hasPageText),
+                         [this](const ActivityResult& result) {
+                           const auto& menu = std::get<MenuResult>(result.data);
+                           applyOrientation(menu.orientation);
+                           toggleAutoPageTurn(menu.pageTurnOption);
+                           if (menu.verticalOverride >= 0 && menu.verticalOverride != (useVerticalText() ? 1 : 0)) {
+                             verticalOverride = menu.verticalOverride;
+                             section.reset();
+                             verticalSection.reset();
+                             // Forcing vertical text on a non-ja book is the same signal
+                             // isJapaneseBook() covers at open: JP fallback follows it.
+                             sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+                           }
+                           if (menu.furiganaOverride >= 0 && menu.furiganaOverride != (useFurigana() ? 1 : 0)) {
+                             furiganaOverride = menu.furiganaOverride;
+                           }
+                           if (!result.isCancelled) {
+                             onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
+                           }
+                           requestUpdate();
+                         });
+
+}
+
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   auto progressChangeResultHandler = [this](const ActivityResult& result) {
     loadCachedBookmarks();
@@ -674,6 +680,20 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
   };
 
   switch (action) {
+    case EpubReaderMenuActivity::MenuAction::READER_SETTINGS: {
+      // Push settings opened on the Reader tab; Back pops straight back into the book. Font or
+      // margin changes are picked up on return: the SD font system reloads to the new selection
+      // and the next render's section-cache parameter check rebuilds the layout if needed.
+      startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                                                /*finishOnBack=*/true),
+                             [this](const ActivityResult&) {
+                               sdFontSystem.ensureLoaded(renderer);
+                               sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+                               // Return to the reader MENU (where the user came from), not the page.
+                               openReaderMenu();
+                             });
+      break;
+    }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       const int spineIdx = currentSpineIndex;
       const std::string path = epub->getPath();
@@ -1719,6 +1739,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical) {
     return;
   }
+  const bool spanModeChanged = chapterSpanVertical != vertical;
   chapterSpanSpine = currentSpineIndex;
   chapterSpanLivePages = livePages;
   chapterSpanVertical = vertical;
@@ -1732,6 +1753,9 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   const int spineCount = epub->getSpineItemsCount();
   if (spineCount <= 0) return;
   if (static_cast<int>(spinePagesReal.size()) != spineCount) spinePagesReal.assign(spineCount, 0);
+  // A mode switch invalidates every cached count AND every remembered probe failure -- the two
+  // modes use entirely different section files.
+  if (spanModeChanged) spinePagesReal.assign(spineCount, 0);
 
   // Collect real page counts: the live section plus a cheap header-only cache peek for every
   // spine not seen yet this session (a missing cache is a fast failed open).
@@ -1742,9 +1766,16 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
     if (i == currentSpineIndex && livePages > 0) {
       spinePagesReal[i] = static_cast<uint16_t>(std::min(livePages, 0xFFFF));
     } else if (spinePagesReal[i] == 0) {
+      // A failed probe is remembered for the session (kSpineProbeFailed): without this, every
+      // menu open / status-bar refresh after a cache-version bump re-opened (and re-discarded)
+      // all N stale section files -- a visible seconds-long delay on a 39-spine book.
+      bool probed = false;
       if (vertical) {
         VerticalSection sibling(epub, i, renderer);
-        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight)) spinePagesReal[i] = sibling.pageCount;
+        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight)) {
+          spinePagesReal[i] = sibling.pageCount;
+          probed = true;
+        }
       } else {
         Section sibling(epub, i, renderer);
         if (sibling.loadSectionFile(fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
@@ -1752,10 +1783,12 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
                                     SETTINGS.focusReadingEnabled)) {
           spinePagesReal[i] = sibling.pageCount;
+          probed = true;
         }
       }
+      if (!probed) spinePagesReal[i] = kSpineProbeFailed;
     }
-    if (spinePagesReal[i] > 0) {
+    if (spinePagesReal[i] > 0 && spinePagesReal[i] != kSpineProbeFailed) {
       knownPages += spinePagesReal[i];
       const size_t prev = (i >= 1) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
       knownBytes += epub->getCumulativeSpineItemSize(i) - prev;
@@ -1766,7 +1799,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   // pages-per-byte ratio) where not.
   spinePagesEffective.assign(spineCount, 1);
   for (int i = 0; i < spineCount; i++) {
-    if (spinePagesReal[i] > 0) {
+    if (spinePagesReal[i] > 0 && spinePagesReal[i] != kSpineProbeFailed) {
       spinePagesEffective[i] = spinePagesReal[i];
       continue;
     }

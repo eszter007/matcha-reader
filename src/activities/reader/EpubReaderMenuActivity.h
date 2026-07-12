@@ -27,7 +27,8 @@ class EpubReaderMenuActivity final : public Activity {
     WORD_LOOKUP,
     TRANSLATE_PAGE,
     TOGGLE_VERTICAL,
-    TOGGLE_FURIGANA
+    TOGGLE_FURIGANA,
+    READER_SETTINGS
   };
 
   // hasWordLookup gates whether Word Lookup appears at all (book-level: is

@@ -144,6 +144,8 @@ struct SettingInfo {
 
 class SettingsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
+  int initialCategory = 0;
+  bool finishOnBack = false;
 
   int selectedCategoryIndex = 0;  // Currently selected category
   int selectedSettingIndex = 0;
@@ -169,8 +171,12 @@ class SettingsActivity final : public Activity {
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
  public:
-  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Settings", renderer, mappedInput) {}
+  // initialCategory: category tab to open on (0=Display, 1=Reader, 2=Controls, 3=System).
+  // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
+  // instead of replacing the stack with Home.
+  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
+                            const bool finishOnBack = false)
+      : Activity("Settings", renderer, mappedInput), initialCategory(initialCategory), finishOnBack(finishOnBack) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

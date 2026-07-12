@@ -92,9 +92,10 @@ void SettingsActivity::rebuildSettingsLists() {
 void SettingsActivity::onEnter() {
   Activity::onEnter();
 
-  // Reset selection to first category
-  selectedCategoryIndex = 0;
+  // Start on the requested category (0 unless a caller like the reader menu asks otherwise)
+  selectedCategoryIndex = initialCategory;
   selectedSettingIndex = 0;
+  if (finishOnBack) selectedSettingIndex = 1;  // category row is locked in embedded mode
   preserveQuickResumeTimeoutOn =
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
   quickResumeTimeoutAutoEnabled = false;
@@ -118,9 +119,12 @@ void SettingsActivity::loop() {
   // Handle actions with early return
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (selectedSettingIndex == 0) {
-      selectedCategoryIndex = (selectedCategoryIndex < categoryCount - 1) ? (selectedCategoryIndex + 1) : 0;
-      hasChangedCategory = true;
-      requestUpdate();
+      // Embedded single-category mode (reader menu): the category row is locked.
+      if (!finishOnBack) {
+        selectedCategoryIndex = (selectedCategoryIndex < categoryCount - 1) ? (selectedCategoryIndex + 1) : 0;
+        hasChangedCategory = true;
+        requestUpdate();
+      }
     } else {
       toggleCurrentSetting();
       requestUpdate();
@@ -128,7 +132,16 @@ void SettingsActivity::loop() {
     }
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  // Embedded mode finishes on the RELEASE: finishing on the press would leave the release
+  // for the activity underneath (the reader), which would treat it as its own Back and exit
+  // the book -- the same stray-event trap the reader menu's ignoreNextConfirmRelease guards.
+  if (finishOnBack) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      SETTINGS.saveToFile();
+      finish();
+      return;
+    }
+  } else if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     if (selectedSettingIndex > 0) {
       selectedSettingIndex = 0;
       requestUpdate();
@@ -142,11 +155,13 @@ void SettingsActivity::loop() {
   // Handle navigation
   buttonNavigator.onNextRelease([this] {
     selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
+    if (finishOnBack && selectedSettingIndex == 0) selectedSettingIndex = settingsCount > 0 ? 1 : 0;
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this] {
     selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
+    if (finishOnBack && selectedSettingIndex == 0) selectedSettingIndex = settingsCount;
     requestUpdate();
   });
 
@@ -326,16 +341,20 @@ void SettingsActivity::render(RenderLock&&) {
 
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION);
+  // Embedded single-category mode (opened from the reader menu): title the view after the
+  // category and hide the tab bar entirely -- the other categories are not reachable here.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
+                 finishOnBack ? tr(STR_READER_SETTINGS) : tr(STR_SETTINGS_TITLE), CROSSPOINT_VERSION);
 
-  std::vector<TabInfo> tabs;
-  tabs.reserve(categoryCount);
-  for (int i = 0; i < categoryCount; i++) {
-    tabs.push_back({I18N.get(categoryNames[i]), selectedCategoryIndex == i});
+  if (!finishOnBack) {
+    std::vector<TabInfo> tabs;
+    tabs.reserve(categoryCount);
+    for (int i = 0; i < categoryCount; i++) {
+      tabs.push_back({I18N.get(categoryNames[i]), selectedCategoryIndex == i});
+    }
+    GUI.drawTabBar(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight}, tabs,
+                   selectedSettingIndex == 0);
   }
-  GUI.drawTabBar(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight}, tabs,
-                 selectedSettingIndex == 0);
 
   const auto& settings = *currentSettings;
   GUI.drawList(
