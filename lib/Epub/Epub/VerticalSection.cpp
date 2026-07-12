@@ -934,6 +934,7 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = 1 + sizeof(int) + 2 * sizeof(uint16_t
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
                                            const uint16_t viewportHeight) {
+  lastBuildDroppedForHeap_ = false;
   // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
   // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
   // whether that low contiguous budget is a fresh drop from THIS chapter's own parsing, or whether
@@ -1000,12 +1001,32 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
-  // rule map (heap!).
+  // rule map (heap!). The table lives for the whole build (~10-15KB for a full EBPAJ book),
+  // so under heap pressure it is bounded down or skipped entirely: correct TEXT layout beats
+  // styling fidelity on a tight (X3) heap, and the release below reclaims font memory first.
   std::vector<std::pair<std::string, CssParser::VerticalBlockStyle>> blockStyles;
   if (epub->getCssParser()) {
-    epub->getCssParser()->collectVerticalStyles(blockStyles);
-    if (!blockStyles.empty()) {
-      LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(blockStyles.size()));
+    if (ESP.getMaxAllocHeap() < 64 * 1024) {
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        LOG_INF("VSC", "Low heap before styled-block collect (maxAlloc=%u); releasing font memory",
+                ESP.getMaxAllocHeap());
+        fcm->releaseAllFontMemory();
+      }
+    }
+    // Binary decision, no partial cap: the collector fills in CACHE order, so a reduced cap
+    // silently drops whichever selectors happen to sit late in the file (confirmed earlier:
+    // .k-solid boxes vanishing at a 64-entry cap). Either the full table fits, or the build
+    // runs unstyled AND is stamped stale so a later, roomier open rebuilds it properly.
+    const uint32_t maxAllocNow = ESP.getMaxAllocHeap();
+    if (maxAllocNow < 48 * 1024) {
+      LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u); building unstyled, marked for rebuild",
+              maxAllocNow);
+      lastBuildDroppedForHeap_ = true;  // reuse the stale-stamp path: version 0 -> rebuild next open
+    } else {
+      epub->getCssParser()->collectVerticalStyles(blockStyles);
+      if (!blockStyles.empty()) {
+        LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(blockStyles.size()));
+      }
     }
   }
 
@@ -1079,7 +1100,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   if (sink.failed) return false;
 
-  lastBuildDroppedForHeap_ = layout.everDroppedForHeap();
+  // OR, don't assign: the styled-block collect above may already have flagged this build
+  // (unstyled fallback under heap pressure).
+  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap();
   LOG_INF("VSC", "streamParseAndLayout: %u ms", millis() - buildStartMs);
   LOG_INF("VSC", "streamParseAndLayout end spine=%d pages=%zu free=%u", spineIndex, pageOffsets_.size(),
           ESP.getFreeHeap());

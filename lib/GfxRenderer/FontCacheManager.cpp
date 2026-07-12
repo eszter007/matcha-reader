@@ -25,6 +25,13 @@ void FontCacheManager::clearCache() {
 
 void FontCacheManager::releaseAllFontMemory() {
   clearCache();
+  // The emergency path also surrenders the persistent advance tables (up to ~6KB per active
+  // style per font since the 1536-entry cap): they are pure measurement caches that rebuild
+  // from SD on the next ensureSdCardFontReady, and on the tight X3 heap their residency is
+  // exactly the margin the caller is trying to reclaim. Rendering itself never needs them.
+  for (auto& [id, font] : sdCardFonts_) {
+    font->clearPersistentCache();
+  }
   if (fontDecompressor_) fontDecompressor_->freeGlyphSlab();
 }
 
