@@ -85,7 +85,8 @@ def inject_version(env):
     project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
     # This fork's dev/test builds carry a stable fork identity instead of branch+SHA.
-    version_string = f'matcha-reader-{base_version}'
+    # -debug marks the LOG_LEVEL=2 dev environment apart from release binaries.
+    version_string = f'matcha-reader-{base_version}-debug'
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')
