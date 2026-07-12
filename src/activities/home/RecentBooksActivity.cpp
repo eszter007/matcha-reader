@@ -404,7 +404,9 @@ bool RecentBooksActivity::fillPendingProgress(const int maxCount) {
     bookProgress[i].percent = readProgressPercent(recentBooks[i].path);
     filled++;
   }
-  if (filled > 0 && !anyPending) requestUpdate();  // labels appear once the batch completes
+  // No requestUpdate: the visible page's entries are filled synchronously at render time
+  // (fillPageProgressNow), so a refresh here would redraw an unchanged screen -- the second
+  // full e-ink refresh right after opening was a visible part of the "slow open" feel.
   return anyPending || filled > 0;
 }
 
@@ -947,13 +949,76 @@ void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const i
     }
   }
 
-  const int labelY = coverY + coverHeight + CELL_TEXT_GAP;
+  // Progress badge on the cover (top-right, white on black): "NEW" for unstarted books,
+  // "Read" for finished ones, else the percentage. progressPercent < 0 means the idle-gated
+  // progress pass hasn't reached this book yet -- draw nothing rather than a wrong badge.
   if (progressPercent >= 0) {
-    char pctBuf[8];
-    snprintf(pctBuf, sizeof(pctBuf), "%d%%", progressPercent);
-    const int pctW = renderer.getTextWidth(SMALL_FONT_ID, pctBuf);
-    renderer.drawText(SMALL_FONT_ID, coverX + (coverWidth - pctW) / 2, labelY, pctBuf, true);
+    char badgeBuf[8];
+    if (progressPercent <= 0) {
+      snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
+    } else if (progressPercent >= 100) {
+      snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_READ));
+    } else {
+      snprintf(badgeBuf, sizeof(badgeBuf), "%d%%", progressPercent);
+    }
+    const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
+    const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
+    const int badgeW = badgeTextW + 12;
+    const int badgeX = coverX + coverWidth - badgeW;
+    const int badgeY = coverY;
+    // Black fill with a rounded bottom-left corner; pixels outside the arc stay untouched so
+    // the cover shows through the corner notch.
+    constexpr int badgeR = 4;
+    renderer.fillRect(badgeX + badgeR, badgeY, badgeW - badgeR, badgeH, true);
+    renderer.fillRect(badgeX, badgeY, badgeR, badgeH - badgeR, true);
+    const int arcCx = badgeX + badgeR;
+    const int arcCy = badgeY + badgeH - 1 - badgeR;
+    for (int dy = 0; dy <= badgeR; dy++) {
+      for (int dx = 0; dx <= badgeR; dx++) {
+        const int d2 = dx * dx + dy * dy;
+        if (d2 > badgeR * badgeR) continue;
+        // Outermost ring of the arc is white so it joins the white edge lines below.
+        renderer.drawPixel(arcCx - dx, arcCy + dy, d2 < (badgeR - 1) * (badgeR - 1));
+      }
+    }
+    // White border on the two exposed edges (left + bottom); top/right sit on the cover edge.
+    renderer.drawLine(badgeX, badgeY, badgeX, arcCy, false);
+    renderer.drawLine(arcCx, badgeY + badgeH - 1, badgeX + badgeW - 1, badgeY + badgeH - 1, false);
+    renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
   }
+
+  // Title below the cover, single line, ellipsis-truncated.
+  const int labelY = coverY + coverHeight + CELL_TEXT_GAP;
+  if (!title.empty()) {
+    const std::string line = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), coverWidth);
+    renderer.drawText(SMALL_FONT_ID, coverX, labelY, line.c_str(), true);
+  }
+}
+
+// Read the progress for a page's pending entries NOW (bounded: BOOKS_PER_PAGE small reads).
+// The deferred background pass still covers everything else; it just never gets to trigger a
+// second full-screen refresh for cells the user is currently looking at.
+void RecentBooksActivity::fillPageProgressNow(std::vector<BookProgress>& progress,
+                                              const std::vector<RecentBook>* books,
+                                              const std::vector<ShelfBook>* sBooks, const int firstIdx,
+                                              const int lastIdx) {
+  for (int i = firstIdx; i >= 0 && i <= lastIdx && i < static_cast<int>(progress.size()); i++) {
+    if (progress[i].percent != PROGRESS_PENDING) continue;
+    const std::string& path = books ? (*books)[i].path : (*sBooks)[i].path;
+    progress[i].percent = readProgressPercent(path);
+  }
+}
+
+void RecentBooksActivity::drawPageIndicator(const int page, const int totalPages, const int contentTop,
+                                            const int contentHeight) {
+  if (totalPages <= 1) return;
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d/%d", page + 1, totalPages);
+  const int w = renderer.getTextWidth(SMALL_FONT_ID, buf);
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  renderer.drawText(SMALL_FONT_ID, renderer.getScreenWidth() - metrics.contentSidePadding - w,
+                    contentTop + contentHeight - lineHeight, buf, true);
 }
 
 void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
@@ -972,45 +1037,41 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   const int thumbHeight = metrics.homeCoverHeight;
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int cellHeight = getCellHeight(cellWidth);
-  const int visibleRows = getVisibleRows(cellHeight, contentHeight);
-  const int totalRows = (static_cast<int>(recentBooks.size()) + GRID_COLS - 1) / GRID_COLS;
+  const int bookCount = static_cast<int>(recentBooks.size());
+  const int totalPages = (bookCount + BOOKS_PER_PAGE - 1) / BOOKS_PER_PAGE;
   const int selectedItem = contentIndex - 1;
+  const int page = selectedItem >= 0 ? selectedItem / BOOKS_PER_PAGE : 0;
+  const int firstIdx = page * BOOKS_PER_PAGE;
+  const int lastIdx = std::min(firstIdx + BOOKS_PER_PAGE, bookCount) - 1;
 
-  int selectedRow = selectedItem >= 0 ? selectedItem / GRID_COLS : 0;
-  if (selectedRow < scrollRow) scrollRow = selectedRow;
-  if (selectedRow >= scrollRow + visibleRows) scrollRow = selectedRow - visibleRows + 1;
+  // Fill this page's progress badges synchronously (max 6 books, ~2 small reads each) so the
+  // first paint is already correct -- the deferred background pass caused a SECOND full e-ink
+  // refresh right after opening, which read as sluggishness.
+  fillPageProgressNow(bookProgress, &recentBooks, nullptr, firstIdx, lastIdx);
 
-  // Render one extra row beyond the visible area so the next row peeks
-  // behind the button bar, hinting that more content is available.
-  const int renderRows = visibleRows + (totalRows > visibleRows ? 1 : 0);
-
-  // Prewarm titles for visible cells (drawn as a fallback when a cell has no cover thumbnail) --
-  // see the matching comment in renderShelvesTab for why this matters for non-Latin text.
+  // Prewarm titles for the page's cells (always drawn below the covers).
   if (auto* fcm = renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
-    for (int row = scrollRow; row < std::min(scrollRow + renderRows, totalRows); row++) {
-      for (int col = 0; col < GRID_COLS; col++) {
-        const int idx = row * GRID_COLS + col;
-        if (idx >= static_cast<int>(recentBooks.size())) break;
-        prewarmBuf += recentBooks[idx].title;
-        prewarmBuf += ' ';
-      }
+    for (int idx = firstIdx; idx <= lastIdx; idx++) {
+      prewarmBuf += recentBooks[idx].title;
+      prewarmBuf += ' ';
     }
     fcm->prewarmCache(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
 
-  for (int row = scrollRow; row < std::min(scrollRow + renderRows, totalRows); row++) {
-    for (int col = 0; col < GRID_COLS; col++) {
-      const int idx = row * GRID_COLS + col;
-      if (idx >= static_cast<int>(recentBooks.size())) break;
-      const int cellX = metrics.contentSidePadding + col * cellWidth;
-      const int cellY = contentTop + (row - scrollRow) * cellHeight;
-      const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
-      drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
-                   idx == selectedItem);
-    }
+  for (int idx = firstIdx; idx <= lastIdx; idx++) {
+    const int local = idx - firstIdx;
+    const int col = local % GRID_COLS;
+    const int row = local / GRID_COLS;
+    const int cellX = metrics.contentSidePadding + col * cellWidth;
+    const int cellY = contentTop + row * (cellHeight + GRID_ROW_GAP);
+    const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
+    drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
+                 idx == selectedItem);
   }
+
+  drawPageIndicator(page, totalPages, contentTop, contentHeight);
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
   // LyraTheme::drawRecentBookCover for why this is required (FontDecompressor's page-slot pool
@@ -1175,47 +1236,39 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
   const int thumbHeight = metrics.homeCoverHeight;
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int cellHeight = getCellHeight(cellWidth);
-  const int visibleRows = getVisibleRows(cellHeight, contentHeight);
-  const int totalRows = (static_cast<int>(shelfBooks.size()) + GRID_COLS - 1) / GRID_COLS;
+  const int bookCount = static_cast<int>(shelfBooks.size());
+  const int totalPages = (bookCount + BOOKS_PER_PAGE - 1) / BOOKS_PER_PAGE;
+  const int page = shelfContentIndex >= 0 ? shelfContentIndex / BOOKS_PER_PAGE : 0;
+  const int firstIdx = page * BOOKS_PER_PAGE;
+  const int lastIdx = std::min(firstIdx + BOOKS_PER_PAGE, bookCount) - 1;
 
-  int selectedRow = shelfContentIndex >= 0 ? shelfContentIndex / GRID_COLS : 0;
-  if (selectedRow < shelfScrollRow) shelfScrollRow = selectedRow;
-  if (selectedRow >= shelfScrollRow + visibleRows) shelfScrollRow = selectedRow - visibleRows + 1;
+  // See renderBooksTab: badges of the visible page are filled synchronously for a correct
+  // first paint.
+  fillPageProgressNow(shelfBookProgress, nullptr, &shelfBooks, firstIdx, lastIdx);
 
-  // Prewarm titles for visible cells (drawn as a fallback when a cell has no cover thumbnail) --
-  // see the matching comment in renderShelvesTab for why this matters for non-Latin text.
+  // Prewarm titles for the page's cells (always drawn below the covers).
   if (auto* fcm = renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
-    for (int row = shelfScrollRow; row < std::min(shelfScrollRow + visibleRows, totalRows); row++) {
-      for (int col = 0; col < GRID_COLS; col++) {
-        const int idx = row * GRID_COLS + col;
-        if (idx >= static_cast<int>(shelfBooks.size())) break;
-        prewarmBuf += shelfBooks[idx].title;
-        prewarmBuf += ' ';
-      }
+    for (int idx = firstIdx; idx <= lastIdx; idx++) {
+      prewarmBuf += shelfBooks[idx].title;
+      prewarmBuf += ' ';
     }
     fcm->prewarmCache(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
 
-  for (int row = shelfScrollRow; row < std::min(shelfScrollRow + visibleRows, totalRows); row++) {
-    for (int col = 0; col < GRID_COLS; col++) {
-      const int idx = row * GRID_COLS + col;
-      if (idx >= static_cast<int>(shelfBooks.size())) break;
-      const int cellX = metrics.contentSidePadding + col * cellWidth;
-      const int cellY = contentTop + (row - shelfScrollRow) * cellHeight;
-      const int pct = idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1;
-      drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
-                   idx == shelfContentIndex);
-    }
+  for (int idx = firstIdx; idx <= lastIdx; idx++) {
+    const int local = idx - firstIdx;
+    const int col = local % GRID_COLS;
+    const int row = local / GRID_COLS;
+    const int cellX = metrics.contentSidePadding + col * cellWidth;
+    const int cellY = contentTop + row * (cellHeight + GRID_ROW_GAP);
+    const int pct = idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1;
+    drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
+                 idx == shelfContentIndex);
   }
 
-  if (totalRows > visibleRows) {
-    const int barX = pageWidth - metrics.scrollBarRightOffset - metrics.scrollBarWidth;
-    const int thumbH = std::max(10, contentHeight * visibleRows / totalRows);
-    const int thumbY = contentTop + (contentHeight - thumbH) * shelfScrollRow / (totalRows - visibleRows);
-    renderer.fillRect(barX, thumbY, metrics.scrollBarWidth, thumbH, true);
-  }
+  drawPageIndicator(page, totalPages, contentTop, contentHeight);
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
   // LyraTheme::drawRecentBookCover for why this is required.
@@ -1242,22 +1295,20 @@ bool RecentBooksActivity::tryPartialSelectionRedraw() {
     if (newIdx >= static_cast<int>(shelfBooks.size()) || oldIdx >= static_cast<int>(shelfBooks.size())) return false;
 
     const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-    const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
     const int gridWidth = pageWidth - 2 * metrics.contentSidePadding;
     const int cellWidth = gridWidth / GRID_COLS;
     const int cellHeight = getCellHeight(cellWidth);
-    const int visibleRows = getVisibleRows(cellHeight, contentHeight);
-    const int newRow = newIdx / GRID_COLS;
-    // The move must not scroll (renderShelfBooksView would adjust shelfScrollRow).
-    if (newRow < shelfScrollRow || newRow >= shelfScrollRow + visibleRows) return false;
-    if (shelfScrollRow != lastRendered.shelfScrollRow) return false;
+    // A page flip replaces every cell -- full render only.
+    if (oldIdx / BOOKS_PER_PAGE != newIdx / BOOKS_PER_PAGE) return false;
+    const int pageFirst = (newIdx / BOOKS_PER_PAGE) * BOOKS_PER_PAGE;
 
     // The border ring never overlaps cell content, so the move is just erase + draw.
     for (const int idx : {oldIdx, newIdx}) {
-      const int row = idx / GRID_COLS;
-      const int col = idx % GRID_COLS;
+      const int local = idx - pageFirst;
+      const int row = local / GRID_COLS;
+      const int col = local % GRID_COLS;
       const int cellX = metrics.contentSidePadding + col * cellWidth;
-      const int cellY = contentTop + (row - shelfScrollRow) * cellHeight;
+      const int cellY = contentTop + row * (cellHeight + GRID_ROW_GAP);
       drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, idx == newIdx);
     }
     return true;
@@ -1278,18 +1329,17 @@ bool RecentBooksActivity::tryPartialSelectionRedraw() {
     const int gridWidth = pageWidth - 2 * metrics.contentSidePadding;
     const int cellWidth = gridWidth / GRID_COLS;
     const int cellHeight = getCellHeight(cellWidth);
-    const int visibleRows = getVisibleRows(cellHeight, contentHeight);
-    const int newRow = (newIdx - 1) / GRID_COLS;
-    // The move must not scroll (renderBooksTab would adjust scrollRow).
-    if (newRow < scrollRow || newRow >= scrollRow + visibleRows) return false;
-    if (scrollRow != lastRendered.scrollRow) return false;
+    // A page flip replaces every cell -- full render only.
+    if ((oldIdx - 1) / BOOKS_PER_PAGE != (newIdx - 1) / BOOKS_PER_PAGE) return false;
+    const int pageFirst = ((newIdx - 1) / BOOKS_PER_PAGE) * BOOKS_PER_PAGE;
 
     // The border ring never overlaps cell content, so the move is just erase + draw.
     for (const int idx : {oldIdx - 1, newIdx - 1}) {
-      const int row = idx / GRID_COLS;
-      const int col = idx % GRID_COLS;
+      const int local = idx - pageFirst;
+      const int row = local / GRID_COLS;
+      const int col = local % GRID_COLS;
       const int cellX = metrics.contentSidePadding + col * cellWidth;
-      const int cellY = contentTop + (row - scrollRow) * cellHeight;
+      const int cellY = contentTop + row * (cellHeight + GRID_ROW_GAP);
       drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, idx == newIdx - 1);
     }
     return true;

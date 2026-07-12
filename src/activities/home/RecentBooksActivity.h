@@ -53,6 +53,9 @@ class RecentBooksActivity final : public Activity {
 
   static constexpr int TAB_COUNT = 2;
   static constexpr int GRID_COLS = 3;
+  static constexpr int GRID_ROWS_PER_PAGE = 2;
+  static constexpr int BOOKS_PER_PAGE = GRID_COLS * GRID_ROWS_PER_PAGE;
+  static constexpr int GRID_ROW_GAP = 16;
   static constexpr int COVER_PADDING = 4;
   static constexpr int CELL_TEXT_GAP = 4;
   static constexpr int SELECTION_RADIUS = 6;
@@ -65,6 +68,9 @@ class RecentBooksActivity final : public Activity {
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
   int readProgressPercent(const std::string& bookPath) const;
+  void fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,
+                           const std::vector<ShelfBook>* sBooks, int firstIdx, int lastIdx);
+  void drawPageIndicator(int page, int totalPages, int contentTop, int contentHeight);
 
   int getContentItemCount() const;
   void renderBooksTab(int contentTop, int contentHeight);

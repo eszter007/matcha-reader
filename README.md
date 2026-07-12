@@ -90,7 +90,7 @@ Read manga with real panel detection, dictionary lookup, and pre-extracted trans
 - **Progress saving** — Current page and panel position saved automatically. Reaching the last page marks the manga finished in Insights, same as EPUBs.
 - **Bookmarks** — Toggle a bookmark on the current page from the reader menu, and browse/jump to/delete bookmarks from the Bookmarks list, same as EPUBs.
 - **Title and author** — Read from a `meta.bin` file the converter writes alongside the panel data (auto-detected from the source EPUB/CBZ/PDF, or set explicitly with `--title`/`--author`). Shown in the Library, on shelves, and on the Home screen's Continue Reading card, just like EPUB metadata.
-- **Cover and progress in the Library** — The first page is used as the cover thumbnail everywhere (Library grid, shelf list, Home). Progress is shown as a percentage below the cover, the same as EPUBs.
+- **Cover and progress in the Library** — The first page is used as the cover thumbnail everywhere (Library grid, shelf list, Home). Progress is shown as a badge on the cover, the same as EPUBs.
 - **Found anywhere on the card** — The Library scans every folder on the SD card, at any nesting depth, for a `panels.idx` file — a manga folder doesn't need to sit directly under a folder named "manga" or live only one level deep.
 
 <p align="center">
@@ -117,7 +117,7 @@ Read manga with real panel detection, dictionary lookup, and pre-extracted trans
 
 The home menu's **Library** has two tabs:
 
-- **Books** — All books on the SD card as a 3-column cover grid, sorted by recency (recently opened first, then alphabetical). Covers and titles are auto-generated from EPUB metadata on first visit; manga covers use the first page image and title/author from `meta.bin`. A peek row hints at more content below the button bar. The scan walks every folder on the card, at any depth, so books and manga don't need to sit at the SD card root or one level down.
+- **Books** — All books on the SD card as a paginated cover grid (6 per page, page indicator bottom right), sorted by recency (recently opened first, then alphabetical). The title sits below each cover, and reading progress is a badge on the cover: "New" for unstarted books, "Read" for finished ones, else the percentage. Covers and titles are auto-generated from EPUB metadata on first visit; manga covers use the first page image and title/author from `meta.bin`. The scan walks every folder on the card, at any depth, so books and manga don't need to sit at the SD card root or one level down.
 - **Shelves** — Folders on the SD card that contain books, shown as a list with a cover thumbnail, folder name, book count, and a chevron. Tap a shelf to see all books in that folder as a cover grid with progress.
 
 Tab switching uses the same pattern as Settings: Confirm cycles tabs when the tab row is focused, hold Up/Down to switch tabs from anywhere.
