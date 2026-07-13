@@ -176,6 +176,18 @@ void WordSelectionScan::reset() {
   restoredCursorIndex = kNoRestoredCursor;
 }
 
+void WordSelectionScan::restartStepScan() {
+  // Keep allGlyphs -- only the step-scan state is rewound. selectableGlyphs/selectToAllIdx are
+  // rebuilt from scratch by the re-walk (they must stay in lockstep, so both clear together).
+  selectableGlyphs.clear();
+  selectToAllIdx.clear();
+  phase = Phase::Scan;
+  scanPos = 0;
+  skipUntil = 0;
+  scanTruncated = false;
+  restoredCursorIndex = kNoRestoredCursor;
+}
+
 void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
   reset();
   reserveGlyphsSafe(allGlyphs, page.glyphs.size());

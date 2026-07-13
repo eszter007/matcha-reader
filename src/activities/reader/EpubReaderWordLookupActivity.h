@@ -62,6 +62,11 @@ class EpubReaderWordLookupActivity final : public Activity {
   void reclaimFontHeap();
   void initScanFromCacheOrBurst(const char* label);
   void runInitialBurst(const char* label);
+  // Wraps scan.step(): if the scan aborted a walk under low heap (fewer entries than the page
+  // really has), release the font caches once and restart the walk over the intact glyph list,
+  // so a fragmented first open self-heals instead of the user having to reopen via the menu.
+  bool stepScan(uint32_t budgetMs);
+  bool scanHealAttempted = false;
   void moveCursor(int delta);
   void performLookup();
   void performLookupImpl();

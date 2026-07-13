@@ -893,6 +893,13 @@ bool EpubReaderActivity::launchKOReaderSync() {
     section.reset();
     verticalSection.reset();
     epub.reset();
+    // Also release the resident font caches (SD font slab + advance tables -- tens of KB on a
+    // Japanese book). Freeing the Epub alone leaves those pinned, fragmenting the heap so WiFi +
+    // the TLS handshake dip below MIN_HEAP_FOR_TLS and OOM. The Translate Page path (same
+    // handshake) already does this; the reader re-warms fonts lazily on return.
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+    }
   }
   LOG_DBG("KOSync", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
 

@@ -45,6 +45,17 @@ class WordSelectionScan {
   bool step(uint32_t maxMillis);
   bool isDone() const { return phase == Phase::Done; }
 
+  // True when initFrom*() or step() abandoned work because the heap couldn't grow a vector, so
+  // the selectable list is a partial (often tiny) result. Callers that can free heap (release
+  // font caches) then restartStepScan() to recover the full result -- see restartStepScan().
+  bool wasTruncated() const { return scanTruncated; }
+
+  // Re-run the step scan over the already-built allGlyphs after the caller has freed heap. Clears
+  // the partial selectable map, the truncation flag, and the scan cursor, but KEEPS allGlyphs
+  // (the step()-time abort never touches it), so a single low-heap rescan recovers every word the
+  // fragmented first pass dropped. No-op-safe if allGlyphs is empty.
+  void restartStepScan();
+
   // Single-slot per-book result cache: the completed selectable map for ONE (spine, page),
   // self-validated by a hash of allGlyphs (so a section rebuild with different layout/content
   // invalidates it) and the main dictionary's file size (so a dictionary swap does too). Also

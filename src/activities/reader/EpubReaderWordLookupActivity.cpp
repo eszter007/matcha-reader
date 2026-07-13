@@ -81,9 +81,29 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
   const uint32_t scanStart = millis();
   LOG_INF("WLA", "progressive scan (%s): %u characters", label, static_cast<unsigned>(scan.allGlyphs.size()));
   while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
-    scan.step(50);
+    stepScan(50);
   }
   LOG_INF("WLA", "progressive scan (%s): first word after %u ms", label, millis() - scanStart);
+}
+
+// See the header: heal a low-heap-truncated scan once by freeing fonts and re-walking the intact
+// glyph list. cursorIndex is intentionally left alone -- the rebuilt selectable list only grows,
+// and every caller already guards against an out-of-range cursor while it refills, so the user's
+// position resumes naturally once the rescan passes it again.
+bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
+  const bool done = scan.step(budgetMs);
+  if (scan.wasTruncated() && !scanHealAttempted && !scan.allGlyphs.empty()) {
+    scanHealAttempted = true;
+    LOG_INF("WLA", "Scan truncated by low heap; releasing fonts and rescanning (maxAlloc=%u)",
+            ESP.getMaxAllocHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+    scan.restartStepScan();
+    return false;  // not done -- caller keeps stepping over the freshly-reset scan
+  }
+  return done;
 }
 
 void EpubReaderWordLookupActivity::onEnter() {
@@ -131,7 +151,7 @@ void EpubReaderWordLookupActivity::moveCursor(int delta) {
   if (delta > 0 && !scan.isDone() && cursorIndex + delta >= static_cast<int>(scan.selectableGlyphs.size())) {
     const size_t want = static_cast<size_t>(cursorIndex + delta) + 1;
     while (!scan.isDone() && scan.selectableGlyphs.size() < want) {
-      scan.step(50);
+      stepScan(50);
     }
   }
   if (scan.selectableGlyphs.empty()) return;
@@ -393,7 +413,7 @@ void EpubReaderWordLookupActivity::loop() {
   // task only ever reads counter sizes -- so no lock is needed and, unlike the abandoned
   // reader-idle precompute, nothing can starve another activity's rendering.
   if (!scan.isDone()) {
-    const bool done = scan.step(40);
+    const bool done = stepScan(40);
     // The open can show "No match" if the initial burst found nothing yet -- promote the first
     // word as soon as the background scan discovers it.
     if (!hasResult && !scan.selectableGlyphs.empty()) {
