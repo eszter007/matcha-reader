@@ -384,47 +384,63 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         first--;
       }
 
-      // Collect all entries with this headword, pick highest priority and merge
-      struct Entry { std::string def; uint8_t priority; };
-      std::vector<Entry> entries;
-      constexpr int kMaxEntries = 5;
-
-      for (size_t idx = first; idx < recordCount && static_cast<int>(entries.size()) < kMaxEntries; idx++) {
+      // Two passes so the highest-priority senses win even when they sit past the first few in
+      // storage order. The index groups all same-reading records together but NOT by priority, so
+      // a reading with many homophones (ほう: 方/法/報/...袍) could bury the common word (方) behind
+      // rarer ones (袍) and the old "read the first 5, then sort those" lost it. Pass 1 walks every
+      // sibling reading ONLY the index record (priority + payload location, no .dat read); pass 2
+      // reads definitions for just the top-priority few. Pass 1 is cheap index-only SD reads; pass
+      // 2 does the same handful of .dat reads as before.
+      struct Sib {
+        uint8_t priority;
+        uint32_t offset;
+        uint16_t length;
+      };
+      constexpr size_t kMaxSiblingScan = 32;  // bound the walk for a pathological reading
+      std::vector<Sib> sibs;
+      sibs.reserve(kMaxSiblingScan);
+      for (size_t idx = first; idx < recordCount && sibs.size() < kMaxSiblingScan; idx++) {
         DictIndexRecord r;
         if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
+        sibs.push_back({r.priority, r.offset, r.length});
+      }
+      if (sibs.empty()) return false;
 
-        // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions --
-        // confirmed by a real device crash_report with the heap run down mid-lookup-session.
-        // Skip entries that don't comfortably fit (the user gets a shorter definition instead
-        // of a reboot). The size sanity cap also rejects a corrupt/misread record length
-        // before it can become a huge allocation request.
+      // Selection sort by priority (highest first) -- <=32 uint8 compares, negligible.
+      for (size_t a = 0; a < sibs.size(); a++) {
+        size_t best = a;
+        for (size_t b = a + 1; b < sibs.size(); b++)
+          if (sibs[b].priority > sibs[best].priority) best = b;
+        if (best != a) std::swap(sibs[a], sibs[best]);
+      }
+
+      // Read definitions for the top-priority siblings, already in priority order.
+      struct Entry { std::string def; uint8_t priority; };
+      std::vector<Entry> entries;
+      constexpr int kMaxEntries = 5;
+      for (size_t s = 0; s < sibs.size() && static_cast<int>(entries.size()) < kMaxEntries; s++) {
+        // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions -- confirmed
+        // by a real device crash_report with the heap run down mid-lookup-session. Skip entries
+        // that don't comfortably fit (shorter definition instead of a reboot); the size cap also
+        // rejects a corrupt/misread record length before it becomes a huge allocation request.
         constexpr uint32_t MAX_DEF_BYTES = 16 * 1024;
-        if (r.length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < r.length + 8 * 1024) {
-          LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(r.length),
+        if (sibs[s].length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < sibs[s].length + 8 * 1024) {
+          LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(sibs[s].length),
                   ESP.getMaxAllocHeap());
-          if (entries.empty()) continue;  // keep trying: a later sibling entry may be smaller
+          if (entries.empty()) continue;  // keep trying: a lower-priority sibling may be smaller
           break;
         }
-
-        datFile.seek(r.offset);
+        datFile.seek(sibs[s].offset);
         std::string def;
-        def.resize(r.length);
-        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), r.length) != static_cast<int>(r.length)) continue;
-
-        entries.push_back({std::move(def), r.priority});
+        def.resize(sibs[s].length);
+        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) !=
+            static_cast<int>(sibs[s].length))
+          continue;
+        entries.push_back({std::move(def), sibs[s].priority});
       }
 
       if (entries.empty()) return false;
-
-      // Sort by priority (highest first)
-      for (size_t a = 0; a < entries.size(); a++) {
-        for (size_t b = a + 1; b < entries.size(); b++) {
-          if (entries[b].priority > entries[a].priority) {
-            std::swap(entries[a], entries[b]);
-          }
-        }
-      }
 
       out.headword = headword;
       out.priority = entries[0].priority;
