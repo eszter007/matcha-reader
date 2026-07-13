@@ -36,6 +36,13 @@ void ButtonNavigator::onPress(const Buttons& buttons, const Callback& callback) 
 
   if (wasPressed) {
     callback();
+    // Stamp the nav time AFTER the callback: onPressAndContinuous() runs onContinuous() right
+    // after this in the SAME loop iteration, and if the callback blocked (e.g. a slow e-ink render
+    // in Word Lookup held the render lock ~0.5s), getHeldTime() has now crossed continuousStartMs
+    // -- so without this stamp, that onContinuous() fires a SECOND step from one physical press
+    // (the reported "10 jumps to 12" skip). Stamping now forces continuous repeats to wait a full
+    // continuousIntervalMs, so a single tap moves exactly one step no matter how slow the render.
+    lastContinuousNavTime = millis();
   }
 }
 
