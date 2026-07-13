@@ -316,7 +316,7 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 }
 
 namespace {
-constexpr uint32_t WLSCAN_MAGIC = 0x33534C57;  // "WLS3" -- bumped to discard low-heap-poisoned caches
+constexpr uint32_t WLSCAN_MAGIC = 0x36534C57;  // "WLS6" -- particle-led (は+あり) + all-noise multi-char (ふんふん) fixes
 
 // Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
 // scans (segmentation depends on the dictionary). File size is not a perfect identity, but any
@@ -515,15 +515,19 @@ void WordSelectionScan::scanOnePosition() {
       }
     }
 
-    // A case particle that matched exactly 2 chars (にど, のと) usually
-    // mis-segments: the 2nd character starts a longer real word (どっさり,
-    // ところ). If so, don't let the particle consume it — pass through so the
-    // next char begins the longer word.
+    // A match that STARTS with a case/topic particle usually mis-segments: the particle should
+    // stand alone and the character after it begins the real word. Two examples:
+    //   にど (2) -> に + どっさり,   はあり (3, =羽蟻 "winged ant") -> は + ありません(ある).
+    // Suppress the particle-led match (pass through so the next char starts the real word) only
+    // when the word beginning one char later is AT LEAST AS LONG as this match. That length test
+    // is what keeps genuine words that merely begin with a particle-kana intact: とても (3) has
+    // remainder ても (2) < 3 so it stays, ところ/における likewise, while 羽蟻's remainder
+    // ありません (5) >= 3 correctly loses to the split.
     auto isCaseParticle = [](uint32_t cp) {
       return cp == 0x306B || cp == 0x306E || cp == 0x3068 || cp == 0x304C || cp == 0x306F ||
              cp == 0x3092 || cp == 0x3082 || cp == 0x3067 || cp == 0x3078 || cp == 0x3084 || cp == 0x304B;
     };
-    if (hasMatch && matchChars == 2 && isCaseParticle(allGlyphs[scanStart].codepoint) &&
+    if (hasMatch && matchChars >= 2 && isCaseParticle(allGlyphs[scanStart].codepoint) &&
         scanStart + 1 < allGlyphs.size() && allGlyphs[scanStart + 1].paragraphIndex == paraIdx) {
       std::string nextText;
       int nc = 0;
@@ -545,7 +549,9 @@ void WordSelectionScan::scanOnePosition() {
           else pp += 4;
           nmc++;
         }
-        if (nmc >= 2) hasMatch = false;  // let the next char start the longer word
+        // >= matchChars keeps the original 2-char behavior (nmc>=2) and extends it to longer
+        // particle-led mis-segmentations without disturbing real particle-initial words.
+        if (nmc >= matchChars) hasMatch = false;  // let the next char start the longer word
       }
     }
 
@@ -699,9 +705,14 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
       else p += 4;
       mc++;
     }
-    // Filter: all matched chars are noise particles → skip
-    bool allNoise = true;
-    for (size_t ci = allIdx; ci < allIdx + static_cast<size_t>(mc) && ci < allGlyphs.size(); ci++) {
+    // Filter: a SHORT match whose every char is an individually-noise kana (は, が, には, では)
+    // is a stray particle / particle-combo, not a lookup-worthy word. Cap this at <=2 chars: the
+    // noise list is a set of single kana, and many real 3-4 char words are built entirely from
+    // them -- mimetics like ふんふん/きらきら and words like とても/ところ. Filtering those by the
+    // per-char list dropped them from the page (reported: ふんふん skipped). A genuine 3+ char
+    // dictionary match is kept.
+    bool allNoise = mc <= 2;
+    for (size_t ci = allIdx; allNoise && ci < allIdx + static_cast<size_t>(mc) && ci < allGlyphs.size(); ci++) {
       if (!isDisplayNoise(allGlyphs[ci].codepoint)) { allNoise = false; break; }
     }
     if (allNoise) return false;
