@@ -2,6 +2,7 @@
 
 #include <Epub.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -127,6 +128,14 @@ void SleepActivity::renderTransparentSleepScreen() const {
 // PNG overlays render through the shared PNG->framebuffer decoder with alphaMask set:
 // alpha < 128 keeps the book page, everything else -- including white -- covers it.
 bool SleepActivity::renderPngOverlaySleepImage(const std::string& path) const {
+  // The PNG decoder needs ~60KB free heap. Auto-sleep from the reader leaves the book's fonts
+  // resident, which starves it -- getDimensionsStatic()/decode then fail and the transparent
+  // overlay silently falls back to the plain custom screen (the reported bug). Release the font
+  // caches first: the retained framebuffer (the book page the overlay shows through) is a separate
+  // buffer and is unaffected, and fonts reload on wake.
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  LOG_DBG("SLP", "PNG overlay: free=%u maxAlloc=%u after font release", (unsigned)ESP.getFreeHeap(),
+          (unsigned)ESP.getMaxAllocHeap());
   ImageDimensions dims{};
   if (!PngToFramebufferConverter::getDimensionsStatic(path, dims)) return false;
   if (dims.width <= 0 || dims.height <= 0) return false;
