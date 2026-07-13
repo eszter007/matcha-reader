@@ -56,6 +56,15 @@ static constexpr Rule kRules[] = {
     {"\xe3\x81\xa6\xe3\x81\x8a\xe3\x81\x8f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ておく→る (do in advance)
     {"\xe3\x81\xa6\xe3\x81\x97\xe3\x81\xbe\xe3\x81\x86", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てしまう→る
     {"\xe3\x81\xa6\xe3\x81\x97\xe3\x81\xbe\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てしまった→る
+    // Colloquial PAST contractions of てしまった / でしまった: strip the しまった part, leaving the
+    // bare te-form (keeping euphonic っ/ん/い) which the te-form rules below reduce to every verb
+    // class -- たまっちゃった -> たまって -> たまる, 死んじゃった -> 死んで -> 死ぬ. Only the PAST
+    // (った) forms: the present ちゃう/じゃう were tried and removed -- a godan renyoukei い→う rule
+    // turns ～ちゃい into ～ちゃう, so ちゃう→て mis-ate the い of the common ～ちゃいけない ("must
+    // not", where ちゃ = ては, NOT ちゃう). Greedy segmentation can't resolve that ちゃ ambiguity;
+    // the past forms don't end in い so they don't hit it.
+    {"\xe3\x81\xa1\xe3\x82\x83\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\xa6", WordCondition::DICT, WordCondition::DICT},  // ちゃった→て
+    {"\xe3\x81\x98\xe3\x82\x83\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\xa7", WordCondition::DICT, WordCondition::DICT},  // じゃった→で
     {"\xe3\x81\xa6\xe3\x81\xbf\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てみる→る (try doing)
     {"\xe3\x81\xa6\xe3\x81\xbf\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てみた→る
     {"\xe3\x81\xa6\xe3\x81\x82\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てある→る (state result)

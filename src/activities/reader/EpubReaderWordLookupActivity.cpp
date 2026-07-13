@@ -260,6 +260,46 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     }
   }
 
+  // Fictional katakana name + honorific (ヘムレンさん): if the dictionary only covers a prefix of
+  // the name (ヘム) or nothing, show the whole katakana run instead. It has no dictionary entry,
+  // so the definition body stays empty -- but it reads as one name rather than "heme". Dictionary
+  // names (スナフキン) cover the whole run, so this branch doesn't fire for them.
+  const size_t nameRun = WordSelectionScan::katakanaNameRunBeforeHonorific(text);
+  if (nameRun >= 2) {
+    WordLookupResult nr;
+    int nrChars = 0;
+    if (WordLookup::lookup(text, 0, nr)) {
+      size_t pos = 0;
+      while (pos < nr.matchLength && pos < text.size()) {
+        auto c = static_cast<unsigned char>(text[pos]);
+        if (c < 0x80) pos += 1;
+        else if ((c & 0xE0) == 0xC0) pos += 2;
+        else if ((c & 0xF0) == 0xE0) pos += 3;
+        else pos += 4;
+        nrChars++;
+      }
+    }
+    if (static_cast<int>(nameRun) > nrChars) {
+      size_t nb = 0;
+      int nc = 0;
+      while (nb < text.size() && nc < static_cast<int>(nameRun)) {
+        auto c = static_cast<unsigned char>(text[nb]);
+        if (c < 0x80) nb += 1;
+        else if ((c & 0xE0) == 0xC0) nb += 2;
+        else if ((c & 0xF0) == 0xE0) nb += 3;
+        else nb += 4;
+        nc++;
+      }
+      hasResult = true;
+      resultHeadword = digitPrefix + text.substr(0, nb);
+      resultDefinition = tr(STR_LOOKUP_NAME);  // no dictionary entry -- label it as a name
+      resultMatchLen = static_cast<int>(nameRun);
+      requestUpdate();  // this early return would otherwise skip the requestUpdate() at the end,
+                        // leaving the name un-rendered (screen keeps the previous word -> looks skipped)
+      return;
+    }
+  }
+
   WordLookupResult result;
   if (WordLookup::lookup(text, 0, result)) {
     WordSelectionScan::stripTrailingParticle(text, result);
@@ -439,12 +479,31 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
   // same fix, and same root cause, as the vertical-page-turn slowness fixed earlier this session.
   // Without this, dictionary definitions (which merge up to 5 entries and can run to hundreds of
   // characters spanning many different compressed font groups) fall through the slow one-by-one
-  // glyph fallback path a character at a time.
+  // glyph fallback path a character at a time. ONE prewarm per string: the FontDecompressor reuses
+  // its 4 page-buffer slots WITHIN a call but not across calls, so per-line prewarming exhausts
+  // them ("All 4 slots full") and is slower, not faster.
   if (hasResult) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
       fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      // Prewarm only the ON-SCREEN slice of the definition, in ONE call. A merged 5-entry
+      // definition can run to thousands of bytes, but only ~13 lines show; warming the whole
+      // thing was the ~1s-per-step navigation cost (renders serialize on the RenderLock, so a
+      // slow render stalls the next keypress). ~1KB covers a full screen of Latin OR CJK. Only
+      // when scrollOffset==0 (navigating a new word); a scrolled view warms the whole definition
+      // since its visible window is further in. ONE call, not per-line: the decompressor reuses
+      // its 4 page-buffer slots within a call but not across calls.
+      constexpr size_t kVisiblePrewarmBytes = 1024;
+      if (scrollOffset == 0 && resultDefinition.size() > kVisiblePrewarmBytes) {
+        size_t cut = kVisiblePrewarmBytes;  // back up to a UTF-8 lead byte so the last char is whole
+        while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
+        const char saved = resultDefinition[cut];
+        resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
+        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        resultDefinition[cut] = saved;
+      } else {
+        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      }
     }
   }
 

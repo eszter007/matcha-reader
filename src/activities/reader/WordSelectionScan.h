@@ -84,6 +84,13 @@ class WordSelectionScan {
   static bool isHiragana(uint32_t cp);
   static bool isCJK(uint32_t cp);
   static bool isDigitCp(uint32_t cp);
+  // A katakana run of >=2 chars immediately followed by an honorific (さん/くん/ちゃん/さま/様/氏)
+  // is almost always a proper name being addressed, so it should stay one unit even when no
+  // dictionary covers it -- otherwise a fictional name fragments into unrelated real sub-words
+  // (ヘムレンさん -> ヘム=heme + レン). Returns the katakana run length IN CHARS, or 0 if `text`
+  // (from byte 0) doesn't start with such a name+honorific pattern. Shared by the scan (to group
+  // the selectable unit) and the runtime lookup (to display the whole name).
+  static size_t katakanaNameRunBeforeHonorific(const std::string& text);
   // A greedy dictionary match can absorb a trailing case-particle onto a kanji stem (東の, 私は)
   // and land on a junk entry. When the match is [kanji...][particle] and the stem alone is a
   // valid word, shorten `result` to the stem.

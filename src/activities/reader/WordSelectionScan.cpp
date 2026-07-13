@@ -66,6 +66,42 @@ bool WordSelectionScan::isDigitCp(uint32_t cp) {
   return (cp >= '0' && cp <= '9') || (cp >= 0xFF10 && cp <= 0xFF19);
 }
 
+size_t WordSelectionScan::katakanaNameRunBeforeHonorific(const std::string& text) {
+  // Decode the leading codepoints (a name+honorific never needs more than kMaxLookupChars).
+  uint32_t cps[kMaxLookupChars];
+  size_t n = 0;
+  for (size_t b = 0; b < text.size() && n < kMaxLookupChars;) {
+    const auto c = static_cast<unsigned char>(text[b]);
+    if (c < 0x80) {
+      cps[n++] = c;
+      b += 1;
+    } else if ((c & 0xE0) == 0xC0 && b + 1 < text.size()) {
+      cps[n++] = ((c & 0x1F) << 6) | (static_cast<unsigned char>(text[b + 1]) & 0x3F);
+      b += 2;
+    } else if ((c & 0xF0) == 0xE0 && b + 2 < text.size()) {
+      cps[n++] = ((c & 0x0F) << 12) | ((static_cast<unsigned char>(text[b + 1]) & 0x3F) << 6) |
+                 (static_cast<unsigned char>(text[b + 2]) & 0x3F);
+      b += 3;
+    } else {
+      break;
+    }
+  }
+
+  // Leading katakana run (>=2 chars). Long-vowel ー is katakana here (ムーミン), 中黒 ・ is not.
+  size_t run = 0;
+  while (run < n && isKatakana(cps[run]) && cps[run] != 0x30FB) run++;
+  if (run < 2) return 0;
+
+  // Honorific immediately after the run.
+  const auto at = [&](size_t idx) -> uint32_t { return idx < n ? cps[idx] : 0; };
+  const size_t k = run;
+  const bool honorific = (at(k) == 0x3055 && (at(k + 1) == 0x3093 || at(k + 1) == 0x307E)) ||  // さん / さま
+                         (at(k) == 0x304F && at(k + 1) == 0x3093) ||                            // くん
+                         (at(k) == 0x3061 && at(k + 1) == 0x3083 && at(k + 2) == 0x3093) ||     // ちゃん
+                         at(k) == 0x69D8 || at(k) == 0x6C0F;                                    // 様 / 氏
+  return honorific ? run : 0;
+}
+
 bool WordSelectionScan::stripTrailingParticle(const std::string& text, WordLookupResult& result,
                                               const bool needDefinition) {
   if (result.matchLength == 0) return false;
@@ -316,7 +352,7 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 }
 
 namespace {
-constexpr uint32_t WLSCAN_MAGIC = 0x36534C57;  // "WLS6" -- particle-led (は+あり) + all-noise multi-char (ふんふん) fixes
+constexpr uint32_t WLSCAN_MAGIC = 0x42534C57;  // "WLSB" -- small-kana guard, katakana-name grouping, ~そう filter, past-only ちゃ contraction
 
 // Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
 // scans (segmentation depends on the dictionary). File size is not a perfect identity, but any
@@ -458,6 +494,22 @@ void WordSelectionScan::scanOnePosition() {
     return;
   }
 
+  // No Japanese word begins with a small kana -- sokuon っ, small ゃゅょ, small vowels ぁぃぅぇぉ,
+  // ゎ (and their katakana forms). A match starting on one is always a mid-word fragment left by an
+  // unhandled contraction (reported: っち out of たまっちゃった). Never start a lookup there; the
+  // char is still covered by the preceding word's skipUntil when that word segmented correctly.
+  if (scanStart < allGlyphs.size()) {
+    switch (allGlyphs[scanStart].codepoint) {
+      case 0x3041: case 0x3043: case 0x3045: case 0x3047: case 0x3049:  // ぁぃぅぇぉ
+      case 0x3063: case 0x3083: case 0x3085: case 0x3087: case 0x308E:  // っ ゃゅょ ゎ
+      case 0x30A1: case 0x30A3: case 0x30A5: case 0x30A7: case 0x30A9:  // ァィゥェォ
+      case 0x30C3: case 0x30E3: case 0x30E5: case 0x30E7: case 0x30EE:  // ッ ャュョ ヮ
+        return;
+      default:
+        break;
+    }
+  }
+
   // Build lookup text from the first non-digit char
   std::string text;
   int charCount = 0;
@@ -552,6 +604,17 @@ void WordSelectionScan::scanOnePosition() {
         // >= matchChars keeps the original 2-char behavior (nmc>=2) and extends it to longer
         // particle-led mis-segmentations without disturbing real particle-initial words.
         if (nmc >= matchChars) hasMatch = false;  // let the next char start the longer word
+      }
+    }
+
+    // Fictional katakana name + honorific: group the whole run as one selectable unit even when
+    // the dictionary only covers a prefix (ヘム of ヘムレン) or nothing. Dictionary names
+    // (スナフキン) already match the whole run, so this is a no-op for them.
+    if (isKatakana(allGlyphs[scanStart].codepoint)) {
+      const size_t nameRun = katakanaNameRunBeforeHonorific(text);
+      if (nameRun >= 2 && static_cast<int>(nameRun) > matchChars) {
+        hasMatch = true;
+        matchChars = static_cast<int>(nameRun);
       }
     }
 
@@ -720,12 +783,18 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
     // Exact-match colloquial/grammatical contractions that are never useful as
     // standalone vocabulary (なくちゃ→ちゃ, じゃ, etc.). Use the exact matched
     // text so real words (茶碗/ちゃわん) are not filtered.
+    // そうに/そうな/そうだ are the ～そう "seeming/appears" auxiliary (心配そうに); their only
+    // dictionary hit is the rare homophone 僧尼 ("monks and nuns") and no grammar entry covers
+    // them, so as standalone lookups they are just misleading -- filter them out.
     const std::string matchedText = ltext.substr(0, lr.matchLength);
     static const char* const exactNoise[] = {
       "\xe3\x81\xa1\xe3\x82\x83",  // ちゃ
       "\xe3\x81\x98\xe3\x82\x83",  // じゃ
       "\xe3\x81\xa1\xe3\x82\x83\xe3\x81\x86",  // ちゃう
       "\xe3\x81\xa3\xe3\x81\xa6",  // って
+      "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xab",  // そうに
+      "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xaa",  // そうな
+      "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xa0",  // そうだ
       nullptr
     };
     for (int e = 0; exactNoise[e]; e++) {
