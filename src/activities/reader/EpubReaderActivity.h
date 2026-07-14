@@ -36,6 +36,34 @@ class EpubReaderActivity final : public Activity {
   int pagesUntilFullRefresh = 0;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
+
+  // Snapshot of the layout-affecting settings the currently-resident section was
+  // built with. The reader menu is pushed on top of this activity, so editing a
+  // setting (e.g. screenMargin) never null-resets the section -- the new value
+  // moves the draw origin but the cached line layout keeps the old width, so text
+  // overflows one side until the book is reopened. render() compares this against
+  // the current settings and reflows in place on a mismatch.
+  struct LayoutSig {
+    int fontId = -1;
+    uint16_t viewportWidth = 0;
+    uint16_t viewportHeight = 0;
+    float lineCompression = 0.0f;
+    uint8_t paragraphAlignment = 0;
+    bool extraParagraphSpacing = false;
+    bool hyphenationEnabled = false;
+    bool embeddedStyle = false;
+    uint8_t imageRendering = 0;
+    bool focusReadingEnabled = false;
+    bool operator==(const LayoutSig& o) const {
+      return fontId == o.fontId && viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight &&
+             lineCompression == o.lineCompression && paragraphAlignment == o.paragraphAlignment &&
+             extraParagraphSpacing == o.extraParagraphSpacing && hyphenationEnabled == o.hyphenationEnabled &&
+             embeddedStyle == o.embeddedStyle && imageRendering == o.imageRendering &&
+             focusReadingEnabled == o.focusReadingEnabled;
+    }
+    bool operator!=(const LayoutSig& o) const { return !(*this == o); }
+  };
+  LayoutSig sectionLayoutSig;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   // Signals that the next render should reposition within the newly loaded section

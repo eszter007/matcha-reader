@@ -1071,6 +1071,41 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   lastViewportWidth = viewportWidth;
   lastViewportHeight = viewportHeight;
 
+  // Reflow a resident section when a layout-affecting setting changed under it.
+  // The reader menu is pushed on top of this activity, so editing e.g. screenMargin
+  // never null-resets the section: the new margin moves the draw origin (oL/oR) but
+  // the cached line layout keeps the old viewport width, so justified text overflows
+  // one side until the book is reopened. Detect the change and reflow in place,
+  // preserving the reading position the same way applyOrientation() does. This runs
+  // in the render task, which already holds the render lock, so no RenderLock here.
+  {
+    const LayoutSig currentSig{effectiveReaderFontId(),
+                               viewportWidth,
+                               viewportHeight,
+                               SETTINGS.getReaderLineCompression(),
+                               SETTINGS.paragraphAlignment,
+                               static_cast<bool>(SETTINGS.extraParagraphSpacing),
+                               static_cast<bool>(SETTINGS.hyphenationEnabled),
+                               static_cast<bool>(SETTINGS.embeddedStyle),
+                               SETTINGS.imageRendering,
+                               static_cast<bool>(SETTINGS.focusReadingEnabled)};
+    if ((section || verticalSection) && currentSig != sectionLayoutSig) {
+      LOG_DBG("ERS", "Layout params changed; reflowing section in place");
+      if (verticalSection) {
+        cachedSpineIndex = currentSpineIndex;
+        cachedChapterTotalPageCount = verticalSection->pageCount;
+        nextPageNumber = verticalSection->currentPage;
+      } else if (section) {
+        cachedSpineIndex = currentSpineIndex;
+        cachedChapterTotalPageCount = section->pageCount;
+        nextPageNumber = section->currentPage;
+      }
+      section.reset();
+      verticalSection.reset();
+    }
+    sectionLayoutSig = currentSig;
+  }
+
   // Low-heap floor for the resume-into-book path. A sleep wake reboots straight into the reader
   // (lastSleepFromReader) and renders on whatever fragmented heap the boot produced -- unlike
   // opening from home, which the reporter confirms is always clean. On the X3 the wider 528px
