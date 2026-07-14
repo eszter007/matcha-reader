@@ -645,26 +645,6 @@ void loop() {
     return;
   }
 
-  // Idle panel-off: after this long without user activity, cut the e-ink DC/DC
-  // rails. Leaving the panel powered indefinitely lets its high-voltage state
-  // drift the image toward gray within minutes and — per the panel maker's
-  // precaution — risks permanent damage. The image persists with the panel off;
-  // the next render powers it back on (the SDK forces a clean HALF refresh on
-  // wake). No-op once already off, so it costs nothing when Sunlight Fading Fix
-  // (per-refresh power-off) is enabled, and it never fights an auto-sleep that
-  // has already put the panel to sleep. Kept short enough to protect the panel
-  // yet long enough not to disturb active reading (only a paused reader is hit,
-  // and only with one clean HALF refresh on resume).
-  static constexpr unsigned long IDLE_PANEL_OFF_MS = 45000;
-  if (!display.isScreenPoweredOff() && millis() - lastActivityTime >= IDLE_PANEL_OFF_MS) {
-    LOG_DBG("SLP", "Idle panel-off after %lu ms — cutting e-ink rails", IDLE_PANEL_OFF_MS);
-    RenderLock lock;
-    // Re-drive the current (unchanged) content with a fast, near-invisible
-    // differential refresh, then power down. GfxRenderer::displayBuffer can't
-    // request turnOffScreen, so go through HalDisplay directly.
-    display.refreshDisplay(HalDisplay::FAST_REFRESH, /*turnOffScreen=*/true);
-  }
-
   // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
