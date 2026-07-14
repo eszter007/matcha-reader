@@ -159,12 +159,7 @@ bool SleepActivity::renderPngOverlaySleepImage(const std::string& path) const {
 
   PngToFramebufferConverter converter;
   if (!converter.decodeToFramebuffer(path, renderer, config)) return false;
-  // FULL (not HALF) refresh for the sleep image: a half/fast waveform only drives
-  // pixels to a "good enough" state, so over the hours the device sits asleep they
-  // relax toward mid-gray (worse when the bag is warm). A full refresh drives every
-  // pixel to its deep black/white rail, which holds far longer. The extra ~1-2s and
-  // the black/white flash are fine for the last frame before deep sleep.
-  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   return true;
 }
 
@@ -330,9 +325,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool ove
     // plain HALF refresh (previous behavior).
     renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   } else {
-    // FULL refresh so the BW cover/overlay is set deeply and resists graying over
-    // the hours asleep (see renderPngOverlaySleepImage for the rationale).
-    renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   }
 
   if (hasGreyscale) {
@@ -435,12 +428,10 @@ void SleepActivity::renderCoverSleepScreen() const {
 void SleepActivity::renderLastScreenSleepScreen() const {
   const auto pageHeight = renderer.getScreenHeight();
   renderer.drawImage(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
-  // FULL refresh for deep, drift-resistant retention while asleep (see
-  // renderPngOverlaySleepImage for the rationale).
-  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 
 void SleepActivity::renderBlankSleepScreen() const {
   renderer.clearScreen();
-  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
