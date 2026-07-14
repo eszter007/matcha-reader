@@ -44,6 +44,14 @@ class HalDisplay {
   // Power management
   void deepSleep();
 
+  // True when the e-ink DC/DC rails are currently powered down (last drive was
+  // turnOffScreen=true, or deepSleep()). Mirrors the SDK's private isScreenOn
+  // state: every panel drive routes through HalDisplay, so this is an accurate
+  // main-side view without touching the SDK. Used by the main loop to decide
+  // whether an idle panel-off is needed (and to avoid re-driving an already-off
+  // panel, which would force a visible wake refresh). See src/main.cpp.
+  bool isScreenPoweredOff() const { return screenPoweredOff; }
+
   // Access to frame buffer
   uint8_t* getFrameBuffer() const;
 
@@ -81,6 +89,10 @@ class HalDisplay {
 
  private:
   EInkDisplay einkDisplay;
+
+  // Mirror of the panel's power state (false = powered on, the post-begin()
+  // default). Updated by every method that drives or powers the panel.
+  bool screenPoweredOff = false;
 };
 
 extern HalDisplay display;
