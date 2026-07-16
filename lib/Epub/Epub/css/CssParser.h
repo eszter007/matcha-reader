@@ -34,7 +34,8 @@ class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
   // v10: border byte became a per-edge mask (v9 briefly stored a bool -- same size, new meaning)
-  static constexpr uint8_t CSS_CACHE_VERSION = 10;
+  // v11: +textEmphasis/fontVariant/listStyleType bytes and defined bits 19-21
+  static constexpr uint8_t CSS_CACHE_VERSION = 11;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -229,6 +230,8 @@ class CssParser {
   static CssFontStyle interpretFontStyle(std::string_view val);
   static CssFontWeight interpretFontWeight(std::string_view val);
   static CssTextDecoration interpretDecoration(std::string_view val);
+  static CssTextEmphasis interpretTextEmphasis(std::string_view val);
+  static CssListStyleType interpretListStyleType(std::string_view val);
   static CssLength interpretLength(std::string_view val);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */
   static bool tryInterpretLength(std::string_view val, CssLength& out);

@@ -260,6 +260,34 @@ CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
   return CssTextDecoration::None;
 }
 
+CssTextEmphasis CssParser::interpretTextEmphasis(std::string_view val) {
+  // Value is fill + shape in either order ("filled sesame", "open dot", ...).
+  // "none" wins outright; a missing fill keyword means filled per the CSS spec.
+  if (icontainsAscii(val, "none")) return CssTextEmphasis::None;
+  const bool open = icontainsAscii(val, "open");
+  if (icontainsAscii(val, "sesame")) return open ? CssTextEmphasis::OpenSesame : CssTextEmphasis::FilledSesame;
+  if (icontainsAscii(val, "double-circle"))
+    return open ? CssTextEmphasis::OpenDoubleCircle : CssTextEmphasis::FilledDoubleCircle;
+  if (icontainsAscii(val, "circle")) return open ? CssTextEmphasis::OpenCircle : CssTextEmphasis::FilledCircle;
+  if (icontainsAscii(val, "triangle")) return open ? CssTextEmphasis::OpenTriangle : CssTextEmphasis::FilledTriangle;
+  if (icontainsAscii(val, "dot")) return open ? CssTextEmphasis::OpenDot : CssTextEmphasis::FilledDot;
+  // Bare "filled"/"open" (or a string mark we don't support): default shape.
+  // JP bouten convention is the sesame dot, which is also what EBPAJ books use.
+  return open ? CssTextEmphasis::OpenSesame : CssTextEmphasis::FilledSesame;
+}
+
+CssListStyleType CssParser::interpretListStyleType(std::string_view val) {
+  if (icontainsAscii(val, "none")) return CssListStyleType::NoMarker;
+  if (icontainsAscii(val, "square")) return CssListStyleType::Square;
+  if (icontainsAscii(val, "circle")) return CssListStyleType::Circle;
+  // Numbered and alphabetic/roman ordered types all render as decimal numbers.
+  if (icontainsAscii(val, "decimal") || icontainsAscii(val, "alpha") || icontainsAscii(val, "roman") ||
+      icontainsAscii(val, "latin")) {
+    return CssListStyleType::Decimal;
+  }
+  return CssListStyleType::Disc;
+}
+
 CssLength CssParser::interpretLength(std::string_view val) {
   CssLength result;
   tryInterpretLength(val, result);
@@ -330,6 +358,19 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
   } else if (iequalsAscii(name, "text-indent")) {
     style.textIndent = interpretLength(value);
     style.defined.textIndent = 1;
+  } else if (iequalsAscii(name, "text-emphasis-style") || iequalsAscii(name, "text-emphasis") ||
+             iequalsAscii(name, "-epub-text-emphasis-style") || iequalsAscii(name, "-webkit-text-emphasis-style") ||
+             iequalsAscii(name, "-epub-text-emphasis") || iequalsAscii(name, "-webkit-text-emphasis")) {
+    style.textEmphasis = interpretTextEmphasis(value);
+    style.defined.textEmphasis = 1;
+  } else if (iequalsAscii(name, "font-variant") || iequalsAscii(name, "font-variant-caps")) {
+    // Only small-caps matters for rendering; anything else resets to normal.
+    style.fontVariant =
+        (value.find("small-caps") != std::string_view::npos) ? CssFontVariant::SmallCaps : CssFontVariant::Normal;
+    style.defined.fontVariant = 1;
+  } else if (iequalsAscii(name, "list-style-type") || iequalsAscii(name, "list-style")) {
+    style.listStyleType = interpretListStyleType(value);
+    style.defined.listStyleType = 1;
   } else if (iequalsAscii(name, "margin-top")) {
     style.marginTop = interpretLength(value);
     style.defined.marginTop = 1;
@@ -818,7 +859,8 @@ bool CssParser::saveToCache() const {
 }
 
 // One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 11 CssLength
-// (float value + unit byte) + display + verticalAlign + definedBits(4).
+// (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
+// fontVariant + listStyleType + definedBits(4).
 void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, const CssStyle& style) {
   const auto selectorLen = static_cast<uint16_t>(selector.size());
   file.write(reinterpret_cast<const uint8_t*>(&selectorLen), sizeof(selectorLen));
@@ -849,6 +891,9 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   file.write(static_cast<uint8_t>(style.display));
   file.write(static_cast<uint8_t>(style.verticalAlign));
   file.write(style.borderEdges);
+  file.write(static_cast<uint8_t>(style.textEmphasis));
+  file.write(static_cast<uint8_t>(style.fontVariant));
+  file.write(static_cast<uint8_t>(style.listStyleType));
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -870,6 +915,9 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   if (style.defined.direction) definedBits |= 1 << 16;
   if (style.defined.verticalAlign) definedBits |= 1 << 17;
   if (style.defined.border) definedBits |= 1 << 18;
+  if (style.defined.textEmphasis) definedBits |= 1 << 19;
+  if (style.defined.fontVariant) definedBits |= 1 << 20;
+  if (style.defined.listStyleType) definedBits |= 1 << 21;
   file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
 }
 
@@ -898,7 +946,7 @@ bool CssParser::validateCache() const {
   }
 
   // selectorLen is followed by this many fixed bytes (see writeRuleRecord).
-  constexpr size_t RULE_FIXED_BYTES = 5 + 11 * (sizeof(float) + 1) + 3 + sizeof(uint32_t);
+  constexpr size_t RULE_FIXED_BYTES = 5 + 11 * (sizeof(float) + 1) + 6 + sizeof(uint32_t);
   for (uint16_t i = 0; i < ruleCount; ++i) {
     uint16_t selectorLen = 0;
     if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) return false;
@@ -961,8 +1009,10 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     }
     if (!lenOk) break;
     uint8_t displayVal, verticalAlignVal, borderVal;
+    uint8_t emphasisVal, variantVal, listTypeVal;  // v11 record tail; unused by the vertical engine
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
+        file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
         file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
@@ -1244,6 +1294,16 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     }
     style.borderEdges = borderVal;
 
+    // Read textEmphasis + fontVariant + listStyleType (v11+)
+    uint8_t emphasisVal, variantVal, listTypeVal;
+    if (file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.textEmphasis = static_cast<CssTextEmphasis>(emphasisVal);
+    style.fontVariant = static_cast<CssFontVariant>(variantVal);
+    style.listStyleType = static_cast<CssListStyleType>(listTypeVal);
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
@@ -1269,6 +1329,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
     style.defined.border = (definedBits & 1 << 18) != 0;
+    style.defined.textEmphasis = (definedBits & 1 << 19) != 0;
+    style.defined.fontVariant = (definedBits & 1 << 20) != 0;
+    style.defined.listStyleType = (definedBits & 1 << 21) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.

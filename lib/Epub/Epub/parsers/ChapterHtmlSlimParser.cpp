@@ -31,6 +31,48 @@ constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
+
+// UTF-8 mark glyph for a text-emphasis style (JP bouten), nullptr for none.
+const char* emphasisMarkUtf8(const CssTextEmphasis e) {
+  switch (e) {
+    case CssTextEmphasis::FilledDot:
+      return "\xE2\x80\xA2";  // •
+    case CssTextEmphasis::OpenDot:
+      return "\xE2\x97\xA6";  // ◦
+    case CssTextEmphasis::FilledCircle:
+      return "\xE2\x97\x8F";  // ●
+    case CssTextEmphasis::OpenCircle:
+      return "\xE2\x97\x8B";  // ○
+    case CssTextEmphasis::FilledSesame:
+      return "\xEF\xB9\x85";  // ﹅
+    case CssTextEmphasis::OpenSesame:
+      return "\xEF\xB9\x86";  // ﹆
+    case CssTextEmphasis::FilledTriangle:
+      return "\xE2\x96\xB2";  // ▲
+    case CssTextEmphasis::OpenTriangle:
+      return "\xE2\x96\xB3";  // △
+    case CssTextEmphasis::FilledDoubleCircle:
+      return "\xE2\x97\x89";  // ◉
+    case CssTextEmphasis::OpenDoubleCircle:
+      return "\xE2\x97\x8E";  // ◎
+    default:
+      return nullptr;
+  }
+}
+
+// In-place uppercase for the small-caps approximation: ASCII a-z plus the
+// two-byte Latin-1 range (à..þ -> À..Þ, skipping ÷ and ß). We cannot render
+// true small capitals (no per-word font size), so full caps conveys the style.
+void smallCapsTransform(char* s) {
+  for (unsigned char* p = reinterpret_cast<unsigned char*>(s); *p; p++) {
+    if (*p >= 'a' && *p <= 'z') {
+      *p -= 0x20;
+    } else if (*p == 0xC3 && p[1] >= 0xA0 && p[1] <= 0xBE && p[1] != 0xB7) {
+      p[1] -= 0x20;
+      p++;
+    }
+  }
+}
 constexpr const char* BOLD_TAGS[] = {"b", "strong"};
 constexpr const char* ITALIC_TAGS[] = {"i", "em"};
 constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
@@ -100,6 +142,8 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveDirection = currentCssStyle.direction;
   effectiveSup = false;
   effectiveSub = false;
+  effectiveEmphasis = currentCssStyle.hasTextEmphasis() ? currentCssStyle.textEmphasis : CssTextEmphasis::None;
+  effectiveSmallCaps = currentCssStyle.hasFontVariant() && currentCssStyle.fontVariant == CssFontVariant::SmallCaps;
 
   // Apply inline style stack in order
   for (const auto& entry : inlineStyleStack) {
@@ -123,6 +167,12 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     if (entry.hasSub) {
       effectiveSub = entry.sub;
       if (entry.sub) effectiveSup = false;
+    }
+    if (entry.hasEmphasis) {
+      effectiveEmphasis = entry.emphasis;
+    }
+    if (entry.hasSmallCaps) {
+      effectiveSmallCaps = entry.smallCaps;
     }
   }
 
@@ -186,7 +236,30 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
+  if (effectiveSmallCaps) {
+    smallCapsTransform(partWordBuffer);
+  }
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+  if (effectiveEmphasis != CssTextEmphasis::None) {
+    if (const char* mark = emphasisMarkUtf8(effectiveEmphasis)) {
+      // Synthetic per-glyph ruby: one full-width mark per codepoint sits above
+      // each character (aligning 1:1 over full-width CJK glyphs). A real <rt>
+      // annotation following this word simply overwrites the marks - furigana
+      // wins over bouten. Marks render through the ruby path, so they follow
+      // the furigana visibility toggle.
+      int cps = 0;
+      for (int i = 0; partWordBuffer[i] != '\0'; i++) {
+        if ((static_cast<unsigned char>(partWordBuffer[i]) & 0xC0) != 0x80) cps++;
+      }
+      if (cps > 0 && cps <= 24) {
+        std::string marks;
+        const size_t markLen = strlen(mark);
+        marks.reserve(markLen * cps);
+        for (int i = 0; i < cps; i++) marks.append(mark, markLen);
+        currentTextBlock->setLastWordRuby(marks);
+      }
+    }
+  }
   partWordBufferIndex = 0;
   nextWordContinues = false;
 }
@@ -984,7 +1057,32 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
-        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);
+        // Marker per list-style-type: the li's own value wins, else the
+        // enclosing list's (bullet when the li sits outside any tracked list).
+        ListCtx* ctx = self->listDepth > 0 ? &self->listStack[std::min(self->listDepth, kMaxListDepth) - 1] : nullptr;
+        const CssListStyleType type =
+            cssStyle.hasListStyleType() ? cssStyle.listStyleType : (ctx ? ctx->type : CssListStyleType::Disc);
+        switch (type) {
+          case CssListStyleType::NoMarker:
+            break;
+          case CssListStyleType::Decimal:
+            if (ctx) {
+              char marker[8];
+              snprintf(marker, sizeof(marker), "%u.", static_cast<unsigned>(++ctx->counter));
+              self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR);
+              break;
+            }
+            [[fallthrough]];  // decimal without a list context: plain bullet
+          case CssListStyleType::Disc:
+            self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);  // •
+            break;
+          case CssListStyleType::Circle:
+            self->currentTextBlock->addWord("\xe2\x97\x8b", EpdFontFamily::REGULAR);  // ○
+            break;
+          case CssListStyleType::Square:
+            self->currentTextBlock->addWord("\xe2\x96\xa0", EpdFontFamily::REGULAR);  // ■
+            break;
+        }
       }
     }
   } else if (matches(name, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS))) {
@@ -1087,10 +1185,23 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
+  } else if (strcmp(name, "ol") == 0 || strcmp(name, "ul") == 0) {
+    // Track list nesting for list-style-type markers: <ol> counts decimal by
+    // default, <ul> draws discs; the element's own list-style-type overrides.
+    if (self->listDepth < kMaxListDepth) {
+      ListCtx ctx;
+      ctx.counter = 0;
+      ctx.type = cssStyle.hasListStyleType()
+                     ? cssStyle.listStyleType
+                     : (name[0] == 'o' ? CssListStyleType::Decimal : CssListStyleType::Disc);
+      self->listStack[self->listDepth] = ctx;
+    }
+    self->listDepth++;
   } else if (strcmp(name, "span") == 0 || !isHeaderOrBlock(name)) {
     // Handle span and other inline elements for CSS styling
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
-        cssStyle.hasDirection() || cssStyle.hasVerticalAlign()) {
+        cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || cssStyle.hasTextEmphasis() ||
+        cssStyle.hasFontVariant()) {
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -1119,6 +1230,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           entry.hasSub = true;
           entry.sub = true;
         }
+      }
+      if (cssStyle.hasTextEmphasis()) {
+        entry.hasEmphasis = true;
+        entry.emphasis = cssStyle.textEmphasis;
+      }
+      if (cssStyle.hasFontVariant()) {
+        entry.hasSmallCaps = true;
+        entry.smallCaps = cssStyle.fontVariant == CssFontVariant::SmallCaps;
       }
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -1374,6 +1493,10 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->pendingRubyText.clear();
     return;
   }
+  if (strcmp(name, "ol") == 0 || strcmp(name, "ul") == 0) {
+    if (self->listDepth > 0) self->listDepth--;
+  }
+
   if (strcmp(name, "ruby") == 0) {
     self->inRubyBlock = false;
     return;

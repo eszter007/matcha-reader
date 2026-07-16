@@ -81,6 +81,9 @@ class ChapterHtmlSlimParser {
     CssTextDirection direction = CssTextDirection::Ltr;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
+    bool hasEmphasis = false;
+    CssTextEmphasis emphasis = CssTextEmphasis::None;
+    bool hasSmallCaps = false, smallCaps = false;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -92,6 +95,21 @@ class ChapterHtmlSlimParser {
   CssTextDirection effectiveDirection = CssTextDirection::Ltr;
   bool effectiveSup = false;
   bool effectiveSub = false;
+  // Active text-emphasis mark (JP bouten) -- rendered as synthetic per-glyph ruby.
+  CssTextEmphasis effectiveEmphasis = CssTextEmphasis::None;
+  // font-variant: small-caps -- approximated by uppercasing (no per-word size support).
+  bool effectiveSmallCaps = false;
+
+  // Ordered/unordered list nesting for list-style-type markers. Fixed-depth
+  // stack: nesting past kMaxListDepth reuses the innermost tracked context.
+  struct ListCtx {
+    uint16_t counter = 0;
+    CssListStyleType type = CssListStyleType::Disc;
+  };
+  static constexpr int kMaxListDepth = 8;
+  ListCtx listStack[kMaxListDepth];
+  int listDepth = 0;
+
   int tableDepth = 0;
   int tableRowIndex = 0;
   int tableColIndex = 0;

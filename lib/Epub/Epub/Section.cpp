@@ -74,7 +74,9 @@ namespace {
 // files built under the old guard must not be reused as-is.
 // v46: "Book side margins" setting (honor vs ignore book CSS horizontal insets) is a layout
 // input; it joins the header match params and widens the header by one bool.
-constexpr uint8_t SECTION_FILE_VERSION = 46;
+// v47: text-emphasis (bouten as synthetic ruby), small-caps transform, and
+// list-style-type markers change parsed section content.
+constexpr uint8_t SECTION_FILE_VERSION = 47;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
