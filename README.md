@@ -154,6 +154,10 @@ Reading time is recorded automatically when you close a book (minimum 1 minute t
 
 The reader uses whatever font is selected in Settings (built-in Noto Serif/Sans or SD card fonts like UDDigiKyokasho). No font is auto-overridden — the user's choice is always respected.
 
+### Book Side Margins
+
+Some EPUBs stack their own CSS side margins across nested wrappers, producing a narrow, over-margined text column. By default Matcha Reader ignores the book's horizontal CSS margins/padding, so the text column's side margins come solely from the **Reader Screen Margin** setting. A **Book Side Margins** toggle (Settings → Reader) restores the upstream behavior of honoring the book's own side margins (clamped per element) — e.g. if you want blockquote and list indents back. Changing either setting reflows the open book immediately.
+
 ---
 
 ## Setup

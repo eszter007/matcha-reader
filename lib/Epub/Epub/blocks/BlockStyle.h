@@ -9,6 +9,12 @@
  * BlockStyle - Block-level styling properties
  */
 struct BlockStyle {
+  // Upper bound (in em) for any single side's horizontal margin or padding when
+  // book CSS insets are honored. Some EPUBs apply huge em-based insets to
+  // chapter-opener classes; without a cap, effectiveWidth collapses to 1-2 words
+  // per line and justification dumps the remaining space into a single gap.
+  static constexpr float MAX_HORIZONTAL_INSET_EM = 2.0f;
+
   CssTextAlign alignment = CssTextAlign::Justify;
 
   // Spacing (in pixels)
@@ -92,25 +98,29 @@ struct BlockStyle {
   // Create a BlockStyle from CSS style properties, resolving CssLength values to pixels
   // emSize is the current font line height, used for em/rem unit conversion
   // paragraphAlignment is the user's paragraphAlignment setting preference
+  // honorHorizontalInsets: when false (the "Book side margins" setting is off), the
+  // book's horizontal CSS margins/padding are zeroed so the text column's side
+  // margins come only from the reader's screenMargin setting -- nested wrappers
+  // (body + div + p) otherwise stack per-element insets into a narrow column the
+  // user can't control (blockquote/list indents are dropped too). When true, each
+  // side is honored but clamped to MAX_HORIZONTAL_INSET_EM per element. Vertical
+  // margins/padding (paragraph spacing) are always honored.
   static BlockStyle fromCssStyle(const CssStyle& cssStyle, const float emSize, const CssTextAlign paragraphAlignment,
-                                 const uint16_t viewportWidth = 0) {
+                                 const uint16_t viewportWidth = 0, const bool honorHorizontalInsets = false) {
     BlockStyle blockStyle;
     const float vw = viewportWidth;
-    // Vertical margins/padding are honored (paragraph spacing). Horizontal book
-    // CSS insets are intentionally ignored so the text column's side margins come
-    // ONLY from the reader's screenMargin setting. Otherwise nested wrappers
-    // (body + div + p) stack their per-element margins into a narrow, over-
-    // margined column the user can't control. Blockquote/list horizontal indents
-    // are dropped as a result -- an acceptable trade-off on a small screen.
     blockStyle.marginTop = cssStyle.marginTop.toPixelsInt16(emSize, vw);
     blockStyle.marginBottom = cssStyle.marginBottom.toPixelsInt16(emSize, vw);
-    blockStyle.marginLeft = 0;
-    blockStyle.marginRight = 0;
-
     blockStyle.paddingTop = cssStyle.paddingTop.toPixelsInt16(emSize, vw);
     blockStyle.paddingBottom = cssStyle.paddingBottom.toPixelsInt16(emSize, vw);
-    blockStyle.paddingLeft = 0;
-    blockStyle.paddingRight = 0;
+
+    if (honorHorizontalInsets) {
+      const auto maxHorizontalInsetPx = static_cast<int16_t>(emSize * MAX_HORIZONTAL_INSET_EM);
+      blockStyle.marginLeft = std::min(cssStyle.marginLeft.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
+      blockStyle.marginRight = std::min(cssStyle.marginRight.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
+      blockStyle.paddingLeft = std::min(cssStyle.paddingLeft.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
+      blockStyle.paddingRight = std::min(cssStyle.paddingRight.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
+    }
 
     // For textIndent: if it's a percentage we can't resolve (no viewport width),
     // leave textIndentDefined=false so the space-width fallback in resolveFirstLineIndent() is used

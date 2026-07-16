@@ -240,6 +240,9 @@ class CrossPointSettings {
 
   // Reader screen margin settings
   uint8_t screenMargin = 5;
+  // Honor the book's own horizontal CSS margins/padding (clamped per element).
+  // Default off: the text column's side margins come only from screenMargin.
+  uint8_t bookCssMargins = 0;
   // OPDS browser settings
   char opdsServerUrl[128] = "";
   char opdsUsername[64] = "";

@@ -54,12 +54,13 @@ class EpubReaderActivity final : public Activity {
     bool embeddedStyle = false;
     uint8_t imageRendering = 0;
     bool focusReadingEnabled = false;
+    bool bookCssMargins = false;
     bool operator==(const LayoutSig& o) const {
       return fontId == o.fontId && viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight &&
              lineCompression == o.lineCompression && paragraphAlignment == o.paragraphAlignment &&
              extraParagraphSpacing == o.extraParagraphSpacing && hyphenationEnabled == o.hyphenationEnabled &&
              embeddedStyle == o.embeddedStyle && imageRendering == o.imageRendering &&
-             focusReadingEnabled == o.focusReadingEnabled;
+             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins;
     }
     bool operator!=(const LayoutSig& o) const { return !(*this == o); }
   };

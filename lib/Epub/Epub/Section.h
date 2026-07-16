@@ -21,7 +21,8 @@ class Section {
 
   void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                               uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
-                              bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled);
+                              bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled,
+                              bool honorBookInsets);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
 
  public:
@@ -36,14 +37,14 @@ class Section {
   ~Section() = default;
   bool loadSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                        uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
-                       uint8_t imageRendering, bool focusReadingEnabled);
+                       uint8_t imageRendering, bool focusReadingEnabled, bool honorBookInsets);
   bool clearCache() const;
   // Reads the section-wide footnote table (v32+): (pageIndex, entry) in document order.
   // Returns false (empty out) for pre-table files or on any read error.
   bool loadSectionFootnotes(std::vector<std::pair<uint16_t, FootnoteEntry>>& out);
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
-                         uint8_t imageRendering, bool focusReadingEnabled,
+                         uint8_t imageRendering, bool focusReadingEnabled, bool honorBookInsets,
                          const std::function<void()>& popupFn = nullptr);
   std::unique_ptr<Page> loadPageFromSectionFile();
   std::string getTextFromSectionFile();

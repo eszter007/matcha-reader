@@ -1088,7 +1088,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                                static_cast<bool>(SETTINGS.hyphenationEnabled),
                                static_cast<bool>(SETTINGS.embeddedStyle),
                                SETTINGS.imageRendering,
-                               static_cast<bool>(SETTINGS.focusReadingEnabled)};
+                               static_cast<bool>(SETTINGS.focusReadingEnabled),
+                               static_cast<bool>(SETTINGS.bookCssMargins)};
     if ((section || verticalSection) && currentSig != sectionLayoutSig) {
       LOG_DBG("ERS", "Layout params changed; reflowing section in place");
       if (verticalSection) {
@@ -1401,7 +1402,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!section->loadSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                   viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                  SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+                                  SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, SETTINGS.bookCssMargins)) {
       LOG_DBG("ERS", "Cache not found, building...");
 
       GUI.drawPopup(renderer, tr(STR_INDEXING));
@@ -1419,7 +1420,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       if (!section->createSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                      SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, popupFn)) {
+                                      SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, SETTINGS.bookCssMargins,
+                                      popupFn)) {
         LOG_ERR("ERS", "Failed to persist page data to SD");
         failedSectionSpineIndex = currentSpineIndex;
         section.reset();
@@ -1591,7 +1593,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   if (nextSection.loadSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                   viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                  SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+                                  SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, SETTINGS.bookCssMargins)) {
     return;
   }
 
@@ -1599,7 +1601,8 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   if (!nextSection.createSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                     SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+                                     SETTINGS.imageRendering, SETTINGS.focusReadingEnabled,
+                                     SETTINGS.bookCssMargins)) {
     LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
   }
 }
@@ -1823,7 +1826,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
         if (sibling.loadSectionFile(fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
                                     SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
-                                    SETTINGS.focusReadingEnabled)) {
+                                    SETTINGS.focusReadingEnabled, SETTINGS.bookCssMargins)) {
           spinePagesReal[i] = sibling.pageCount;
           probed = true;
         }

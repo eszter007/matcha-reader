@@ -63,6 +63,9 @@ class ChapterHtmlSlimParser {
   bool focusReadingEnabled;
   const CssParser* cssParser;
   bool embeddedStyle;
+  // "Book side margins" setting: honor the book's horizontal CSS margins/padding
+  // (clamped per element) instead of zeroing them. See BlockStyle::fromCssStyle.
+  bool honorBookInsets;
   uint8_t imageRendering;
   std::string contentBase;
   std::string imageBasePath;
@@ -139,7 +142,8 @@ class ChapterHtmlSlimParser {
                                  const bool embeddedStyle, const std::string& contentBase,
                                  const std::string& imageBasePath, const uint8_t imageRendering = 0,
                                  std::vector<std::string> tocAnchors = {},
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
+                                 const bool honorBookInsets = false)
 
       : epub(epub),
         filepath(filepath),
@@ -156,6 +160,7 @@ class ChapterHtmlSlimParser {
         popupFn(popupFn),
         cssParser(cssParser),
         embeddedStyle(embeddedStyle),
+        honorBookInsets(honorBookInsets),
         imageRendering(imageRendering),
         contentBase(contentBase),
         imageBasePath(imageBasePath),
