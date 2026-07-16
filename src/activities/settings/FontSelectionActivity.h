@@ -22,6 +22,7 @@ class FontSelectionActivity final : public Activity {
 
  private:
   void handleSelection();
+  void rebuildFontList();
   int getFontIdForPreview(int index) const;
   void renderPreviewPane(int top, int height, int fontId, const char* fontName) const;
 
@@ -30,6 +31,10 @@ class FontSelectionActivity final : public Activity {
     bool isBuiltin;
     uint8_t settingIndex;
   };
+
+  // The "Manage Fonts" outline button below the list is a virtual focus position
+  // one past the last font row (reachable with Down from the last font).
+  bool onManageButton() const { return selectedIndex_ == static_cast<int>(fonts_.size()); }
 
   const SdCardFontRegistry* registry_;
   ButtonNavigator buttonNavigator_;

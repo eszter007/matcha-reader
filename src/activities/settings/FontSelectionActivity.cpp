@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "CrossPointSettings.h"
+#include "FontDownloadActivity.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "components/UITheme.h"
@@ -49,6 +50,12 @@ void FontSelectionActivity::onEnter() {
   strncpy(originalSdFontFamilyName_, SETTINGS.sdFontFamilyName, sizeof(originalSdFontFamilyName_) - 1);
   originalSdFontFamilyName_[sizeof(originalSdFontFamilyName_) - 1] = '\0';
 
+  rebuildFontList();
+
+  requestUpdate();
+}
+
+void FontSelectionActivity::rebuildFontList() {
   fonts_.clear();
   fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0));
 
@@ -76,8 +83,6 @@ void FontSelectionActivity::onEnter() {
     }
   }
   previewFontIndex_ = selectedIndex_;
-
-  requestUpdate();
 }
 
 void FontSelectionActivity::onExit() { Activity::onExit(); }
@@ -93,6 +98,17 @@ void FontSelectionActivity::loop() {
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (onManageButton()) {
+      // Open font management; on return the registry may have gained or lost
+      // families, so rebuild the list (selection re-anchors to the current font).
+      startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
+                             [this](const ActivityResult&) {
+                               SETTINGS.saveToFile();
+                               rebuildFontList();
+                               requestUpdate();
+                             });
+      return;
+    }
     if (selectedIndex_ == previewFontIndex_) {
       handleSelection();
     } else {
@@ -115,7 +131,8 @@ void FontSelectionActivity::loop() {
     return;
   }
 
-  const int listSize = static_cast<int>(fonts_.size());
+  // +1: the "Manage Fonts" outline button below the list is the last focus position.
+  const int listSize = static_cast<int>(fonts_.size()) + 1;
   const int pageItems =
       UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, previewHeight + metrics_.verticalSpacing);
 
@@ -207,7 +224,10 @@ void FontSelectionActivity::render(RenderLock&&) {
 
   const int previewTop = afterHeader;
   const int listTop = previewTop + previewHeight + metrics_.verticalSpacing;
-  const int listHeight = usableHeight - previewHeight - metrics_.verticalSpacing;
+  // Reserve a row at the bottom for the "Manage Fonts" outline button.
+  const int manageButtonHeight = metrics_.menuRowHeight;
+  const int listHeight =
+      usableHeight - previewHeight - metrics_.verticalSpacing - manageButtonHeight - metrics_.verticalSpacing;
 
   const int previewFontId = SETTINGS.getReaderFontId();
   const char* previewFontName = (previewFontIndex_ >= 0 && previewFontIndex_ < static_cast<int>(fonts_.size()))
@@ -218,8 +238,10 @@ void FontSelectionActivity::render(RenderLock&&) {
   renderer.drawLine(0, listTop - metrics_.verticalSpacing / 2, pageWidth, listTop - metrics_.verticalSpacing / 2);
 
   const int currentFontIndex = findCurrentFontIndex(registry_, originalSdFontFamilyName_, originalFontFamily_);
+  // -1 while the manage button is focused: no list row carries the highlight.
+  const int listSelectedIndex = onManageButton() ? -1 : selectedIndex_;
   GUI.drawList(
-      renderer, Rect{0, listTop, pageWidth, listHeight}, static_cast<int>(fonts_.size()), selectedIndex_,
+      renderer, Rect{0, listTop, pageWidth, listHeight}, static_cast<int>(fonts_.size()), listSelectedIndex,
       [this](int index) { return fonts_[index].name; }, nullptr, nullptr,
       [this, currentFontIndex](int index) -> std::string {
         if (index == previewFontIndex_ && index != currentFontIndex) return tr(STR_PREVIEW);
@@ -228,8 +250,28 @@ void FontSelectionActivity::render(RenderLock&&) {
       },
       true);
 
+  // "Manage Fonts" outline button below the list: visually a button (rounded
+  // outline, centered label), inverted when focused via Down past the last font.
+  {
+    const int buttonTop = listTop + listHeight + metrics_.verticalSpacing;
+    const int buttonWidth = pageWidth - metrics_.contentSidePadding * 2;
+    const int buttonX = metrics_.contentSidePadding;
+    const bool focused = onManageButton();
+    constexpr int kCornerRadius = 8;
+    if (focused) {
+      renderer.fillRoundedRect(buttonX, buttonTop, buttonWidth, manageButtonHeight, kCornerRadius, Color::Black);
+    } else {
+      renderer.drawRoundedRect(buttonX, buttonTop, buttonWidth, manageButtonHeight, 2, kCornerRadius, true);
+    }
+    const int labelFontId = UI_12_FONT_ID;
+    const int labelY = buttonTop + (manageButtonHeight - renderer.getLineHeight(labelFontId)) / 2;
+    const char* label = tr(STR_MANAGE_FONTS);
+    const int labelX = buttonX + (buttonWidth - renderer.getTextWidth(labelFontId, label)) / 2;
+    renderer.drawText(labelFontId, labelX, labelY, label, !focused);
+  }
+
   const bool onPreviewed = selectedIndex_ == previewFontIndex_;
-  const char* confirmLabel = onPreviewed ? tr(STR_SELECT) : tr(STR_PREVIEW);
+  const char* confirmLabel = (onManageButton() || onPreviewed) ? tr(STR_SELECT) : tr(STR_PREVIEW);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
