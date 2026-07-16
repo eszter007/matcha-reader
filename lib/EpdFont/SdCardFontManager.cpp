@@ -78,7 +78,14 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
-  renderer.clearSdCardFonts();
+  // Remove ONLY this manager's fonts. Two managers share the renderer (the
+  // selected reader font and the JP companion, see SdCardFontSystem); the
+  // former renderer.clearSdCardFonts() here wiped the OTHER manager's
+  // streaming registration while its font-map entry and manager bookkeeping
+  // stayed intact -- observed as the selected SD font silently rendering as
+  // the built-in fallback after a JP book's companion was unloaded on entering
+  // a Latin book. removeFont() already erases both the font map and the
+  // sdCardFonts_ streaming entry for each id this manager owns.
   for (auto& lf : loaded_) {
     renderer.removeFont(lf.fontId);
     delete lf.font;
