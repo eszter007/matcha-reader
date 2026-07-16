@@ -65,6 +65,35 @@ class EpubReaderActivity final : public Activity {
     bool operator!=(const LayoutSig& o) const { return !(*this == o); }
   };
   LayoutSig sectionLayoutSig;
+
+  // Per-book reader preferences. The global settings page (opened from home)
+  // holds the DEFAULTS: a book with no prefs file opens with them. Once a book
+  // has been opened, its reading-relevant settings are pinned to the book
+  // (readerprefs.bin in its cache dir) and reapplied on every open; settings
+  // edited while reading affect only the book -- the global values captured in
+  // globalPrefsSnapshot are restored (RAM and, if a mid-session save leaked
+  // book values into the global file, re-saved) on exit. Vertical/furigana
+  // overrides already live per-book in progress.bin and are untouched.
+  struct ReaderPrefs {
+    uint8_t fontFamily = 0;
+    char sdFontFamilyName[32] = {};
+    uint8_t fontSize = 0;
+    uint8_t lineSpacing = 0;
+    uint8_t screenMargin = 0;
+    uint8_t bookCssMargins = 0;
+    uint8_t paragraphAlignment = 0;
+    uint8_t embeddedStyle = 0;
+    uint8_t hyphenationEnabled = 0;
+    uint8_t focusReadingEnabled = 0;
+    uint8_t imageRendering = 0;
+    uint8_t orientation = 0;
+    bool operator==(const ReaderPrefs&) const = default;
+  };
+  ReaderPrefs globalPrefsSnapshot;
+  static ReaderPrefs capturePrefsFromSettings();
+  static void applyPrefsToSettings(const ReaderPrefs& prefs);
+  bool loadBookPrefs(ReaderPrefs& out) const;
+  void saveBookPrefs(const ReaderPrefs& prefs) const;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   // Signals that the next render should reposition within the newly loaded section

@@ -154,6 +154,10 @@ Reading time is recorded automatically when you close a book (minimum 1 minute t
 
 The reader uses whatever font is selected in Settings (built-in Noto Serif/Sans or SD card fonts like UDDigiKyokasho). No font is auto-overridden — the user's choice is always respected.
 
+### Per-Book Reader Settings
+
+Reading-relevant settings (font family, font size, line spacing, screen margin, book side margins, paragraph alignment, embedded style, hyphenation, focus reading, image rendering, orientation) are remembered **per book**. The global settings page (opened from the home menu) holds the defaults: a book you haven't opened yet starts with them. Once a book has been opened, its settings are pinned to that book — change the font size while reading a Japanese novel and your Latin-script books keep their own preferences. Settings edited while reading affect only the open book; the global defaults are restored when you leave it. (Vertical text and furigana were already per-book.) Applies to EPUBs; TXT/XTC use the global settings.
+
 ### Book Side Margins
 
 Some EPUBs stack their own CSS side margins across nested wrappers, producing a narrow, over-margined text column. By default Matcha Reader ignores the book's horizontal CSS margins/padding, so the text column's side margins come solely from the **Reader Screen Margin** setting. A **Book Side Margins** toggle (Settings → Reader) restores the upstream behavior of honoring the book's own side margins (clamped per element) — e.g. if you want blockquote and list indents back. Changing either setting reflows the open book immediately.

@@ -41,6 +41,8 @@
 #include "KOReaderSyncActivity.h"
 #include <ctime>
 
+#include <Serialization.h>
+
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "ProgressMapper.h"
@@ -62,6 +64,9 @@ constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr uint32_t RESUME_HEAP_FLOOR = 40 * 1024;
 constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
+// Bump when ReaderPrefs gains/changes fields; stale files fall back to globals.
+constexpr uint8_t READER_PREFS_VERSION = 1;
+constexpr char READER_PREFS_FILE[] = "/readerprefs.bin";
 
 int clampPercent(int percent) {
   if (percent < 0) {
@@ -167,6 +172,64 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
 
 }  // namespace
 
+EpubReaderActivity::ReaderPrefs EpubReaderActivity::capturePrefsFromSettings() {
+  ReaderPrefs p;
+  p.fontFamily = SETTINGS.fontFamily;
+  strncpy(p.sdFontFamilyName, SETTINGS.sdFontFamilyName, sizeof(p.sdFontFamilyName) - 1);
+  p.sdFontFamilyName[sizeof(p.sdFontFamilyName) - 1] = '\0';
+  p.fontSize = SETTINGS.fontSize;
+  p.lineSpacing = SETTINGS.lineSpacing;
+  p.screenMargin = SETTINGS.screenMargin;
+  p.bookCssMargins = SETTINGS.bookCssMargins;
+  p.paragraphAlignment = SETTINGS.paragraphAlignment;
+  p.embeddedStyle = SETTINGS.embeddedStyle;
+  p.hyphenationEnabled = SETTINGS.hyphenationEnabled;
+  p.focusReadingEnabled = SETTINGS.focusReadingEnabled;
+  p.imageRendering = SETTINGS.imageRendering;
+  p.orientation = SETTINGS.orientation;
+  return p;
+}
+
+void EpubReaderActivity::applyPrefsToSettings(const ReaderPrefs& prefs) {
+  SETTINGS.fontFamily = prefs.fontFamily;
+  strncpy(SETTINGS.sdFontFamilyName, prefs.sdFontFamilyName, sizeof(SETTINGS.sdFontFamilyName) - 1);
+  SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
+  SETTINGS.fontSize = prefs.fontSize;
+  SETTINGS.lineSpacing = prefs.lineSpacing;
+  SETTINGS.screenMargin = prefs.screenMargin;
+  SETTINGS.bookCssMargins = prefs.bookCssMargins;
+  SETTINGS.paragraphAlignment = prefs.paragraphAlignment;
+  SETTINGS.embeddedStyle = prefs.embeddedStyle;
+  SETTINGS.hyphenationEnabled = prefs.hyphenationEnabled;
+  SETTINGS.focusReadingEnabled = prefs.focusReadingEnabled;
+  SETTINGS.imageRendering = prefs.imageRendering;
+  SETTINGS.orientation = prefs.orientation;
+}
+
+bool EpubReaderActivity::loadBookPrefs(ReaderPrefs& out) const {
+  if (!epub) return false;
+  const std::string path = epub->getCachePath() + READER_PREFS_FILE;
+  if (!Storage.exists(path.c_str())) return false;
+  HalFile f;
+  if (!Storage.openFileForRead("ERS", path, f)) return false;
+  uint8_t version = 0;
+  serialization::readPod(f, version);
+  if (version != READER_PREFS_VERSION) return false;
+  ReaderPrefs p;
+  if (f.read(reinterpret_cast<uint8_t*>(&p), sizeof(p)) != sizeof(p)) return false;
+  out = p;
+  return true;
+}
+
+void EpubReaderActivity::saveBookPrefs(const ReaderPrefs& prefs) const {
+  if (!epub) return;
+  const std::string path = epub->getCachePath() + READER_PREFS_FILE;
+  HalFile f;
+  if (!Storage.openFileForWrite("ERS", path, f)) return;
+  serialization::writePod(f, READER_PREFS_VERSION);
+  f.write(reinterpret_cast<const uint8_t*>(&prefs), sizeof(prefs));
+}
+
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
 
@@ -179,11 +242,24 @@ void EpubReaderActivity::onEnter() {
     return;
   }
 
+  epub->setupCacheDir();
+
+  // Per-book reader prefs: snapshot the global defaults, then pin this book's
+  // saved settings if it has been opened before. Must run before orientation
+  // and any font use so layout math and the SD font selection match the book.
+  globalPrefsSnapshot = capturePrefsFromSettings();
+  {
+    ReaderPrefs bookPrefs;
+    if (loadBookPrefs(bookPrefs) && !(bookPrefs == globalPrefsSnapshot)) {
+      LOG_DBG("ERS", "Applying per-book reader prefs");
+      applyPrefsToSettings(bookPrefs);
+      sdFontSystem.ensureLoaded(renderer);
+    }
+  }
+
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-
-  epub->setupCacheDir();
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -230,6 +306,24 @@ void EpubReaderActivity::onEnter() {
 
 void EpubReaderActivity::onExit() {
   Activity::onExit();
+
+  // Per-book reader prefs: pin the current reading settings to this book, then
+  // restore the global defaults. Settings edited while reading (via the pushed
+  // settings screen or the orientation shortcut) saved themselves into the
+  // global file mid-session; re-saving after the restore keeps the global page
+  // as the untouched default for books without their own prefs.
+  if (epub) {
+    const ReaderPrefs current = capturePrefsFromSettings();
+    ReaderPrefs existing;
+    if (!loadBookPrefs(existing) || !(existing == current)) {
+      saveBookPrefs(current);
+    }
+    if (!(current == globalPrefsSnapshot)) {
+      applyPrefsToSettings(globalPrefsSnapshot);
+      SETTINGS.saveToFile();
+      sdFontSystem.ensureLoaded(renderer);
+    }
+  }
 
   // Record reading time for stats
   if (readingSessionStartMs > 0) {
