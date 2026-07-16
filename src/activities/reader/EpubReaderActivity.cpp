@@ -253,9 +253,15 @@ void EpubReaderActivity::onEnter() {
     if (loadBookPrefs(bookPrefs) && !(bookPrefs == globalPrefsSnapshot)) {
       LOG_DBG("ERS", "Applying per-book reader prefs");
       applyPrefsToSettings(bookPrefs);
-      sdFontSystem.ensureLoaded(renderer);
     }
   }
+  // Always re-sync the SD font system, even when the book's prefs match the
+  // globals: SETTINGS naming a family does not guarantee the manager has it
+  // loaded (a failed load elsewhere clears the manager but the name can
+  // reappear via prefs/restore) -- skipping this rendered the built-in font
+  // despite the settings page showing the SD family. Cheap no-op when the
+  // wanted family and size are already loaded.
+  sdFontSystem.ensureLoaded(renderer);
 
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
@@ -307,24 +313,6 @@ void EpubReaderActivity::onEnter() {
 void EpubReaderActivity::onExit() {
   Activity::onExit();
 
-  // Per-book reader prefs: pin the current reading settings to this book, then
-  // restore the global defaults. Settings edited while reading (via the pushed
-  // settings screen or the orientation shortcut) saved themselves into the
-  // global file mid-session; re-saving after the restore keeps the global page
-  // as the untouched default for books without their own prefs.
-  if (epub) {
-    const ReaderPrefs current = capturePrefsFromSettings();
-    ReaderPrefs existing;
-    if (!loadBookPrefs(existing) || !(existing == current)) {
-      saveBookPrefs(current);
-    }
-    if (!(current == globalPrefsSnapshot)) {
-      applyPrefsToSettings(globalPrefsSnapshot);
-      SETTINGS.saveToFile();
-      sdFontSystem.ensureLoaded(renderer);
-    }
-  }
-
   // Record reading time for stats
   if (readingSessionStartMs > 0) {
     unsigned long elapsed = millis() - readingSessionStartMs;
@@ -365,6 +353,32 @@ void EpubReaderActivity::onExit() {
 
   section.reset();
   verticalSection.reset();
+
+  // Per-book reader prefs: pin the current reading settings to this book, then
+  // restore the global defaults. Settings edited while reading (via the pushed
+  // settings screen or the orientation shortcut) saved themselves into the
+  // global file mid-session; re-saving after the restore keeps the global page
+  // as the untouched default for books without their own prefs.
+  //
+  // Deliberately AFTER the section resets: restoring can swap the SD font, and
+  // SdCardFontSystem's loadFamily fails (and clears the selection) under a
+  // tight heap. With the chapter freed first, the load gets the coalesced heap
+  // instead of running at the worst moment with the whole book still resident.
+  if (epub) {
+    const ReaderPrefs current = capturePrefsFromSettings();
+    ReaderPrefs existing;
+    if (!loadBookPrefs(existing) || !(existing == current)) {
+      saveBookPrefs(current);
+    }
+    if (!(current == globalPrefsSnapshot)) {
+      applyPrefsToSettings(globalPrefsSnapshot);
+      SETTINGS.saveToFile();
+      // Re-sync the loaded SD font to the restored globals so the next
+      // consumer (home UI thumbnails, TXT/XTC readers) sees a consistent state.
+      sdFontSystem.ensureLoaded(renderer);
+    }
+  }
+
   if (pendingReadFolderMove && epub) {
     const std::string srcPath = epub->getPath();
     const std::string oldCachePath = epub->getCachePath();
