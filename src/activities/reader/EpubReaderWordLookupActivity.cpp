@@ -59,6 +59,12 @@ void EpubReaderWordLookupActivity::reclaimFontHeap() {
   if (ESP.getMaxAllocHeap() < 40 * 1024) {
     LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
     if (auto* fcm = renderer.getFontCacheManager()) {
+      // This runs on the main task; the render task may be mid-render with glyph
+      // pointers into the font cache (it holds the render lock for the whole
+      // render()). Freeing under the lock waits that render out -- releasing
+      // without it is a cross-task use-after-free (confirmed crash_report:
+      // renderCharImpl faulted while this path freed the cache).
+      RenderLock lock;
       fcm->releaseAllFontMemory();
       LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
     }
@@ -96,6 +102,12 @@ bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
     scanHealAttempted = true;
     LOG_INF("WLA", "Scan truncated by low heap; releasing fonts and rescanning (maxAlloc=%u)",
             ESP.getMaxAllocHeap());
+    // Heal under the render lock: this runs on the main task (loop()), and the
+    // render task may be mid-render, drawing definition text from font-cache
+    // glyphs and reading scan.selectableGlyphs. Freeing the cache / resetting the
+    // scan without the lock is a cross-task use-after-free (confirmed
+    // crash_report: renderCharImpl faulted at this exact moment).
+    RenderLock lock;
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->releaseAllFontMemory();
       LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
