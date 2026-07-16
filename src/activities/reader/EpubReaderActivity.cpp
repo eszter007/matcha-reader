@@ -1460,6 +1460,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       renderStatusBar();
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
     }
+    // Pre-build the next chapter's cache while this page is on screen. This call was
+    // missing from the vertical path (lost in a refactor -- silentIndexNextChapterIfNeeded
+    // has had a vertical branch all along), so in tategaki books every chapter transition
+    // showed the Indexing popup. JP books make it worse: each full-page illustration is its
+    // own one-page spine item, so a text->image->text sequence popped Indexing twice. Now
+    // the image chapter builds while the last text pages are read, and the next text
+    // chapter builds while the reader looks at the illustration.
+    silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
     saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride, furiganaOverride);
 
     showPendingSyncSaveError();
@@ -1660,7 +1668,17 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     const int fontId = effectiveReaderFontId();
     if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight)) return;
 
-    LOG_DBG("ERS", "Silently indexing next vertical chapter: %d", nextSpineIndex);
+    // The vertical build is the most memory-intensive step in the reader, and this
+    // silent path runs it at the worst heap moment: right after a page render, with
+    // the glyph slab fully warmed AND the current chapter still resident. Hand the
+    // build the font memory first, like the mainline vertical build does. Costs
+    // nothing here: every vertical page render clearCache()s and re-prewarms anyway.
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+    }
+
+    LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex,
+            ESP.getMaxAllocHeap());
     if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight)) {
       LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
     }
