@@ -1331,11 +1331,17 @@ void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoi
   free(nodeX);
 }
 
-// For performance measurement (using static to allow "const" methods)
+// For performance measurement (using static to allow "const" methods).
+// frameTimed gates the displayBuffer log: renders that draw over the existing
+// frame WITHOUT a clearScreen (battery/status partial updates) used to log the
+// time since the previous frame's clear -- minutes-old anchors that read as
+// fake 6-43s "renders" in field logs and derailed a crash investigation.
 static unsigned long start_ms = 0;
+static bool frameTimed = false;
 
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
+  frameTimed = true;
   if (_stripActive) {
     // Clear only the active band's scratch, not the shared framebuffer.
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
@@ -1384,8 +1390,10 @@ void GfxRenderer::invertScreen() const {
 }
 
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
-  auto elapsed = millis() - start_ms;
-  LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  if (frameTimed) {
+    LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", millis() - start_ms);
+    frameTimed = false;
+  }
   display.displayBuffer(refreshMode, fadingFix);
 }
 
