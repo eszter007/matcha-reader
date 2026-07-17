@@ -421,6 +421,47 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
                         value.find("dotted") != std::string_view::npos;
     style.borderEdges = styled ? CssStyle::BORDER_ALL : 0;
     style.defined.border = 1;
+  } else if (iequalsAscii(name, "border-top") || iequalsAscii(name, "border-bottom") ||
+             iequalsAscii(name, "border-left") || iequalsAscii(name, "border-right")) {
+    // Per-side shorthands ("border-bottom: 1px solid #333"): books use these as
+    // separator rules under headings and table rows. Merge into the edge mask
+    // (|=/&~) so several per-side declarations in one rule compose instead of
+    // overwriting each other.
+    const bool styled = value.find("solid") != std::string_view::npos ||
+                        value.find("double") != std::string_view::npos ||
+                        value.find("dashed") != std::string_view::npos ||
+                        value.find("dotted") != std::string_view::npos;
+    uint8_t bit = CssStyle::BORDER_TOP;
+    if (iequalsAscii(name, "border-bottom")) {
+      bit = CssStyle::BORDER_BOTTOM;
+    } else if (iequalsAscii(name, "border-left")) {
+      bit = CssStyle::BORDER_LEFT;
+    } else if (iequalsAscii(name, "border-right")) {
+      bit = CssStyle::BORDER_RIGHT;
+    }
+    if (styled) {
+      style.borderEdges |= bit;
+    } else {
+      style.borderEdges &= static_cast<uint8_t>(~bit);
+    }
+    style.defined.border = 1;
+  } else if (iequalsAscii(name, "font")) {
+    // font shorthand ("italic small-caps bold 1em/1.4 serif"): only the style,
+    // variant and weight keywords render here -- size and family are the
+    // reader's settings. Family names that contain "Bold"/"Oblique" would
+    // false-positive, but book CSS uses the shorthand for cites and headings.
+    if (icontainsAscii(value, "italic") || icontainsAscii(value, "oblique")) {
+      style.fontStyle = CssFontStyle::Italic;
+      style.defined.fontStyle = 1;
+    }
+    if (icontainsAscii(value, "bold")) {
+      style.fontWeight = CssFontWeight::Bold;
+      style.defined.fontWeight = 1;
+    }
+    if (icontainsAscii(value, "small-caps")) {
+      style.fontVariant = CssFontVariant::SmallCaps;
+      style.defined.fontVariant = 1;
+    }
   } else if (iequalsAscii(name, "padding-top")) {
     style.paddingTop = interpretLength(value);
     style.defined.paddingTop = 1;

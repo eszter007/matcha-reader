@@ -77,7 +77,9 @@ namespace {
 // v47: text-emphasis (bouten as synthetic ruby), small-caps transform, and
 // list-style-type markers change parsed section content.
 // v48: gaiji inline images emit replacement text instead of image blocks.
-constexpr uint8_t SECTION_FILE_VERSION = 48;
+// v49: CSS cache v12 parses per-side borders + font shorthand; sections built
+// against v11 rules lack those edges/styles.
+constexpr uint8_t SECTION_FILE_VERSION = 49;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +

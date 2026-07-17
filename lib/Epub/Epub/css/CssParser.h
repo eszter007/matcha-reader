@@ -35,7 +35,9 @@ class CssParser {
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
   // v10: border byte became a per-edge mask (v9 briefly stored a bool -- same size, new meaning)
   // v11: +textEmphasis/fontVariant/listStyleType bytes and defined bits 19-21
-  static constexpr uint8_t CSS_CACHE_VERSION = 11;
+  // v12: border-top/bottom/left/right and the font shorthand are parsed; rules
+  //      cached under v11 lack their edges/style bits.
+  static constexpr uint8_t CSS_CACHE_VERSION = 12;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
