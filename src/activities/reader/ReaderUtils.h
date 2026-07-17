@@ -2,10 +2,14 @@
 
 #include <CrossPointSettings.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalTiltSensor.h>
 #include <Logging.h>
 
+#include <ctime>
+
 #include "MappedInputManager.h"
+#include "ReadingStatsStore.h"
 
 namespace ReaderUtils {
 
@@ -13,6 +17,38 @@ constexpr unsigned long GO_HOME_MS = 1000;
 constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
+
+// Reading-stats heartbeat interval: one load/add/save round per flush, so this also
+// throttles SD writes (see the settings-write throttling rule).
+constexpr unsigned long READING_STATS_FLUSH_MS = 5UL * 60UL * 1000UL;
+
+// Flush whole elapsed minutes of the current reading session into READING_STATS.
+//
+// Stats used to be written only in the readers' onExit(), so any exit path that never
+// runs it -- a hang or watchdog reset on the sleep transition, a battery pull, a crash
+// -- silently lost the entire session: days stopped registering and the streak broke
+// while page progress (saved on page turns) kept working. Call this periodically from
+// the reader's loop() (it self-throttles to one SD write per READING_STATS_FLUSH_MS)
+// and with force=true from onExit() to record the sub-interval tail.
+//
+// The sub-minute remainder is carried forward in sessionStartMs so repeated flushes
+// never drop seconds.
+inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = false) {
+  if (sessionStartMs == 0) return;
+  const unsigned long elapsed = millis() - sessionStartMs;
+  if (!force && elapsed < READING_STATS_FLUSH_MS) return;
+  const uint16_t minutes = static_cast<uint16_t>(elapsed / 60000UL);
+  if (minutes == 0) return;
+  // Local-midnight day boundary: shift by the user's display UTC offset so an evening
+  // session doesn't get logged against "tomorrow" (UTC midnight is 9am in Japan).
+  const time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
+  struct tm* t = gmtime(&now);
+  READING_STATS.loadFromFile();
+  READING_STATS.addMinutes(static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
+                           static_cast<uint8_t>(t->tm_mday), minutes);
+  READING_STATS.saveToFile();
+  sessionStartMs += static_cast<unsigned long>(minutes) * 60000UL;
+}
 
 inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
   switch (orientation) {
