@@ -631,6 +631,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       }
 
+      // Gaiji: a tiny inline image standing in for a rare glyph mid-sentence.
+      // Emitting it through the image path would end the paragraph around it;
+      // append replacement text to the current word instead (see
+      // gaijiReplacementText for the alt/filename/geta-mark order).
+      if (classAttr.find("gaiji") != std::string::npos) {
+        const std::string repl = gaijiReplacementText(src, alt);
+        for (const char c : repl) {
+          if (self->partWordBufferIndex < MAX_WORD_SIZE) {
+            self->partWordBuffer[self->partWordBufferIndex++] = c;
+          }
+        }
+        self->depth += 1;
+        return;
+      }
+
       if (!src.empty() && self->imageRendering != 1) {
         LOG_DBG("EHP", "Found image: src=%s", src.c_str());
 

@@ -76,7 +76,8 @@ namespace {
 // input; it joins the header match params and widens the header by one bool.
 // v47: text-emphasis (bouten as synthetic ruby), small-caps transform, and
 // list-style-type markers change parsed section content.
-constexpr uint8_t SECTION_FILE_VERSION = 47;
+// v48: gaiji inline images emit replacement text instead of image blocks.
+constexpr uint8_t SECTION_FILE_VERSION = 48;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
