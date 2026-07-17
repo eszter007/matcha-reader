@@ -30,7 +30,7 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 71;  // v71: ignore book CSS horizontal margins/padding (side margins from screenMargin only)
+constexpr uint8_t VSECTION_FILE_VERSION = 72;  // v72: !?/!! pairs render as tate-chu-yoko upright runs
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -324,15 +324,23 @@ struct TextExtractor {
     }
     if (strcasecmp(name, "img") == 0 || strcasecmp(name, "image") == 0) {
       const char* src = nullptr;
+      const char* alt = nullptr;
       if (atts) {
         for (int i = 0; atts[i]; i += 2) {
           if (strcasecmp(atts[i], "src") == 0 || strcasecmp(atts[i], "xlink:href") == 0) {
-            src = atts[i + 1];
-            break;
+            if (!src) src = atts[i + 1];
+          } else if (strcasecmp(atts[i], "alt") == 0) {
+            alt = atts[i + 1];
           }
         }
       }
-      if (src && src[0] != '\0') {
+      if (hasClass(atts, "gaiji")) {
+        // Gaiji: a tiny inline image standing in for a rare glyph mid-sentence.
+        // Routing it through onImage would split the paragraph and insert a
+        // near-empty full image page per gaiji; keep the text flowing with
+        // replacement text instead (alt / filename codepoint / geta mark).
+        self->currentText += gaijiReplacementText(src ? src : "", alt ? alt : "");
+      } else if (src && src[0] != '\0') {
         // Complete the paragraph built so far, then emit the image in document order. (For the
         // rare mid-paragraph image this places the partial text before the image, where the old
         // accumulate-then-interleave code placed the image before the whole paragraph; identical

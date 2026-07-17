@@ -718,6 +718,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     return (cp >= '0' && cp <= '9') ||              // ASCII digits: U+0030-U+0039
            (cp >= 0xFF10 && cp <= 0xFF19);         // Fullwidth digits: U+FF10-U+FF19
   };
+  auto isAsciiAlnum = [](uint32_t cp) {
+    return (cp >= '0' && cp <= '9') || (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
+  };
+  // Exclamation/question marks that books put in tate-chu-yoko pairs (!? / !!).
+  // Halfwidth only: fullwidth ！？ already render upright as normal CJK cells.
+  auto isBangOrQuestion = [](uint32_t cp) { return cp == '!' || cp == '?'; };
   auto encodeDigitUtf8 = [](uint32_t cp, std::string& out) {
     if (cp < 0x80) {
       out.push_back(static_cast<char>(cp));
@@ -728,6 +734,69 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
       out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
       out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+  };
+
+  // Place a two-character tate-chu-yoko run (a 2-digit number like 26, or a
+  // !?/!! pair) upright in a single cell, ink-centered on the column, and
+  // advance row/column past it. Shared by the digit and punctuation-pair
+  // branches in the loop below.
+  auto placeTcyPairAt = [&](size_t i0) {
+    std::string runUtf8;
+    encodeDigitUtf8(stream_[i0].codepoint, runUtf8);
+    encodeDigitUtf8(stream_[i0 + 1].codepoint, runUtf8);
+    renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
+    const int runWidthPx =
+        renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+
+    // Center the run on its INK box, not its advance width. drawText puts ink at
+    // pen + firstGlyph.left, and digit advances carry trailing whitespace, so advance-based
+    // centering sat the run visibly right of the column's kanji (device photo, 「築26年」).
+    // Mirrors the single-digit ink centering in placeUprightAt.
+    int runX = columnLeftX(column) + std::max(0, (cellPx - runWidthPx) / 2);
+    {
+      const uint32_t cpFirst = stream_[i0].codepoint;
+      const uint32_t cpLast = stream_[i0 + 1].codepoint;
+      int l1 = 0, w1 = 0, t1 = 0, h1 = 0, lN = 0, wN = 0, tN = 0, hN = 0;
+      if (renderer_.getGlyphMetrics(fontId_, cpFirst, static_cast<EpdFontFamily::Style>(kNoStyle), &l1, &w1, &t1,
+                                    &h1) &&
+          renderer_.getGlyphMetrics(fontId_, cpLast, static_cast<EpdFontFamily::Style>(kNoStyle), &lN, &wN, &tN,
+                                    &hN)) {
+        std::string lastUtf8;
+        encodeDigitUtf8(cpLast, lastUtf8);
+        const int lastAdvance =
+            renderer_.getTextAdvanceX(fontId_, lastUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+        // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
+        const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
+        if (inkWidth > 0 && inkWidth <= cellPx) {
+          // Extra left nudge on top of ink centering: the surrounding kanji's ink sits
+          // slightly left of the cell center (CJK glyphs carry a touch more right-side
+          // bearing), so a mathematically centered run still reads right-shifted next to
+          // them. Tuned on device photos with Kyokasho ("築26年").
+          runX = columnLeftX(column) + (cellPx - inkWidth) / 2 - l1 - 1 - std::max(4, cellPx / 4);
+        }
+      }
+    }
+
+    VerticalGlyph g;
+    g.codepoint = 0;
+    g.column = column;
+    g.row = row;
+    g.x = static_cast<uint16_t>(std::max(0, runX));
+    g.y = static_cast<uint16_t>(row * cellPx + ascender);
+    g.paragraphIndex = stream_[i0].paragraphIndex;
+    g.byteOffset = stream_[i0].byteOffset;
+    g.style = stream_[i0].style;
+    g.renderKind = VerticalGlyph::UprightRun;
+    g.rotatedRunText = runUtf8;
+    pushGlyph(page.glyphs, g);
+
+    row++;
+    if (row >= rowsPerColumn) {
+      column++;
+      row = 0;
+      finalizePageIfNeeded();
+      row = columnStartRow(false);
     }
   };
 
@@ -820,6 +889,25 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         (nextParagraphBreakIdx < paragraphBreaksBeforeIndex_.size()) ? paragraphBreaksBeforeIndex_[nextParagraphBreakIdx]
                                                                      : stream_.size();
 
+    // Tate-chu-yoko for !?/!! pairs: JP books mark these with a tcy span, but
+    // like the digit path below we detect them directly so books without the
+    // class benefit too. Only a run of exactly two marks qualifies, and only
+    // when no ASCII letter/digit adjoins it -- "Hello!?" stays part of the
+    // rotated latin run. Other run lengths keep their existing handling.
+    if (isBangOrQuestion(pc.codepoint)) {
+      const bool prevAlnum = idx > 0 && isAsciiAlnum(stream_[idx - 1].codepoint);
+      size_t markEnd = idx;
+      while (markEnd < boundaryLimit && isBangOrQuestion(stream_[markEnd].codepoint)) {
+        markEnd++;
+      }
+      const bool nextAlnum = markEnd < stream_.size() && isAsciiAlnum(stream_[markEnd].codepoint);
+      if (markEnd - idx == 2 && !prevAlnum && !nextAlnum) {
+        placeTcyPairAt(idx);
+        idx = markEnd;
+        continue;
+      }
+    }
+
     if (isAsciiDigit(pc.codepoint)) {
       size_t digitEnd = idx;
       while (digitEnd < boundaryLimit && isAsciiDigit(stream_[digitEnd].codepoint)) {
@@ -829,62 +917,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       const size_t digitCount = digitEnd - idx;
       
       if (digitCount == 2) {
-        std::string runUtf8;
-        encodeDigitUtf8(stream_[idx].codepoint, runUtf8);
-        encodeDigitUtf8(stream_[idx + 1].codepoint, runUtf8);
-        renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
-        const int runWidthPx =
-            renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
-
-        // Center the run on its INK box, not its advance width. drawText puts ink at
-        // pen + firstGlyph.left, and digit advances carry trailing whitespace, so advance-based
-        // centering sat the run visibly right of the column's kanji (device photo, 「築26年」).
-        // Mirrors the single-digit ink centering in placeUprightAt.
-        int runX = columnLeftX(column) + std::max(0, (cellPx - runWidthPx) / 2);
-        {
-          const uint32_t cpFirst = stream_[idx].codepoint;
-          const uint32_t cpLast = stream_[idx + 1].codepoint;
-          int l1 = 0, w1 = 0, t1 = 0, h1 = 0, lN = 0, wN = 0, tN = 0, hN = 0;
-          if (renderer_.getGlyphMetrics(fontId_, cpFirst, static_cast<EpdFontFamily::Style>(kNoStyle), &l1, &w1, &t1,
-                                        &h1) &&
-              renderer_.getGlyphMetrics(fontId_, cpLast, static_cast<EpdFontFamily::Style>(kNoStyle), &lN, &wN, &tN,
-                                        &hN)) {
-            std::string lastUtf8;
-            encodeDigitUtf8(cpLast, lastUtf8);
-            const int lastAdvance =
-                renderer_.getTextAdvanceX(fontId_, lastUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
-            // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
-            const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
-            if (inkWidth > 0 && inkWidth <= cellPx) {
-              // Extra left nudge on top of ink centering: the surrounding kanji's ink sits
-              // slightly left of the cell center (CJK glyphs carry a touch more right-side
-              // bearing), so a mathematically centered run still reads right-shifted next to
-              // them. Tuned on device photos with Kyokasho ("築26年").
-              runX = columnLeftX(column) + (cellPx - inkWidth) / 2 - l1 - 1 - std::max(4, cellPx / 4);
-            }
-          }
-        }
-
-        VerticalGlyph g;
-        g.codepoint = 0;
-        g.column = column;
-        g.row = row;
-        g.x = static_cast<uint16_t>(std::max(0, runX));
-        g.y = static_cast<uint16_t>(row * cellPx + ascender);
-        g.paragraphIndex = pc.paragraphIndex;
-        g.byteOffset = pc.byteOffset;
-        g.style = pc.style;
-        g.renderKind = VerticalGlyph::UprightRun;
-        g.rotatedRunText = runUtf8;
-        pushGlyph(page.glyphs, g);
-
-        row++;
-        if (row >= rowsPerColumn) {
-          column++;
-          row = 0;
-          finalizePageIfNeeded();
-          row = columnStartRow(false);
-        }
+        placeTcyPairAt(idx);
         idx = digitEnd;
         continue;
       }
