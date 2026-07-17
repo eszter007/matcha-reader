@@ -44,13 +44,13 @@ constexpr unsigned long READING_STATS_FLUSH_MS = 5UL * 60UL * 1000UL;
 inline void statsTrace(const char* tag, const unsigned long sessionStartMs, const unsigned long elapsed,
                        const uint16_t minutes, const int loadOk, const int saveOk) {
   constexpr size_t CAP = 2048;
-  constexpr size_t LINE_MAX = 96;
+  constexpr size_t TRACE_LINE_MAX = 96;  // LINE_MAX is taken by <limits.h>
   auto buf = makeUniqueNoThrow<char[]>(CAP);
   if (!buf) return;  // diagnostics must never take down the reader
   size_t len = Storage.readFileToBuffer("/system/stats_trace.txt", buf.get(), CAP);
-  if (len > CAP - LINE_MAX) len = 0;  // cap reached: restart the trace
-  const int n = snprintf(buf.get() + len, LINE_MAX, "%lu %s start=%lu el=%lu min=%u load=%d save=%d\n", millis(), tag,
-                         sessionStartMs, elapsed, minutes, loadOk, saveOk);
+  if (len > CAP - TRACE_LINE_MAX) len = 0;  // cap reached: restart the trace
+  const int n = snprintf(buf.get() + len, TRACE_LINE_MAX, "%lu %s start=%lu el=%lu min=%u load=%d save=%d\n", millis(),
+                         tag, sessionStartMs, elapsed, minutes, loadOk, saveOk);
   if (n <= 0) return;
   HalFile f;
   if (!Storage.openFileForWrite("STATS", "/system/stats_trace.txt", f)) return;
