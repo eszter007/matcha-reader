@@ -4,6 +4,9 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Manual runs: build any branch on demand (e.g. to grab the firmware.bin
+  # artifact for SD-card flashing without a local toolchain).
+  workflow_dispatch:
 
 permissions:
   contents: read
