@@ -22,19 +22,20 @@ int dowFromDate(uint16_t y, uint8_t m, uint8_t d) {
 }
 
 void subtractDays(uint16_t& y, uint8_t& m, uint8_t& d, int n) {
-  int epoch = daysSinceEpoch(y, m, d) - n;
-  // Inverse of daysSinceEpoch: convert epoch days back to y/m/d.
-  // The forward formula adds d at the end, so the inverse subtracts 1
-  // to get the 0-based day-of-month before re-adding 1.
-  int a = epoch + 305;
-  int yy = (4 * a + 3) / 1461;
-  int doy = a - (365 * yy + yy / 4 - yy / 100 + yy / 400);
-  int mm = (5 * doy + 2) / 153;
-  d = static_cast<uint8_t>(doy - (153 * mm + 2) / 5 + 1);
-  mm += 3;
-  if (mm > 12) { mm -= 12; yy++; }
-  y = static_cast<uint16_t>(yy);
-  m = static_cast<uint8_t>(mm);
+  // Exact Gregorian inverse of daysSinceEpoch (Howard Hinnant's civil_from_days, shifted so
+  // day 0 = 0000-03-01). The previous version estimated the year with the Julian 1461-day
+  // cycle, which by the 2020s runs ~15 days late -- dates in the first half of March resolved
+  // into the previous March-based year and came back 1-2 days off, corrupting streaks and
+  // week/month views that cross early March.
+  const int z = daysSinceEpoch(y, m, d) - n + 305;                            // days since 0000-03-01
+  const int era = (z >= 0 ? z : z - 146096) / 146097;                         // 400-year eras
+  const unsigned doe = static_cast<unsigned>(z - era * 146097);               // [0, 146096]
+  const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);               // [0, 365]
+  const unsigned mp = (5 * doy + 2) / 153;                                    // [0, 11], 0 = March
+  d = static_cast<uint8_t>(doy - (153 * mp + 2) / 5 + 1);
+  m = static_cast<uint8_t>(mp < 10 ? mp + 3 : mp - 9);
+  y = static_cast<uint16_t>(static_cast<int>(yoe) + era * 400 + (m <= 2 ? 1 : 0));
 }
 
 int daysInMonth(uint16_t y, uint8_t m) {

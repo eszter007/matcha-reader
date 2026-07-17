@@ -248,7 +248,14 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // so once is enough on X3), and ALSO whenever the system time is clearly unset -- RTC-less
     // devices (X4) lose the system clock on full power-off, and reading-stats dates come from
     // time(nullptr), so any WiFi use is a free chance to make "today" exact again.
-    if (!SETTINGS.clockHasBeenSynced || !HalClock::systemTimeValid()) {
+    //
+    // On RTC-less devices sync on EVERY connection, not just when the clock looks unset:
+    // restoreSystemTime() seeds a PLAUSIBLE epoch (SD stash / build date) that
+    // systemTimeValid() cannot distinguish from a correct one, yet it lags real time by
+    // however long the device was powered off -- and that lag accumulates across power-offs.
+    // Once it crosses local midnight, reading sessions are recorded onto the PREVIOUS day and
+    // the reading streak silently breaks. WiFi being up is the only chance to heal the lag.
+    if (!SETTINGS.clockHasBeenSynced || !HalClock::systemTimeValid() || !halClock.isAvailable()) {
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();
