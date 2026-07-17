@@ -17,7 +17,6 @@
 #include <cstring>
 #include <ctime>
 
-#include <HalClock.h>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -70,11 +69,9 @@ void MangaReaderActivity::onEnter() {
 }
 
 void MangaReaderActivity::onExit() {
-  uint16_t minutes = 0;
-  if (readingSessionStartMs > 0) {
-    unsigned long elapsed = millis() - readingSessionStartMs;
-    minutes = static_cast<uint16_t>(elapsed / 60000);
-  }
+  // Record the sub-interval tail of the session; whole minutes were already flushed
+  // periodically from loop() (see ReaderUtils::flushReadingStats).
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
 
   // On the last page (currentPage never advances past pageCount-1 -- see
   // nextPage()) regardless of how long this particular session lasted.
@@ -82,19 +79,9 @@ void MangaReaderActivity::onExit() {
   // pageCount instead of pageCount-1, so it could never fire -- manga never
   // got marked finished even at 100% progress, unlike Epub/Txt readers.
   const bool atLastPage = book && book->getPageCount() > 0 && currentPage >= book->getPageCount() - 1;
-
-  if (minutes > 0 || atLastPage) {
+  if (atLastPage) {
     READING_STATS.loadFromFile();
-    if (minutes > 0) {
-      // Local-midnight day boundary -- see the matching call in EpubReaderActivity.
-      time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
-      struct tm* t = gmtime(&now);
-      READING_STATS.addMinutes(static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
-                               static_cast<uint8_t>(t->tm_mday), minutes);
-    }
-    if (atLastPage) {
-      READING_STATS.markBookFinished(book->getFolder());
-    }
+    READING_STATS.markBookFinished(book->getFolder());
     READING_STATS.saveToFile();
   }
 
@@ -188,6 +175,10 @@ void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOptio
 }
 
 void MangaReaderActivity::loop() {
+  // Crash-proof stats: flush whole minutes every few minutes so an exit path that
+  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
+  ReaderUtils::flushReadingStats(readingSessionStartMs);
+
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
     requestUpdate();
