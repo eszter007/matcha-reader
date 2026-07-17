@@ -3,8 +3,10 @@
 #include <CrossPointSettings.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalStorage.h>
 #include <HalTiltSensor.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <ctime>
 
@@ -33,20 +35,52 @@ constexpr unsigned long READING_STATS_FLUSH_MS = 5UL * 60UL * 1000UL;
 //
 // The sub-minute remainder is carried forward in sessionStartMs so repeated flushes
 // never drop seconds.
+// TEMPORARY DIAGNOSTIC (remove before merging): append one line per stats event to
+// /system/stats_trace.txt so a device without serial access can report why days stop
+// registering (reported regression: no day recorded since Jul 13). HalStorage has no
+// append mode (openFileForWrite is O_TRUNC), so read-modify-rewrite with a transient
+// 2KB heap buffer; when the file approaches the cap it restarts from empty. Bounded to
+// one write per flush attempt by the 5-minute throttle.
+inline void statsTrace(const char* tag, const unsigned long sessionStartMs, const unsigned long elapsed,
+                       const uint16_t minutes, const int loadOk, const int saveOk) {
+  constexpr size_t CAP = 2048;
+  constexpr size_t LINE_MAX = 96;
+  auto buf = makeUniqueNoThrow<char[]>(CAP);
+  if (!buf) return;  // diagnostics must never take down the reader
+  size_t len = Storage.readFileToBuffer("/system/stats_trace.txt", buf.get(), CAP);
+  if (len > CAP - LINE_MAX) len = 0;  // cap reached: restart the trace
+  const int n = snprintf(buf.get() + len, LINE_MAX, "%lu %s start=%lu el=%lu min=%u load=%d save=%d\n", millis(), tag,
+                         sessionStartMs, elapsed, minutes, loadOk, saveOk);
+  if (n <= 0) return;
+  HalFile f;
+  if (!Storage.openFileForWrite("STATS", "/system/stats_trace.txt", f)) return;
+  f.write(reinterpret_cast<const uint8_t*>(buf.get()), len + static_cast<size_t>(n));
+}
+
 inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = false) {
-  if (sessionStartMs == 0) return;
+  if (sessionStartMs == 0) {
+    if (force) statsTrace("exit-nostart", 0, 0, 0, -1, -1);
+    return;
+  }
   const unsigned long elapsed = millis() - sessionStartMs;
   if (!force && elapsed < READING_STATS_FLUSH_MS) return;
   const uint16_t minutes = static_cast<uint16_t>(elapsed / 60000UL);
-  if (minutes == 0) return;
+  if (minutes == 0) {
+    if (force) statsTrace("exit-zero", sessionStartMs, elapsed, 0, -1, -1);
+    return;
+  }
   // Local-midnight day boundary: shift by the user's display UTC offset so an evening
   // session doesn't get logged against "tomorrow" (UTC midnight is 9am in Japan).
   const time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
   struct tm* t = gmtime(&now);
-  READING_STATS.loadFromFile();
+  const bool loadOk = READING_STATS.loadFromFile();
   READING_STATS.addMinutes(static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
                            static_cast<uint8_t>(t->tm_mday), minutes);
-  READING_STATS.saveToFile();
+  const bool saveOk = READING_STATS.saveToFile();
+  if (!saveOk) {
+    LOG_ERR("STATS", "saveToFile failed (load=%d, %u min lost from file)", loadOk, minutes);
+  }
+  statsTrace(force ? "exit-flush" : "beat-flush", sessionStartMs, elapsed, minutes, loadOk, saveOk);
   sessionStartMs += static_cast<unsigned long>(minutes) * 60000UL;
 }
 

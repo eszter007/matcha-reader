@@ -236,6 +236,9 @@ void EpubReaderActivity::onEnter() {
   // so it doesn't immediately trigger the reader menu.
   ignoreNextConfirmRelease = true;
   readingSessionStartMs = millis();
+  // TEMPORARY DIAGNOSTIC (remove before merging): frequent enter lines = the reader is
+  // being recreated under the user, which restamps the session timer.
+  ReaderUtils::statsTrace("epub-enter", readingSessionStartMs, 0, 0, -1, -1);
 
   if (!epub) {
     return;
