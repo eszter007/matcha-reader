@@ -11,9 +11,12 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <JsonSettingsIO.h>
+
+#include <ctime>
 
 #include <algorithm>
 
@@ -24,6 +27,7 @@
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
+#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
@@ -33,6 +37,8 @@
 
 void XtcReaderActivity::onEnter() {
   Activity::onEnter();
+
+  readingSessionStartMs = millis();
 
   if (!xtc) {
     return;
@@ -55,6 +61,24 @@ void XtcReaderActivity::onEnter() {
 
 void XtcReaderActivity::onExit() {
   Activity::onExit();
+
+  // Record reading time for stats (mirrors EpubReaderActivity::onExit). XTC books never
+  // counted toward the reading streak -- reading an XTC book all day left the day
+  // unregistered and silently broke the streak.
+  if (readingSessionStartMs > 0) {
+    const unsigned long elapsed = millis() - readingSessionStartMs;
+    const uint16_t minutes = static_cast<uint16_t>(elapsed / 60000);
+    if (minutes > 0) {
+      // Local-midnight day boundary: shift by the user's display UTC offset so an evening
+      // session doesn't get logged against "tomorrow" (UTC midnight is 9am in Japan).
+      const time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
+      struct tm* t = gmtime(&now);
+      READING_STATS.loadFromFile();
+      READING_STATS.addMinutes(static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
+                               static_cast<uint8_t>(t->tm_mday), minutes);
+      READING_STATS.saveToFile();
+    }
+  }
 
   freePageBuffer();
   APP_STATE.readerActivityLoadCount = 0;
