@@ -9,9 +9,12 @@
 
 #include <cstddef>
 
+#include <FontCacheManager.h>
+
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
 #include "SilentRestart.h"
+#include "activities/RenderLock.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
 #include "components/UITheme.h"
@@ -64,6 +67,23 @@ void CrossPointWebServerActivity::onEnter() {
   Activity::onEnter();
 
   LOG_DBG("WEBACT", "Free heap at onEnter: %d bytes", ESP.getFreeHeap());
+
+  // Hand the reader font caches (~15-20K, glyph slabs + hot group) to the WiFi
+  // stack: file transfer never renders book text (this activity's screens use
+  // the built-in UI fonts), and every path where WiFi actually came up leaves
+  // via silentRestart(), so nothing needs restoring. Without this, AP mode on
+  // the X3 bottoms out around 19K free / 16K maxAlloc at server start and dies
+  // by abort() at ~2K maxAlloc after a few captive-portal page serves (field
+  // crash report: abort in the Wi-Fi credentials API handler; "only the
+  // homepage still loads" is the same exhaustion short of the abort). If the
+  // user backs out without starting WiFi, glyph caches reload lazily.
+  {
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+    }
+  }
+  LOG_DBG("WEBACT", "After font release: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   // Reset state
   state = WebServerActivityState::MODE_SELECTION;
