@@ -538,8 +538,8 @@ void WordSelectionScan::scanOnePosition() {
   const bool needDef = !isCJK(allGlyphs[scanStart].codepoint) && !isKatakana(allGlyphs[scanStart].codepoint);
   WordLookupResult result;
   bool hasMatch = !text.empty() && WordLookup::lookup(text, 0, result, needDef);
-  int matchChars = 0;
   if (hasMatch) {
+    int matchChars = 0;
     stripTrailingParticle(text, result, needDef);
     size_t pos = 0;
     while (pos < result.matchLength && pos < text.size()) {
@@ -651,9 +651,9 @@ void WordSelectionScan::scanOnePosition() {
     }
 
     if (hasMatch && (matchChars > 1 || digitGlyphs > 0)) {
-      skipUntil = scanStart + matchChars;
       // Extend skip for honorifics after names
-      size_t afterMatch = scanStart + matchChars;
+      const size_t afterMatch = scanStart + matchChars;
+      skipUntil = afterMatch;
       if (afterMatch < allGlyphs.size() && allGlyphs[afterMatch].paragraphIndex == paraIdx) {
         uint32_t nextCp = allGlyphs[afterMatch].codepoint;
         if (nextCp == 0x3055) {  // さ → さん、さま

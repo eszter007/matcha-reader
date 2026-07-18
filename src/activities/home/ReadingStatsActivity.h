@@ -7,8 +7,8 @@ class ReadingStatsActivity final : public Activity {
   int scrollOffset = 0;
   int maxScrollOffset = 0;
   // Calendar month navigation
-  uint16_t calYear;
-  uint8_t calMonth;
+  uint16_t calYear = 0;
+  uint8_t calMonth = 1;
 
  public:
   explicit ReadingStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

@@ -26,7 +26,7 @@ struct Today {
 Today getToday() {
   // Local-midnight day boundary, matching how the readers record stats.
   time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
-  struct tm* t = gmtime(&now);
+  const struct tm* t = gmtime(&now);
   return {static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
           static_cast<uint8_t>(t->tm_mday), (t->tm_wday + 6) % 7};
 }
@@ -128,7 +128,6 @@ void ReadingStatsActivity::render(RenderLock&&) {
 
   // Draw header AFTER content so it covers scrolled text underneath.
   // Content is drawn first, then the header area is cleared and redrawn on top.
-  const int pad = metrics.contentSidePadding;
   const int cardMargin = 20;
   const int cardX = screen.x + cardMargin;
   const int cardW = screen.width - 2 * cardMargin;

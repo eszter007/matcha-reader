@@ -137,13 +137,8 @@ void RecentBooksActivity::loadRecentBooks() {
     RecentBooksStore cache;
     if (JsonSettingsIO::loadRecentBooks(cache, cacheJson.c_str())) {
       for (const auto& b : cache.getBooks()) {
-        bool known = false;
-        for (const auto& r : recentBooks) {
-          if (r.path == b.path) {
-            known = true;
-            break;
-          }
-        }
+        const bool known =
+            std::any_of(recentBooks.begin(), recentBooks.end(), [&b](const auto& r) { return r.path == b.path; });
         if (!known) recentBooks.push_back(b);
       }
     }
@@ -195,13 +190,12 @@ bool RecentBooksActivity::stepLibraryScan() {
       // Surface the new cover immediately (the list was already applied after the walk).
       {
         RenderLock lock;
-        for (auto& live : recentBooks) {
-          if (live.path == book.path) {
-            live.coverBmpPath = book.coverBmpPath;
-            if (!title.empty()) live.title = book.title;
-            lastRendered.valid = false;
-            break;
-          }
+        const auto live = std::find_if(recentBooks.begin(), recentBooks.end(),
+                                       [&book](const auto& r) { return r.path == book.path; });
+        if (live != recentBooks.end()) {
+          live->coverBmpPath = book.coverBmpPath;
+          if (!title.empty()) live->title = book.title;
+          lastRendered.valid = false;
         }
       }
       requestUpdate();
@@ -245,12 +239,9 @@ void RecentBooksActivity::scanOneDirectory(const std::string& dirPath) {
       RecentBook entry;
       entry.path = fullPath;
       entry.title = std::string(nameBuf.get());
-      for (const auto& r : recentBooks) {
-        if (r.path == fullPath) {
-          entry = r;
-          break;
-        }
-      }
+      const auto cached = std::find_if(recentBooks.begin(), recentBooks.end(),
+                                       [&fullPath](const auto& r) { return r.path == fullPath; });
+      if (cached != recentBooks.end()) entry = *cached;
 
       const bool coverIsTemplate = entry.coverBmpPath.find("[HEIGHT]") != std::string::npos;
       const bool coverIsRawImage =
@@ -318,12 +309,9 @@ void RecentBooksActivity::scanOneDirectory(const std::string& dirPath) {
     auto dot = fn.find_last_of('.');
     book.title = std::string(dot != std::string_view::npos ? fn.substr(0, dot) : fn);
     // Seed title/author/cover from the current list so cached metadata survives the re-scan.
-    for (const auto& r : recentBooks) {
-      if (r.path == fullPath) {
-        book = r;
-        break;
-      }
-    }
+    const auto cached =
+        std::find_if(recentBooks.begin(), recentBooks.end(), [&fullPath](const auto& r) { return r.path == fullPath; });
+    if (cached != recentBooks.end()) book = *cached;
     scan_.results.push_back(std::move(book));
   }
   dir.close();
@@ -334,15 +322,12 @@ void RecentBooksActivity::applyLibraryScan() {
   // drop out, covers repaired by the scan take effect, and the cache is re-persisted.
   std::vector<RecentBook> fresh = RECENT_BOOKS.getBooks();
   for (const auto& r : scan_.results) {
-    bool known = false;
-    for (auto& existing : fresh) {
-      if (existing.path == r.path) {
-        if (!r.coverBmpPath.empty()) existing.coverBmpPath = r.coverBmpPath;
-        known = true;
-        break;
-      }
+    const auto existing = std::find_if(fresh.begin(), fresh.end(), [&r](const auto& e) { return e.path == r.path; });
+    if (existing != fresh.end()) {
+      if (!r.coverBmpPath.empty()) existing->coverBmpPath = r.coverBmpPath;
+    } else {
+      fresh.push_back(r);
     }
-    if (!known) fresh.push_back(r);
   }
 
   bool changed = fresh.size() != recentBooks.size();
@@ -356,16 +341,18 @@ void RecentBooksActivity::applyLibraryScan() {
   }
 
   if (changed) {
-    RenderLock lock;  // the render task reads these lists concurrently
-    recentBooks = std::move(fresh);
-    markAllProgressPending();
-    loadShelves();
-    lastRendered.valid = false;
-    LOG_DBG("RBA", "Library scan applied: %u books", static_cast<unsigned>(recentBooks.size()));
+    {
+      RenderLock lock;  // the render task reads these lists concurrently
+      recentBooks = std::move(fresh);
+      markAllProgressPending();
+      loadShelves();
+      lastRendered.valid = false;
+      LOG_DBG("RBA", "Library scan applied: %u books", static_cast<unsigned>(recentBooks.size()));
+    }
+    // Request outside the RenderLock scope; scan_.results stays alive either way: the idle-time
+    // thumb pass still iterates it, and the cache is persisted in finishLibraryScan().
+    requestUpdate();
   }
-  // scan_.results stays alive: the idle-time thumb pass still iterates it, and the cache is
-  // persisted (with the covers it generates) in finishLibraryScan().
-  if (changed) requestUpdate();
 }
 
 void RecentBooksActivity::finishLibraryScan() {
@@ -417,26 +404,21 @@ void RecentBooksActivity::loadShelves() {
         (lastSlash != std::string::npos && lastSlash < folder.size() - 1) ? folder.substr(lastSlash + 1) : folder;
     if (folder == "/") name = "Unsorted";
 
-    bool found = false;
-    for (auto& shelf : shelves) {
-      if (shelf.folderPath == folder) {
-        if (shelf.coverBmpPath.empty() && !book.coverBmpPath.empty()) {
-          shelf.coverBmpPath = book.coverBmpPath;
-          shelf.coverBookPath = book.path;
-        }
-        found = true;
-        break;
+    const auto shelf =
+        std::find_if(shelves.begin(), shelves.end(), [&folder](const auto& s) { return s.folderPath == folder; });
+    if (shelf != shelves.end()) {
+      if (shelf->coverBmpPath.empty() && !book.coverBmpPath.empty()) {
+        shelf->coverBmpPath = book.coverBmpPath;
+        shelf->coverBookPath = book.path;
       }
-    }
-
-    if (!found) {
-      ShelfInfo shelf;
-      shelf.folderPath = folder;
-      shelf.folderName = name;
-      shelf.coverBmpPath = book.coverBmpPath;
-      if (!book.coverBmpPath.empty()) shelf.coverBookPath = book.path;
-      shelf.bookCount = 0;
-      shelves.push_back(std::move(shelf));
+    } else {
+      ShelfInfo fresh;
+      fresh.folderPath = folder;
+      fresh.folderName = name;
+      fresh.coverBmpPath = book.coverBmpPath;
+      if (!book.coverBmpPath.empty()) fresh.coverBookPath = book.path;
+      fresh.bookCount = 0;
+      shelves.push_back(std::move(fresh));
     }
   }
 
@@ -527,12 +509,11 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
       book.path = fullPath;
       book.title = std::string(nameBuffer.get());
 
-      for (const auto& recent : recentBooks) {
-        if (recent.path == book.path) {
-          if (!recent.title.empty()) book.title = recent.title;
-          book.coverBmpPath = recent.coverBmpPath;
-          break;
-        }
+      const auto recent =
+          std::find_if(recentBooks.begin(), recentBooks.end(), [&book](const auto& r) { return r.path == book.path; });
+      if (recent != recentBooks.end()) {
+        if (!recent->title.empty()) book.title = recent->title;
+        book.coverBmpPath = recent->coverBmpPath;
       }
       if (book.coverBmpPath.empty()) {
         // A previously generated (valid) thumb short-circuits the folder scan (same as
@@ -590,12 +571,11 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
     auto dotPos = filename.find_last_of('.');
     book.title = std::string(dotPos != std::string_view::npos ? filename.substr(0, dotPos) : filename);
 
-    for (const auto& recent : recentBooks) {
-      if (recent.path == book.path) {
-        if (!recent.title.empty()) book.title = recent.title;
-        book.coverBmpPath = recent.coverBmpPath;
-        break;
-      }
+    const auto recent =
+        std::find_if(recentBooks.begin(), recentBooks.end(), [&book](const auto& r) { return r.path == book.path; });
+    if (recent != recentBooks.end()) {
+      if (!recent->title.empty()) book.title = recent->title;
+      book.coverBmpPath = recent->coverBmpPath;
     }
 
     if (book.coverBmpPath.empty()) {
@@ -1171,9 +1151,6 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
   if (selectedItem >= visibleItems) {
     scrollOffset = selectedItem - visibleItems + 1;
   }
-
-  const int thumbH = metrics.homeCoverHeight;
-  const int chevronMargin = 15;
 
   // Prewarm the font cache with all visible folder names before drawing. Folder names are drawn
   // unconditionally on every render (unlike cover-fallback titles below), so without this, non-Latin

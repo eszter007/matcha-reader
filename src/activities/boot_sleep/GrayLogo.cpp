@@ -16,7 +16,7 @@ inline uint8_t levelAt(const int px, const int py) {
 
 namespace GrayLogo {
 
-void drawBase(GfxRenderer& renderer, const int x, const int y, const bool invertedScreen) {
+void drawBase(const GfxRenderer& renderer, const int x, const int y, const bool invertedScreen) {
   for (int py = 0; py < SIZE; py++) {
     for (int px = 0; px < SIZE; px++) {
       const uint8_t val = levelAt(px, py);
@@ -34,7 +34,7 @@ void drawBase(GfxRenderer& renderer, const int x, const int y, const bool invert
   }
 }
 
-void drawBw(GfxRenderer& renderer, const int x, const int y) {
+void drawBw(const GfxRenderer& renderer, const int x, const int y) {
   for (int py = 0; py < SIZE; py++) {
     for (int px = 0; px < SIZE; px++) {
       // Threshold between the two grays: dark shading keeps its ink, light shading drops out.

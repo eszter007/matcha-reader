@@ -597,8 +597,6 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   Rect screen = theme.getScreenSafeArea(renderer, true, false);
 
   const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + metrics.verticalSpacing;
-  const int contentBottom = screen.y + screen.height - footerHeight;
 
   // Position counter (35/50) shown right-aligned on the header baseline.
   std::string posText;

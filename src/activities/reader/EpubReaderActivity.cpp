@@ -23,6 +23,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <numeric>
 
 #include "BookmarkEntry.h"
 #include "CrossPointSettings.h"
@@ -1436,8 +1437,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // needed more slots than exist, wasting them on styles the page doesn't even use.
         if (auto* fcm = renderer.getFontCacheManager()) {
           fcm->clearCache();
-          uint8_t styleMask = 0;
-          for (const auto& g : vpage->glyphs) styleMask |= static_cast<uint8_t>(1u << (g.style & 0x03));
+          uint8_t styleMask = std::accumulate(
+              vpage->glyphs.begin(), vpage->glyphs.end(), uint8_t{0},
+              [](uint8_t m, const auto& g) { return static_cast<uint8_t>(m | (1u << (g.style & 0x03))); });
           if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
           const std::string pageText = PageTextExtractor::fromVerticalPage(*vpage);
           fcm->prewarmCache(effectiveReaderFontId(), pageText.c_str(), styleMask);

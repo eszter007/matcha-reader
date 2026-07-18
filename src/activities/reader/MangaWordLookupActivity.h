@@ -17,7 +17,7 @@ class MangaWordLookupActivity final : public Activity {
   // constructor only scans far enough to show the first word; the rest of the text is mapped in
   // the background from loop(). When scanCachePath is given, a completed scan is persisted there
   // keyed by (pageIndex, panelIndex) and re-opening the same unchanged text skips scanning.
-  explicit MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string panelText,
+  explicit MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& panelText,
                                    std::string scanCachePath = "", uint16_t pageIndex = 0, uint16_t panelIndex = 0);
 
   void onEnter() override;

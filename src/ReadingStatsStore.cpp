@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <algorithm>
 #include <cstring>
 
 ReadingStatsStore ReadingStatsStore::instance;
@@ -63,8 +64,9 @@ void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, ui
 }
 
 void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
-  for (const auto& p : finishedBookPaths) {
-    if (p == bookPath) return;
+  if (std::any_of(finishedBookPaths.begin(), finishedBookPaths.end(),
+                  [&bookPath](const std::string& p) { return p == bookPath; })) {
+    return;
   }
   finishedBookPaths.push_back(bookPath);
   booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
