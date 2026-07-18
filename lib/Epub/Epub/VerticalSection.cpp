@@ -2,13 +2,12 @@
 
 #include <Arduino.h>
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
-
-#include <FsHelpers.h>
 
 #include <cstring>
 #include <string>
@@ -118,12 +117,8 @@ struct TextExtractor {
     lastCheckpointMaxAlloc = now;
   }
 
-  static bool isBoldTag(const char* name) {
-    return strcasecmp(name, "b") == 0 || strcasecmp(name, "strong") == 0;
-  }
-  static bool isItalicTag(const char* name) {
-    return strcasecmp(name, "i") == 0 || strcasecmp(name, "em") == 0;
-  }
+  static bool isBoldTag(const char* name) { return strcasecmp(name, "b") == 0 || strcasecmp(name, "strong") == 0; }
+  static bool isItalicTag(const char* name) { return strcasecmp(name, "i") == 0 || strcasecmp(name, "em") == 0; }
   uint8_t currentStyle() const {
     uint8_t s = 0;
     if (boldDepth > 0) s |= 1;    // EpdFontFamily::BOLD
@@ -143,9 +138,9 @@ struct TextExtractor {
   // the kind of churn that fragments a ~220KB heap. These hints are small requests sized for the
   // common case (a handful of CJK characters / a handful of runs between markup boundaries), not a
   // correctness requirement -- an unusually long run still grows normally via doubling.
-  static constexpr size_t TEXT_RESERVE_HINT = 128;   // bytes
-  static constexpr size_t RUBY_RESERVE_HINT = 32;    // bytes
-  static constexpr size_t RUNS_RESERVE_HINT = 16;    // elements
+  static constexpr size_t TEXT_RESERVE_HINT = 128;  // bytes
+  static constexpr size_t RUBY_RESERVE_HINT = 32;   // bytes
+  static constexpr size_t RUNS_RESERVE_HINT = 16;   // elements
 
   void flushCurrentText() {
     if (!currentText.empty()) {
@@ -182,8 +177,7 @@ struct TextExtractor {
         size_t totalBytes = 0;
         for (const auto& r : currentRuns) totalBytes += r.baseText.size() + r.rubyText.size();
         LOG_DBG("VSC", "flushParagraph: %u runs, %u bytes, maxAlloc=%u before onParagraph",
-                static_cast<unsigned>(currentRuns.size()), static_cast<unsigned>(totalBytes),
-                ESP.getMaxAllocHeap());
+                static_cast<unsigned>(currentRuns.size()), static_cast<unsigned>(totalBytes), ESP.getMaxAllocHeap());
         // By reference: onParagraph moves the individual runs' strings out and clear()s the
         // vector, handing its capacity back -- currentRuns keeps one stable buffer for the
         // whole build instead of re-growing from RUNS_RESERVE_HINT every paragraph.
@@ -200,7 +194,7 @@ struct TextExtractor {
   void flushParagraph() { emitRuns(true); }
 
   static bool isBlockTag(const char* name) {
-    static constexpr const char* blockTags[] = {"p",  "div", "h1", "h2",   "h3",  "h4",
+    static constexpr const char* blockTags[] = {"p",  "div", "h1", "h2",         "h3",      "h4",
                                                 "h5", "h6",  "li", "blockquote", "section", "article"};
     for (const auto* tag : blockTags) {
       if (strcasecmp(name, tag) == 0) return true;
@@ -224,8 +218,8 @@ struct TextExtractor {
         if (dot == std::string::npos) {
           hit = strcasecmp(sel.c_str(), name) == 0;
         } else {
-          hit = strlen(name) == dot && strncasecmp(sel.c_str(), name, dot) == 0 &&
-                hasClass(atts, sel.c_str() + dot + 1);
+          hit =
+              strlen(name) == dot && strncasecmp(sel.c_str(), name, dot) == 0 && hasClass(atts, sel.c_str() + dot + 1);
         }
       }
       if (!hit) continue;
@@ -248,8 +242,7 @@ struct TextExtractor {
         const size_t clsLen = strlen(cls);
         while (*val) {
           while (*val == ' ') val++;
-          if (strncasecmp(val, cls, clsLen) == 0 && (val[clsLen] == ' ' || val[clsLen] == '\0'))
-            return true;
+          if (strncasecmp(val, cls, clsLen) == 0 && (val[clsLen] == ' ' || val[clsLen] == '\0')) return true;
           while (*val && *val != ' ') val++;
         }
       }
@@ -272,12 +265,11 @@ struct TextExtractor {
     if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
       if (self->resolveBlockStyle(name, atts, params) &&
-          (params.startEm > 0 || params.beforeEm > 0 || params.afterEm > 0 || params.hangEm > 0 ||
-           params.alignCenter || params.borderEdges != 0)) {
+          (params.startEm > 0 || params.beforeEm > 0 || params.afterEm > 0 || params.hangEm > 0 || params.alignCenter ||
+           params.borderEdges != 0)) {
         self->flushParagraph();
-        LOG_DBG("VSC", "styled block open: <%s> start=%.1f hang=%.1f before=%.1f after=%.1f center=%d edges=0x%X",
-                name, params.startEm, params.hangEm, params.beforeEm, params.afterEm, params.alignCenter,
-                params.borderEdges);
+        LOG_DBG("VSC", "styled block open: <%s> start=%.1f hang=%.1f before=%.1f after=%.1f center=%d edges=0x%X", name,
+                params.startEm, params.hangEm, params.beforeEm, params.afterEm, params.alignCenter, params.borderEdges);
         if (self->sink) self->sink->onBlockStyleStart(params);
         self->boxOpenedAtDepth = self->elementDepth;
       }
@@ -305,8 +297,7 @@ struct TextExtractor {
     if (isBoldTag(name) || hasClass(atts, "bold")) {
       self->flushCurrentText();
       self->boldDepth++;
-      if (self->boldStackSize < MAX_STYLE_STACK)
-        self->boldOpenedAtDepth[self->boldStackSize++] = self->elementDepth;
+      if (self->boldStackSize < MAX_STYLE_STACK) self->boldOpenedAtDepth[self->boldStackSize++] = self->elementDepth;
     }
     if (isItalicTag(name) || hasClass(atts, "italic")) {
       self->flushCurrentText();
@@ -378,8 +369,8 @@ struct TextExtractor {
       self->inRt = false;
       // Emit a RubyRun for the base text accumulated so far with this annotation.
       if (!self->rubyBase.empty()) {
-        self->currentRuns.push_back(
-            RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation), self->currentStyle(), self->hasEmphasis()});
+        self->currentRuns.push_back(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation),
+                                            self->currentStyle(), self->hasEmphasis()});
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
@@ -447,7 +438,8 @@ struct TextExtractor {
       // whitespace inside running text lands with currentText already non-empty.
       if (self->currentText.empty()) {
         int firstInk = 0;
-        while (firstInk < len && (s[firstInk] == '\n' || s[firstInk] == '\r' || s[firstInk] == '\t' || s[firstInk] == ' ')) {
+        while (firstInk < len &&
+               (s[firstInk] == '\n' || s[firstInk] == '\r' || s[firstInk] == '\t' || s[firstInk] == ' ')) {
           firstInk++;
         }
         if (firstInk == len) return;
@@ -1117,8 +1109,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   return true;
 }
 
-bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewportWidth,
-                                         const uint16_t viewportHeight) {
+bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight) {
   const auto vsectionsDir = epub->getCachePath() + "/vsections";
   Storage.mkdir(vsectionsDir.c_str());
 

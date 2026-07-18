@@ -59,8 +59,8 @@ class EpubReaderMenuActivity final : public Activity {
   };
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
-                                               bool showVerticalToggle, bool verticalEnabled, bool furiganaEnabled,
-                                               bool imageReaderMinimal);
+                                              bool showVerticalToggle, bool verticalEnabled, bool furiganaEnabled,
+                                              bool imageReaderMinimal);
 
   std::vector<MenuItem> menuItems;
   bool hasPageText = true;

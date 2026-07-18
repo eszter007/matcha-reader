@@ -237,16 +237,15 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
       break;
     case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
       if (!xtc) break;
-      startActivityForResult(
-          std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, xtc->getPath(),
-                                                   std::vector<manga::TocEntry>{}),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled && xtc) {
-              const uint32_t target = std::get<PageResult>(result.data).page;
-              if (target < xtc->getPageCount()) currentPage = target;
-            }
-            requestUpdate();
-          });
+      startActivityForResult(std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, xtc->getPath(),
+                                                                      std::vector<manga::TocEntry>{}),
+                             [this](const ActivityResult& result) {
+                               if (!result.isCancelled && xtc) {
+                                 const uint32_t target = std::get<PageResult>(result.data).page;
+                                 if (target < xtc->getPageCount()) currentPage = target;
+                               }
+                               requestUpdate();
+                             });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SCREENSHOT:
@@ -300,8 +299,7 @@ void XtcReaderActivity::addBookmark() {
   const size_t countBefore = cachedBookmarks.size();
   cachedBookmarks.erase(std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
                                        [&](const BookmarkEntry& b) {
-                                         return b.computedSpineIndex == 0 &&
-                                                b.computedChapterPageCount == pageCount &&
+                                         return b.computedSpineIndex == 0 && b.computedChapterPageCount == pageCount &&
                                                 b.computedChapterProgress == currentPage;
                                        }),
                         cachedBookmarks.end());

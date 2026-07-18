@@ -496,8 +496,8 @@ bool Xtc::generateThumbBmp(int height) const {
 // column), and the plane-1 bit alone gives a good black/white classification (bit1=1 -> dark).
 // Point-samples one source pixel per thumb pixel (last source column mapping to a thumb column
 // wins). Peak RAM: one source column (~100 B) + the packed 1-bit thumb (~4.5 KB).
-bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, uint16_t thumbWidth,
-                                   uint16_t thumbHeight, float scale) const {
+bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, uint16_t thumbWidth, uint16_t thumbHeight,
+                                   float scale) const {
   if (thumbWidth == 0 || thumbHeight == 0 || pageInfo.width == 0 || pageInfo.height == 0) return false;
 
   const size_t colBytes = (static_cast<size_t>(pageInfo.height) + 7) / 8;
@@ -555,8 +555,7 @@ bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, ui
   createBmpHeader(&bmpHeader, thumbWidth, thumbHeight, BmpRowOrder::TopDown);
   thumbBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(bmpHeader));
   thumbBmp.write(thumb.get(), static_cast<size_t>(rowSize) * thumbHeight);
-  LOG_DBG("XTC", "Generated streaming thumb BMP (%dx%d): %s", thumbWidth, thumbHeight,
-          getThumbBmpPath(height).c_str());
+  LOG_DBG("XTC", "Generated streaming thumb BMP (%dx%d): %s", thumbWidth, thumbHeight, getThumbBmpPath(height).c_str());
   return true;
 }
 

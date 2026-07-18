@@ -1257,7 +1257,9 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
   // and return before touching the card. Seeds are filtered by actual coverage so a CJK-only
   // font doesn't cache replacement-glyph advances for Latin it can't render.
   if (advanceTableSize_[0] == 0 && !hitCap) {
-    static constexpr struct { uint32_t first, last; } kSeedRanges[] = {
+    static constexpr struct {
+      uint32_t first, last;
+    } kSeedRanges[] = {
         {0x20, 0x7E},      // ASCII
         {0xA0, 0xFF},      // Latin-1 (French/German accents)
         {0x2010, 0x2027},  // dashes, curly quotes, ellipsis

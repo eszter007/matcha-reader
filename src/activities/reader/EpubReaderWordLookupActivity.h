@@ -1,7 +1,7 @@
 #pragma once
 
-#include <GfxRenderer.h>
 #include <Epub/VerticalParsedText.h>
+#include <GfxRenderer.h>
 
 struct Rect;
 class Page;
@@ -24,9 +24,9 @@ class EpubReaderWordLookupActivity final : public Activity {
                                         const VerticalPage& page, std::string scanCachePath = "",
                                         uint16_t spineIndex = 0, uint16_t pageIndex = 0);
   // Horizontal (yokogaki) reading mode.
-  explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                        const Page& page, std::string scanCachePath = "",
-                                        uint16_t spineIndex = 0, uint16_t pageIndex = 0);
+  explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Page& page,
+                                        std::string scanCachePath = "", uint16_t spineIndex = 0,
+                                        uint16_t pageIndex = 0);
 
   void onEnter() override;
   void onExit() override;

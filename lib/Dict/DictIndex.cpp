@@ -35,8 +35,8 @@ constexpr size_t SPX_KEY_SIZE = DictIndexRecord::HEADWORD_SIZE;  // 32
 // scan; smaller -> bigger fine windows, and a big fine window is a slow SD read (transfer time,
 // not just per-transaction overhead) that the fine-window cache below must then absorb. 128 keeps
 // the coarse heap ~10KB (safe headroom under the resident reader) and the fine window ~4KB.
-constexpr size_t MAX_COARSE = 128;                              // RAM coarse entries per dict
-constexpr size_t FINE_SLICE_BYTES = 3904;                       // one coarse bracket (>= max cstride*32)
+constexpr size_t MAX_COARSE = 128;         // RAM coarse entries per dict
+constexpr size_t FINE_SLICE_BYTES = 3904;  // one coarse bracket (>= max cstride*32)
 
 struct CoarseEntry {
   char key[SPX_KEY_SIZE];
@@ -160,8 +160,7 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   if (version != SPX_VERSION || stride == 0 || fineCount == 0) return;
   // Stale sidecar (dict file changed) -> fall back to the full search rather than mis-locate.
   if (idxCount != recordCount) {
-    LOG_ERR("DICT", "spx %s stale: %u records vs idx %u", spxPath, idxCount,
-            static_cast<unsigned>(recordCount));
+    LOG_ERR("DICT", "spx %s stale: %u records vs idx %u", spxPath, idxCount, static_cast<unsigned>(recordCount));
     return;
   }
 
@@ -175,15 +174,14 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   auto fineCache = makeUniqueNoThrow<uint8_t[]>(fineBytes);
   if (!coarse || !fineCache) {
     // Not enough contiguous heap right now -> stay on the full search. Not fatal.
-    LOG_ERR("DICT", "spx alloc failed (%u coarse, %u B fine); using full search",
-            static_cast<unsigned>(coarseCount), static_cast<unsigned>(fineBytes));
+    LOG_ERR("DICT", "spx alloc failed (%u coarse, %u B fine); using full search", static_cast<unsigned>(coarseCount),
+            static_cast<unsigned>(fineBytes));
     return;
   }
   for (size_t c = 0; c < coarseCount; c++) {
     const uint32_t fineIdx = static_cast<uint32_t>(c) * cstride;  // < fineCount by construction
     h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fineIdx) * SPX_KEY_SIZE);
-    if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) !=
-        static_cast<int>(SPX_KEY_SIZE)) {
+    if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) != static_cast<int>(SPX_KEY_SIZE)) {
       return;  // partial -> leave spxOk false
     }
     coarse[c].fineIdx = fineIdx;
@@ -200,8 +198,7 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   h.spxCoarseCount = coarseCount;
   h.spxOk = true;
   LOG_INF("DICT", "spx %s: %u checkpoints, %u coarse in RAM (%u B)", spxPath, fineCount,
-          static_cast<unsigned>(coarseCount),
-          static_cast<unsigned>(coarseCount * sizeof(CoarseEntry)));
+          static_cast<unsigned>(coarseCount), static_cast<unsigned>(coarseCount * sizeof(CoarseEntry)));
 }
 
 // Narrow the search to the .idx record window [*lo,*hi) that must contain `key` (a 32-byte,
@@ -282,8 +279,7 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 
   h.idxFile.seek(start * sizeof(DictIndexRecord));
   const size_t bytesToRead = count * sizeof(DictIndexRecord);
-  if (h.idxFile.read(reinterpret_cast<uint8_t*>(h.blockCache.get()), bytesToRead) !=
-      static_cast<int>(bytesToRead)) {
+  if (h.idxFile.read(reinterpret_cast<uint8_t*>(h.blockCache.get()), bytesToRead) != static_cast<int>(bytesToRead)) {
     h.blockStart = SIZE_MAX;  // invalidate on read failure -- don't serve a partial block later
     return false;
   }
@@ -295,9 +291,7 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 }
 }  // namespace
 
-bool DictIndex::isAvailable() {
-  return Storage.exists(IDX_PATH) && Storage.exists(DAT_PATH);
-}
+bool DictIndex::isAvailable() { return Storage.exists(IDX_PATH) && Storage.exists(DAT_PATH); }
 
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
                              bool needDefinition) {
@@ -308,8 +302,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     // fail again, once per candidate/window/character for the whole page.
     if (h.triedOpen) return false;
     h.triedOpen = true;
-    if (!Storage.openFileForRead("DICT", idxPath, h.idxFile) ||
-        !Storage.openFileForRead("DICT", datPath, h.datFile)) {
+    if (!Storage.openFileForRead("DICT", idxPath, h.idxFile) || !Storage.openFileForRead("DICT", datPath, h.datFile)) {
       return false;
     }
     h.opened = true;
@@ -416,7 +409,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       }
 
       // Read definitions for the top-priority siblings, already in priority order.
-      struct Entry { std::string def; uint8_t priority; };
+      struct Entry {
+        std::string def;
+        uint8_t priority;
+      };
       std::vector<Entry> entries;
       constexpr int kMaxEntries = 5;
       for (size_t s = 0; s < sibs.size() && static_cast<int>(entries.size()) < kMaxEntries; s++) {
@@ -434,8 +430,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         datFile.seek(sibs[s].offset);
         std::string def;
         def.resize(sibs[s].length);
-        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) !=
-            static_cast<int>(sibs[s].length))
+        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) != static_cast<int>(sibs[s].length))
           continue;
         entries.push_back({std::move(def), sibs[s].priority});
       }
@@ -491,8 +486,8 @@ void DictIndex::releaseCaches() {
 }
 
 void DictIndex::logAndResetStats(const char* label) {
-  LOG_INF("DICT", "%s: %u lookupExact, idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)",
-          label, g_lookupExactCalls, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
+  LOG_INF("DICT", "%s: %u lookupExact, idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)", label,
+          g_lookupExactCalls, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
           g_recordCacheMisses + g_fineReads);
   g_lookupExactCalls = 0;
   g_recordCacheHits = 0;

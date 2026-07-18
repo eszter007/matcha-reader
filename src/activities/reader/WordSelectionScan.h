@@ -72,9 +72,9 @@ class WordSelectionScan {
   static constexpr uint16_t kNoRestoredCursor = 0xFFFF;
   uint16_t restoredCursorIndex = kNoRestoredCursor;
 
-  std::vector<GlyphRef> allGlyphs;          // Full glyph list for building lookup text
-  std::vector<GlyphRef> selectableGlyphs;   // Positions with a dictionary match
-  std::vector<size_t> selectToAllIdx;       // Maps selectableGlyphs index -> allGlyphs index
+  std::vector<GlyphRef> allGlyphs;         // Full glyph list for building lookup text
+  std::vector<GlyphRef> selectableGlyphs;  // Positions with a dictionary match
+  std::vector<size_t> selectToAllIdx;      // Maps selectableGlyphs index -> allGlyphs index
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;

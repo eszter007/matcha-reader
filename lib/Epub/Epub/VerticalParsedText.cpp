@@ -89,82 +89,142 @@ uint32_t composeKanaDiacritic(uint32_t base, uint32_t mark) {
   // U+3099 COMBINING KATAKANA-HIRAGANA VOICED SOUND MARK
   if (mark == 0x3099) {
     switch (base) {
-      case 0x3046: return 0x3094;  // う + ゙ = ゔ
-      case 0x304B: return 0x304C;  // か -> が
-      case 0x304D: return 0x304E;  // き -> ぎ
-      case 0x304F: return 0x3050;  // く -> ぐ
-      case 0x3051: return 0x3052;  // け -> げ
-      case 0x3053: return 0x3054;  // こ -> ご
-      case 0x3055: return 0x3056;  // さ -> ざ
-      case 0x3057: return 0x3058;  // し -> じ
-      case 0x3059: return 0x305A;  // す -> ず
-      case 0x305B: return 0x305C;  // せ -> ぜ
-      case 0x305D: return 0x305E;  // そ -> ぞ
-      case 0x305F: return 0x3060;  // た -> だ
-      case 0x3061: return 0x3062;  // ち -> ぢ
-      case 0x3064: return 0x3065;  // つ -> づ
-      case 0x3066: return 0x3067;  // て -> で
-      case 0x3068: return 0x3069;  // と -> ど
-      case 0x306F: return 0x3070;  // は -> ば
-      case 0x3072: return 0x3073;  // ひ -> び
-      case 0x3075: return 0x3076;  // ふ -> ぶ
-      case 0x3078: return 0x3079;  // へ -> べ
-      case 0x307B: return 0x307C;  // ほ -> ぼ
-      case 0x309D: return 0x309E;  // ゝ -> ゞ
-      case 0x30A6: return 0x30F4;  // ウ -> ヴ
-      case 0x30AB: return 0x30AC;  // カ -> ガ
-      case 0x30AD: return 0x30AE;  // キ -> ギ
-      case 0x30AF: return 0x30B0;  // ク -> グ
-      case 0x30B1: return 0x30B2;  // ケ -> ゲ
-      case 0x30B3: return 0x30B4;  // コ -> ゴ
-      case 0x30B5: return 0x30B6;  // サ -> ザ
-      case 0x30B7: return 0x30B8;  // シ -> ジ
-      case 0x30B9: return 0x30BA;  // ス -> ズ
-      case 0x30BB: return 0x30BC;  // セ -> ゼ
-      case 0x30BD: return 0x30BE;  // ソ -> ゾ
-      case 0x30BF: return 0x30C0;  // タ -> ダ
-      case 0x30C1: return 0x30C2;  // チ -> ヂ
-      case 0x30C4: return 0x30C5;  // ツ -> ヅ
-      case 0x30C6: return 0x30C7;  // テ -> デ
-      case 0x30C8: return 0x30C9;  // ト -> ド
-      case 0x30CF: return 0x30D0;  // ハ -> バ
-      case 0x30D2: return 0x30D3;  // ヒ -> ビ
-      case 0x30D5: return 0x30D6;  // フ -> ブ
-      case 0x30D8: return 0x30D9;  // ヘ -> ベ
-      case 0x30DB: return 0x30DC;  // ホ -> ボ
-      case 0x30EF: return 0x30F7;  // ワ -> ヷ
-      case 0x30F0: return 0x30F8;  // ヰ -> ヸ
-      case 0x30F1: return 0x30F9;  // ヱ -> ヹ
-      case 0x30F2: return 0x30FA;  // ヲ -> ヺ
-      case 0x30FD: return 0x30FE;  // ヽ -> ヾ
-      default: return 0;
+      case 0x3046:
+        return 0x3094;  // う + ゙ = ゔ
+      case 0x304B:
+        return 0x304C;  // か -> が
+      case 0x304D:
+        return 0x304E;  // き -> ぎ
+      case 0x304F:
+        return 0x3050;  // く -> ぐ
+      case 0x3051:
+        return 0x3052;  // け -> げ
+      case 0x3053:
+        return 0x3054;  // こ -> ご
+      case 0x3055:
+        return 0x3056;  // さ -> ざ
+      case 0x3057:
+        return 0x3058;  // し -> じ
+      case 0x3059:
+        return 0x305A;  // す -> ず
+      case 0x305B:
+        return 0x305C;  // せ -> ぜ
+      case 0x305D:
+        return 0x305E;  // そ -> ぞ
+      case 0x305F:
+        return 0x3060;  // た -> だ
+      case 0x3061:
+        return 0x3062;  // ち -> ぢ
+      case 0x3064:
+        return 0x3065;  // つ -> づ
+      case 0x3066:
+        return 0x3067;  // て -> で
+      case 0x3068:
+        return 0x3069;  // と -> ど
+      case 0x306F:
+        return 0x3070;  // は -> ば
+      case 0x3072:
+        return 0x3073;  // ひ -> び
+      case 0x3075:
+        return 0x3076;  // ふ -> ぶ
+      case 0x3078:
+        return 0x3079;  // へ -> べ
+      case 0x307B:
+        return 0x307C;  // ほ -> ぼ
+      case 0x309D:
+        return 0x309E;  // ゝ -> ゞ
+      case 0x30A6:
+        return 0x30F4;  // ウ -> ヴ
+      case 0x30AB:
+        return 0x30AC;  // カ -> ガ
+      case 0x30AD:
+        return 0x30AE;  // キ -> ギ
+      case 0x30AF:
+        return 0x30B0;  // ク -> グ
+      case 0x30B1:
+        return 0x30B2;  // ケ -> ゲ
+      case 0x30B3:
+        return 0x30B4;  // コ -> ゴ
+      case 0x30B5:
+        return 0x30B6;  // サ -> ザ
+      case 0x30B7:
+        return 0x30B8;  // シ -> ジ
+      case 0x30B9:
+        return 0x30BA;  // ス -> ズ
+      case 0x30BB:
+        return 0x30BC;  // セ -> ゼ
+      case 0x30BD:
+        return 0x30BE;  // ソ -> ゾ
+      case 0x30BF:
+        return 0x30C0;  // タ -> ダ
+      case 0x30C1:
+        return 0x30C2;  // チ -> ヂ
+      case 0x30C4:
+        return 0x30C5;  // ツ -> ヅ
+      case 0x30C6:
+        return 0x30C7;  // テ -> デ
+      case 0x30C8:
+        return 0x30C9;  // ト -> ド
+      case 0x30CF:
+        return 0x30D0;  // ハ -> バ
+      case 0x30D2:
+        return 0x30D3;  // ヒ -> ビ
+      case 0x30D5:
+        return 0x30D6;  // フ -> ブ
+      case 0x30D8:
+        return 0x30D9;  // ヘ -> ベ
+      case 0x30DB:
+        return 0x30DC;  // ホ -> ボ
+      case 0x30EF:
+        return 0x30F7;  // ワ -> ヷ
+      case 0x30F0:
+        return 0x30F8;  // ヰ -> ヸ
+      case 0x30F1:
+        return 0x30F9;  // ヱ -> ヹ
+      case 0x30F2:
+        return 0x30FA;  // ヲ -> ヺ
+      case 0x30FD:
+        return 0x30FE;  // ヽ -> ヾ
+      default:
+        return 0;
     }
   }
 
   // U+309A COMBINING KATAKANA-HIRAGANA SEMI-VOICED SOUND MARK
   if (mark == 0x309A) {
     switch (base) {
-      case 0x306F: return 0x3071;  // は -> ぱ
-      case 0x3072: return 0x3074;  // ひ -> ぴ
-      case 0x3075: return 0x3077;  // ふ -> ぷ
-      case 0x3078: return 0x307A;  // へ -> ぺ
-      case 0x307B: return 0x307D;  // ほ -> ぽ
-      case 0x30CF: return 0x30D1;  // ハ -> パ
-      case 0x30D2: return 0x30D4;  // ヒ -> ピ
-      case 0x30D5: return 0x30D7;  // フ -> プ
-      case 0x30D8: return 0x30DA;  // ヘ -> ペ
-      case 0x30DB: return 0x30DD;  // ホ -> ポ
-      default: return 0;
+      case 0x306F:
+        return 0x3071;  // は -> ぱ
+      case 0x3072:
+        return 0x3074;  // ひ -> ぴ
+      case 0x3075:
+        return 0x3077;  // ふ -> ぷ
+      case 0x3078:
+        return 0x307A;  // へ -> ぺ
+      case 0x307B:
+        return 0x307D;  // ほ -> ぽ
+      case 0x30CF:
+        return 0x30D1;  // ハ -> パ
+      case 0x30D2:
+        return 0x30D4;  // ヒ -> ピ
+      case 0x30D5:
+        return 0x30D7;  // フ -> プ
+      case 0x30D8:
+        return 0x30DA;  // ヘ -> ペ
+      case 0x30DB:
+        return 0x30DD;  // ホ -> ポ
+      default:
+        return 0;
     }
   }
 
   return 0;
 }
 
-} // namespace
+}  // namespace
 
 VerticalParsedText::VerticalParsedText(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
-                                        uint16_t viewportHeight)
+                                       uint16_t viewportHeight)
     : renderer_(renderer), fontId_(fontId), viewportWidth_(viewportWidth), viewportHeight_(viewportHeight) {}
 
 int VerticalParsedText::charAdvancePx() const {
@@ -178,8 +238,8 @@ int VerticalParsedText::charAdvancePx() const {
   // fonts that includes interline spacing, blowing cells up from ~1em to ~1.45em (visibly
   // "very wide" character spacing).
   renderer_.ensureSdCardFontReady(fontId_, "\xe6\xbc\xa2", 0x01);
-  const int cjkAdvance = renderer_.getTextAdvanceX(
-      fontId_, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));  // 漢
+  const int cjkAdvance =
+      renderer_.getTextAdvanceX(fontId_, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));  // 漢
   if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 6;
   return renderer_.getLineHeight(fontId_);
 }
@@ -296,7 +356,7 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
 }
 
 void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
-                                                const bool continuesPreviousParagraph) {
+                                               const bool continuesPreviousParagraph) {
   // A paragraph break recorded at the very END of the previous batch (a trailing '\n' in the
   // last run) could never fire there -- the layout loop only visits indices < stream size --
   // and reset() would have discarded it. layoutPages() flags it instead; re-record it here at
@@ -394,8 +454,8 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     if (run.rubyText.empty()) {
       for (size_t k = 0; k < baseCps.size(); k++) {
         if (!canPushStreamChar()) return;
-        stream_.push_back(
-            PendingChar{baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style, run.emphasis, {}});
+        stream_.push_back(PendingChar{
+            baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style, run.emphasis, {}});
       }
     } else {
       // Decode ruby codepoints to distribute evenly across base characters.
@@ -438,8 +498,8 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
           }
         }
         if (!canPushStreamChar()) return;
-        stream_.push_back(PendingChar{baseCps[k], paragraphIndex,
-                                       static_cast<uint32_t>(baseOffsets[k]), run.style, run.emphasis, std::move(slice)});
+        stream_.push_back(PendingChar{baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style,
+                                      run.emphasis, std::move(slice)});
       }
     }
 
@@ -571,7 +631,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       return true;
     }
     constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;  // headroom for the rest of the app, not the reserve() margin
-    constexpr size_t LINEAR_GROWTH_STEP = 16;  // elements; keeps a stalled page's retries cheap
+    constexpr size_t LINEAR_GROWTH_STEP = 16;          // elements; keeps a stalled page's retries cheap
 
     const size_t doubledCapacity = glyphs.capacity() == 0 ? 1 : glyphs.capacity() * 2;
     const size_t doubledBytes = doubledCapacity * sizeof(VerticalGlyph);
@@ -715,8 +775,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
   auto placeUpright = [&](const PendingChar& pc) { placeUprightAt(pc, column, row); };
   auto isAsciiDigit = [](uint32_t cp) {
-    return (cp >= '0' && cp <= '9') ||              // ASCII digits: U+0030-U+0039
-           (cp >= 0xFF10 && cp <= 0xFF19);         // Fullwidth digits: U+FF10-U+FF19
+    return (cp >= '0' && cp <= '9') ||      // ASCII digits: U+0030-U+0039
+           (cp >= 0xFF10 && cp <= 0xFF19);  // Fullwidth digits: U+FF10-U+FF19
   };
   auto isAsciiAlnum = [](uint32_t cp) {
     return (cp >= '0' && cp <= '9') || (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
@@ -760,8 +820,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       int l1 = 0, w1 = 0, t1 = 0, h1 = 0, lN = 0, wN = 0, tN = 0, hN = 0;
       if (renderer_.getGlyphMetrics(fontId_, cpFirst, static_cast<EpdFontFamily::Style>(kNoStyle), &l1, &w1, &t1,
                                     &h1) &&
-          renderer_.getGlyphMetrics(fontId_, cpLast, static_cast<EpdFontFamily::Style>(kNoStyle), &lN, &wN, &tN,
-                                    &hN)) {
+          renderer_.getGlyphMetrics(fontId_, cpLast, static_cast<EpdFontFamily::Style>(kNoStyle), &lN, &wN, &tN, &hN)) {
         std::string lastUtf8;
         encodeDigitUtf8(cpLast, lastUtf8);
         const int lastAdvance =
@@ -885,9 +944,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       nextBoxStartIdx++;
     }
 
-    const size_t boundaryLimit =
-        (nextParagraphBreakIdx < paragraphBreaksBeforeIndex_.size()) ? paragraphBreaksBeforeIndex_[nextParagraphBreakIdx]
-                                                                     : stream_.size();
+    const size_t boundaryLimit = (nextParagraphBreakIdx < paragraphBreaksBeforeIndex_.size())
+                                     ? paragraphBreaksBeforeIndex_[nextParagraphBreakIdx]
+                                     : stream_.size();
 
     // Tate-chu-yoko for !?/!! pairs: JP books mark these with a tcy span, but
     // like the digit path below we detect them directly so books without the
@@ -915,7 +974,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       }
 
       const size_t digitCount = digitEnd - idx;
-      
+
       if (digitCount == 2) {
         placeTcyPairAt(idx);
         idx = digitEnd;
@@ -1006,7 +1065,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       std::string remaining = runUtf8;
 
       while (!remaining.empty()) {
-        const int remWidthPx = renderer_.getTextAdvanceX(fontId_, remaining.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+        const int remWidthPx =
+            renderer_.getTextAdvanceX(fontId_, remaining.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
         const uint16_t remRows = static_cast<uint16_t>(
             std::max(1, static_cast<int>(std::ceil(static_cast<double>(remWidthPx + runDownNudge) / cellPx))));
         const uint16_t availRows = rowsPerColumn - row;
@@ -1039,9 +1099,11 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // Doesn't fit — find a space to break at that fits within availRows.
         // Measure progressively shorter prefixes ending at a space.
         size_t breakAt = std::string::npos;
-        for (size_t sp = remaining.rfind(' '); sp != std::string::npos; sp = (sp == 0) ? std::string::npos : remaining.rfind(' ', sp - 1)) {
+        for (size_t sp = remaining.rfind(' '); sp != std::string::npos;
+             sp = (sp == 0) ? std::string::npos : remaining.rfind(' ', sp - 1)) {
           std::string prefix = remaining.substr(0, sp);
-          const int prefixPx = renderer_.getTextAdvanceX(fontId_, prefix.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+          const int prefixPx =
+              renderer_.getTextAdvanceX(fontId_, prefix.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
           const uint16_t prefixRows = static_cast<uint16_t>(
               std::max(1, static_cast<int>(std::ceil(static_cast<double>(prefixPx + runDownNudge) / cellPx))));
           if (prefixRows <= availRows) {
@@ -1085,7 +1147,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
         // Place the prefix chunk.
         std::string chunk = remaining.substr(0, breakAt);
-        const int chunkPx = renderer_.getTextAdvanceX(fontId_, chunk.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+        const int chunkPx =
+            renderer_.getTextAdvanceX(fontId_, chunk.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
         const uint16_t chunkRows = static_cast<uint16_t>(
             std::max(1, static_cast<int>(std::ceil(static_cast<double>(chunkPx + runDownNudge) / cellPx))));
 
@@ -1213,7 +1276,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 // column in tategaki order) and append it to the page. Full column height, with the border lines
 // centered in the surrounding column gaps / padded by a fraction of the cell vertically.
 void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t startCol, const uint16_t endCol,
-                                              const bool openLeft, const bool openRight) const {
+                                             const bool openLeft, const bool openRight) const {
   if (boxGeomCellPx_ <= 0 || activeBlock_.borderEdges == 0) return;
   const int gap = boxGeomColumnAdvancePx_ - boxGeomCellPx_;
   const int padX = std::max(2, gap / 2);
@@ -1260,8 +1323,8 @@ void VerticalParsedText::centerBlockColumns(VerticalPage& p, const uint16_t star
     }
     if (maxRow < 0) continue;
     const int usedRows = maxRow - minRow + 1;
-    const int shiftPx = ((static_cast<int>(boxGeomRowsPerColumn_) - usedRows) * boxGeomCellPx_) / 2 -
-                        minRow * boxGeomCellPx_;
+    const int shiftPx =
+        ((static_cast<int>(boxGeomRowsPerColumn_) - usedRows) * boxGeomCellPx_) / 2 - minRow * boxGeomCellPx_;
     if (shiftPx == 0) continue;
     for (auto& g : p.glyphs) {
       if (g.column != c) continue;

@@ -19,8 +19,8 @@ struct Rect;
 class EpubReaderFootnotesActivity final : public Activity {
  public:
   explicit EpubReaderFootnotesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                       const std::vector<FootnoteEntry>& footnotes, Epub* epub,
-                                       int currentSpineIndex, int startIndex = 0)
+                                       const std::vector<FootnoteEntry>& footnotes, Epub* epub, int currentSpineIndex,
+                                       int startIndex = 0)
       : Activity("EpubReaderFootnotes", renderer, mappedInput),
         footnotes(footnotes),
         epub(epub),

@@ -7,7 +7,9 @@
 class Epub;
 class Xtc;
 class Txt;
-namespace manga { class MangaBook; }
+namespace manga {
+class MangaBook;
+}
 
 class ReaderActivity final : public Activity {
   std::string initialBookPath;

@@ -1,16 +1,13 @@
 #include "HomeActivity.h"
 
-#include "EpubProgressUtil.h"
-#include "XtcProgressUtil.h"
-
 #include <Bitmap.h>
 #include <Epub.h>
-#include <FsHelpers.h>
-#include <MangaPanel.h>
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <MangaPanel.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
@@ -19,9 +16,11 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "EpubProgressUtil.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "XtcProgressUtil.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 

@@ -82,13 +82,19 @@ void ReadingStatsActivity::loop() {
   }
   // Left/Right to navigate calendar months
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    if (calMonth == 1) { calMonth = 12; calYear--; }
-    else calMonth--;
+    if (calMonth == 1) {
+      calMonth = 12;
+      calYear--;
+    } else
+      calMonth--;
     requestUpdate();
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    if (calMonth == 12) { calMonth = 1; calYear++; }
-    else calMonth++;
+    if (calMonth == 12) {
+      calMonth = 1;
+      calYear++;
+    } else
+      calMonth++;
     requestUpdate();
   }
   // Up/Down to scroll
@@ -153,13 +159,13 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const int row1X = cardX + (cardW - row1TotalW) / 2;
   const int row1Y = y + cardPad;
   renderer.drawIcon(FlameIcon, row1X, row1Y, iconSize, iconSize);
-  renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8,
-                    row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2, streakBuf, true, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8, row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
+                    streakBuf, true, EpdFontFamily::BOLD);
 
   // Minutes this week
   char weekBuf[48];
   snprintf(weekBuf, sizeof(weekBuf), tr(STR_WEEK_MINUTES_READ_FORMAT), weekMinutes,
-          weekMinutes == 1 ? tr(STR_MINUTE) : tr(STR_MINUTES));
+           weekMinutes == 1 ? tr(STR_MINUTE) : tr(STR_MINUTES));
   const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
   const int row2Y = row1Y + iconSize + 4;
   renderer.drawText(SMALL_FONT_ID, cardX + (cardW - weekTextW) / 2, row2Y, weekBuf, true);
@@ -177,8 +183,8 @@ void ReadingStatsActivity::render(RenderLock&&) {
     const int cx = cardX + cardPad + daySpacing / 2 + i * daySpacing;
     const bool isToday = (i == today.dow);
     const char* label = dayLabel(i);
-    const int labelW = renderer.getTextWidth(SMALL_FONT_ID, label,
-                                              isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    const int labelW =
+        renderer.getTextWidth(SMALL_FONT_ID, label, isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     renderer.drawText(SMALL_FONT_ID, cx - labelW / 2, labelsY, label, true,
                       isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     const int ix = cx - circleSize / 2;
@@ -211,15 +217,17 @@ void ReadingStatsActivity::render(RenderLock&&) {
   char booksBuf[16], daysBuf[16], timeBuf[16], streakLBuf[16];
   snprintf(booksBuf, sizeof(booksBuf), "%d", booksFinished);
   snprintf(daysBuf, sizeof(daysBuf), "%d", daysRead);
-  if (totalMin >= 60) snprintf(timeBuf, sizeof(timeBuf), "%dh", static_cast<int>(totalMin / 60));
-  else snprintf(timeBuf, sizeof(timeBuf), "%dm", static_cast<int>(totalMin));
+  if (totalMin >= 60)
+    snprintf(timeBuf, sizeof(timeBuf), "%dh", static_cast<int>(totalMin / 60));
+  else
+    snprintf(timeBuf, sizeof(timeBuf), "%dm", static_cast<int>(totalMin));
   snprintf(streakLBuf, sizeof(streakLBuf), "%d", longestStreak);
 
   StatCard cards[4] = {
-    {booksBuf, tr(STR_STAT_BOOKS_FINISHED), BookOpenIcon24},
-    {daysBuf, tr(STR_STAT_DAYS_READ), CalendarIcon24},
-    {timeBuf, tr(STR_STAT_TOTAL_TIME), ClockIcon24},
-    {streakLBuf, tr(STR_STAT_LONGEST_STREAK), FlameIcon},
+      {booksBuf, tr(STR_STAT_BOOKS_FINISHED), BookOpenIcon24},
+      {daysBuf, tr(STR_STAT_DAYS_READ), CalendarIcon24},
+      {timeBuf, tr(STR_STAT_TOTAL_TIME), ClockIcon24},
+      {streakLBuf, tr(STR_STAT_LONGEST_STREAK), FlameIcon},
   };
 
   for (int i = 0; i < 4; i++) {
@@ -329,7 +337,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
   }
 
   // Compute max scroll: content bottom (y + calH) minus the visible area.
-  const int contentEndY = y + calH + 10;  // 10px bottom margin
+  const int contentEndY = y + calH + 10;                                     // 10px bottom margin
   const int visibleHeight = renderer.getScreenHeight() - headerBottom - 50;  // 50 for button hints
   maxScrollOffset = contentEndY - headerBottom - visibleHeight + scrollOffset;
   if (maxScrollOffset < 0) maxScrollOffset = 0;

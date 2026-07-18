@@ -20,7 +20,7 @@
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
-constexpr size_t PARSE_BUFFER_SIZE = 4096;  // 4KB: SD reads are latency-bound (see VerticalSection)
+constexpr size_t PARSE_BUFFER_SIZE = 4096;        // 4KB: SD reads are latency-bound (see VerticalSection)
 
 // Hard cap on the number of anchor IDs recorded per chapter. Legitimate navigation
 // anchors (TOC entries, footnotes, cross-references) rarely exceed a few hundred per
@@ -271,8 +271,8 @@ void ChapterHtmlSlimParser::flushPendingBlockLayout() {
   if (!currentTextBlock || currentTextBlock->isEmpty()) return;
   makePages();
   const auto style = currentTextBlock->getBlockStyle();
-  currentTextBlock.reset(new (std::nothrow) ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled,
-                                                       style));
+  currentTextBlock.reset(new (std::nothrow)
+                             ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, style));
   wordsExtractedInBlock = 0;
 }
 
@@ -294,8 +294,7 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
   if (boxContinued) edges &= static_cast<uint8_t>(~CssStyle::BORDER_TOP);
   if (openBottom) edges &= static_cast<uint8_t>(~CssStyle::BORDER_BOTTOM);
   auto box = std::shared_ptr<PageBox>(new (std::nothrow) PageBox(static_cast<int16_t>(viewportWidth - 5),
-                                                                 static_cast<int16_t>(yBottom - yTop), edges,
-                                                                 2, yTop));
+                                                                 static_cast<int16_t>(yBottom - yTop), edges, 2, yTop));
   if (box) currentPage->elements.push_back(box);
 }
 
@@ -832,8 +831,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // fills the screen (the user tilts the device to view it).
                 const bool viewportIsPortrait = self->viewportHeight > self->viewportWidth;
                 const bool imageIsLandscape = dims.width > dims.height;
-                const bool rotateImage =
-                    dims.width > 0 && dims.height > 0 && (viewportIsPortrait == imageIsLandscape);
+                const bool rotateImage = dims.width > 0 && dims.height > 0 && (viewportIsPortrait == imageIsLandscape);
 
                 std::shared_ptr<ImageBlock> imageBlock;
                 int xPos = 0;
@@ -842,9 +840,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   // Store natural dims; ImageBlock rotates + centers itself.
                   imageBlock = std::make_shared<ImageBlock>(cachedImagePath, dims.width, dims.height);
                   if (imageBlock) {
-                    const int reserve =
-                        std::max(self->renderer.getScreenWidth() - self->viewportWidth,
-                                 self->renderer.getScreenHeight() - self->viewportHeight);
+                    const int reserve = std::max(self->renderer.getScreenWidth() - self->viewportWidth,
+                                                 self->renderer.getScreenHeight() - self->viewportHeight);
                     imageBlock->setRotated(true, static_cast<int16_t>(reserve));
                   }
                 } else {
@@ -858,8 +855,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   int fitH = static_cast<int>(dims.height * s + 0.5f);
                   if (fitW < 1) fitW = 1;
                   if (fitH < 1) fitH = 1;
-                  imageBlock = std::make_shared<ImageBlock>(cachedImagePath,
-                                                            static_cast<int16_t>(fitW),
+                  imageBlock = std::make_shared<ImageBlock>(cachedImagePath, static_cast<int16_t>(fitW),
                                                             static_cast<int16_t>(fitH));
                   xPos = (self->viewportWidth - fitW) / 2;
                   yPos = (self->viewportHeight - fitH) / 2;
@@ -869,8 +865,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   LOG_ERR("EHP", "Failed to create ImageBlock");
                   return;
                 }
-                auto pageImage = std::make_shared<PageImage>(imageBlock, static_cast<int16_t>(xPos),
-                                                             static_cast<int16_t>(yPos));
+                auto pageImage =
+                    std::make_shared<PageImage>(imageBlock, static_cast<int16_t>(xPos), static_cast<int16_t>(yPos));
                 if (!pageImage) {
                   LOG_ERR("EHP", "Failed to create PageImage");
                   return;
@@ -879,8 +875,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
                 // Complete the image's dedicated page; start fresh for following text.
                 self->maybeEmitOpenBoxForPageBreak();
-                self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
-                                     self->xpathListItemIndex);
+                self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex, self->xpathListItemIndex);
                 self->completedPageCount++;
                 self->currentPage.reset(new Page());
                 if (!self->currentPage) {
@@ -1206,9 +1201,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->listDepth < kMaxListDepth) {
       ListCtx ctx;
       ctx.counter = 0;
-      ctx.type = cssStyle.hasListStyleType()
-                     ? cssStyle.listStyleType
-                     : (name[0] == 'o' ? CssListStyleType::Decimal : CssListStyleType::Disc);
+      ctx.type = cssStyle.hasListStyleType() ? cssStyle.listStyleType
+                                             : (name[0] == 'o' ? CssListStyleType::Decimal : CssListStyleType::Disc);
       self->listStack[self->listDepth] = ctx;
     }
     self->listDepth++;

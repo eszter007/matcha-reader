@@ -24,10 +24,14 @@ inline std::string gaijiReplacementText(const std::string& src, const std::strin
     while (digits < 6) {
       const char c = *h;
       uint32_t v;
-      if (c >= '0' && c <= '9') v = c - '0';
-      else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
-      else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-      else break;
+      if (c >= '0' && c <= '9')
+        v = c - '0';
+      else if (c >= 'a' && c <= 'f')
+        v = c - 'a' + 10;
+      else if (c >= 'A' && c <= 'F')
+        v = c - 'A' + 10;
+      else
+        break;
       cp = cp * 16 + v;
       h++;
       digits++;

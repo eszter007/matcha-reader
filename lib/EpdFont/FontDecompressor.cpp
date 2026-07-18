@@ -41,8 +41,8 @@ const uint8_t* FontDecompressor::slabLookup(const EpdFontData* fontData, const u
   return nullptr;
 }
 
-const uint8_t* FontDecompressor::slabInsert(const EpdFontData* fontData, const uint32_t glyphIndex,
-                                            const uint8_t* data, const uint32_t len) {
+const uint8_t* FontDecompressor::slabInsert(const EpdFontData* fontData, const uint32_t glyphIndex, const uint8_t* data,
+                                            const uint32_t len) {
   if (len == 0 || len > SLAB_BYTES) return nullptr;
   if (!slabBuf) {
     // Lazy allocation: the slab only costs RAM once non-prewarmed compressed-font glyphs are

@@ -28,15 +28,15 @@ struct VerticalGlyph {
   enum RenderKind : uint8_t { Upright = 0, RotatedRun = 1, RotatedPunct = 2, SmallKanaCorner = 3, UprightRun = 4 };
 
   uint32_t codepoint = 0;
-  uint16_t column = 0;      // 0 = rightmost column on the page
-  uint16_t row = 0;          // 0 = topmost cell in the column
-  uint16_t x = 0;            // logical screen-space draw position
-  uint16_t y = 0;            // logical screen-space draw position
+  uint16_t column = 0;  // 0 = rightmost column on the page
+  uint16_t row = 0;     // 0 = topmost cell in the column
+  uint16_t x = 0;       // logical screen-space draw position
+  uint16_t y = 0;       // logical screen-space draw position
   uint32_t paragraphIndex = 0;
-  uint32_t byteOffset = 0;   // UTF-8 byte offset into that paragraph's text
+  uint32_t byteOffset = 0;  // UTF-8 byte offset into that paragraph's text
   uint8_t renderKind = Upright;
-  uint8_t style = 0;           // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
-  bool emphasis = false;       // text-emphasis (sesame dots beside character)
+  uint8_t style = 0;      // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
+  bool emphasis = false;  // text-emphasis (sesame dots beside character)
   // Populated for run render kinds (RotatedRun/UprightRun).
   std::string rotatedRunText;
   // Furigana/ruby annotation for this glyph (UTF-8). Rendered in a smaller
@@ -202,7 +202,8 @@ class VerticalParsedText {
     // Carry box markers sitting exactly at the batch boundary into the next batch: they were
     // recorded for content that hasn't been added yet, so the layout loop (idx < stream size)
     // never visited them. layoutPages() re-records a carried marker at index 0.
-    boxStartCarry_ = boxStartCarry_ || (!boxStartsBeforeIndex_.empty() && boxStartsBeforeIndex_.back() == stream_.size());
+    boxStartCarry_ =
+        boxStartCarry_ || (!boxStartsBeforeIndex_.empty() && boxStartsBeforeIndex_.back() == stream_.size());
     boxEndCarry_ = boxEndCarry_ || (!boxEndsBeforeIndex_.empty() && boxEndsBeforeIndex_.back() == stream_.size());
     stream_.clear();
     paragraphBreaksBeforeIndex_.clear();
