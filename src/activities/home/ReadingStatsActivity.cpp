@@ -24,11 +24,13 @@ struct Today {
 };
 
 Today getToday() {
-  // Local-midnight day boundary, matching how the readers record stats.
+  // Local-midnight day boundary, matching how the readers record stats. gmtime_r into a
+  // stack tm: gmtime()'s shared static buffer is not reentrant across tasks.
   time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
-  const struct tm* t = gmtime(&now);
-  return {static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
-          static_cast<uint8_t>(t->tm_mday), (t->tm_wday + 6) % 7};
+  struct tm t = {};
+  gmtime_r(&now, &t);
+  return {static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1), static_cast<uint8_t>(t.tm_mday),
+          (t.tm_wday + 6) % 7};
 }
 
 int daysInMonth(uint16_t y, uint8_t m) {
