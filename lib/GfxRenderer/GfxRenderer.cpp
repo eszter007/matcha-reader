@@ -264,8 +264,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
       outerBase = cursorX + fontData->ascender - top;  // screenX = outerBase + glyphY
       innerBase = cursorY - left;                      // screenY = innerBase - glyphX
     } else if constexpr (rotation == TextRotation::Rotated90CCW) {
-      outerBase = cursorX + top;    // screenX = outerBase - glyphY; baseline at cursorX
-      innerBase = cursorY + left;   // screenY = innerBase + glyphX
+      outerBase = cursorX + top;   // screenX = outerBase - glyphY; baseline at cursorX
+      innerBase = cursorY + left;  // screenY = innerBase + glyphX
     } else {
       outerBase = cursorY - top;   // screenY = outerBase + glyphY
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
@@ -1979,15 +1979,15 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     drawY += baselineExcess * 2;
   }
 
-  if (shiftType == 2) {          // closing bracket/quote
-    const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3009 || cp == 0x300B ||
-                                  cp == 0x3011 || cp == 0x3015);
+  if (shiftType == 2) {  // closing bracket/quote
+    const bool isSquareBracket =
+        (cp == 0x300D || cp == 0x300F || cp == 0x3009 || cp == 0x300B || cp == 0x3011 || cp == 0x3015);
     if (isSquareBracket) {
       drawX = cellLeftX + (cellSize - rotatedW) / 2 - cellSize / 3;
     }
     const int closingBias = std::max(1, cellSize / 6 + extraNudge * 2);
     drawY = cellTopY + cellSize - rotatedH + closingBias;
-  } else if (shiftType == 3) {   // opening bracket/quote
+  } else if (shiftType == 3) {  // opening bracket/quote
     // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
     // deep, the bracket read as hanging low/left of the character it opens (device photos with
     // UDDigiKyokasho). The maxX clamp below already grants opening brackets right overhang.
@@ -2024,7 +2024,9 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
 
   // TEMP diagnostics for vertical punctuation tuning (strip with the other telemetry)
   if (cp == 0x30FC || shiftType == 3) {
-    LOG_DBG("VROT", "cp=%04X shift=%d cell=%d asc=%d pct=%d nudge=%d rotW=%d rotH=%d gTop=%d gLeft=%d cellTopY=%d drawX=%d drawY=%d",
+    LOG_DBG("VROT",
+            "cp=%04X shift=%d cell=%d asc=%d pct=%d nudge=%d rotW=%d rotH=%d gTop=%d gLeft=%d cellTopY=%d drawX=%d "
+            "drawY=%d",
             (unsigned)cp, shiftType, cellSize, ascender, fontPct, extraNudge, rotatedW, rotatedH, glyph->top,
             glyph->left, cellTopY, drawX, drawY);
   }

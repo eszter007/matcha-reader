@@ -98,7 +98,6 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
     return 0;
   }
 
-
   const uint32_t position = file.position();
   if (!page->serialize(file)) {
     LOG_ERR("SCT", "Failed to serialize page %d", pageCount);
@@ -266,7 +265,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, 4096);  // 4KB chunks: see VerticalSection PARSE_BUFFER_SIZE
+    success =
+        epub->readItemContentsToStream(localPath, tmpHtml, 4096);  // 4KB chunks: see VerticalSection PARSE_BUFFER_SIZE
     fileSize = tmpHtml.size();
     // Explicitly close() file before calling Storage.remove()
     tmpHtml.close();

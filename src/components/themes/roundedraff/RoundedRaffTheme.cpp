@@ -363,16 +363,15 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
   const int rowWidth = rect.width - sidePadding * 2;
 
   const int pageEndIndex = std::min(itemCount, pageStartIndex + pageItems);
-  bool prewarmed =
-      prewarmRows(renderer, kTitleFontId, (1 << EpdFontFamily::BOLD) | (1 << EpdFontFamily::REGULAR), pageStartIndex,
-                  pageEndIndex, [&](int i) {
-                    std::string s = rowTitle(i);
-                    if (rowValue != nullptr) s += rowValue(i);
-                    return s;
-                  });
+  bool prewarmed = prewarmRows(renderer, kTitleFontId, (1 << EpdFontFamily::BOLD) | (1 << EpdFontFamily::REGULAR),
+                               pageStartIndex, pageEndIndex, [&](int i) {
+                                 std::string s = rowTitle(i);
+                                 if (rowValue != nullptr) s += rowValue(i);
+                                 return s;
+                               });
   if (rowSubtitle != nullptr) {
-    prewarmed |= prewarmRows(renderer, kSubtitleFontId, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
-                             rowSubtitle);
+    prewarmed |=
+        prewarmRows(renderer, kSubtitleFontId, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex, rowSubtitle);
   }
 
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {

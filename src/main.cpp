@@ -503,8 +503,7 @@ void setup() {
     activityManager.replaceActivity(std::make_unique<EpubReaderTranslationActivity>(
         renderer, mappedInputManager, std::move(translateStashText), "", /*resumedAfterRestart=*/true));
   } else if (resume == BootResume::Silent &&
-             (snapshotTarget == SILENT_REBOOT_TARGET_READER ||
-              snapshotTarget == SILENT_REBOOT_TARGET_TRANSLATE) &&
+             (snapshotTarget == SILENT_REBOOT_TARGET_READER || snapshotTarget == SILENT_REBOOT_TARGET_TRANSLATE) &&
              !APP_STATE.openEpubPath.empty()) {
     // Plain reader resume -- also the fallback for a translate target whose stash was
     // missing/unreadable: land back in the book rather than home.

@@ -35,8 +35,7 @@ class ReadingStatsStore {
   uint16_t getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
   bool hasReadToday(uint16_t year, uint8_t month, uint8_t day) const;
 
-  void getWeekStatus(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay,
-                     int todayDow, bool readDays[7]) const;
+  void getWeekStatus(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, int todayDow, bool readDays[7]) const;
 
   // Get reading status for every day of a given month (1-indexed, out[1]..out[31]).
   void getMonthStatus(uint16_t year, uint8_t month, bool out[32]) const;

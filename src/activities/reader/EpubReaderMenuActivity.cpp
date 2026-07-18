@@ -26,13 +26,9 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
 
-std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes,
-                                                                                     bool hasBookmarks,
-                                                                                     bool hasWordLookup,
-                                                                                     bool showVerticalToggle,
-                                                                                     bool verticalEnabled,
-                                                                                     bool furiganaEnabled,
-                                                                                     bool imageReaderMinimal) {
+std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
+    bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool showVerticalToggle, bool verticalEnabled,
+    bool furiganaEnabled, bool imageReaderMinimal) {
   std::vector<MenuItem> items;
   items.reserve(16);
 
@@ -131,9 +127,9 @@ void EpubReaderMenuActivity::loop() {
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
-    result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption,
-                             static_cast<int8_t>(pendingVerticalEnabled ? 1 : 0),
-                             static_cast<int8_t>(pendingFuriganaEnabled ? 1 : 0)};
+    result.data =
+        MenuResult{-1, pendingOrientation, selectedPageTurnOption, static_cast<int8_t>(pendingVerticalEnabled ? 1 : 0),
+                   static_cast<int8_t>(pendingFuriganaEnabled ? 1 : 0)};
     setResult(std::move(result));
     finish();
     return;

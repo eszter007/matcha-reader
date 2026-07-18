@@ -237,9 +237,8 @@ class GfxRenderer {
   // Renders a single codepoint rotated 90° CCW and positioned inside a vertical
   // cell. shiftType is from Kinsoku::verticalShiftType():
   // 0=no bias, 2=closing bracket, 3=opening bracket, 4=dash/choonpu.
-  void drawCharVerticalRotatedInCell(int fontId, int cellLeftX, int cellTopY, int cellSize, uint32_t cp,
-                                     int shiftType, bool black = true,
-                                     EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  void drawCharVerticalRotatedInCell(int fontId, int cellLeftX, int cellTopY, int cellSize, uint32_t cp, int shiftType,
+                                     bool black = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

@@ -63,9 +63,8 @@ void probe(const Dict& d, const std::string& key) {
     std::snprintf(buf, sizeof(buf), "%02x", b);
     kh += buf;
   }
-  std::printf("%s|%s|%d|%d|%d|%08x\n", d.name, kh.c_str(), found ? 1 : 0,
-              found ? e.priority : -1, found ? (int)e.definition.size() : -1,
-              found ? crc32(e.definition) : 0u);
+  std::printf("%s|%s|%d|%d|%d|%08x\n", d.name, kh.c_str(), found ? 1 : 0, found ? e.priority : -1,
+              found ? (int)e.definition.size() : -1, found ? crc32(e.definition) : 0u);
 }
 }  // namespace
 
@@ -90,8 +89,8 @@ int main() {
     for (size_t r = 0; r < count; r += stride) {
       std::string hw = readHeadword(f, r);
       if (hw.empty()) continue;
-      probe(d, hw);                 // exact hit
-      probe(d, hw + "\x01");        // near-miss just after this headword
+      probe(d, hw);                                              // exact hit
+      probe(d, hw + "\x01");                                     // near-miss just after this headword
       if (hw.size() > 3) probe(d, hw.substr(0, hw.size() - 1));  // prefix (hit or miss)
     }
     std::fclose(f);

@@ -21,8 +21,7 @@ class VerticalTextBlock {
   explicit VerticalTextBlock(VerticalPage page) : page_(std::move(page)) {}
 
   void render(GfxRenderer& renderer, int fontId, int offsetX = 0, int offsetY = 0, bool black = true) const;
-  void render(GfxRenderer& renderer, int fontId, int rubyFontId, int offsetX, int offsetY,
-              bool black = true) const;
+  void render(GfxRenderer& renderer, int fontId, int rubyFontId, int offsetX, int offsetY, bool black = true) const;
 
   const VerticalPage& page() const { return page_; }
 

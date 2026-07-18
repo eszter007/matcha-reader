@@ -21,7 +21,6 @@
 #include "components/icons/bookmark.h"
 #include "components/icons/cover.h"
 #include "components/icons/file24.h"
-#include "components/icons/stats_icons.h"
 #include "components/icons/folder.h"
 #include "components/icons/folder24.h"
 #include "components/icons/hotspot.h"
@@ -29,6 +28,7 @@
 #include "components/icons/library.h"
 #include "components/icons/recent.h"
 #include "components/icons/settings2.h"
+#include "components/icons/stats_icons.h"
 #include "components/icons/text24.h"
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
@@ -271,8 +271,8 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
         return s;
       });
   if (rowSubtitle != nullptr) {
-    prewarmed |= prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
-                             rowSubtitle);
+    prewarmed |=
+        prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex, rowSubtitle);
   }
   int iconY = (rowSubtitle != nullptr) ? 16 : 10;
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {

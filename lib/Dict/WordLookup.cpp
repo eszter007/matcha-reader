@@ -42,8 +42,8 @@ uint32_t decodeCp(const std::string& s, size_t pos) {
 bool hasNameChar(const std::string& text) {
   for (size_t pos = 0; pos < text.size();) {
     const uint32_t cp = decodeCp(text, pos);
-    const bool kanji = (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
-                       (cp >= 0xF900 && cp <= 0xFAFF);
+    const bool kanji =
+        (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF);
     const bool katakana = (cp >= 0x30A0 && cp <= 0x30FF) || (cp >= 0xFF66 && cp <= 0xFF9D);
     if (kanji || katakana) return true;
     pos += utf8CharBytes(static_cast<unsigned char>(text[pos]));

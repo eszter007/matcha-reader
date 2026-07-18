@@ -1,14 +1,12 @@
 #include "FontCacheManager.h"
 
-#include <Utf8.h>
-
-#include <string>
-
 #include <FontDecompressor.h>
 #include <Logging.h>
 #include <SdCardFont.h>
+#include <Utf8.h>
 
 #include <cstring>
+#include <string>
 
 FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap,
                                    const std::map<int, SdCardFont*>& sdCardFonts)

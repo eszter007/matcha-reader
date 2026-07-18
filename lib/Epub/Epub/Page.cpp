@@ -1,12 +1,12 @@
 #include "Page.h"
 
-#include "css/CssStyle.h"
-
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
 
 #include <new>
+
+#include "css/CssStyle.h"
 
 namespace {
 

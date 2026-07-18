@@ -68,7 +68,7 @@ class SdCardFontSystem {
     }
   }
 
-private:
+ private:
   /// Keep the global glyph fallback correct for the current selection:
   ///  - selected SD font renders Japanese -> it IS the fallback (any glyph on demand)
   ///  - otherwise (built-in or Latin-only SD font) -> auto-load the best CJK family from the

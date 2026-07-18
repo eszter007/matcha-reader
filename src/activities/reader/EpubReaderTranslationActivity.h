@@ -15,9 +15,8 @@ class EpubReaderTranslationActivity final : public Activity {
   // fallback to one attempt -- on a pristine post-boot heap a second gate failure
   // is a real error, not fragmentation, so it must show the message instead of
   // restart-looping.
-  explicit EpubReaderTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                         std::string sourceText, std::string preTranslatedText = "",
-                                         bool resumedAfterRestart = false);
+  explicit EpubReaderTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string sourceText,
+                                         std::string preTranslatedText = "", bool resumedAfterRestart = false);
 
   void onEnter() override;
   void onExit() override;

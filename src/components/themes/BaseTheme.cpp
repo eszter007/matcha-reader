@@ -339,8 +339,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
         return s;
       });
   if (rowSubtitle != nullptr) {
-    prewarmed |= prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
-                             rowSubtitle);
+    prewarmed |=
+        prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex, rowSubtitle);
   }
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;

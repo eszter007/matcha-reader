@@ -1,7 +1,5 @@
 #include "MangaWordLookupActivity.h"
 
-#include "DefinitionTextRenderer.h"
-
 #include <Arduino.h>
 #include <DictIndex.h>
 #include <FontCacheManager.h>
@@ -12,6 +10,7 @@
 #include <WordLookup.h>
 
 #include "CrossPointSettings.h"
+#include "DefinitionTextRenderer.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -113,8 +112,10 @@ void MangaWordLookupActivity::moveCursor(int delta) {
   int newIndex = cursorIndex + delta;
   if (scan.isDone()) {
     // Full text mapped -- cycle past the ends instead of dead-ending (see EPUB activity).
-    if (newIndex < 0) newIndex = maxIdx;
-    else if (newIndex > maxIdx) newIndex = 0;
+    if (newIndex < 0)
+      newIndex = maxIdx;
+    else if (newIndex > maxIdx)
+      newIndex = 0;
   } else {
     if (newIndex < 0) newIndex = 0;
     if (newIndex > maxIdx) newIndex = maxIdx;
@@ -178,10 +179,14 @@ void MangaWordLookupActivity::performLookupImpl() {
     size_t pos = 0;
     while (pos < result.matchLength && pos < text.size()) {
       auto c = static_cast<unsigned char>(text[pos]);
-      if (c < 0x80) pos += 1;
-      else if ((c & 0xE0) == 0xC0) pos += 2;
-      else if ((c & 0xF0) == 0xE0) pos += 3;
-      else pos += 4;
+      if (c < 0x80)
+        pos += 1;
+      else if ((c & 0xE0) == 0xC0)
+        pos += 2;
+      else if ((c & 0xF0) == 0xE0)
+        pos += 3;
+      else
+        pos += 4;
       chars++;
     }
     resultMatchLen = chars;
@@ -192,16 +197,27 @@ void MangaWordLookupActivity::performLookupImpl() {
       for (size_t b = 0; b < result.matchLength && b < text.size();) {
         auto c = static_cast<unsigned char>(text[b]);
         uint32_t cp2 = 0;
-        if (c < 0x80) { cp2 = c; b += 1; }
-        else if ((c & 0xE0) == 0xC0) { cp2 = ((c & 0x1F) << 6) | (text[b+1] & 0x3F); b += 2; }
-        else if ((c & 0xF0) == 0xE0) { cp2 = ((c & 0x0F) << 12) | ((text[b+1] & 0x3F) << 6) | (text[b+2] & 0x3F); b += 3; }
-        else { b += 4; }
-        if (cp2 < 0x3040 || cp2 > 0x309F) { allHiragana = false; break; }
+        if (c < 0x80) {
+          cp2 = c;
+          b += 1;
+        } else if ((c & 0xE0) == 0xC0) {
+          cp2 = ((c & 0x1F) << 6) | (text[b + 1] & 0x3F);
+          b += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+          cp2 = ((c & 0x0F) << 12) | ((text[b + 1] & 0x3F) << 6) | (text[b + 2] & 0x3F);
+          b += 3;
+        } else {
+          b += 4;
+        }
+        if (cp2 < 0x3040 || cp2 > 0x309F) {
+          allHiragana = false;
+          break;
+        }
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH,
-                                     DictIndex::GRAMMAR_DAT_PATH, gramEntry)) {
+        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+                                    gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
         }
       }
@@ -213,7 +229,8 @@ void MangaWordLookupActivity::performLookupImpl() {
   // allocation abort() -- see EpubReaderWordLookupActivity's grammar scan.
   if (ESP.getMaxAllocHeap() < 16 * 1024) {
     LOG_ERR("MWLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) && cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
+  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) &&
+             cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
     const size_t allStart = scan.selectToAllIdx[cursorIndex];
     int bestGramLen = 0;
     std::string bestGramHw, bestGramDef;
@@ -234,16 +251,20 @@ void MangaWordLookupActivity::performLookupImpl() {
         int cnt = 0;
         for (size_t b2 = 0; b2 < gramText.size() && cnt < wLen; cnt++) {
           auto c = static_cast<unsigned char>(gramText[b2]);
-          if (c < 0x80) b2 += 1;
-          else if ((c & 0xE0) == 0xC0) b2 += 2;
-          else if ((c & 0xF0) == 0xE0) b2 += 3;
-          else b2 += 4;
+          if (c < 0x80)
+            b2 += 1;
+          else if ((c & 0xE0) == 0xC0)
+            b2 += 2;
+          else if ((c & 0xF0) == 0xE0)
+            b2 += 3;
+          else
+            b2 += 4;
           byteEnd = b2;
         }
         std::string window = gramText.substr(0, byteEnd);
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH,
-                                     DictIndex::GRAMMAR_DAT_PATH, gramEntry)) {
+        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+                                    gramEntry)) {
           if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
             bestGramLen = wLen;
             bestGramHw = std::move(gramEntry.headword);
@@ -289,10 +310,16 @@ void MangaWordLookupActivity::loop() {
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { moveCursor(-1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
-    if (hasResult && scrollOffset < maxScroll) { scrollOffset = std::min(maxScroll, scrollOffset + 5); requestUpdate(); }
+    if (hasResult && scrollOffset < maxScroll) {
+      scrollOffset = std::min(maxScroll, scrollOffset + 5);
+      requestUpdate();
+    }
   });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
-    if (scrollOffset > 0) { scrollOffset = std::max(0, scrollOffset - 5); requestUpdate(); }
+    if (scrollOffset > 0) {
+      scrollOffset = std::max(0, scrollOffset - 5);
+      requestUpdate();
+    }
   });
 
   // Progressive background scan + one-time result persistence -- same structure as
@@ -338,8 +365,8 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
 
   if (scan.selectableGlyphs.empty() || !hasResult) {
     const bool stillWorking = lookupInFlight || !scan.isDone();
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID,
-                              screen.y + screen.height / 2, stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
+    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2,
+                              stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
     return;
   }
 
@@ -360,8 +387,8 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
   const int defLineH = renderer.getLineHeight(defFont);
   const int maxDefY = screen.y + screen.height - 2;
   const int firstDefY = defY;
-  const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH,
-                                                maxWidth, maxDefY, scrollOffset);
+  const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
+                                                maxDefY, scrollOffset);
 
   totalLines = wrap.totalLines;
   const int visibleCapacity = (maxDefY - firstDefY) / defLineH;

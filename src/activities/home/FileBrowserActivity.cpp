@@ -83,7 +83,10 @@ void FileBrowserActivity::loadFiles() {
       fullPath += f;
       bool isRecent = false;
       for (const auto& r : recents) {
-        if (r.path == fullPath) { isRecent = true; break; }
+        if (r.path == fullPath) {
+          isRecent = true;
+          break;
+        }
       }
       if (isRecent) {
         recentFiles.push_back(std::move(f));

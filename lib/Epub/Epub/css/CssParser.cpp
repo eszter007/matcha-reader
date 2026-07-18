@@ -415,10 +415,9 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     style.defined.border = 1;
   } else if (iequalsAscii(name, "border")) {
     // Shorthand ("1px solid #000" / "none"): a stroke-style keyword means all four sides.
-    const bool styled = value.find("solid") != std::string_view::npos ||
-                        value.find("double") != std::string_view::npos ||
-                        value.find("dashed") != std::string_view::npos ||
-                        value.find("dotted") != std::string_view::npos;
+    const bool styled =
+        value.find("solid") != std::string_view::npos || value.find("double") != std::string_view::npos ||
+        value.find("dashed") != std::string_view::npos || value.find("dotted") != std::string_view::npos;
     style.borderEdges = styled ? CssStyle::BORDER_ALL : 0;
     style.defined.border = 1;
   } else if (iequalsAscii(name, "border-top") || iequalsAscii(name, "border-bottom") ||
@@ -427,10 +426,9 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     // separator rules under headings and table rows. Merge into the edge mask
     // (|=/&~) so several per-side declarations in one rule compose instead of
     // overwriting each other.
-    const bool styled = value.find("solid") != std::string_view::npos ||
-                        value.find("double") != std::string_view::npos ||
-                        value.find("dashed") != std::string_view::npos ||
-                        value.find("dotted") != std::string_view::npos;
+    const bool styled =
+        value.find("solid") != std::string_view::npos || value.find("double") != std::string_view::npos ||
+        value.find("dashed") != std::string_view::npos || value.find("dotted") != std::string_view::npos;
     uint8_t bit = CssStyle::BORDER_TOP;
     if (iequalsAscii(name, "border-bottom")) {
       bit = CssStyle::BORDER_BOTTOM;

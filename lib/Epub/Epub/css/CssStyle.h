@@ -186,9 +186,9 @@ struct CssStyle {
   uint8_t borderEdges = 0;
   [[nodiscard]] bool isFullBorderBox() const { return defined.border && borderEdges == BORDER_ALL; }
 
-  CssTextEmphasis textEmphasis = CssTextEmphasis::None;        // JP bouten marks
-  CssFontVariant fontVariant = CssFontVariant::Normal;         // small-caps
-  CssListStyleType listStyleType = CssListStyleType::Disc;     // list markers
+  CssTextEmphasis textEmphasis = CssTextEmphasis::None;     // JP bouten marks
+  CssFontVariant fontVariant = CssFontVariant::Normal;      // small-caps
+  CssListStyleType listStyleType = CssListStyleType::Disc;  // list markers
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 

@@ -20,8 +20,7 @@ int main() {
     layout.addParagraph(
         "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。"
         "何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。");
-    layout.addParagraph(
-        "彼はCrossPoint Readerという端末で2024年に日本語の小説を読んでいた。「これは良い」と思った。");
+    layout.addParagraph("彼はCrossPoint Readerという端末で2024年に日本語の小説を読んでいた。「これは良い」と思った。");
 
     std::vector<VerticalPage> pages = layout.layoutPages();
     std::printf("Laid out 2 paragraph(s) into %zu page(s).\n", pages.size());
@@ -42,19 +41,19 @@ int main() {
 
     // Simulate: 漢字(かんじ)を読(よ)む
     std::vector<VerticalParsedText::RubyRun> runs;
-    runs.push_back({"漢字", "かんじ"});       // group ruby: 2 base, 3 ruby chars
-    runs.push_back({"を", ""});               // plain
-    runs.push_back({"読", "よ"});             // per-char ruby
-    runs.push_back({"む。", ""});             // plain with punctuation
+    runs.push_back({"漢字", "かんじ"});  // group ruby: 2 base, 3 ruby chars
+    runs.push_back({"を", ""});          // plain
+    runs.push_back({"読", "よ"});        // per-char ruby
+    runs.push_back({"む。", ""});        // plain with punctuation
     layout.addAnnotatedParagraph(runs);
 
     // Second paragraph: mixed content with longer ruby
     std::vector<VerticalParsedText::RubyRun> runs2;
-    runs2.push_back({"東京", "とうきょう"});   // 2 base, 5 ruby
+    runs2.push_back({"東京", "とうきょう"});  // 2 base, 5 ruby
     runs2.push_back({"は", ""});
-    runs2.push_back({"美", "うつく"});         // 1 base, 3 ruby
+    runs2.push_back({"美", "うつく"});  // 1 base, 3 ruby
     runs2.push_back({"しい", ""});
-    runs2.push_back({"都市", "とし"});         // 2 base, 2 ruby (1:1)
+    runs2.push_back({"都市", "とし"});  // 2 base, 2 ruby (1:1)
     runs2.push_back({"です。", ""});
     layout.addAnnotatedParagraph(runs2);
 
@@ -86,8 +85,7 @@ int main() {
   std::printf("\n=== Running sanity checks ===\n");
   {
     VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
-    layout.addParagraph(
-        "吾輩は猫である。名前はまだ無い。");
+    layout.addParagraph("吾輩は猫である。名前はまだ無い。");
 
     std::vector<VerticalParsedText::RubyRun> runs;
     runs.push_back({"漢字", "かんじ"});

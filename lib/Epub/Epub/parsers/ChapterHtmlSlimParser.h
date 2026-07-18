@@ -47,7 +47,7 @@ class ChapterHtmlSlimParser {
   int boxDepth = -1;
   uint8_t boxEdges = 0;
   int16_t boxStartY = 0;
-  bool boxContinued = false;         // continued from the previous page: omit the top edge
+  bool boxContinued = false;          // continued from the previous page: omit the top edge
   bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
   void flushPendingBlockLayout();
   void emitBoxRect(bool openBottom);

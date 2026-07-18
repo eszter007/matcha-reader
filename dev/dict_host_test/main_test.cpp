@@ -19,17 +19,17 @@ struct TestEntry {
 };
 
 static const TestEntry kTestEntries[] = {
-    {"\xe4\xb9\x97\xe3\x82\x8b", "【のる】\nto ride; to board", 200},                                    // 乗る
-    {"\xe4\xb9\x97\xe3\x82\x8b", "【のる】\nto ride; to board", 200},                                    // duplicate for sort test
-    {"\xe4\xb9\xb0\xe3\x81\x86", "【かう】\nto buy", 200},                                                // 買う
-    {"\xe6\x9b\xb8\xe3\x81\x8f", "【かく】\nto write", 200},                                              // 書く
-    {"\xe7\x8c\xab", "【ねこ】\ncat", 200},                                                                // 猫
-    {"\xe7\xbe\x8e\xe3\x81\x97\xe3\x81\x84", "【うつくしい】\nbeautiful", 200},                          // 美しい
-    {"\xe8\xa1\x8c\xe3\x81\x8f", "【いく】\nto go", 200},                                                 // 行く
-    {"\xe8\xaa\xad\xe3\x82\x80", "【よむ】\nto read", 200},                                               // 読む
-    {"\xe9\xa3\x9f\xe3\x81\xb9\xe3\x82\x8b", "【たべる】\nto eat", 200},                                 // 食べる
-    {"\xe3\x81\x99\xe3\x82\x8b", "【する】\nto do", 200},                                                 // する
-    {"\xe3\x81\x8f\xe3\x82\x8b", "【くる】\nto come", 200},                                               // くる
+    {"\xe4\xb9\x97\xe3\x82\x8b", "【のる】\nto ride; to board", 200},            // 乗る
+    {"\xe4\xb9\x97\xe3\x82\x8b", "【のる】\nto ride; to board", 200},            // duplicate for sort test
+    {"\xe4\xb9\xb0\xe3\x81\x86", "【かう】\nto buy", 200},                       // 買う
+    {"\xe6\x9b\xb8\xe3\x81\x8f", "【かく】\nto write", 200},                     // 書く
+    {"\xe7\x8c\xab", "【ねこ】\ncat", 200},                                      // 猫
+    {"\xe7\xbe\x8e\xe3\x81\x97\xe3\x81\x84", "【うつくしい】\nbeautiful", 200},  // 美しい
+    {"\xe8\xa1\x8c\xe3\x81\x8f", "【いく】\nto go", 200},                        // 行く
+    {"\xe8\xaa\xad\xe3\x82\x80", "【よむ】\nto read", 200},                      // 読む
+    {"\xe9\xa3\x9f\xe3\x81\xb9\xe3\x82\x8b", "【たべる】\nto eat", 200},         // 食べる
+    {"\xe3\x81\x99\xe3\x82\x8b", "【する】\nto do", 200},                        // する
+    {"\xe3\x81\x8f\xe3\x82\x8b", "【くる】\nto come", 200},                      // くる
 };
 
 static bool buildTestDictionary(const char* idxPath, const char* datPath) {
@@ -62,10 +62,9 @@ static bool buildTestDictionary(const char* idxPath, const char* datPath) {
             [](const SortedEntry& a, const SortedEntry& b) { return std::memcmp(a.headword, b.headword, 32) < 0; });
 
   // Deduplicate
-  auto it = std::unique(sorted.begin(), sorted.end(),
-                        [](const SortedEntry& a, const SortedEntry& b) {
-                          return std::memcmp(a.headword, b.headword, 32) == 0;
-                        });
+  auto it = std::unique(sorted.begin(), sorted.end(), [](const SortedEntry& a, const SortedEntry& b) {
+    return std::memcmp(a.headword, b.headword, 32) == 0;
+  });
   sorted.erase(it, sorted.end());
 
   // Write dat file

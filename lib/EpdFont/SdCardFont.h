@@ -243,10 +243,10 @@ class SdCardFont {
   // kanji vs one 18-byte read). 0 = not yet measured.
   uint16_t fullWidthAdvance_[MAX_STYLES] = {};
   static bool isUniformFullWidth(uint32_t cp) {
-    return (cp >= 0x3041 && cp <= 0x30FF)     // hiragana + katakana
-           || (cp >= 0x3400 && cp <= 0x4DBF)  // CJK ext A
-           || (cp >= 0x4E00 && cp <= 0x9FFF)  // CJK unified
-           || (cp >= 0xF900 && cp <= 0xFAFF); // CJK compat
+    return (cp >= 0x3041 && cp <= 0x30FF)      // hiragana + katakana
+           || (cp >= 0x3400 && cp <= 0x4DBF)   // CJK ext A
+           || (cp >= 0x4E00 && cp <= 0x9FFF)   // CJK unified
+           || (cp >= 0xF900 && cp <= 0xFAFF);  // CJK compat
   }
   uint32_t advanceTableSize_[MAX_STYLES] = {};
   bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;

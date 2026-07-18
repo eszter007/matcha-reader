@@ -200,6 +200,6 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, blockStyle.directionDefined);
 
   return std::unique_ptr<TextBlock>(new TextBlock(std::move(words), std::move(wordXpos), std::move(wordStyles),
-                                                  std::move(wordFocusBoundary), std::move(wordFocusSuffixX),
-                                                  blockStyle, std::move(wordRuby)));
+                                                  std::move(wordFocusBoundary), std::move(wordFocusSuffixX), blockStyle,
+                                                  std::move(wordRuby)));
 }

@@ -157,10 +157,10 @@ class CssParser {
    * layout converts em -> cells). Populated from unscoped rules plus the EBPAJ "v|" scope.
    */
   struct VerticalBlockStyle {
-    float startEm = 0;       // v margin-top: every column of the block starts this many cells down
-    float beforeEm = 0;      // v margin-right: extra gap before the block's first column
-    float afterEm = 0;       // v margin-left: extra gap after the block's last column
-    float hangEm = 0;        // v padding-top + negative text-indent: hanging indent for wrapped lines
+    float startEm = 0;         // v margin-top: every column of the block starts this many cells down
+    float beforeEm = 0;        // v margin-right: extra gap before the block's first column
+    float afterEm = 0;         // v margin-left: extra gap after the block's last column
+    float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
     bool alignCenter = false;  // text-align: center -> column content vertically centered
     uint8_t borderEdges = 0;   // CssStyle::BORDER_* mask (full = box, TOP = separator rule)
     [[nodiscard]] bool any() const {
@@ -173,8 +173,7 @@ class CssParser {
    * selector with at least one vertical-relevant property, without materializing the rule map.
    * Returns the number collected (bounded by maxOut).
    */
-  size_t collectVerticalStyles(std::vector<std::pair<std::string, VerticalBlockStyle>>& out,
-                               size_t maxOut = 256) const;
+  size_t collectVerticalStyles(std::vector<std::pair<std::string, VerticalBlockStyle>>& out, size_t maxOut = 256) const;
 
  private:
   // Lookup key for a multi-piece selector. The pieces are hashed and compared

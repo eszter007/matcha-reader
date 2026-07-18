@@ -12,10 +12,10 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "GrayLogo.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "GrayLogo.h"
 #include "images/MoonIcon.h"
 
 // Real hardware never reaches loop() while asleep: enterDeepSleep() ends by
@@ -58,8 +58,7 @@ void SleepActivity::onEnter() {
   // so it must exit before the "Entering sleep" popup paints over that page -- same early
   // return the quick-resume screen uses. Outside the reader there is no page to peek
   // through; the switch below falls back to the custom wallpaper screen.
-  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT &&
-      APP_STATE.lastSleepFromReader) {
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT && APP_STATE.lastSleepFromReader) {
     return renderTransparentSleepScreen();
   }
 

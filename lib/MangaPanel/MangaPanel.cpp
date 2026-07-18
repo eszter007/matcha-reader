@@ -162,8 +162,7 @@ bool MangaBook::scanImages() {
       file.getName(name, sizeof(name));
       if (name[0] != '.' && !isPanelCropFile(name)) {
         std::string_view sv(name);
-        if (FsHelpers::hasBmpExtension(sv) || FsHelpers::hasJpgExtension(sv) ||
-            FsHelpers::hasPngExtension(sv)) {
+        if (FsHelpers::hasBmpExtension(sv) || FsHelpers::hasJpgExtension(sv) || FsHelpers::hasPngExtension(sv)) {
           imageFiles.emplace_back(name);
         }
       }

@@ -1,31 +1,28 @@
 #include "RecentBooksActivity.h"
 
-#include "JsonSettingsIO.h"
-
-#include "EpubProgressUtil.h"
-#include "XtcProgressUtil.h"
-
 #include <Bitmap.h>
+#include <Epub.h>
+#include <Epub/converters/ImageDecoderFactory.h>
+#include <Epub/converters/ImageToFramebufferDecoder.h>
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <JpegToBmpConverter.h>
+#include <MangaPanel.h>
 #include <Memory.h>
+#include <PngToBmpConverter.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <memory>
 
-#include <Epub.h>
-#include <Epub/converters/ImageDecoderFactory.h>
-#include <Epub/converters/ImageToFramebufferDecoder.h>
-#include <JpegToBmpConverter.h>
-#include <MangaPanel.h>
-#include <PngToBmpConverter.h>
-
+#include "EpubProgressUtil.h"
+#include "JsonSettingsIO.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "XtcProgressUtil.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
@@ -216,7 +213,6 @@ bool RecentBooksActivity::stepLibraryScan() {
   scan_.active = false;
   return true;
 }
-
 
 void RecentBooksActivity::scanOneDirectory(const std::string& dirPath) {
   constexpr size_t NAME_BUF = 500;
@@ -417,9 +413,8 @@ void RecentBooksActivity::loadShelves() {
   for (const auto& book : recentBooks) {
     std::string folder = FsHelpers::extractFolderPath(book.path);
     size_t lastSlash = folder.find_last_of('/');
-    std::string name = (lastSlash != std::string::npos && lastSlash < folder.size() - 1)
-                           ? folder.substr(lastSlash + 1)
-                           : folder;
+    std::string name =
+        (lastSlash != std::string::npos && lastSlash < folder.size() - 1) ? folder.substr(lastSlash + 1) : folder;
     if (folder == "/") name = "Unsorted";
 
     bool found = false;
@@ -520,8 +515,8 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
     file.getName(nameBuffer.get(), NAME_BUF_SIZE);
     if (nameBuffer[0] == '.') continue;
 
-    std::string fullPath = folderPath == "/" ? "/" + std::string(nameBuffer.get())
-                                             : folderPath + "/" + std::string(nameBuffer.get());
+    std::string fullPath =
+        folderPath == "/" ? "/" + std::string(nameBuffer.get()) : folderPath + "/" + std::string(nameBuffer.get());
 
     if (file.isDirectory()) {
       // Manga folders (containing panels.idx) count as books within a shelf.
@@ -548,34 +543,34 @@ void RecentBooksActivity::loadShelfBooks(const std::string& folderPath) {
         if (thumbHeightValid(UITheme::getCoverThumbPath(tmpl, gridHeight), gridHeight)) {
           book.coverBmpPath = tmpl;
         } else {
-        // Same first-page selection as loadRecentBooks() -- skip panel crops.
-        auto mangaDir = Storage.open(fullPath.c_str());
-        if (mangaDir && mangaDir.isDirectory()) {
-          mangaDir.rewindDirectory();
-          std::string firstPageImage, firstAnyImage;
-          for (auto mf = mangaDir.openNextFile(); mf; mf = mangaDir.openNextFile()) {
-            char imgName[200];
-            mf.getName(imgName, sizeof(imgName));
-            if (imgName[0] == '.' || mf.isDirectory()) continue;
-            std::string_view imgFn{imgName};
-            if (!FsHelpers::hasJpgExtension(imgFn) && !FsHelpers::hasPngExtension(imgFn) &&
-                !FsHelpers::hasBmpExtension(imgFn)) {
-              continue;
+          // Same first-page selection as loadRecentBooks() -- skip panel crops.
+          auto mangaDir = Storage.open(fullPath.c_str());
+          if (mangaDir && mangaDir.isDirectory()) {
+            mangaDir.rewindDirectory();
+            std::string firstPageImage, firstAnyImage;
+            for (auto mf = mangaDir.openNextFile(); mf; mf = mangaDir.openNextFile()) {
+              char imgName[200];
+              mf.getName(imgName, sizeof(imgName));
+              if (imgName[0] == '.' || mf.isDirectory()) continue;
+              std::string_view imgFn{imgName};
+              if (!FsHelpers::hasJpgExtension(imgFn) && !FsHelpers::hasPngExtension(imgFn) &&
+                  !FsHelpers::hasBmpExtension(imgFn)) {
+                continue;
+              }
+              if (strncmp(imgName, "page_", 5) == 0) {
+                if (firstPageImage.empty() || imgFn < firstPageImage) firstPageImage = imgName;
+              } else if (!manga::isPanelCropFile(imgName)) {
+                if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
+              }
             }
-            if (strncmp(imgName, "page_", 5) == 0) {
-              if (firstPageImage.empty() || imgFn < firstPageImage) firstPageImage = imgName;
-            } else if (!manga::isPanelCropFile(imgName)) {
-              if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
+            mangaDir.close();
+            const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
+            if (!chosen.empty()) {
+              const std::string sourcePath = fullPath + "/" + chosen;
+              const std::string thumb = ensureMangaCoverThumb(fullPath, sourcePath);
+              book.coverBmpPath = !thumb.empty() ? thumb : sourcePath;
             }
           }
-          mangaDir.close();
-          const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
-          if (!chosen.empty()) {
-            const std::string sourcePath = fullPath + "/" + chosen;
-            const std::string thumb = ensureMangaCoverThumb(fullPath, sourcePath);
-            book.coverBmpPath = !thumb.empty() ? thumb : sourcePath;
-          }
-        }
         }
       }
 
@@ -764,8 +759,8 @@ void RecentBooksActivity::loop() {
 
   if (selectedTab == 0 && contentIndex > 0) {
     const int itemIdx = contentIndex - 1;
-    if (itemIdx < static_cast<int>(recentBooks.size()) &&
-        mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
+    if (itemIdx < static_cast<int>(recentBooks.size()) && mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
+        mappedInput.getHeldTime() >= LONG_PRESS_MS) {
       longPressFired = true;
       promptRemoveBook(recentBooks[itemIdx].path, recentBooks[itemIdx].title);
       return;
@@ -1000,8 +995,7 @@ void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const i
 // Read the progress for the visible window's pending entries NOW (bounded: <=9 small reads).
 // The deferred background pass still covers everything else; it just never gets to trigger a
 // second full-screen refresh for cells the user is currently looking at.
-void RecentBooksActivity::fillPageProgressNow(std::vector<BookProgress>& progress,
-                                              const std::vector<RecentBook>* books,
+void RecentBooksActivity::fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,
                                               const std::vector<ShelfBook>* sBooks, const int firstIdx,
                                               const int lastIdx) {
   for (int i = firstIdx; i >= 0 && i <= lastIdx && i < static_cast<int>(progress.size()); i++) {
@@ -1010,7 +1004,6 @@ void RecentBooksActivity::fillPageProgressNow(std::vector<BookProgress>& progres
     progress[i].percent = readProgressPercent(path);
   }
 }
-
 
 void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -1085,9 +1078,8 @@ void RecentBooksActivity::drawShelfRow(const int shelfIdx, const int itemY, cons
   const auto& shelf = shelves[shelfIdx];
 
   if (selected) {
-    renderer.fillRoundedRect(metrics.contentSidePadding - 6, itemY - 4,
-                             pageWidth - 2 * metrics.contentSidePadding + 12, rowHeight + 8, SELECTION_RADIUS,
-                             Color::LightGray);
+    renderer.fillRoundedRect(metrics.contentSidePadding - 6, itemY - 4, pageWidth - 2 * metrics.contentSidePadding + 12,
+                             rowHeight + 8, SELECTION_RADIUS, Color::LightGray);
   }
 
   int thumbX = metrics.contentSidePadding + 4;
@@ -1111,8 +1103,8 @@ void RecentBooksActivity::drawShelfRow(const int shelfIdx, const int itemY, cons
       }
       file.close();
     }
-  } else if (!shelf.coverBmpPath.empty() && (FsHelpers::hasJpgExtension(shelf.coverBmpPath) ||
-                                             FsHelpers::hasPngExtension(shelf.coverBmpPath))) {
+  } else if (!shelf.coverBmpPath.empty() &&
+             (FsHelpers::hasJpgExtension(shelf.coverBmpPath) || FsHelpers::hasPngExtension(shelf.coverBmpPath))) {
     // Manga covers are JPG/PNG page images (no pre-rendered shelf thumb) --
     // decode and scale directly into the thumb slot.
     ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(shelf.coverBmpPath);
