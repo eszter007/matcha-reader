@@ -8,6 +8,7 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <iterator>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -81,13 +82,8 @@ void FileBrowserActivity::loadFiles() {
       std::string fullPath = basepath;
       if (fullPath.back() != '/') fullPath += '/';
       fullPath += f;
-      bool isRecent = false;
-      for (const auto& r : recents) {
-        if (r.path == fullPath) {
-          isRecent = true;
-          break;
-        }
-      }
+      const bool isRecent =
+          std::any_of(recents.begin(), recents.end(), [&fullPath](const auto& r) { return r.path == fullPath; });
       if (isRecent) {
         recentFiles.push_back(std::move(f));
       } else {
@@ -113,9 +109,9 @@ void FileBrowserActivity::loadFiles() {
 
   files.clear();
   files.reserve(folders.size() + recentFiles.size() + otherFiles.size());
-  for (auto& f : folders) files.push_back(std::move(f));
-  for (auto& f : recentFiles) files.push_back(std::move(f));
-  for (auto& f : otherFiles) files.push_back(std::move(f));
+  std::move(folders.begin(), folders.end(), std::back_inserter(files));
+  std::move(recentFiles.begin(), recentFiles.end(), std::back_inserter(files));
+  std::move(otherFiles.begin(), otherFiles.end(), std::back_inserter(files));
 }
 
 void FileBrowserActivity::onEnter() {

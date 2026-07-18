@@ -16,7 +16,7 @@
 #include "fontIds.h"
 
 MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                 std::string panelText, std::string scanCachePath,
+                                                 const std::string& panelText, std::string scanCachePath,
                                                  const uint16_t pageIndex, const uint16_t panelIndex)
     : Activity("MangaWordLookup", renderer, mappedInput),
       scanCachePath(std::move(scanCachePath)),

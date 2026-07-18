@@ -47,14 +47,15 @@ inline void statsTrace(const char* tag, const unsigned long sessionStartMs, cons
   constexpr size_t TRACE_LINE_MAX = 96;  // LINE_MAX is taken by <limits.h>
   auto buf = makeUniqueNoThrow<char[]>(CAP);
   if (!buf) return;  // diagnostics must never take down the reader
-  size_t len = Storage.readFileToBuffer("/system/stats_trace.txt", buf.get(), CAP);
+  char* base = buf.get();
+  size_t len = Storage.readFileToBuffer("/system/stats_trace.txt", base, CAP);
   if (len > CAP - TRACE_LINE_MAX) len = 0;  // cap reached: restart the trace
-  const int n = snprintf(buf.get() + len, TRACE_LINE_MAX, "%lu %s start=%lu el=%lu min=%u load=%d save=%d\n", millis(),
-                         tag, sessionStartMs, elapsed, minutes, loadOk, saveOk);
+  const int n = snprintf(base + len, TRACE_LINE_MAX, "%lu %s start=%lu el=%lu min=%u load=%d save=%d\n", millis(), tag,
+                         sessionStartMs, elapsed, minutes, loadOk, saveOk);
   if (n <= 0) return;
   HalFile f;
   if (!Storage.openFileForWrite("STATS", "/system/stats_trace.txt", f)) return;
-  f.write(reinterpret_cast<const uint8_t*>(buf.get()), len + static_cast<size_t>(n));
+  f.write(reinterpret_cast<const uint8_t*>(base), len + static_cast<size_t>(n));
 }
 
 inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = false) {
@@ -72,7 +73,7 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   // Local-midnight day boundary: shift by the user's display UTC offset so an evening
   // session doesn't get logged against "tomorrow" (UTC midnight is 9am in Japan).
   const time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
-  struct tm* t = gmtime(&now);
+  const struct tm* t = gmtime(&now);
   const bool loadOk = READING_STATS.loadFromFile();
   READING_STATS.addMinutes(static_cast<uint16_t>(t->tm_year + 1900), static_cast<uint8_t>(t->tm_mon + 1),
                            static_cast<uint8_t>(t->tm_mday), minutes);

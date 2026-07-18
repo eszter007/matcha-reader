@@ -268,13 +268,8 @@ bool BaseTheme::prewarmRows(const GfxRenderer& renderer, const int fontId, const
   }
   // Pure-ASCII text renders fine from the hot group -- don't spend a group decompression on it
   // (and don't make the caller clear a hot group that ASCII screens keep reusing).
-  bool hasNonAscii = false;
-  for (const char c : buf) {
-    if (static_cast<unsigned char>(c) >= 0x80) {
-      hasNonAscii = true;
-      break;
-    }
-  }
+  const bool hasNonAscii =
+      std::any_of(buf.begin(), buf.end(), [](const char c) { return static_cast<unsigned char>(c) >= 0x80; });
   if (!hasNonAscii) return false;
   fcm->prewarmCache(fontId, buf.c_str(), styleMask);
   return true;

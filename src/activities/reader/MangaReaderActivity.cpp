@@ -55,12 +55,10 @@ void MangaReaderActivity::onEnter() {
   // Use author from meta.bin; fall back to any author already in recents.
   std::string bookAuthor = book->getAuthor();
   if (bookAuthor.empty()) {
-    for (const auto& r : RECENT_BOOKS.getBooks()) {
-      if (r.path == book->getFolder()) {
-        bookAuthor = r.author;
-        break;
-      }
-    }
+    const auto& books = RECENT_BOOKS.getBooks();
+    const auto r =
+        std::find_if(books.begin(), books.end(), [this](const auto& b) { return b.path == book->getFolder(); });
+    if (r != books.end()) bookAuthor = r->author;
   }
   RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getPageImagePath(0));
 
@@ -480,12 +478,12 @@ void MangaReaderActivity::prefetchNextPageCache() {
     nextPagePrefetched = true;
     return;
   }
-  const uint32_t nextPage = currentPage + 1;
-  if (nextPage >= book->getPageCount()) {
+  const uint32_t upcomingPage = currentPage + 1;
+  if (upcomingPage >= book->getPageCount()) {
     nextPagePrefetched = true;
     return;
   }
-  const std::string cachePath = book->getCachePath() + "/page_" + std::to_string(nextPage) + ".2bp";
+  const std::string cachePath = book->getCachePath() + "/page_" + std::to_string(upcomingPage) + ".2bp";
   if (Storage.exists(cachePath.c_str())) {
     nextPagePrefetched = true;
     return;
@@ -500,7 +498,7 @@ void MangaReaderActivity::prefetchNextPageCache() {
   // stall a queued render -- retry on a later idle tick instead.
   if (RenderLock::peek()) return;
 
-  const std::string imgPath = book->getPageImagePath(nextPage);
+  const std::string imgPath = book->getPageImagePath(upcomingPage);
   ImageToFramebufferDecoder* decoder = imgPath.empty() ? nullptr : ImageDecoderFactory::getDecoder(imgPath);
   ImageDimensions dims = {0, 0};
   if (!decoder || !decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
@@ -515,7 +513,7 @@ void MangaReaderActivity::prefetchNextPageCache() {
     nextPagePrefetched = true;
     return;
   }
-  LOG_DBG("MRA", "Prefetching pixel cache for page %u", static_cast<unsigned>(nextPage));
+  LOG_DBG("MRA", "Prefetching pixel cache for page %u", static_cast<unsigned>(upcomingPage));
   const FullPageGeom g = applyFullPageGeometry(dims.width, dims.height);
   RenderConfig config;
   config.x = g.x;
@@ -555,7 +553,7 @@ void MangaReaderActivity::renderPanelZoom() {
 
   // Try to load a pre-cropped panel image (p<page>_<panel>.jpg)
   char panelFileName[64];
-  snprintf(panelFileName, sizeof(panelFileName), "p%d_%d.jpg", currentPage, currentPanel);
+  snprintf(panelFileName, sizeof(panelFileName), "p%u_%d.jpg", static_cast<unsigned>(currentPage), currentPanel);
   std::string panelImgPath = book->getFolder();
   if (panelImgPath.back() != '/') panelImgPath += '/';
   panelImgPath += panelFileName;

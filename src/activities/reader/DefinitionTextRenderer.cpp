@@ -79,9 +79,9 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
           }
           const bool keepPunct = cp == 0x3002 || cp == 0x3001 || cp == 0xFF01 || cp == 0xFF1F || cp == '.' ||
                                  cp == ',' || cp == '!' || cp == '?';
-          if (keepPunct) {
-            pos += charLen;  // punctuation stays on this line
-          } else {
+          // keepPunct: the punctuation stays in lineBuf on this line; the post-loop
+          // advance uses lineBuf.size(), so pos itself needs no update before break.
+          if (!keepPunct) {
             lineBuf.resize(lineBuf.size() - charLen);  // reject the overflowing character
           }
           break;
