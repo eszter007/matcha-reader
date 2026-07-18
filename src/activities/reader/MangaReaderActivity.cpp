@@ -63,9 +63,6 @@ void MangaReaderActivity::onEnter() {
   RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getPageImagePath(0));
 
   readingSessionStartMs = millis();
-  // TEMPORARY DIAGNOSTIC (remove before merging): frequent enter lines = the reader is
-  // being recreated under the user, which restamps the session timer.
-  ReaderUtils::statsTrace("manga-enter", readingSessionStartMs, 0, 0, -1, -1);
 
   loadCurrentPagePanels();
   requestUpdate();
