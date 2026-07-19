@@ -212,6 +212,9 @@ class GfxRenderer {
   /// Returns the kerning adjustment between two adjacent codepoints.
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // Render-truth advance for SHORT strings: resolves glyphs exactly as the draw loops do
+  // (on-demand SD load), so layout reservations match drawn ink. See implementation note.
+  int getRenderAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   bool getGlyphMetrics(int fontId, uint32_t cp, EpdFontFamily::Style style, int* left, int* width, int* top,
                        int* height) const;
   int getFontAscenderSize(int fontId) const;

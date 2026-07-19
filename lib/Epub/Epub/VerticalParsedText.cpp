@@ -801,7 +801,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // wider, so an unstyled measurement mis-centers the pair in its cell.
     const auto tcyStyle = static_cast<EpdFontFamily::Style>(stream_[i0].style);
     renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (stream_[i0].style & 3)));
-    const int runWidthPx = renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), tcyStyle);
+    const int runWidthPx = renderer_.getRenderAdvanceX(fontId_, runUtf8.c_str(), tcyStyle);
 
     // Center the run on its INK box, not its advance width. drawText puts ink at
     // pen + firstGlyph.left, and digit advances carry trailing whitespace, so advance-based
@@ -816,7 +816,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           renderer_.getGlyphMetrics(fontId_, cpLast, tcyStyle, &lN, &wN, &tN, &hN)) {
         std::string lastUtf8;
         encodeDigitUtf8(cpLast, lastUtf8);
-        const int lastAdvance = renderer_.getTextAdvanceX(fontId_, lastUtf8.c_str(), tcyStyle);
+        const int lastAdvance = renderer_.getRenderAdvanceX(fontId_, lastUtf8.c_str(), tcyStyle);
         // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
         const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
         if (inkWidth > 0 && inkWidth <= cellPx) {
@@ -979,12 +979,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           encodeDigitUtf8(stream_[i].codepoint, runUtf8);
         }
 
-        // Measure with the run's ACTUAL style: the renderer draws with g.style, and bold
-        // digits are wider than regular -- an unstyled measurement under-reserves rows and
-        // the run's tail overprints the following character.
+        // Render-truth measurement with the run's ACTUAL style: getRenderAdvanceX resolves
+        // glyphs exactly as drawTextRotated90CCW will (the advance-table fast path priced
+        // non-resident digits from a companion font and under-reported -- device photo:
+        // a year-run measured ~half its drawn width, so 年 overprinted the digits).
         const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
         renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
-        const int runWidthPx = renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), runStyle);
+        const int runWidthPx = renderer_.getRenderAdvanceX(fontId_, runUtf8.c_str(), runStyle);
         const int fontPctRun = (cellPx > 0) ? (ascender * 100 / cellPx) : 100;
         const int runExtraNudge = (fontPctRun > 100) ? (cellPx * (fontPctRun - 100) / 30) : 0;
         const int numericRotatedDownNudge = std::max(8, (cellPx * 9) / 10) + runExtraNudge * 2;
@@ -1067,7 +1068,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       std::string remaining = runUtf8;
 
       while (!remaining.empty()) {
-        const int remWidthPx = renderer_.getTextAdvanceX(fontId_, remaining.c_str(), runStyle);
+        const int remWidthPx = renderer_.getRenderAdvanceX(fontId_, remaining.c_str(), runStyle);
         const uint16_t remRows = static_cast<uint16_t>(
             std::max(1, static_cast<int>(std::ceil(static_cast<double>(remWidthPx + runDownNudge) / cellPx))));
         const uint16_t availRows = rowsPerColumn - row;
@@ -1103,7 +1104,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         for (size_t sp = remaining.rfind(' '); sp != std::string::npos;
              sp = (sp == 0) ? std::string::npos : remaining.rfind(' ', sp - 1)) {
           std::string prefix = remaining.substr(0, sp);
-          const int prefixPx = renderer_.getTextAdvanceX(fontId_, prefix.c_str(), runStyle);
+          const int prefixPx = renderer_.getRenderAdvanceX(fontId_, prefix.c_str(), runStyle);
           const uint16_t prefixRows = static_cast<uint16_t>(
               std::max(1, static_cast<int>(std::ceil(static_cast<double>(prefixPx + runDownNudge) / cellPx))));
           if (prefixRows <= availRows) {
@@ -1147,7 +1148,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
         // Place the prefix chunk.
         std::string chunk = remaining.substr(0, breakAt);
-        const int chunkPx = renderer_.getTextAdvanceX(fontId_, chunk.c_str(), runStyle);
+        const int chunkPx = renderer_.getRenderAdvanceX(fontId_, chunk.c_str(), runStyle);
         const uint16_t chunkRows = static_cast<uint16_t>(
             std::max(1, static_cast<int>(std::ceil(static_cast<double>(chunkPx + runDownNudge) / cellPx))));
 
