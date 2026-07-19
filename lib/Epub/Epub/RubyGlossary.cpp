@@ -94,6 +94,12 @@ void collect(std::vector<Pair>& pairs, const std::string& base, const std::strin
   if (std::any_of(pairs.begin(), pairs.end(), [&](const Pair& p) { return p.first == base && p.second == ruby; })) {
     return;
   }
+  if (pairs.capacity() == 0) {
+    // One up-front block instead of doubling growth during the parse. 32 covers a typical
+    // section's unique pairs; a full MAX_PAIRS_PER_SECTION reserve would cost ~10KB per
+    // section whether or not the book has ruby, which this heap can't spare.
+    pairs.reserve(32);
+  }
   pairs.emplace_back(base, ruby);
 }
 
@@ -182,11 +188,14 @@ bool lookup(const std::string& bookCachePath, const std::string& base, std::stri
   // Distinct readings for the same base are rare (e.g. two characters sharing surname
   // kanji) -- collect exactly, then join with '・'.
   std::vector<std::string> readings;
-  forEachRecord(f, count, [&](std::string_view recBase, std::string_view ruby) {
+  const bool ok = forEachRecord(f, count, [&](std::string_view recBase, std::string_view ruby) {
     if (recBase != base) return;
     if (std::any_of(readings.begin(), readings.end(), [&](const std::string& r) { return r == ruby; })) return;
     readings.emplace_back(ruby);
   });
+  // Malformed/truncated file: treat the glossary as unusable rather than serving
+  // whatever partial readings streamed out before the corruption.
+  if (!ok) return false;
   for (const auto& r : readings) {
     if (!outReadings.empty()) outReadings += "\xE3\x83\xBB";  // '・'
     outReadings += r;
