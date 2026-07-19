@@ -44,6 +44,19 @@ static constexpr Rule kRules[] = {
     {"\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // れば→る
     // Desire
     {"\xe3\x81\x9f\xe3\x81\x84", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // たい→る
+    // Suru progressive/compound て-forms. MUST precede the generic ichidan ている→る rule:
+    // rule order is candidate order, and the ichidan rule turns している into しる -- 知る, a real
+    // headword that then shadows する in the lookup's first-match-wins candidate walk. Mirrors the
+    // godan している→す block below, which is equally shadowed without these.
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x82\x8b", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // している→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\x9f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していた→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xaa\xe3\x81\x84", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していない→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xbe\xe3\x81\x99", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // しています→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xa6", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していて→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x8d\xe3\x81\x9f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // してきた→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x8f\xe3\x82\x8b", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // してくる→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\x8f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していく→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していった→する
     // Progressive て+いる and compound auxiliaries
     {"\xe3\x81\xa6\xe3\x81\x84\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ている→る
     {"\xe3\x81\xa6\xe3\x81\x84\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ていた→る

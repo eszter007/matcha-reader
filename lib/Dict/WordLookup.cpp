@@ -74,6 +74,7 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
     if (DictIndex::lookupExact(window.c_str(), entry, dictMask, needDefinition)) {
       out.entry = std::move(entry);
       out.matchLength = windowEnd - byteOffset;
+      out.deinflected = false;
       return true;
     }
 
@@ -93,10 +94,35 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
     auto candidates = Deinflector::deinflect(window);
     // Skip index 0 — that's the raw surface form we already tried.
     for (size_t i = 1; i < candidates.size(); i++) {
+      // Validate the candidate against the entry's actual word class: a godan-rule candidate must
+      // resolve to a godan verb, etc. Kills reading-record collisions like だとい→だとう (妥当, a
+      // noun) or って→う (鵜). Condition DICT (chained contractions) carries no class -> mask 0.
+      uint8_t posMask = 0;
+      switch (candidates[i].condition) {
+        case WordCondition::V1:
+          posMask = DictIndexRecord::POS_V1;
+          break;
+        case WordCondition::V5:
+          posMask = DictIndexRecord::POS_V5;
+          break;
+        case WordCondition::VS:
+          posMask = DictIndexRecord::POS_VS;
+          break;
+        case WordCondition::VK:
+          posMask = DictIndexRecord::POS_VK;
+          break;
+        case WordCondition::ADJ_I:
+          posMask = DictIndexRecord::POS_ADJ_I;
+          break;
+        case WordCondition::DICT:
+          posMask = 0;
+          break;
+      }
       // Deinflected forms are conjugated verbs/adjectives -> only ever in jmdict.
-      if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition)) {
+      if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition, posMask)) {
         out.entry = std::move(entry);
         out.matchLength = windowEnd - byteOffset;
+        out.deinflected = true;
         return true;
       }
     }
