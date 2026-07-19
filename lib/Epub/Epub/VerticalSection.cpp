@@ -12,6 +12,7 @@
 #include <cstring>
 #include <string>
 
+#include "Epub/RubyGlossary.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "GfxRenderer.h"
 
@@ -29,7 +30,7 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 73;  // v73: CSS v12 per-side borders reach vertical block styles
+constexpr uint8_t VSECTION_FILE_VERSION = 74;  // v74: force re-parse so the furigana glossary harvests existing books
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -685,6 +686,10 @@ struct LayoutPageSink final : ParagraphSink {
   const uint16_t viewportHeight;
   size_t imgIdx = 0;
   bool failed = false;
+  // Per-book furigana glossary harvest: unique (base, ruby) pairs seen during this build,
+  // merged into <cache>/ruby.bin after a successful parse (see RubyGlossary). Bounded by
+  // RubyGlossary's per-section cap, so worst case is a few KB of short strings.
+  std::vector<RubyGlossary::Pair> rubyHarvest;
 
   void onBlockStyleStart(const VerticalBlockParams& params) override { layout.markBlockStart(params); }
   void onBlockStyleEnd() override { layout.markBlockEnd(); }
@@ -722,6 +727,10 @@ struct LayoutPageSink final : ParagraphSink {
 
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
     if (failed) return;
+    // Harvest furigana pairs BEFORE the chunking below moves the runs' strings out.
+    for (const auto& r : runs) {
+      if (!r.rubyText.empty()) RubyGlossary::collect(rubyHarvest, r.baseText, r.rubyText);
+    }
     // A single paragraph (one <p>/<div>, or many furigana-annotated RubyRuns) can itself hold
     // thousands of characters -- MAX_PARAGRAPH_BYTES (16KB, ~5000+ CJK chars) only bounds the
     // SAX-side accumulation buffers, not this batch's memory budget, and ordinary long-form prose
@@ -1103,6 +1112,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // OR, don't assign: the styled-block collect above may already have flagged this build
   // (unstyled fallback under heap pressure).
   lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap();
+  // Persist harvested furigana pairs; runs after the parse buffers are freed, so the
+  // transient merge buffer doesn't compete with layout's peak memory.
+  RubyGlossary::merge(epub->getCachePath(), sink.rubyHarvest);
   LOG_INF("VSC", "streamParseAndLayout: %u ms", millis() - buildStartMs);
   LOG_INF("VSC", "streamParseAndLayout end spine=%d pages=%zu free=%u", spineIndex, pageOffsets_.size(),
           ESP.getFreeHeap());

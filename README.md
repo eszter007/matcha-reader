@@ -38,6 +38,7 @@ Japanese books are automatically detected from EPUB metadata (`<dc:language>ja</
 Open the reader menu and select **Word Lookup** to look up any word on the current page. Works in both vertical and horizontal reading modes. Only shown for Japanese books.
 
 - **JMdict vocabulary** — Full JMdict/Jitendex dictionary with readings, part-of-speech tags, definitions, and example sentences
+- **Book furigana glossary** — When the book itself provides a furigana reading for the selected word, the entry starts with "In this book: はやし". Readings are remembered per book, so a name annotated only on its first appearance still shows its reading when you look it up chapters later. Names without a dictionary entry show the book's reading too; nothing is shown when the book never annotated the word.
 - **Verb deinflection** — Conjugated forms resolve to their dictionary base automatically:
   - te-form: 読んで → 読む
   - masu: 食べます → 食べる

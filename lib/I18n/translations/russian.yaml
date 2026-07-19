@@ -444,3 +444,4 @@ STR_TRANSLATION_LOW_MEMORY: "Недостаточно памяти для пер
 STR_TRANSLATION_NO_API_KEY: "Нет API-ключа (поместите gemini.key в /system/)"
 STR_TRANSLATION_NO_TEXT: "На этой странице нет текста"
 STR_TRANSLATION_WIFI_FAILED: "Не удалось подключиться к Wi-Fi"
+STR_IN_THIS_BOOK: "В этой книге:"

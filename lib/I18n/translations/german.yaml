@@ -445,3 +445,4 @@ STR_TRANSLATION_NO_API_KEY: "Kein API-Schlüssel (gemini.key in /system/ ablegen
 STR_TRANSLATION_NO_TEXT: "Kein Text auf dieser Seite"
 STR_TRANSLATION_WIFI_FAILED: "WLAN-Verbindung fehlgeschlagen"
 
+STR_IN_THIS_BOOK: "In diesem Buch:"

@@ -10,6 +10,7 @@
 
 #include "Epub/FootnoteEntry.h"
 #include "Epub/ParsedText.h"
+#include "Epub/RubyGlossary.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
@@ -129,6 +130,13 @@ class ChapterHtmlSlimParser {
   bool inRtTag = false;
   std::string pendingRubyText;
 
+ public:
+  // Per-book furigana glossary harvest: unique (base, ruby) pairs seen during this parse,
+  // merged into <cache>/ruby.bin by the section build after a successful parse (see
+  // RubyGlossary). Bounded by RubyGlossary's per-section cap.
+  std::vector<RubyGlossary::Pair> rubyHarvest;
+
+ private:
   // Footnote link tracking
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;
