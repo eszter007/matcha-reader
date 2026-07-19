@@ -6,6 +6,7 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include "Epub/RubyGlossary.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 
@@ -79,7 +80,8 @@ namespace {
 // v48: gaiji inline images emit replacement text instead of image blocks.
 // v49: CSS cache v12 parses per-side borders + font shorthand; sections built
 // against v11 rules lack those edges/styles.
-constexpr uint8_t SECTION_FILE_VERSION = 49;
+// v50: force re-parse so the furigana glossary (ruby.bin) harvests existing books.
+constexpr uint8_t SECTION_FILE_VERSION = 50;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
@@ -369,6 +371,10 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     }
     return false;
   }
+
+  // Persist harvested furigana pairs for the per-book glossary (see RubyGlossary); runs
+  // after the parse so the transient merge buffer doesn't compete with layout's peak memory.
+  RubyGlossary::merge(epub->getCachePath(), visitor.rubyHarvest);
 
   const uint32_t lutOffset = file.position();
   bool hasFailedLutRecords = false;

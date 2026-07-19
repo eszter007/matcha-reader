@@ -1498,6 +1498,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->inRtTag = false;
     if (self->currentTextBlock && !self->pendingRubyText.empty() && !self->currentTextBlock->isEmpty()) {
       self->currentTextBlock->setLastWordRuby(self->pendingRubyText);
+      // Harvest for the per-book furigana glossary: the base is the word the ruby was
+      // just attached to.
+      RubyGlossary::collect(self->rubyHarvest, self->currentTextBlock->lastWord(), self->pendingRubyText);
     }
     self->pendingRubyText.clear();
     return;

@@ -2,12 +2,15 @@
 
 #include <Arduino.h>
 #include <DictIndex.h>
+#include <Epub/RubyGlossary.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WordLookup.h>
+
+#include <algorithm>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
@@ -23,6 +26,8 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
+  const size_t slash = this->scanCachePath.find_last_of('/');
+  if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
   initScanFromCacheOrBurst("vertical");
@@ -35,6 +40,8 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
+  const size_t slash = this->scanCachePath.find_last_of('/');
+  if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromPage(page);
   initScanFromCacheOrBurst("horizontal");
@@ -207,6 +214,17 @@ std::string EpubReaderWordLookupActivity::buildLookupText(size_t startIdx) const
   return text;
 }
 
+void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface) {
+  if (bookCachePath.empty() || surface.empty()) return;
+  std::string readings;
+  if (!RubyGlossary::lookup(bookCachePath, surface, readings)) return;
+  std::string line = tr(STR_IN_THIS_BOOK);
+  line += ' ';
+  line += readings;
+  line += '\n';
+  resultDefinition = line + resultDefinition;
+}
+
 void EpubReaderWordLookupActivity::performLookup() {
   // Hold the rendering mutex while the result strings are rebuilt: the render task wraps and
   // draws resultDefinition/resultHeadword CONCURRENTLY on its own task, and mutating them
@@ -312,6 +330,9 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       resultHeadword = digitPrefix + text.substr(0, nb);
       resultDefinition = tr(STR_LOOKUP_NAME);  // no dictionary entry -- label it as a name
       resultMatchLen = static_cast<int>(nameRun);
+      // Names are the glossary's prime case: the book's own furigana is often the ONLY
+      // source for a name's reading.
+      prependBookReading(text.substr(0, nb));
       requestUpdate();  // this early return would otherwise skip the requestUpdate() at the end,
                         // leaving the name un-rendered (screen keeps the previous word -> looks skipped)
       return;
@@ -324,6 +345,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
+    prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;
     size_t pos = 0;
     while (pos < result.matchLength && pos < text.size()) {

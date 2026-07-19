@@ -306,3 +306,30 @@ if (parsedSize != fileSize) {
     std::warning(std::format("Unparsed data detected: {} bytes remaining at offset 0x{:X}", fileSize - parsedSize, parsedSize));
 }
 ```
+
+## `ruby.bin`
+
+Per-book furigana glossary: unique `(base text, ruby reading)` pairs harvested from
+`<ruby>` markup during section parsing (both horizontal and vertical builds). Word
+lookup consults it so "In this book: <reading>" can be shown for later, bare-kanji
+occurrences of a word whose reading the book annotated only on first appearance.
+
+Location: `.crosspoint/epub_<hash>/ruby.bin`. Unlike section caches the pairs depend
+only on book content — never on font, margins, or viewport — so the file survives
+relayouts and is only removed with the book's cache directory.
+
+Current version: **1**
+
+```text
+u8   version        (1)
+u16  count          (little-endian, capped at 1024 records)
+repeated count times:
+  u8   baseLen      (1..32)
+  u8[] baseText     (UTF-8, baseLen bytes, no terminator)
+  u8   rubyLen      (1..32)
+  u8[] rubyText     (UTF-8, rubyLen bytes, no terminator)
+```
+
+Only kanji-bearing base texts are stored. The file is capped at 16KB; overflow pairs
+are silently dropped (the glossary is best-effort). Distinct readings for the same
+base text may appear as separate records; lookup joins them with '・'.

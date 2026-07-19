@@ -58,6 +58,14 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::string scanCachePath;
   uint16_t scanSpine = 0;
   uint16_t scanPage = 0;
+  // Book cache dir (derived from scanCachePath) for the furigana glossary; empty = disabled.
+  std::string bookCachePath;
+
+  // Prepend "In this book: <reading>" to resultDefinition when the book's furigana
+  // glossary has an entry for the selected surface text (see RubyGlossary). Books
+  // typically annotate a name's reading only on first appearance -- this surfaces it
+  // on every later occurrence too. No entry -> no line.
+  void prependBookReading(const std::string& surface);
 
   void reclaimFontHeap();
   void initScanFromCacheOrBurst(const char* label);
