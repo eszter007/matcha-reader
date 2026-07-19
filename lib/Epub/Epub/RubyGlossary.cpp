@@ -91,8 +91,7 @@ void collect(std::vector<Pair>& pairs, const std::string& base, const std::strin
   // Only kanji-bearing bases are worth remembering: ruby over kana is decorative and a
   // kana base needs no reading.
   if (!hasKanji(base)) return;
-  if (std::any_of(pairs.begin(), pairs.end(),
-                  [&](const Pair& p) { return p.first == base && p.second == ruby; })) {
+  if (std::any_of(pairs.begin(), pairs.end(), [&](const Pair& p) { return p.first == base && p.second == ruby; })) {
     return;
   }
   pairs.emplace_back(base, ruby);
@@ -144,8 +143,8 @@ void merge(const std::string& bookCachePath, const std::vector<Pair>& pairs) {
     for (const auto& p : pending) n += 2 + p.first.size() + p.second.size();
     return n;
   };
-  while (!pending.empty() && (oldCount + pending.size() > MAX_FILE_RECORDS ||
-                              3 + oldBytes + pendingBytes() > MAX_FILE_BYTES)) {
+  while (!pending.empty() &&
+         (oldCount + pending.size() > MAX_FILE_RECORDS || 3 + oldBytes + pendingBytes() > MAX_FILE_BYTES)) {
     pending.pop_back();
   }
   if (pending.empty()) return;
