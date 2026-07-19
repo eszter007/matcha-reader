@@ -88,6 +88,14 @@ struct TextExtractor {
   std::string rubyBase;
   std::string rubyAnnotation;
 
+  // Furigana-glossary harvest (owned by the layout sink; see RubyGlossary). Mono-ruby
+  // elements (小<rt>こ</rt>林<rt>ばやし</rt>) additionally record the whole-element pair
+  // (小林 -> こばやし) so word lookup's whole-word selection can match.
+  std::vector<RubyGlossary::Pair>* rubyHarvest = nullptr;
+  std::string rubyElemBase;
+  std::string rubyElemRuby;
+  int rubyElemRunCount = 0;
+
   // Style tracking — each entry records the elementDepth at which
   // bold/italic was activated. On endElement, if we're leaving that
   // depth, pop and flush.
@@ -288,6 +296,9 @@ struct TextExtractor {
       self->rubyBase.reserve(RUBY_RESERVE_HINT);
       self->rubyAnnotation.clear();
       self->rubyAnnotation.reserve(RUBY_RESERVE_HINT);
+      self->rubyElemBase.clear();
+      self->rubyElemRuby.clear();
+      self->rubyElemRunCount = 0;
     } else if (strcasecmp(name, "rt") == 0) {
       self->inRt = true;
       self->rubyAnnotation.clear();
@@ -370,6 +381,13 @@ struct TextExtractor {
       self->inRt = false;
       // Emit a RubyRun for the base text accumulated so far with this annotation.
       if (!self->rubyBase.empty()) {
+        if (self->rubyHarvest) {
+          // Glossary harvest BEFORE the moves below consume the strings.
+          RubyGlossary::collect(*self->rubyHarvest, self->rubyBase, self->rubyAnnotation);
+          self->rubyElemBase += self->rubyBase;
+          self->rubyElemRuby += self->rubyAnnotation;
+          self->rubyElemRunCount++;
+        }
         self->currentRuns.push_back(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation),
                                             self->currentStyle(), self->hasEmphasis()});
         self->rubyBase.clear();
@@ -386,6 +404,14 @@ struct TextExtractor {
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
+      // Mono-ruby element (per-character <rt>s): also record the whole-element pair so
+      // whole-word lookups (小林) match, not just per-character ones (小, 林).
+      if (self->rubyHarvest && self->rubyElemRunCount >= 2) {
+        RubyGlossary::collect(*self->rubyHarvest, self->rubyElemBase, self->rubyElemRuby);
+      }
+      self->rubyElemBase.clear();
+      self->rubyElemRuby.clear();
+      self->rubyElemRunCount = 0;
       self->inRuby = false;
       // Furigana-dense text accumulates many small runs without currentText ever growing;
       // stream them onward at the same cadence as the byte bound (see SOFT_FLUSH_RUNS).
@@ -727,10 +753,8 @@ struct LayoutPageSink final : ParagraphSink {
 
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
     if (failed) return;
-    // Harvest furigana pairs BEFORE the chunking below moves the runs' strings out.
-    for (const auto& r : runs) {
-      if (!r.rubyText.empty()) RubyGlossary::collect(rubyHarvest, r.baseText, r.rubyText);
-    }
+    // (Furigana-glossary harvest happens in TextExtractor's ruby handlers, which also see
+    // whole-<ruby>-element boundaries for mono-ruby pairs; rubyHarvest is only OWNED here.)
     // A single paragraph (one <p>/<div>, or many furigana-annotated RubyRuns) can itself hold
     // thousands of characters -- MAX_PARAGRAPH_BYTES (16KB, ~5000+ CJK chars) only bounds the
     // SAX-side accumulation buffers, not this batch's memory budget, and ordinary long-form prose
@@ -1041,6 +1065,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   TextExtractor extractor;
   extractor.sink = &sink;
+  extractor.rubyHarvest = &sink.rubyHarvest;
   extractor.blockStyles = &blockStyles;
   // Pin every buffer that lives across the whole build to its worst case NOW, while the heap
   // is freshest -- mid-build growth (doubling alloc-copy-free) plants persistent blocks in

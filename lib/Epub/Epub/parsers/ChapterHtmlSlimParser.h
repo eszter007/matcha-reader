@@ -129,6 +129,12 @@ class ChapterHtmlSlimParser {
   bool inRubyBlock = false;
   bool inRtTag = false;
   std::string pendingRubyText;
+  // Whole-<ruby>-element accumulation for the glossary: mono-ruby elements
+  // (小<rt>こ</rt>林<rt>ばやし</rt>) also record 小林 -> こばやし so whole-word
+  // lookups match, not just the per-character pairs.
+  std::string rubyElemBase;
+  std::string rubyElemRuby;
+  int rubyElemRunCount = 0;
 
  public:
   // Per-book furigana glossary harvest: unique (base, ruby) pairs seen during this parse,

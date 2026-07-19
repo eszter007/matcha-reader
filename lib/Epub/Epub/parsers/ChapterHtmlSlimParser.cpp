@@ -1169,6 +1169,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
     }
+    self->rubyElemBase.clear();
+    self->rubyElemRuby.clear();
+    self->rubyElemRunCount = 0;
     self->depth += 1;
     return;
   } else if (strcmp(name, "rt") == 0) {
@@ -1501,6 +1504,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       // Harvest for the per-book furigana glossary: the base is the word the ruby was
       // just attached to.
       RubyGlossary::collect(self->rubyHarvest, self->currentTextBlock->lastWord(), self->pendingRubyText);
+      self->rubyElemBase += self->currentTextBlock->lastWord();
+      self->rubyElemRuby += self->pendingRubyText;
+      self->rubyElemRunCount++;
     }
     self->pendingRubyText.clear();
     return;
@@ -1510,6 +1516,13 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   }
 
   if (strcmp(name, "ruby") == 0) {
+    // Mono-ruby element: also record the whole-element pair (see rubyElemBase).
+    if (self->rubyElemRunCount >= 2) {
+      RubyGlossary::collect(self->rubyHarvest, self->rubyElemBase, self->rubyElemRuby);
+    }
+    self->rubyElemBase.clear();
+    self->rubyElemRuby.clear();
+    self->rubyElemRunCount = 0;
     self->inRubyBlock = false;
     return;
   }
