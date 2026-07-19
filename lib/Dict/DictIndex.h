@@ -8,11 +8,24 @@
 // Dat file contains the variable-length definition text that offset/length point into.
 struct DictIndexRecord {
   static constexpr size_t HEADWORD_SIZE = 32;
+
+  // Part-of-speech flags (posFlags field). Written by tools/dict_convert/convert_jmdict.py from
+  // JMdict partOfSpeech tags / Yomitan rules; used to validate deinflection candidates (a candidate
+  // produced by a godan rule must resolve to an entry that IS a godan verb -- prevents だとい
+  // matching 妥当 via the い→う masu-stem rule). 0 means "no POS data" (pre-flags dict files have a
+  // zero pad byte here) and accepts every candidate, so old dictionaries keep today's behaviour.
+  static constexpr uint8_t POS_V1 = 0x01;     // ichidan verb
+  static constexpr uint8_t POS_V5 = 0x02;     // godan verb
+  static constexpr uint8_t POS_VS = 0x04;     // suru verb
+  static constexpr uint8_t POS_VK = 0x08;     // kuru verb
+  static constexpr uint8_t POS_ADJ_I = 0x10;  // i-adjective
+  static constexpr uint8_t POS_OTHER = 0x20;  // tagged, but none of the above (noun, particle, ...)
+
   char headword[HEADWORD_SIZE];
   uint32_t offset;
   uint16_t length;
   uint8_t priority;
-  uint8_t pad;
+  uint8_t posFlags;
 } __attribute__((packed));
 
 static_assert(sizeof(DictIndexRecord) == 40, "DictIndexRecord must be 40 bytes");
@@ -54,14 +67,17 @@ class DictIndex {
   // is left empty) and the adjacent-record collect walk -- existence, headword and matchLength are
   // still exact. The Word Lookup page scan uses this: it discards definitions for most positions,
   // and each avoided definition is 1-5 SD reads.
-  static bool lookupExact(const char* headword, DictEntry& out, uint8_t dictMask = DICT_ALL,
-                          bool needDefinition = true);
+  // posMask (DictIndexRecord::POS_* bits): when nonzero, only records whose posFlags intersect the
+  // mask (or records with posFlags==0, i.e. no POS data) count as hits. Used to validate
+  // deinflection candidates against the entry's actual word class.
+  static bool lookupExact(const char* headword, DictEntry& out, uint8_t dictMask = DICT_ALL, bool needDefinition = true,
+                          uint8_t posMask = 0);
 
   // Look up in a specific index/dat file pair. Collects ALL entries with
   // the same headword (scanning adjacent records) and merges definitions
-  // (unless needDefinition=false; see lookupExact).
+  // (unless needDefinition=false; see lookupExact). posMask: see lookupExact.
   static bool lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
-                           bool needDefinition = true);
+                           bool needDefinition = true, uint8_t posMask = 0);
 
   // Free all lookup caches (sparse-index tiers, record block caches) and close the dictionary
   // files, returning ~30KB to the heap pool. MUST be called when a Word Lookup activity exits:

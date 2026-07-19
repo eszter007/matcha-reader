@@ -347,7 +347,9 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 
 namespace {
 constexpr uint32_t WLSCAN_MAGIC =
-    0x42534C57;  // "WLSB" -- small-kana guard, katakana-name grouping, ~そう filter, past-only ちゃ contraction
+    0x43534C57;  // "WLSC" -- POS-validated deinflection (segmentation changes even though the dict
+                 // files keep their byte size when reconverted with posFlags, so the size-based
+                 // dictFingerprint below cannot catch that swap on its own)
 
 // Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
 // scans (segmentation depends on the dictionary). File size is not a perfect identity, but any

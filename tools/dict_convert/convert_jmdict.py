@@ -56,7 +56,7 @@ def strip_html(html: str) -> str:
 
 
 def write_binary(records: list, output_dir: str):
-    """Write (headword_bytes, definition_bytes, priority) triples to idx+dat files.
+    """Write (headword_bytes, definition_bytes, priority, pos_flags) tuples to idx+dat files.
 
     Expects records to be pre-validated (headword_bytes < HEADWORD_SIZE).
     """
@@ -74,7 +74,7 @@ def write_binary(records: list, output_dir: str):
         prev_offset = 0
         prev_length = 0
 
-        for hw_bytes, def_bytes, priority in records:
+        for hw_bytes, def_bytes, priority, pos_flags in records:
             if def_bytes == prev_def:
                 offset = prev_offset
                 length = prev_length
@@ -91,11 +91,11 @@ def write_binary(records: list, output_dir: str):
                 prev_length = length
 
             padded_hw = hw_bytes + b"\x00" * (HEADWORD_SIZE - len(hw_bytes))
-            index_entries.append((padded_hw, offset, length, priority))
+            index_entries.append((padded_hw, offset, length, priority, pos_flags))
 
     with open(idx_path, "wb") as idx_f:
-        for padded_hw, offset, length, priority in index_entries:
-            idx_f.write(struct.pack(RECORD_FORMAT, padded_hw, offset, length, priority, 0))
+        for padded_hw, offset, length, priority, pos_flags in index_entries:
+            idx_f.write(struct.pack(RECORD_FORMAT, padded_hw, offset, length, priority, pos_flags))
 
     dat_size = os.path.getsize(dat_path)
     idx_size = os.path.getsize(idx_path)
@@ -148,6 +148,56 @@ def compute_priority_jmdict(entry: dict) -> int:
     return 200 if is_common else 100
 
 
+
+# Part-of-speech flag bits -- must mirror DictIndexRecord::POS_* in lib/Dict/DictIndex.h.
+# 0 means "no POS data" and the firmware then accepts every deinflection candidate, so leaving
+# flags unset is always safe (fail open).
+POS_V1 = 0x01     # ichidan verb
+POS_V5 = 0x02     # godan verb
+POS_VS = 0x04     # suru verb
+POS_VK = 0x08     # kuru verb
+POS_ADJ_I = 0x10  # i-adjective
+POS_OTHER = 0x20  # tagged, but none of the above (noun, particle, na-adjective, ...)
+POS_ANY_VERB = POS_V1 | POS_V5 | POS_VS | POS_VK
+
+
+def pos_flags_from_tags(tags) -> int:
+    """Map JMdict partOfSpeech tags / Yomitan rules to POS flag bits.
+
+    Prefix-matches the verb classes so subtags stay covered (v5k-s, v5aru, v1-s, vs-i, adj-ix).
+    A verb-ish tag with an unrecognized class fails OPEN (all verb bits) rather than closed --
+    a wrongly-rejected real conjugation is worse than letting a rare archaic verb through.
+    Transitivity tags (vt/vi) say nothing about conjugation class and are ignored.
+    """
+    flags = 0
+    for t in tags:
+        if not t:
+            continue
+        if t in ("vt", "vi", "aux", "aux-adj", "exp"):
+            continue  # not a conjugation class
+        if t.startswith("v1"):
+            flags |= POS_V1
+        elif t.startswith("v5") or t.startswith("v4") or t.startswith("iv"):
+            flags |= POS_V5  # v4* (archaic yodan) conjugates closest to godan for our rule set
+        elif t.startswith("vs"):
+            flags |= POS_VS
+        elif t.startswith("vk"):
+            flags |= POS_VK
+        elif t.startswith("adj-i"):
+            flags |= POS_ADJ_I
+        elif t.startswith("v") or t == "aux-v":
+            flags |= POS_ANY_VERB  # unknown verb subtype: fail open across verb classes
+        else:
+            flags |= POS_OTHER
+    return flags
+
+
+def pos_flags_jmdict(entry: dict) -> int:
+    tags = []
+    for sense in entry.get("sense", []):
+        tags.extend(sense.get("partOfSpeech", []))
+    return pos_flags_from_tags(tags)
+
 def format_definition_jmdict(entry: dict) -> str:
     """Format an entry's readings and glosses into a compact display string."""
     parts = []
@@ -180,6 +230,7 @@ def convert_jmdict(json_path: str, output_dir: str):
         definition = format_definition_jmdict(entry)
         def_bytes = definition.encode("utf-8")
         priority = compute_priority_jmdict(entry)
+        pos_flags = pos_flags_jmdict(entry)
 
         seen_headwords = set()
         for kanji in entry.get("kanji", []):
@@ -188,7 +239,7 @@ def convert_jmdict(json_path: str, output_dir: str):
             if len(hw_bytes) >= HEADWORD_SIZE or hw_bytes in seen_headwords:
                 continue
             seen_headwords.add(hw_bytes)
-            records.append((hw_bytes, def_bytes, priority))
+            records.append((hw_bytes, def_bytes, priority, pos_flags))
 
         for kana in entry.get("kana", []):
             hw = kana["text"]
@@ -196,7 +247,7 @@ def convert_jmdict(json_path: str, output_dir: str):
             if len(hw_bytes) >= HEADWORD_SIZE or hw_bytes in seen_headwords:
                 continue
             seen_headwords.add(hw_bytes)
-            records.append((hw_bytes, def_bytes, priority))
+            records.append((hw_bytes, def_bytes, priority, pos_flags))
 
     print(f"Generated {len(records)} index records")
     write_binary(records, output_dir)
@@ -411,10 +462,11 @@ def convert_yomitan(zip_path: str, output_dir: str):
                 if not headword or not isinstance(headword, str):
                     continue
                 reading = entry[1] if len(entry) > 1 else ""
+                rules = entry[3] if len(entry) > 3 and isinstance(entry[3], str) else ""
                 score = entry[4] if len(entry) > 4 else 0
                 definitions = entry[5] if len(entry) > 5 else []
                 redirect = find_redirect_target(definitions)
-                all_entries.append((headword, reading, score, definitions, redirect))
+                all_entries.append((headword, reading, score, definitions, redirect, rules))
                 if not redirect:
                     definition = format_definition_yomitan(headword, reading, definitions)
                     if definition:
@@ -426,7 +478,7 @@ def convert_yomitan(zip_path: str, output_dir: str):
         # Pass 2: emit records, resolving redirects to the target's real definition.
         records = []
         entry_count = 0
-        for headword, reading, score, definitions, redirect in all_entries:
+        for headword, reading, score, definitions, redirect, rules in all_entries:
             if redirect:
                 target = canonical_defs.get(redirect)
                 if not target:
@@ -441,18 +493,21 @@ def convert_yomitan(zip_path: str, output_dir: str):
                 priority = max(0, min(255, int(score) + 128)) if isinstance(score, (int, float)) else 100
 
             def_bytes = definition.encode("utf-8")
+            # Yomitan spec: empty rules = "word is not inflected" -- that IS positive POS data
+            # (a non-conjugating word), so stamp POS_OTHER rather than the fail-open 0.
+            pos_flags = pos_flags_from_tags(rules.split()) if rules.strip() else POS_OTHER
             seen_headwords = set()
             hw_bytes = headword.encode("utf-8")
             if len(hw_bytes) < HEADWORD_SIZE:
                 seen_headwords.add(hw_bytes)
-                records.append((hw_bytes, def_bytes, priority))
+                records.append((hw_bytes, def_bytes, priority, pos_flags))
 
             if reading and reading != headword and not redirect:
                 r_bytes = reading.encode("utf-8")
                 if len(r_bytes) < HEADWORD_SIZE and r_bytes not in seen_headwords:
                     r_def = format_definition_yomitan(reading, reading, definitions)
                     if r_def:
-                        records.append((r_bytes, r_def.encode("utf-8"), priority))
+                        records.append((r_bytes, r_def.encode("utf-8"), priority, pos_flags))
 
             entry_count += 1
 
@@ -510,7 +565,7 @@ def convert_mdict(mdx_path: str, output_dir: str):
             continue
 
         def_bytes = definition.encode("utf-8")
-        records.append((hw_bytes, def_bytes, 100))
+        records.append((hw_bytes, def_bytes, 100, 0))
         entry_count += 1
 
     print(f"Processed {entry_count} MDict entries ({skipped} skipped) → {len(records)} index records")

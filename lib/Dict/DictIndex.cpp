@@ -294,7 +294,7 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 bool DictIndex::isAvailable() { return Storage.exists(IDX_PATH) && Storage.exists(DAT_PATH); }
 
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
-                             bool needDefinition) {
+                             bool needDefinition, uint8_t posMask) {
   DictFileHandles& h = handlesFor(idxPath);
   if (!h.opened) {
     // Optional dictionaries (grammar, jmnedict) may genuinely not be on the SD card -- without
@@ -359,9 +359,18 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     } else if (cmp > 0) {
       lo = mid + 1;
     } else {
+      // POS gate: a record with flags counts only if it intersects the caller's mask; a record
+      // with posFlags==0 (no POS data, e.g. a pre-flags dict file) always counts. posMask==0
+      // means the caller doesn't care (exact surface-form lookups).
+      const auto posAccept = [posMask](uint8_t flags) { return posMask == 0 || flags == 0 || (flags & posMask) != 0; };
+      constexpr size_t kMaxSiblingScan = 32;  // bound the walks for a pathological reading
+
       // Existence-only mode: the caller discards the definition (page scan), so skip the
       // backward walk, the collect walk, and all .dat payload reads -- each is an SD transaction.
-      if (!needDefinition) {
+      // With a POS mask, the record the binary search landed on may be the wrong homophone
+      // (しる could land on 汁 while the mask wants the verb 知る), so only take the fast path
+      // when that record already passes; otherwise fall through to the sibling walk below.
+      if (!needDefinition && posAccept(rec.posFlags)) {
         out.headword = headword;
         out.priority = rec.priority;
         out.definition.clear();
@@ -377,6 +386,23 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         first--;
       }
 
+      // POS-filtered existence check: any sibling with compatible flags is a hit. Served almost
+      // entirely from the block cache (the backward walk above just fetched this block).
+      if (!needDefinition) {
+        for (size_t idx = first; idx < recordCount && idx < first + kMaxSiblingScan; idx++) {
+          DictIndexRecord r;
+          if (!readIndexRecord(h, idx, recordCount, r)) break;
+          if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
+          if (posAccept(r.posFlags)) {
+            out.headword = headword;
+            out.priority = r.priority;
+            out.definition.clear();
+            return true;
+          }
+        }
+        return false;
+      }
+
       // Two passes so the highest-priority senses win even when they sit past the first few in
       // storage order. The index groups all same-reading records together but NOT by priority, so
       // a reading with many homophones (ほう: 方/法/報/...袍) could bury the common word (方) behind
@@ -389,13 +415,13 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         uint32_t offset;
         uint16_t length;
       };
-      constexpr size_t kMaxSiblingScan = 32;  // bound the walk for a pathological reading
       std::vector<Sib> sibs;
       sibs.reserve(kMaxSiblingScan);
       for (size_t idx = first; idx < recordCount && sibs.size() < kMaxSiblingScan; idx++) {
         DictIndexRecord r;
         if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
+        if (!posAccept(r.posFlags)) continue;  // wrong word class for this deinflection candidate
         sibs.push_back({r.priority, r.offset, r.length});
       }
       if (sibs.empty()) return false;
@@ -466,15 +492,17 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   return false;
 }
 
-bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMask, bool needDefinition) {
+bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMask, bool needDefinition,
+                            uint8_t posMask) {
   g_lookupExactCalls++;
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
-  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition)) return true;
-  if ((dictMask & DICT_GRAMMAR) && lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition))
+  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition, posMask)) return true;
+  if ((dictMask & DICT_GRAMMAR) &&
+      lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition, posMask))
     return true;
-  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition))
+  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition, posMask))
     return true;
   return false;
 }
