@@ -990,8 +990,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
         const int runWidthPx =
             renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
-        const uint16_t rowsNeeded =
-            static_cast<uint16_t>(std::max(1, static_cast<int>(std::ceil(static_cast<double>(runWidthPx) / cellPx))));
+        const int fontPctRun = (cellPx > 0) ? (ascender * 100 / cellPx) : 100;
+        const int runExtraNudge = (fontPctRun > 100) ? (cellPx * (fontPctRun - 100) / 30) : 0;
+        const int numericRotatedDownNudge = std::max(8, (cellPx * 9) / 10) + runExtraNudge * 2;
+        // Reserve rows for the run's FULL vertical span: the ink starts numericRotatedDownNudge
+        // below the cell top and extends runWidthPx further down. Reserving only
+        // ceil(runWidth/cell) let 4-digit years overrun their rows by most of a cell and
+        // overprint the following character (device photo: 1914年 with 14 fused into 年).
+        const uint16_t rowsNeeded = static_cast<uint16_t>(std::max(
+            1, static_cast<int>(std::ceil(static_cast<double>(numericRotatedDownNudge + runWidthPx) / cellPx))));
 
         if (row != 0 && row + rowsNeeded > rowsPerColumn) {
           column++;
@@ -1001,9 +1008,6 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         }
 
         const int topY = row * cellPx;
-        const int fontPctRun = (cellPx > 0) ? (ascender * 100 / cellPx) : 100;
-        const int runExtraNudge = (fontPctRun > 100) ? (cellPx * (fontPctRun - 100) / 30) : 0;
-        const int numericRotatedDownNudge = std::max(8, (cellPx * 9) / 10) + runExtraNudge * 2;
         VerticalGlyph g;
         g.codepoint = 0;
         g.column = column;

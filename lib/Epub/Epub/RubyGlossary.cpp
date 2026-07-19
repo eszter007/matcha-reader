@@ -101,24 +101,29 @@ void merge(const std::string& bookCachePath, const std::vector<Pair>& pairs) {
   if (pairs.empty() || bookCachePath.empty()) return;
   const std::string path = glossaryPath(bookCachePath);
 
-  // Load the existing file into a transient heap buffer (bounded by MAX_FILE_BYTES) so the
-  // rewrite can carry it over -- HalStorage has no append mode (openFileForWrite truncates).
+  // Load the existing file into a transient heap buffer so the rewrite can carry it over --
+  // HalStorage has no append mode (openFileForWrite truncates). Size the buffer to the actual
+  // file (not the 16KB cap): this runs right after a section parse, where a large contiguous
+  // allocation is exactly what a fragmented heap cannot give, and a failed allocation here
+  // silently loses the harvest. First write needs no buffer at all.
   size_t oldBytes = 0;
   uint16_t oldCount = 0;
-  auto oldBuf = makeUniqueNoThrow<uint8_t[]>(MAX_FILE_BYTES);
-  if (!oldBuf) return;  // best-effort: skip harvesting under memory pressure
+  std::unique_ptr<uint8_t[]> oldBuf;
   std::vector<Pair> pending = pairs;
   {
     HalFile f;
     uint16_t count = 0;
     if (openAndReadHeader(path, f, count)) {
+      const size_t bufCap = std::max<size_t>(std::min(static_cast<size_t>(f.fileSize()), MAX_FILE_BYTES), 1);
+      oldBuf = makeUniqueNoThrow<uint8_t[]>(bufCap);
+      if (!oldBuf) return;  // best-effort: skip this harvest under memory pressure
       const bool ok = forEachRecord(f, count, [&](std::string_view base, std::string_view ruby) {
         // Drop pending pairs the file already has.
         pending.erase(std::remove_if(pending.begin(), pending.end(),
                                      [&](const Pair& p) { return p.first == base && p.second == ruby; }),
                       pending.end());
         const size_t recLen = 2 + base.size() + ruby.size();
-        if (oldBytes + recLen <= MAX_FILE_BYTES) {
+        if (oldBytes + recLen <= bufCap) {
           oldBuf[oldBytes++] = static_cast<uint8_t>(base.size());
           memcpy(oldBuf.get() + oldBytes, base.data(), base.size());
           oldBytes += base.size();
