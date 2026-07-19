@@ -7,7 +7,8 @@
 
 struct WordLookupResult {
   DictEntry entry;
-  size_t matchLength;  // number of UTF-8 bytes from the start position that matched
+  size_t matchLength;        // number of UTF-8 bytes from the start position that matched
+  bool deinflected = false;  // true if the hit came from a deinflection candidate, not the raw window
 };
 
 // Given a paragraph's source text and a byte offset into it, tries

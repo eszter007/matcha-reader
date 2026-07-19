@@ -74,6 +74,7 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
     if (DictIndex::lookupExact(window.c_str(), entry, dictMask, needDefinition)) {
       out.entry = std::move(entry);
       out.matchLength = windowEnd - byteOffset;
+      out.deinflected = false;
       return true;
     }
 
@@ -97,6 +98,7 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
       if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition)) {
         out.entry = std::move(entry);
         out.matchLength = windowEnd - byteOffset;
+        out.deinflected = true;
         return true;
       }
     }

@@ -493,18 +493,30 @@ void WordSelectionScan::scanOnePosition() {
   // ゎ (and their katakana forms). A match starting on one is always a mid-word fragment left by an
   // unhandled contraction (reported: っち out of たまっちゃった). Never start a lookup there; the
   // char is still covered by the preceding word's skipUntil when that word segmented correctly.
+  //
+  // One real exception: the colloquial quotative って (っていう, ってこと, ...) DOES begin with っ.
+  // Allow the lookup for っ+て, but accept only an EXACT dictionary/grammar hit below -- a
+  // deinflection-derived hit at a っ start is exactly the fragment class this skip exists to
+  // suppress (って→う via the godan te-form rule).
+  bool sokuonTeStart = false;
   if (scanStart < allGlyphs.size()) {
     switch (allGlyphs[scanStart].codepoint) {
+      case 0x3063: {  // っ
+        const bool teNext = scanStart + 1 < allGlyphs.size() && allGlyphs[scanStart + 1].paragraphIndex == paraIdx &&
+                            allGlyphs[scanStart + 1].codepoint == 0x3066;  // て
+        if (!teNext) return;
+        sokuonTeStart = true;
+        break;
+      }
       case 0x3041:
       case 0x3043:
       case 0x3045:
       case 0x3047:
       case 0x3049:  // ぁぃぅぇぉ
-      case 0x3063:
       case 0x3083:
       case 0x3085:
       case 0x3087:
-      case 0x308E:  // っ ゃゅょ ゎ
+      case 0x308E:  // ゃゅょ ゎ
       case 0x30A1:
       case 0x30A3:
       case 0x30A5:
@@ -538,6 +550,9 @@ void WordSelectionScan::scanOnePosition() {
   const bool needDef = !isCJK(allGlyphs[scanStart].codepoint) && !isKatakana(allGlyphs[scanStart].codepoint);
   WordLookupResult result;
   bool hasMatch = !text.empty() && WordLookup::lookup(text, 0, result, needDef);
+  // っ-start positions accept exact entries only (see the small-kana skip above): a deinflected
+  // hit there is a conjugation fragment (って→う), not the quotative って.
+  if (sokuonTeStart && hasMatch && result.deinflected) hasMatch = false;
   if (hasMatch) {
     int matchChars = 0;
     stripTrailingParticle(text, result, needDef);
