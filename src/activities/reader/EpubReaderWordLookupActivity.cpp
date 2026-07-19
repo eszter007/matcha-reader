@@ -221,7 +221,9 @@ void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface
   std::string line = tr(STR_IN_THIS_BOOK);
   line += ' ';
   line += readings;
-  line += '\n';
+  // Blank line: DefinitionText::drawWrapped renders an empty line as a half-line gap,
+  // visually separating the book reading from the dictionary entry below it.
+  line += "\n\n";
   resultDefinition = line + resultDefinition;
 }
 

@@ -77,14 +77,6 @@ std::string encodeCp(uint32_t cp) {
   return out;
 }
 
-// REGULAR isn't a symbol we've confirmed exists by name in
-// EpdFontFamily::Style for this checkout -- 0 is the bitwise-OR identity
-// element for the style flags (BOLD | ITALIC | UNDERLINE are documented as
-// being combined with bitwise OR), so this is safe regardless of what the
-// "no styling" enumerator is actually called. Swap in the real symbol if
-// one exists, for readability.
-constexpr int kNoStyle = 0;
-
 uint32_t composeKanaDiacritic(uint32_t base, uint32_t mark) {
   // U+3099 COMBINING KATAKANA-HIRAGANA VOICED SOUND MARK
   if (mark == 0x3099) {
@@ -756,7 +748,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     int gy = rowIdx * cellPx + ascender;
     if (pc.codepoint >= '0' && pc.codepoint <= '9') {
       int left = 0, width = 0, top = 0, height = 0;
-      if (renderer_.getGlyphMetrics(fontId_, pc.codepoint, static_cast<EpdFontFamily::Style>(kNoStyle), &left, &width,
+      if (renderer_.getGlyphMetrics(fontId_, pc.codepoint, static_cast<EpdFontFamily::Style>(pc.style), &left, &width,
                                     &top, &height)) {
         gx = columnLeftX(col) + (cellPx - width) / 2 - left - 1;
       }
@@ -805,9 +797,11 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     std::string runUtf8;
     encodeDigitUtf8(stream_[i0].codepoint, runUtf8);
     encodeDigitUtf8(stream_[i0 + 1].codepoint, runUtf8);
-    renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
-    const int runWidthPx =
-        renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+    // Measure with the pair's ACTUAL style -- rendered with g.style, and bold digits are
+    // wider, so an unstyled measurement mis-centers the pair in its cell.
+    const auto tcyStyle = static_cast<EpdFontFamily::Style>(stream_[i0].style);
+    renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (stream_[i0].style & 3)));
+    const int runWidthPx = renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), tcyStyle);
 
     // Center the run on its INK box, not its advance width. drawText puts ink at
     // pen + firstGlyph.left, and digit advances carry trailing whitespace, so advance-based
@@ -818,13 +812,11 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       const uint32_t cpFirst = stream_[i0].codepoint;
       const uint32_t cpLast = stream_[i0 + 1].codepoint;
       int l1 = 0, w1 = 0, t1 = 0, h1 = 0, lN = 0, wN = 0, tN = 0, hN = 0;
-      if (renderer_.getGlyphMetrics(fontId_, cpFirst, static_cast<EpdFontFamily::Style>(kNoStyle), &l1, &w1, &t1,
-                                    &h1) &&
-          renderer_.getGlyphMetrics(fontId_, cpLast, static_cast<EpdFontFamily::Style>(kNoStyle), &lN, &wN, &tN, &hN)) {
+      if (renderer_.getGlyphMetrics(fontId_, cpFirst, tcyStyle, &l1, &w1, &t1, &h1) &&
+          renderer_.getGlyphMetrics(fontId_, cpLast, tcyStyle, &lN, &wN, &tN, &hN)) {
         std::string lastUtf8;
         encodeDigitUtf8(cpLast, lastUtf8);
-        const int lastAdvance =
-            renderer_.getTextAdvanceX(fontId_, lastUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+        const int lastAdvance = renderer_.getTextAdvanceX(fontId_, lastUtf8.c_str(), tcyStyle);
         // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
         const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
         if (inkWidth > 0 && inkWidth <= cellPx) {
@@ -987,9 +979,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           encodeDigitUtf8(stream_[i].codepoint, runUtf8);
         }
 
-        renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
-        const int runWidthPx =
-            renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+        // Measure with the run's ACTUAL style: the renderer draws with g.style, and bold
+        // digits are wider than regular -- an unstyled measurement under-reserves rows and
+        // the run's tail overprints the following character.
+        const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
+        renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
+        const int runWidthPx = renderer_.getTextAdvanceX(fontId_, runUtf8.c_str(), runStyle);
         const int fontPctRun = (cellPx > 0) ? (ascender * 100 / cellPx) : 100;
         const int runExtraNudge = (fontPctRun > 100) ? (cellPx * (fontPctRun - 100) / 30) : 0;
         const int numericRotatedDownNudge = std::max(8, (cellPx * 9) / 10) + runExtraNudge * 2;
@@ -1059,7 +1054,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       }
 
       // Split the run into chunks that fit in columns, breaking at spaces.
-      renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), 0x01);
+      // Measure with the run's ACTUAL style (drawn with g.style; bold is wider than an
+      // unstyled measurement, which under-reserved rows and overprinted the next glyph).
+      const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
+      renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
       const int maxColumnPx = rowsPerColumn * cellPx;
       // A rotated run drawn flush at its cell top starts inside the preceding upright
       // character's ink (device photo: ...デザイン bookwall with the ン touching the b).
@@ -1069,8 +1067,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       std::string remaining = runUtf8;
 
       while (!remaining.empty()) {
-        const int remWidthPx =
-            renderer_.getTextAdvanceX(fontId_, remaining.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+        const int remWidthPx = renderer_.getTextAdvanceX(fontId_, remaining.c_str(), runStyle);
         const uint16_t remRows = static_cast<uint16_t>(
             std::max(1, static_cast<int>(std::ceil(static_cast<double>(remWidthPx + runDownNudge) / cellPx))));
         const uint16_t availRows = rowsPerColumn - row;
@@ -1106,8 +1103,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         for (size_t sp = remaining.rfind(' '); sp != std::string::npos;
              sp = (sp == 0) ? std::string::npos : remaining.rfind(' ', sp - 1)) {
           std::string prefix = remaining.substr(0, sp);
-          const int prefixPx =
-              renderer_.getTextAdvanceX(fontId_, prefix.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+          const int prefixPx = renderer_.getTextAdvanceX(fontId_, prefix.c_str(), runStyle);
           const uint16_t prefixRows = static_cast<uint16_t>(
               std::max(1, static_cast<int>(std::ceil(static_cast<double>(prefixPx + runDownNudge) / cellPx))));
           if (prefixRows <= availRows) {
@@ -1151,8 +1147,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
         // Place the prefix chunk.
         std::string chunk = remaining.substr(0, breakAt);
-        const int chunkPx =
-            renderer_.getTextAdvanceX(fontId_, chunk.c_str(), static_cast<EpdFontFamily::Style>(kNoStyle));
+        const int chunkPx = renderer_.getTextAdvanceX(fontId_, chunk.c_str(), runStyle);
         const uint16_t chunkRows = static_cast<uint16_t>(
             std::max(1, static_cast<int>(std::ceil(static_cast<double>(chunkPx + runDownNudge) / cellPx))));
 
