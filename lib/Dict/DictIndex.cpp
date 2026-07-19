@@ -377,19 +377,24 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         return true;
       }
 
-      // Found a match — scan backwards to find the first record with this headword
+      // Found a match — scan backwards to find the first record with this headword. Bounded per
+      // direction so the sibling window is anchored on MID, not on the block start: real homophone
+      // blocks reach 54 records (こう), and a window of kMaxSiblingScan counted from `first` could
+      // push the compatible sibling past the cap when the binary search lands late in the block.
+      // Anchoring both bounds on mid guarantees mid±kMaxSiblingScan coverage (up to 65 records).
       size_t first = mid;
-      while (first > 0) {
+      while (first > 0 && (mid - first) < kMaxSiblingScan) {
         DictIndexRecord prevRec;
         if (!readIndexRecord(h, first - 1, recordCount, prevRec)) break;
         if (std::memcmp(key, prevRec.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         first--;
       }
+      const size_t scanEnd = std::min(recordCount, mid + 1 + kMaxSiblingScan);
 
       // POS-filtered existence check: any sibling with compatible flags is a hit. Served almost
       // entirely from the block cache (the backward walk above just fetched this block).
       if (!needDefinition) {
-        for (size_t idx = first; idx < recordCount && idx < first + kMaxSiblingScan; idx++) {
+        for (size_t idx = first; idx < scanEnd; idx++) {
           DictIndexRecord r;
           if (!readIndexRecord(h, idx, recordCount, r)) break;
           if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
@@ -417,7 +422,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       };
       std::vector<Sib> sibs;
       sibs.reserve(kMaxSiblingScan);
-      for (size_t idx = first; idx < recordCount && sibs.size() < kMaxSiblingScan; idx++) {
+      for (size_t idx = first; idx < scanEnd && sibs.size() < kMaxSiblingScan; idx++) {
         DictIndexRecord r;
         if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
