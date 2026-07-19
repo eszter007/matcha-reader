@@ -1759,6 +1759,11 @@ int GfxRenderer::getRenderAdvanceX(const int fontId, const char* text, const Epd
     }
     const EpdGlyph* glyph = font.getGlyph(cp, style);
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
+      // drawText halves the cursor advance for scaled SUP/SUB glyphs; mirror it so the
+      // render-truth contract holds for those styles too.
+      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    }
     prevCp = cp;
   }
   widthPx += fp4::toPixel(prevAdvanceFP);
