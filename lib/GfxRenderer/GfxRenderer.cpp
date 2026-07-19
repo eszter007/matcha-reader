@@ -1980,8 +1980,11 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   }
 
   if (shiftType == 2) {  // closing bracket/quote
-    const bool isSquareBracket =
-        (cp == 0x300D || cp == 0x300F || cp == 0x3009 || cp == 0x300B || cp == 0x3011 || cp == 0x3015);
+    // Corner/lenticular/tortoise brackets (」』】〕) have their rotated ink hugging the
+    // right of the em box, so pull them left onto the column axis. Angle brackets 〉》 are
+    // symmetric chevrons -- the same pull pushed them visibly LEFT of the column (device
+    // photo, 〈夏〉); leave them ink-centered.
+    const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3011 || cp == 0x3015);
     if (isSquareBracket) {
       drawX = cellLeftX + (cellSize - rotatedW) / 2 - cellSize / 3;
     }
@@ -1991,14 +1994,15 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
     // deep, the bracket read as hanging low/left of the character it opens (device photos with
     // UDDigiKyokasho). The maxX clamp below already grants opening brackets right overhang.
-    // Round parens stay purely ink-centered: the corner-bracket right shift pushed their
-    // rotated arc off the column axis (device photos, kyokasho).
-    const bool roundParen = (cp == 0xFF08);
+    // Round parens and angle brackets stay purely ink-centered: the corner-bracket right
+    // shift pushed the paren arc -- and the symmetric 〈《 chevrons (device photo, 〈夏〉) --
+    // off the column axis to the RIGHT.
+    const bool inkCentered = (cp == 0xFF08 || cp == 0x3008 || cp == 0x300A);
     // baselineExcess: tall fonts (Noto) left the opening bracket hanging too high above the
     // character it opens (kyokasho, baselineExcess 0, is unaffected).
     const int openingBias = std::max(1, cellSize / 2 + extraNudge + baselineExcess);
     drawY = cellTopY + cellSize + openingBias;
-    if (!roundParen) drawX += cellSize / 4;
+    if (!inkCentered) drawX += cellSize / 4;
   }
 
   int minX = cellLeftX;
