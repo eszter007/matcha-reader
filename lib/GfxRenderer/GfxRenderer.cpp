@@ -1730,6 +1730,41 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   return widthPx;
 }
 
+int GfxRenderer::getRenderAdvanceX(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  // Render-truth measurement: walks the same glyph/kerning sequence as drawText and
+  // drawTextRotated90CCW, resolving glyphs through getGlyph() (on-demand SD load) exactly
+  // as rendering will. getTextAdvanceX's fast paths price non-resident glyphs from advance
+  // tables or a companion font and can under-report -- observed on device as a rotated
+  // year-run measuring ~half its drawn width, so the following kanji overprinted its tail.
+  // Short strings only: each cold glyph costs an SD read, so bulk word indexing must keep
+  // using getTextAdvanceX.
+  if (text == nullptr || *text == '\0') return 0;
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+  const auto& font = fontIt->second;
+  int widthPx = 0;
+  int32_t prevAdvanceFP = 0;  // 12.4 fixed-point, same snap arithmetic as the draw loops
+  uint32_t cp;
+  uint32_t prevCp = 0;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    if (cp >= 0x0591 && cp <= 0x05C7) continue;
+    if (utf8IsCombiningMark(cp)) continue;
+    cp = font.applyLigatures(cp, text, style);
+    if (prevCp != 0) {
+      const auto kernFP = font.getKerning(prevCp, cp, style);
+      widthPx += fp4::toPixel(prevAdvanceFP + kernFP);
+    }
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    prevCp = cp;
+  }
+  widthPx += fp4::toPixel(prevAdvanceFP);
+  return widthPx;
+}
+
 bool GfxRenderer::getGlyphMetrics(const int fontId, const uint32_t cp, const EpdFontFamily::Style style, int* left,
                                   int* width, int* top, int* height) const {
   if (!left || !width || !top || !height) return false;
