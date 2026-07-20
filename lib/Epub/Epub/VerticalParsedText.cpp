@@ -800,10 +800,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // Measure with the pair's ACTUAL style -- rendered with g.style, and bold digits are
     // wider, so an unstyled measurement mis-centers the pair in its cell.
     const auto tcyStyle = static_cast<EpdFontFamily::Style>(stream_[i0].style);
-    // Ensure the digits AND the 中 reference glyph (used below to derive the column's CJK ink
-    // center) are resident before measuring.
-    std::string ensureUtf8 = runUtf8 + "\xe4\xb8\xad";
-    renderer_.ensureSdCardFontReady(fontId_, ensureUtf8.c_str(), static_cast<uint8_t>(1u << (stream_[i0].style & 3)));
+    const auto tcyStyleBit = static_cast<uint8_t>(1u << (stream_[i0].style & 3));
+    renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), tcyStyleBit);
     const int runWidthPx = renderer_.getRenderAdvanceX(fontId_, runUtf8.c_str(), tcyStyle);
 
     // Center the run on its INK box, not its advance width. drawText puts ink at
@@ -833,6 +831,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           // the pair off-axis. Falls back to plain ink centering when metrics are unavailable.
           int cjkDelta = 0;
           int kl = 0, kw = 0, kt = 0, kh = 0;
+          // String literal, no allocation -- this sits in the pagination path (review finding:
+          // the earlier runUtf8 + 中 concatenation allocated per pair).
+          renderer_.ensureSdCardFontReady(fontId_, "\xe4\xb8\xad", tcyStyleBit);
           if (renderer_.getGlyphMetrics(fontId_, 0x4E2D /* 中 */, tcyStyle, &kl, &kw, &kt, &kh) && kw > 0) {
             cjkDelta = (kl + kw / 2) - cellPx / 2;
             const int clampPx = std::max(2, cellPx / 8);
