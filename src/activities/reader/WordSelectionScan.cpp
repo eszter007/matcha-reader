@@ -347,9 +347,8 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 
 namespace {
 constexpr uint32_t WLSCAN_MAGIC =
-    0x43534C57;  // "WLSC" -- POS-validated deinflection (segmentation changes even though the dict
-                 // files keep their byte size when reconverted with posFlags, so the size-based
-                 // dictFingerprint below cannot catch that swap on its own)
+    0x44534C57;  // "WLSD" -- POS_READING-flagged collision suppression (reconverted dicts keep
+                 // their byte size, so the size-based dictFingerprint can't catch the swap)
 
 // Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
 // scans (segmentation depends on the dictionary). File size is not a perfect identity, but any
@@ -609,6 +608,24 @@ void WordSelectionScan::scanOnePosition() {
         }
         const bool usuallyKana = result.entry.definition.find("[kana]") != std::string::npos;
         if (hwHasKanji && !usuallyKana) hasMatch = false;
+
+        // Reading-record collision the headword check above cannot see: the kana READING of a
+        // kanji word is its own index record whose headword IS the kana (しながら -> 品柄
+        // "quality", ました -> 真下), so hwHasKanji stays false and the match survives. The
+        // converter marks those records with POS_READING (kana-only lemmas stay unflagged), so
+        // suppress an exact all-hiragana match of a flagged record unless the entry is marked
+        // usually-kana ([kana]: books DO write ちょっと for 一寸) or common by priority (books
+        // DO write きょう for 今日). Deinflected hits are exempt: their candidate is a
+        // POS-validated dictionary form, not a surface reading. Grammar/jmnedict records never
+        // carry the flag, and dicts converted before the flag existed have it 0 everywhere --
+        // both are simply never suppressed. Priority scales: Jitendex = score+128 (128 = no
+        // frequency data); jmdict-simplified = 200 common / 100 rest.
+        constexpr uint8_t kMinKanaExactPriority = 200;
+        if (hasMatch && !result.deinflected && matchChars >= 2 &&
+            (result.entry.posFlags & DictIndexRecord::POS_READING) != 0 && !usuallyKana &&
+            result.entry.priority < kMinKanaExactPriority) {
+          hasMatch = false;
+        }
       }
     }
 

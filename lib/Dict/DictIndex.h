@@ -20,6 +20,10 @@ struct DictIndexRecord {
   static constexpr uint8_t POS_VK = 0x08;     // kuru verb
   static constexpr uint8_t POS_ADJ_I = 0x10;  // i-adjective
   static constexpr uint8_t POS_OTHER = 0x20;  // tagged, but none of the above (noun, particle, ...)
+  // Kana READING record of an entry whose headwords are kanji (品柄→しながら). Set by the
+  // converter; kana-only lemmas stay unflagged. Hiragana segmentation suppresses uncommon
+  // flagged matches -- text that equals a rare kanji word's reading is morphology, not the word.
+  static constexpr uint8_t POS_READING = 0x40;
 
   char headword[HEADWORD_SIZE];
   uint32_t offset;
@@ -34,6 +38,8 @@ struct DictEntry {
   std::string headword;
   std::string definition;
   uint8_t priority;
+  uint8_t sourceDict = 0;  // DictIndex::DICT_* constant of the dictionary that answered (0 = unset)
+  uint8_t posFlags = 0;    // DictIndexRecord::POS_* flags of the best matched record (0 = none/unset)
 };
 
 // Opens jmdict.idx / jmdict.dat from the SD card and provides O(log n)

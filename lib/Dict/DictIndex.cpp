@@ -373,6 +373,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       if (!needDefinition && posAccept(rec.posFlags)) {
         out.headword = headword;
         out.priority = rec.priority;
+        out.posFlags = rec.posFlags;
         out.definition.clear();
         return true;
       }
@@ -401,6 +402,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
           if (posAccept(r.posFlags)) {
             out.headword = headword;
             out.priority = r.priority;
+            out.posFlags = r.posFlags;
             out.definition.clear();
             return true;
           }
@@ -417,6 +419,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       // 2 does the same handful of .dat reads as before.
       struct Sib {
         uint8_t priority;
+        uint8_t posFlags;
         uint32_t offset;
         uint16_t length;
       };
@@ -427,7 +430,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         if (!posAccept(r.posFlags)) continue;  // wrong word class for this deinflection candidate
-        sibs.push_back({r.priority, r.offset, r.length});
+        sibs.push_back({r.priority, r.posFlags, r.offset, r.length});
       }
       if (sibs.empty()) return false;
 
@@ -445,6 +448,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         uint8_t priority;
       };
       std::vector<Entry> entries;
+      uint8_t bestFlags = 0;  // posFlags of the first (highest-priority) entry actually read
       constexpr int kMaxEntries = 5;
       for (size_t s = 0; s < sibs.size() && static_cast<int>(entries.size()) < kMaxEntries; s++) {
         // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions -- confirmed
@@ -463,6 +467,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         def.resize(sibs[s].length);
         if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) != static_cast<int>(sibs[s].length))
           continue;
+        if (entries.empty()) bestFlags = sibs[s].posFlags;
         entries.push_back({std::move(def), sibs[s].priority});
       }
 
@@ -470,6 +475,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
 
       out.headword = headword;
       out.priority = entries[0].priority;
+      out.posFlags = bestFlags;
       if (entries.size() == 1) {
         out.definition = std::move(entries[0].def);
       } else {
@@ -503,12 +509,19 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
-  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition, posMask)) return true;
+  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition, posMask)) {
+    out.sourceDict = DICT_JMDICT;
+    return true;
+  }
   if ((dictMask & DICT_GRAMMAR) &&
-      lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition, posMask))
+      lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition, posMask)) {
+    out.sourceDict = DICT_GRAMMAR;
     return true;
-  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition, posMask))
+  }
+  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition, posMask)) {
+    out.sourceDict = DICT_NAMES;
     return true;
+  }
   return false;
 }
 

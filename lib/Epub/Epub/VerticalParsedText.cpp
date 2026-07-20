@@ -800,7 +800,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // Measure with the pair's ACTUAL style -- rendered with g.style, and bold digits are
     // wider, so an unstyled measurement mis-centers the pair in its cell.
     const auto tcyStyle = static_cast<EpdFontFamily::Style>(stream_[i0].style);
-    renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (stream_[i0].style & 3)));
+    const auto tcyStyleBit = static_cast<uint8_t>(1u << (stream_[i0].style & 3));
+    renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), tcyStyleBit);
     const int runWidthPx = renderer_.getRenderAdvanceX(fontId_, runUtf8.c_str(), tcyStyle);
 
     // Center the run on its INK box, not its advance width. drawText puts ink at
@@ -820,11 +821,26 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
         const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
         if (inkWidth > 0 && inkWidth <= cellPx) {
-          // Extra left nudge on top of ink centering: the surrounding kanji's ink sits
-          // slightly left of the cell center (CJK glyphs carry a touch more right-side
-          // bearing), so a mathematically centered run still reads right-shifted next to
-          // them. Tuned on device photos with Kyokasho ("築26年").
-          runX = columnLeftX(column) + (cellPx - inkWidth) / 2 - l1 - 1 - std::max(4, cellPx / 4);
+          // Align the pair's ink center with the ink center of the column's CJK glyphs rather
+          // than the geometric cell center: CJK glyphs carry uneven side bearings, so pure cell
+          // centering reads shifted next to them. The previous fixed nudge of
+          // -max(4, cellPx/4) was tuned on one photo/font (Kyokasho, 「築26年」) and
+          // over-corrected elsewhere -- device photo: 「10年」 sat a quarter cell LEFT of the
+          // column in Mincho. Measure the 中 reference glyph's ink center at this size/style
+          // and use its delta from the cell center, clamped so a metrics outlier can't fling
+          // the pair off-axis. Falls back to plain ink centering when metrics are unavailable.
+          int cjkDelta = 0;
+          int kl = 0, kw = 0, kt = 0, kh = 0;
+          // String literal, no allocation -- this sits in the pagination path (review finding:
+          // the earlier runUtf8 + 中 concatenation allocated per pair).
+          renderer_.ensureSdCardFontReady(fontId_, "\xe4\xb8\xad", tcyStyleBit);
+          if (renderer_.getGlyphMetrics(fontId_, 0x4E2D /* 中 */, tcyStyle, &kl, &kw, &kt, &kh) && kw > 0) {
+            cjkDelta = (kl + kw / 2) - cellPx / 2;
+            const int clampPx = std::max(2, cellPx / 8);
+            if (cjkDelta > clampPx) cjkDelta = clampPx;
+            if (cjkDelta < -clampPx) cjkDelta = -clampPx;
+          }
+          runX = columnLeftX(column) + (cellPx - inkWidth) / 2 - l1 + cjkDelta;
         }
       }
     }

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/ usr / bin / env python3
 """Convert dictionary files to binary index files for CrossPoint Reader.
 
 Supported input formats:
@@ -11,13 +11,13 @@ Emits:
   jmdict.dat  -- variable-length definition text blob
 
 Usage:
-    # JMdict (default — downloads if no --input given)
+#JMdict(default — downloads if no-- input given)
     python3 convert_jmdict.py [--input jmdict-eng-3.5.0.json] [--output-dir ./output]
 
-    # Yomitan dictionary zip
+#Yomitan dictionary zip
     python3 convert_jmdict.py --input jmdict-yomitan.zip --output-dir ./output
 
-    # MDict .mdx file
+#MDict.mdx file
     python3 convert_jmdict.py --input dictionary.mdx --output-dir ./output
 """
 
@@ -35,7 +35,6 @@ RECORD_FORMAT = f"<{HEADWORD_SIZE}sIHBB"  # headword(32) + offset(4) + length(2)
 RECORD_SIZE = struct.calcsize(RECORD_FORMAT)
 
 assert RECORD_SIZE == 40, f"Record size mismatch: {RECORD_SIZE}"
-
 
 # ── Shared helpers ──────────────────────────────────────────────
 
@@ -104,8 +103,7 @@ def write_binary(records: list, output_dir: str):
     print(f"  {dat_path}: {dat_size:,} bytes")
     print(f"  Total: {(idx_size + dat_size) / 1024 / 1024:.1f} MB")
 
-
-# ── JMdict (jmdict-simplified JSON) ─────────────────────────────
+# ── JMdict(jmdict - simplified JSON) ─────────────────────────────
 
 
 def download_jmdict(output_path: str) -> str:
@@ -147,17 +145,16 @@ def compute_priority_jmdict(entry: dict) -> int:
                 break
     return 200 if is_common else 100
 
-
-
-# Part-of-speech flag bits -- must mirror DictIndexRecord::POS_* in lib/Dict/DictIndex.h.
+#Part - of - speech flag bits-- must mirror DictIndexRecord::POS_* in lib / Dict / DictIndex.h.
 # 0 means "no POS data" and the firmware then accepts every deinflection candidate, so leaving
-# flags unset is always safe (fail open).
+#flags unset is always safe(fail open).
 POS_V1 = 0x01     # ichidan verb
 POS_V5 = 0x02     # godan verb
 POS_VS = 0x04     # suru verb
 POS_VK = 0x08     # kuru verb
 POS_ADJ_I = 0x10  # i-adjective
 POS_OTHER = 0x20  # tagged, but none of the above (noun, particle, na-adjective, ...)
+POS_READING = 0x40  # kana READING record of an entry that has kanji headwords (not a kana lemma)
 POS_ANY_VERB = POS_V1 | POS_V5 | POS_VS | POS_VK
 
 
@@ -241,19 +238,23 @@ def convert_jmdict(json_path: str, output_dir: str):
             seen_headwords.add(hw_bytes)
             records.append((hw_bytes, def_bytes, priority, pos_flags))
 
+#Kana records of an entry that also has kanji headwords are READING records : text that
+#matches them is usually conjugation morphology, not the word(しながら vs 品柄).The
+#firmware suppresses uncommon flagged records in hiragana segmentation.Entries with no
+#kanji form at all are kana LEMMAS-- their kana record is the word itself, unflagged.
+        kana_flags = pos_flags | (POS_READING if entry.get("kanji") else 0)
         for kana in entry.get("kana", []):
             hw = kana["text"]
             hw_bytes = hw.encode("utf-8")
             if len(hw_bytes) >= HEADWORD_SIZE or hw_bytes in seen_headwords:
                 continue
             seen_headwords.add(hw_bytes)
-            records.append((hw_bytes, def_bytes, priority, pos_flags))
+            records.append((hw_bytes, def_bytes, priority, kana_flags))
 
     print(f"Generated {len(records)} index records")
     write_binary(records, output_dir)
 
-
-# ── Yomitan / Yomichan (.zip) ───────────────────────────────────
+# ── Yomitan / Yomichan(.zip) ───────────────────────────────────
 
 
 def flatten_structured_content(content) -> str:
@@ -274,7 +275,8 @@ def flatten_structured_content(content) -> str:
 
         inner = content.get("content", "")
         tag = content.get("tag", "")
-        data = content.get("data", {}) if isinstance(content.get("data"), dict) else {}
+        data = content.get("data", {}) if isinstance(content.get("data"), dict) else {
+}
         dc = data.get("content", "")
         cls = data.get("class", "")
         text = flatten_structured_content(inner)
@@ -286,26 +288,26 @@ def flatten_structured_content(content) -> str:
         if tag == "ruby":
             return text
 
-        # All tag-class spans → [noun] [math] [colloquial] etc. inline
+#All tag - class spans → [noun][math][colloquial] etc.inline
         if cls == "tag" and dc in ("part-of-speech-info", "field-info", "misc-info",
                                    "dialect-info", "language-info"):
             return "[" + text + "] "
         if cls == "tag" and dc == "forms-label":
             return ""
 
-        # Glossary list items — newline before to separate from POS tags
+#Glossary list items — newline before to separate from POS tags
         if dc == "glossary" and tag == "ul":
             return "\n" + text
         if tag == "li" and not dc:
             return "• " + text.strip() + "\n"
 
-        # Sense groups
+#Sense groups
         if dc == "sense-group" and tag in ("li", "div"):
             return text + "\n"
         if dc == "sense" and tag == "li":
             return text
 
-        # Notes — indented with arrow
+#Notes — indented with arrow
         if dc == "sense-note-label":
             return text + ": "
         if dc == "sense-note-content":
@@ -313,7 +315,7 @@ def flatten_structured_content(content) -> str:
         if dc == "sense-note" and cls == "extra-box":
             return "  → " + text
 
-        # Example sentences — each part on its own line, indented
+#Example sentences — each part on its own line, indented
         if dc == "example-sentence-a":
             return text + "\n"
         if dc == "example-sentence-b":
@@ -323,21 +325,21 @@ def flatten_structured_content(content) -> str:
         if dc == "example-keyword":
             return text
 
-        # Cross-references
+#Cross - references
         if dc == "xref" and cls == "extra-box":
             return ""
         if dc == "reference-label":
             return text + " "
 
-        # Other forms — skip to save space
+#Other forms — skip to save space
         if dc == "forms":
             return ""
 
-        # Attribution
+#Attribution
         if dc == "attribution-footnote":
             return ""
 
-        # Generic block elements
+#Generic block elements
         if tag in ("div", "p", "blockquote", "section"):
             if dc == "extra-info":
                 return text
@@ -352,14 +354,14 @@ def flatten_structured_content(content) -> str:
 def format_definition_yomitan(headword: str, reading: str, definitions) -> str:
     """Format a Yomitan entry's reading + definitions into display string."""
     parts = []
-    # Only show reading if it differs from headword (skip for kana-only entries)
+#Only show reading if it differs from headword(skip for kana - only entries)
     if reading and reading != headword:
         parts.append(f"【{reading}】")
 
     def flatten_list_defn(d) -> str:
-        # Yomitan list-form definitions (variant/redirect entries) like
-        # ["引っ張り上げる", ["redirected from 引っぱり上げる"]]. Join the string
-        # parts; drop "redirected from ..." cross-reference noise.
+#Yomitan list - form definitions(variant / redirect entries) like
+#["引っ張り上げる", ["redirected from 引っぱり上げる"]].Join the string
+#parts; drop "redirected from ..." cross - reference noise.
         if isinstance(d, str):
             if d.startswith("redirected from"):
                 return ""
@@ -385,7 +387,7 @@ def format_definition_yomitan(headword: str, reading: str, definitions) -> str:
             text = text.strip()
             if text:
                 non_empty.append(text)
-        # Drop pure-duplicate entries (redirect variant repeating the first gloss)
+#Drop pure - duplicate entries(redirect variant repeating the first gloss)
         deduped = []
         for t in non_empty:
             if t not in deduped:
@@ -413,7 +415,7 @@ def find_redirect_target(definitions) -> str:
         if isinstance(node, dict):
             data = node.get("data")
             if isinstance(data, dict) and data.get("content") == "redirect-glossary":
-                # The target headword is the link text (strip the ⟶ arrow).
+#The target headword is the link text(strip the ⟶ arrow).
                 txt = flatten_structured_content(node).replace("⟶", "").strip()
                 return txt
             return search(node.get("content"))
@@ -448,8 +450,8 @@ def convert_yomitan(zip_path: str, output_dir: str):
 
         print(f"  Found {len(term_banks)} term bank files")
 
-        # Pass 1: load all entries; build a headword → best definition map for
-        # non-redirect entries so variant/redirect entries can be resolved.
+#Pass 1 : load all entries; build a headword → best definition map for
+#non - redirect entries so variant / redirect entries can be resolved.
         all_entries = []
         canonical_defs = {}  # headword → (definition_string, priority)
         for bank_name in term_banks:
@@ -475,7 +477,7 @@ def convert_yomitan(zip_path: str, output_dir: str):
                         if prev is None or priority > prev[1]:
                             canonical_defs[headword] = (definition, priority)
 
-        # Pass 2: emit records, resolving redirects to the target's real definition.
+#Pass 2 : emit records, resolving redirects to the target's real definition.
         records = []
         entry_count = 0
         for headword, reading, score, definitions, redirect, rules in all_entries:
@@ -483,7 +485,7 @@ def convert_yomitan(zip_path: str, output_dir: str):
                 target = canonical_defs.get(redirect)
                 if not target:
                     continue  # dangling redirect — skip the useless circular entry
-                # Show the canonical spelling note + the real definition.
+#Show the canonical spelling note + the real definition.
                 definition = f"= {redirect}\n{target[0]}"
                 priority = target[1]
             else:
@@ -493,8 +495,8 @@ def convert_yomitan(zip_path: str, output_dir: str):
                 priority = max(0, min(255, int(score) + 128)) if isinstance(score, (int, float)) else 100
 
             def_bytes = definition.encode("utf-8")
-            # Yomitan spec: empty rules = "word is not inflected" -- that IS positive POS data
-            # (a non-conjugating word), so stamp POS_OTHER rather than the fail-open 0.
+#Yomitan spec : empty rules = "word is not inflected" --that IS positive POS data
+#(a non - conjugating word), so stamp POS_OTHER rather than the fail - open 0.
             pos_flags = pos_flags_from_tags(rules.split()) if rules.strip() else POS_OTHER
             seen_headwords = set()
             hw_bytes = headword.encode("utf-8")
@@ -507,15 +509,17 @@ def convert_yomitan(zip_path: str, output_dir: str):
                 if len(r_bytes) < HEADWORD_SIZE and r_bytes not in seen_headwords:
                     r_def = format_definition_yomitan(reading, reading, definitions)
                     if r_def:
-                        records.append((r_bytes, r_def.encode("utf-8"), priority, pos_flags))
+#reading != headword means kana reading of a kanji headword : flag it
+#(see POS_READING above).
+                        records.append((r_bytes, r_def.encode("utf-8"), priority,
+                                        pos_flags | POS_READING))
 
             entry_count += 1
 
     print(f"Processed {entry_count} Yomitan entries → {len(records)} index records")
     write_binary(records, output_dir)
 
-
-# ── MDict (.mdx) ────────────────────────────────────────────────
+# ── MDict(.mdx) ────────────────────────────────────────────────
 
 
 def convert_mdict(mdx_path: str, output_dir: str):
@@ -570,7 +574,6 @@ def convert_mdict(mdx_path: str, output_dir: str):
 
     print(f"Processed {entry_count} MDict entries ({skipped} skipped) → {len(records)} index records")
     write_binary(records, output_dir)
-
 
 # ── Format detection & main ─────────────────────────────────────
 

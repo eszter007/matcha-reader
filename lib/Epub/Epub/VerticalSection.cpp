@@ -30,7 +30,7 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 76;  // v76: rotated runs measured with render-truth glyph advances
+constexpr uint8_t VSECTION_FILE_VERSION = 77;  // v77: tate-chu-yoko pairs aligned to font-derived CJK ink center
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
