@@ -34,6 +34,7 @@ struct DictEntry {
   std::string headword;
   std::string definition;
   uint8_t priority;
+  uint8_t sourceDict = 0;  // DictIndex::DICT_* constant of the dictionary that answered (0 = unset)
 };
 
 // Opens jmdict.idx / jmdict.dat from the SD card and provides O(log n)

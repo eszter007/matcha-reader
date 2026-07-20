@@ -503,12 +503,19 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
-  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition, posMask)) return true;
+  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition, posMask)) {
+    out.sourceDict = DICT_JMDICT;
+    return true;
+  }
   if ((dictMask & DICT_GRAMMAR) &&
-      lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition, posMask))
+      lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition, posMask)) {
+    out.sourceDict = DICT_GRAMMAR;
     return true;
-  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition, posMask))
+  }
+  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition, posMask)) {
+    out.sourceDict = DICT_NAMES;
     return true;
+  }
   return false;
 }
 

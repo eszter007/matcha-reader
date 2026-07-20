@@ -609,6 +609,21 @@ void WordSelectionScan::scanOnePosition() {
         }
         const bool usuallyKana = result.entry.definition.find("[kana]") != std::string::npos;
         if (hwHasKanji && !usuallyKana) hasMatch = false;
+
+        // Reading-record collision the headword check above cannot see: the kana READING of a
+        // kanji word is its own index record whose headword IS the kana (しながら -> 品柄
+        // "quality"), so hwHasKanji stays false and the match survives. Signal instead: an exact
+        // all-hiragana jmdict match that is neither marked usually-kana ([kana]) nor common by
+        // priority is a reading collision -- no book writes 品柄 as しながら. Thresholds:
+        // Jitendex priority = score+128 (128 = no frequency data); jmdict-simplified emits
+        // 200 (common) / 100. Grammar/name hits are exempt (pattern entries carry neither
+        // [kana] nor frequency), as are deinflected hits (already POS-validated, and their
+        // candidate is a dictionary form, not a surface reading).
+        constexpr uint8_t kMinKanaExactPriority = 200;
+        if (hasMatch && !result.deinflected && matchChars >= 2 && result.entry.sourceDict == DictIndex::DICT_JMDICT &&
+            !usuallyKana && result.entry.priority < kMinKanaExactPriority) {
+          hasMatch = false;
+        }
       }
     }
 
