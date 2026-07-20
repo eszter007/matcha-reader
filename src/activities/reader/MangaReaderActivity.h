@@ -76,6 +76,38 @@ class MangaReaderActivity final : public Activity {
 
   void prefetchNextPageCache();
 
+  // Panel-zoom prefetch. Armed the first time panel-zoom actually renders in this book, so
+  // full-page-only readers never pay the speculative decode/SD-write cost. Once armed, idle
+  // dwell on a full page warms the first panel's pixel cache, and idle dwell on a panel warms
+  // the next panel's -- entering a panel then costs a cache read instead of a JPEG decode.
+  bool panelPrefetchArmed = false;
+  bool firstPanelPrefetched = true;  // per-page; true until loadCurrentPagePanels() arms it
+  bool nextPanelPrefetched = true;   // per-panel; true until a panel render arms it
+  unsigned long panelRenderedMs = 0;
+
+  // Per-page facts cached off the hot paths: the input handler used to hit the SD (exists())
+  // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
+  // every entry. Both answers are static for a given page.
+  bool pageHasPanelCrops = false;
+  struct PanelCropDims {
+    int w = 0, h = 0;  // 0 = not probed yet
+  };
+  std::vector<PanelCropDims> panelDims;
+
+  // Geometry of a zoomed panel on the (possibly temporarily rotated) screen. Shared by
+  // renderPanelZoom() and prefetchPanelCache() so the prefetch-written pixel cache has exactly
+  // the dimensions the later render expects. Same restore contract as applyFullPageGeometry.
+  struct PanelGeom {
+    int x = 0, y = 0;
+    int fitW = 0, fitH = 0;
+    bool rotated = false;
+    int savedOrientation = 0;
+  };
+  PanelGeom applyPanelGeometry(int imgWidth, int imgHeight);
+
+  std::string panelCropPath(int panelIdx) const;
+  void prefetchPanelCache(int panelIdx);
+
   void loadCurrentPagePanels();
   void renderFullPage();
   void renderPanelZoom();
