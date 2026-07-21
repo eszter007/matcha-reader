@@ -567,27 +567,37 @@ void MangaReaderActivity::renderPanelZoom() {
     return;
   }
 
-  // Panel-zoom is in active use: arm the idle prefetches (see loop()).
-  panelPrefetchArmed = true;
-
-  const std::string panelImgPath = panelCropPath(currentPanel);
-  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(panelImgPath);
-  if (!decoder) {
+  // Crop known missing/invalid from an earlier probe: fall back without touching the SD.
+  if (panelDims[currentPanel].w < 0) {
     renderFullPage();
     return;
   }
 
-  // Crop dimensions are static per file: probe the JPEG header only the first time (a missing
-  // crop file fails the probe every time and keeps falling back, same as before). Prefetch
-  // fills this slot too, so a prefetched panel enters without any header parse.
-  if (panelDims[currentPanel].w <= 0) {
+  const std::string panelImgPath = panelCropPath(currentPanel);
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(panelImgPath);
+  if (!decoder) {
+    panelDims[currentPanel] = {-1, -1};
+    renderFullPage();
+    return;
+  }
+
+  // Crop dimensions are static per file: probe the JPEG header only the first time; a failure
+  // is cached as -1 so a missing/corrupt crop doesn't re-probe on every entry. Prefetch fills
+  // this slot too, so a prefetched panel enters without any header parse.
+  if (panelDims[currentPanel].w == 0) {
     ImageDimensions dims = {0, 0};
     if (!decoder->getDimensions(panelImgPath, dims) || dims.width <= 0 || dims.height <= 0) {
+      panelDims[currentPanel] = {-1, -1};
       renderFullPage();
       return;
     }
     panelDims[currentPanel] = {dims.width, dims.height};
   }
+
+  // Panel-zoom is genuinely in use (a crop resolved and will render): arm the idle prefetches
+  // (see loop()). Armed only here so books whose crops never render don't trigger speculative
+  // prefetch work.
+  panelPrefetchArmed = true;
 
   const PanelGeom g = applyPanelGeometry(panelDims[currentPanel].w, panelDims[currentPanel].h);
   const bool rotatePanel = g.rotated;
@@ -720,7 +730,9 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
   const std::string cropPath = panelCropPath(panelIdx);
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cropPath);
   if (!decoder || !Storage.exists(cropPath.c_str())) {
-    // Full-page panel (cover/splash): no crop file, nothing to warm.
+    // Full-page panel (cover/splash): no crop file, nothing to warm. Cache the miss so a
+    // later render entry falls back without re-probing the SD.
+    panelDims[panelIdx] = {-1, -1};
     doneFlag = true;
     return;
   }
@@ -736,6 +748,7 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
 
   ImageDimensions dims = {0, 0};
   if (!decoder->getDimensions(cropPath, dims) || dims.width <= 0 || dims.height <= 0) {
+    panelDims[panelIdx] = {-1, -1};  // corrupt header: don't re-probe on render entry either
     doneFlag = true;
     return;
   }

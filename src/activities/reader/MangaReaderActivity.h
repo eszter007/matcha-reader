@@ -90,7 +90,9 @@ class MangaReaderActivity final : public Activity {
   // every entry. Both answers are static for a given page.
   bool pageHasPanelCrops = false;
   struct PanelCropDims {
-    int w = 0, h = 0;  // 0 = not probed yet
+    // Sentinels: 0 = not probed yet (probe on next need); -1 = crop known missing/invalid
+    // (never re-probe -- render falls back to full page without touching the SD).
+    int w = 0, h = 0;
   };
   std::vector<PanelCropDims> panelDims;
 
