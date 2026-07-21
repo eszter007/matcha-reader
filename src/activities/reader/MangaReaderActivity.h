@@ -2,6 +2,7 @@
 
 #include <MangaPanel.h>
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -54,11 +55,17 @@ class MangaReaderActivity final : public Activity {
   enum class ViewMode { FullPage, PanelZoom, TextOverlay };
   ViewMode viewMode = ViewMode::FullPage;
 
+  // Prefetch state flags below are written from the render task (renderFullPage/renderPanelZoom)
+  // and read/updated from the loop task (loop/loadCurrentPagePanels). They're word-sized and only
+  // advisory (a stale read at worst skips or delays one prefetch, never corrupts state), and on
+  // this single-core target an aligned load/store can't tear -- but std::atomic makes the
+  // cross-task access well-defined per the C++ memory model at zero cost (native 32-bit atomics).
+
   // Set when a full page finishes rendering; the idle prefetch below warms the NEXT page's pixel
   // cache once per displayed page, after a short dwell, so forward page turns hit the cache
   // instead of running a fresh JPEG decode.
-  bool nextPagePrefetched = true;  // true until the first full-page render arms it
-  unsigned long fullPageRenderedMs = 0;
+  std::atomic<bool> nextPagePrefetched{true};  // true until the first full-page render arms it
+  std::atomic<unsigned long> fullPageRenderedMs{0};
 
   // Geometry of a full-page image on the (possibly temporarily rotated) screen. Shared by
   // renderFullPage() and prefetchNextPageCache() so the prefetch-written pixel cache has exactly
@@ -75,6 +82,59 @@ class MangaReaderActivity final : public Activity {
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
 
   void prefetchNextPageCache();
+
+  // Panel-zoom prefetch. Armed the first time panel-zoom actually renders in this book, so
+  // full-page-only readers never pay the speculative decode/SD-write cost. Once armed, idle
+  // dwell on a full page warms the first panel's pixel cache, and idle dwell on a panel warms
+  // the next panel's -- entering a panel then costs a cache read instead of a JPEG decode.
+  std::atomic<bool> panelPrefetchArmed{false};
+  std::atomic<bool> firstPanelPrefetched{true};  // per-page; true until loadCurrentPagePanels() arms it
+  std::atomic<bool> nextPanelPrefetched{true};   // per-panel; true until a panel render arms it
+  std::atomic<unsigned long> panelRenderedMs{0};
+
+  // Per-page facts cached off the hot paths: the input handler used to hit the SD (exists())
+  // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
+  // every entry. Both answers are static for a given page.
+  bool pageHasPanelCrops = false;
+  // True when the current full-page image is a 1-bit monochrome BMP: it renders with a single BW
+  // e-ink pass (no 4-level gray refresh), so renderFullPage skips the grayscale planes entirely.
+  // Computed once per page in loadCurrentPagePanels(). Read on the render task, written under
+  // RenderLock (see panelDims note below).
+  bool currentPageBwOnly = false;
+  // Panel crop format for this book (uniform per book): the converter writes p<page>_<panel>.jpg
+  // normally, or .bmp with --mono. panelCropPath() picks the extension from this.
+  bool panelCropIsBmp = false;
+  // True when this page's panel crops are 1-bit monochrome BMP -> renderPanelZoom takes the same
+  // single-BW-wave fast path as a mono full page. Detected once per page in loadCurrentPagePanels.
+  bool panelsBwOnly = false;
+  struct PanelCropDims {
+    // Sentinels: 0 = not probed yet (probe on next need); -1 = crop known missing/invalid
+    // (never re-probe -- render falls back to full page without touching the SD).
+    int w = 0, h = 0;
+  };
+  // render() (render task) reads `panels` and `panelDims` under RenderLock. Every writer on the
+  // loop task -- loadCurrentPagePanels() (whole-vector swap) and prefetchPanelCache() (per-slot)
+  // -- must take RenderLock around the write; renderPanelZoom() writes them while already
+  // holding the lock render() handed it. Keep the standalone SD probes (the panel-index load,
+  // exists(), getDimensions()) OUTSIDE the lock so they don't stall the render task; the decode
+  // itself necessarily runs under the lock because it draws into the renderer's framebuffer, and
+  // its file read is part of that -- that is expected, not a violation of the rule above.
+  std::vector<PanelCropDims> panelDims;
+
+  // Geometry of a zoomed panel on the (possibly temporarily rotated) screen. Shared by
+  // renderPanelZoom() and prefetchPanelCache() so the prefetch-written pixel cache has exactly
+  // the dimensions the later render expects. Same restore contract as applyFullPageGeometry.
+  struct PanelGeom {
+    int x = 0, y = 0;
+    int fitW = 0, fitH = 0;
+    bool rotated = false;
+    int savedOrientation = 0;
+  };
+  PanelGeom applyPanelGeometry(int imgWidth, int imgHeight);
+
+  std::string panelCropPath(int panelIdx) const;                      // uses panelCropIsBmp for the extension
+  std::string panelCropPathExt(int panelIdx, const char* ext) const;  // explicit extension (format detection)
+  void prefetchPanelCache(int panelIdx);
 
   void loadCurrentPagePanels();
   void renderFullPage();

@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <DictIndex.h>
+#include <Epub/converters/BmpToFramebufferConverter.h>
 #include <Epub/converters/ImageDecoderFactory.h>
 #include <Epub/converters/ImageToFramebufferDecoder.h>
 #include <Epub/converters/PixelCache.h>
@@ -100,12 +101,72 @@ void MangaReaderActivity::onExit() {
 }
 
 void MangaReaderActivity::loadCurrentPagePanels() {
-  panels.clear();
-  panelsLoaded = false;
+  // render() runs on the dedicated render task and reads `panels`/`panelDims` under RenderLock.
+  // Do the slow SD work (panel index load, crop probe) into locals WITHOUT the lock -- holding
+  // it across SD I/O would stall the render task -- then publish everything in one short locked
+  // swap so the render task never observes a half-cleared or reallocating vector.
+  std::vector<manga::Panel> loadedPanels;
+  bool loaded = false;
   if (book && currentPage < book->getPageCount()) {
-    panelsLoaded = book->loadPagePanels(currentPage, panels);
+    loaded = book->loadPagePanels(currentPage, loadedPanels);
+  }
+  // Probe once per page what the input handler and panel renders need on every press: whether
+  // real crop files exist (full-page panels like covers have none), which format they use
+  // (converter writes .jpg normally or .bmp with --mono; uniform per book), and -- for BMP -- whether
+  // they're 1-bit monochrome (single-BW-wave fast path). Per-panel dimension slots are filled
+  // lazily by prefetch or first render.
+  bool hasCrops = false;
+  bool cropsBmp = false;
+  bool panelsBw = false;
+  if (!loadedPanels.empty() && book) {
+    const std::string bmp0 = panelCropPathExt(0, ".bmp");
+    if (Storage.exists(bmp0.c_str())) {
+      hasCrops = true;
+      cropsBmp = true;
+      panelsBw = BmpToFramebufferConverter::isMonochromeStatic(bmp0);
+    } else if (Storage.exists(panelCropPathExt(0, ".jpg").c_str())) {
+      hasCrops = true;
+    }
+  }
+  // A 1-bit BMP full page renders BW-only (single wave, no gray planes); probe it once here
+  // (cheap header read) so renderFullPage can pick the fast path. Only .bmp pages can be
+  // monochrome -- jpg/png always go the grayscale route.
+  bool bwOnly = false;
+  if (book) {
+    const std::string pageImg = book->getPageImagePath(currentPage);
+    if (FsHelpers::hasBmpExtension(pageImg)) {
+      bwOnly = BmpToFramebufferConverter::isMonochromeStatic(pageImg);
+    }
+  }
+  // Arm the first-panel prefetch for this page only when panel-zoom has been used in this book
+  // -- full-page-only reading must not pay speculative decodes and cache writes.
+  const bool armFirst = panelPrefetchArmed && hasCrops;
+  {
+    RenderLock lock;  // callers are all loop/onEnter/result-handler context -- never already held
+    panels = std::move(loadedPanels);
+    panelsLoaded = loaded;
+    pageHasPanelCrops = hasCrops;
+    currentPageBwOnly = bwOnly;
+    panelCropIsBmp = cropsBmp;
+    panelsBwOnly = panelsBw;
+    panelDims.assign(panels.size(), {});
+    firstPanelPrefetched = !armFirst;
+    nextPanelPrefetched = true;
   }
   updateBookmarkFlag();
+}
+
+std::string MangaReaderActivity::panelCropPath(const int panelIdx) const {
+  return panelCropPathExt(panelIdx, panelCropIsBmp ? ".bmp" : ".jpg");
+}
+
+std::string MangaReaderActivity::panelCropPathExt(const int panelIdx, const char* ext) const {
+  char cropName[64];
+  snprintf(cropName, sizeof(cropName), "p%u_%d%s", static_cast<unsigned>(currentPage), panelIdx, ext);
+  std::string path = book->getFolder();
+  if (path.empty() || path.back() != '/') path += '/';  // path.back() on an empty string is UB
+  path += cropName;
+  return path;
 }
 
 void MangaReaderActivity::nextPanel() {
@@ -257,11 +318,19 @@ void MangaReaderActivity::loop() {
 
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
-    // Idle tick: after a short dwell on a full page, warm the NEXT page's pixel cache so the
-    // upcoming forward page turn renders from cache instead of running its JPEG decode. The
-    // dwell gate keeps rapid back-to-back turns from queueing a blocking decode between them.
-    if (viewMode == ViewMode::FullPage && !nextPagePrefetched && (millis() - fullPageRenderedMs) > 400) {
-      prefetchNextPageCache();
+    // Idle tick: after a short dwell, warm the pixel cache the user is most likely to need
+    // next, so that render hits the cache instead of running a fresh JPEG decode. On a full
+    // page that's the NEXT page first, then (when panel-zoom is in use) this page's FIRST
+    // panel; inside panel-zoom it's the NEXT panel. The dwell gate keeps rapid back-to-back
+    // presses from queueing a blocking decode between them.
+    if (viewMode == ViewMode::FullPage && (millis() - fullPageRenderedMs) > 400) {
+      if (!nextPagePrefetched) {
+        prefetchNextPageCache();
+      } else if (!firstPanelPrefetched) {
+        prefetchPanelCache(0);
+      }
+    } else if (viewMode == ViewMode::PanelZoom && !nextPanelPrefetched && (millis() - panelRenderedMs) > 400) {
+      prefetchPanelCache(currentPanel + 1);
     }
     return;
   }
@@ -274,16 +343,9 @@ void MangaReaderActivity::loop() {
       // Only enter panel-zoom if a real crop file exists for the first panel.
       // Full-page panels (cover, splash pages) have no crop -- they'd just
       // render the same full image in panel-zoom, requiring an extra click.
-      bool hasPanelCrops = false;
-      if (!panels.empty() && book) {
-        char cropName[64];
-        snprintf(cropName, sizeof(cropName), "p%u_0.jpg", currentPage);
-        std::string cropPath = book->getFolder();
-        if (cropPath.back() != '/') cropPath += '/';
-        cropPath += cropName;
-        hasPanelCrops = Storage.exists(cropPath.c_str());
-      }
-      if (hasPanelCrops) {
+      // Probed once per page in loadCurrentPagePanels(); the old per-press
+      // Storage.exists() here was an SD transaction inside the input path.
+      if (pageHasPanelCrops) {
         currentPanel = 0;
         viewMode = ViewMode::PanelZoom;
         requestUpdate();
@@ -404,8 +466,14 @@ void MangaReaderActivity::renderFullPage() {
   const int destWidth = g.destWidth, destHeight = g.destHeight;
   const int screenW = g.screenW, screenH = g.screenH;
 
-  // Cache path for decoded pixel data (avoids re-decoding JPG on grayscale passes)
-  std::string cachePath = book->getCachePath() + "/page_" + std::to_string(currentPage) + ".2bp";
+  // Only JPEG/PNG pages stream a .2bp pixel cache; the BMP converter renders straight to the
+  // framebuffer and never writes one, so for a BMP page the cache would be a guaranteed miss on
+  // every plane -- an SD open attempt for nothing. Skip it entirely for BMP (mirrors the
+  // panelCropIsBmp guard in renderPanelZoom). Note the 1-bit BMP fast path below returns before
+  // any cache use anyway; this covers the >=8-bit BMP page case.
+  const bool useCache = !FsHelpers::hasBmpExtension(imgPath);
+  const std::string cachePath =
+      useCache ? book->getCachePath() + "/page_" + std::to_string(currentPage) + ".2bp" : std::string();
 
   RenderConfig config;
   config.x = x;
@@ -416,6 +484,29 @@ void MangaReaderActivity::renderFullPage() {
   config.useDithering = true;
   config.cachePath = cachePath;
 
+  // 1-bit BMP fast path: pure black/white content needs no 4-level gray refresh, so render a
+  // single BW pass and one FAST wave -- no grayscale planes, no displayGrayBuffer, no pixel
+  // cache. Roughly halves the page render for line-art manga (the whole point of BMP support).
+  if (currentPageBwOnly) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    decoder->decodeToFramebuffer(imgPath, renderer, config);
+
+    char bwStatus[32];
+    snprintf(bwStatus, sizeof(bwStatus), "%u/%u", currentPage + 1, book->getPageCount());
+    const int bwStatusW = renderer.getTextWidth(SMALL_FONT_ID, bwStatus);
+    const int bwStatusX = screenW - bwStatusW - 4;
+    const int bwStatusY = screenH - renderer.getLineHeight(SMALL_FONT_ID) - 2;
+    renderer.fillRect(bwStatusX - 2, bwStatusY - 1, bwStatusW + 4, renderer.getLineHeight(SMALL_FONT_ID) + 2, false);
+    renderer.drawText(SMALL_FONT_ID, bwStatusX, bwStatusY, bwStatus, true);
+
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    if (rotatePage) renderer.setOrientation(savedOrientation);
+    // Arm the next-page prefetch like the grayscale path (prefetch itself skips BMP -- see there).
+    nextPagePrefetched = false;
+    fullPageRenderedMs = millis();
+    return;
+  }
+
   // BW pass — a page visited before (or warmed by the idle prefetch) has its decoded pixels
   // cached on SD; render those directly and skip the JPEG decode entirely. Otherwise decode to
   // framebuffer AND stream the pixel cache to disk (config.cachePath) so the two grayscale passes
@@ -424,7 +515,7 @@ void MangaReaderActivity::renderFullPage() {
   // (BW + LSB + MSB), each a full JPEG parse/IDCT/scale -- the dominant cost of "turning pages in
   // manga is slow". ImageBlock (regular EPUB images) already had this same cache-read
   // optimization; manga bypassed ImageBlock entirely and never got it.
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
 
@@ -445,14 +536,14 @@ void MangaReaderActivity::renderFullPage() {
   // real decode if the cache write failed (e.g. under memory pressure) or wasn't enabled.
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
   renderer.copyGrayscaleLsbBuffers();
 
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
   renderer.copyGrayscaleMsbBuffers();
@@ -477,6 +568,14 @@ void MangaReaderActivity::prefetchNextPageCache() {
   }
   const uint32_t upcomingPage = currentPage + 1;
   if (upcomingPage >= book->getPageCount()) {
+    nextPagePrefetched = true;
+    return;
+  }
+  // BMP pages don't stream a .2bp cache (the BMP converter renders straight to the framebuffer),
+  // so there's nothing to warm -- and probing Storage.exists() below would never become true,
+  // re-running this every idle tick. BMP is uncompressed, so the page-turn decode is cheap
+  // anyway. Skip prefetch for a BMP next page.
+  if (FsHelpers::hasBmpExtension(book->getPageImagePath(upcomingPage))) {
     nextPagePrefetched = true;
     return;
   }
@@ -545,71 +644,76 @@ void MangaReaderActivity::renderPanelZoom() {
     return;
   }
 
-  int screenW = renderer.getScreenWidth();
-  int screenH = renderer.getScreenHeight();
+  // Crop known missing/invalid from an earlier probe: fall back without touching the SD.
+  if (panelDims[currentPanel].w < 0) {
+    renderFullPage();
+    return;
+  }
 
-  // Try to load a pre-cropped panel image (p<page>_<panel>.jpg)
-  char panelFileName[64];
-  snprintf(panelFileName, sizeof(panelFileName), "p%u_%d.jpg", static_cast<unsigned>(currentPage), currentPanel);
-  std::string panelImgPath = book->getFolder();
-  if (panelImgPath.back() != '/') panelImgPath += '/';
-  panelImgPath += panelFileName;
-
+  const std::string panelImgPath = panelCropPath(currentPanel);
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(panelImgPath);
-  if (!decoder || !Storage.exists(panelImgPath.c_str())) {
-    // No pre-cropped panel image — fall back to full page view
+  if (!decoder) {
+    // A null decoder is a transient condition (getDecoder allocates its decoder with nothrow and
+    // returns null on OOM), NOT a permanently missing/unsupported crop -- so DON'T poison the
+    // dims slot with -1 here. Fall back this frame; a later entry retries once memory recovers.
     renderFullPage();
     return;
   }
 
-  ImageDimensions panelDims = {0, 0};
-  if (!decoder->getDimensions(panelImgPath, panelDims) || panelDims.width <= 0 || panelDims.height <= 0) {
-    renderFullPage();
-    return;
+  // Crop dimensions are static per file: probe the JPEG header only the first time; a failure
+  // is cached as -1 so a missing/corrupt crop doesn't re-probe on every entry. Prefetch fills
+  // this slot too, so a prefetched panel enters without any header parse.
+  if (panelDims[currentPanel].w == 0) {
+    ImageDimensions dims = {0, 0};
+    if (!decoder->getDimensions(panelImgPath, dims) || dims.width <= 0 || dims.height <= 0) {
+      panelDims[currentPanel] = {-1, -1};
+      renderFullPage();
+      return;
+    }
+    panelDims[currentPanel] = {dims.width, dims.height};
   }
 
-  // Rotate when the panel's aspect doesn't match the screen's, same as EPUB
-  // full-page images: this lets a wide (landscape) panel fill a portrait
-  // screen edge-to-edge instead of shrinking to fit within its width, and
-  // vice versa. The user tilts the device to view a rotated panel.
-  const auto savedOrientation = renderer.getOrientation();
-  const bool screenIsPortrait = screenH > screenW;
-  const bool panelIsLandscape = panelDims.width > panelDims.height;
-  const bool rotatePanel = screenIsPortrait == panelIsLandscape;
-  if (rotatePanel) {
-    const auto rotatedOrientation = static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4);
-    renderer.setOrientation(rotatedOrientation);
-    screenW = renderer.getScreenWidth();
-    screenH = renderer.getScreenHeight();
-  }
+  // Panel-zoom is genuinely in use (a crop resolved and will render): arm the idle prefetches
+  // (see loop()). Armed only here so books whose crops never render don't trigger speculative
+  // prefetch work.
+  panelPrefetchArmed = true;
 
-  // Fit panel image to screen preserving aspect ratio. Unlike inline EPUB
-  // images (which deliberately never upscale), a panel crop should always
-  // be blown up to fill as much of the screen as possible -- that's the
-  // whole point of zooming into it. Compute the exact target size here and
-  // pass useExactDimensions so the decoder skips its own upscale-disabled
-  // fit-or-shrink logic.
-  float scale = std::min(static_cast<float>(screenW) / panelDims.width, static_cast<float>(screenH) / panelDims.height);
-  int fitW = std::max(1, static_cast<int>(panelDims.width * scale + 0.5f));
-  int fitH = std::max(1, static_cast<int>(panelDims.height * scale + 0.5f));
-  int x = (screenW - fitW) / 2;
-  int y = (screenH - fitH) / 2;
+  const PanelGeom g = applyPanelGeometry(panelDims[currentPanel].w, panelDims[currentPanel].h);
+  const bool rotatePanel = g.rotated;
+  const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
+  const int screenW = renderer.getScreenWidth();
+  const int screenH = renderer.getScreenHeight();
+  const int fitW = g.fitW, fitH = g.fitH;
+  const int x = g.x, y = g.y;
 
-  std::string cachePath =
-      book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(currentPanel) + ".2bp";
+  // 1-bit BMP panels render BW-only (single fast wave, no gray planes, no .2bp cache) -- the same
+  // fast path a mono full page uses. Grayscale (JPEG or >=8-bit BMP) panels take the cached
+  // BW+LSB+MSB path below.
+  const bool bwOnly = panelsBwOnly;
+  // Only JPEG panels stream a .2bp pixel cache; the BMP converter renders straight to the
+  // framebuffer and never writes one, so for any BMP crop the cache would be a guaranteed miss --
+  // an SD open attempt per plane for nothing. Skip the cache entirely for BMP.
+  const bool useCache = !panelCropIsBmp;
+  const std::string cachePath =
+      useCache ? book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(currentPanel) + ".2bp"
+               : std::string();
   RenderConfig config;
   config.x = x;
   config.y = y;
   config.maxWidth = fitW;
   config.maxHeight = fitH;
   config.useExactDimensions = true;
-  config.useGrayscale = true;
-  config.useDithering = true;
+  config.useGrayscale = !bwOnly;
+  config.useDithering = !bwOnly;
   config.cachePath = cachePath;
 
-  // BW pass -- a revisited panel renders from its pixel cache and skips the crop-JPEG decode,
-  // same as renderFullPage().
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+  // Populate the BW framebuffer. BW-only decodes the 1-bit BMP straight to BW; the grayscale path
+  // renders from the .2bp pixel cache when warm (revisited/prefetched JPEG panel) and only decodes
+  // on a cold pass (or always, for a cacheless BMP crop), same as renderFullPage().
+  if (bwOnly) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+  } else if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
     decoder->decodeToFramebuffer(panelImgPath, renderer, config);
   }
 
@@ -632,33 +736,191 @@ void MangaReaderActivity::renderPanelZoom() {
     renderer.drawText(SMALL_FONT_ID, 4, statusY, hint, true);
   }
 
-  // Display with grayscale
-  renderer.storeBwBuffer();
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  if (bwOnly) {
+    // Single black-and-white wave; no grayscale planes.
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  } else {
+    // Display with grayscale
+    renderer.storeBwBuffer();
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
-  // Read back the pixels the BW pass cached instead of re-decoding the JPEG for each grayscale
-  // plane -- same fix as renderFullPage(), see the comment there for the full rationale.
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
-    decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+    // Read back the pixels the BW pass cached instead of re-decoding the JPEG for each grayscale
+    // plane -- same fix as renderFullPage(), see the comment there for the full rationale.
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+      decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+    }
+    renderer.copyGrayscaleLsbBuffers();
+
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+      decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+    }
+    renderer.copyGrayscaleMsbBuffers();
+
+    renderer.displayGrayBuffer();
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.restoreBwBuffer();
   }
-  renderer.copyGrayscaleLsbBuffers();
-
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
-    decoder->decodeToFramebuffer(panelImgPath, renderer, config);
-  }
-  renderer.copyGrayscaleMsbBuffers();
-
-  renderer.displayGrayBuffer();
-  renderer.setRenderMode(GfxRenderer::BW);
-  renderer.restoreBwBuffer();
 
   if (rotatePanel) {
     renderer.setOrientation(savedOrientation);
   }
+
+  // Arm the idle prefetch for the panel the user steps to next (see loop()).
+  panelRenderedMs = millis();
+  nextPanelPrefetched = (currentPanel + 1 >= static_cast<int>(panels.size()));
+}
+
+MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
+  PanelGeom g;
+  g.savedOrientation = renderer.getOrientation();
+  int screenW = renderer.getScreenWidth();
+  int screenH = renderer.getScreenHeight();
+
+  // Rotate when the panel's aspect doesn't match the screen's, same as EPUB
+  // full-page images: this lets a wide (landscape) panel fill a portrait
+  // screen edge-to-edge instead of shrinking to fit within its width, and
+  // vice versa. The user tilts the device to view a rotated panel.
+  const bool screenIsPortrait = screenH > screenW;
+  const bool panelIsLandscape = imgWidth > imgHeight;
+  g.rotated = screenIsPortrait == panelIsLandscape;
+  if (g.rotated) {
+    const auto rotatedOrientation = static_cast<GfxRenderer::Orientation>((g.savedOrientation + 3) % 4);
+    renderer.setOrientation(rotatedOrientation);
+    screenW = renderer.getScreenWidth();
+    screenH = renderer.getScreenHeight();
+  }
+
+  // Fit panel image to screen preserving aspect ratio. Unlike inline EPUB
+  // images (which deliberately never upscale), a panel crop should always
+  // be blown up to fill as much of the screen as possible -- that's the
+  // whole point of zooming into it. Compute the exact target size here and
+  // pass useExactDimensions so the decoder skips its own upscale-disabled
+  // fit-or-shrink logic.
+  const float scale = std::min(static_cast<float>(screenW) / imgWidth, static_cast<float>(screenH) / imgHeight);
+  g.fitW = std::max(1, static_cast<int>(imgWidth * scale + 0.5f));
+  g.fitH = std::max(1, static_cast<int>(imgHeight * scale + 0.5f));
+  g.x = (screenW - g.fitW) / 2;
+  g.y = (screenH - g.fitH) / 2;
+  return g;
+}
+
+// Idle-time twin of renderPanelZoom's decode: writes the panel's .2bp pixel cache (and its
+// dimension slot) so entering the panel costs a cache read instead of a JPEG decode. Same
+// guard discipline as prefetchNextPageCache: heap floor, RenderLock::peek retry, framebuffer
+// snapshot around the decode scribble.
+void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
+  std::atomic<bool>& doneFlag = (viewMode == ViewMode::FullPage) ? firstPanelPrefetched : nextPanelPrefetched;
+  if (!book || panelIdx < 0 || panelIdx >= static_cast<int>(panels.size())) {
+    doneFlag = true;
+    return;
+  }
+  // BMP panels don't stream a .2bp cache (the BMP converter renders straight to the framebuffer),
+  // and mono panels render BW-only on entry anyway -- nothing to warm, and probing the (never
+  // written) .2bp would re-run this every idle tick. BMP decode is cheap, so skip the prefetch.
+  if (panelCropIsBmp) {
+    doneFlag = true;
+    return;
+  }
+  // Don't contend on the SD mutex with an in-flight render decode: bail before ANY SD work (the
+  // cache-exists probe and header parse below both hit storage) if the render task is active, and
+  // retry on a later idle tick. Mirrors the peek guard before the framebuffer decode further down.
+  if (RenderLock::peek()) return;
+  const std::string cachePath =
+      book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(panelIdx) + ".2bp";
+  if (Storage.exists(cachePath.c_str())) {
+    // Pixel cache already warm (commonly a .2bp persisted from a prior session), but this
+    // session's panelDims slot may still be unprobed -- so the eventual panel entry would parse
+    // the crop header on the render hot path even though the pixels are cached. Probe the header
+    // once here (idle) and publish the slot, so entry is a pure cache read.
+    // Snapshot the slot under the lock (render() writes panelDims on its own task -- see header),
+    // then do the SD probe outside the lock.
+    bool needProbe;
+    {
+      RenderLock lock;
+      needProbe = (panelDims[panelIdx].w == 0);
+    }
+    if (needProbe) {
+      const std::string warmCropPath = panelCropPath(panelIdx);
+      const ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(warmCropPath);
+      // Null decoder = transient OOM (nothrow getDecoder), not a bad crop -- leave the slot
+      // unprobed so a later entry retries. Only a non-null decoder whose header parse fails is a
+      // genuinely bad crop worth caching as -1.
+      if (warmDecoder) {
+        ImageDimensions warmDims = {0, 0};
+        const bool warmOk =
+            warmDecoder->getDimensions(warmCropPath, warmDims) && warmDims.width > 0 && warmDims.height > 0;
+        RenderLock lock;
+        panelDims[panelIdx] = warmOk ? PanelCropDims{warmDims.width, warmDims.height} : PanelCropDims{-1, -1};
+      }
+    }
+    doneFlag = true;
+    return;
+  }
+  const std::string cropPath = panelCropPath(panelIdx);
+  if (!Storage.exists(cropPath.c_str())) {
+    // Confirmed missing crop file (full-page panel like a cover/splash): cache -1 (under the lock
+    // -- render() reads panelDims on its own task) so a later render entry falls back without
+    // re-probing the SD.
+    RenderLock lock;
+    panelDims[panelIdx] = {-1, -1};
+    doneFlag = true;
+    return;
+  }
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cropPath);  // non-const: decodes below
+  if (!decoder) {
+    // Transient (nothrow getDecoder returns null on OOM), not a missing/bad crop -- skip this
+    // prefetch without poisoning the slot; the panel-entry render re-probes and retries.
+    doneFlag = true;
+    return;
+  }
+  // The decode needs working buffers plus the 48KB framebuffer snapshot below; under pressure,
+  // skip permanently for this slot (the panel-entry decode handles it as before).
+  if (ESP.getMaxAllocHeap() < 60000) {
+    doneFlag = true;
+    return;
+  }
+  // The renderer belongs to the render task; only touch it under the rendering mutex, and don't
+  // stall a queued render -- retry on a later idle tick instead.
+  if (RenderLock::peek()) return;
+
+  // Probe the crop's header WITHOUT the lock (SD I/O must not stall the render task), then take
+  // the lock once and publish the dimension slot (missing/corrupt cached as -1, so render never
+  // re-probes) plus do the framebuffer decode under that same lock -- every panelDims write and
+  // every renderer touch is now render-task-safe.
+  ImageDimensions dims = {0, 0};
+  const bool dimsOk = decoder->getDimensions(cropPath, dims) && dims.width > 0 && dims.height > 0;
+
+  RenderLock lock;
+  panelDims[panelIdx] = dimsOk ? PanelCropDims{dims.width, dims.height} : PanelCropDims{-1, -1};
+  if (!dimsOk) {
+    doneFlag = true;
+    return;
+  }
+  if (!renderer.storeBwBuffer()) {
+    doneFlag = true;
+    return;
+  }
+  LOG_DBG("MRA", "Prefetching panel cache p%u_%d", static_cast<unsigned>(currentPage), panelIdx);
+  const PanelGeom g = applyPanelGeometry(dims.width, dims.height);
+  RenderConfig config;
+  config.x = g.x;
+  config.y = g.y;
+  config.maxWidth = g.fitW;
+  config.maxHeight = g.fitH;
+  config.useExactDimensions = true;
+  config.useGrayscale = true;
+  config.useDithering = true;
+  config.cachePath = cachePath;
+  decoder->decodeToFramebuffer(cropPath, renderer, config);
+  if (g.rotated) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>(g.savedOrientation));
+  }
+  renderer.restoreBwBuffer();
+  doneFlag = true;
 }
 
 void MangaReaderActivity::renderTextOverlay() {

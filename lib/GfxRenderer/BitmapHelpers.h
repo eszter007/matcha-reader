@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <new>
 
 struct BmpHeader;
 
@@ -105,9 +106,11 @@ class Atkinson1BitDitherer {
 class AtkinsonDitherer {
  public:
   explicit AtkinsonDitherer(int width) : width(width) {
-    errorRow0 = new int16_t[width + 4]();  // Current row
-    errorRow1 = new int16_t[width + 4]();  // Next row
-    errorRow2 = new int16_t[width + 4]();  // Row after next
+    // nothrow: bare new aborts on OOM under -fno-exceptions. valid() lets the owner reject the
+    // ditherer and fail the parse gracefully instead of crashing (manga BMP pages can be large).
+    errorRow0 = new (std::nothrow) int16_t[width + 4]();  // Current row
+    errorRow1 = new (std::nothrow) int16_t[width + 4]();  // Next row
+    errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
   }
 
   ~AtkinsonDitherer() {
@@ -115,6 +118,10 @@ class AtkinsonDitherer {
     delete[] errorRow1;
     delete[] errorRow2;
   }
+
+  // True only if every internal row buffer allocated. Check before use; a false ditherer must be
+  // discarded (the owner treats it as an allocation failure).
+  bool valid() const { return errorRow0 && errorRow1 && errorRow2; }
   // **1. EXPLICITLY DELETE THE COPY CONSTRUCTOR**
   AtkinsonDitherer(const AtkinsonDitherer& other) = delete;
 
@@ -206,14 +213,18 @@ class AtkinsonDitherer {
 class FloydSteinbergDitherer {
  public:
   explicit FloydSteinbergDitherer(int width) : width(width), rowCount(0) {
-    errorCurRow = new int16_t[width + 2]();  // +2 for boundary handling
-    errorNextRow = new int16_t[width + 2]();
+    // nothrow: see AtkinsonDitherer -- fail the parse gracefully instead of aborting on OOM.
+    errorCurRow = new (std::nothrow) int16_t[width + 2]();  // +2 for boundary handling
+    errorNextRow = new (std::nothrow) int16_t[width + 2]();
   }
 
   ~FloydSteinbergDitherer() {
     delete[] errorCurRow;
     delete[] errorNextRow;
   }
+
+  // True only if both internal row buffers allocated (see AtkinsonDitherer::valid).
+  bool valid() const { return errorCurRow && errorNextRow; }
 
   // **1. EXPLICITLY DELETE THE COPY CONSTRUCTOR**
   FloydSteinbergDitherer(const FloydSteinbergDitherer& other) = delete;

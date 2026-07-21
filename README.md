@@ -81,7 +81,7 @@ Non-Japanese-language books that contain occasional CJK characters (e.g. a stray
 
 ### Manga Panel Reader
 
-Read manga with real panel detection, dictionary lookup, and pre-extracted translations. A conversion tool (`tools/manga_convert/`) detects actual panel rectangles with a YOLO model trained on Manga109, asks Gemini what text appears in each panel (plus an English translation), and packs everything into a compact binary format the device reads natively. Page images (JPG/PNG) are used directly — no BMP conversion needed.
+Read manga with real panel detection, dictionary lookup, and pre-extracted translations. A conversion tool (`tools/manga_convert/`) detects actual panel rectangles with a YOLO model trained on Manga109, asks Gemini what text appears in each panel (plus an English translation), and packs everything into a compact binary format the device reads natively. Page images are used directly — JPG, PNG, and BMP are all rendered without any pre-conversion. A **1-bit (black-and-white) BMP** renders especially fast: pure line art needs no 4-level gray refresh, so it paints in a single black-and-white pass instead of the usual gray sequence. The converter's **`--mono`** flag writes both pages and panel crops as 1-bit Floyd–Steinberg-dithered BMP, so page turns and panel-zoom both paint fast — ideal for line-art manga (screentone gradients become dither patterns, so it's less suited to heavily-toned art).
 
 - **Full-page view** — Displays the manga page scaled to screen with panel highlight rectangles. When the reading orientation is landscape, a page whose aspect doesn't match the screen rotates to fill it edge-to-edge instead of shrinking into a small centered box (same behavior panel-zoom already had).
 - **Panel-by-panel zoom** — Navigate panels in reading order with page turn buttons. Each panel is scaled to fill the screen, rotating to landscape when that fills more of the screen than portrait would.
@@ -366,6 +366,7 @@ python3 tools/manga_convert/convert_manga.py \
 
 - `--page-order-file FILE` — explicit page order (one source filename per line) for sources whose filenames don't sort into true reading order
 - `--no-ocr` — skip the Gemini calls entirely; panel boxes only, no text/translation/lookup data
+- `--mono` — write pages **and** panel crops as 1-bit Floyd–Steinberg-dithered BMP instead of JPEG, so both page turns and panel-zoom paint in a single fast black-and-white refresh. Best for line-art manga; screentone gradients become dither patterns. Pairs naturally with `--no-ocr` — when OCR is on, the dithered crop is what's sent to Gemini, so text recognition on toned pages is less accurate than from a JPEG crop.
 - `--max-pages N` — only process the first N pages, useful for a quick test before running the full (potentially expensive) batch
 - `--gemini-key-file FILE` — read the API key from a file instead of `GEMINI_API_KEY`
 - `--title TITLE` / `--author AUTHOR` — override the book's title/author. When omitted, the converter auto-detects them from the source: EPUB `dc:title`/`dc:creator`, CBZ `ComicInfo.xml`, or PDF document metadata. If nothing is found and these flags aren't passed, the device falls back to the folder name with no author shown.
@@ -376,10 +377,10 @@ The Gemini API key is never embedded in the script — pass it via `--gemini-key
 
 ```
 /manga/MangaTitle/
-  page_0000.jpg     # Page images (JPG/PNG, used directly — no BMP conversion)
+  page_0000.jpg     # Page images (JPG/PNG/BMP, all rendered directly; --mono writes 1-bit .bmp, fastest)
   page_0001.jpg
   ...
-  p0_0.jpg          # Cropped panel images for panel-zoom view (p<page>_<panel>.jpg)
+  p0_0.jpg          # Cropped panel images for panel-zoom (p<page>_<panel>.jpg, or .bmp with --mono)
   p0_1.jpg
   ...
   panels.idx        # Panel index (binary, auto-generated)
