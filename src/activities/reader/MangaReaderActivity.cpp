@@ -772,11 +772,15 @@ MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int
 // guard discipline as prefetchNextPageCache: heap floor, RenderLock::peek retry, framebuffer
 // snapshot around the decode scribble.
 void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
-  bool& doneFlag = (viewMode == ViewMode::FullPage) ? firstPanelPrefetched : nextPanelPrefetched;
+  std::atomic<bool>& doneFlag = (viewMode == ViewMode::FullPage) ? firstPanelPrefetched : nextPanelPrefetched;
   if (!book || panelIdx < 0 || panelIdx >= static_cast<int>(panels.size())) {
     doneFlag = true;
     return;
   }
+  // Don't contend on the SD mutex with an in-flight render decode: bail before ANY SD work (the
+  // cache-exists probe and header parse below both hit storage) if the render task is active, and
+  // retry on a later idle tick. Mirrors the peek guard before the framebuffer decode further down.
+  if (RenderLock::peek()) return;
   const std::string cachePath =
       book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(panelIdx) + ".2bp";
   if (Storage.exists(cachePath.c_str())) {

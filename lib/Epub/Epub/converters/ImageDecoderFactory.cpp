@@ -14,17 +14,20 @@ std::unique_ptr<JpegToFramebufferConverter> ImageDecoderFactory::jpegDecoder = n
 std::unique_ptr<PngToFramebufferConverter> ImageDecoderFactory::pngDecoder = nullptr;
 std::unique_ptr<BmpToFramebufferConverter> ImageDecoderFactory::bmpDecoder = nullptr;
 
+namespace {
+// Lower-cased file extension (including the dot), or "" if none. Shared by getDecoder() and
+// isFormatSupported() so both agree on what a "supported format" is.
+std::string lowerExtension(const std::string& imagePath) {
+  const size_t dotPos = imagePath.rfind('.');
+  if (dotPos == std::string::npos) return "";
+  std::string ext = imagePath.substr(dotPos);
+  for (auto& c : ext) c = static_cast<char>(tolower(c));
+  return ext;
+}
+}  // namespace
+
 ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& imagePath) {
-  std::string ext = imagePath;
-  size_t dotPos = ext.rfind('.');
-  if (dotPos != std::string::npos) {
-    ext = ext.substr(dotPos);
-    for (auto& c : ext) {
-      c = tolower(c);
-    }
-  } else {
-    ext = "";
-  }
+  const std::string ext = lowerExtension(imagePath);
 
   // new (std::nothrow): bare new aborts the firmware on OOM under -fno-exceptions (see CLAUDE.md).
   // A null decoder propagates through get() and every caller already handles a null decoder
@@ -50,4 +53,11 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
   return nullptr;
 }
 
-bool ImageDecoderFactory::isFormatSupported(const std::string& imagePath) { return getDecoder(imagePath) != nullptr; }
+bool ImageDecoderFactory::isFormatSupported(const std::string& imagePath) {
+  // Format support is a static property of the extension -- decide it WITHOUT allocating a decoder.
+  // (getDecoder now returns nullptr on OOM via nothrow allocation, so delegating here would wrongly
+  // report a supported format as unsupported under memory pressure.)
+  const std::string ext = lowerExtension(imagePath);
+  return JpegToFramebufferConverter::supportsFormat(ext) || PngToFramebufferConverter::supportsFormat(ext) ||
+         BmpToFramebufferConverter::supportsFormat(ext);
+}

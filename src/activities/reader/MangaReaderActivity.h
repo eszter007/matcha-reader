@@ -2,6 +2,7 @@
 
 #include <MangaPanel.h>
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -54,11 +55,17 @@ class MangaReaderActivity final : public Activity {
   enum class ViewMode { FullPage, PanelZoom, TextOverlay };
   ViewMode viewMode = ViewMode::FullPage;
 
+  // Prefetch state flags below are written from the render task (renderFullPage/renderPanelZoom)
+  // and read/updated from the loop task (loop/loadCurrentPagePanels). They're word-sized and only
+  // advisory (a stale read at worst skips or delays one prefetch, never corrupts state), and on
+  // this single-core target an aligned load/store can't tear -- but std::atomic makes the
+  // cross-task access well-defined per the C++ memory model at zero cost (native 32-bit atomics).
+
   // Set when a full page finishes rendering; the idle prefetch below warms the NEXT page's pixel
   // cache once per displayed page, after a short dwell, so forward page turns hit the cache
   // instead of running a fresh JPEG decode.
-  bool nextPagePrefetched = true;  // true until the first full-page render arms it
-  unsigned long fullPageRenderedMs = 0;
+  std::atomic<bool> nextPagePrefetched{true};  // true until the first full-page render arms it
+  std::atomic<unsigned long> fullPageRenderedMs{0};
 
   // Geometry of a full-page image on the (possibly temporarily rotated) screen. Shared by
   // renderFullPage() and prefetchNextPageCache() so the prefetch-written pixel cache has exactly
@@ -80,10 +87,10 @@ class MangaReaderActivity final : public Activity {
   // full-page-only readers never pay the speculative decode/SD-write cost. Once armed, idle
   // dwell on a full page warms the first panel's pixel cache, and idle dwell on a panel warms
   // the next panel's -- entering a panel then costs a cache read instead of a JPEG decode.
-  bool panelPrefetchArmed = false;
-  bool firstPanelPrefetched = true;  // per-page; true until loadCurrentPagePanels() arms it
-  bool nextPanelPrefetched = true;   // per-panel; true until a panel render arms it
-  unsigned long panelRenderedMs = 0;
+  std::atomic<bool> panelPrefetchArmed{false};
+  std::atomic<bool> firstPanelPrefetched{true};  // per-page; true until loadCurrentPagePanels() arms it
+  std::atomic<bool> nextPanelPrefetched{true};   // per-panel; true until a panel render arms it
+  std::atomic<unsigned long> panelRenderedMs{0};
 
   // Per-page facts cached off the hot paths: the input handler used to hit the SD (exists())
   // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
