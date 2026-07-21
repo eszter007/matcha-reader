@@ -630,7 +630,9 @@ void MangaReaderActivity::renderPanelZoom() {
   const std::string panelImgPath = panelCropPath(currentPanel);
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(panelImgPath);
   if (!decoder) {
-    panelDims[currentPanel] = {-1, -1};
+    // A null decoder is a transient condition (getDecoder allocates its decoder with nothrow and
+    // returns null on OOM), NOT a permanently missing/unsupported crop -- so DON'T poison the
+    // dims slot with -1 here. Fall back this frame; a later entry retries once memory recovers.
     renderFullPage();
     return;
   }
@@ -779,30 +781,47 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
       book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(panelIdx) + ".2bp";
   if (Storage.exists(cachePath.c_str())) {
     // Pixel cache already warm (commonly a .2bp persisted from a prior session), but this
-    // session's panelDims slot is still unprobed -- so the eventual panel entry would parse the
-    // crop header on the render hot path even though the pixels are cached. Probe the header once
-    // here (idle, outside the lock) and publish the slot under the lock, so entry is a pure cache
-    // read. A missing/bad crop caches -1 as elsewhere.
-    if (panelDims[panelIdx].w == 0) {
+    // session's panelDims slot may still be unprobed -- so the eventual panel entry would parse
+    // the crop header on the render hot path even though the pixels are cached. Probe the header
+    // once here (idle) and publish the slot, so entry is a pure cache read.
+    // Snapshot the slot under the lock (render() writes panelDims on its own task -- see header),
+    // then do the SD probe outside the lock.
+    bool needProbe;
+    {
+      RenderLock lock;
+      needProbe = (panelDims[panelIdx].w == 0);
+    }
+    if (needProbe) {
       const std::string warmCropPath = panelCropPath(panelIdx);
       const ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(warmCropPath);
-      ImageDimensions warmDims = {0, 0};
-      const bool warmOk = warmDecoder && warmDecoder->getDimensions(warmCropPath, warmDims) && warmDims.width > 0 &&
-                          warmDims.height > 0;
-      RenderLock lock;
-      panelDims[panelIdx] = warmOk ? PanelCropDims{warmDims.width, warmDims.height} : PanelCropDims{-1, -1};
+      // Null decoder = transient OOM (nothrow getDecoder), not a bad crop -- leave the slot
+      // unprobed so a later entry retries. Only a non-null decoder whose header parse fails is a
+      // genuinely bad crop worth caching as -1.
+      if (warmDecoder) {
+        ImageDimensions warmDims = {0, 0};
+        const bool warmOk =
+            warmDecoder->getDimensions(warmCropPath, warmDims) && warmDims.width > 0 && warmDims.height > 0;
+        RenderLock lock;
+        panelDims[panelIdx] = warmOk ? PanelCropDims{warmDims.width, warmDims.height} : PanelCropDims{-1, -1};
+      }
     }
     doneFlag = true;
     return;
   }
   const std::string cropPath = panelCropPath(panelIdx);
-  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cropPath);
-  if (!decoder || !Storage.exists(cropPath.c_str())) {
-    // Full-page panel (cover/splash): no crop file, nothing to warm. Cache the miss (under the
-    // lock -- render() reads panelDims on its own task) so a later render entry falls back
-    // without re-probing the SD.
+  if (!Storage.exists(cropPath.c_str())) {
+    // Confirmed missing crop file (full-page panel like a cover/splash): cache -1 (under the lock
+    // -- render() reads panelDims on its own task) so a later render entry falls back without
+    // re-probing the SD.
     RenderLock lock;
     panelDims[panelIdx] = {-1, -1};
+    doneFlag = true;
+    return;
+  }
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cropPath);  // non-const: decodes below
+  if (!decoder) {
+    // Transient (nothrow getDecoder returns null on OOM), not a missing/bad crop -- skip this
+    // prefetch without poisoning the slot; the panel-entry render re-probes and retries.
     doneFlag = true;
     return;
   }
