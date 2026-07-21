@@ -36,16 +36,19 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
   if (JpegToFramebufferConverter::supportsFormat(ext)) {
     if (!jpegDecoder) {
       jpegDecoder.reset(new (std::nothrow) JpegToFramebufferConverter());
+      if (!jpegDecoder) LOG_ERR("DEC", "OOM allocating JPEG decoder for: %s", imagePath.c_str());
     }
     return jpegDecoder.get();
   } else if (PngToFramebufferConverter::supportsFormat(ext)) {
     if (!pngDecoder) {
       pngDecoder.reset(new (std::nothrow) PngToFramebufferConverter());
+      if (!pngDecoder) LOG_ERR("DEC", "OOM allocating PNG decoder for: %s", imagePath.c_str());
     }
     return pngDecoder.get();
   } else if (BmpToFramebufferConverter::supportsFormat(ext)) {
     if (!bmpDecoder) {
       bmpDecoder.reset(new (std::nothrow) BmpToFramebufferConverter());
+      if (!bmpDecoder) LOG_ERR("DEC", "OOM allocating BMP decoder for: %s", imagePath.c_str());
     }
     return bmpDecoder.get();
   }

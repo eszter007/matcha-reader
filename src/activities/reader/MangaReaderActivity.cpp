@@ -684,9 +684,13 @@ void MangaReaderActivity::renderPanelZoom() {
   // fast path a mono full page uses. Grayscale (JPEG or >=8-bit BMP) panels take the cached
   // BW+LSB+MSB path below.
   const bool bwOnly = panelsBwOnly;
+  // Only JPEG panels stream a .2bp pixel cache; the BMP converter renders straight to the
+  // framebuffer and never writes one, so for any BMP crop the cache would be a guaranteed miss --
+  // an SD open attempt per plane for nothing. Skip the cache entirely for BMP.
+  const bool useCache = !panelCropIsBmp;
   const std::string cachePath =
-      bwOnly ? std::string()
-             : book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(currentPanel) + ".2bp";
+      useCache ? book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(currentPanel) + ".2bp"
+               : std::string();
   RenderConfig config;
   config.x = x;
   config.y = y;
@@ -698,12 +702,12 @@ void MangaReaderActivity::renderPanelZoom() {
   config.cachePath = cachePath;
 
   // Populate the BW framebuffer. BW-only decodes the 1-bit BMP straight to BW; the grayscale path
-  // renders from the .2bp pixel cache when warm (revisited/prefetched panel) and only decodes the
-  // crop JPEG on a cold pass, same as renderFullPage().
+  // renders from the .2bp pixel cache when warm (revisited/prefetched JPEG panel) and only decodes
+  // on a cold pass (or always, for a cacheless BMP crop), same as renderFullPage().
   if (bwOnly) {
     renderer.setRenderMode(GfxRenderer::BW);
     decoder->decodeToFramebuffer(panelImgPath, renderer, config);
-  } else if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+  } else if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
     decoder->decodeToFramebuffer(panelImgPath, renderer, config);
   }
 
@@ -738,14 +742,14 @@ void MangaReaderActivity::renderPanelZoom() {
     // plane -- same fix as renderFullPage(), see the comment there for the full rationale.
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
       decoder->decodeToFramebuffer(panelImgPath, renderer, config);
     }
     renderer.copyGrayscaleLsbBuffers();
 
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
       decoder->decodeToFramebuffer(panelImgPath, renderer, config);
     }
     renderer.copyGrayscaleMsbBuffers();
