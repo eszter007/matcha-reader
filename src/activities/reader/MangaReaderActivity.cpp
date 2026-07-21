@@ -336,15 +336,11 @@ void MangaReaderActivity::loop() {
 
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
-    // Idle tick: after a dwell, warm the pixel cache the user is most likely to need next, so the
-    // render hits the cache instead of running a fresh JPEG decode. The dwell gate keeps rapid
-    // back-to-back presses from queueing a blocking decode between them.
-    //
-    // On a paneled full page the FIRST PANEL is warmed first and on a shorter dwell (see the
-    // constants): zooming in is the likely next action there and its cold decode is the slowest
-    // step of the full-page -> panel transition, so caching it even after a brief pause makes that
-    // transition snappy. The next-page cache warms afterward on the full dwell. Pages with no crops
-    // skip straight to the next-page warm. Inside panel-zoom it's the NEXT panel (full dwell).
+    // Idle tick: after a dwell, warm the pixel cache the user is most likely to need next so the
+    // render hits it instead of a fresh JPEG decode. Dwell gates and ordering rationale live with
+    // the PREFETCH_DWELL_MS / FIRST_PANEL_PREFETCH_DWELL_MS constants above. In short: on a paneled
+    // full page warm the first panel first (shorter dwell), then the next page; pages without crops
+    // go straight to the next page; inside panel-zoom warm the next panel.
     if (viewMode == ViewMode::FullPage) {
       const unsigned long dwell = millis() - fullPageRenderedMs;
       if (pageHasPanelCrops && !firstPanelPrefetched && dwell > FIRST_PANEL_PREFETCH_DWELL_MS) {
