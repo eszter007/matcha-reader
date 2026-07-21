@@ -97,14 +97,16 @@ class MangaReaderActivity final : public Activity {
   // dwells on the panel, so stepping panel->panel->panel pays one wave each instead of two. 1-bit
   // (bwOnly) panels are already single-wave and never defer. Both flags are atomic for the same
   // reason as the prefetch flags above (written/read across the loop and render tasks).
-  //   panelGrayPending -- the render task sets it after a deferred BW-only panel render; the loop
-  //     task watches it and, once the dwell elapses, requests the upgrade. Single writer (render
-  //     task): cleared at every renderPanelZoom() entry, set true only after a successful deferred
-  //     BW render, so a fallback (e.g. missing crop) leaves nothing pending.
-  //   panelGrayUpgrade -- the loop task sets it (dwell elapsed) to ask renderPanelZoom() to build
-  //     the gray planes over the on-screen BW image; the render task consumes it via exchange().
-  //     Panel navigation clears it so an already-elapsed dwell can't upgrade a panel the reader
-  //     has just stepped away from.
+  //   panelGrayPending -- set to true ONLY by the render task, after a successful deferred BW-only
+  //     panel render (so a fallback such as a missing crop leaves nothing pending). Cleared to false
+  //     by both tasks: the render task clears it at every renderPanelZoom() entry, and the loop task
+  //     clears it when it hands the panel off for its upgrade (once per dwell) and when panel
+  //     navigation/fresh entry cancels a pending upgrade. Only one writer ever sets true, and false
+  //     is idempotent, so the multiple clearers don't race destructively.
+  //   panelGrayUpgrade -- set to true by the loop task (dwell elapsed) to ask renderPanelZoom() to
+  //     build the gray planes over the on-screen BW image; the render task consumes it via
+  //     exchange(). Panel navigation clears it so an already-elapsed dwell can't upgrade a panel the
+  //     reader has just stepped away from.
   std::atomic<bool> panelGrayPending{false};
   std::atomic<bool> panelGrayUpgrade{false};
 

@@ -341,8 +341,11 @@ void MangaReaderActivity::loop() {
     } else if (viewMode == ViewMode::PanelZoom && (millis() - panelRenderedMs) > 400) {
       if (panelGrayPending) {
         // Dwelled on a panel still showing the fast BW-only image: upgrade it to full 4-level gray.
-        // Takes priority over the speculative next-panel prefetch below -- this is the panel the
-        // reader is actually looking at. (400ms dwell shared with the prefetch gate; tunable.)
+        // Clear panelGrayPending as we hand off so this issues requestUpdate() exactly once per
+        // dwell instead of every idle tick until the render task starts the upgrade. Takes priority
+        // over the speculative next-panel prefetch below -- this is the panel the reader is actually
+        // looking at. (400ms dwell shared with the prefetch gate; tunable.)
+        panelGrayPending = false;
         panelGrayUpgrade = true;
         requestUpdate();
       } else if (!nextPanelPrefetched) {
@@ -781,27 +784,32 @@ void MangaReaderActivity::renderPanelZoom() {
     // wave entirely. Store the BW framebuffer, rebuild the LSB/MSB planes from the now-warm pixel
     // cache, and show the combined 4-level gray in one wave. Identical plane-build to the old
     // non-deferred path, minus that first BW wave.
-    renderer.storeBwBuffer();
+    if (!renderer.storeBwBuffer()) {
+      // OOM saving the BW framebuffer. Unlike the non-deferred path we can degrade cleanly here: the
+      // fast BW panel is already on screen, so just skip the gray upgrade (no clearScreen, no plane
+      // build, no restoreBwBuffer of chunks that were never stored) and leave the BW image up.
+      LOG_ERR("MRA", "storeBwBuffer OOM; keeping on-screen BW panel, skipping gray upgrade");
+    } else {
+      // Read back the pixels the BW pass cached instead of re-decoding the JPEG for each grayscale
+      // plane -- same approach as renderFullPage(), see the comment there for the full rationale.
+      renderer.clearScreen(0x00);
+      renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+      if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+        decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+      }
+      renderer.copyGrayscaleLsbBuffers();
 
-    // Read back the pixels the BW pass cached instead of re-decoding the JPEG for each grayscale
-    // plane -- same approach as renderFullPage(), see the comment there for the full rationale.
-    renderer.clearScreen(0x00);
-    renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
-      decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+      renderer.clearScreen(0x00);
+      renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+      if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+        decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+      }
+      renderer.copyGrayscaleMsbBuffers();
+
+      renderer.displayGrayBuffer();
+      renderer.setRenderMode(GfxRenderer::BW);
+      renderer.restoreBwBuffer();
     }
-    renderer.copyGrayscaleLsbBuffers();
-
-    renderer.clearScreen(0x00);
-    renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
-      decoder->decodeToFramebuffer(panelImgPath, renderer, config);
-    }
-    renderer.copyGrayscaleMsbBuffers();
-
-    renderer.displayGrayBuffer();
-    renderer.setRenderMode(GfxRenderer::BW);
-    renderer.restoreBwBuffer();
   }
 
   if (rotatePanel) {
