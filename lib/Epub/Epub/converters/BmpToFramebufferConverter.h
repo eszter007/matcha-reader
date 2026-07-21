@@ -2,7 +2,9 @@
 
 #include "ImageToFramebufferDecoder.h"
 
-// Renders Windows BMP images to the framebuffer for the manga reader (full-page BMP pages).
+// Renders Windows BMP images to the framebuffer. Registered in ImageDecoderFactory, so it serves
+// any BMP asset -- manga full-page BMP pages as well as per-panel BMP crops (both produced by the
+// converter's --mono mode), not just full pages.
 // Delegates the actual pixel work to the shared Bitmap parser + GfxRenderer::drawBitmap, which
 // already handles every BMP bit depth, aspect-fit scaling, and the current render mode
 // (BW / GRAYSCALE_LSB / GRAYSCALE_MSB), and auto-selects the optimized 1-bit path for monochrome

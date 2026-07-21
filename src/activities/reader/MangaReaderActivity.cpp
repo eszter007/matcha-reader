@@ -466,8 +466,14 @@ void MangaReaderActivity::renderFullPage() {
   const int destWidth = g.destWidth, destHeight = g.destHeight;
   const int screenW = g.screenW, screenH = g.screenH;
 
-  // Cache path for decoded pixel data (avoids re-decoding JPG on grayscale passes)
-  std::string cachePath = book->getCachePath() + "/page_" + std::to_string(currentPage) + ".2bp";
+  // Only JPEG/PNG pages stream a .2bp pixel cache; the BMP converter renders straight to the
+  // framebuffer and never writes one, so for a BMP page the cache would be a guaranteed miss on
+  // every plane -- an SD open attempt for nothing. Skip it entirely for BMP (mirrors the
+  // panelCropIsBmp guard in renderPanelZoom). Note the 1-bit BMP fast path below returns before
+  // any cache use anyway; this covers the >=8-bit BMP page case.
+  const bool useCache = !FsHelpers::hasBmpExtension(imgPath);
+  const std::string cachePath =
+      useCache ? book->getCachePath() + "/page_" + std::to_string(currentPage) + ".2bp" : std::string();
 
   RenderConfig config;
   config.x = x;
@@ -509,7 +515,7 @@ void MangaReaderActivity::renderFullPage() {
   // (BW + LSB + MSB), each a full JPEG parse/IDCT/scale -- the dominant cost of "turning pages in
   // manga is slow". ImageBlock (regular EPUB images) already had this same cache-read
   // optimization; manga bypassed ImageBlock entirely and never got it.
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
 
@@ -530,14 +536,14 @@ void MangaReaderActivity::renderFullPage() {
   // real decode if the cache write failed (e.g. under memory pressure) or wasn't enabled.
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
   renderer.copyGrayscaleLsbBuffers();
 
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
   renderer.copyGrayscaleMsbBuffers();
