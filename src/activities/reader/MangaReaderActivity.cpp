@@ -232,6 +232,15 @@ void MangaReaderActivity::prevPage() {
 
 namespace {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
+
+// Idle-dwell gates (ms since the last render) before speculative pixel-cache prefetch. The
+// next-page / next-panel warms wait the full dwell so rapid flipping doesn't queue a blocking
+// decode between presses. The first panel of a paneled page uses a shorter dwell and is warmed
+// *first* (ahead of the next-page cache): zooming in is the likely next action there, and its cold
+// JPEG decode is the slowest step of the full-page -> panel transition, so getting it cached even
+// after a brief pause is what makes that transition feel instant.
+constexpr unsigned long PREFETCH_DWELL_MS = 400;
+constexpr unsigned long FIRST_PANEL_PREFETCH_DWELL_MS = 150;
 }  // namespace
 
 void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
@@ -327,24 +336,25 @@ void MangaReaderActivity::loop() {
 
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
-    // Idle tick: after a short dwell, warm the pixel cache the user is most likely to need
-    // next, so that render hits the cache instead of running a fresh JPEG decode. On a full
-    // page that's the NEXT page first, then (when panel-zoom is in use) this page's FIRST
-    // panel; inside panel-zoom it's the NEXT panel. The dwell gate keeps rapid back-to-back
-    // presses from queueing a blocking decode between them.
-    if (viewMode == ViewMode::FullPage && (millis() - fullPageRenderedMs) > 400) {
-      if (!nextPagePrefetched) {
-        prefetchNextPageCache();
-      } else if (!firstPanelPrefetched) {
+    // Idle tick: after a dwell, warm the pixel cache the user is most likely to need next so the
+    // render hits it instead of a fresh JPEG decode. Dwell gates and ordering rationale live with
+    // the PREFETCH_DWELL_MS / FIRST_PANEL_PREFETCH_DWELL_MS constants above. In short: on a paneled
+    // full page warm the first panel first (shorter dwell), then the next page; pages without crops
+    // go straight to the next page; inside panel-zoom warm the next panel.
+    if (viewMode == ViewMode::FullPage) {
+      const unsigned long dwell = millis() - fullPageRenderedMs;
+      if (pageHasPanelCrops && !firstPanelPrefetched && dwell > FIRST_PANEL_PREFETCH_DWELL_MS) {
         prefetchPanelCache(0);
+      } else if (!nextPagePrefetched && dwell > PREFETCH_DWELL_MS) {
+        prefetchNextPageCache();
       }
-    } else if (viewMode == ViewMode::PanelZoom && (millis() - panelRenderedMs) > 400) {
+    } else if (viewMode == ViewMode::PanelZoom && (millis() - panelRenderedMs) > PREFETCH_DWELL_MS) {
       if (panelGrayPending) {
         // Dwelled on a panel still showing the fast BW-only image: upgrade it to full 4-level gray.
         // Clear panelGrayPending as we hand off so this issues requestUpdate() exactly once per
         // dwell instead of every idle tick until the render task starts the upgrade. Takes priority
         // over the speculative next-panel prefetch below -- this is the panel the reader is actually
-        // looking at. (400ms dwell shared with the prefetch gate; tunable.)
+        // looking at. (Shares the PREFETCH_DWELL_MS gate; tunable.)
         panelGrayPending = false;
         panelGrayUpgrade = true;
         requestUpdate();
