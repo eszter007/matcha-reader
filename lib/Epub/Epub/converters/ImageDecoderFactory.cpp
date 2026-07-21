@@ -2,6 +2,7 @@
 
 #include <Logging.h>
 
+#include <cctype>
 #include <memory>
 #include <new>
 #include <string>
@@ -21,7 +22,7 @@ std::string lowerExtension(const std::string& imagePath) {
   const size_t dotPos = imagePath.rfind('.');
   if (dotPos == std::string::npos) return "";
   std::string ext = imagePath.substr(dotPos);
-  for (auto& c : ext) c = static_cast<char>(tolower(c));
+  for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return ext;
 }
 }  // namespace
