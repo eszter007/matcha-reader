@@ -1054,6 +1054,15 @@ def main():
     )
     parser.add_argument("--title", help="Book title written to meta.bin (overrides value auto-detected from source)")
     parser.add_argument("--author", help="Book author written to meta.bin (overrides value auto-detected from source)")
+    parser.add_argument(
+        "--mono",
+        action="store_true",
+        help="Write pages and panel crops as 1-bit (black/white) Floyd-Steinberg-dithered BMP instead of JPEG. "
+             "The device renders 1-bit BMP with a single fast black-and-white refresh (no 4-level gray pass), so "
+             "pages and panels paint noticeably faster. Best for pure line-art manga; screentone gradients become "
+             "dither patterns. Pairs naturally with --no-ocr: when OCR is enabled the (dithered) panel crop is what "
+             "gets sent to Gemini, so text recognition on toned pages is less accurate than from a JPEG crop.",
+    )
     args = parser.parse_args()
 
     api_key = None
@@ -1116,13 +1125,20 @@ def main():
             img = Image.open(src_path)
             img_w, img_h = img.size
 
-            # Copy page to a canonical, trivially-sortable filename.
-            ext = Path(src_path).suffix.lower()
-            if ext not in (".jpg", ".jpeg", ".png"):
-                ext = ".jpg"
-                img.convert("RGB").save(os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92)
+            # Write the page to a canonical, trivially-sortable filename.
+            if args.mono:
+                # 1-bit Floyd-Steinberg-dithered BMP (convert("1") defaults to FS dithering). The
+                # device renders these BW-only, in a single fast refresh.
+                img.convert("L").convert("1").save(os.path.join(args.output_dir, f"page_{page_idx:04d}.bmp"), "BMP")
             else:
-                shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
+                ext = Path(src_path).suffix.lower()
+                if ext not in (".jpg", ".jpeg", ".png"):
+                    ext = ".jpg"
+                    img.convert("RGB").save(
+                        os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
+                    )
+                else:
+                    shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
             boxes = detect_panels(img)
             boxes = sort_panels_manga_order(boxes)
@@ -1146,8 +1162,12 @@ def main():
                 panel_path = None
                 if not is_full_page_panel(box, img_w, img_h):
                     cropped = img.crop((mx1, my1, mx2, my2))
-                    panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.jpg")
-                    cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
+                    if args.mono:
+                        panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.bmp")
+                        cropped.convert("L").convert("1").save(panel_path, "BMP")
+                    else:
+                        panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.jpg")
+                        cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
                 panel_paths.append(panel_path)
                 panel_rects.append((mx1, my1, mx2, my2))
 

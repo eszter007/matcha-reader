@@ -98,9 +98,15 @@ class MangaReaderActivity final : public Activity {
   bool pageHasPanelCrops = false;
   // True when the current full-page image is a 1-bit monochrome BMP: it renders with a single BW
   // e-ink pass (no 4-level gray refresh), so renderFullPage skips the grayscale planes entirely.
-  // Computed once per page in loadCurrentPagePanels(). Panel crops are always JPEG, so panel-zoom
-  // is unaffected. Read on the render task, written under RenderLock (see panelDims note below).
+  // Computed once per page in loadCurrentPagePanels(). Read on the render task, written under
+  // RenderLock (see panelDims note below).
   bool currentPageBwOnly = false;
+  // Panel crop format for this book (uniform per book): the converter writes p<page>_<panel>.jpg
+  // normally, or .bmp with --mono. panelCropPath() picks the extension from this.
+  bool panelCropIsBmp = false;
+  // True when this page's panel crops are 1-bit monochrome BMP -> renderPanelZoom takes the same
+  // single-BW-wave fast path as a mono full page. Detected once per page in loadCurrentPagePanels.
+  bool panelsBwOnly = false;
   struct PanelCropDims {
     // Sentinels: 0 = not probed yet (probe on next need); -1 = crop known missing/invalid
     // (never re-probe -- render falls back to full page without touching the SD).
@@ -126,7 +132,8 @@ class MangaReaderActivity final : public Activity {
   };
   PanelGeom applyPanelGeometry(int imgWidth, int imgHeight);
 
-  std::string panelCropPath(int panelIdx) const;
+  std::string panelCropPath(int panelIdx) const;                      // uses panelCropIsBmp for the extension
+  std::string panelCropPathExt(int panelIdx, const char* ext) const;  // explicit extension (format detection)
   void prefetchPanelCache(int panelIdx);
 
   void loadCurrentPagePanels();
