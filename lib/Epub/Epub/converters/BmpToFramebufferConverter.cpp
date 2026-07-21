@@ -41,8 +41,11 @@ bool BmpToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   // memcpys instead of per-row SD transactions (harmless no-op / row-wise fallback for large
   // images). Must precede the first row read.
   bmp.preload();
-  // drawBitmap scales to fit within maxWidth x maxHeight (never upscales), draws at config.x/y,
-  // honours the current render mode, and routes 1-bit BMPs through drawBitmap1Bit automatically.
-  renderer.drawBitmap(bmp, config.x, config.y, config.maxWidth, config.maxHeight);
+  // drawBitmap fits within maxWidth x maxHeight, draws at config.x/y, honours the current render
+  // mode, and routes 1-bit BMPs through drawBitmap1Bit automatically. useExactDimensions (manga
+  // panel zoom) opts into upscaling so a mono crop smaller than the target box fills it instead of
+  // rendering at 1:1; without it the fit stays shrink-only (full pages, which never upscale).
+  renderer.drawBitmap(bmp, config.x, config.y, config.maxWidth, config.maxHeight, 0.0f, 0.0f,
+                      config.useExactDimensions);
   return true;
 }

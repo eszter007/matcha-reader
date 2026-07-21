@@ -1081,11 +1081,11 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
 }
 
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
-                             const float cropX, const float cropY) const {
+                             const float cropX, const float cropY, const bool allowUpscale) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
   // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
   if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
-    drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight);
+    drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight, allowUpscale);
     return;
   }
 
@@ -1198,17 +1198,31 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 }
 
 void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
-                                 const int maxHeight) const {
+                                 const int maxHeight, const bool allowUpscale) const {
+  const int srcW = bitmap.getWidth();
+  const int srcH = bitmap.getHeight();
+  if (srcW <= 0 || srcH <= 0) return;
+
+  // Fit within the target box preserving aspect. Shrink-to-fit is unconditional (covers, sleep
+  // screens); growing past 1:1 happens only when the caller opts in (manga panel zoom passes
+  // allowUpscale so a small mono crop fills the screen). Without the opt-in, scale is clamped to
+  // <= 1.0f exactly as before, so every existing caller is byte-for-byte unchanged.
   float scale = 1.0f;
-  bool isScaled = false;
-  if (maxWidth > 0 && bitmap.getWidth() > maxWidth) {
-    scale = static_cast<float>(maxWidth) / static_cast<float>(bitmap.getWidth());
-    isScaled = true;
+  bool hasBounds = false;
+  if (maxWidth > 0) {
+    scale = static_cast<float>(maxWidth) / static_cast<float>(srcW);
+    hasBounds = true;
   }
-  if (maxHeight > 0 && bitmap.getHeight() > maxHeight) {
-    scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight()));
-    isScaled = true;
+  if (maxHeight > 0) {
+    const float heightScale = static_cast<float>(maxHeight) / static_cast<float>(srcH);
+    scale = hasBounds ? std::min(scale, heightScale) : heightScale;
+    hasBounds = true;
   }
+  if (!hasBounds) scale = 1.0f;
+  if (scale > 1.0f && !allowUpscale) scale = 1.0f;
+
+  const bool upscale = scale > 1.0f;
+  const bool isScaled = scale != 1.0f;
 
   // Same fixed-point + preload treatment as drawBitmap() -- no FPU, so per-pixel float math
   // and per-row SD reads dominated this path too.
@@ -1216,7 +1230,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
   bitmap.preload();
 
   // For 1-bit BMP, output is still 2-bit packed (for consistency with readNextRow)
-  const int outputRowSize = (bitmap.getWidth() + 3) / 4;
+  const int outputRowSize = (srcW + 3) / 4;
   auto* outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
   auto* rowBytes = static_cast<uint8_t*>(malloc(bitmap.getRowBytes()));
 
@@ -1227,7 +1241,10 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     return;
   }
 
-  for (int bmpY = 0; bmpY < bitmap.getHeight(); bmpY++) {
+  const int screenW = getScreenWidth();
+  const int screenH = getScreenHeight();
+
+  for (int bmpY = 0; bmpY < srcH; bmpY++) {
     // Read rows sequentially using readNextRow
     if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
       LOG_ERR("GFX", "Failed to read row %d from 1-bit bitmap", bmpY);
@@ -1237,18 +1254,48 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     }
 
     // Calculate screen Y based on whether BMP is top-down or bottom-up
-    const int bmpYOffset = bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY;
+    const int bmpYOffset = bitmap.isTopDown() ? bmpY : srcH - 1 - bmpY;
+
+    if (upscale) {
+      // Enlarging: nearest-neighbour leaves gaps, so each source pixel paints the whole
+      // destination span it maps to. Spans are computed from adjacent scaled boundaries, so they
+      // tile the output exactly -- neighbouring pixels neither overlap nor leave holes. Only black
+      // is painted; white source pixels leave the (pre-cleared) background, so no darkest-wins
+      // merge is needed at this scale.
+      int screenY0 = y + ((bmpYOffset * scaleFP) >> 16);
+      int screenY1 = y + (((bmpYOffset + 1) * scaleFP) >> 16);
+      if (screenY0 < 0) screenY0 = 0;
+      if (screenY1 > screenH) screenY1 = screenH;
+      if (screenY1 <= screenY0) continue;
+
+      for (int bmpX = 0; bmpX < srcW; bmpX++) {
+        int screenX0 = x + ((bmpX * scaleFP) >> 16);
+        if (screenX0 >= screenW) break;  // spans only advance rightward
+        const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+        if (val >= 3) continue;  // white -> leave background
+        int screenX1 = x + (((bmpX + 1) * scaleFP) >> 16);
+        if (screenX0 < 0) screenX0 = 0;
+        if (screenX1 > screenW) screenX1 = screenW;
+        for (int sy = screenY0; sy < screenY1; sy++) {
+          for (int sx = screenX0; sx < screenX1; sx++) {
+            drawPixel(sx, sy, true);
+          }
+        }
+      }
+      continue;
+    }
+
     int screenY = y + (isScaled ? ((bmpYOffset * scaleFP) >> 16) : bmpYOffset);
-    if (screenY >= getScreenHeight()) {
+    if (screenY >= screenH) {
       continue;  // Continue reading to keep row counter in sync
     }
     if (screenY < 0) {
       continue;
     }
 
-    for (int bmpX = 0; bmpX < bitmap.getWidth(); bmpX++) {
+    for (int bmpX = 0; bmpX < srcW; bmpX++) {
       int screenX = x + (isScaled ? ((bmpX * scaleFP) >> 16) : bmpX);
-      if (screenX >= getScreenWidth()) {
+      if (screenX >= screenW) {
         break;
       }
       if (screenX < 0) {
