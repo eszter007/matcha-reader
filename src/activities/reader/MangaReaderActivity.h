@@ -89,6 +89,11 @@ class MangaReaderActivity final : public Activity {
   // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
   // every entry. Both answers are static for a given page.
   bool pageHasPanelCrops = false;
+  // True when the current full-page image is a 1-bit monochrome BMP: it renders with a single BW
+  // e-ink pass (no 4-level gray refresh), so renderFullPage skips the grayscale planes entirely.
+  // Computed once per page in loadCurrentPagePanels(). Panel crops are always JPEG, so panel-zoom
+  // is unaffected. Read on the render task, written under RenderLock (see panelDims note below).
+  bool currentPageBwOnly = false;
   struct PanelCropDims {
     // Sentinels: 0 = not probed yet (probe on next need); -1 = crop known missing/invalid
     // (never re-probe -- render falls back to full page without touching the SD).

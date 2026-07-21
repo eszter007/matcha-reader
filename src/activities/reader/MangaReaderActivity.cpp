@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <DictIndex.h>
+#include <Epub/converters/BmpToFramebufferConverter.h>
 #include <Epub/converters/ImageDecoderFactory.h>
 #include <Epub/converters/ImageToFramebufferDecoder.h>
 #include <Epub/converters/PixelCache.h>
@@ -116,6 +117,16 @@ void MangaReaderActivity::loadCurrentPagePanels() {
   if (!loadedPanels.empty() && book) {
     hasCrops = Storage.exists(panelCropPath(0).c_str());
   }
+  // A 1-bit BMP full page renders BW-only (single wave, no gray planes); probe it once here
+  // (cheap header read) so renderFullPage can pick the fast path. Only .bmp pages can be
+  // monochrome -- jpg/png always go the grayscale route.
+  bool bwOnly = false;
+  if (book) {
+    const std::string pageImg = book->getPageImagePath(currentPage);
+    if (FsHelpers::hasBmpExtension(pageImg)) {
+      bwOnly = BmpToFramebufferConverter::isMonochromeStatic(pageImg);
+    }
+  }
   // Arm the first-panel prefetch for this page only when panel-zoom has been used in this book
   // -- full-page-only reading must not pay speculative decodes and cache writes.
   const bool armFirst = panelPrefetchArmed && hasCrops;
@@ -124,6 +135,7 @@ void MangaReaderActivity::loadCurrentPagePanels() {
     panels = std::move(loadedPanels);
     panelsLoaded = loaded;
     pageHasPanelCrops = hasCrops;
+    currentPageBwOnly = bwOnly;
     panelDims.assign(panels.size(), {});
     firstPanelPrefetched = !armFirst;
     nextPanelPrefetched = true;
@@ -449,6 +461,29 @@ void MangaReaderActivity::renderFullPage() {
   config.useDithering = true;
   config.cachePath = cachePath;
 
+  // 1-bit BMP fast path: pure black/white content needs no 4-level gray refresh, so render a
+  // single BW pass and one FAST wave -- no grayscale planes, no displayGrayBuffer, no pixel
+  // cache. Roughly halves the page render for line-art manga (the whole point of BMP support).
+  if (currentPageBwOnly) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    decoder->decodeToFramebuffer(imgPath, renderer, config);
+
+    char bwStatus[32];
+    snprintf(bwStatus, sizeof(bwStatus), "%u/%u", currentPage + 1, book->getPageCount());
+    const int bwStatusW = renderer.getTextWidth(SMALL_FONT_ID, bwStatus);
+    const int bwStatusX = screenW - bwStatusW - 4;
+    const int bwStatusY = screenH - renderer.getLineHeight(SMALL_FONT_ID) - 2;
+    renderer.fillRect(bwStatusX - 2, bwStatusY - 1, bwStatusW + 4, renderer.getLineHeight(SMALL_FONT_ID) + 2, false);
+    renderer.drawText(SMALL_FONT_ID, bwStatusX, bwStatusY, bwStatus, true);
+
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    if (rotatePage) renderer.setOrientation(savedOrientation);
+    // Arm the next-page prefetch like the grayscale path (prefetch itself skips BMP -- see there).
+    nextPagePrefetched = false;
+    fullPageRenderedMs = millis();
+    return;
+  }
+
   // BW pass — a page visited before (or warmed by the idle prefetch) has its decoded pixels
   // cached on SD; render those directly and skip the JPEG decode entirely. Otherwise decode to
   // framebuffer AND stream the pixel cache to disk (config.cachePath) so the two grayscale passes
@@ -510,6 +545,14 @@ void MangaReaderActivity::prefetchNextPageCache() {
   }
   const uint32_t upcomingPage = currentPage + 1;
   if (upcomingPage >= book->getPageCount()) {
+    nextPagePrefetched = true;
+    return;
+  }
+  // BMP pages don't stream a .2bp cache (the BMP converter renders straight to the framebuffer),
+  // so there's nothing to warm -- and probing Storage.exists() below would never become true,
+  // re-running this every idle tick. BMP is uncompressed, so the page-turn decode is cheap
+  // anyway. Skip prefetch for a BMP next page.
+  if (FsHelpers::hasBmpExtension(book->getPageImagePath(upcomingPage))) {
     nextPagePrefetched = true;
     return;
   }

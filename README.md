@@ -81,7 +81,7 @@ Non-Japanese-language books that contain occasional CJK characters (e.g. a stray
 
 ### Manga Panel Reader
 
-Read manga with real panel detection, dictionary lookup, and pre-extracted translations. A conversion tool (`tools/manga_convert/`) detects actual panel rectangles with a YOLO model trained on Manga109, asks Gemini what text appears in each panel (plus an English translation), and packs everything into a compact binary format the device reads natively. Page images (JPG/PNG) are used directly — no BMP conversion needed.
+Read manga with real panel detection, dictionary lookup, and pre-extracted translations. A conversion tool (`tools/manga_convert/`) detects actual panel rectangles with a YOLO model trained on Manga109, asks Gemini what text appears in each panel (plus an English translation), and packs everything into a compact binary format the device reads natively. Page images are used directly — JPG, PNG, and BMP are all rendered without any pre-conversion. A **1-bit (black-and-white) BMP** page renders especially fast: pure line art needs no 4-level gray refresh, so the page paints in a single black-and-white pass instead of the usual gray sequence.
 
 - **Full-page view** — Displays the manga page scaled to screen with panel highlight rectangles. When the reading orientation is landscape, a page whose aspect doesn't match the screen rotates to fill it edge-to-edge instead of shrinking into a small centered box (same behavior panel-zoom already had).
 - **Panel-by-panel zoom** — Navigate panels in reading order with page turn buttons. Each panel is scaled to fill the screen, rotating to landscape when that fills more of the screen than portrait would.
@@ -376,7 +376,7 @@ The Gemini API key is never embedded in the script — pass it via `--gemini-key
 
 ```
 /manga/MangaTitle/
-  page_0000.jpg     # Page images (JPG/PNG, used directly — no BMP conversion)
+  page_0000.jpg     # Page images (JPG/PNG/BMP, all rendered directly; 1-bit BMP is fastest)
   page_0001.jpg
   ...
   p0_0.jpg          # Cropped panel images for panel-zoom view (p<page>_<panel>.jpg)
