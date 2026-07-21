@@ -654,10 +654,14 @@ void MangaReaderActivity::prefetchNextPageCache() {
 
 void MangaReaderActivity::renderPanelZoom() {
   // Deferred-grayscale phase (see the panelGray* flags in the header). true means the BW image is
-  // already on screen from the initial entry and this pass only needs to build and show the gray
-  // planes; false is a fresh entry that renders BW and re-defers the gray wave. Consume the request
-  // up front. Clear panelGrayPending on every entry (single writer): the fresh-entry branch below
-  // re-arms it only on success, so any fallback path leaves nothing pending for loop() to upgrade.
+  // already displayed on the e-ink from the initial entry, so this pass skips the BW refresh wave
+  // and only adds the 4-level gray wave; false is a fresh entry that shows BW and re-defers the gray
+  // wave. Both phases still repopulate the BW *framebuffer* below (a cheap warm-cache read, not an
+  // e-ink wave): the upgrade needs it as the base for displayGrayBuffer, and rebuilding it keeps the
+  // stored snapshot correct independent of any transient overlay (e.g. a bookmark popup) drawn into
+  // the framebuffer after the fresh entry. Consume the request up front. Clear panelGrayPending on
+  // every entry: the fresh-entry branch below re-arms it only on success, so any fallback path
+  // leaves nothing pending for loop() to upgrade.
   const bool grayUpgrade = panelGrayUpgrade.exchange(false);
   panelGrayPending = false;
 
@@ -816,9 +820,14 @@ void MangaReaderActivity::renderPanelZoom() {
     renderer.setOrientation(savedOrientation);
   }
 
-  // Arm the idle prefetch for the panel the user steps to next (see loop()).
-  panelRenderedMs = millis();
-  nextPanelPrefetched = (currentPanel + 1 >= static_cast<int>(panels.size()));
+  // Arm the idle prefetch/upgrade dwell for the panel the user steps to next (see loop()) -- but
+  // only from a fresh render. Re-arming on the deferred gray upgrade would restart the 400ms window
+  // and needlessly delay the next-panel prefetch, which is gated on the same panelRenderedMs;
+  // leaving it lets prefetch start as soon as the upgrade finishes.
+  if (!grayUpgrade) {
+    panelRenderedMs = millis();
+    nextPanelPrefetched = (currentPanel + 1 >= static_cast<int>(panels.size()));
+  }
 }
 
 MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
