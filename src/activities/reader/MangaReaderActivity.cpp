@@ -100,23 +100,34 @@ void MangaReaderActivity::onExit() {
 }
 
 void MangaReaderActivity::loadCurrentPagePanels() {
-  panels.clear();
-  panelsLoaded = false;
+  // render() runs on the dedicated render task and reads `panels`/`panelDims` under RenderLock.
+  // Do the slow SD work (panel index load, crop probe) into locals WITHOUT the lock -- holding
+  // it across SD I/O would stall the render task -- then publish everything in one short locked
+  // swap so the render task never observes a half-cleared or reallocating vector.
+  std::vector<manga::Panel> loadedPanels;
+  bool loaded = false;
   if (book && currentPage < book->getPageCount()) {
-    panelsLoaded = book->loadPagePanels(currentPage, panels);
+    loaded = book->loadPagePanels(currentPage, loadedPanels);
   }
-  // Probe once per page what the input handler and panel renders need on every press:
-  // whether real crop files exist (full-page panels like covers have none), and a slot for
-  // each crop's dimensions (filled lazily by prefetch or first render).
-  pageHasPanelCrops = false;
-  panelDims.assign(panels.size(), {});
-  if (!panels.empty() && book) {
-    pageHasPanelCrops = Storage.exists(panelCropPath(0).c_str());
+  // Probe once per page what the input handler and panel renders need on every press: whether
+  // real crop files exist (full-page panels like covers have none). Per-panel dimension slots
+  // are filled lazily by prefetch or first render.
+  bool hasCrops = false;
+  if (!loadedPanels.empty() && book) {
+    hasCrops = Storage.exists(panelCropPath(0).c_str());
   }
   // Arm the first-panel prefetch for this page only when panel-zoom has been used in this book
   // -- full-page-only reading must not pay speculative decodes and cache writes.
-  firstPanelPrefetched = !(panelPrefetchArmed && pageHasPanelCrops);
-  nextPanelPrefetched = true;
+  const bool armFirst = panelPrefetchArmed && hasCrops;
+  {
+    RenderLock lock;  // callers are all loop/onEnter/result-handler context -- never already held
+    panels = std::move(loadedPanels);
+    panelsLoaded = loaded;
+    pageHasPanelCrops = hasCrops;
+    panelDims.assign(panels.size(), {});
+    firstPanelPrefetched = !armFirst;
+    nextPanelPrefetched = true;
+  }
   updateBookmarkFlag();
 }
 
@@ -730,8 +741,10 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
   const std::string cropPath = panelCropPath(panelIdx);
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cropPath);
   if (!decoder || !Storage.exists(cropPath.c_str())) {
-    // Full-page panel (cover/splash): no crop file, nothing to warm. Cache the miss so a
-    // later render entry falls back without re-probing the SD.
+    // Full-page panel (cover/splash): no crop file, nothing to warm. Cache the miss (under the
+    // lock -- render() reads panelDims on its own task) so a later render entry falls back
+    // without re-probing the SD.
+    RenderLock lock;
     panelDims[panelIdx] = {-1, -1};
     doneFlag = true;
     return;
@@ -746,15 +759,19 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
   // stall a queued render -- retry on a later idle tick instead.
   if (RenderLock::peek()) return;
 
+  // Probe the crop's header WITHOUT the lock (SD I/O must not stall the render task), then take
+  // the lock once and publish the dimension slot (missing/corrupt cached as -1, so render never
+  // re-probes) plus do the framebuffer decode under that same lock -- every panelDims write and
+  // every renderer touch is now render-task-safe.
   ImageDimensions dims = {0, 0};
-  if (!decoder->getDimensions(cropPath, dims) || dims.width <= 0 || dims.height <= 0) {
-    panelDims[panelIdx] = {-1, -1};  // corrupt header: don't re-probe on render entry either
+  const bool dimsOk = decoder->getDimensions(cropPath, dims) && dims.width > 0 && dims.height > 0;
+
+  RenderLock lock;
+  panelDims[panelIdx] = dimsOk ? PanelCropDims{dims.width, dims.height} : PanelCropDims{-1, -1};
+  if (!dimsOk) {
     doneFlag = true;
     return;
   }
-  panelDims[panelIdx] = {dims.width, dims.height};
-
-  RenderLock lock;
   if (!renderer.storeBwBuffer()) {
     doneFlag = true;
     return;

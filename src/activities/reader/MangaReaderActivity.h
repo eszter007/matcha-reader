@@ -94,6 +94,10 @@ class MangaReaderActivity final : public Activity {
     // (never re-probe -- render falls back to full page without touching the SD).
     int w = 0, h = 0;
   };
+  // render() (render task) reads `panels` and `panelDims` under RenderLock. Every writer on the
+  // loop task -- loadCurrentPagePanels() (whole-vector swap) and prefetchPanelCache() (per-slot)
+  // -- must take RenderLock around the write; renderPanelZoom() writes them while already
+  // holding the lock render() handed it. Never hold the lock across the SD load/probe itself.
   std::vector<PanelCropDims> panelDims;
 
   // Geometry of a zoomed panel on the (possibly temporarily rotated) screen. Shared by
