@@ -170,6 +170,11 @@ std::string MangaReaderActivity::panelCropPathExt(const int panelIdx, const char
 }
 
 void MangaReaderActivity::nextPanel() {
+  // Leaving the current panel: cancel any deferred gray upgrade queued/elapsed for it so a stale
+  // dwell can't run the gray pass against the panel we're stepping to before it has rendered BW.
+  panelGrayPending = false;
+  panelGrayUpgrade = false;
+
   if (panels.empty()) {
     nextPage();
     return;
@@ -188,6 +193,10 @@ void MangaReaderActivity::nextPanel() {
 }
 
 void MangaReaderActivity::prevPanel() {
+  // See nextPanel(): cancel a deferred gray upgrade queued for the panel we're leaving.
+  panelGrayPending = false;
+  panelGrayUpgrade = false;
+
   if (currentPanel > 0) {
     currentPanel--;
     requestUpdate();
@@ -329,8 +338,19 @@ void MangaReaderActivity::loop() {
       } else if (!firstPanelPrefetched) {
         prefetchPanelCache(0);
       }
-    } else if (viewMode == ViewMode::PanelZoom && !nextPanelPrefetched && (millis() - panelRenderedMs) > 400) {
-      prefetchPanelCache(currentPanel + 1);
+    } else if (viewMode == ViewMode::PanelZoom && (millis() - panelRenderedMs) > 400) {
+      if (panelGrayPending) {
+        // Dwelled on a panel still showing the fast BW-only image: upgrade it to full 4-level gray.
+        // Clear panelGrayPending as we hand off so this issues requestUpdate() exactly once per
+        // dwell instead of every idle tick until the render task starts the upgrade. Takes priority
+        // over the speculative next-panel prefetch below -- this is the panel the reader is actually
+        // looking at. (400ms dwell shared with the prefetch gate; tunable.)
+        panelGrayPending = false;
+        panelGrayUpgrade = true;
+        requestUpdate();
+      } else if (!nextPanelPrefetched) {
+        prefetchPanelCache(currentPanel + 1);
+      }
     }
     return;
   }
@@ -346,6 +366,11 @@ void MangaReaderActivity::loop() {
       // Probed once per page in loadCurrentPagePanels(); the old per-press
       // Storage.exists() here was an SD transaction inside the input path.
       if (pageHasPanelCrops) {
+        // Fresh panel-zoom entry: clear any deferred gray flags left over from a prior panel-zoom
+        // session (see nextPanel()), so the first panel renders BW then defers rather than being
+        // upgraded before its BW pass runs.
+        panelGrayPending = false;
+        panelGrayUpgrade = false;
         currentPanel = 0;
         viewMode = ViewMode::PanelZoom;
         requestUpdate();
@@ -628,6 +653,18 @@ void MangaReaderActivity::prefetchNextPageCache() {
 }
 
 void MangaReaderActivity::renderPanelZoom() {
+  // Deferred-grayscale phase (see the panelGray* flags in the header). true means the BW image is
+  // already displayed on the e-ink from the initial entry, so this pass skips the BW refresh wave
+  // and only adds the 4-level gray wave; false is a fresh entry that shows BW and re-defers the gray
+  // wave. Both phases still repopulate the BW *framebuffer* below (a cheap warm-cache read, not an
+  // e-ink wave): the upgrade needs it as the base for displayGrayBuffer, and rebuilding it keeps the
+  // stored snapshot correct independent of any transient overlay (e.g. a bookmark popup) drawn into
+  // the framebuffer after the fresh entry. Consume the request up front. Clear panelGrayPending on
+  // every entry: the fresh-entry branch below re-arms it only on success, so any fallback path
+  // leaves nothing pending for loop() to upgrade.
+  const bool grayUpgrade = panelGrayUpgrade.exchange(false);
+  panelGrayPending = false;
+
   renderer.clearScreen();
 
   if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) {
@@ -737,41 +774,60 @@ void MangaReaderActivity::renderPanelZoom() {
   }
 
   if (bwOnly) {
-    // Single black-and-white wave; no grayscale planes.
+    // Single black-and-white wave; no grayscale planes, nothing to defer.
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  } else if (!grayUpgrade) {
+    // Fresh entry: show the BW image with one FAST wave and defer the slower 4-level gray wave to a
+    // dwell (loop() requests it once the reader stops stepping). Rapid panel-to-panel navigation
+    // thus pays a single wave per panel instead of two. The BW pass above also streamed the .2bp
+    // cache (for JPEG crops), so the deferred upgrade reads those pixels back instead of re-decoding.
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    panelGrayPending = true;
   } else {
-    // Display with grayscale
-    renderer.storeBwBuffer();
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    // Deferred upgrade: the BW image is already on screen (initial entry showed it), so skip the BW
+    // wave entirely. Store the BW framebuffer, rebuild the LSB/MSB planes from the now-warm pixel
+    // cache, and show the combined 4-level gray in one wave. Identical plane-build to the old
+    // non-deferred path, minus that first BW wave.
+    if (!renderer.storeBwBuffer()) {
+      // OOM saving the BW framebuffer. Unlike the non-deferred path we can degrade cleanly here: the
+      // fast BW panel is already on screen, so just skip the gray upgrade (no clearScreen, no plane
+      // build, no restoreBwBuffer of chunks that were never stored) and leave the BW image up.
+      LOG_ERR("MRA", "storeBwBuffer OOM; keeping on-screen BW panel, skipping gray upgrade");
+    } else {
+      // Read back the pixels the BW pass cached instead of re-decoding the JPEG for each grayscale
+      // plane -- same approach as renderFullPage(), see the comment there for the full rationale.
+      renderer.clearScreen(0x00);
+      renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+      if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+        decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+      }
+      renderer.copyGrayscaleLsbBuffers();
 
-    // Read back the pixels the BW pass cached instead of re-decoding the JPEG for each grayscale
-    // plane -- same fix as renderFullPage(), see the comment there for the full rationale.
-    renderer.clearScreen(0x00);
-    renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
-      decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+      renderer.clearScreen(0x00);
+      renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+      if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+        decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+      }
+      renderer.copyGrayscaleMsbBuffers();
+
+      renderer.displayGrayBuffer();
+      renderer.setRenderMode(GfxRenderer::BW);
+      renderer.restoreBwBuffer();
     }
-    renderer.copyGrayscaleLsbBuffers();
-
-    renderer.clearScreen(0x00);
-    renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
-      decoder->decodeToFramebuffer(panelImgPath, renderer, config);
-    }
-    renderer.copyGrayscaleMsbBuffers();
-
-    renderer.displayGrayBuffer();
-    renderer.setRenderMode(GfxRenderer::BW);
-    renderer.restoreBwBuffer();
   }
 
   if (rotatePanel) {
     renderer.setOrientation(savedOrientation);
   }
 
-  // Arm the idle prefetch for the panel the user steps to next (see loop()).
-  panelRenderedMs = millis();
-  nextPanelPrefetched = (currentPanel + 1 >= static_cast<int>(panels.size()));
+  // Arm the idle prefetch/upgrade dwell for the panel the user steps to next (see loop()) -- but
+  // only from a fresh render. Re-arming on the deferred gray upgrade would restart the 400ms window
+  // and needlessly delay the next-panel prefetch, which is gated on the same panelRenderedMs;
+  // leaving it lets prefetch start as soon as the upgrade finishes.
+  if (!grayUpgrade) {
+    panelRenderedMs = millis();
+    nextPanelPrefetched = (currentPanel + 1 >= static_cast<int>(panels.size()));
+  }
 }
 
 MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
