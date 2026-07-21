@@ -785,7 +785,7 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
     // read. A missing/bad crop caches -1 as elsewhere.
     if (panelDims[panelIdx].w == 0) {
       const std::string warmCropPath = panelCropPath(panelIdx);
-      ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(warmCropPath);
+      const ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(warmCropPath);
       ImageDimensions warmDims = {0, 0};
       const bool warmOk = warmDecoder && warmDecoder->getDimensions(warmCropPath, warmDims) && warmDims.width > 0 &&
                           warmDims.height > 0;
