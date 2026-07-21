@@ -92,6 +92,22 @@ class MangaReaderActivity final : public Activity {
   std::atomic<bool> nextPanelPrefetched{true};   // per-panel; true until a panel render arms it
   std::atomic<unsigned long> panelRenderedMs{0};
 
+  // Deferred grayscale upgrade for panel-zoom. A fresh grayscale (JPEG / >=8-bit BMP) panel entry
+  // shows only the fast single BW wave; the slower 4-level gray wave is deferred until the reader
+  // dwells on the panel, so stepping panel->panel->panel pays one wave each instead of two. 1-bit
+  // (bwOnly) panels are already single-wave and never defer. Both flags are atomic for the same
+  // reason as the prefetch flags above (written/read across the loop and render tasks).
+  //   panelGrayPending -- the render task sets it after a deferred BW-only panel render; the loop
+  //     task watches it and, once the dwell elapses, requests the upgrade. Single writer (render
+  //     task): cleared at every renderPanelZoom() entry, set true only after a successful deferred
+  //     BW render, so a fallback (e.g. missing crop) leaves nothing pending.
+  //   panelGrayUpgrade -- the loop task sets it (dwell elapsed) to ask renderPanelZoom() to build
+  //     the gray planes over the on-screen BW image; the render task consumes it via exchange().
+  //     Panel navigation clears it so an already-elapsed dwell can't upgrade a panel the reader
+  //     has just stepped away from.
+  std::atomic<bool> panelGrayPending{false};
+  std::atomic<bool> panelGrayUpgrade{false};
+
   // Per-page facts cached off the hot paths: the input handler used to hit the SD (exists())
   // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
   // every entry. Both answers are static for a given page.
