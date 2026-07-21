@@ -3,6 +3,7 @@
 #include <Logging.h>
 
 #include <memory>
+#include <new>
 #include <string>
 
 #include "BmpToFramebufferConverter.h"
@@ -25,19 +26,22 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
     ext = "";
   }
 
+  // new (std::nothrow): bare new aborts the firmware on OOM under -fno-exceptions (see CLAUDE.md).
+  // A null decoder propagates through get() and every caller already handles a null decoder
+  // (renderFullPage/renderPanelZoom show a load error / fall back; prefetch skips).
   if (JpegToFramebufferConverter::supportsFormat(ext)) {
     if (!jpegDecoder) {
-      jpegDecoder.reset(new JpegToFramebufferConverter());
+      jpegDecoder.reset(new (std::nothrow) JpegToFramebufferConverter());
     }
     return jpegDecoder.get();
   } else if (PngToFramebufferConverter::supportsFormat(ext)) {
     if (!pngDecoder) {
-      pngDecoder.reset(new PngToFramebufferConverter());
+      pngDecoder.reset(new (std::nothrow) PngToFramebufferConverter());
     }
     return pngDecoder.get();
   } else if (BmpToFramebufferConverter::supportsFormat(ext)) {
     if (!bmpDecoder) {
-      bmpDecoder.reset(new BmpToFramebufferConverter());
+      bmpDecoder.reset(new (std::nothrow) BmpToFramebufferConverter());
     }
     return bmpDecoder.get();
   }
