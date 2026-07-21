@@ -147,7 +147,7 @@ std::string MangaReaderActivity::panelCropPath(const int panelIdx) const {
   char cropName[64];
   snprintf(cropName, sizeof(cropName), "p%u_%d.jpg", static_cast<unsigned>(currentPage), panelIdx);
   std::string path = book->getFolder();
-  if (path.back() != '/') path += '/';
+  if (path.empty() || path.back() != '/') path += '/';  // path.back() on an empty string is UB
   path += cropName;
   return path;
 }
@@ -778,6 +778,20 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
   const std::string cachePath =
       book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(panelIdx) + ".2bp";
   if (Storage.exists(cachePath.c_str())) {
+    // Pixel cache already warm (commonly a .2bp persisted from a prior session), but this
+    // session's panelDims slot is still unprobed -- so the eventual panel entry would parse the
+    // crop header on the render hot path even though the pixels are cached. Probe the header once
+    // here (idle, outside the lock) and publish the slot under the lock, so entry is a pure cache
+    // read. A missing/bad crop caches -1 as elsewhere.
+    if (panelDims[panelIdx].w == 0) {
+      const std::string warmCropPath = panelCropPath(panelIdx);
+      ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(warmCropPath);
+      ImageDimensions warmDims = {0, 0};
+      const bool warmOk = warmDecoder && warmDecoder->getDimensions(warmCropPath, warmDims) && warmDims.width > 0 &&
+                          warmDims.height > 0;
+      RenderLock lock;
+      panelDims[panelIdx] = warmOk ? PanelCropDims{warmDims.width, warmDims.height} : PanelCropDims{-1, -1};
+    }
     doneFlag = true;
     return;
   }
