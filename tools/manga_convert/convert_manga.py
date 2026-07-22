@@ -1033,6 +1033,53 @@ def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) ->
 # ── Main pipeline ─────────────────────────────────────────────────
 
 
+# Device screen sizes (portrait width x height) for --x3 / --x4 downscaling.
+DEVICE_TARGETS = {"x3": (528, 792), "x4": (480, 800)}
+
+
+def fit_to_device(img, target):
+    """Downscale img to fit the device screen box; never upscale, never change aspect.
+
+    The firmware rotates a page/panel whose aspect doesn't match the screen so it fills the
+    display (a landscape image on the portrait screen renders rotated), so landscape images are
+    fitted against the swapped box. The result keeps every pixel the device can actually show and
+    drops the ones it never could -- the ESP32-C3 then decodes far fewer pixels per page/panel.
+
+    Returns img unchanged when target is None (default: keep original resolution) or the image
+    already fits.
+    """
+    if target is None:
+        return img
+    from PIL import Image  # deferred like main()'s import, so --help works without Pillow
+
+    tw, th = target
+    w, h = img.size
+    if w > h:
+        tw, th = th, tw
+    scale = min(tw / w, th / h)
+    if scale >= 1.0:
+        return img
+    # Palette/1-bit/alpha modes resize poorly (palette indices get interpolated), so normalize
+    # first. Sources WITH transparency are composited onto WHITE -- that is exactly what the
+    # firmware's PNG renderer does with alpha (convertLineToGray blends toward 255), and what
+    # e-ink paper looks like -- whereas a bare convert("RGB") would composite onto black and turn
+    # transparent regions into black blobs. Grayscale sources stay grayscale.
+    has_alpha = img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        img = background
+    elif img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    # Clamp to the box as belt-and-braces. Mathematically round() cannot exceed it (the binding
+    # axis rounds onto the target within float precision; the other axis is strictly below), but
+    # an explicit clamp makes "never exceeds the screen box" obvious rather than subtle.
+    new_w = min(tw, max(1, round(w * scale)))
+    new_h = min(th, max(1, round(h * scale)))
+    return img.resize((new_w, new_h), Image.LANCZOS)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert manga (image folder / CBZ / EPUB) into CrossPoint Reader format.",
@@ -1063,7 +1110,23 @@ def main():
              "dither patterns. Pairs naturally with --no-ocr: when OCR is enabled the (dithered) panel crop is what "
              "gets sent to Gemini, so text recognition on toned pages is less accurate than from a JPEG crop.",
     )
+    size_group = parser.add_mutually_exclusive_group()
+    size_group.add_argument(
+        "--x3",
+        action="store_true",
+        help="Downscale pages and panel crops to fit the Xteink X3 screen (528x792; landscape images fit the "
+             "rotated box). The device never displays more pixels than its screen, so this shrinks files and "
+             "makes on-device decoding much faster with no visible quality loss. Never upscales. Applies to "
+             "every output format (JPEG/PNG/BMP). Default without --x3/--x4: keep original resolution.",
+    )
+    size_group.add_argument(
+        "--x4",
+        action="store_true",
+        help="Downscale pages and panel crops to fit the Xteink X4 screen (480x800). See --x3.",
+    )
     args = parser.parse_args()
+
+    device_target = DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4 else None
 
     api_key = None
     if not args.no_ocr:
@@ -1123,6 +1186,12 @@ def main():
             print(f"[{page_idx + 1}/{len(pages)}] {os.path.basename(src_path)}")
 
             img = Image.open(src_path)
+            # Downscale FIRST, before panel detection: every coordinate downstream (panel boxes,
+            # crop rects, OCR text boxes, the page dims in panels.idx) then lives in the resized
+            # space, matching the page/crop files actually written -- nothing needs rescaling.
+            orig_size = img.size
+            img = fit_to_device(img, device_target)
+            was_resized = img.size != orig_size
             img_w, img_h = img.size
 
             # Write the page to a canonical, trivially-sortable filename.
@@ -1137,6 +1206,15 @@ def main():
                     img.convert("RGB").save(
                         os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
                     )
+                elif was_resized:
+                    # Resized: the source file no longer matches -- re-encode in the source's own
+                    # format so the output keeps its extension (PNG stays PNG, JPEG stays JPEG).
+                    if ext == ".png":
+                        img.save(os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "PNG", optimize=True)
+                    else:
+                        img.convert("RGB").save(
+                            os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
+                        )
                 else:
                     shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
