@@ -71,6 +71,10 @@ void MangaReaderActivity::onEnter() {
   if (!book) return;
 
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  // Base screen dims for the prefetch worker's geometry math -- captured here, the one moment
+  // that is single-threaded by construction (no render has been requested yet). See the header.
+  baseScreenW = renderer.getScreenWidth();
+  baseScreenH = renderer.getScreenHeight();
   loadProgress();
   loadCachedBookmarks();
   updateBookmarkFlag();
@@ -723,9 +727,9 @@ void MangaReaderActivity::renderPanelZoom() {
   const std::string panelImgPath = panelCropPath(currentPanel);
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(panelImgPath);
   if (!decoder) {
-    // A null decoder is a transient condition (getDecoder allocates its decoder with nothrow and
-    // returns null on OOM), NOT a permanently missing/unsupported crop -- so DON'T poison the
-    // dims slot with -1 here. Fall back this frame; a later entry retries once memory recovers.
+    // Defensive: getDecoder returns null only for an unsupported extension, and crop paths are
+    // always .jpg/.bmp -- shouldn't happen. Fall back to the full page without poisoning the
+    // dims slot.
     renderFullPage();
     return;
   }
@@ -973,12 +977,10 @@ void MangaReaderActivity::postPrefetchJob(PrefetchJob&& job) {
   // No worker (task creation failed at onEnter): prefetching is disabled; mark nothing.
   if (!prefetchTaskHandle || prefetchBusy || prefetchResult.pending) return;
   prefetchJob = std::move(job);
-  // Screen dims for the pure geometry math, captured once here. A render running concurrently
-  // inside its locked section may have the orientation transiently rotated, which could yield
-  // swapped dims -- benign: the resulting cache fails renderFromCache's dimension check and the
-  // entry falls back to a normal decode (self-healing miss, never a corrupt render).
-  prefetchJob.screenW = renderer.getScreenWidth();
-  prefetchJob.screenH = renderer.getScreenHeight();
+  // Base dims captured once at onEnter -- no renderer read here, so posting can never race a
+  // render task's transient orientation change (see the header note on baseScreenW/baseScreenH).
+  prefetchJob.screenW = baseScreenW;
+  prefetchJob.screenH = baseScreenH;
   prefetchResult = PrefetchResult{};
   prefetchBusy = true;
   xTaskNotifyGive(prefetchTaskHandle);
@@ -1085,9 +1087,9 @@ void MangaReaderActivity::workerWarmPanel() {
     // skip an already-done probe would need RenderLock, which this task must never take -- so we
     // probe unconditionally: at worst one redundant header parse per panel per page, off-hot-path.)
     const ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(prefetchJob.imgPath);
-    // Null decoder = transient OOM (nothrow getDecoder), not a bad crop -- leave the slot
-    // unprobed so a later entry retries. Only a non-null decoder whose header parse fails is a
-    // genuinely bad crop worth caching as -1.
+    // Defensive: getDecoder returns null only for an unsupported extension (decoder instances
+    // are static, no allocation involved) -- leave the slot unprobed. Only a non-null decoder
+    // whose header parse fails is a genuinely bad crop worth caching as -1.
     if (warmDecoder) {
       ImageDimensions warmDims = {0, 0};
       const bool warmOk =
@@ -1108,8 +1110,8 @@ void MangaReaderActivity::workerWarmPanel() {
   }
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(prefetchJob.imgPath);  // non-const: decodes
   if (!decoder) {
-    // Transient (nothrow getDecoder returns null on OOM), not a missing/bad crop -- finish this
-    // job without poisoning the slot; the panel-entry render re-probes and retries.
+    // Defensive: getDecoder returns null only for an unsupported extension. Finish the job
+    // without poisoning the dims slot; the panel-entry render re-probes if ever hit.
     prefetchResult.completed = true;
     return;
   }

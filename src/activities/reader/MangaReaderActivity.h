@@ -159,7 +159,8 @@ class MangaReaderActivity final : public Activity {
   //    onExit() while HOLDING RenderLock, and onExit() joins this worker -- a worker blocked on
   //    that same lock would deadlock the join. Consequently the worker also never touches the
   //    renderer: decodes run cacheOnly (see RenderConfig), and geometry comes from the pure
-  //    computeFullPageGeom/computePanelGeom helpers with screen dims captured at post time.
+  //    computeFullPageGeom/computePanelGeom helpers with screen dims captured once at onEnter
+  //    (see baseScreenW/baseScreenH above -- no renderer reads off the render task at all).
   //  * Results are handed BACK to the loop task (applyPrefetchResult), which owns the existing
   //    locked-write discipline for panelDims and the done-flags. The worker never writes them.
   //  * The worker decodes into cachePath + ".tmp" and publishes by rename. A real render may
@@ -183,6 +184,14 @@ class MangaReaderActivity final : public Activity {
   std::atomic<bool> prefetchTaskExited{false};
   std::atomic<bool> prefetchBusy{false};
   std::atomic<uint32_t> pageGeneration{0};
+  // Base (unrotated) logical screen dims for the worker's pure geometry math. Captured ONCE in
+  // onEnter(), right after applyOrientation and before any task can render: the persistent
+  // orientation cannot change while this activity is open (settings live in another activity),
+  // and transient render-time rotations are always restored under RenderLock -- so reading the
+  // renderer per-post would be an unsynchronized read racing those transient writes, for a value
+  // that never actually changes. Plain ints, written once single-threaded, read-only afterwards.
+  int baseScreenW = 0;
+  int baseScreenH = 0;
 
   struct PrefetchJob {
     bool isPanel = false;
