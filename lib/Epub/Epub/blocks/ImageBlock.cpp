@@ -5,6 +5,9 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <cctype>
+#include <cstdlib>
+
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/PixelCache.h"
 
@@ -17,6 +20,84 @@ ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t heig
     : imagePath(imagePath), width(width), height(height) {}
 
 bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
+
+void ImageBlock::fitWithin(const int availW, const int availH, int& w, int& h) {
+  if (w > availW || h > availH) {
+    const float sx = static_cast<float>(availW) / w;
+    const float sy = static_cast<float>(availH) / h;
+    const float s = (sx < sy) ? sx : sy;
+    w = static_cast<int>(w * s + 0.5f);
+    h = static_cast<int>(h * s + 0.5f);
+  }
+  if (w < 1) w = 1;
+  if (h < 1) h = 1;
+}
+
+ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shouldCancel)(const void*),
+                                             const void* cancelCtx) const {
+  // BMP never streams a pixel cache (the BMP converter rejects cacheOnly) and renders fast
+  // without one -- nothing to warm.
+  const size_t dotPos = imagePath.rfind('.');
+  if (dotPos != std::string::npos) {
+    std::string ext = imagePath.substr(dotPos);
+    for (auto& c : ext) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    if (ext == ".bmp") return WarmResult::Failed;
+  }
+
+  // The dimensions the eventual render will ask renderFromCache for: the stored fit dims, or
+  // for a rotated image the same rotated-frame fit render() computes. The rotated render draws
+  // upright in the ADJACENT orientation, whose screen box is the current one with W/H swapped.
+  int dstW = width;
+  int dstH = height;
+  if (rotated) {
+    const int usableW = std::max(1, renderer.getScreenHeight() - 2 * reserveMargin_);
+    const int usableH = std::max(1, renderer.getScreenWidth() - 2 * reserveMargin_);
+    fitWithin(usableW, usableH, dstW, dstH);
+  }
+
+  const std::string cachePath = PixelCacheIO::pathFor(imagePath);
+  {
+    HalFile cacheFile;
+    if (Storage.openFileForRead("IMG", cachePath, cacheFile)) {
+      uint16_t cachedWidth = 0, cachedHeight = 0;
+      if (cacheFile.read(&cachedWidth, 2) == 2 && cacheFile.read(&cachedHeight, 2) == 2 &&
+          abs(cachedWidth - dstW) <= 1 && abs(cachedHeight - dstH) <= 1) {
+        return WarmResult::AlreadyWarm;  // same 1px tolerance as renderFromCache
+      }
+      // Unreadable header or dimension mismatch (layout changed): the decode below rewrites it.
+    }
+  }
+
+  if (!Storage.exists(imagePath.c_str())) {
+    LOG_ERR("IMG", "Warm: image file not found: %s", imagePath.c_str());
+    return WarmResult::Failed;
+  }
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
+  if (!decoder) {
+    return WarmResult::Failed;  // unsupported extension
+  }
+
+  RenderConfig config;
+  config.x = 0;
+  config.y = 0;
+  config.maxWidth = dstW;
+  config.maxHeight = dstH;
+  config.useGrayscale = true;
+  config.useDithering = true;
+  config.performanceMode = false;
+  config.useExactDimensions = true;
+  config.cacheOnly = true;  // stream only the .2bp cache; never touch the framebuffer
+  config.cachePath = cachePath;
+  config.shouldCancel = shouldCancel;
+  config.cancelCtx = cancelCtx;
+
+  LOG_DBG("IMG", "Warming image cache: %s (%dx%d)", cachePath.c_str(), dstW, dstH);
+  if (decoder->decodeToFramebuffer(imagePath, renderer, config)) {
+    return WarmResult::Warmed;
+  }
+  // The converter already dropped any partial cache file on both cancel and failure.
+  return (shouldCancel && shouldCancel(cancelCtx)) ? WarmResult::Cancelled : WarmResult::Failed;
+}
 
 void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // Rotated images (aspect-mismatched, on a dedicated page): switch the display
@@ -42,15 +123,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     // the rotated screen. usableW/usableH are already in the rotated frame.
     int fitW = width;
     int fitH = height;
-    if (fitW > usableW || fitH > usableH) {
-      const float sx = static_cast<float>(usableW) / fitW;
-      const float sy = static_cast<float>(usableH) / fitH;
-      const float s = (sx < sy) ? sx : sy;
-      fitW = static_cast<int>(fitW * s + 0.5f);
-      fitH = static_cast<int>(fitH * s + 0.5f);
-    }
-    if (fitW < 1) fitW = 1;
-    if (fitH < 1) fitH = 1;
+    fitWithin(usableW, usableH, fitW, fitH);
 
     const int16_t savedW = width;
     const int16_t savedH = height;

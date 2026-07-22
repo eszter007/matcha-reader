@@ -449,23 +449,29 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   return true;
 }
 
-std::unique_ptr<Page> Section::loadPageFromSectionFile() {
-  if (!Storage.openFileForRead("SCT", filePath, file)) {
+std::unique_ptr<Page> Section::loadPageFromSectionFile() { return loadPageFromSectionFile(currentPage); }
+
+std::unique_ptr<Page> Section::loadPageFromSectionFile(const int pageIndex) {
+  if (pageIndex < 0 || pageIndex >= pageCount) {
+    return nullptr;
+  }
+  // Local file handle, and pageIndex instead of the currentPage member: the image-warm path
+  // peeks the NEXT page from the render task while the loop task may be adjusting currentPage
+  // for a page turn -- this overload must not touch any shared state.
+  HalFile pageFile;
+  if (!Storage.openFileForRead("SCT", filePath, pageFile)) {
     return nullptr;
   }
 
-  file.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
+  pageFile.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
   uint32_t lutOffset;
-  serialization::readPod(file, lutOffset);
-  file.seek(lutOffset + sizeof(uint32_t) * currentPage);
+  serialization::readPod(pageFile, lutOffset);
+  pageFile.seek(lutOffset + sizeof(uint32_t) * pageIndex);
   uint32_t pagePos;
-  serialization::readPod(file, pagePos);
-  file.seek(pagePos);
+  serialization::readPod(pageFile, pagePos);
+  pageFile.seek(pagePos);
 
-  auto page = Page::deserialize(file);
-  // Explicit close() required: member variable persists beyond function scope
-  file.close();
-  return page;
+  return Page::deserialize(pageFile);
 }
 
 std::string Section::getTextFromSectionFile() {

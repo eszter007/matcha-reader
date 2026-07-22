@@ -47,6 +47,9 @@ class Section {
                          uint8_t imageRendering, bool focusReadingEnabled, bool honorBookInsets,
                          const std::function<void()>& popupFn = nullptr);
   std::unique_ptr<Page> loadPageFromSectionFile();
+  // Load an arbitrary page without touching currentPage or the member file handle -- safe to
+  // call from the render task's background image warm while the loop task owns currentPage.
+  std::unique_ptr<Page> loadPageFromSectionFile(int pageIndex);
   std::string getTextFromSectionFile();
 
   // Look up the page number for an anchor id from the section cache file.

@@ -4,6 +4,7 @@
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
 
+#include <atomic>
 #include <optional>
 
 #include "BookmarkEntry.h"
@@ -138,6 +139,24 @@ class EpubReaderActivity final : public Activity {
   static constexpr int MAX_FOOTNOTE_DEPTH = 3;
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
+
+  // --- Background image-cache warm (render-task tail) ---
+  // After a page is fully displayed, the render task warms the NEXT page's image .pxc pixel
+  // cache in place (ImageBlock::warmCache, cacheOnly decode) so landing on a full-page
+  // illustration is a cache read instead of a multi-second decode. No extra task: the warm
+  // runs at the tail of render(), still holding the RenderLock, and gets out of the way via
+  // cooperative cancellation with two signals polled per decode block:
+  //   1. imageWarmInputStamp_ -- bumped by the loop task on ANY button press (and in
+  //      pageTurn() for tilt/auto turns) BEFORE any handler can push/pop an activity or take
+  //      the RenderLock, so those blocking acquires only ever wait one decode block.
+  //   2. the render task's own pending task-notification value -- a queued render (page turn
+  //      already requested, requestUpdateAndWait from another task) cancels the warm even
+  //      when no new button press is involved.
+  std::atomic<uint32_t> imageWarmInputStamp_{0};
+  uint32_t imageWarmStampSnapshot_ = 0;  // render task only: stamp value at warm start
+  std::string imageWarmFailedPath_;      // render task only: give-up-once decode-failure target
+  void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
+  static bool imageWarmShouldCancel(const void* ctx);
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
