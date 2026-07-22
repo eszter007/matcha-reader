@@ -1,5 +1,6 @@
 #pragma once
 #include <HalStorage.h>
+#include <stdint.h>
 
 #include <memory>
 #include <string>
@@ -65,8 +66,16 @@ class ImageToFramebufferDecoder {
   virtual const char* getFormatName() const = 0;
 
  protected:
-  // Size validation helpers
-  static constexpr int MAX_SOURCE_PIXELS = 3145728;  // 2048 * 1536
+  // Sanity cap on source image AREA, aligned with the BMP path's existing per-axis caps in
+  // Bitmap.cpp (2048 x 3072). The old 2048x1536-equivalent cap rejected completely ordinary
+  // manga page scans (observed on-device: a 1500x2250 PNG page -> blank page, since the decode
+  // failed after the geometry was already committed). Area is NOT what bounds memory in these
+  // streamed decoders -- their working set scales with WIDTH, and each converter has its own
+  // real guard for that (PNG: the PNG_MAX_BUFFERED_PIXELS runtime check against the source
+  // pitch; JPEG: JPEGDEC chunks MCU rows internally and our callback allocates nothing
+  // width-dependent; the pixel-cache band is destination-sized, <= screen). This cap only
+  // bounds worst-case decode TIME for pathological inputs.
+  static constexpr int32_t MAX_SOURCE_PIXELS = 2048 * 3072;
 
   bool validateImageDimensions(int width, int height, const std::string& format);
   void warnUnsupportedFeature(const std::string& feature, const std::string& imagePath);
