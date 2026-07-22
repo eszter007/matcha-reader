@@ -991,15 +991,17 @@ void MangaReaderActivity::applyPrefetchResult() {
   // panelDims write keeps the established "loop task writes under RenderLock" discipline, and
   // the worker can stay lock-free (see the header: onExit() joins it while HOLDING RenderLock).
   if (prefetchBusy || !prefetchResult.pending) return;
-  // NEVER block the input task on the rendering mutex: if a render is in flight, taking the lock
-  // below would stall loop() -- and button polling with it -- for the render's whole duration
-  // (observed on-device: a 2.7s loop stall when a cancelled warm's dims were applied during a
-  // 3.3s panel decode). Defer instead; the result stays pending and a later tick applies it.
-  // postPrefetchJob refuses new jobs while a result is pending, so nothing is lost or clobbered.
-  if (prefetchResult.dimsValid && RenderLock::peek()) return;
   const bool genOk = (prefetchJob.gen == pageGeneration);
   if (prefetchResult.dimsValid && genOk) {
-    RenderLock lock;
+    // NEVER block the input task on the rendering mutex: a blocking acquire here stalls loop()
+    // -- and button polling with it -- for a render's whole duration (observed on-device: a
+    // 2.7s loop stall when a cancelled warm's dims were applied during a 3.3s panel decode).
+    // A peek()-then-lock guard still had a TOCTOU window (the render task can take the mutex
+    // between the check and the constructor), so use the non-blocking acquire: either we hold
+    // the lock right now, or the whole application defers to a later tick -- the result stays
+    // pending, and postPrefetchJob refuses new jobs while it is, so nothing is lost.
+    RenderLock lock{RenderLock::Try{}};
+    if (!lock.held()) return;
     if (prefetchJob.panelIdx >= 0 && prefetchJob.panelIdx < static_cast<int>(panelDims.size())) {
       panelDims[prefetchJob.panelIdx] = prefetchResult.dims;
     }
