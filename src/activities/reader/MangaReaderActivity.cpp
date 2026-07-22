@@ -1053,7 +1053,15 @@ void MangaReaderActivity::workerWarmNextPage() {
   if (decoder->decodeToFramebuffer(prefetchJob.imgPath, renderer, config)) {
     // SdFat rename fails (O_CREAT|O_EXCL) if the destination exists -- exactly what we want when
     // a foreground render published the real cache first. Losing the race just drops our tmp.
+    // Any OTHER rename failure (I/O error, card full) leaves no cache; the job is still marked
+    // completed rather than retried: the done flags mean "stop warming this asset", NOT "cache
+    // guaranteed present" -- every render path probes the cache file itself and falls back to an
+    // on-demand decode, and retrying on a failing/full card would churn the worker forever.
+    // Same give-up-once policy as a decode failure below; log it so it isn't silent.
     if (!Storage.rename(tmpPath.c_str(), prefetchJob.cachePath.c_str())) {
+      if (!Storage.exists(prefetchJob.cachePath.c_str())) {
+        LOG_ERR("MRA", "Prefetch cache publish failed: %s", prefetchJob.cachePath.c_str());
+      }
       Storage.remove(tmpPath.c_str());
     }
     prefetchResult.completed = true;
@@ -1133,7 +1141,13 @@ void MangaReaderActivity::workerWarmPanel() {
   const std::string tmpPath = prefetchJob.cachePath + ".tmp";
   config.cachePath = tmpPath;
   if (decoder->decodeToFramebuffer(prefetchJob.imgPath, renderer, config)) {
+    // See workerWarmNextPage: rename-fails-because-destination-exists is the by-design lost
+    // race; any other failure still completes the job (done flags mean "stop warming", not
+    // "cache present" -- renders probe the file and fall back to decoding) but gets logged.
     if (!Storage.rename(tmpPath.c_str(), prefetchJob.cachePath.c_str())) {
+      if (!Storage.exists(prefetchJob.cachePath.c_str())) {
+        LOG_ERR("MRA", "Prefetch cache publish failed: %s", prefetchJob.cachePath.c_str());
+      }
       Storage.remove(tmpPath.c_str());
     }
     prefetchResult.completed = true;
