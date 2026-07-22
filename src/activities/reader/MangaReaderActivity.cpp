@@ -989,6 +989,12 @@ void MangaReaderActivity::applyPrefetchResult() {
   // panelDims write keeps the established "loop task writes under RenderLock" discipline, and
   // the worker can stay lock-free (see the header: onExit() joins it while HOLDING RenderLock).
   if (prefetchBusy || !prefetchResult.pending) return;
+  // NEVER block the input task on the rendering mutex: if a render is in flight, taking the lock
+  // below would stall loop() -- and button polling with it -- for the render's whole duration
+  // (observed on-device: a 2.7s loop stall when a cancelled warm's dims were applied during a
+  // 3.3s panel decode). Defer instead; the result stays pending and a later tick applies it.
+  // postPrefetchJob refuses new jobs while a result is pending, so nothing is lost or clobbered.
+  if (prefetchResult.dimsValid && RenderLock::peek()) return;
   const bool genOk = (prefetchJob.gen == pageGeneration);
   if (prefetchResult.dimsValid && genOk) {
     RenderLock lock;
