@@ -1063,7 +1063,12 @@ def fit_to_device(img, target):
     # same way the JPEG save path does. Grayscale sources stay grayscale.
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
-    return img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+    # Clamp to the box as belt-and-braces. Mathematically round() cannot exceed it (the binding
+    # axis rounds onto the target within float precision; the other axis is strictly below), but
+    # an explicit clamp makes "never exceeds the screen box" obvious rather than subtle.
+    new_w = min(tw, max(1, round(w * scale)))
+    new_h = min(th, max(1, round(h * scale)))
+    return img.resize((new_w, new_h), Image.LANCZOS)
 
 
 def main():
