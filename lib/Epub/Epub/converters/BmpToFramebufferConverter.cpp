@@ -30,6 +30,13 @@ bool BmpToFramebufferConverter::isMonochromeStatic(const std::string& imagePath)
 
 bool BmpToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,
                                                     const RenderConfig& config) {
+  // Cache-only prefetch decodes are meaningless for BMP: this converter never streams a .2bp
+  // cache (see the header). The manga prefetch already skips BMP assets; reject defensively so
+  // a future caller can't silently decode into the framebuffer without the rendering mutex.
+  if (config.cacheOnly) {
+    LOG_ERR("BMP", "cacheOnly decode not supported: %s", imagePath.c_str());
+    return false;
+  }
   HalFile file;
   if (!Storage.openFileForRead("BMP", imagePath, file)) return false;
   Bitmap bmp(file, config.useDithering);

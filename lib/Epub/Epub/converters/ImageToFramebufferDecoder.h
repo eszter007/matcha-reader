@@ -34,6 +34,24 @@ struct RenderConfig {
   // pixel is written opaquely -- including white, which the normal BW path leaves
   // untouched. Sources without an alpha channel render fully opaque. PNG only.
   bool alphaMask = false;
+
+  // Background-prefetch mode: stream ONLY the .2bp pixel cache (cachePath, required) to SD and
+  // never touch the framebuffer or read any renderer state. Because nothing shared with the
+  // render task is accessed, the decode needs no rendering mutex and no framebuffer snapshot --
+  // this is what lets the manga prefetch worker run off the render/input tasks. JPEG/PNG only
+  // (BMP never streams a cache); decodeToFramebuffer fails fast if cachePath is empty or the
+  // cache stream can't start, since the decode would produce nothing.
+  bool cacheOnly = false;
+
+  // Cooperative cancellation, polled once per decode block/scanline. Return true to abort: the
+  // decode stops within one block and the partial cache file is dropped, so a background warm
+  // gets out of the way the moment a real render (or activity teardown) needs the CPU/SD.
+  // Plain function pointer + context, not std::function (see CLAUDE.md on closure bloat).
+  // NOTE (verified against JPEGDEC @86282979 jpeg.inl DecodeJPEG): an aborted decode still
+  // returns success (iErr stays 0 on early exit), so converters must track cancellation
+  // themselves and treat an aborted decode as failure -- never finalize a partial cache.
+  bool (*shouldCancel)(void* ctx) = nullptr;
+  void* cancelCtx = nullptr;
 };
 
 class ImageToFramebufferDecoder {
