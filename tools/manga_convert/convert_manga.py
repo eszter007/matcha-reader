@@ -250,10 +250,17 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
                     xhtml = zf.read(full_href).decode("utf-8", "ignore")
                 except KeyError:
                     continue
-                img_m = re.search(r'(?:src|xlink:href)="([^"]+)"', xhtml)
-                if not img_m:
+                # Take the first src-like attribute that is an IMAGE. Kobo-processed EPUBs
+                # inject <script src=".../kobo.js"> (and style links) BEFORE the page's <img>,
+                # so grabbing the first src outright extracted kobo.js as the "page image" and
+                # the conversion died on an unidentifiable image.
+                img_href = None
+                for attr_m in re.finditer(r'(?:src|xlink:href)="([^"]+)"', xhtml):
+                    if is_image(attr_m.group(1)):
+                        img_href = attr_m.group(1)
+                        break
+                if not img_href:
                     continue
-                img_href = img_m.group(1)
                 xhtml_dir = os.path.dirname(full_href)
                 src_in_zip = os.path.normpath(os.path.join(xhtml_dir, img_href)).replace(os.sep, "/")
 
@@ -1110,6 +1117,15 @@ def main():
              "dither patterns. Pairs naturally with --no-ocr: when OCR is enabled the (dithered) panel crop is what "
              "gets sent to Gemini, so text recognition on toned pages is less accurate than from a JPEG crop.",
     )
+    parser.add_argument(
+        "--no-panels",
+        action="store_true",
+        help="Skip panel detection entirely: every page becomes a single full-page 'panel' with no crop "
+             "files, so the reader behaves as a pure page flipper (page-turn buttons always turn pages, "
+             "never enter panel-zoom). Use for image-based novels, photo books, or scans where panel "
+             "boxes are meaningless -- the detector would otherwise carve text columns into bogus "
+             "panels. Pairs naturally with --no-ocr (full-page panels are never OCR'd anyway).",
+    )
     size_group = parser.add_mutually_exclusive_group()
     size_group.add_argument(
         "--x3",
@@ -1218,8 +1234,13 @@ def main():
                 else:
                     shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
-            boxes = detect_panels(img)
-            boxes = sort_panels_manga_order(boxes)
+            if args.no_panels:
+                # One full-page panel: is_full_page_panel() then skips the crop file, and the
+                # reader's existing cover/splash handling treats the page as a plain page-flip.
+                boxes = [[0, 0, img_w, img_h]]
+            else:
+                boxes = detect_panels(img)
+                boxes = sort_panels_manga_order(boxes)
 
             # Crop and save every panel first (fast, local) before dispatching
             # the slow network calls concurrently -- OCR is I/O-bound (network
