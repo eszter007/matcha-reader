@@ -50,8 +50,8 @@ struct RenderConfig {
   // NOTE (verified against JPEGDEC @86282979 jpeg.inl DecodeJPEG): an aborted decode still
   // returns success (iErr stays 0 on early exit), so converters must track cancellation
   // themselves and treat an aborted decode as failure -- never finalize a partial cache.
-  bool (*shouldCancel)(void* ctx) = nullptr;
-  void* cancelCtx = nullptr;
+  bool (*shouldCancel)(const void* ctx) = nullptr;
+  const void* cancelCtx = nullptr;
 };
 
 class ImageToFramebufferDecoder {

@@ -953,7 +953,7 @@ void MangaReaderActivity::prefetchTaskLoop() {
   vTaskDelete(nullptr);
 }
 
-bool MangaReaderActivity::prefetchShouldCancel(void* selfPtr) {
+bool MangaReaderActivity::prefetchShouldCancel(const void* selfPtr) {
   const auto* self = static_cast<const MangaReaderActivity*>(selfPtr);
   // Exit: the activity is tearing down. peek: a real render holds (or has just taken) the
   // rendering mutex -- the foreground work the background warm must never compete with.

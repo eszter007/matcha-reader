@@ -206,7 +206,7 @@ class MangaReaderActivity final : public Activity {
 
   static void prefetchTaskTrampoline(void* param);
   void prefetchTaskLoop();
-  static bool prefetchShouldCancel(void* selfPtr);
+  static bool prefetchShouldCancel(const void* selfPtr);
   void postPrefetchJob(PrefetchJob&& job);
   void applyPrefetchResult();  // loop task: publish worker results under the normal lock rules
   void workerWarmNextPage();
