@@ -42,7 +42,7 @@ ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shoul
   if (dotPos != std::string::npos) {
     std::string ext = imagePath.substr(dotPos);
     for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (ext == ".bmp") return WarmResult::Failed;
+    if (ext == ".bmp") return WarmResult::NotApplicable;
   }
 
   // The dimensions the eventual render will ask renderFromCache for: the stored fit dims, or

@@ -36,10 +36,11 @@ class ImageBlock final : public Block {
   static void fitWithin(int availW, int availH, int& w, int& h);
 
   enum class WarmResult : uint8_t {
-    Warmed,       // cache written
-    AlreadyWarm,  // cache exists with matching dimensions
-    Cancelled,    // shouldCancel fired mid-decode; partial cache dropped, safe to retry later
-    Failed        // decode/setup failure; caller should not retry this image
+    Warmed,         // cache written
+    AlreadyWarm,    // cache exists with matching dimensions
+    NotApplicable,  // format has no pixel cache to warm (BMP); nothing to do, not an error
+    Cancelled,      // shouldCancel fired mid-decode; partial cache dropped, safe to retry later
+    Failed          // decode/setup failure; caller should not retry this image
   };
 
   // Background-warm this image's .pxc pixel cache (cacheOnly decode -- no framebuffer access)

@@ -1746,10 +1746,10 @@ bool EpubReaderActivity::imageWarmShouldCancel(const void* ctx) {
   }
   // A queued render (page turn already requested before the warm started, subactivity render,
   // requestUpdateAndWait from another task) is a pending task notification on the render task.
-  // The warm runs ON the render task, so query our own notification value without consuming it.
-  uint32_t pendingNotifies = 0;
-  xTaskNotifyAndQuery(xTaskGetCurrentTaskHandle(), 0, eNoAction, &pendingNotifies);
-  return pendingNotifies > 0;
+  // The warm runs ON the render task, so read our own notification VALUE without side effects:
+  // ulTaskNotifyValueClear with zero bits to clear is a pure read. (xTaskNotifyAndQuery is NOT
+  // -- even with eNoAction it is still a notify and stamps the notification state.)
+  return ulTaskNotifyValueClear(nullptr, 0) > 0;
 }
 
 void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, const uint16_t viewportHeight) {
