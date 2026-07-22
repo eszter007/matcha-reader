@@ -108,6 +108,7 @@ Read manga with real panel detection, dictionary lookup, and pre-extracted trans
 - No blank pages between consecutive images
 - Status bar respected for rotated images
 - SVG `<image>` elements (Calibre-generated cover pages) now render correctly
+- **Instant image page turns**: while you read the current page, the next page's image is decoded and cached in the background, so turning onto a full-page illustration shows it immediately instead of pausing for a multi-second decode. Illustrated light novels (text chapters interleaved with full-page art) benefit the most — first views were previously the slow ones, and every linear read-through is all first views
 
 ### Home Screen
 

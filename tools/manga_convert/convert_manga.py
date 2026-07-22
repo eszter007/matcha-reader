@@ -250,12 +250,30 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
                     xhtml = zf.read(full_href).decode("utf-8", "ignore")
                 except KeyError:
                     continue
-                img_m = re.search(r'(?:src|xlink:href)="([^"]+)"', xhtml)
-                if not img_m:
-                    continue
-                img_href = img_m.group(1)
+                # Take the first src-like attribute that is an IMAGE. Kobo-processed EPUBs
+                # inject <script src=".../kobo.js"> (and style links) BEFORE the page's <img>,
+                # so grabbing the first src outright extracted kobo.js as the "page image" and
+                # the conversion died on an unidentifiable image.
                 xhtml_dir = os.path.dirname(full_href)
-                src_in_zip = os.path.normpath(os.path.join(xhtml_dir, img_href)).replace(os.sep, "/")
+                src_in_zip = None
+                for attr_m in re.finditer(r'(?:src|xlink:href)="([^"]+)"', xhtml):
+                    # hrefs may carry a fragment/query ("page.jpg#frag"); strip both
+                    # so the extension check and the zip lookup see the real path.
+                    candidate = attr_m.group(1).split("#", 1)[0].split("?", 1)[0]
+                    if not candidate or not is_image(candidate):
+                        continue
+                    # Only accept a candidate that resolves to a real ZIP member, so a
+                    # missing/external image href falls through to the next candidate
+                    # instead of dropping the whole spine page.
+                    resolved = os.path.normpath(os.path.join(xhtml_dir, candidate)).replace(os.sep, "/")
+                    try:
+                        zf.getinfo(resolved)
+                    except KeyError:
+                        continue
+                    src_in_zip = resolved
+                    break
+                if not src_in_zip:
+                    continue
 
             try:
                 data = zf.read(src_in_zip)

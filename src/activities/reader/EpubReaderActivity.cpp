@@ -17,6 +17,8 @@
 #include <Memory.h>
 #include <Serialization.h>
 #include <esp_system.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <algorithm>
 #include <ctime>
@@ -63,6 +65,12 @@ constexpr float bookmarkProgressEpsilon = 0.0001f;
 // Bump when ReaderPrefs gains/changes fields; stale files fall back to globals.
 constexpr uint8_t READER_PREFS_VERSION = 1;
 constexpr char READER_PREFS_FILE[] = "/readerprefs.bin";
+
+// Largest-contiguous-block floor for the background image warm. The warm needs the same
+// working set the page-turn decode it replaces would need (JPEG decoder ~20KB contiguous +
+// pixel-cache band <= 24KB); below this the decode would fail either way, so don't try --
+// the page-turn path keeps its existing on-demand behavior.
+constexpr uint32_t IMAGE_WARM_MIN_ALLOC = 30 * 1024;
 
 int clampPercent(int percent) {
   if (percent < 0) {
@@ -378,6 +386,14 @@ void EpubReaderActivity::loop() {
     // Should never happen
     finish();
     return;
+  }
+
+  // Cancel any in-flight background image warm the moment the user touches a button -- BEFORE
+  // any handler below can request a render, push a subactivity, or pop this activity (push/pop
+  // block on the RenderLock the warm's render() call is still holding; the warm polls this
+  // stamp per decode block, so the wait stays in the milliseconds).
+  if (mappedInput.wasAnyPressed()) {
+    imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
   }
 
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
@@ -1063,6 +1079,10 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 }
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn) {
+  // Tilt- and auto-page-turn calls reach here without a button press, so the loop()-side stamp
+  // bump didn't fire -- cancel a running image warm before the chapter-boundary branches below
+  // block on the RenderLock it holds.
+  imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
   const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
   const int pgCount = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
 
@@ -1354,13 +1374,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           } else {
             int iw = vpage->imageWidth;
             int ih = vpage->imageHeight;
-            if (iw > viewportWidth || ih > viewportHeight) {
-              const float sx = static_cast<float>(viewportWidth) / iw;
-              const float sy = static_cast<float>(viewportHeight) / ih;
-              const float s = (sx < sy) ? sx : sy;
-              iw = static_cast<int>(iw * s + 0.5f);
-              ih = static_cast<int>(ih * s + 0.5f);
-            }
+            // Shared with warmNextPageImageCache so a background-warmed cache has EXACTLY the
+            // dimensions this render asks for.
+            ImageBlock::fitWithin(viewportWidth, viewportHeight, iw, ih);
             ImageBlock fitBlock(vpage->imagePath, static_cast<int16_t>(iw), static_cast<int16_t>(ih));
             const int imgX = orientedMarginLeft + (viewportWidth - iw) / 2;
             const int imgY = orientedMarginTop + (viewportHeight - ih) / 2;
@@ -1477,6 +1493,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (showBookmarkMessage) {
       GUI.drawPopup(renderer, tr(STR_BOOKMARK_ADDED));
     }
+
+    // Last: warm the NEXT page's image pixel cache while this page is on screen, so landing on
+    // a full-page illustration is a cache read + FAST pass instead of a multi-second decode.
+    // Cancellable per decode block the moment any input or queued render arrives.
+    warmNextPageImageCache(viewportWidth, viewportHeight);
     return;
   }
 
@@ -1648,6 +1669,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (showBookmarkMessage) {
     GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));
   }
+
+  // Last: warm the NEXT page's image pixel cache while this page is on screen (see the
+  // identical call at the vertical path's tail).
+  warmNextPageImageCache(viewportWidth, viewportHeight);
 }
 
 void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
@@ -1711,6 +1736,113 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                      SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, SETTINGS.bookCssMargins)) {
     LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
+  }
+}
+
+bool EpubReaderActivity::imageWarmShouldCancel(const void* ctx) {
+  const auto* self = static_cast<const EpubReaderActivity*>(ctx);
+  if (self->imageWarmInputStamp_.load(std::memory_order_relaxed) != self->imageWarmStampSnapshot_) {
+    return true;
+  }
+  // A queued render (page turn already requested before the warm started, subactivity render,
+  // requestUpdateAndWait from another task) is a pending task notification on the render task.
+  // The warm runs ON the render task, so read our own notification VALUE without side effects:
+  // ulTaskNotifyValueClear with zero bits to clear is a pure read. (xTaskNotifyAndQuery is NOT
+  // -- even with eNoAction it is still a notify and stamps the notification state.)
+  return ulTaskNotifyValueClear(nullptr, 0) > 0;
+}
+
+void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, const uint16_t viewportHeight) {
+  imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+  if (imageWarmShouldCancel(this)) {
+    return;  // another render is already queued -- stay out of its way
+  }
+  if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC) {
+    return;
+  }
+
+  const int fontId = effectiveReaderFontId();
+  // Returns false to stop iterating (cancelled). The MOST RECENT failed target is remembered
+  // (single path, not a list): the warm targets one page at a time, so one slot is enough to
+  // stop the common retry churn of re-attempting the same broken image on every render tail.
+  const auto warmBlock = [this](const ImageBlock& block) -> bool {
+    if (block.getImagePath() == imageWarmFailedPath_) {
+      return true;
+    }
+    const auto res = block.warmCache(renderer, &imageWarmShouldCancel, this);
+    if (res == ImageBlock::WarmResult::Failed) {
+      imageWarmFailedPath_ = block.getImagePath();
+    }
+    return res != ImageBlock::WarmResult::Cancelled;
+  };
+
+  if (useVerticalText()) {
+    if (!verticalSection || verticalSection->pageCount == 0) {
+      return;
+    }
+    // Constructed only on the spine-boundary branch (its ctor builds a path string -- avoidable
+    // churn on the common within-chapter turn), but declared at this scope because it must
+    // outlive vp: getPage() hands out a pointer into the section's page cache.
+    std::optional<VerticalSection> nextV;
+    const VerticalPage* vp = nullptr;
+    const int nextPage = verticalSection->currentPage + 1;
+    if (nextPage < verticalSection->pageCount) {
+      vp = verticalSection->getPage(nextPage);
+    } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
+      // Last page of the chapter: the next page lives in the next spine item. In JP books each
+      // full-page illustration is its own one-page spine item, so this cross-boundary peek is
+      // the common case -- silentIndexNextChapterIfNeeded has already built the section file.
+      nextV.emplace(epub, currentSpineIndex + 1, renderer);
+      if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight) && nextV->pageCount > 0) {
+        vp = nextV->getPage(0);
+      }
+    }
+    if (!vp || !vp->isImagePage()) {
+      return;
+    }
+    if (vp->imageRotated) {
+      const int reserve = UITheme::getInstance().getStatusBarHeight() +
+                          UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
+      ImageBlock block(vp->imagePath, vp->imageWidth, vp->imageHeight);
+      block.setRotated(true, static_cast<int16_t>(reserve));
+      warmBlock(block);
+    } else {
+      // Same fit the render path computes -- shared helper keeps the cache dims identical.
+      int iw = vp->imageWidth;
+      int ih = vp->imageHeight;
+      ImageBlock::fitWithin(viewportWidth, viewportHeight, iw, ih);
+      warmBlock(ImageBlock(vp->imagePath, static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
+    }
+    return;
+  }
+
+  if (!section || section->pageCount == 0) {
+    return;
+  }
+  std::unique_ptr<Page> peeked;
+  const int nextPage = section->currentPage + 1;
+  if (nextPage < section->pageCount) {
+    peeked = section->loadPageFromSectionFile(nextPage);
+  } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
+    Section nextSection(epub, currentSpineIndex + 1, renderer);
+    if (nextSection.loadSectionFile(fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+                                    SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+                                    SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering,
+                                    SETTINGS.focusReadingEnabled, SETTINGS.bookCssMargins) &&
+        nextSection.pageCount > 0) {
+      peeked = nextSection.loadPageFromSectionFile(0);
+    }
+  }
+  if (!peeked) {
+    return;
+  }
+  for (const auto& el : peeked->elements) {
+    if (el->getTag() != TAG_PageImage) {
+      continue;
+    }
+    if (!warmBlock(static_cast<const PageImage&>(*el).getImageBlock())) {
+      break;  // cancelled -- input or a queued render wants the CPU/SD
+    }
   }
 }
 
