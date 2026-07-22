@@ -69,8 +69,16 @@ std::string encodeCp(uint32_t cp) {
   } else if (cp < 0x800) {
     out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
     out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
+  } else if (cp < 0x10000) {
     out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else {
+    // Supplementary plane (4-byte). Reachable: rare CJK ideographs like U+23D40 (a Vita
+    // Sexualis gaiji) do occur in Aozora-derived EPUBs; the old 3-byte fallthrough emitted an
+    // invalid sequence for them (high bits truncated into a wrong lead byte).
+    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
     out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
     out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
   }
@@ -1130,27 +1138,39 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         }
 
         if (breakAt == std::string::npos) {
-          // No space-break fits — move to a fresh column.
-          if (row != 0) {
+          // No space-break fits. Retry from a fresh column ONLY when the current position is
+          // deeper than where a fresh column would start; otherwise force-place. The comparison
+          // MUST be against columnStartRow(false), not 0: inside a styled block (start-Xem, e.g.
+          // Aozora/EBPAJ div.mtN margins, defined up to 22em+) fresh columns begin at a non-zero
+          // row, and comparing against 0 made this branch loop forever -- every retry re-seeded
+          // row = startRows != 0, the force-place arm below was unreachable, and the layout
+          // marched through columns/pages without consuming a single byte ("Indexing" never
+          // finished; host-reproduced with a mtN block whose start offset left fewer rows than a
+          // short embedded Latin word needs). After one retry row == columnStartRow(false), so
+          // the force-place arm is guaranteed on the next pass -- termination is structural.
+          if (row > columnStartRow(false)) {
             column++;
             row = 0;
             finalizePageIfNeeded();
             row = columnStartRow(false);
           } else {
-            // Already at top of column and still doesn't fit — force-place
-            // the whole thing to avoid an infinite loop.
+            // At (or above) a fresh column's start row and still doesn't fit — force-place the
+            // whole thing at the CURRENT row to guarantee progress. It may overrun the column
+            // bottom (the renderer clips); an unbreakable over-long run has no better placement.
+            const int topY = row * cellPx;
             VerticalGlyph g;
             g.codepoint = 0;
             g.column = column;
-            g.row = 0;
+            g.row = row;
             g.x = static_cast<uint16_t>(columnLeftX(column) + cellPx - ascender);
-            g.y = static_cast<uint16_t>(runDownNudge);
+            g.y = static_cast<uint16_t>(topY + runDownNudge);
             g.paragraphIndex = pc.paragraphIndex;
             g.byteOffset = pc.byteOffset;
+            g.style = pc.style;
             g.renderKind = VerticalGlyph::RotatedRun;
             g.rotatedRunText = remaining;
             pushGlyph(page.glyphs, g);
-            row = std::min(remRows, rowsPerColumn);
+            row = static_cast<uint16_t>(std::min<int>(row + remRows, rowsPerColumn));
             if (row >= rowsPerColumn) {
               column++;
               row = 0;
