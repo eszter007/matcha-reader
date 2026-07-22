@@ -954,7 +954,7 @@ void MangaReaderActivity::prefetchTaskLoop() {
 }
 
 bool MangaReaderActivity::prefetchShouldCancel(void* selfPtr) {
-  auto* self = static_cast<MangaReaderActivity*>(selfPtr);
+  const auto* self = static_cast<const MangaReaderActivity*>(selfPtr);
   // Exit: the activity is tearing down. peek: a real render holds (or has just taken) the
   // rendering mutex -- the foreground work the background warm must never compete with.
   return self->prefetchExitRequested || RenderLock::peek();
