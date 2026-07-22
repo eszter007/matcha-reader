@@ -654,6 +654,10 @@ void MangaReaderActivity::renderFullPage() {
 }
 
 void MangaReaderActivity::prefetchNextPageCache() {
+  // Don't even build a job while a render is active/queued: the worker would only defer via its
+  // cancel probe, so posting now is pure churn -- a task wake-up plus fresh path strings every
+  // idle tick for the render's whole duration (heap-fragmentation smell). Retry next tick.
+  if (RenderLock::peek()) return;
   if (!book) {
     nextPagePrefetched = true;
     return;
@@ -903,6 +907,8 @@ MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int
 // dimension slot) so entering the panel costs a cache read instead of a JPEG decode. This is
 // only the loop-side gate; the SD probes and the decode itself run on the prefetch worker.
 void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
+  // See prefetchNextPageCache: no job building while a render is active/queued.
+  if (RenderLock::peek()) return;
   std::atomic<bool>& doneFlag = (viewMode == ViewMode::FullPage) ? firstPanelPrefetched : nextPanelPrefetched;
   if (!book || panelIdx < 0 || panelIdx >= static_cast<int>(panels.size())) {
     doneFlag = true;
