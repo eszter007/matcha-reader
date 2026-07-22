@@ -37,6 +37,30 @@
 #include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"
 
+namespace {
+constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
+
+// Idle-dwell gates (ms since the last render) before speculative pixel-cache prefetch. The
+// next-page / next-panel warms wait the full dwell so rapid flipping doesn't queue a blocking
+// decode between presses. The first panel of a paneled page uses a shorter dwell and is warmed
+// *first* (ahead of the next-page cache): zooming in is the likely next action there, and its cold
+// JPEG decode is the slowest step of the full-page -> panel transition, so getting it cached even
+// after a brief pause is what makes that transition feel instant.
+constexpr unsigned long PREFETCH_DWELL_MS = 400;
+constexpr unsigned long FIRST_PANEL_PREFETCH_DWELL_MS = 150;
+
+// Heap floor before a background decode starts. The old in-loop prefetch also needed a ~48KB
+// framebuffer snapshot; the cache-only worker doesn't (it never touches the framebuffer), but
+// the decoder (~20KB JPEG / ~44KB PNG) plus the streaming cache band (<=24KB) still want real
+// headroom -- and a foreground render may now allocate concurrently. Keep the old conservative
+// floor rather than shaving it.
+constexpr uint32_t PREFETCH_HEAP_FLOOR = 60000;
+
+// Prefetch worker stack, in bytes. Mirrors the render task (ActivityManager::begin), which runs
+// these same JPEG/PNG decode paths -- the one stack size proven for them on hardware.
+constexpr uint32_t PREFETCH_TASK_STACK = 8192;
+}  // namespace
+
 void MangaReaderActivity::onEnter() {
   Activity::onEnter();
 
@@ -260,30 +284,6 @@ void MangaReaderActivity::prevPage() {
     requestUpdate();
   }
 }
-
-namespace {
-constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
-
-// Idle-dwell gates (ms since the last render) before speculative pixel-cache prefetch. The
-// next-page / next-panel warms wait the full dwell so rapid flipping doesn't queue a blocking
-// decode between presses. The first panel of a paneled page uses a shorter dwell and is warmed
-// *first* (ahead of the next-page cache): zooming in is the likely next action there, and its cold
-// JPEG decode is the slowest step of the full-page -> panel transition, so getting it cached even
-// after a brief pause is what makes that transition feel instant.
-constexpr unsigned long PREFETCH_DWELL_MS = 400;
-constexpr unsigned long FIRST_PANEL_PREFETCH_DWELL_MS = 150;
-
-// Heap floor before a background decode starts. The old in-loop prefetch also needed a ~48KB
-// framebuffer snapshot; the cache-only worker doesn't (it never touches the framebuffer), but
-// the decoder (~20KB JPEG / ~44KB PNG) plus the streaming cache band (<=24KB) still want real
-// headroom -- and a foreground render may now allocate concurrently. Keep the old conservative
-// floor rather than shaving it.
-constexpr uint32_t PREFETCH_HEAP_FLOOR = 60000;
-
-// Prefetch worker stack, in bytes. Mirrors the render task (ActivityManager::begin), which runs
-// these same JPEG/PNG decode paths -- the one stack size proven for them on hardware.
-constexpr uint32_t PREFETCH_TASK_STACK = 8192;
-}  // namespace
 
 void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
   if (selectedPageTurnOption == 0 || selectedPageTurnOption >= std::size(PAGE_TURN_RATES)) {
