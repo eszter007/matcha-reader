@@ -256,8 +256,11 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
                 # the conversion died on an unidentifiable image.
                 img_href = None
                 for attr_m in re.finditer(r'(?:src|xlink:href)="([^"]+)"', xhtml):
-                    if is_image(attr_m.group(1)):
-                        img_href = attr_m.group(1)
+                    # hrefs may carry a fragment/query ("page.jpg#frag"); strip both
+                    # so the extension check and the zip lookup see the real path.
+                    candidate = attr_m.group(1).split("#", 1)[0].split("?", 1)[0]
+                    if candidate and is_image(candidate):
+                        img_href = candidate
                         break
                 if not img_href:
                     continue
