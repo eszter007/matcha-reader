@@ -1059,9 +1059,18 @@ def fit_to_device(img, target):
     scale = min(tw / w, th / h)
     if scale >= 1.0:
         return img
-    # Palette/1-bit/alpha modes resize poorly (palette indices get interpolated); normalize the
-    # same way the JPEG save path does. Grayscale sources stay grayscale.
-    if img.mode not in ("RGB", "L"):
+    # Palette/1-bit/alpha modes resize poorly (palette indices get interpolated), so normalize
+    # first. Sources WITH transparency are composited onto WHITE -- that is exactly what the
+    # firmware's PNG renderer does with alpha (convertLineToGray blends toward 255), and what
+    # e-ink paper looks like -- whereas a bare convert("RGB") would composite onto black and turn
+    # transparent regions into black blobs. Grayscale sources stay grayscale.
+    has_alpha = img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        img = background
+    elif img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
     # Clamp to the box as belt-and-braces. Mathematically round() cannot exceed it (the binding
     # axis rounds onto the target within float precision; the other axis is strictly below), but
