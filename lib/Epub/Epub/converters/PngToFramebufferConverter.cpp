@@ -37,6 +37,13 @@ struct PngContext {
   PixelCache cache;
   bool caching{false};
 
+  // Cache-only decode (background prefetch): skip every DirectPixelWriter/renderer access.
+  bool cacheOnly{false};
+  // Set when config->shouldCancel asked for an abort. PNGdec does surface a callback abort as
+  // PNG_QUIT_EARLY, but we track it explicitly anyway (uniform with the JPEG converter, where
+  // the library reports success after an abort) so a partial cache can never be finalized.
+  bool cancelled{false};
+
   uint8_t* grayLineBuffer{nullptr};
   uint8_t* alphaLineBuffer{nullptr};  // per-pixel source alpha; only allocated for alphaMask
 };
@@ -192,6 +199,13 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   PngContext* ctx = reinterpret_cast<PngContext*>(pDraw->pUser);
   if (!ctx || !ctx->config || !ctx->renderer || !ctx->grayLineBuffer) return 0;
 
+  // Cooperative cancel: polled once per scanline. Returning 0 makes PNGdec stop with
+  // PNG_QUIT_EARLY (verified in png.inl 1.1.6).
+  if (ctx->config->shouldCancel && ctx->config->shouldCancel(ctx->config->cancelCtx)) {
+    ctx->cancelled = true;
+    return 0;
+  }
+
   int srcY = pDraw->y;
   int srcWidth = ctx->srcWidth;
 
@@ -227,11 +241,17 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   int screenWidth = ctx->screenWidth;
   bool useDithering = ctx->config->useDithering;
   bool caching = ctx->caching;
+  // Cache-only prefetch never touches the framebuffer: pw stays uninitialized (init reads
+  // renderer state, which a lock-free background decode must not do), so every pw call below is
+  // guarded. Constant per decode -- perfectly predicted, same cost class as `if (caching)`.
+  const bool cacheOnly = ctx->cacheOnly;
 
   // Pre-compute orientation and render-mode state once per row
-  DirectPixelWriter pw;
-  pw.init(*ctx->renderer);
-  pw.beginRow(outY);
+  DirectPixelWriter pw{};  // value-init: cacheOnly leaves it untouched (all uses below are guarded)
+  if (!cacheOnly) {
+    pw.init(*ctx->renderer);
+    pw.beginRow(outY);
+  }
 
   // The cache streams to disk one row at a time. Flushing rows below this one
   // (PNGdec delivers scanlines top to bottom) repositions the single-row band.
@@ -265,10 +285,12 @@ int pngDrawCallback(PNGDRAW* pDraw) {
         ditheredGray = gray / 85;
         if (ditheredGray > 3) ditheredGray = 3;
       }
-      if (alphaMask) {
-        pw.writePixelOpaque(outX, ditheredGray);
-      } else {
-        pw.writePixel(outX, ditheredGray);
+      if (!cacheOnly) {
+        if (alphaMask) {
+          pw.writePixelOpaque(outX, ditheredGray);
+        } else {
+          pw.writePixel(outX, ditheredGray);
+        }
       }
       if (caching) cw.writePixel(outX, ditheredGray);
     }
@@ -334,8 +356,19 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   PngContext ctx;
   ctx.renderer = &renderer;
   ctx.config = &config;
-  ctx.screenWidth = renderer.getScreenWidth();
-  ctx.screenHeight = renderer.getScreenHeight();
+  ctx.cacheOnly = config.cacheOnly;
+  if (ctx.cacheOnly) {
+    // Cache-only decode produces nothing without a cache stream, and it must not read renderer
+    // state (it runs without the rendering mutex): screen bounds are substituted with exact
+    // no-clip values once the destination size is known, further down.
+    if (config.cachePath.empty()) {
+      LOG_ERR("PNG", "cacheOnly decode without cachePath: %s", imagePath.c_str());
+      return false;
+    }
+  } else {
+    ctx.screenWidth = renderer.getScreenWidth();
+    ctx.screenHeight = renderer.getScreenHeight();
+  }
 
   int rc = png->open(imagePath.c_str(), pngOpenWithHandle, pngCloseWithHandle, pngReadWithHandle, pngSeekWithHandle,
                      pngDrawCallback);
@@ -378,6 +411,12 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     ctx.dstHeight = (int)(ctx.srcHeight * ctx.scale);
   }
   ctx.lastDstY = -1;  // Reset row tracking
+  if (ctx.cacheOnly) {
+    // Exact no-clip screen bounds so the full dstWidth x dstHeight lands in the cache -- same
+    // rationale as the JPEG converter (manga geometry is always on-screen anyway).
+    ctx.screenWidth = config.x + ctx.dstWidth;
+    ctx.screenHeight = config.y + ctx.dstHeight;
+  }
 
   LOG_DBG("PNG", "PNG %dx%d -> %dx%d (scale %.2f), bpp: %d", ctx.srcWidth, ctx.srcHeight, ctx.dstWidth, ctx.dstHeight,
           ctx.scale, png->getBpp());
@@ -422,6 +461,15 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   ctx.caching = !config.cachePath.empty();
   if (ctx.caching) {
     if (!ctx.cache.begin(config.cachePath, ctx.dstWidth, ctx.dstHeight, config.x, config.y, 1)) {
+      if (ctx.cacheOnly) {
+        // The cache IS the output here -- decoding without it would be pure wasted work.
+        LOG_ERR("PNG", "cacheOnly: cache stream failed to start, skipping decode");
+        free(ctx.grayLineBuffer);
+        ctx.grayLineBuffer = nullptr;
+        free(ctx.alphaLineBuffer);
+        ctx.alphaLineBuffer = nullptr;
+        return false;
+      }
       LOG_ERR("PNG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
@@ -436,8 +484,14 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   free(ctx.alphaLineBuffer);
   ctx.alphaLineBuffer = nullptr;
 
-  if (rc != PNG_SUCCESS) {
-    LOG_ERR("PNG", "Decode failed: %d", rc);
+  // A cancelled decode surfaces as PNG_QUIT_EARLY; ctx.cancelled double-checks it. Either way the
+  // image is incomplete: drop the partial cache and report failure.
+  if (rc != PNG_SUCCESS || ctx.cancelled) {
+    if (ctx.cancelled) {
+      LOG_DBG("PNG", "Decode cancelled: %s", imagePath.c_str());
+    } else {
+      LOG_ERR("PNG", "Decode failed: %d", rc);
+    }
     if (ctx.caching) ctx.cache.abort();
     return false;
   }

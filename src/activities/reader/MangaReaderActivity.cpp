@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <utility>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -36,6 +37,30 @@
 #include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"
 
+namespace {
+constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
+
+// Idle-dwell gates (ms since the last render) before speculative pixel-cache prefetch. The
+// next-page / next-panel warms wait the full dwell so rapid flipping doesn't queue a blocking
+// decode between presses. The first panel of a paneled page uses a shorter dwell and is warmed
+// *first* (ahead of the next-page cache): zooming in is the likely next action there, and its cold
+// JPEG decode is the slowest step of the full-page -> panel transition, so getting it cached even
+// after a brief pause is what makes that transition feel instant.
+constexpr unsigned long PREFETCH_DWELL_MS = 400;
+constexpr unsigned long FIRST_PANEL_PREFETCH_DWELL_MS = 150;
+
+// Heap floor before a background decode starts. The old in-loop prefetch also needed a ~48KB
+// framebuffer snapshot; the cache-only worker doesn't (it never touches the framebuffer), but
+// the decoder (~20KB JPEG / ~44KB PNG) plus the streaming cache band (<=24KB) still want real
+// headroom -- and a foreground render may now allocate concurrently. Keep the old conservative
+// floor rather than shaving it.
+constexpr uint32_t PREFETCH_HEAP_FLOOR = 60000;
+
+// Prefetch worker stack, in bytes. Mirrors the render task (ActivityManager::begin), which runs
+// these same JPEG/PNG decode paths -- the one stack size proven for them on hardware.
+constexpr uint32_t PREFETCH_TASK_STACK = 8192;
+}  // namespace
+
 void MangaReaderActivity::onEnter() {
   Activity::onEnter();
 
@@ -46,6 +71,10 @@ void MangaReaderActivity::onEnter() {
   if (!book) return;
 
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  // Base screen dims for the prefetch worker's geometry math -- captured here, the one moment
+  // that is single-threaded by construction (no render has been requested yet). See the header.
+  baseScreenW = renderer.getScreenWidth();
+  baseScreenH = renderer.getScreenHeight();
   loadProgress();
   loadCachedBookmarks();
   updateBookmarkFlag();
@@ -65,11 +94,36 @@ void MangaReaderActivity::onEnter() {
 
   readingSessionStartMs = millis();
 
+  // Background prefetch worker (see the header doc block). Same priority as the loop and render
+  // tasks so it timeslices instead of starving either; stack mirrors the render task, which runs
+  // these same decode paths. Creation failure (OOM) just disables prefetching -- postPrefetchJob
+  // no-ops on a null handle and every render path decodes on demand exactly as before.
+  if (xTaskCreate(&prefetchTaskTrampoline, "MangaPrefetch", PREFETCH_TASK_STACK, this, 1, &prefetchTaskHandle) !=
+      pdPASS) {
+    prefetchTaskHandle = nullptr;
+    LOG_ERR("MRA", "Failed to create prefetch worker; prefetch disabled");
+  }
+
   loadCurrentPagePanels();
   requestUpdate();
 }
 
 void MangaReaderActivity::onExit() {
+  // Join the prefetch worker FIRST, before any teardown below: it may be mid-decode against book
+  // paths and activity members. The exit flag makes the decode's cancel probe abort within one
+  // MCU block/scanline (partial tmp dropped by the converter), so this spin is short -- worst
+  // case one in-flight SD transaction plus cleanup. Deadlock-free even though ActivityManager's
+  // pop path calls onExit() while holding RenderLock: the worker never takes that lock (see the
+  // header doc block).
+  if (prefetchTaskHandle) {
+    prefetchExitRequested = true;
+    xTaskNotifyGive(prefetchTaskHandle);  // wake it if idle-blocked on the notification
+    while (!prefetchTaskExited) {
+      vTaskDelay(1);
+    }
+    prefetchTaskHandle = nullptr;
+  }
+
   // Record the sub-interval tail of the session; whole minutes were already flushed
   // periodically from loop() (see ReaderUtils::flushReadingStats).
   ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
@@ -143,6 +197,11 @@ void MangaReaderActivity::loadCurrentPagePanels() {
   const bool armFirst = panelPrefetchArmed && hasCrops;
   {
     RenderLock lock;  // callers are all loop/onEnter/result-handler context -- never already held
+    // Invalidate any in-flight prefetch-worker job: its results were computed against the OLD
+    // page's panels/panelDims and must be dropped by applyPrefetchResult's generation check.
+    // Bumped inside the same locked section as the panelDims swap so a job can never observe
+    // the new vector with the old generation.
+    pageGeneration++;
     panels = std::move(loadedPanels);
     panelsLoaded = loaded;
     pageHasPanelCrops = hasCrops;
@@ -230,19 +289,6 @@ void MangaReaderActivity::prevPage() {
   }
 }
 
-namespace {
-constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
-
-// Idle-dwell gates (ms since the last render) before speculative pixel-cache prefetch. The
-// next-page / next-panel warms wait the full dwell so rapid flipping doesn't queue a blocking
-// decode between presses. The first panel of a paneled page uses a shorter dwell and is warmed
-// *first* (ahead of the next-page cache): zooming in is the likely next action there, and its cold
-// JPEG decode is the slowest step of the full-page -> panel transition, so getting it cached even
-// after a brief pause is what makes that transition feel instant.
-constexpr unsigned long PREFETCH_DWELL_MS = 400;
-constexpr unsigned long FIRST_PANEL_PREFETCH_DWELL_MS = 150;
-}  // namespace
-
 void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
   if (selectedPageTurnOption == 0 || selectedPageTurnOption >= std::size(PAGE_TURN_RATES)) {
     automaticPageTurnActive = false;
@@ -257,6 +303,11 @@ void MangaReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
   ReaderUtils::flushReadingStats(readingSessionStartMs);
+
+  // Publish any finished prefetch-worker result (panelDims slot + done flags) under the loop
+  // task's normal locking rules. Runs before everything else so a completed warm is visible to
+  // this very tick's input handling, and so the single job slot frees up for the next post.
+  applyPrefetchResult();
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
@@ -427,26 +478,26 @@ void MangaReaderActivity::render(RenderLock&&) {
   }
 }
 
-MangaReaderActivity::FullPageGeom MangaReaderActivity::applyFullPageGeometry(const int imgWidth, const int imgHeight) {
+MangaReaderActivity::FullPageGeom MangaReaderActivity::computeFullPageGeom(const int imgWidth, const int imgHeight,
+                                                                           int screenW, int screenH) {
   FullPageGeom g;
-  g.savedOrientation = renderer.getOrientation();
-  g.screenW = renderer.getScreenWidth();
-  g.screenH = renderer.getScreenHeight();
 
   // Rotate when the page's aspect doesn't match the screen's -- same
   // fill-the-screen behavior as panel-zoom (renderPanelZoom): this lets a
   // portrait manga page fill a landscape-oriented screen edge-to-edge
   // instead of shrinking to a small centered box. The user tilts the
-  // device to read a rotated page.
-  const bool screenIsPortrait = g.screenH > g.screenW;
+  // device to read a rotated page. Pure math (no renderer access, so the
+  // lock-free prefetch worker can call it): a 90-degree orientation change
+  // is exactly a screen-dim swap, which is what the applying wrapper's
+  // setOrientation((o+3)%4) produces via getScreenWidth/Height.
+  const bool screenIsPortrait = screenH > screenW;
   const bool pageIsLandscape = imgWidth > imgHeight;
   g.rotated = screenIsPortrait == pageIsLandscape;
   if (g.rotated) {
-    const auto rotatedOrientation = static_cast<GfxRenderer::Orientation>((g.savedOrientation + 3) % 4);
-    renderer.setOrientation(rotatedOrientation);
-    g.screenW = renderer.getScreenWidth();
-    g.screenH = renderer.getScreenHeight();
+    std::swap(screenW, screenH);
   }
+  g.screenW = screenW;
+  g.screenH = screenH;
 
   g.destWidth = imgWidth;
   g.destHeight = imgHeight;
@@ -465,6 +516,16 @@ MangaReaderActivity::FullPageGeom MangaReaderActivity::applyFullPageGeometry(con
   } else {
     g.x = (g.screenW - imgWidth) / 2;
     g.y = (g.screenH - imgHeight) / 2;
+  }
+  return g;
+}
+
+MangaReaderActivity::FullPageGeom MangaReaderActivity::applyFullPageGeometry(const int imgWidth, const int imgHeight) {
+  const int savedOrientation = renderer.getOrientation();
+  FullPageGeom g = computeFullPageGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight());
+  g.savedOrientation = savedOrientation;
+  if (g.rotated) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4));
   }
   return g;
 }
@@ -597,6 +658,10 @@ void MangaReaderActivity::renderFullPage() {
 }
 
 void MangaReaderActivity::prefetchNextPageCache() {
+  // Don't even build a job while a render is active/queued: the worker would only defer via its
+  // cancel probe, so posting now is pure churn -- a task wake-up plus fresh path strings every
+  // idle tick for the render's whole duration (heap-fragmentation smell). Retry next tick.
+  if (RenderLock::peek()) return;
   if (!book) {
     nextPagePrefetched = true;
     return;
@@ -607,59 +672,21 @@ void MangaReaderActivity::prefetchNextPageCache() {
     return;
   }
   // BMP pages don't stream a .2bp cache (the BMP converter renders straight to the framebuffer),
-  // so there's nothing to warm -- and probing Storage.exists() below would never become true,
-  // re-running this every idle tick. BMP is uncompressed, so the page-turn decode is cheap
-  // anyway. Skip prefetch for a BMP next page.
-  if (FsHelpers::hasBmpExtension(book->getPageImagePath(upcomingPage))) {
-    nextPagePrefetched = true;
-    return;
-  }
-  const std::string cachePath = book->getCachePath() + "/page_" + std::to_string(upcomingPage) + ".2bp";
-  if (Storage.exists(cachePath.c_str())) {
-    nextPagePrefetched = true;
-    return;
-  }
-  // The decode needs working buffers plus the 48KB framebuffer snapshot below; under pressure,
-  // skip permanently for this page (the page-turn decode handles it as before).
-  if (ESP.getMaxAllocHeap() < 60000) {
-    nextPagePrefetched = true;
-    return;
-  }
-  // The renderer belongs to the render task; only touch it under the rendering mutex, and don't
-  // stall a queued render -- retry on a later idle tick instead.
-  if (RenderLock::peek()) return;
-
+  // so there's nothing to warm. BMP is uncompressed, so the page-turn decode is cheap anyway.
   const std::string imgPath = book->getPageImagePath(upcomingPage);
-  ImageToFramebufferDecoder* decoder = imgPath.empty() ? nullptr : ImageDecoderFactory::getDecoder(imgPath);
-  ImageDimensions dims = {0, 0};
-  if (!decoder || !decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
+  if (imgPath.empty() || FsHelpers::hasBmpExtension(imgPath)) {
     nextPagePrefetched = true;
     return;
   }
-
-  RenderLock lock;
-  // The decode scribbles the framebuffer (RAM only -- nothing is displayed here); snapshot and
-  // restore it so the on-screen frame survives for later partial redraws and overlays.
-  if (!renderer.storeBwBuffer()) {
-    nextPagePrefetched = true;
-    return;
-  }
-  LOG_DBG("MRA", "Prefetching pixel cache for page %u", static_cast<unsigned>(upcomingPage));
-  const FullPageGeom g = applyFullPageGeometry(dims.width, dims.height);
-  RenderConfig config;
-  config.x = g.x;
-  config.y = g.y;
-  config.maxWidth = g.screenW;
-  config.maxHeight = g.screenH;
-  config.useGrayscale = true;
-  config.useDithering = true;
-  config.cachePath = cachePath;
-  decoder->decodeToFramebuffer(imgPath, renderer, config);
-  if (g.rotated) {
-    renderer.setOrientation(static_cast<GfxRenderer::Orientation>(g.savedOrientation));
-  }
-  renderer.restoreBwBuffer();
-  nextPagePrefetched = true;
+  // Everything that touches the SD or decodes runs on the prefetch worker -- this used to decode
+  // synchronously right here on the input-polling task, which starved gpio.update() and dropped
+  // button presses for the whole ~1s decode (see the worker doc block in the header).
+  PrefetchJob job;
+  job.isPanel = false;
+  job.gen = pageGeneration;
+  job.imgPath = imgPath;
+  job.cachePath = book->getCachePath() + "/page_" + std::to_string(upcomingPage) + ".2bp";
+  postPrefetchJob(std::move(job));  // screen dims for the geometry math are captured in the post
 }
 
 void MangaReaderActivity::renderPanelZoom() {
@@ -700,9 +727,9 @@ void MangaReaderActivity::renderPanelZoom() {
   const std::string panelImgPath = panelCropPath(currentPanel);
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(panelImgPath);
   if (!decoder) {
-    // A null decoder is a transient condition (getDecoder allocates its decoder with nothrow and
-    // returns null on OOM), NOT a permanently missing/unsupported crop -- so DON'T poison the
-    // dims slot with -1 here. Fall back this frame; a later entry retries once memory recovers.
+    // Defensive: getDecoder returns null only for an unsupported extension, and crop paths are
+    // always .jpg/.bmp -- shouldn't happen. Fall back to the full page without poisoning the
+    // dims slot.
     renderFullPage();
     return;
   }
@@ -840,24 +867,20 @@ void MangaReaderActivity::renderPanelZoom() {
   }
 }
 
-MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
+MangaReaderActivity::PanelGeom MangaReaderActivity::computePanelGeom(const int imgWidth, const int imgHeight,
+                                                                     int screenW, int screenH) {
   PanelGeom g;
-  g.savedOrientation = renderer.getOrientation();
-  int screenW = renderer.getScreenWidth();
-  int screenH = renderer.getScreenHeight();
 
   // Rotate when the panel's aspect doesn't match the screen's, same as EPUB
   // full-page images: this lets a wide (landscape) panel fill a portrait
   // screen edge-to-edge instead of shrinking to fit within its width, and
-  // vice versa. The user tilts the device to view a rotated panel.
+  // vice versa. The user tilts the device to view a rotated panel. Pure math
+  // (no renderer access) -- see computeFullPageGeom for the swap rationale.
   const bool screenIsPortrait = screenH > screenW;
   const bool panelIsLandscape = imgWidth > imgHeight;
   g.rotated = screenIsPortrait == panelIsLandscape;
   if (g.rotated) {
-    const auto rotatedOrientation = static_cast<GfxRenderer::Orientation>((g.savedOrientation + 3) % 4);
-    renderer.setOrientation(rotatedOrientation);
-    screenW = renderer.getScreenWidth();
-    screenH = renderer.getScreenHeight();
+    std::swap(screenW, screenH);
   }
 
   // Fit panel image to screen preserving aspect ratio. Unlike inline EPUB
@@ -874,11 +897,22 @@ MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int
   return g;
 }
 
-// Idle-time twin of renderPanelZoom's decode: writes the panel's .2bp pixel cache (and its
-// dimension slot) so entering the panel costs a cache read instead of a JPEG decode. Same
-// guard discipline as prefetchNextPageCache: heap floor, RenderLock::peek retry, framebuffer
-// snapshot around the decode scribble.
+MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
+  const int savedOrientation = renderer.getOrientation();
+  PanelGeom g = computePanelGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight());
+  g.savedOrientation = savedOrientation;
+  if (g.rotated) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4));
+  }
+  return g;
+}
+
+// Idle-time twin of renderPanelZoom's decode: warms the panel's .2bp pixel cache (and its
+// dimension slot) so entering the panel costs a cache read instead of a JPEG decode. This is
+// only the loop-side gate; the SD probes and the decode itself run on the prefetch worker.
 void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
+  // See prefetchNextPageCache: no job building while a render is active/queued.
+  if (RenderLock::peek()) return;
   std::atomic<bool>& doneFlag = (viewMode == ViewMode::FullPage) ? firstPanelPrefetched : nextPanelPrefetched;
   if (!book || panelIdx < 0 || panelIdx >= static_cast<int>(panels.size())) {
     doneFlag = true;
@@ -891,87 +925,212 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
     doneFlag = true;
     return;
   }
-  // Don't contend on the SD mutex with an in-flight render decode: bail before ANY SD work (the
-  // cache-exists probe and header parse below both hit storage) if the render task is active, and
-  // retry on a later idle tick. Mirrors the peek guard before the framebuffer decode further down.
-  if (RenderLock::peek()) return;
-  const std::string cachePath =
-      book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(panelIdx) + ".2bp";
-  if (Storage.exists(cachePath.c_str())) {
-    // Pixel cache already warm (commonly a .2bp persisted from a prior session), but this
-    // session's panelDims slot may still be unprobed -- so the eventual panel entry would parse
-    // the crop header on the render hot path even though the pixels are cached. Probe the header
-    // once here (idle) and publish the slot, so entry is a pure cache read.
-    // Snapshot the slot under the lock (render() writes panelDims on its own task -- see header),
-    // then do the SD probe outside the lock.
-    bool needProbe;
-    {
-      RenderLock lock;
-      needProbe = (panelDims[panelIdx].w == 0);
-    }
-    if (needProbe) {
-      const std::string warmCropPath = panelCropPath(panelIdx);
-      const ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(warmCropPath);
-      // Null decoder = transient OOM (nothrow getDecoder), not a bad crop -- leave the slot
-      // unprobed so a later entry retries. Only a non-null decoder whose header parse fails is a
-      // genuinely bad crop worth caching as -1.
-      if (warmDecoder) {
-        ImageDimensions warmDims = {0, 0};
-        const bool warmOk =
-            warmDecoder->getDimensions(warmCropPath, warmDims) && warmDims.width > 0 && warmDims.height > 0;
-        RenderLock lock;
-        panelDims[panelIdx] = warmOk ? PanelCropDims{warmDims.width, warmDims.height} : PanelCropDims{-1, -1};
-      }
-    }
-    doneFlag = true;
-    return;
-  }
-  const std::string cropPath = panelCropPath(panelIdx);
-  if (!Storage.exists(cropPath.c_str())) {
-    // Confirmed missing crop file (full-page panel like a cover/splash): cache -1 (under the lock
-    // -- render() reads panelDims on its own task) so a later render entry falls back without
-    // re-probing the SD.
-    RenderLock lock;
-    panelDims[panelIdx] = {-1, -1};
-    doneFlag = true;
-    return;
-  }
-  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cropPath);  // non-const: decodes below
-  if (!decoder) {
-    // Transient (nothrow getDecoder returns null on OOM), not a missing/bad crop -- skip this
-    // prefetch without poisoning the slot; the panel-entry render re-probes and retries.
-    doneFlag = true;
-    return;
-  }
-  // The decode needs working buffers plus the 48KB framebuffer snapshot below; under pressure,
-  // skip permanently for this slot (the panel-entry decode handles it as before).
-  if (ESP.getMaxAllocHeap() < 60000) {
-    doneFlag = true;
-    return;
-  }
-  // The renderer belongs to the render task; only touch it under the rendering mutex, and don't
-  // stall a queued render -- retry on a later idle tick instead.
-  if (RenderLock::peek()) return;
+  PrefetchJob job;
+  job.isPanel = true;
+  job.isFirstPanel = (viewMode == ViewMode::FullPage);
+  job.panelIdx = panelIdx;
+  job.gen = pageGeneration;
+  // Paths are built HERE, on the loop task that owns currentPage/panelCropIsBmp -- the worker
+  // must never call panelCropPath() itself, since a page turn mid-job would make it read
+  // half-updated state. A stale captured path at worst writes a correct cache for the old page.
+  job.imgPath = panelCropPath(panelIdx);
+  job.cachePath = book->getCachePath() + "/p" + std::to_string(currentPage) + "_" + std::to_string(panelIdx) + ".2bp";
+  postPrefetchJob(std::move(job));
+}
 
-  // Probe the crop's header WITHOUT the lock (SD I/O must not stall the render task), then take
-  // the lock once and publish the dimension slot (missing/corrupt cached as -1, so render never
-  // re-probes) plus do the framebuffer decode under that same lock -- every panelDims write and
-  // every renderer touch is now render-task-safe.
+// ---- Background prefetch worker (see the doc block in the header for the design invariants) ----
+
+void MangaReaderActivity::prefetchTaskTrampoline(void* param) {
+  static_cast<MangaReaderActivity*>(param)->prefetchTaskLoop();
+}
+
+void MangaReaderActivity::prefetchTaskLoop() {
+  while (true) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (prefetchExitRequested) break;
+    if (!prefetchBusy) continue;  // spurious/coalesced notification with no job posted
+    if (prefetchJob.isPanel) {
+      workerWarmPanel();
+    } else {
+      workerWarmNextPage();
+    }
+    // Release the job slot LAST: the loop task treats busy==false as "job+result are mine".
+    prefetchBusy = false;
+  }
+  // Self-terminate. The exited flag is the join signal for onExit(); nothing on this task may
+  // touch the activity after setting it.
+  prefetchTaskExited = true;
+  vTaskDelete(nullptr);
+}
+
+bool MangaReaderActivity::prefetchShouldCancel(const void* selfPtr) {
+  const auto* self = static_cast<const MangaReaderActivity*>(selfPtr);
+  // Exit: the activity is tearing down. peek: a real render holds (or has just taken) the
+  // rendering mutex -- the foreground work the background warm must never compete with.
+  return self->prefetchExitRequested || RenderLock::peek();
+}
+
+void MangaReaderActivity::postPrefetchJob(PrefetchJob&& job) {
+  // Single-slot queue: refuse while the worker owns the slot (busy) or a finished result hasn't
+  // been applied yet (pending) -- overwriting either would break the ownership ping-pong. The
+  // caller's done-flag stays false, so the dwell logic simply retries on a later idle tick.
+  // No worker (task creation failed at onEnter): prefetching is disabled; mark nothing.
+  if (!prefetchTaskHandle || prefetchBusy || prefetchResult.pending) return;
+  prefetchJob = std::move(job);
+  // Base dims captured once at onEnter -- no renderer read here, so posting can never race a
+  // render task's transient orientation change (see the header note on baseScreenW/baseScreenH).
+  prefetchJob.screenW = baseScreenW;
+  prefetchJob.screenH = baseScreenH;
+  prefetchResult = PrefetchResult{};
+  prefetchBusy = true;
+  xTaskNotifyGive(prefetchTaskHandle);
+}
+
+void MangaReaderActivity::applyPrefetchResult() {
+  // Loop task only. Worker results are applied here -- never by the worker itself -- so every
+  // panelDims write keeps the established "loop task writes under RenderLock" discipline, and
+  // the worker can stay lock-free (see the header: onExit() joins it while HOLDING RenderLock).
+  if (prefetchBusy || !prefetchResult.pending) return;
+  const bool genOk = (prefetchJob.gen == pageGeneration);
+  if (prefetchResult.dimsValid && genOk) {
+    // NEVER block the input task on the rendering mutex: a blocking acquire here stalls loop()
+    // -- and button polling with it -- for a render's whole duration (observed on-device: a
+    // 2.7s loop stall when a cancelled warm's dims were applied during a 3.3s panel decode).
+    // A peek()-then-lock guard still had a TOCTOU window (the render task can take the mutex
+    // between the check and the constructor), so use the non-blocking acquire: either we hold
+    // the lock right now, or the whole application defers to a later tick -- the result stays
+    // pending, and postPrefetchJob refuses new jobs while it is, so nothing is lost.
+    RenderLock lock{RenderLock::Try{}};
+    if (!lock.held()) return;
+    if (prefetchJob.panelIdx >= 0 && prefetchJob.panelIdx < static_cast<int>(panelDims.size())) {
+      panelDims[prefetchJob.panelIdx] = prefetchResult.dims;
+    }
+  }
+  if (prefetchResult.completed && genOk) {
+    std::atomic<bool>& doneFlag = prefetchJob.isPanel
+                                      ? (prefetchJob.isFirstPanel ? firstPanelPrefetched : nextPanelPrefetched)
+                                      : nextPagePrefetched;
+    doneFlag = true;
+  }
+  // A stale-generation or deferred (cancelled) job marks nothing: the flags for the current page
+  // are still false, so the dwell logic naturally re-posts a fresh job.
+  prefetchResult.pending = false;
+}
+
+void MangaReaderActivity::workerWarmNextPage() {
+  prefetchResult.pending = true;  // every exit path below hands a result (possibly a deferral) back
+  // Defer, don't consume, while a render is active or teardown started: completed stays false,
+  // so the loop retries after the next dwell.
+  if (prefetchShouldCancel(this)) return;
+  if (Storage.exists(prefetchJob.cachePath.c_str())) {
+    prefetchResult.completed = true;  // already warm (e.g. persisted from a prior session)
+    return;
+  }
+  if (ESP.getMaxAllocHeap() < PREFETCH_HEAP_FLOOR) {
+    // Under memory pressure skip permanently for this page (the page-turn decode handles it as
+    // before) -- same policy as the old in-loop prefetch.
+    prefetchResult.completed = true;
+    return;
+  }
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(prefetchJob.imgPath);
   ImageDimensions dims = {0, 0};
-  const bool dimsOk = decoder->getDimensions(cropPath, dims) && dims.width > 0 && dims.height > 0;
+  if (!decoder || !decoder->getDimensions(prefetchJob.imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
+    prefetchResult.completed = true;  // undecodable page: give up like the old code did
+    return;
+  }
+  LOG_DBG("MRA", "Prefetch worker: warming page cache %s", prefetchJob.cachePath.c_str());
+  const FullPageGeom g = computeFullPageGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH);
+  RenderConfig config;
+  config.x = g.x;
+  config.y = g.y;
+  config.maxWidth = g.screenW;
+  config.maxHeight = g.screenH;
+  config.useGrayscale = true;
+  config.useDithering = true;
+  config.cacheOnly = true;
+  config.shouldCancel = &prefetchShouldCancel;
+  config.cancelCtx = this;
+  // Decode into a private tmp and publish by rename -- see the header doc block for why writing
+  // the real path directly could collide with a foreground render caching the same asset.
+  const std::string tmpPath = prefetchJob.cachePath + ".tmp";
+  config.cachePath = tmpPath;
+  if (decoder->decodeToFramebuffer(prefetchJob.imgPath, renderer, config)) {
+    // SdFat rename fails (O_CREAT|O_EXCL) if the destination exists -- exactly what we want when
+    // a foreground render published the real cache first. Losing the race just drops our tmp.
+    // Any OTHER rename failure (I/O error, card full) leaves no cache; the job is still marked
+    // completed rather than retried: the done flags mean "stop warming this asset", NOT "cache
+    // guaranteed present" -- every render path probes the cache file itself and falls back to an
+    // on-demand decode, and retrying on a failing/full card would churn the worker forever.
+    // Same give-up-once policy as a decode failure below; log it so it isn't silent.
+    if (!Storage.rename(tmpPath.c_str(), prefetchJob.cachePath.c_str())) {
+      if (!Storage.exists(prefetchJob.cachePath.c_str())) {
+        LOG_ERR("MRA", "Prefetch cache publish failed: %s", prefetchJob.cachePath.c_str());
+      }
+      Storage.remove(tmpPath.c_str());
+    }
+    prefetchResult.completed = true;
+  } else if (!prefetchShouldCancel(this)) {
+    // Genuine decode failure (not a cancellation): give up for this page, old-code policy.
+    // The converter already dropped its partial tmp.
+    prefetchResult.completed = true;
+  }
+  // Cancelled: completed stays false -> the loop re-posts after the next dwell.
+}
 
-  RenderLock lock;
-  panelDims[panelIdx] = dimsOk ? PanelCropDims{dims.width, dims.height} : PanelCropDims{-1, -1};
+void MangaReaderActivity::workerWarmPanel() {
+  prefetchResult.pending = true;  // every exit path below hands a result (possibly a deferral) back
+  if (prefetchShouldCancel(this)) return;
+
+  if (Storage.exists(prefetchJob.cachePath.c_str())) {
+    // Pixel cache already warm (commonly persisted from a prior session), but the panelDims slot
+    // may still be unprobed -- so the eventual panel entry would parse the crop header on the
+    // render hot path even though the pixels are cached. Probe the header once here and hand the
+    // dims back for the loop task to publish, so entry is a pure cache read. (Reading the slot to
+    // skip an already-done probe would need RenderLock, which this task must never take -- so we
+    // probe unconditionally: at worst one redundant header parse per panel per page, off-hot-path.)
+    const ImageToFramebufferDecoder* warmDecoder = ImageDecoderFactory::getDecoder(prefetchJob.imgPath);
+    // Defensive: getDecoder returns null only for an unsupported extension (decoder instances
+    // are static, no allocation involved) -- leave the slot unprobed. Only a non-null decoder
+    // whose header parse fails is a genuinely bad crop worth caching as -1.
+    if (warmDecoder) {
+      ImageDimensions warmDims = {0, 0};
+      const bool warmOk =
+          warmDecoder->getDimensions(prefetchJob.imgPath, warmDims) && warmDims.width > 0 && warmDims.height > 0;
+      prefetchResult.dims = warmOk ? PanelCropDims{warmDims.width, warmDims.height} : PanelCropDims{-1, -1};
+      prefetchResult.dimsValid = true;
+    }
+    prefetchResult.completed = true;
+    return;
+  }
+  if (!Storage.exists(prefetchJob.imgPath.c_str())) {
+    // Confirmed missing crop file (full-page panel like a cover/splash): cache -1 so a later
+    // render entry falls back without re-probing the SD.
+    prefetchResult.dims = {-1, -1};
+    prefetchResult.dimsValid = true;
+    prefetchResult.completed = true;
+    return;
+  }
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(prefetchJob.imgPath);  // non-const: decodes
+  if (!decoder) {
+    // Defensive: getDecoder returns null only for an unsupported extension. Finish the job
+    // without poisoning the dims slot; the panel-entry render re-probes if ever hit.
+    prefetchResult.completed = true;
+    return;
+  }
+  if (ESP.getMaxAllocHeap() < PREFETCH_HEAP_FLOOR) {
+    prefetchResult.completed = true;  // memory pressure: skip for this slot, old-code policy
+    return;
+  }
+  ImageDimensions dims = {0, 0};
+  const bool dimsOk = decoder->getDimensions(prefetchJob.imgPath, dims) && dims.width > 0 && dims.height > 0;
+  prefetchResult.dims = dimsOk ? PanelCropDims{dims.width, dims.height} : PanelCropDims{-1, -1};
+  prefetchResult.dimsValid = true;
   if (!dimsOk) {
-    doneFlag = true;
+    prefetchResult.completed = true;
     return;
   }
-  if (!renderer.storeBwBuffer()) {
-    doneFlag = true;
-    return;
-  }
-  LOG_DBG("MRA", "Prefetching panel cache p%u_%d", static_cast<unsigned>(currentPage), panelIdx);
-  const PanelGeom g = applyPanelGeometry(dims.width, dims.height);
+  LOG_DBG("MRA", "Prefetch worker: warming panel cache %s", prefetchJob.cachePath.c_str());
+  const PanelGeom g = computePanelGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH);
   RenderConfig config;
   config.x = g.x;
   config.y = g.y;
@@ -980,13 +1139,26 @@ void MangaReaderActivity::prefetchPanelCache(const int panelIdx) {
   config.useExactDimensions = true;
   config.useGrayscale = true;
   config.useDithering = true;
-  config.cachePath = cachePath;
-  decoder->decodeToFramebuffer(cropPath, renderer, config);
-  if (g.rotated) {
-    renderer.setOrientation(static_cast<GfxRenderer::Orientation>(g.savedOrientation));
+  config.cacheOnly = true;
+  config.shouldCancel = &prefetchShouldCancel;
+  config.cancelCtx = this;
+  const std::string tmpPath = prefetchJob.cachePath + ".tmp";
+  config.cachePath = tmpPath;
+  if (decoder->decodeToFramebuffer(prefetchJob.imgPath, renderer, config)) {
+    // See workerWarmNextPage: rename-fails-because-destination-exists is the by-design lost
+    // race; any other failure still completes the job (done flags mean "stop warming", not
+    // "cache present" -- renders probe the file and fall back to decoding) but gets logged.
+    if (!Storage.rename(tmpPath.c_str(), prefetchJob.cachePath.c_str())) {
+      if (!Storage.exists(prefetchJob.cachePath.c_str())) {
+        LOG_ERR("MRA", "Prefetch cache publish failed: %s", prefetchJob.cachePath.c_str());
+      }
+      Storage.remove(tmpPath.c_str());
+    }
+    prefetchResult.completed = true;
+  } else if (!prefetchShouldCancel(this)) {
+    prefetchResult.completed = true;  // genuine failure: give up for this slot, old-code policy
   }
-  renderer.restoreBwBuffer();
-  doneFlag = true;
+  // Cancelled: completed stays false (dims, if probed, still get published) -> retried later.
 }
 
 void MangaReaderActivity::renderTextOverlay() {

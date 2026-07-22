@@ -1,6 +1,8 @@
 #pragma once
 
 #include <MangaPanel.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <atomic>
 #include <memory>
@@ -80,6 +82,10 @@ class MangaReaderActivity final : public Activity {
   // NOTE: sets the renderer orientation when rotation is needed -- the caller must restore
   // savedOrientation when done.
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
+  // Pure fit/rotate math shared by applyFullPageGeometry (render path) and the prefetch worker.
+  // Touches NO renderer state: rotation is just a screen-dim swap here, which matches what
+  // setOrientation((o+3)%4) does to getScreenWidth/Height. savedOrientation is left at 0.
+  static FullPageGeom computeFullPageGeom(int imgWidth, int imgHeight, int screenW, int screenH);
 
   void prefetchNextPageCache();
 
@@ -131,13 +137,89 @@ class MangaReaderActivity final : public Activity {
     int w = 0, h = 0;
   };
   // render() (render task) reads `panels` and `panelDims` under RenderLock. Every writer on the
-  // loop task -- loadCurrentPagePanels() (whole-vector swap) and prefetchPanelCache() (per-slot)
-  // -- must take RenderLock around the write; renderPanelZoom() writes them while already
-  // holding the lock render() handed it. Keep the standalone SD probes (the panel-index load,
-  // exists(), getDimensions()) OUTSIDE the lock so they don't stall the render task; the decode
+  // loop task -- loadCurrentPagePanels() (whole-vector swap) and applyPrefetchResult() (per-slot
+  // publication of worker probes) -- must take RenderLock around the write; renderPanelZoom()
+  // writes them while already holding the lock render() handed it. The prefetch WORKER task never
+  // writes these (or takes the lock) -- it hands results to applyPrefetchResult instead; see the
+  // worker doc block below. Keep standalone SD probes (the panel-index load, exists(),
+  // getDimensions()) OUTSIDE the lock so they don't stall the render task; the render decode
   // itself necessarily runs under the lock because it draws into the renderer's framebuffer, and
   // its file read is part of that -- that is expected, not a violation of the rule above.
   std::vector<PanelCropDims> panelDims;
+
+  // ---- Background prefetch worker ----
+  // The speculative cache warms (next page / panels) used to decode JPEGs synchronously inside
+  // loop() -- on the SAME task that polls the buttons. A ~1s decode meant gpio.update() stopped
+  // being called for that whole window; button edges are events, not queued state, so presses
+  // AND releases landing inside the window simply evaporated ("takes multiple clicks to
+  // register" on JPEG books). The warms now run on this dedicated worker task instead.
+  //
+  // Design rules (each one is a hard invariant, not a preference):
+  //  * The worker is LOCK-FREE: it never takes RenderLock. ActivityManager's pop path calls
+  //    onExit() while HOLDING RenderLock, and onExit() joins this worker -- a worker blocked on
+  //    that same lock would deadlock the join. Consequently the worker also never touches the
+  //    renderer: decodes run cacheOnly (see RenderConfig), and geometry comes from the pure
+  //    computeFullPageGeom/computePanelGeom helpers with screen dims captured once at onEnter
+  //    (see baseScreenW/baseScreenH above -- no renderer reads off the render task at all).
+  //  * Results are handed BACK to the loop task (applyPrefetchResult), which owns the existing
+  //    locked-write discipline for panelDims and the done-flags. The worker never writes them.
+  //  * The worker decodes into cachePath + ".tmp" and publishes by rename. A real render may
+  //    decode-and-cache the SAME asset concurrently (it streams to the real path); two write
+  //    handles on one FAT file corrupt the volume. SdFat's rename opens the destination
+  //    O_CREAT|O_EXCL (verified, SdFat 2.3.1 FatFile::rename), so publish fails cleanly if the
+  //    render got there first -- the worker then just deletes its tmp.
+  //  * Cancellation: the decode's per-block cancel probe checks prefetchExitRequested and
+  //    RenderLock::peek(). The moment a real render starts (or the activity exits), the decode
+  //    aborts within one MCU block/scanline and its partial tmp is dropped -- so a background
+  //    warm never competes with a foreground render for CPU/SD beyond a few ms.
+  //  * Single-slot job queue with strict ownership ping-pong: loop() writes prefetchJob and
+  //    prefetchResult only while prefetchBusy is false and no result is pending; the worker
+  //    touches them only between the notify that follows busy=true and its own busy=false.
+  //    The strings/struct members therefore need no locking of their own.
+  //  * pageGeneration stamps jobs; loadCurrentPagePanels() bumps it (under RenderLock) on every
+  //    page change, so results of a stale in-flight warm are dropped instead of poisoning the
+  //    new page's panelDims/flags.
+  TaskHandle_t prefetchTaskHandle = nullptr;
+  std::atomic<bool> prefetchExitRequested{false};
+  std::atomic<bool> prefetchTaskExited{false};
+  std::atomic<bool> prefetchBusy{false};
+  std::atomic<uint32_t> pageGeneration{0};
+  // Base (unrotated) logical screen dims for the worker's pure geometry math. Captured ONCE in
+  // onEnter(), right after applyOrientation and before any task can render: the persistent
+  // orientation cannot change while this activity is open (settings live in another activity),
+  // and transient render-time rotations are always restored under RenderLock -- so reading the
+  // renderer per-post would be an unsynchronized read racing those transient writes, for a value
+  // that never actually changes. Plain ints, written once single-threaded, read-only afterwards.
+  int baseScreenW = 0;
+  int baseScreenH = 0;
+
+  struct PrefetchJob {
+    bool isPanel = false;
+    bool isFirstPanel = false;  // which done-flag a panel job resolves
+    int panelIdx = -1;
+    uint32_t gen = 0;       // pageGeneration at post time
+    int screenW = 0;        // base (unrotated) screen dims captured at post time --
+    int screenH = 0;        //   inputs to the pure geometry helpers
+    std::string imgPath;    // page image or panel crop
+    std::string cachePath;  // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
+  };
+  PrefetchJob prefetchJob;
+
+  struct PrefetchResult {
+    bool pending = false;    // worker sets before clearing busy; loop clears after applying
+    bool completed = false;  // job reached a terminal state (vs deferred/cancelled -> retry later)
+    bool dimsValid = false;  // panel jobs: publish dims into panelDims[job.panelIdx]
+    PanelCropDims dims{};
+  };
+  PrefetchResult prefetchResult;
+
+  static void prefetchTaskTrampoline(void* param);
+  void prefetchTaskLoop();
+  static bool prefetchShouldCancel(const void* selfPtr);
+  void postPrefetchJob(PrefetchJob&& job);
+  void applyPrefetchResult();  // loop task: publish worker results under the normal lock rules
+  void workerWarmNextPage();
+  void workerWarmPanel();
 
   // Geometry of a zoomed panel on the (possibly temporarily rotated) screen. Shared by
   // renderPanelZoom() and prefetchPanelCache() so the prefetch-written pixel cache has exactly
@@ -149,6 +231,8 @@ class MangaReaderActivity final : public Activity {
     int savedOrientation = 0;
   };
   PanelGeom applyPanelGeometry(int imgWidth, int imgHeight);
+  // Pure twin of applyPanelGeometry, same contract as computeFullPageGeom (no renderer access).
+  static PanelGeom computePanelGeom(int imgWidth, int imgHeight, int screenW, int screenH);
 
   std::string panelCropPath(int panelIdx) const;                      // uses panelCropIsBmp for the extension
   std::string panelCropPathExt(int panelIdx, const char* ext) const;  // explicit extension (format detection)
