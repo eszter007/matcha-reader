@@ -1128,15 +1128,6 @@ def main():
              "dither patterns. Pairs naturally with --no-ocr: when OCR is enabled the (dithered) panel crop is what "
              "gets sent to Gemini, so text recognition on toned pages is less accurate than from a JPEG crop.",
     )
-    parser.add_argument(
-        "--no-panels",
-        action="store_true",
-        help="Skip panel detection entirely: every page becomes a single full-page 'panel' with no crop "
-             "files, so the reader behaves as a pure page flipper (page-turn buttons always turn pages, "
-             "never enter panel-zoom). Use for image-based novels, photo books, or scans where panel "
-             "boxes are meaningless -- the detector would otherwise carve text columns into bogus "
-             "panels. Implies --no-ocr (full-page panels are never OCR'd anyway).",
-    )
     size_group = parser.add_mutually_exclusive_group()
     size_group.add_argument(
         "--x3",
@@ -1152,12 +1143,6 @@ def main():
         help="Downscale pages and panel crops to fit the Xteink X4 screen (480x800). See --x3.",
     )
     args = parser.parse_args()
-
-    # --no-panels produces only full-page panels, which never get crop files and
-    # are therefore never OCR'd -- requiring a Gemini key would be pointless friction.
-    if args.no_panels and not args.no_ocr:
-        print("Note: --no-panels implies --no-ocr (full-page panels are never OCR'd).")
-        args.no_ocr = True
 
     device_target = DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4 else None
 
@@ -1251,13 +1236,8 @@ def main():
                 else:
                     shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
-            if args.no_panels:
-                # One full-page panel: is_full_page_panel() then skips the crop file, and the
-                # reader's existing cover/splash handling treats the page as a plain page-flip.
-                boxes = [[0, 0, img_w, img_h]]
-            else:
-                boxes = detect_panels(img)
-                boxes = sort_panels_manga_order(boxes)
+            boxes = detect_panels(img)
+            boxes = sort_panels_manga_order(boxes)
 
             # Crop and save every panel first (fast, local) before dispatching
             # the slow network calls concurrently -- OCR is I/O-bound (network
