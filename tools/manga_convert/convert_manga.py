@@ -1127,7 +1127,7 @@ def main():
              "files, so the reader behaves as a pure page flipper (page-turn buttons always turn pages, "
              "never enter panel-zoom). Use for image-based novels, photo books, or scans where panel "
              "boxes are meaningless -- the detector would otherwise carve text columns into bogus "
-             "panels. Pairs naturally with --no-ocr (full-page panels are never OCR'd anyway).",
+             "panels. Implies --no-ocr (full-page panels are never OCR'd anyway).",
     )
     size_group = parser.add_mutually_exclusive_group()
     size_group.add_argument(
@@ -1144,6 +1144,12 @@ def main():
         help="Downscale pages and panel crops to fit the Xteink X4 screen (480x800). See --x3.",
     )
     args = parser.parse_args()
+
+    # --no-panels produces only full-page panels, which never get crop files and
+    # are therefore never OCR'd -- requiring a Gemini key would be pointless friction.
+    if args.no_panels and not args.no_ocr:
+        print("Note: --no-panels implies --no-ocr (full-page panels are never OCR'd).")
+        args.no_ocr = True
 
     device_target = DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4 else None
 
