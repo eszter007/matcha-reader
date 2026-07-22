@@ -1762,8 +1762,9 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   }
 
   const int fontId = effectiveReaderFontId();
-  // Returns false to stop iterating (cancelled); Failed targets are recorded so a broken image
-  // is only decode-attempted once per session instead of on every render tail.
+  // Returns false to stop iterating (cancelled). The MOST RECENT failed target is remembered
+  // (single path, not a list): the warm targets one page at a time, so one slot is enough to
+  // stop the common retry churn of re-attempting the same broken image on every render tail.
   const auto warmBlock = [this](const ImageBlock& block) -> bool {
     if (block.getImagePath() == imageWarmFailedPath_) {
       return true;
@@ -1779,18 +1780,22 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     if (!verticalSection || verticalSection->pageCount == 0) {
       return;
     }
-    // nextV must outlive vp: getPage() hands out a pointer into the section's page cache.
-    VerticalSection nextV(epub, currentSpineIndex + 1, renderer);
+    // Constructed only on the spine-boundary branch (its ctor builds a path string -- avoidable
+    // churn on the common within-chapter turn), but declared at this scope because it must
+    // outlive vp: getPage() hands out a pointer into the section's page cache.
+    std::optional<VerticalSection> nextV;
     const VerticalPage* vp = nullptr;
     const int nextPage = verticalSection->currentPage + 1;
     if (nextPage < verticalSection->pageCount) {
       vp = verticalSection->getPage(nextPage);
-    } else if (currentSpineIndex + 1 < epub->getSpineItemsCount() &&
-               nextV.loadSectionFile(fontId, viewportWidth, viewportHeight) && nextV.pageCount > 0) {
+    } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
       // Last page of the chapter: the next page lives in the next spine item. In JP books each
       // full-page illustration is its own one-page spine item, so this cross-boundary peek is
       // the common case -- silentIndexNextChapterIfNeeded has already built the section file.
-      vp = nextV.getPage(0);
+      nextV.emplace(epub, currentSpineIndex + 1, renderer);
+      if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight) && nextV->pageCount > 0) {
+        vp = nextV->getPage(0);
+      }
     }
     if (!vp || !vp->isImagePage()) {
       return;

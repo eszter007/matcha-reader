@@ -5,6 +5,7 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 
@@ -40,7 +41,7 @@ ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shoul
   const size_t dotPos = imagePath.rfind('.');
   if (dotPos != std::string::npos) {
     std::string ext = imagePath.substr(dotPos);
-    for (auto& c : ext) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (ext == ".bmp") return WarmResult::Failed;
   }
 
