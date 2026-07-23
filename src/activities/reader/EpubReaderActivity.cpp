@@ -1485,13 +1485,13 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       renderStatusBar();
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
     }
-    // Kindle-class turns: load the NEXT page's glyphs while the reader looks at this one,
-    // so the next forward turn renders from a warm cache instead of paying the full
-    // per-page SD bulk load at button time. The mini-font cache holds exactly one page per
-    // style; the page on screen no longer needs its glyphs (pixels are in the framebuffer).
-    // getPage(next) also leaves the next page in the section's single-page read cache, so
-    // the turn skips the SD page read too. Backward turns miss the warm cache and take the
-    // classic prewarm path.
+    // Kindle-class turns: load the neighbouring page's glyphs while the reader looks at this
+    // one, so the next turn renders from a warm cache instead of paying the full per-page SD
+    // bulk load at button time. Direction-adaptive: warm the NEXT page after a forward turn,
+    // the PREVIOUS page after a backward turn, so sustained paging in either direction stays
+    // warm -- only the single turn right after a direction reversal is cold (the mini-font
+    // cache holds exactly one page per style). getPage(target) also leaves that page in the
+    // section's single-page read cache, so the turn skips the SD page read too.
     prewarmedVPage_ = -1;
     const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? verticalSection->currentPage + 1
                                                                             : verticalSection->currentPage - 1;

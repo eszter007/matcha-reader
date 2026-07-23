@@ -998,7 +998,15 @@ struct LayoutPageSink final : ParagraphSink {
     // the flush, a backward seek can hand back stale/garbage bytes for freshly written pages
     // (observed on device: a read-back returned a corrupt glyph count).
     out.flush();
-    out.seek(pageOffsets[req]);
+    // A failed seek to the record would leave the handle at the append position, so readPage
+    // would parse the just-written page's tail as a header -- garbage. Bail the serve (the
+    // request stays pending) rather than render a corrupt page; the write cursor is still at
+    // endPos, so the build continues correctly.
+    if (!out.seek(pageOffsets[req])) {
+      LOG_ERR("VSC", "Failed to seek to page %d for read-back", req);
+      out.seek(endPos);
+      return;
+    }
     const bool okRead = readPage(out, servePage_);
     if (!out.seek(endPos)) {
       LOG_ERR("VSC", "Failed to seek back to build position after page read-back");
