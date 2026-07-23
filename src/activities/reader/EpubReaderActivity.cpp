@@ -1420,6 +1420,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     {
       const auto* vpage = verticalSection->getPage();
       if (!vpage) {
+        if (verticalSection->lastReadHeapRefused()) {
+          // Transient low heap, NOT corruption: the on-disk cache is valid. Clearing it here
+          // would force an expensive rebuild (which needs far more heap and would fail too).
+          // Reclaim the font memory to recover headroom and re-render; the retry then fits.
+          LOG_ERR("ERS", "Vertical page read refused on low heap; keeping cache and retrying");
+          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+          prewarmedVPage_ = -1;
+          requestUpdate();
+          automaticPageTurnActive = false;
+          showPendingSyncSaveError();
+          return;
+        }
         LOG_ERR("ERS", "Failed to get vertical page");
         verticalSection->clearCache();
         verticalSection.reset();
@@ -1735,6 +1747,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         lastTurnForward_.load(std::memory_order_relaxed) ? section->currentPage + 1 : section->currentPage - 1;
     if (warmTarget >= 0 && warmTarget < section->pageCount) {
       if (auto np = section->loadPageFromSectionFile(warmTarget)) {
+        // createPrewarmScope() clears the cache in its constructor (FontCacheManager::clearCache
+        // -> FontDecompressor::clearCache), which frees the MAX_PAGE_SLOTS page-buffer slots.
+        // So each idle warm REPLACES the previous page's glyphs rather than consuming a new
+        // slot -- slots do not accumulate across turns even with release() keeping the result.
         auto scope = fcm->createPrewarmScope();
         np->render(renderer, effectiveReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
         scope.endScanAndPrewarm();

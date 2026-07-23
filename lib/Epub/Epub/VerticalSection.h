@@ -35,6 +35,10 @@ class VerticalSection {
   // fetch-and-render one page at a time, never holding two pages.
   mutable VerticalPage loadedPage_;
   mutable int loadedPageIndex_ = -1;
+  // Set by getPage() when its last read failed because the glyph vector could not be reserved
+  // on a low heap (the on-disk record is fine). Lets the reader retry later instead of clearing
+  // a valid cache. See lastReadHeapRefused().
+  mutable bool lastReadHeapRefused_ = false;
 
   bool streamParseAndLayout(HalFile& out, int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
 
@@ -92,4 +96,7 @@ class VerticalSection {
   bool clearCache() const;
   const VerticalPage* getPage() const;
   const VerticalPage* getPage(int pageIndex) const;
+  // True when the most recent getPage() returned nullptr only because the page's glyph vector
+  // could not be reserved on a low heap -- the cache is valid; retry, do not clear it.
+  bool lastReadHeapRefused() const { return lastReadHeapRefused_; }
 };

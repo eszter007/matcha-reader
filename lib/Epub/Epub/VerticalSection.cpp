@@ -599,7 +599,14 @@ bool writePage(Sink& file, const VerticalPage& page) {
   return true;
 }
 
-bool readPage(HalFile& file, VerticalPage& page) {
+// A read can fail two ways that callers must treat DIFFERENTLY: HeapRefused is transient (the
+// glyph vector could not be reserved on the current low heap) and the on-disk record is fine,
+// so the caller must NOT invalidate the cache -- retry later. Corrupt means the bytes are bad
+// and a rebuild is warranted. Collapsing both to a bool let a momentary heap dip nuke a valid
+// cache and trigger an expensive rebuild loop.
+enum class ReadResult { Ok, HeapRefused, Corrupt };
+
+ReadResult readPage(HalFile& file, VerticalPage& page) {
   page.glyphs.clear();
   page.boxes.clear();
   page.imagePath.clear();
@@ -611,7 +618,7 @@ bool readPage(HalFile& file, VerticalPage& page) {
     serialization::readPod(file, page.imageWidth);
     serialization::readPod(file, page.imageHeight);
     serialization::readPod(file, page.imageRotated);
-    return !page.imagePath.empty();
+    return page.imagePath.empty() ? ReadResult::Corrupt : ReadResult::Ok;
   }
 
   uint32_t glyphCount;
@@ -623,7 +630,7 @@ bool readPage(HalFile& file, VerticalPage& page) {
   serialization::readPod(file, boxCount);
   if (boxCount > 8) {
     LOG_ERR("VSC", "Corrupt page record: %u boxes", boxCount);
-    return false;
+    return ReadResult::Corrupt;
   }
   page.boxes.reserve(boxCount);
   for (uint8_t bi = 0; bi < boxCount; bi++) {
@@ -641,7 +648,7 @@ bool readPage(HalFile& file, VerticalPage& page) {
   constexpr uint32_t MAX_GLYPHS_PER_PAGE = 4096;
   if (glyphCount > MAX_GLYPHS_PER_PAGE) {
     LOG_ERR("VSC", "Corrupt page record: %u glyphs", glyphCount);
-    return false;
+    return ReadResult::Corrupt;
   }
   // reserve() throws-and-ABORTS under -fno-exceptions; verify the block actually exists
   // first. A corrupt count within the format bound can still demand ~98KB -- observed on
@@ -655,7 +662,7 @@ bool readPage(HalFile& file, VerticalPage& page) {
   // margin permanently starved mid-build page turns against a stable 13.3K hole.
   if (page.glyphs.capacity() < glyphCount && ESP.getMaxAllocHeap() < glyphBytes + 2 * 1024) {
     LOG_ERR("VSC", "Page record needs %u bytes, maxAlloc=%u; refusing read", glyphBytes, ESP.getMaxAllocHeap());
-    return false;
+    return ReadResult::HeapRefused;
   }
   page.glyphs.reserve(glyphCount);
 
@@ -689,7 +696,7 @@ bool readPage(HalFile& file, VerticalPage& page) {
     }
     page.glyphs.push_back(std::move(g));
   }
-  return true;
+  return ReadResult::Ok;
 }
 
 // Streams the temp HTML once looking for "<rt", to decide ruby layout geometry (column gap /
@@ -1007,13 +1014,13 @@ struct LayoutPageSink final : ParagraphSink {
       out.seek(endPos);
       return;
     }
-    const bool okRead = readPage(out, servePage_);
+    const ReadResult okRead = readPage(out, servePage_);
     if (!out.seek(endPos)) {
       LOG_ERR("VSC", "Failed to seek back to build position after page read-back");
       failed = true;
       return;
     }
-    if (!okRead) {  // heap-refused or corrupt: request stays pending, retried on heap change
+    if (okRead != ReadResult::Ok) {  // heap-refused or corrupt: request stays pending, retried on heap change
       lastRefusedAttemptKey = attemptKey;
       return;
     }
@@ -1455,10 +1462,14 @@ const VerticalPage* VerticalSection::getPage(int pageIndex) const {
     file.close();
     return nullptr;
   }
-  const bool ok = readPage(file, loadedPage_);
+  const ReadResult result = readPage(file, loadedPage_);
   file.close();
-  if (!ok) {
-    LOG_ERR("VSC", "Failed to read page %d from cache", pageIndex);
+  // Tell the reader whether a nullptr means "transient low heap, keep the cache" or a genuine
+  // failure worth clearing/rebuilding -- see lastReadHeapRefused().
+  lastReadHeapRefused_ = (result == ReadResult::HeapRefused);
+  if (result != ReadResult::Ok) {
+    LOG_ERR("VSC", "Failed to read page %d from cache (%s)", pageIndex,
+            result == ReadResult::HeapRefused ? "low heap" : "corrupt");
     return nullptr;
   }
   loadedPageIndex_ = pageIndex;
