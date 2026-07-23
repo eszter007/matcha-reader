@@ -606,10 +606,11 @@ def main():
     parser.add_argument(
         "--name",
         default="vocab",
-        help="Basename for the output files (default: vocab -> vocab.idx/vocab.dat). The device "
-        "reads vocab (main dictionary), names (name dictionary), and grammar (grammar "
-        "dictionary); pass --name names or --name grammar to fill those slots directly, "
-        "no manual renaming needed.",
+        choices=["vocab", "names", "grammar"],
+        help="Which dictionary slot the output files fill (default: vocab -> vocab.idx/"
+        "vocab.dat). The device reads vocab (main dictionary), names (name dictionary), and "
+        "grammar (grammar dictionary); pass --name names or --name grammar to fill those "
+        "slots directly, no manual renaming needed.",
     )
     parser.add_argument(
         "--format",

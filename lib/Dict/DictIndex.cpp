@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <vector>
 
 namespace {
 // Re-opening the idx/dat files on every lookup was the dominant cost of building the Word Lookup
