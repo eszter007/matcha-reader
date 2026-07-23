@@ -42,20 +42,36 @@ struct DictEntry {
   uint8_t posFlags = 0;    // DictIndexRecord::POS_* flags of the best matched record (0 = none/unset)
 };
 
-// Opens jmdict.idx / jmdict.dat from the SD card and provides O(log n)
-// lookup by headword via binary search over the sorted index file.
+// Opens vocab.idx / vocab.dat (legacy: jmdict.idx / jmdict.dat) from the SD card and provides
+// O(log n) lookup by headword via binary search over the sorted index file.
 // No full-file load — each search step reads one 40-byte record.
 class DictIndex {
  public:
   // Check whether the dictionary files exist on the SD card.
   static bool isAvailable();
 
-  static constexpr const char* IDX_PATH = "/dict/jmdict.idx";
-  static constexpr const char* DAT_PATH = "/dict/jmdict.dat";
-  static constexpr const char* NAMES_IDX_PATH = "/dict/jmnedict.idx";
-  static constexpr const char* NAMES_DAT_PATH = "/dict/jmnedict.dat";
+  // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
+  // filenames (jmdict/jmnedict) -- resolved at runtime by the accessors below, so existing SD
+  // cards keep working without any re-conversion or renaming.
+  static constexpr const char* VOCAB_IDX_PATH = "/dict/vocab.idx";
+  static constexpr const char* VOCAB_DAT_PATH = "/dict/vocab.dat";
+  static constexpr const char* NAMES_IDX_PATH = "/dict/names.idx";
+  static constexpr const char* NAMES_DAT_PATH = "/dict/names.dat";
+  static constexpr const char* LEGACY_VOCAB_IDX_PATH = "/dict/jmdict.idx";
+  static constexpr const char* LEGACY_VOCAB_DAT_PATH = "/dict/jmdict.dat";
+  static constexpr const char* LEGACY_NAMES_IDX_PATH = "/dict/jmnedict.idx";
+  static constexpr const char* LEGACY_NAMES_DAT_PATH = "/dict/jmnedict.dat";
   static constexpr const char* GRAMMAR_IDX_PATH = "/dict/grammar.idx";
   static constexpr const char* GRAMMAR_DAT_PATH = "/dict/grammar.dat";
+
+  // Resolved paths for the vocab/names dictionaries: the preferred filename if it exists on the
+  // SD card, else the legacy one. Probed lazily on first use and cached; releaseCaches() clears
+  // the cache so files uploaded mid-session (web file transfer) are picked up by the next lookup
+  // session. Always returns a stable pointer to one of the constants above.
+  static const char* vocabIdxPath();
+  static const char* vocabDatPath();
+  static const char* namesIdxPath();
+  static const char* namesDatPath();
 
   // Which dictionaries lookupExact() should consult. Each dict search is ~2 SD reads, so scoping
   // out dictionaries a candidate can't possibly be in is the main lever for Word Lookup speed:

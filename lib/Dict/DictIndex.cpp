@@ -121,14 +121,40 @@ struct DictFileHandles {
   }
 };
 
-DictFileHandles g_jmdictHandles;
+DictFileHandles g_vocabHandles;
 DictFileHandles g_grammarHandles;
 DictFileHandles g_namesHandles;
 
 DictFileHandles& handlesFor(const char* idxPath) {
   if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0) return g_grammarHandles;
-  if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0) return g_namesHandles;
-  return g_jmdictHandles;
+  if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0 ||
+      std::strcmp(idxPath, DictIndex::LEGACY_NAMES_IDX_PATH) == 0) {
+    return g_namesHandles;
+  }
+  return g_vocabHandles;
+}
+
+// Resolved idx path for the vocab/names pairs: preferred filename if present on the SD card,
+// else legacy. nullptr = not probed yet. Cleared by DictIndex::releaseCaches() so dictionary
+// files uploaded mid-session (web file transfer) are picked up by the next lookup session.
+const char* g_vocabIdxResolved = nullptr;
+const char* g_namesIdxResolved = nullptr;
+
+const char* resolveIdxPath(const char*& cache, const char* preferred, const char* legacy) {
+  if (cache) return cache;
+  if (Storage.exists(preferred)) {
+    cache = preferred;
+    return cache;
+  }
+  if (Storage.exists(legacy)) {
+    LOG_INF("DICT", "Using legacy dictionary filename: %s", legacy);
+    cache = legacy;
+    return cache;
+  }
+  // Neither present: report the preferred name (isAvailable()/error paths) but do NOT cache the
+  // outcome -- the files may appear later (web upload) and releaseCaches() may not run before
+  // the next probe.
+  return preferred;
 }
 
 // Derive "/dict/foo.spx" from "/dict/foo.idx" into out (must be >= strlen(idxPath)+1).
@@ -291,7 +317,21 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 }
 }  // namespace
 
-bool DictIndex::isAvailable() { return Storage.exists(IDX_PATH) && Storage.exists(DAT_PATH); }
+const char* DictIndex::vocabIdxPath() {
+  return resolveIdxPath(g_vocabIdxResolved, VOCAB_IDX_PATH, LEGACY_VOCAB_IDX_PATH);
+}
+const char* DictIndex::vocabDatPath() {
+  // Pair the .dat with whichever .idx was resolved -- never mix legacy and preferred halves.
+  return vocabIdxPath() == LEGACY_VOCAB_IDX_PATH ? LEGACY_VOCAB_DAT_PATH : VOCAB_DAT_PATH;
+}
+const char* DictIndex::namesIdxPath() {
+  return resolveIdxPath(g_namesIdxResolved, NAMES_IDX_PATH, LEGACY_NAMES_IDX_PATH);
+}
+const char* DictIndex::namesDatPath() {
+  return namesIdxPath() == LEGACY_NAMES_IDX_PATH ? LEGACY_NAMES_DAT_PATH : NAMES_DAT_PATH;
+}
+
+bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
 
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
                              bool needDefinition, uint8_t posMask) {
@@ -509,7 +549,8 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
-  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition, posMask)) {
+  if ((dictMask & DICT_JMDICT) &&
+      lookupInFile(headword, vocabIdxPath(), vocabDatPath(), out, needDefinition, posMask)) {
     out.sourceDict = DICT_JMDICT;
     return true;
   }
@@ -518,7 +559,7 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
     out.sourceDict = DICT_GRAMMAR;
     return true;
   }
-  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition, posMask)) {
+  if ((dictMask & DICT_NAMES) && lookupInFile(headword, namesIdxPath(), namesDatPath(), out, needDefinition, posMask)) {
     out.sourceDict = DICT_NAMES;
     return true;
   }
@@ -526,9 +567,13 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
 }
 
 void DictIndex::releaseCaches() {
-  g_jmdictHandles.release();
+  g_vocabHandles.release();
   g_grammarHandles.release();
   g_namesHandles.release();
+  // Re-probe filenames next session: dictionary files can be added/replaced mid-session via the
+  // web file transfer, including switching between legacy and preferred names.
+  g_vocabIdxResolved = nullptr;
+  g_namesIdxResolved = nullptr;
 }
 
 void DictIndex::logAndResetStats(const char* label) {

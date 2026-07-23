@@ -186,7 +186,7 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dict/
 ```
 
-This produces `dict/jmdict.idx` and `dict/jmdict.dat` on the SD card.
+This produces `dict/vocab.idx` and `dict/vocab.dat` on the SD card. (Any Yomitan dictionary, jmdict-simplified JSON, or MDict `.mdx` file works as input — Jitendex is just the recommended source.)
 
 #### 2. Name Dictionary (optional, recommended)
 
@@ -195,10 +195,9 @@ Download [JMnedict](https://github.com/JMdictProject) in Yomitan format:
 ```bash
 python3 tools/dict_convert/convert_jmdict.py \
   --input jmnedict-yomitan.zip \
-  --output-dir /path/to/sd/dict/
+  --output-dir /path/to/sd/dict/ \
+  --name names
 ```
-
-Rename the output files to `jmnedict.idx` and `jmnedict.dat` in the `dict/` folder.
 
 #### 3. Grammar Dictionary (optional)
 
@@ -207,10 +206,9 @@ Convert a grammar reference (e.g. "Dictionary of Japanese Grammar") in Yomitan f
 ```bash
 python3 tools/dict_convert/convert_jmdict.py \
   --input grammar-dict-yomitan.zip \
-  --output-dir /path/to/sd/dict/
+  --output-dir /path/to/sd/dict/ \
+  --name grammar
 ```
-
-Rename the output files to `grammar.idx` and `grammar.dat` in the `dict/` folder.
 
 #### SD Card Layout
 
@@ -218,13 +216,15 @@ After setup, your SD card `dict/` folder should contain:
 
 ```
 /dict/
-  jmdict.idx        # Vocabulary index (required)
-  jmdict.dat        # Vocabulary definitions (required)
-  jmnedict.idx      # Name dictionary index (optional)
-  jmnedict.dat      # Name dictionary definitions (optional)
+  vocab.idx         # Vocabulary index (required)
+  vocab.dat         # Vocabulary definitions (required)
+  names.idx         # Name dictionary index (optional)
+  names.dat         # Name dictionary definitions (optional)
   grammar.idx       # Grammar reference index (optional)
   grammar.dat       # Grammar reference definitions (optional)
 ```
+
+Cards set up before the rename keep working unchanged: the firmware falls back to the legacy `jmdict.*` / `jmnedict.*` filenames automatically when the new names aren't present.
 
 ### Install Japanese Fonts (optional)
 

@@ -6,9 +6,9 @@ Supported input formats:
   - Yomitan/Yomichan (.zip containing term_bank_N.json)
   - MDict (.mdx) — requires: pip install readmdict
 
-Emits:
-  jmdict.idx  -- sorted array of 40-byte records (headword + offset + length + priority)
-  jmdict.dat  -- variable-length definition text blob
+Emits (basename set by --name, default "vocab"):
+  vocab.idx  -- sorted array of 40-byte records (headword + offset + length + priority)
+  vocab.dat  -- variable-length definition text blob
 
 Usage:
 #JMdict(default — downloads if no-- input given)
@@ -54,7 +54,7 @@ def strip_html(html: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def write_binary(records: list, output_dir: str):
+def write_binary(records: list, output_dir: str, name: str = "vocab"):
     """Write (headword_bytes, definition_bytes, priority, pos_flags) tuples to idx+dat files.
 
     Expects records to be pre-validated (headword_bytes < HEADWORD_SIZE).
@@ -62,8 +62,8 @@ def write_binary(records: list, output_dir: str):
     records.sort(key=lambda r: r[0])
 
     os.makedirs(output_dir, exist_ok=True)
-    dat_path = os.path.join(output_dir, "jmdict.dat")
-    idx_path = os.path.join(output_dir, "jmdict.idx")
+    dat_path = os.path.join(output_dir, f"{name}.dat")
+    idx_path = os.path.join(output_dir, f"{name}.idx")
 
     dat_offset = 0
     index_entries = []
@@ -213,7 +213,7 @@ def format_definition_jmdict(entry: dict) -> str:
     return "\n".join(parts)
 
 
-def convert_jmdict(json_path: str, output_dir: str):
+def convert_jmdict(json_path: str, output_dir: str, name: str = "vocab"):
     """Convert JMdict JSON to binary index + data files."""
     print(f"Loading {json_path}...")
     with open(json_path, "r", encoding="utf-8") as f:
@@ -252,7 +252,7 @@ def convert_jmdict(json_path: str, output_dir: str):
             records.append((hw_bytes, def_bytes, priority, kana_flags))
 
     print(f"Generated {len(records)} index records")
-    write_binary(records, output_dir)
+    write_binary(records, output_dir, name)
 
 # ── Yomitan / Yomichan(.zip) ───────────────────────────────────
 
@@ -428,7 +428,7 @@ def find_redirect_target(definitions) -> str:
     return search(definitions)
 
 
-def convert_yomitan(zip_path: str, output_dir: str):
+def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
     """Convert a Yomitan/Yomichan .zip dictionary to binary index + data files."""
     import zipfile
 
@@ -517,12 +517,12 @@ def convert_yomitan(zip_path: str, output_dir: str):
             entry_count += 1
 
     print(f"Processed {entry_count} Yomitan entries → {len(records)} index records")
-    write_binary(records, output_dir)
+    write_binary(records, output_dir, name)
 
 # ── MDict(.mdx) ────────────────────────────────────────────────
 
 
-def convert_mdict(mdx_path: str, output_dir: str):
+def convert_mdict(mdx_path: str, output_dir: str, name: str = "vocab"):
     """Convert an MDict .mdx file to binary index + data files.
 
     Requires: pip install readmdict
@@ -573,7 +573,7 @@ def convert_mdict(mdx_path: str, output_dir: str):
         entry_count += 1
 
     print(f"Processed {entry_count} MDict entries ({skipped} skipped) → {len(records)} index records")
-    write_binary(records, output_dir)
+    write_binary(records, output_dir, name)
 
 # ── Format detection & main ─────────────────────────────────────
 
@@ -604,6 +604,14 @@ def main():
     )
     parser.add_argument("--output-dir", default="output", help="Output directory (default: output)")
     parser.add_argument(
+        "--name",
+        default="vocab",
+        help="Basename for the output files (default: vocab -> vocab.idx/vocab.dat). The device "
+        "reads vocab (main dictionary), names (name dictionary), and grammar (grammar "
+        "dictionary); pass --name names or --name grammar to fill those slots directly, "
+        "no manual renaming needed.",
+    )
+    parser.add_argument(
         "--format",
         choices=["jmdict", "yomitan", "mdict"],
         help="Force input format (overrides auto-detection)",
@@ -615,14 +623,14 @@ def main():
         print(f"Detected format: {fmt}")
 
         if fmt == "mdict":
-            convert_mdict(args.input, args.output_dir)
+            convert_mdict(args.input, args.output_dir, args.name)
         elif fmt == "yomitan":
-            convert_yomitan(args.input, args.output_dir)
+            convert_yomitan(args.input, args.output_dir, args.name)
         else:
-            convert_jmdict(args.input, args.output_dir)
+            convert_jmdict(args.input, args.output_dir, args.name)
     else:
         json_path = download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))
-        convert_jmdict(json_path, args.output_dir)
+        convert_jmdict(json_path, args.output_dir, args.name)
 
 
 if __name__ == "__main__":

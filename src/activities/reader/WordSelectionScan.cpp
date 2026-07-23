@@ -355,7 +355,7 @@ constexpr uint32_t WLSCAN_MAGIC =
 // realistic dictionary swap changes it.
 uint32_t dictFingerprint() {
   HalFile f;
-  if (!Storage.openFileForRead("WLS", DictIndex::IDX_PATH, f)) return 0;
+  if (!Storage.openFileForRead("WLS", DictIndex::vocabIdxPath(), f)) return 0;
   return static_cast<uint32_t>(f.size());
 }
 }  // namespace
