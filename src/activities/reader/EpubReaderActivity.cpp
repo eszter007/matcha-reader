@@ -1276,7 +1276,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!verticalSection) {
       LOG_DBG("ERS", "Loading vertical section, index: %d", currentSpineIndex);
       prewarmedVPage_ = -1;  // fresh section: whatever sits in the mini-font cache is stale
-      verticalSection = std::unique_ptr<VerticalSection>(new VerticalSection(epub, currentSpineIndex, renderer));
+      // makeUniqueNoThrow, not bare new: with -fno-exceptions a failed new aborts the firmware
+      // instead of returning null, and this allocation can land on a badly fragmented heap.
+      verticalSection = makeUniqueNoThrow<VerticalSection>(epub, currentSpineIndex, renderer);
+      if (!verticalSection) {
+        LOG_ERR("ERS", "OOM allocating VerticalSection");
+        renderer.clearScreen();
+        renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+        renderStatusBar();
+        renderer.displayBuffer();
+        automaticPageTurnActive = false;
+        showPendingSyncSaveError();
+        return;
+      }
       sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
       const int fontId = effectiveReaderFontId();
@@ -1546,7 +1558,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
     prewarmedHPage_ = -1;  // fresh section: any page warmed for the previous one is stale
-    section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
+    // makeUniqueNoThrow, not bare new: with -fno-exceptions a failed new aborts the firmware
+    // instead of returning null, and this allocation can land on a badly fragmented heap.
+    section = makeUniqueNoThrow<Section>(epub, currentSpineIndex, renderer);
+    if (!section) {
+      LOG_ERR("ERS", "OOM allocating Section");
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+      renderStatusBar();
+      renderer.displayBuffer();
+      automaticPageTurnActive = false;
+      showPendingSyncSaveError();
+      return;
+    }
 
     if (!section->loadSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,

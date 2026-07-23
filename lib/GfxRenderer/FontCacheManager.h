@@ -53,7 +53,14 @@ class FontCacheManager {
     // scope -- e.g. the idle next-page prewarm, which warms a page the reader will only turn
     // to later. Ordinary single-render scopes do NOT release, so they clear (warm-for-one-
     // render) and keep the cache honest for the next scan.
-    void release() { active_ = false; }
+    //
+    // Finalizes the scan first: calling release() before endScanAndPrewarm() would otherwise
+    // strand the manager in scan mode (drawText would keep recording instead of drawing) and
+    // never prewarm. endScanAndPrewarm() is a no-op when the scan was already ended.
+    void release() {
+      endScanAndPrewarm();
+      active_ = false;
+    }
     PrewarmScope(PrewarmScope&& other) noexcept;
     PrewarmScope& operator=(PrewarmScope&&) = delete;
     PrewarmScope(const PrewarmScope&) = delete;
