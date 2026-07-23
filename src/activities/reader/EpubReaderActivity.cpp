@@ -1281,6 +1281,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       verticalSection = makeUniqueNoThrow<VerticalSection>(epub, currentSpineIndex, renderer);
       if (!verticalSection) {
         LOG_ERR("ERS", "OOM allocating VerticalSection");
+        // Mark this spine failed so render() stops retrying the same allocation every frame --
+        // the same guard the build-failure path uses to avoid an infinite indexing/error loop.
+        failedVerticalSpineIndex = currentSpineIndex;
         renderer.clearScreen();
         renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
         renderStatusBar();
@@ -1316,13 +1319,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // estimate otherwise -- the post-build render corrects the rare off-by-a-few case
         // with its one refresh. A target beyond the final page count (e.g. the "last page"
         // sentinel when paging backwards) simply never fires the hook -- classic path again.
+        // Seed earlyDisplayedPage_ with the target page (not -1) BEFORE the build starts, so a
+        // page turn pressed in the first seconds -- before the early-render hook has fired --
+        // still has a valid baseline to offset from and records its request, instead of being
+        // silently dropped. Percent jumps set no hook (they need the final pageCount), so they
+        // keep -1 and mid-build turns stay inert there, matching the classic wait path.
+        int earlyTarget = -1;
         if (!pendingPercentJump) {
-          const int earlyTarget =
-              pendingPageJump.has_value() ? *pendingPageJump : (nextPageNumber > 0 ? nextPageNumber : 0);
+          earlyTarget = pendingPageJump.has_value() ? *pendingPageJump : (nextPageNumber > 0 ? nextPageNumber : 0);
           verticalSection->setEarlyRenderHook(this, &EpubReaderActivity::earlyRenderVerticalPageThunk, earlyTarget);
         }
 
-        earlyDisplayedPage_.store(-1, std::memory_order_relaxed);
+        earlyDisplayedPage_.store(earlyTarget, std::memory_order_relaxed);
         verticalBuildInProgress_.store(true, std::memory_order_relaxed);
         const bool built = verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight);
         verticalBuildInProgress_.store(false, std::memory_order_relaxed);
@@ -1563,6 +1571,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     section = makeUniqueNoThrow<Section>(epub, currentSpineIndex, renderer);
     if (!section) {
       LOG_ERR("ERS", "OOM allocating Section");
+      // Mark this spine failed so render() stops retrying the same allocation every frame --
+      // the same guard the build-failure path uses to avoid an infinite indexing/error loop.
+      failedSectionSpineIndex = currentSpineIndex;
       renderer.clearScreen();
       renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
       renderStatusBar();
@@ -2278,8 +2289,10 @@ bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
 
 void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const bool glyphsAlreadyWarm) {
   if (!glyphsAlreadyWarm) prewarmVerticalPageGlyphs(vpage);
-  // Same origin derivation as render(): vertical text only needs the top-left corner.
-  int marginTop, marginRight, marginBottom, marginLeft;
+  // Same origin derivation as render(): vertical text only needs the top-left corner, but
+  // getOrientedViewableTRBL fills all four edges -- right/bottom are intentionally unused here.
+  int marginTop, marginLeft;
+  [[maybe_unused]] int marginRight, marginBottom;
   renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
   marginTop += SETTINGS.screenMargin;
   marginLeft += SETTINGS.screenMargin;
