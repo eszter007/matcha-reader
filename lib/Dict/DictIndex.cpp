@@ -152,11 +152,10 @@ const char* resolveIdxPath(const char*& cache, const char* preferred, const char
     // Neither present: cache the preferred name anyway. Leaving this case un-cached would
     // re-run both exists() probes inside EVERY lookupExact() when an optional dict (names) is
     // absent -- thousands of SD probes per page scan, where the pre-rename code paid nothing
-    // (lookupInFile's triedOpen cache). Tradeoff: LEGACY-named files uploaded mid-session are
-    // only noticed after releaseCaches() (lookup-session exit) or reboot; preferred-named
-    // uploads are still found immediately because callers probe the resolved path itself
-    // (isAvailable()'s exists(), lookupInFile()'s open) -- and the converter now emits the
-    // preferred names by default.
+    // (lookupInFile's triedOpen cache). Tradeoff: files uploaded mid-session are noticed at
+    // the next lookup session (releaseCaches() clears this cache AND the triedOpen latches)
+    // or reboot. isAvailable() alone reflects a preferred-named upload immediately, since it
+    // re-runs exists() on the resolved path; a legacy-named upload needs the re-probe.
     cache = preferred;
   }
   return cache;

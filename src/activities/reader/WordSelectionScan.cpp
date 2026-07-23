@@ -350,9 +350,10 @@ constexpr uint32_t WLSCAN_MAGIC =
     0x44534C57;  // "WLSD" -- POS_READING-flagged collision suppression (reconverted dicts keep
                  // their byte size, so the size-based dictFingerprint can't catch the swap)
 
-// Cheap fingerprint of the dictionary content: a changed/replaced jmdict.idx invalidates cached
-// scans (segmentation depends on the dictionary). File size is not a perfect identity, but any
-// realistic dictionary swap changes it.
+// Cheap fingerprint of the dictionary content: a changed/replaced vocab index (vocab.idx, or
+// legacy jmdict.idx -- whichever resolves) invalidates cached scans (segmentation depends on
+// the dictionary). File size is not a perfect identity, but any realistic dictionary swap
+// changes it.
 uint32_t dictFingerprint() {
   HalFile f;
   if (!Storage.openFileForRead("WLS", DictIndex::vocabIdxPath(), f)) return 0;
