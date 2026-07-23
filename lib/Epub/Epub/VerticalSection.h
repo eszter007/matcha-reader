@@ -42,6 +42,11 @@ class VerticalSection {
   // file with version 0 so the next open sees a version mismatch and rebuilds the chapter --
   // instead of the truncation living on disk as a permanently sparse chapter.
   bool lastBuildDroppedForHeap_ = false;
+  // Set by loadSectionFile when the on-disk cache carried the version-0 stale stamp (a prior
+  // build dropped glyphs). If THIS build drops again, createSectionFile keeps the best-effort
+  // cache valid instead of re-stamping: the drop conditions are deterministic per book, so
+  // re-stamping meant a full re-index on every open, forever.
+  bool rebuildingFromStale_ = false;
 
  public:
   uint16_t pageCount = 0;

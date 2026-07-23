@@ -649,6 +649,19 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       return true;
     }
 
+    // Last resort before CONTENT LOSS: accept half the margin. Device evidence (whole-book
+    // chapter, 450+ pages): maxAlloc dips bottomed at 14324/17396 while linearBytes sat at
+    // ~9216 -- the 8K margin missed by 12 bytes, dropped glyphs, and the stale-mark then
+    // re-indexed the chapter on every open. 4K clears every observed dip; briefly dipping
+    // into the safety margin for a block that the page flush frees moments later is strictly
+    // better than losing content and looping the rebuild.
+    constexpr uint32_t LINEAR_LAST_RESORT_MARGIN = 4 * 1024;
+    if (ESP.getMaxAllocHeap() >= linearBytes + LINEAR_LAST_RESORT_MARGIN) {
+      glyphs.reserve(linearCapacity);
+      glyphs.push_back(g);
+      return true;
+    }
+
     LOG_ERR("VPT", "Low heap (%u bytes, need ~%u); dropping glyph", ESP.getMaxAllocHeap(),
             static_cast<unsigned>(linearBytes));
     everDroppedForHeap_ = true;

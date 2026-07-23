@@ -1755,9 +1755,11 @@ bool EpubReaderActivity::imageWarmShouldCancel(const void* ctx) {
 void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
   if (imageWarmShouldCancel(this)) {
+    LOG_DBG("IWARM", "skip: render already queued");  // TEMP diagnostics (slow-books hunt)
     return;  // another render is already queued -- stay out of its way
   }
   if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC) {
+    LOG_DBG("IWARM", "skip: maxAlloc %u < %u floor", ESP.getMaxAllocHeap(), IMAGE_WARM_MIN_ALLOC);  // TEMP
     return;
   }
 
@@ -1795,9 +1797,17 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
       nextV.emplace(epub, currentSpineIndex + 1, renderer);
       if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight) && nextV->pageCount > 0) {
         vp = nextV->getPage(0);
+      } else {
+        LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", currentSpineIndex + 1);  // TEMP
       }
     }
-    if (!vp || !vp->isImagePage()) {
+    if (!vp) {
+      LOG_DBG("IWARM", "skip: no next vertical page (page %d/%d)", verticalSection->currentPage,
+              verticalSection->pageCount);  // TEMP
+      return;
+    }
+    if (!vp->isImagePage()) {
+      LOG_DBG("IWARM", "skip: next vertical page is text");  // TEMP
       return;
     }
     if (vp->imageRotated) {
@@ -1834,6 +1844,8 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     }
   }
   if (!peeked) {
+    LOG_DBG("IWARM", "skip: no next horizontal page peeked (page %d/%d)", section->currentPage,
+            section->pageCount);  // TEMP
     return;
   }
   for (const auto& el : peeked->elements) {

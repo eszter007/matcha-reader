@@ -5,6 +5,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Serialization.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
@@ -30,7 +31,13 @@ namespace {
 // v52: not a format change -- forces a rebuild of vertical caches that were built while the CSS
 // rule table was still held resident (see Epub::load): its heap fragmentation made the layout's
 // stream reserve fail on long chapters, silently truncating them into sparse pages ON DISK.
-constexpr uint8_t VSECTION_FILE_VERSION = 77;  // v77: tate-chu-yoko pairs aligned to font-derived CJK ink center
+// v78: PR #12 (rotated-run loop fix) also fixed encodeCp for supplementary-plane codepoints
+// (4-byte UTF-8; previously emitted invalid 3-byte sequences) WITHOUT a bump -- caches built
+// before it can hold the broken bytes and must not be reused.
+// v80: not a format change -- invalidates best-effort caches built while the resident write
+// staging buffer deepened the low-heap dips and dropped glyphs (missing characters ON DISK);
+// the emergency-release hook now prevents those drops on rebuild.
+constexpr uint8_t VSECTION_FILE_VERSION = 80;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -532,7 +539,10 @@ namespace {
 // The footer lets loadSectionFile() open a chapter by reading only the header + 4 bytes/page,
 // and getPage() seek straight to one page -- pages are never all resident in RAM.
 
-bool writePage(HalFile& file, const VerticalPage& page) {
+// Sink is HalFile (direct, the historical path) or serialization::BufWriter
+// (whole page into RAM, flushed with one file.write) -- identical byte layout.
+template <typename Sink>
+bool writePage(Sink& file, const VerticalPage& page) {
   const bool isImg = page.isImagePage();
   serialization::writePod(file, isImg);
   if (isImg) {
@@ -749,7 +759,8 @@ struct LayoutPageSink final : ParagraphSink {
         chapterDir(chapterDir),
         imageBasePath(imageBasePath),
         viewportWidth(viewportWidth),
-        viewportHeight(viewportHeight) {}
+        viewportHeight(viewportHeight) {
+  }
 
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
     if (failed) return;
@@ -872,7 +883,9 @@ struct LayoutPageSink final : ParagraphSink {
     // Streaming pages out via callback as they're finalized keeps at most ~2 pages' worth of
     // glyph buffers resident at once instead of the whole batch's -- see PageReadyCallback in
     // VerticalParsedText.h for why this is safe (oikomi only ever looks one page back).
+    const unsigned long layoutStart = millis();  // TEMP diagnostics (first-open perf hunt)
     auto pages = layout.layoutPages(this, &writePageCallback, isFinalFlush);
+    layoutMsAcc += millis() - layoutStart;  // TEMP
     const uint32_t maLayout = ESP.getMaxAllocHeap();
     layout.reset();
     for (const auto& p : pages) writeOne(p);
@@ -883,12 +896,49 @@ struct LayoutPageSink final : ParagraphSink {
     }
   }
 
+  // TEMP diagnostics (first-open perf hunt): accumulated time per build stage.
+  uint32_t layoutMsAcc = 0;
+  uint32_t writeMsAcc = 0;
+
+  // Page serialization staging capacity: one file.write per page instead of ~10 mutexed
+  // SD writes per GLYPH (measured: ~8.3s of a 23s 431-page build was writes). 12KB covers
+  // a dense ruby page (~200 glyphs x ~30 bytes plus strings); larger pages fall back to
+  // the direct field-wise path.
+  static constexpr size_t kPageBufCap = 12 * 1024;
+
   void writeOne(const VerticalPage& p) {
     pageOffsets.push_back(static_cast<uint32_t>(out.position()));
-    if (!writePage(out, p)) {
+    // TEMP diagnostics (slow-books hunt): prove the build ADVANCES and how fast.
+    if ((pageOffsets.size() % 20) == 0) {
+      LOG_DBG("VSC", "build progress: %zu pages, layout=%ums write=%ums, free=%u maxAlloc=%u", pageOffsets.size(),
+              layoutMsAcc, writeMsAcc, static_cast<unsigned>(ESP.getFreeHeap()),
+              static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    }
+    const unsigned long writeStart = millis();  // TEMP
+    // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
+    // Holding it resident across the whole build deepened the layout's low-heap dips by
+    // roughly its own size (device evidence: maxAlloc bottoms 14324 without it vs
+    // 9204-10740 with it resident) and made the layout drop glyphs -- content loss for a
+    // speed buffer. As a per-page transient the layout never coexists with it, and the
+    // same-size alloc/free per page reuses the same hole instead of fragmenting. If the
+    // allocation fails at a tight moment, this page just takes the direct field-wise path.
+    auto pageBuf = makeUniqueNoThrow<uint8_t[]>(kPageBufCap);
+    bool ok = false;
+    if (pageBuf) {
+      serialization::BufWriter w(pageBuf.get(), kPageBufCap);
+      if (writePage(w, p) && !w.overflow) {
+        ok = out.write(pageBuf.get(), w.len) == w.len;
+      } else if (w.overflow) {
+        ok = writePage(out, p);  // page larger than the staging buffer: direct path
+      }
+    } else {
+      ok = writePage(out, p);
+    }
+    if (!ok) {
       LOG_ERR("VSC", "Failed to write page %zu to cache", pageOffsets.size() - 1);
       failed = true;
     }
+    writeMsAcc += millis() - writeStart;  // TEMP
   }
 
   VerticalPage makeImagePage(const std::string& src) {
@@ -1197,12 +1247,17 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   // THIS session (offsets are in RAM, pages read back fine) but stamp version 0 so the next
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
   // ideally, a healthier heap -- instead of the truncation being persisted as a valid cache.
-  if (lastBuildDroppedForHeap_) {
+  if (lastBuildDroppedForHeap_ && !rebuildingFromStale_) {
     LOG_ERR("VSC", "Build dropped glyphs on low heap; marking section stale for rebuild on next open");
     if (file.seek(0)) {
       const uint8_t staleVersion = 0;
       serialization::writePod(file, staleVersion);
     }
+  } else if (lastBuildDroppedForHeap_) {
+    // The retry ALSO dropped: conditions are deterministic, another rebuild would too. Keep the
+    // best-effort cache valid -- a few missing glyphs on the densest pages beat re-indexing the
+    // whole chapter on every single open.
+    LOG_ERR("VSC", "Stale-rebuild dropped glyphs again; keeping best-effort cache to break the rebuild loop");
   }
   file.close();
 
@@ -1225,6 +1280,11 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
   if (version != VSECTION_FILE_VERSION) {
     file.close();
     LOG_DBG("VSC", "Version mismatch: %u vs %u", version, VSECTION_FILE_VERSION);
+    // Version 0 is the stale stamp from a build that dropped glyphs on low heap. Remember it:
+    // if the RETRY build drops again, the conditions are deterministic (same book, same heap
+    // shape) and re-stamping would rebuild the chapter on every open forever -- observed live
+    // as a ~30s "Indexing" on each open of a whole-book-in-one-file novel.
+    if (version == 0) rebuildingFromStale_ = true;
     clearCache();
     return false;
   }
