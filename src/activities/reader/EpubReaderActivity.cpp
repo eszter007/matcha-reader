@@ -1473,17 +1473,40 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         renderStatusBar();
         renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
-        if (renderer.supportsStripGrayscale()) {
-          constexpr int STRIP_ROWS = 80;
+        // The grayscale refine below re-reads the pixel cache several times (~1s+) and the BW
+        // image is ALREADY a valid picture on the persistent e-ink. Snapshot the input stamp so
+        // the refine can be ABANDONED the instant the reader turns the page: flipping through
+        // illustrations then feels instant (BW shows fast, the next turn is honoured immediately)
+        // while dwelling on a page still refines all the way to 4-level grayscale.
+        imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+
+        if (renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
           const int gh = renderer.getDisplayHeight();
           const int gwBytes = renderer.getDisplayWidthBytes();
-          auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+          // Each grayscale strip re-reads the WHOLE pixel cache (the .pxc is row-major in logical
+          // image space, so a physical band can't seek to just its rows), so the read cost scales
+          // with the strip COUNT. Taller strips = fewer strips = fewer whole-cache re-reads: at
+          // 160 rows a 480px page is 3 strips instead of 6, roughly halving the ~13 reads that made
+          // image page turns slow. The taller scratch is 16KB vs 8KB; if that doesn't fit on a
+          // fragmented (X3) heap, fall back to the original 80-row strip -- never worse than before,
+          // and the BW-only path below still catches a total allocation failure.
+          int stripRows = 160;
+          auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
           if (!scratch) {
-            LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); image stays BW this page", gwBytes * STRIP_ROWS);
+            stripRows = 80;
+            scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
+          }
+          if (!scratch) {
+            LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); image stays BW this page", gwBytes * stripRows);
           } else {
+            bool cancelled = false;
             renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-            for (int y = 0; y < gh; y += STRIP_ROWS) {
-              const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+            for (int y = 0; y < gh && !cancelled; y += stripRows) {
+              if (imageWarmShouldCancel(this)) {
+                cancelled = true;
+                break;
+              }
+              const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
               renderer.beginStripTarget(scratch.get(), y, rows);
               renderer.clearScreen(0x00);
               drawImagePage();
@@ -1491,8 +1514,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
             }
             renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-            for (int y = 0; y < gh; y += STRIP_ROWS) {
-              const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+            for (int y = 0; y < gh && !cancelled; y += stripRows) {
+              if (imageWarmShouldCancel(this)) {
+                cancelled = true;
+                break;
+              }
+              const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
               renderer.beginStripTarget(scratch.get(), y, rows);
               renderer.clearScreen(0x00);
               drawImagePage();
@@ -1500,7 +1527,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
             }
             renderer.setRenderMode(GfxRenderer::BW);
-            renderer.displayGrayBuffer();
+            // On cancel, don't show the half-built grayscale -- leave the BW image already on the
+            // e-ink. Either way reset the controller's grayscale planes; the next page turn does a
+            // full clear+render+display, so the rebase content is transient.
+            if (!cancelled) renderer.displayGrayBuffer();
             renderer.cleanupGrayscaleWithFrameBuffer();
           }
         }
