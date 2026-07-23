@@ -630,6 +630,15 @@ def main():
         else:
             convert_jmdict(args.input, args.output_dir, args.name)
     else:
+        if args.name != "vocab":
+            print(
+                f"Error: --name {args.name} without --input would write the auto-downloaded "
+                "JMdict (a vocabulary dictionary) into the "
+                f"{args.name} slot. Pass --input with the actual "
+                f"{args.name} dictionary instead.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         json_path = download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))
         convert_jmdict(json_path, args.output_dir, args.name)
 

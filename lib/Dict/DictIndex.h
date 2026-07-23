@@ -75,8 +75,9 @@ class DictIndex {
 
   // Which dictionaries lookupExact() should consult. Each dict search is ~2 SD reads, so scoping
   // out dictionaries a candidate can't possibly be in is the main lever for Word Lookup speed:
-  //  - deinflected (conjugated) candidates only live in jmdict (names/grammar aren't inflected);
-  //  - jmnedict holds proper names, which are kanji/katakana -- never pure hiragana;
+  //  - deinflected (conjugated) candidates only live in the vocab dict (names/grammar aren't
+  //    inflected);
+  //  - the names dict holds proper names, which are kanji/katakana -- never pure hiragana;
   //  - grammar holds multi-char patterns -- never a single character.
   static constexpr uint8_t DICT_JMDICT = 1;
   static constexpr uint8_t DICT_GRAMMAR = 2;
