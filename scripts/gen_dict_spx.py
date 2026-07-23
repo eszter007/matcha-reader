@@ -33,7 +33,9 @@ MAGIC = b"CPSPX1\0\0"          # 8 bytes
 SPX_VERSION = 1
 HEADER_SIZE = 32              # magic(8) + 5x uint32(20) + pad(4)
 
-DICTS = ["jmdict", "grammar", "jmnedict"]
+# Preferred names first, legacy names (jmdict/jmnedict) after -- whichever .idx files exist in
+# the dict dir get a sidecar; the firmware derives the .spx name from the .idx it resolved.
+DICTS = ["vocab", "names", "grammar", "jmdict", "jmnedict"]
 
 
 def gen_one(idx_path, spx_path):
