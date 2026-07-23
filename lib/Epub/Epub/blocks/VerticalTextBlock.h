@@ -18,7 +18,12 @@ class GfxRenderer;
 // out.
 class VerticalTextBlock {
  public:
-  explicit VerticalTextBlock(VerticalPage page) : page_(std::move(page)) {}
+  // Holds a REFERENCE, not a copy: a page is ~10KB of glyphs plus a ruby string per glyph,
+  // and the old by-value constructor silently copied all of it on every single page render
+  // -- observed on device as an OOM abort when a mid-build render hit the copy at a
+  // low-heap moment. Every caller constructs the block on the stack and renders within the
+  // page's lifetime; do not store a VerticalTextBlock beyond its page.
+  explicit VerticalTextBlock(const VerticalPage& page) : page_(page) {}
 
   void render(GfxRenderer& renderer, int fontId, int offsetX = 0, int offsetY = 0, bool black = true) const;
   void render(GfxRenderer& renderer, int fontId, int rubyFontId, int offsetX, int offsetY, bool black = true) const;
@@ -26,5 +31,5 @@ class VerticalTextBlock {
   const VerticalPage& page() const { return page_; }
 
  private:
-  VerticalPage page_;
+  const VerticalPage& page_;
 };

@@ -8,6 +8,7 @@
 #include <Epub/blocks/TextBlock.h>
 #include <Epub/blocks/VerticalTextBlock.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -1083,6 +1084,23 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   // bump didn't fire -- cancel a running image warm before the chapter-boundary branches below
   // block on the RenderLock it holds.
   imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
+  lastTurnForward_.store(isForwardTurn, std::memory_order_relaxed);
+
+  // A vertical chapter is still building on the render task: pageCount is 0 until the build
+  // ends, so the normal path below would misread every press as "past the last page", block
+  // on the RenderLock for the rest of the build, and then jump to the NEXT SPINE (observed on
+  // device: one press during the build teleported the reader to the end of the book). Route
+  // the turn to the build's page-request hook instead -- the page shows as soon as it exists.
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
+    const int shown = earlyDisplayedPage_.load(std::memory_order_relaxed);
+    if (shown >= 0 && verticalSection) {
+      const int target = isForwardTurn ? shown + 1 : (shown > 0 ? shown - 1 : 0);
+      verticalSection->requestPageDuringBuild(target);
+    }
+    lastPageTurnTime = millis();
+    return;
+  }
+
   const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
   const int pgCount = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
 
@@ -1234,6 +1252,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (maxAlloc < RESUME_HEAP_FLOOR) {
       LOG_INF("ERS", "Low heap before render (maxAlloc=%u < %u); releasing font memory", maxAlloc, RESUME_HEAP_FLOOR);
       fcm->releaseAllFontMemory();
+      prewarmedVPage_ = -1;  // the release just emptied the mini-font cache
       LOG_INF("ERS", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
     }
   }
@@ -1255,6 +1274,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     if (!verticalSection) {
       LOG_DBG("ERS", "Loading vertical section, index: %d", currentSpineIndex);
+      prewarmedVPage_ = -1;  // fresh section: whatever sits in the mini-font cache is stale
       verticalSection = std::unique_ptr<VerticalSection>(new VerticalSection(epub, currentSpineIndex, renderer));
       sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
@@ -1274,12 +1294,39 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           fcm->releaseAllFontMemory();
         }
 
-        if (!verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight)) {
+        // Early first render: show the reader's page the moment it is laid out (a couple of
+        // seconds in) instead of after the whole chapter builds (~17s for a 431-page book).
+        // Percent jumps need the final pageCount and keep the classic wait-for-the-build
+        // path. Rebuilds with saved progress carry cachedChapterTotalPageCount; the remap
+        // below only moves the page when the final count actually differs (a reflow), so the
+        // saved page number is an exact early target for unchanged layouts and a close
+        // estimate otherwise -- the post-build render corrects the rare off-by-a-few case
+        // with its one refresh. A target beyond the final page count (e.g. the "last page"
+        // sentinel when paging backwards) simply never fires the hook -- classic path again.
+        if (!pendingPercentJump) {
+          const int earlyTarget =
+              pendingPageJump.has_value() ? *pendingPageJump : (nextPageNumber > 0 ? nextPageNumber : 0);
+          verticalSection->setEarlyRenderHook(this, &EpubReaderActivity::earlyRenderVerticalPageThunk, earlyTarget);
+        }
+
+        earlyDisplayedPage_.store(-1, std::memory_order_relaxed);
+        verticalBuildInProgress_.store(true, std::memory_order_relaxed);
+        const bool built = verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight);
+        verticalBuildInProgress_.store(false, std::memory_order_relaxed);
+        if (!built) {
           LOG_ERR("ERS", "Failed to build vertical section");
           failedVerticalSpineIndex = currentSpineIndex;
           verticalSection.reset();
           showPendingSyncSaveError();
           return;
+        }
+
+        // Mid-build page turns moved the displayed page; the position the user READ to is
+        // the truth now, not the pre-build progress restore.
+        const int shown = earlyDisplayedPage_.load(std::memory_order_relaxed);
+        if (shown >= 0) {
+          pendingPageJump.reset();
+          nextPageNumber = shown;
         }
       } else {
         LOG_DBG("ERS", "Vertical cache found");
@@ -1428,42 +1475,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         pagesUntilFullRefresh = 1;
         imagePageDisplayed = true;
       } else {
-        // Bulk-load every glyph this page needs before drawing a single one. Without this, each
-        // draw call for a codepoint that isn't already cached falls through to the on-demand
-        // fallback path (for SD-card fonts: a fresh SD file open + two seeks + two reads per
-        // miss, into an 8-slot ring buffer) -- for a page with hundreds of distinct kanji, that's
-        // hundreds of individual SD round-trips. Confirmed on a real device: this was the entire
-        // cause of vertical page turns taking 1.5-2+ seconds of pure render time with an SD font.
-        //
-        // clearCache() first is required, not optional: FontDecompressor's prewarmCache() claims
-        // one of only MAX_PAGE_SLOTS (4) page-buffer slots per call and never self-evicts --
-        // "the caller must call freePageBuffer/clearCache to reset" (FontDecompressor.h). Without
-        // this, every page turn permanently claims more slots; confirmed on a real device that
-        // after ~1 page's worth of prewarm calls, all 4 slots were stuck full, "cannot prewarm"
-        // fired for every subsequent page, and glyphs stopped resolving at all (blank pages).
-        //
-        // styleMask must reflect only the styles ACTUALLY present on this page, not a blanket "all
-        // 4" request: FontCacheManager::prewarmCache() claims one slot per requested style, PLUS
-        // another slot per style for the family's fallback font if it has one -- up to 8 slot
-        // claims against only 4 slots total. Confirmed on a real device: even right after
-        // clearCache(), a single page still hit "all 4 slots full" because the blanket request
-        // needed more slots than exist, wasting them on styles the page doesn't even use.
-        if (auto* fcm = renderer.getFontCacheManager()) {
-          fcm->clearCache();
-          uint8_t styleMask = std::accumulate(
-              vpage->glyphs.begin(), vpage->glyphs.end(), uint8_t{0},
-              [](uint8_t m, const auto& g) { return static_cast<uint8_t>(m | (1u << (g.style & 0x03))); });
-          if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
-          const std::string pageText = PageTextExtractor::fromVerticalPage(*vpage);
-          fcm->prewarmCache(effectiveReaderFontId(), pageText.c_str(), styleMask);
-        }
-        VerticalTextBlock block(*vpage);
-        if (useFurigana()) {
-          block.render(renderer, effectiveReaderFontId(), SETTINGS.getRubyFontId(), orientedMarginLeft,
-                       orientedMarginTop, true);
-        } else {
-          block.render(renderer, effectiveReaderFontId(), orientedMarginLeft, orientedMarginTop, true);
-        }
+        renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/prewarmedVPage_ == verticalSection->currentPage);
       }
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
     }
@@ -1471,6 +1483,21 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    }
+    // Kindle-class turns: load the NEXT page's glyphs while the reader looks at this one,
+    // so the next forward turn renders from a warm cache instead of paying the full
+    // per-page SD bulk load at button time. The mini-font cache holds exactly one page per
+    // style; the page on screen no longer needs its glyphs (pixels are in the framebuffer).
+    // getPage(next) also leaves the next page in the section's single-page read cache, so
+    // the turn skips the SD page read too. Backward turns miss the warm cache and take the
+    // classic prewarm path.
+    prewarmedVPage_ = -1;
+    const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? verticalSection->currentPage + 1
+                                                                            : verticalSection->currentPage - 1;
+    if (warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
+      if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
+        if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
+      }
     }
     // Pre-build the next chapter's cache while this page is on screen. This call was
     // missing from the vertical path (lost in a refactor -- silentIndexNextChapterIfNeeded
@@ -2143,6 +2170,94 @@ int EpubReaderActivity::pageBasedPercent(const int spineIndex, const int section
   }
   const int read = before + std::max(1, sectionPage);
   return clampPercent((read * 100 + bookPagesTotal / 2) / bookPagesTotal);
+}
+
+bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
+  // Bulk-load every glyph this page needs before drawing a single one. Without this, each
+  // draw call for a codepoint that isn't already cached falls through to the on-demand
+  // fallback path (for SD-card fonts: a fresh SD file open + two seeks + two reads per
+  // miss, into an 8-slot ring buffer) -- for a page with hundreds of distinct kanji, that's
+  // hundreds of individual SD round-trips. Confirmed on a real device: this was the entire
+  // cause of vertical page turns taking 1.5-2+ seconds of pure render time with an SD font.
+  //
+  // clearCache() first is required, not optional: FontDecompressor's prewarmCache() claims
+  // one of only MAX_PAGE_SLOTS (4) page-buffer slots per call and never self-evicts --
+  // "the caller must call freePageBuffer/clearCache to reset" (FontDecompressor.h). Without
+  // this, every page turn permanently claims more slots; confirmed on a real device that
+  // after ~1 page's worth of prewarm calls, all 4 slots were stuck full, "cannot prewarm"
+  // fired for every subsequent page, and glyphs stopped resolving at all (blank pages).
+  //
+  // styleMask must reflect only the styles ACTUALLY present on this page, not a blanket "all
+  // 4" request: FontCacheManager::prewarmCache() claims one slot per requested style, PLUS
+  // another slot per style for the family's fallback font if it has one -- up to 8 slot
+  // claims against only 4 slots total. Confirmed on a real device: even right after
+  // clearCache(), a single page still hit "all 4 slots full" because the blanket request
+  // needed more slots than exist, wasting them on styles the page doesn't even use.
+  // Prewarm gated on heap: its page-text string and cache-slot claims are bare allocations,
+  // and this body also runs mid-build (early first render / build-time page turns) where an
+  // OOM aborts under -fno-exceptions. Without prewarm the page still renders correctly via
+  // the per-glyph on-demand path -- slower, but never fatal.
+  // 20K: normal post-build reading always clears this (heap 30K+), so warm turns are
+  // unaffected. The gate only bites during a mid-build serve, and there it MUST stay high:
+  // dropping it to 14K let the prewarm's resident footprint coincide with a dense ruby
+  // page's layout dip and the build dropped glyphs (need 11736 @ 9716 free) -> stale cache.
+  // Build-phase serves rendering on-demand (~2s) is a drop-free, one-time-per-book cost;
+  // content integrity outranks shaving that.
+  constexpr uint32_t PREWARM_MIN_ALLOC = 20 * 1024;
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm || ESP.getMaxAllocHeap() < PREWARM_MIN_ALLOC) return false;
+  fcm->clearCache();
+  uint8_t styleMask =
+      std::accumulate(vpage.glyphs.begin(), vpage.glyphs.end(), uint8_t{0},
+                      [](uint8_t m, const auto& g) { return static_cast<uint8_t>(m | (1u << (g.style & 0x03))); });
+  if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
+  const std::string pageText = PageTextExtractor::fromVerticalPage(vpage);
+  fcm->prewarmCache(effectiveReaderFontId(), pageText.c_str(), styleMask);
+  return true;
+}
+
+void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const bool glyphsAlreadyWarm) {
+  if (!glyphsAlreadyWarm) prewarmVerticalPageGlyphs(vpage);
+  // Same origin derivation as render(): vertical text only needs the top-left corner.
+  int marginTop, marginRight, marginBottom, marginLeft;
+  renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
+  marginTop += SETTINGS.screenMargin;
+  marginLeft += SETTINGS.screenMargin;
+  VerticalTextBlock block(vpage);
+  if (useFurigana()) {
+    block.render(renderer, effectiveReaderFontId(), SETTINGS.getRubyFontId(), marginLeft, marginTop, true);
+  } else {
+    block.render(renderer, effectiveReaderFontId(), marginLeft, marginTop, true);
+  }
+}
+
+void EpubReaderActivity::earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, const int pageIndex) {
+  static_cast<EpubReaderActivity*>(ctx)->earlyRenderVerticalPage(page, pageIndex);
+}
+
+void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const int pageIndex) {
+  const auto start = millis();
+  // Update the shown-page index BEFORE drawing (the render takes 0.7-3s): a button press
+  // during the render should target the page AFTER this one, not re-request this one
+  // (observed on device as the same page rendering twice back-to-back).
+  earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
+  renderer.clearScreen();
+  renderVerticalPageBody(page);
+  // No status bar here: it derives page counts from a section that is still mid-build. The
+  // normal post-build render adds it on top of the identical page content.
+  renderer.displayBuffer();
+  // The build resumes the moment this returns and needs its headroom back: the prewarm above
+  // re-claimed font page slots and the decompressor glyph slab that the build path explicitly
+  // released before starting. Deliberately NOT releaseAllFontMemory(): that would also drop
+  // the SD fonts' advance tables, which the build's measurement is actively using -- their
+  // mid-build 16KB rebuild allocation fails under build pressure (observed: a stream of
+  // buildAdvanceTable OOM errors and deeper maxAlloc dips that dropped glyphs). clearCache()
+  // frees what the render claimed while leaving the measurement caches intact.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+    if (auto* d = fcm->getDecompressor()) d->freeGlyphSlab();
+  }
+  LOG_DBG("ERS", "Early first render of page %d in %dms", pageIndex, millis() - start);
 }
 
 void EpubReaderActivity::renderStatusBar() const {

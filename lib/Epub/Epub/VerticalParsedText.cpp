@@ -662,6 +662,19 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       return true;
     }
 
+    // Final zero-margin attempt before CONTENT LOSS. At this point the margin no longer
+    // shields anything that outranks the text itself: the allocations it protects (font
+    // advance tables, staging buffers, the next page's reserve) all fail gracefully and
+    // retry later, while a dropped glyph is a character permanently missing from the page.
+    // Device evidence across three instrumented whole-book builds: every observed drop
+    // burst (need 8064 @ 11764 free, 10368 @ 10740 and even 14324, 11736 @ 12788) had the
+    // block itself available and died only on the margin check.
+    if (ESP.getMaxAllocHeap() >= linearBytes) {
+      glyphs.reserve(linearCapacity);
+      glyphs.push_back(g);
+      return true;
+    }
+
     LOG_ERR("VPT", "Low heap (%u bytes, need ~%u); dropping glyph", ESP.getMaxAllocHeap(),
             static_cast<unsigned>(linearBytes));
     everDroppedForHeap_ = true;
@@ -888,8 +901,37 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     }
   };
 
+  // Whether the current page's glyph vector can take one more PendingChar's worth of glyphs
+  // without an impossible copy-and-grow (old and new buffer must coexist during a vector
+  // reallocation -- on the observed dense-ruby pages that is a 10-12KB block at exactly the
+  // layout's low-heap dip). HEADROOM covers the worst single-character expansion: a sliced
+  // rotated Latin run plus ruby.
+  // Mirrors pushGlyph's LAST growth fallback exactly (+16 elements, zero margin) so the
+  // early break fires only when the very next growth attempt would otherwise start
+  // dropping -- not sooner. A bigger headroom here inflated the page count with premature
+  // breaks (device evidence: breaks at 81-148 glyphs against dips the +16 step survived).
+  auto pageVectorCanTakeMore = [&]() -> bool {
+    constexpr size_t GROWTH_STEP = 16;  // = pushGlyph's LINEAR_GROWTH_STEP
+    if (page.glyphs.size() + GROWTH_STEP <= page.glyphs.capacity()) return true;
+    const size_t growBytes = (page.glyphs.capacity() + GROWTH_STEP) * sizeof(VerticalGlyph);
+    return ESP.getMaxAllocHeap() >= growBytes;
+  };
+
   size_t idx = 0;
   while (idx < stream_.size()) {
+    // Emergency page split: the page's glyph vector is effectively full and the heap has no
+    // block for the grow-copy. Close the page at this character boundary and continue on a
+    // fresh one (whose vector starts small and grows in fragment-sized steps) -- an early
+    // page break the reader barely notices, instead of the silent character loss that
+    // followed once pushGlyph's growth ladder was exhausted mid-page.
+    if (column < columnsPerPage && !page.glyphs.empty() && !pageVectorCanTakeMore()) {
+      LOG_INF("VPT", "Page glyph buffer cannot grow (%u glyphs, maxAlloc=%u); early page break",
+              static_cast<unsigned>(page.glyphs.size()), ESP.getMaxAllocHeap());
+      column = columnsPerPage;
+      finalizePageIfNeeded();
+      row = columnStartRow(false);
+    }
+
     const PendingChar& pc = stream_[idx];
 
     // Force a fresh column at the start of every paragraph after the

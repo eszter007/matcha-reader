@@ -161,6 +161,37 @@ class EpubReaderActivity final : public Activity {
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;
+  // Bulk-loads a vertical page's glyphs into the SD-font mini cache (heap-gated). Returns
+  // false when the heap was too tight to prewarm -- rendering still works via the slower
+  // per-glyph on-demand path.
+  bool prewarmVerticalPageGlyphs(const VerticalPage& vpage);
+  // Draws one vertical TEXT page into the framebuffer; shared by the normal render path and
+  // the early-first-render hook. Does not touch the display. glyphsAlreadyWarm skips the
+  // prewarm when the page's glyphs were pre-loaded during idle (see prewarmedVPage_).
+  void renderVerticalPageBody(const VerticalPage& vpage, bool glyphsAlreadyWarm = false);
+  // Page index whose glyphs currently sit in the SD-font mini cache from the idle next-page
+  // warm; -1 = cache cold/unknown. Kindle-class turns: the NEXT page's glyphs are loaded
+  // while the reader looks at the current one, so a forward turn renders warm (~200ms)
+  // instead of paying the ~500-700ms per-page SD bulk load at button time.
+  int prewarmedVPage_ = -1;
+  // Direction of the most recent page turn; the idle warm follows it (forward turns warm
+  // the next page, backward turns the previous one) so sustained paging in EITHER
+  // direction hits a warm cache. Written by pageTurn() on the loop() task.
+  std::atomic<bool> lastTurnForward_{true};
+  // Early-first-render: invoked mid-build by VerticalSection the moment the reader's target
+  // page is laid out (and again for every mid-build page-turn request), so text is on screen
+  // seconds into a ~17s whole-chapter build and the user can keep turning pages while the
+  // rest of the chapter builds.
+  static void earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, int pageIndex);
+  void earlyRenderVerticalPage(const VerticalPage& page, int pageIndex);
+  // True while a vertical chapter build runs on the render task. Read by pageTurn() on the
+  // loop() task: while building, the section's pageCount is still 0, so the normal turn path
+  // would misread every press as "past the last page" and jump to the next spine (observed:
+  // a press during the build teleported the reader to the end of the book).
+  std::atomic<bool> verticalBuildInProgress_{false};
+  // Page index currently on screen from the early-render path; -1 until it first fires.
+  // Written on the render task, read by pageTurn() on the loop() task.
+  std::atomic<int> earlyDisplayedPage_{-1};
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.

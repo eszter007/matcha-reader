@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,6 +49,14 @@ class VerticalSection {
   // re-stamping meant a full re-index on every open, forever.
   bool rebuildingFromStale_ = false;
 
+  // See setEarlyRenderHook().
+  void (*earlyRenderFn_)(void*, const VerticalPage&, int) = nullptr;
+  void* earlyRenderCtx_ = nullptr;
+  int earlyRenderTargetPage_ = -1;
+  // See requestPageDuringBuild(). Written by the loop() task, read by the build on the
+  // render task; -1 = no pending request.
+  std::atomic<int> buildPageRequest_{-1};
+
  public:
   uint16_t pageCount = 0;
   int currentPage = 0;
@@ -57,6 +66,26 @@ class VerticalSection {
         spineIndex(spineIndex),
         renderer(renderer),
         filePath(epub->getCachePath() + "/vsections/" + std::to_string(spineIndex) + ".bin") {}
+
+  // Early-first-render hook: when set, createSectionFile() invokes fn(ctx, page, pageIndex)
+  // once, right after the page with index targetPage has been laid out and written to the
+  // cache -- letting the reader show the user's page a couple of seconds into a whole-chapter
+  // build (~17s for a 431-page book) while the remaining pages keep building. Fires for text
+  // pages only: an image page would pay its multi-second decode in the middle of the build.
+  // Silent background builds simply never set the hook. Function pointer + ctx, not
+  // std::function, per the platform binary/heap rules.
+  void setEarlyRenderHook(void* ctx, void (*fn)(void*, const VerticalPage&, int), int targetPage) {
+    earlyRenderCtx_ = ctx;
+    earlyRenderFn_ = fn;
+    earlyRenderTargetPage_ = targetPage;
+  }
+
+  // Mid-build page turns: the reader's loop() task records the page the user wants while a
+  // build is still running on the render task; the build serves it through the early-render
+  // hook as soon as that page exists (immediately via cache read-back if it is already
+  // written, otherwise the moment it is laid out). Latest request wins -- rapid presses
+  // collapse to the final target.
+  void requestPageDuringBuild(int pageIndex) { buildPageRequest_.store(pageIndex, std::memory_order_relaxed); }
 
   bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
   bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight);

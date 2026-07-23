@@ -36,7 +36,9 @@ namespace {
 // before it can hold the broken bytes and must not be reused.
 // v80: not a format change -- invalidates best-effort caches built while the resident write
 // staging buffer deepened the low-heap dips and dropped glyphs (missing characters ON DISK);
-// the emergency-release hook now prevents those drops on rebuild.
+// the transient per-page staging buffer now prevents those drops on rebuild. (The
+// early-first-render / mid-build page-turn work layered on top changes no on-disk format, so
+// it needs no further bump -- a v80 cache built by this firmware is byte-identical.)
 constexpr uint8_t VSECTION_FILE_VERSION = 80;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
@@ -641,6 +643,20 @@ bool readPage(HalFile& file, VerticalPage& page) {
     LOG_ERR("VSC", "Corrupt page record: %u glyphs", glyphCount);
     return false;
   }
+  // reserve() throws-and-ABORTS under -fno-exceptions; verify the block actually exists
+  // first. A corrupt count within the format bound can still demand ~98KB -- observed on
+  // device as an abort inside this exact reserve during a mid-build read-back. The margin
+  // is deliberately small: the page is transient (rendered, then freed), and an over-strict
+  // margin starved mid-build page-turn serves for entire dense stretches.
+  const uint32_t glyphBytes = glyphCount * static_cast<uint32_t>(sizeof(VerticalGlyph));
+  // Gate only when the vector must actually GROW: a caller passing a pre-reserved page (the
+  // build's serve slot) reads with zero allocation and must not be refused. 2K margin, not
+  // more: the render draws from a REFERENCE and the page is freed/reused right after; a 4K
+  // margin permanently starved mid-build page turns against a stable 13.3K hole.
+  if (page.glyphs.capacity() < glyphCount && ESP.getMaxAllocHeap() < glyphBytes + 2 * 1024) {
+    LOG_ERR("VSC", "Page record needs %u bytes, maxAlloc=%u; refusing read", glyphBytes, ESP.getMaxAllocHeap());
+    return false;
+  }
   page.glyphs.reserve(glyphCount);
 
   for (uint32_t gi = 0; gi < glyphCount; gi++) {
@@ -748,6 +764,25 @@ struct LayoutPageSink final : ParagraphSink {
   // more real content preserved with each halving.
   static constexpr size_t BATCH_CHARS = 160;
 
+  // Early-first-render hook, forwarded from VerticalSection::setEarlyRenderHook(). The
+  // initial target page and mid-build page turns share ONE mechanism: pageRequest holds the
+  // newest wanted page (seeded with the initial target at build start), and writeOne serves
+  // it whenever the heap allows.
+  void (*earlyRenderFn)(void*, const VerticalPage&, int) = nullptr;
+  void* earlyRenderCtx = nullptr;
+  std::atomic<int>* pageRequest = nullptr;
+  uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
+
+  // Reusable read-back slot for mid-build page turns. Reserved ONCE at build start (the
+  // healthiest heap moment): with the capacity in place, readPage's reserve is a no-op and
+  // the ruby strings are short enough for SSO, so serving a backward turn needs NO
+  // allocation at all -- previously the transient ~10.4KB page vector had to find a hole at
+  // exactly the layout's low-heap moments, and backward turns starved for up to 10s in
+  // dense stretches. If even this reserve fails, the slot stays empty and read-backs fall
+  // back to the gated on-demand allocation.
+  static constexpr size_t kServeSlotGlyphs = 160;  // full page (~147 cells) + margin
+  VerticalPage servePage_;
+
   LayoutPageSink(VerticalParsedText& layout, HalFile& out, std::vector<uint32_t>& pageOffsets, Epub& epub,
                  GfxRenderer& renderer, const std::string& chapterDir, const std::string& imageBasePath,
                  uint16_t viewportWidth, uint16_t viewportHeight)
@@ -760,6 +795,9 @@ struct LayoutPageSink final : ParagraphSink {
         imageBasePath(imageBasePath),
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight) {
+    if (ESP.getMaxAllocHeap() >= kServeSlotGlyphs * sizeof(VerticalGlyph) + 16 * 1024) {
+      servePage_.glyphs.reserve(kServeSlotGlyphs);
+    }
   }
 
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
@@ -877,28 +915,13 @@ struct LayoutPageSink final : ParagraphSink {
   void flushText(bool isFinalFlush = false) {
     if (failed) return;
     if (!isFinalFlush && layout.pendingCount() == 0) return;
-    // TEMP diagnostics: bisect which stage of the flush plants persistent allocations
-    // (maxAlloc collapsed 82K -> 2K over one chapter on a real device; strip with the rest).
-    const uint32_t maBefore = ESP.getMaxAllocHeap();
     // Streaming pages out via callback as they're finalized keeps at most ~2 pages' worth of
     // glyph buffers resident at once instead of the whole batch's -- see PageReadyCallback in
     // VerticalParsedText.h for why this is safe (oikomi only ever looks one page back).
-    const unsigned long layoutStart = millis();  // TEMP diagnostics (first-open perf hunt)
     auto pages = layout.layoutPages(this, &writePageCallback, isFinalFlush);
-    layoutMsAcc += millis() - layoutStart;  // TEMP
-    const uint32_t maLayout = ESP.getMaxAllocHeap();
     layout.reset();
     for (const auto& p : pages) writeOne(p);
-    const uint32_t maAfter = ESP.getMaxAllocHeap();
-    if (maAfter + 2048 < maBefore) {
-      LOG_DBG("VSC", "flushText maxAlloc: %u -> %u (layout) -> %u (reset+write), free=%u", maBefore, maLayout, maAfter,
-              ESP.getFreeHeap());
-    }
   }
-
-  // TEMP diagnostics (first-open perf hunt): accumulated time per build stage.
-  uint32_t layoutMsAcc = 0;
-  uint32_t writeMsAcc = 0;
 
   // Page serialization staging capacity: one file.write per page instead of ~10 mutexed
   // SD writes per GLYPH (measured: ~8.3s of a 23s 431-page build was writes). 12KB covers
@@ -908,13 +931,6 @@ struct LayoutPageSink final : ParagraphSink {
 
   void writeOne(const VerticalPage& p) {
     pageOffsets.push_back(static_cast<uint32_t>(out.position()));
-    // TEMP diagnostics (slow-books hunt): prove the build ADVANCES and how fast.
-    if ((pageOffsets.size() % 20) == 0) {
-      LOG_DBG("VSC", "build progress: %zu pages, layout=%ums write=%ums, free=%u maxAlloc=%u", pageOffsets.size(),
-              layoutMsAcc, writeMsAcc, static_cast<unsigned>(ESP.getFreeHeap()),
-              static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    }
-    const unsigned long writeStart = millis();  // TEMP
     // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
     // Holding it resident across the whole build deepened the layout's low-heap dips by
     // roughly its own size (device evidence: maxAlloc bottoms 14324 without it vs
@@ -938,7 +954,63 @@ struct LayoutPageSink final : ParagraphSink {
       LOG_ERR("VSC", "Failed to write page %zu to cache", pageOffsets.size() - 1);
       failed = true;
     }
-    writeMsAcc += millis() - writeStart;  // TEMP
+
+    if (ok) servePageRequest(p, static_cast<int>(pageOffsets.size()) - 1);
+  }
+
+  // Show-the-page-during-the-build engine, shared by the initial early first render (the
+  // request is seeded with the reader's target page at build start) and mid-build page
+  // turns: whenever a page finishes writing, serve the newest request -- directly if it IS
+  // the page just written, else by reading the already-serialized record back from the
+  // cache file. openFileForWrite opens O_RDWR, so the same handle seeks back for the read
+  // and returns to the end so the build appends exactly where it left off. A request beyond
+  // the built range stays pending and is re-checked after every page until the build reaches
+  // it; a request for an image page is dropped (its multi-second decode cannot run
+  // mid-build -- the page appears normally once the build completes).
+  void servePageRequest(const VerticalPage& justWritten, const int lastBuilt) {
+    if (!pageRequest || !earlyRenderFn) return;
+    const int req = pageRequest->load(std::memory_order_relaxed);
+    if (req < 0 || req > lastBuilt) return;
+    // Serving renders a page mid-build, and parts of that path allocate bare -- under
+    // -fno-exceptions an OOM there ABORTS (observed on device: __terminate during a
+    // mid-build page turn). The deep guards are in place (readPage refuses reads its glyph
+    // reserve can't afford; renderVerticalPageBody skips the prewarm when tight), so this
+    // outer gate only needs to cover the render's own working set. With the pre-reserved
+    // serve slot the read-back itself allocates nothing, so 8K (render transients: small
+    // utf8 buffers, glyph decompression) is enough -- higher gates repeatedly starved
+    // backward turns for whole dense stretches. A skipped serve stays pending and retries
+    // after the next page.
+    constexpr uint32_t SERVE_MIN_ALLOC = 8 * 1024;
+    if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) return;
+    if (req == lastBuilt) {
+      pageRequest->store(-1, std::memory_order_relaxed);
+      if (!justWritten.isImagePage()) earlyRenderFn(earlyRenderCtx, justWritten, req);
+      return;
+    }
+    // A refused read-back under an UNCHANGED heap state will be refused again -- don't
+    // repeat the seek+read+log for every subsequent page (observed: one starved backward
+    // turn produced a ~50Hz refusal stream for the rest of the build). Retry only when the
+    // request or the largest free block changed.
+    const uint64_t attemptKey = (static_cast<uint64_t>(req) << 32) | ESP.getMaxAllocHeap();
+    if (attemptKey == lastRefusedAttemptKey) return;
+    const size_t endPos = out.position();
+    // Commit pending writes before reading earlier records through the same handle: without
+    // the flush, a backward seek can hand back stale/garbage bytes for freshly written pages
+    // (observed on device: a read-back returned a corrupt glyph count).
+    out.flush();
+    out.seek(pageOffsets[req]);
+    const bool okRead = readPage(out, servePage_);
+    if (!out.seek(endPos)) {
+      LOG_ERR("VSC", "Failed to seek back to build position after page read-back");
+      failed = true;
+      return;
+    }
+    if (!okRead) {  // heap-refused or corrupt: request stays pending, retried on heap change
+      lastRefusedAttemptKey = attemptKey;
+      return;
+    }
+    pageRequest->store(-1, std::memory_order_relaxed);
+    if (!servePage_.isImagePage()) earlyRenderFn(earlyRenderCtx, servePage_, req);
   }
 
   VerticalPage makeImagePage(const std::string& src) {
@@ -1081,6 +1153,12 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
                       viewportHeight);
+  sink.earlyRenderFn = earlyRenderFn_;
+  sink.earlyRenderCtx = earlyRenderCtx_;
+  // Seed the shared page-request slot with the initial early-render target; page turns
+  // recorded while the build runs simply overwrite it (latest wins).
+  buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
+  sink.pageRequest = &buildPageRequest_;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
