@@ -145,17 +145,21 @@ const char* resolveIdxPath(const char*& cache, const char* preferred, const char
   if (cache) return cache;
   if (Storage.exists(preferred)) {
     cache = preferred;
-    return cache;
-  }
-  if (Storage.exists(legacy)) {
+  } else if (Storage.exists(legacy)) {
     LOG_INF("DICT", "Using legacy dictionary filename: %s", legacy);
     cache = legacy;
-    return cache;
+  } else {
+    // Neither present: cache the preferred name anyway. Leaving this case un-cached would
+    // re-run both exists() probes inside EVERY lookupExact() when an optional dict (names) is
+    // absent -- thousands of SD probes per page scan, where the pre-rename code paid nothing
+    // (lookupInFile's triedOpen cache). Tradeoff: LEGACY-named files uploaded mid-session are
+    // only noticed after releaseCaches() (lookup-session exit) or reboot; preferred-named
+    // uploads are still found immediately because callers probe the resolved path itself
+    // (isAvailable()'s exists(), lookupInFile()'s open) -- and the converter now emits the
+    // preferred names by default.
+    cache = preferred;
   }
-  // Neither present: report the preferred name (isAvailable()/error paths) but do NOT cache the
-  // outcome -- the files may appear later (web upload) and releaseCaches() may not run before
-  // the next probe.
-  return preferred;
+  return cache;
 }
 
 // Derive "/dict/foo.spx" from "/dict/foo.idx" into out (must be >= strlen(idxPath)+1).
