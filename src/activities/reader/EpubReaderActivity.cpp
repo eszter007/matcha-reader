@@ -1809,7 +1809,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
   if (imageWarmShouldCancel(this)) {
     LOG_DBG("IWARM", "skip: render already queued");  // TEMP diagnostics (slow-books hunt)
-    return;  // another render is already queued -- stay out of its way
+    return;                                           // another render is already queued -- stay out of its way
   }
   if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC) {
     LOG_DBG("IWARM", "skip: maxAlloc %u < %u floor", ESP.getMaxAllocHeap(), IMAGE_WARM_MIN_ALLOC);  // TEMP
