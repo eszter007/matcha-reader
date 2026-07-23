@@ -159,7 +159,11 @@ class EpubReaderActivity final : public Activity {
   static bool imageWarmShouldCancel(const void* ctx);
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
-                      int orientedMarginBottom, int orientedMarginLeft);
+                      int orientedMarginBottom, int orientedMarginLeft, bool glyphsAlreadyWarm = false);
+  // Horizontal analog of prewarmedVPage_: the page index whose glyphs currently sit warm in
+  // the font cache from the idle next-page prewarm; -1 = cold/unknown. Written on the render
+  // task only.
+  int prewarmedHPage_ = -1;
   void renderStatusBar() const;
   // Bulk-loads a vertical page's glyphs into the SD-font mini cache (heap-gated). Returns
   // false when the heap was too tight to prewarm -- rendering still works via the slower

@@ -1252,7 +1252,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (maxAlloc < RESUME_HEAP_FLOOR) {
       LOG_INF("ERS", "Low heap before render (maxAlloc=%u < %u); releasing font memory", maxAlloc, RESUME_HEAP_FLOOR);
       fcm->releaseAllFontMemory();
-      prewarmedVPage_ = -1;  // the release just emptied the mini-font cache
+      prewarmedVPage_ = -1;  // the release just emptied the mini-font cache (vertical)
+      prewarmedHPage_ = -1;  // ...and the horizontal warm
       LOG_INF("ERS", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
     }
   }
@@ -1544,6 +1545,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
+    prewarmedHPage_ = -1;  // fresh section: any page warmed for the previous one is stale
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
 
     if (!section->loadSectionFile(effectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
@@ -1680,9 +1682,33 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
 
     const auto start = millis();
-    renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
+    renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft,
+                   /*glyphsAlreadyWarm=*/prewarmedHPage_ == section->currentPage);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
   }
+
+  // Idle next-page prewarm (Kindle-class turns): while the reader looks at this page, scan the
+  // page they'll turn to next (direction-adaptive) and warm its glyphs into the font cache, so
+  // the next turn renders warm (~30ms) instead of paying the scan + SD bulk load at button
+  // time. The scan pass draws nothing (GfxRenderer skips drawing while scanning), so it never
+  // touches the displayed framebuffer. Heap-gated: warming loads an extra page transiently, so
+  // skip it when the largest free block is tight and take the classic cold turn instead.
+  prewarmedHPage_ = -1;
+  constexpr uint32_t IDLE_WARM_MIN_ALLOC = 32 * 1024;
+  if (auto* fcm = renderer.getFontCacheManager(); fcm && ESP.getMaxAllocHeap() >= IDLE_WARM_MIN_ALLOC) {
+    const int warmTarget =
+        lastTurnForward_.load(std::memory_order_relaxed) ? section->currentPage + 1 : section->currentPage - 1;
+    if (warmTarget >= 0 && warmTarget < section->pageCount) {
+      if (auto np = section->loadPageFromSectionFile(warmTarget)) {
+        auto scope = fcm->createPrewarmScope();
+        np->render(renderer, effectiveReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
+        scope.endScanAndPrewarm();
+        scope.release();  // keep the warm resident for the upcoming turn
+        prewarmedHPage_ = warmTarget;
+      }
+    }
+  }
+
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
   saveProgress(currentSpineIndex, section->currentPage, section->pageCount, verticalOverride, furiganaOverride);
 
@@ -1892,15 +1918,20 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
-                                        const int orientedMarginLeft) {
+                                        const int orientedMarginLeft, const bool glyphsAlreadyWarm) {
   const auto t0 = millis();
   const int fontId = effectiveReaderFontId();
 
-  // Font prewarm: scan pass accumulates text, then prewarm, then real render
+  // Font prewarm: scan pass accumulates text, then prewarm, then real render. Skipped when the
+  // idle next-page warm already loaded this page's glyphs (prewarmedHPage_) -- the cache is
+  // warm, so we go straight to the real render (~30ms) instead of paying the scan + SD bulk
+  // load again at button time.
   auto* fcm = renderer.getFontCacheManager();
-  auto scope = fcm->createPrewarmScope();
-  page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());  // scan pass
-  scope.endScanAndPrewarm();
+  if (!glyphsAlreadyWarm) {
+    auto scope = fcm->createPrewarmScope();
+    page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());  // scan pass
+    scope.endScanAndPrewarm();
+  }
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
