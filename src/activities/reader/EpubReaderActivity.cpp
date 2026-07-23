@@ -1924,13 +1924,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   // Font prewarm: scan pass accumulates text, then prewarm, then real render. Skipped when the
   // idle next-page warm already loaded this page's glyphs (prewarmedHPage_) -- the cache is
-  // warm, so we go straight to the real render (~30ms) instead of paying the scan + SD bulk
-  // load again at button time.
+  // warm, so we go straight to the real render instead of paying the scan + SD bulk load again
+  // at button time. The scope must stay alive for the WHOLE function so its warm survives the
+  // real render below and clears only at function exit (via the optional's destructor);
+  // scoping it to just the prewarm block would clear the cache before the real render and
+  // defeat the prewarm. In the already-warm case no scope is created, so the idle warm's cache
+  // persists (the next idle warm clears and rebuilds it).
   auto* fcm = renderer.getFontCacheManager();
-  if (!glyphsAlreadyWarm) {
-    auto scope = fcm->createPrewarmScope();
+  std::optional<FontCacheManager::PrewarmScope> prewarm;
+  if (!glyphsAlreadyWarm && fcm) {
+    prewarm.emplace(fcm->createPrewarmScope());
     page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());  // scan pass
-    scope.endScanAndPrewarm();
+    prewarm->endScanAndPrewarm();
   }
   const auto tPrewarm = millis();
 
