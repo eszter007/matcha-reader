@@ -56,6 +56,7 @@ INTERVAL_PRESETS = {
                     (0x2150, 0x218F),   # Number Forms (Roman numerals)
                     (0x2190, 0x21FF),   # Arrows
                     (0x2460, 0x24FF),   # Enclosed Alphanumerics (circled numbers)
+                    (0x2500, 0x257F),   # Box Drawing (─│┌┐└┘├┼) -- rules/tables in JP text
                     (0x25A0, 0x25FF),   # Geometric Shapes (■□●○◎◆)
                     (0x2600, 0x26FF),   # Miscellaneous Symbols (★☆♪)
                     (0x2E80, 0x2EFF),   # CJK Radicals Supplement
