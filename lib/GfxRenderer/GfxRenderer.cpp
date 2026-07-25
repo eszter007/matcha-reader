@@ -1997,9 +1997,15 @@ void GfxRenderer::drawCharVerticalCornerTopRight(const int fontId, const int cel
   renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, cursorX, cursorY, black, style);
 }
 
+// Shared by the drawing path and by verticalPunctInkBox(): when inkTopOut is non-null the
+// function stops once the ink box is known and reports it instead of painting. Vertical layout
+// needs the SAME numbers the drawer uses -- rotated punctuation is placed from its cell box with
+// several font-adaptive nudges, and a layout that guessed instead ran embedded Latin words into
+// the brackets around them (device photo, 「Furz」).
 void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cellLeftX, const int cellTopY,
                                                 const int cellSize, const uint32_t cp, const int shiftType,
-                                                const bool black, const EpdFontFamily::Style style) const {
+                                                const bool black, const EpdFontFamily::Style style, int* inkTopOut,
+                                                int* inkHeightOut) const {
   // Ellipsis glyphs are often horizontally designed and become too tall/ink-heavy
   // when rotated from proportional fonts. Render a centered vertical dot stack
   // directly in the cell to keep stable spacing and avoid overlaps.
@@ -2021,6 +2027,11 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     int startY = cellTopY + std::max(1, cellSize / 3) + cellSize / 3 + ellipsisExtra;
     const int maxStartY = cellTopY + std::max(1, cellSize - totalH - 1) + ellipsisExtra;
     if (startY > maxStartY) startY = maxStartY;
+    if (inkTopOut) {
+      *inkTopOut = startY;
+      *inkHeightOut = totalH;
+      return;
+    }
     const int startX = cellLeftX + (cellSize - dotSize) / 2;
     for (int i = 0; i < dotCount; i++) {
       const int y = startY + i * (dotSize + gap);
@@ -2075,7 +2086,10 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     if (isSquareBracket) {
       drawX = cellLeftX + (cellSize - rotatedW) / 2 - cellSize / 3;
     }
-    const int closingBias = std::max(1, cellSize / 6 + extraNudge * 2);
+    // +cellSize/4: the closing bracket read high against the Japanese character it closes
+    // (device check, tuned in two steps). After an embedded Latin word the distance is set by
+    // the run layout instead, so that case is tuned separately in VerticalParsedText.
+    const int closingBias = std::max(1, cellSize / 6 + cellSize / 4 + extraNudge * 2);
     drawY = cellTopY + cellSize - rotatedH + closingBias;
   } else if (shiftType == 3) {  // opening bracket/quote
     // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
@@ -2106,6 +2120,12 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   drawX = std::clamp(drawX, minX, maxX);
   drawY = std::clamp(drawY, minY, maxY);
 
+  if (inkTopOut) {
+    *inkTopOut = drawY;
+    *inkHeightOut = rotatedH;
+    return;
+  }
+
   // Rotated90CCW mapping:
   //   screenX in [cursorX + top - (height-1), cursorX + top]
   //   screenY in [cursorY + left, cursorY + left + (width-1)]
@@ -2123,6 +2143,23 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   }
 
   renderCharImpl<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorX, cursorY, black, style);
+}
+
+bool GfxRenderer::verticalPunctInkBox(const int fontId, const uint32_t cp, const EpdFontFamily::Style style,
+                                      const int cellTopY, const int cellSize, const int shiftType, int* inkTop,
+                                      int* inkHeight) const {
+  if (!inkTop || !inkHeight) return false;
+  *inkTop = INT32_MIN;
+  drawCharVerticalRotatedInCell(fontId, 0, cellTopY, cellSize, cp, shiftType, true, style, inkTop, inkHeight);
+  if (*inkTop == INT32_MIN) return false;  // no glyph / font missing
+  // VerticalTextBlock applies these extra drops at the call site, so mirror them here or the
+  // layout would read an ink box the drawer never uses.
+  if (cp == 0x2025 || cp == 0x2026) {
+    *inkTop += std::max(1, (cellSize * 5) / 8);
+  } else if (shiftType == 4) {
+    *inkTop += std::max(1, (cellSize * 3) / 8);
+  }
+  return true;
 }
 
 uint8_t* GfxRenderer::getFrameBuffer() const { return frameBuffer; }

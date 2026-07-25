@@ -165,7 +165,9 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     }
 
     const int rubyBlockH = static_cast<int>(rubyCharCount) * rubyLineH;
-    const int rubyDownNudge = std::max(3, (rubyLineH * 4) / 5);
+    // Ruby sat a touch high against its base character on device; drop it by another
+    // ~2/5 of a ruby line (device check, Vita Sexualis furigana).
+    const int rubyDownNudge = std::max(3, (rubyLineH * 6) / 5);
     int rubyY = g.y + offsetY + (baseLineH - rubyBlockH) / 2 - rubyLineH + rubyDownNudge;
 
     if (g.column == prevRubyColumn && rubyY < prevRubyBottom + 1) {

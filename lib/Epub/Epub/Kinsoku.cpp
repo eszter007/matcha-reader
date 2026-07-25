@@ -148,6 +148,11 @@ bool isRotatedRunCharacter(uint32_t codepoint) {
   if (codepoint >= 'A' && codepoint <= 'Z') return true;
   if (codepoint >= 'a' && codepoint <= 'z') return true;
   if (codepoint == ' ') return true;
+  // Accented Latin letters: Latin-1 Supplement (minus the x/÷ operators) and Latin
+  // Extended-A. Without these, a name like "Möbius" split into the runs "M" + "bius"
+  // with an upright ö between them -- three separately-placed fragments instead of one
+  // sideways word (device photo, Vita Sexualis).
+  if (codepoint >= 0x00C0 && codepoint <= 0x017F && codepoint != 0x00D7 && codepoint != 0x00F7) return true;
   switch (codepoint) {
     case '.':
     case ',':

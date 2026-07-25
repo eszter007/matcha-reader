@@ -243,8 +243,14 @@ class GfxRenderer {
   // Renders a single codepoint rotated 90° CCW and positioned inside a vertical
   // cell. shiftType is from Kinsoku::verticalShiftType():
   // 0=no bias, 2=closing bracket, 3=opening bracket, 4=dash/choonpu.
+  // Reports where drawCharVerticalRotatedInCell() would put this glyph's ink (top y and
+  // height, in cellTopY's coordinate space) without drawing. Vertical layout uses it so a
+  // rotated Latin run keeps clear of the brackets it sits between.
+  bool verticalPunctInkBox(int fontId, uint32_t cp, EpdFontFamily::Style style, int cellTopY, int cellSize,
+                           int shiftType, int* inkTop, int* inkHeight) const;
   void drawCharVerticalRotatedInCell(int fontId, int cellLeftX, int cellTopY, int cellSize, uint32_t cp, int shiftType,
-                                     bool black = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+                                     bool black = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                                     int* inkTopOut = nullptr, int* inkHeightOut = nullptr) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions
