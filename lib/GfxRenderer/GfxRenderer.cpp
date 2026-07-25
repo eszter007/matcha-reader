@@ -2155,7 +2155,7 @@ bool GfxRenderer::verticalPunctInkBox(const int fontId, const uint32_t cp, const
   // VerticalTextBlock applies these extra drops at the call site, so mirror them here or the
   // layout would read an ink box the drawer never uses.
   if (cp == 0x2025 || cp == 0x2026) {
-    *inkTop += std::max(1, (cellSize * 5) / 8);
+    *inkTop += std::max(1, (cellSize * 7) / 8);
   } else if (shiftType == 4) {
     *inkTop += std::max(1, (cellSize * 3) / 8);
   }

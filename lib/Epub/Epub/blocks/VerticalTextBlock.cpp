@@ -75,7 +75,9 @@ void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int
     if (g.renderKind == VerticalGlyph::RotatedPunct) {
       const int shiftType = Kinsoku::verticalShiftType(g.codepoint);
       if (g.codepoint == 0x2025 || g.codepoint == 0x2026) {
-        dy += std::max(1, (cellPx * 5) / 8);
+        // 7/8 cell: the dot stack still read high against the character before it (device
+        // check, book 2). Keep in sync with GfxRenderer::verticalPunctInkBox().
+        dy += std::max(1, (cellPx * 7) / 8);
       } else if (shiftType == 4) {
         // Dashes/chōonpu sat visibly low in their cell (device photo, kyokasho) -- a
         // quarter cell less down-shift than the ellipsis dot stack.
