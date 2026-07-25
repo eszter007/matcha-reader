@@ -2174,6 +2174,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 }
 
 void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, const uint16_t viewportHeight) const {
+  // The probe loop below opens one section cache file per spine. While a chapter is still
+  // building, every one of those opens queues behind the build's own SD traffic on the shared
+  // storage mutex, so anything that calls this -- opening the reader menu, drawing the status
+  // bar -- stalls for as long as the build holds the card (reported on device: buttons feel
+  // unresponsive during indexing). Keep the previous numbers until the build is done; they are
+  // recomputed on the next call, and page counts are transient during a build anyway.
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed)) return;
+
   const int livePages = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
   const bool vertical = useVerticalText();
   if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical) {
