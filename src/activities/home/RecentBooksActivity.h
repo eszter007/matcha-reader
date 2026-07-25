@@ -60,6 +60,18 @@ class RecentBooksActivity final : public Activity {
 
   int getVisibleRows(int cellHeight, int contentHeight) const;
   int getCellHeight(int cellWidth) const;
+  // Cancel hook for the background thumbnail generation: a cover conversion takes seconds and
+  // runs on the UI task, so it polls the buttons directly (the debounced state is stale while
+  // no update() tick happens) and gives way to a press. The abandoned thumb is retried on the
+  // next visit. Static so it can be passed as a plain function pointer.
+  static bool thumbGenShouldCancel(void* ctx);
+  uint32_t thumbGenStartedMs = 0;   // start of the running conversion, for the slice budget
+  uint32_t thumbGenBudgetMs = 400;  // grows when a conversion keeps hitting the budget
+  // Cover height of one grid cell, recorded while drawing so the background thumb passes
+  // generate at exactly that size. Drawing a theme-sized thumb (300px, 400px in Classic) into
+  // a ~207px cell costs seconds per cover in software scaling -- a 1:1 draw is a few ms.
+  // 0 until the first grid render; the passes fall back to the theme's cover height.
+  mutable int gridCoverHeight_ = 0;
 
   void loadRecentBooks();
   void loadBookProgress();

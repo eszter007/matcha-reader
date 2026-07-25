@@ -396,7 +396,8 @@ static void convertScanlineToGray(const PngDecodeContext& ctx, uint8_t* grayRow)
 }
 
 bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
-                                                   bool oneBit, bool crop) {
+                                                   bool oneBit, bool crop, BmpConvertCancelFn shouldCancel,
+                                                   void* cancelCtx) {
   LOG_DBG("PNG", "Converting PNG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
   // Verify PNG signature
@@ -666,6 +667,12 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
 
   // Process each scanline
   for (uint32_t y = 0; y < height; y++) {
+    // Cooperative cancel, polled per source row: a thumbnail conversion takes seconds on the
+    // UI task, so without this a button press waits for the whole image.
+    if (shouldCancel && shouldCancel(cancelCtx)) {
+      LOG_DBG("PNG", "PNG->BMP conversion cancelled");
+      return false;
+    }
     // Decode one scanline
     if (!decodeScanline(ctx)) {
       LOG_ERR("PNG", "Failed to decode scanline %u", y);
@@ -833,6 +840,8 @@ bool PngToBmpConverter::pngFileToBmpStreamWithSize(HalFile& pngFile, Print& bmpO
 }
 
 bool PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(HalFile& pngFile, Print& bmpOut, int targetMaxWidth,
-                                                       int targetMaxHeight) {
-  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true);
+                                                       int targetMaxHeight, BmpConvertCancelFn shouldCancel,
+                                                       void* cancelCtx) {
+  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, shouldCancel,
+                                    cancelCtx);
 }

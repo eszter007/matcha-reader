@@ -1,5 +1,6 @@
 #pragma once
 
+#include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 #include <Print.h>
 
 #include <memory>
@@ -56,7 +57,9 @@ class Epub {
   bool generateCoverBmp(bool cropped = false) const;
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
-  bool generateThumbBmp(int height) const;
+  // shouldCancel is polled during the cover decode; on cancel nothing is written and the call
+  // returns false, so a long thumbnail generation can give way to a button press.
+  bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;
