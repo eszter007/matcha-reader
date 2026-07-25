@@ -452,46 +452,17 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
       } else {
         const std::string coverBmpPath = UITheme::getCoverThumbPath(coverPath, LyraMetrics::values.homeCoverHeight);
 
-        // First time: load cover from SD and render
-        if (FsHelpers::hasJpgExtension(coverBmpPath) || FsHelpers::hasPngExtension(coverBmpPath)) {
-          ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverBmpPath);
-          if (decoder) {
-            ImageDimensions dims = {0, 0};
-            if (decoder->getDimensions(coverBmpPath, dims) && dims.width > 0 && dims.height > 0) {
-              const int drawW = LyraMetrics::values.homeCoverHeight * dims.width / dims.height;
-              RenderConfig config;
-              config.x = tileX + hPaddingInSelection;
-              config.y = tileY + hPaddingInSelection;
-              config.maxWidth = drawW;
-              config.maxHeight = LyraMetrics::values.homeCoverHeight;
-              config.useGrayscale = false;
-              config.useDithering = true;
-              if (decoder->decodeToFramebuffer(coverBmpPath, renderer, config)) {
-                coverWidth = drawW;
-              } else {
-                hasCover = false;
-              }
-            } else {
-              hasCover = false;
-            }
-          } else {
-            hasCover = false;
-          }
+        // First time: load cover from SD and render. Shared helper: manga carry a JPG/PNG
+        // cover, EPUB/XTC a generated BMP thumbnail.
+        // coverWidth is shared with the frame/placeholder drawing below and survives between
+        // renders: only a successful draw may change it, or a failed cover would shrink the
+        // placeholder to zero width and vanish.
+        const int drawn = UITheme::drawCoverThumb(renderer, coverBmpPath, tileX + hPaddingInSelection,
+                                                  tileY + hPaddingInSelection, LyraMetrics::values.homeCoverHeight);
+        if (drawn > 0) {
+          coverWidth = drawn;
         } else {
-          HalFile file;
-          if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
-            Bitmap bitmap(file);
-            if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-              coverWidth = bitmap.getWidth();
-              renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection, coverWidth,
-                                  LyraMetrics::values.homeCoverHeight);
-            } else {
-              hasCover = false;
-            }
-            file.close();
-          } else {
-            hasCover = false;
-          }
+          hasCover = false;
         }
       }
 

@@ -42,26 +42,12 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
           const std::string coverBmpPath =
               UITheme::getCoverThumbPath(coverPath, Lyra3CoversMetrics::values.homeCoverHeight);
 
-          // First time: load cover from SD and render
-          HalFile file;
-          if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
-            Bitmap bitmap(file);
-            if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-              float coverHeight = static_cast<float>(bitmap.getHeight());
-              float coverWidth = static_cast<float>(bitmap.getWidth());
-              float ratio = coverWidth / coverHeight;
-              const float tileRatio = static_cast<float>(tileWidth - 2 * hPaddingInSelection) /
-                                      static_cast<float>(Lyra3CoversMetrics::values.homeCoverHeight);
-              float cropX = 1.0f - (tileRatio / ratio);
-
-              renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
-                                  tileWidth - 2 * hPaddingInSelection, Lyra3CoversMetrics::values.homeCoverHeight,
-                                  cropX);
-            } else {
-              hasCover = false;
-            }
-            file.close();
-          }
+          // First time: load cover from SD and render. Shared helper: manga carry a JPG/PNG
+          // cover, EPUB/XTC a generated BMP thumbnail -- this theme only read the BMP form and
+          // drew an empty frame for every manga.
+          hasCover = UITheme::drawCoverThumbFilled(renderer, coverBmpPath, tileX + hPaddingInSelection,
+                                                   tileY + hPaddingInSelection, tileWidth - 2 * hPaddingInSelection,
+                                                   Lyra3CoversMetrics::values.homeCoverHeight);
         }
         // Draw either way
         renderer.drawRect(tileX + hPaddingInSelection, tileY + hPaddingInSelection, tileWidth - 2 * hPaddingInSelection,

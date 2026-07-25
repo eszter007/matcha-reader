@@ -1,7 +1,10 @@
 #include "UITheme.h"
 
+#include <Epub/converters/ImageDecoderFactory.h>
+#include <Epub/converters/ImageToFramebufferDecoder.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalStorage.h>
 #include <Logging.h>
 
 #include <memory>
@@ -109,6 +112,115 @@ std::string UITheme::getCoverThumbPath(std::string coverBmpPath, int coverHeight
     coverBmpPath.replace(pos, 8, std::to_string(coverHeight));
   }
   return coverBmpPath;
+}
+
+// Raw covers (a manga's own page image) go through the framebuffer decoder's 4-level Bayer
+// screen, which reads darker on the 1-bit panel than the Atkinson dithering baked into the
+// cached BMP thumbnails. Lift the midtones so the same cover looks the same on the home screen
+// and in the Library (device report: home was noticeably darker on the first pass).
+constexpr uint8_t COVER_RAW_LIGHTEN = 48;
+
+bool UITheme::getCoverThumbSize(const std::string& coverThumbPath, int* width, int* height) {
+  if (coverThumbPath.empty() || !width || !height) return false;
+
+  if (FsHelpers::hasJpgExtension(coverThumbPath) || FsHelpers::hasPngExtension(coverThumbPath)) {
+    ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverThumbPath);
+    ImageDimensions dims = {0, 0};
+    if (!decoder || !decoder->getDimensions(coverThumbPath, dims) || dims.width <= 0 || dims.height <= 0) return false;
+    *width = dims.width;
+    *height = dims.height;
+    return true;
+  }
+
+  HalFile file;
+  if (!Storage.openFileForRead("HOME", coverThumbPath, file)) return false;
+  Bitmap bitmap(file);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok) return false;
+  *width = bitmap.getWidth();
+  *height = bitmap.getHeight();
+  return *width > 0 && *height > 0;
+}
+
+bool UITheme::drawCoverThumbFilled(GfxRenderer& renderer, const std::string& coverThumbPath, const int x, const int y,
+                                   const int boxWidth, const int boxHeight, const bool allowRawDecode) {
+  if (coverThumbPath.empty() || boxWidth <= 0 || boxHeight <= 0) return false;
+
+  if (FsHelpers::hasJpgExtension(coverThumbPath) || FsHelpers::hasPngExtension(coverThumbPath)) {
+    if (!allowRawDecode) return false;
+    ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverThumbPath);
+    if (!decoder) return false;
+    ImageDimensions dims = {0, 0};
+    if (!decoder->getDimensions(coverThumbPath, dims) || dims.width <= 0 || dims.height <= 0) return false;
+    RenderConfig config;
+    config.x = x;
+    config.y = y;
+    config.maxWidth = boxWidth;
+    config.maxHeight = boxHeight;
+    config.useGrayscale = false;
+    config.useDithering = true;
+    config.lightenBy = COVER_RAW_LIGHTEN;
+    config.fillCrop = true;
+    config.cropWidth = boxWidth;
+    config.cropHeight = boxHeight;
+    return decoder->decodeToFramebuffer(coverThumbPath, renderer, config);
+  }
+
+  HalFile file;
+  if (!Storage.openFileForRead("HOME", coverThumbPath, file)) return false;
+  Bitmap bitmap(file);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok || bitmap.getHeight() <= 0) return false;
+  // Crop the longer axis so the short one fills the box.
+  const float bmpRatio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
+  const float boxRatio = static_cast<float>(boxWidth) / static_cast<float>(boxHeight);
+  float cropX = 0.0f, cropY = 0.0f;
+  if (bmpRatio > boxRatio) {
+    cropX = 1.0f - (boxRatio / bmpRatio);
+  } else {
+    cropY = 1.0f - (bmpRatio / boxRatio);
+  }
+  // A crop of a few pixels is not worth the generic (per-pixel, soft-scaled) path: that costs
+  // ~250ms per cover against a few ms for the packed 1-bit fast path, which only runs when
+  // nothing is cropped. Thumbs are generated at the cell height, so the mismatch is tiny.
+  constexpr float NEGLIGIBLE_CROP = 0.03f;
+  if (cropX < NEGLIGIBLE_CROP && cropY < NEGLIGIBLE_CROP) {
+    cropX = 0.0f;
+    cropY = 0.0f;
+  }
+  // allowUpscale: thumbnails smaller than the cell (small covers, or a cell bigger than the
+  // generated size) must grow into it, or the cell shows white strips.
+  renderer.drawBitmap(bitmap, x, y, boxWidth, boxHeight, cropX, cropY, /*allowUpscale=*/true);
+  return true;
+}
+
+int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumbPath, const int x, const int y,
+                            const int coverHeight, const int boxWidth, const float cropX, const float cropY) {
+  if (coverThumbPath.empty() || coverHeight <= 0) return 0;
+
+  if (FsHelpers::hasJpgExtension(coverThumbPath) || FsHelpers::hasPngExtension(coverThumbPath)) {
+    ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverThumbPath);
+    if (!decoder) return 0;
+    ImageDimensions dims = {0, 0};
+    if (!decoder->getDimensions(coverThumbPath, dims) || dims.width <= 0 || dims.height <= 0) return 0;
+    int drawWidth = coverHeight * dims.width / dims.height;
+    if (boxWidth > 0 && drawWidth > boxWidth) drawWidth = boxWidth;
+    RenderConfig config;
+    config.x = x;
+    config.y = y;
+    config.maxWidth = drawWidth;
+    config.maxHeight = coverHeight;
+    config.useGrayscale = false;
+    config.useDithering = true;
+    config.lightenBy = COVER_RAW_LIGHTEN;
+    return decoder->decodeToFramebuffer(coverThumbPath, renderer, config) ? drawWidth : 0;
+  }
+
+  HalFile file;
+  if (!Storage.openFileForRead("HOME", coverThumbPath, file)) return 0;
+  Bitmap bitmap(file);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok) return 0;
+  const int drawWidth = (boxWidth > 0) ? boxWidth : bitmap.getWidth();
+  renderer.drawBitmap(bitmap, x, y, drawWidth, coverHeight, cropX, cropY, /*allowUpscale=*/true);
+  return drawWidth;
 }
 
 UIIcon UITheme::getFileIcon(const std::string& filename) {
