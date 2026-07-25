@@ -132,9 +132,18 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
   // Cooperative cancel: polled once per MCU block (~10-30ms of decode), so an abort request
   // takes effect almost immediately. Returning 0 makes DecodeJPEG's bContinue loops exit.
+  //
+  // A background cache warm that is nearly done is the exception: aborting there deletes the
+  // partial file, so the page the reader just asked for has to decode the WHOLE image again
+  // (measured on device: 4.4s for a 464x717 illustration). Past the two-thirds mark, finishing
+  // is cheaper than restarting, so the remaining blocks run and the cache survives.
   if (ctx->config->shouldCancel && ctx->config->shouldCancel(ctx->config->cancelCtx)) {
-    ctx->cancelled = true;
-    return 0;
+    const bool nearlyDone =
+        ctx->cacheOnly && ctx->caching && ctx->dstHeight > 0 && ctx->cache.flushedRows * 3 >= ctx->dstHeight * 2;
+    if (!nearlyDone) {
+      ctx->cancelled = true;
+      return 0;
+    }
   }
 
   // In EIGHT_BIT_GRAYSCALE mode, pPixels contains 8-bit grayscale values

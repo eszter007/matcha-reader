@@ -39,7 +39,7 @@ namespace {
 // the transient per-page staging buffer now prevents those drops on rebuild. (The
 // early-first-render / mid-build page-turn work layered on top changes no on-disk format, so
 // it needs no further bump -- a v80 cache built by this firmware is byte-identical.)
-constexpr uint8_t VSECTION_FILE_VERSION = 97;
+constexpr uint8_t VSECTION_FILE_VERSION = 98;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.

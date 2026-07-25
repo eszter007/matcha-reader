@@ -972,27 +972,48 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
   // How far the character AFTER the run may be intruded upon: its ink only starts that far
   // below its own cell top. Reports the ink offset inside the cell, or -1 when unknown.
+  //
+  // Resolving one costs an ensureSdCardFontReady() -- a potential SD round-trip -- and a
+  // chapter hits this once per embedded word, number and ellipsis, often for the same few
+  // characters (は、。 dominate). A tiny direct-mapped cache keeps the repeat lookups off the
+  // card without holding a map. Deliberately small: this runs on the render task, and the
+  // project's stack budget for locals is 256 bytes total -- 16 entries is 96 bytes.
+  struct InkOffsetCacheEntry {
+    uint32_t key = 0;  // codepoint | style << 24; 0 = empty (never a real key, cp 0 is unused)
+    int16_t offset = 0;
+  };
+  static constexpr size_t INK_CACHE_SLOTS = 16;
+  InkOffsetCacheEntry inkOffsetCache[INK_CACHE_SLOTS];
+
   auto nextGlyphInkOffset = [&](const size_t nextIdx, const uint32_t paragraphIndex) -> int {
     if (nextIdx >= stream_.size() || stream_[nextIdx].paragraphIndex != paragraphIndex) return -1;
     const auto& next = stream_[nextIdx];
+    const uint32_t key = (next.codepoint & 0x00FFFFFFu) | (static_cast<uint32_t>(next.style & 3) << 24);
+    auto& slot = inkOffsetCache[key % INK_CACHE_SLOTS];
+    if (slot.key == key) return slot.offset;
+
     const auto nextStyle = static_cast<EpdFontFamily::Style>(next.style);
+    int offset = -1;
     if (Kinsoku::needsVerticalRotation(next.codepoint)) {
       int inkTop = 0, inkHeight = 0;
       if (renderer_.verticalPunctInkBox(fontId_, next.codepoint, nextStyle, 0, cellPx,
                                         Kinsoku::verticalShiftType(next.codepoint), &inkTop, &inkHeight)) {
-        return inkTop;
+        offset = inkTop;
       }
-      return -1;
+    } else {
+      int gl = 0, gw = 0, gt = 0, gh = 0;
+      // Metrics for a glyph the SD font has not paged in yet come back empty, which silently
+      // disabled the tail allowance; page the one character in first.
+      const std::string nextChar = encodeCp(next.codepoint);
+      renderer_.ensureSdCardFontReady(fontId_, nextChar.c_str(), static_cast<uint8_t>(1u << (next.style & 3)));
+      if (renderer_.getGlyphMetrics(fontId_, next.codepoint, nextStyle, &gl, &gw, &gt, &gh) && gh > 0) {
+        offset = 2 * ascender - gt;
+      }
     }
-    int gl = 0, gw = 0, gt = 0, gh = 0;
-    // Metrics for a glyph the SD font has not paged in yet come back empty, which silently
-    // disabled the tail allowance; page the one character in first.
-    const std::string nextChar = encodeCp(next.codepoint);
-    renderer_.ensureSdCardFontReady(fontId_, nextChar.c_str(), static_cast<uint8_t>(1u << (next.style & 3)));
-    if (renderer_.getGlyphMetrics(fontId_, next.codepoint, nextStyle, &gl, &gw, &gt, &gh) && gh > 0) {
-      return 2 * ascender - gt;
-    }
-    return -1;
+    // A miss is worth caching too -- it is the expensive case, and a glyph the font lacks
+    // stays missing for the rest of the chapter.
+    slot = {key, static_cast<int16_t>(offset)};
+    return offset;
   };
 
   // Rows the run occupies: enough that the next character's ink clears the run's, no more.

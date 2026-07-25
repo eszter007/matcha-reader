@@ -2101,7 +2101,10 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     const bool inkCentered = (cp == 0xFF08 || cp == 0x3008 || cp == 0x300A);
     // baselineExcess: tall fonts (Noto) left the opening bracket hanging too high above the
     // character it opens (kyokasho, baselineExcess 0, is unaffected).
-    const int openingBias = std::max(1, cellSize / 2 + extraNudge + baselineExcess);
+    // 1/2 -> 3/8 cell: the bracket still read low against the character it opens (device
+    // check). The vertical layout measures this through verticalPunctInkBox(), so the run
+    // and character spacing around it follows automatically.
+    const int openingBias = std::max(1, (cellSize * 3) / 8 + extraNudge + baselineExcess);
     drawY = cellTopY + cellSize + openingBias;
     if (!inkCentered) drawX += cellSize / 4;
   }

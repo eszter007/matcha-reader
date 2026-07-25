@@ -1935,27 +1935,38 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
         LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", currentSpineIndex + 1);  // TEMP
       }
     }
-    if (!vp) {
-      LOG_DBG("IWARM", "skip: no next vertical page (page %d/%d)", verticalSection->currentPage,
-              verticalSection->pageCount);  // TEMP
-      return;
-    }
-    if (!vp->isImagePage()) {
-      LOG_DBG("IWARM", "skip: next vertical page is text");  // TEMP
-      return;
-    }
-    if (vp->imageRotated) {
-      const int reserve = UITheme::getInstance().getStatusBarHeight() +
-                          UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
-      ImageBlock block(vp->imagePath, vp->imageWidth, vp->imageHeight);
-      block.setRotated(true, static_cast<int16_t>(reserve));
-      warmBlock(block);
-    } else {
+    // Warm the image on the next page and, if that one is already cached, keep looking ahead
+    // within this chapter. Building a 464x717 cache takes ~4.4s on device, so meeting an
+    // illustration with a cold cache stalls the turn; spending otherwise idle time on the ones
+    // further ahead makes every later image page open immediately. Cheap to repeat: warmCache()
+    // returns AlreadyWarm after a 4-byte header read once the cache exists.
+    constexpr int IMAGE_WARM_LOOKAHEAD_PAGES = 8;
+    const auto warmVerticalPage = [&](const VerticalPage& page) -> bool {
+      if (!page.isImagePage()) return true;  // keep scanning
+      if (page.imageRotated) {
+        const int reserve = UITheme::getInstance().getStatusBarHeight() +
+                            UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
+        ImageBlock block(page.imagePath, page.imageWidth, page.imageHeight);
+        block.setRotated(true, static_cast<int16_t>(reserve));
+        return warmBlock(block);
+      }
       // Same fit the render path computes -- shared helper keeps the cache dims identical.
-      int iw = vp->imageWidth;
-      int ih = vp->imageHeight;
+      int iw = page.imageWidth;
+      int ih = page.imageHeight;
       ImageBlock::fitWithin(viewportWidth, viewportHeight, iw, ih);
-      warmBlock(ImageBlock(vp->imagePath, static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
+      return warmBlock(ImageBlock(page.imagePath, static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
+    };
+
+    if (vp && !warmVerticalPage(*vp)) return;  // cancelled: the reader wants the render task back
+
+    for (int ahead = 2; ahead <= IMAGE_WARM_LOOKAHEAD_PAGES; ahead++) {
+      const int page = verticalSection->currentPage + ahead;
+      if (page >= verticalSection->pageCount) break;
+      // Re-check the heap per page: getPage() may pull a page in from the section file.
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+      const VerticalPage* aheadPage = verticalSection->getPage(page);
+      if (!aheadPage) break;
+      if (!warmVerticalPage(*aheadPage)) return;
     }
     return;
   }
