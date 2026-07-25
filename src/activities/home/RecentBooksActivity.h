@@ -129,6 +129,29 @@ class RecentBooksActivity final : public Activity {
     size_t thumbIndex = 0;  // epub cover-thumb pass cursor over results
   };
   LibraryScanState scan_;
+
+  // Library index (/.crosspoint/library.idx): one record per book seen by a previous scan.
+  // Without it every Library visit re-examined each book on the card -- a file open per EPUB
+  // to check its cover thumbnail, a directory listing per manga folder to find its cover page
+  // -- which is what made the background scan cost seconds per slice. A record whose size and
+  // modification stamp still match means nothing about that book can have changed, so the scan
+  // trusts the recorded cover state and skips the I/O. Kept deliberately small (no strings):
+  // titles and cover paths already live in the persisted recents list.
+  struct LibraryIndexEntry {
+    uint32_t pathHash = 0;
+    uint32_t fileSize = 0;       // manga folders: size of panels.idx
+    uint32_t modifiedStamp = 0;  // packed FAT date/time, 0 when the driver has none
+    uint16_t thumbHeight = 0;    // cover height this thumb was verified for (theme-dependent)
+    uint8_t flags = 0;           // bit0: verified thumbnail present
+  };
+  static constexpr uint8_t INDEX_FLAG_HAS_THUMB = 1 << 0;
+  std::vector<LibraryIndexEntry> libraryIndex_;
+  bool libraryIndexDirty_ = false;
+  void loadLibraryIndex();
+  void saveLibraryIndex();
+  const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
+  void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
+                        bool hasThumb);
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   void applyLibraryScan();

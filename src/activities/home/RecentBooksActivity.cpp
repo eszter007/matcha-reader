@@ -188,45 +188,87 @@ void RecentBooksActivity::loadRecentBooks() {
   }
 }
 
-// TEMPORARY (one shot per boot): drop every cached cover thumbnail so the new height-driven
-// ones are generated. Only touches derived cache files under /.crosspoint -- the firmware
-// rebuilds them on the next Library visit. Remove once the caches have turned over.
-static void dropAllCoverThumbsOnce() {
-  static bool done = false;
-  if (done) return;
-  done = true;
-  auto root = Storage.open("/.crosspoint");
-  if (!root || !root.isDirectory()) return;
-  root.rewindDirectory();
-  int removed = 0;
-  for (auto entry = root.openNextFile(); entry; entry = root.openNextFile()) {
-    char dirName[200];
-    entry.getName(dirName, sizeof(dirName));
-    if (!entry.isDirectory() || dirName[0] == '.') continue;
-    const std::string dirPath = std::string("/.crosspoint/") + dirName;
-    auto bookDir = Storage.open(dirPath.c_str());
-    if (!bookDir || !bookDir.isDirectory()) continue;
-    bookDir.rewindDirectory();
-    std::vector<std::string> victims;
-    for (auto f = bookDir.openNextFile(); f; f = bookDir.openNextFile()) {
-      char fileName[200];
-      f.getName(fileName, sizeof(fileName));
-      if (f.isDirectory()) continue;
-      if (strncmp(fileName, "thumb_", 6) == 0 && FsHelpers::hasBmpExtension(std::string_view{fileName})) {
-        victims.push_back(dirPath + "/" + fileName);
-      }
+namespace {
+constexpr char LIBRARY_INDEX_PATH[] = "/.crosspoint/library.idx";
+constexpr uint32_t LIBRARY_INDEX_MAGIC = 0x4C494258;  // "LIBX"
+constexpr uint8_t LIBRARY_INDEX_VERSION = 1;
+constexpr size_t LIBRARY_INDEX_MAX_ENTRIES = 2048;  // guards a corrupt count against the heap
+}  // namespace
+
+void RecentBooksActivity::loadLibraryIndex() {
+  libraryIndex_.clear();
+  libraryIndexDirty_ = false;
+
+  HalFile f;
+  if (!Storage.openFileForRead("LIB", LIBRARY_INDEX_PATH, f)) return;
+  uint32_t magic = 0;
+  uint8_t version = 0;
+  uint32_t count = 0;
+  if (f.read(&magic, sizeof(magic)) != sizeof(magic) || magic != LIBRARY_INDEX_MAGIC) return;
+  if (f.read(&version, sizeof(version)) != sizeof(version) || version != LIBRARY_INDEX_VERSION) return;
+  if (f.read(&count, sizeof(count)) != sizeof(count) || count > LIBRARY_INDEX_MAX_ENTRIES) return;
+
+  libraryIndex_.reserve(count);
+  for (uint32_t i = 0; i < count; i++) {
+    LibraryIndexEntry e;
+    if (f.read(&e, sizeof(e)) != sizeof(e)) {
+      libraryIndex_.clear();  // truncated file: treat the whole index as absent
+      return;
     }
-    bookDir.close();
-    for (const auto& victim : victims) {
-      if (Storage.remove(victim.c_str())) removed++;
-    }
+    libraryIndex_.push_back(e);
   }
-  root.close();
-  LOG_DBG("RBA", "Dropped %d cached cover thumbs for regeneration", removed);
+  LOG_DBG("LIB", "Library index: %u entries", (unsigned)libraryIndex_.size());
+}
+
+void RecentBooksActivity::saveLibraryIndex() {
+  if (!libraryIndexDirty_) return;
+  HalFile f;
+  if (!Storage.openFileForWrite("LIB", LIBRARY_INDEX_PATH, f)) return;
+  const uint32_t magic = LIBRARY_INDEX_MAGIC;
+  const uint8_t version = LIBRARY_INDEX_VERSION;
+  const uint32_t count = static_cast<uint32_t>(libraryIndex_.size());
+  f.write(&magic, sizeof(magic));
+  f.write(&version, sizeof(version));
+  f.write(&count, sizeof(count));
+  for (const auto& e : libraryIndex_) f.write(&e, sizeof(e));
+  f.close();
+  libraryIndexDirty_ = false;
+}
+
+const RecentBooksActivity::LibraryIndexEntry* RecentBooksActivity::findIndexEntry(const uint32_t pathHash) const {
+  for (const auto& e : libraryIndex_) {
+    if (e.pathHash == pathHash) return &e;
+  }
+  return nullptr;
+}
+
+void RecentBooksActivity::recordIndexEntry(const std::string& path, const uint32_t fileSize,
+                                           const uint32_t modifiedStamp, const int thumbHeight, const bool hasThumb) {
+  const uint32_t hash = static_cast<uint32_t>(std::hash<std::string>{}(path));
+  LibraryIndexEntry entry;
+  entry.pathHash = hash;
+  entry.fileSize = fileSize;
+  entry.modifiedStamp = modifiedStamp;
+  entry.thumbHeight = static_cast<uint16_t>(thumbHeight);
+  entry.flags = hasThumb ? INDEX_FLAG_HAS_THUMB : 0;
+
+  for (auto& e : libraryIndex_) {
+    if (e.pathHash != hash) continue;
+    if (e.fileSize == entry.fileSize && e.modifiedStamp == entry.modifiedStamp && e.thumbHeight == entry.thumbHeight &&
+        e.flags == entry.flags) {
+      return;  // unchanged; no rewrite
+    }
+    e = entry;
+    libraryIndexDirty_ = true;
+    return;
+  }
+  if (libraryIndex_.size() >= LIBRARY_INDEX_MAX_ENTRIES) return;
+  libraryIndex_.push_back(entry);
+  libraryIndexDirty_ = true;
 }
 
 void RecentBooksActivity::startLibraryScan() {
-  dropAllCoverThumbsOnce();
+  loadLibraryIndex();
   scan_ = LibraryScanState{};
   scan_.active = true;
   scan_.dirStack.reserve(16);
@@ -298,11 +340,30 @@ bool RecentBooksActivity::stepLibraryScan() {
     }
     std::string cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(book.path));
     std::string thumbPath = cachePath + "/thumb_" + std::to_string(thumbH) + ".bmp";
+
+    // Index shortcut: a record whose size, modification stamp and cover height all still match
+    // was verified by an earlier scan, so skip the file open entirely. Only books the index
+    // does not vouch for pay for thumbHeightValid() -- that per-book open on every Library
+    // visit is what made this pass expensive on a full card.
+    uint32_t bookSize = 0, bookStamp = 0;
+    {
+      HalFile bf;
+      if (Storage.openFileForRead("LIB", book.path, bf)) {
+        bookSize = static_cast<uint32_t>(bf.size());
+        bookStamp = bf.modifiedStamp();
+      }
+    }
+    const uint32_t bookHash = static_cast<uint32_t>(std::hash<std::string>{}(book.path));
+    const LibraryIndexEntry* indexed = findIndexEntry(bookHash);
+    const bool indexSaysThumbOk = indexed && (indexed->flags & INDEX_FLAG_HAS_THUMB) && indexed->fileSize == bookSize &&
+                                  indexed->modifiedStamp == bookStamp &&
+                                  indexed->thumbHeight == static_cast<uint16_t>(thumbH);
     // Height-checked, not just present: earlier builds bounded the thumb's WIDTH too, so a
     // wide cover produced a file that is shorter than its name claims and the grid drew it
     // with a white strip below. thumbHeightValid() sends those through the generator again.
-    if (thumbHeightValid(thumbPath, thumbH)) {
+    if (indexSaysThumbOk || thumbHeightValid(thumbPath, thumbH)) {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
+      recordIndexEntry(book.path, bookSize, bookStamp, thumbH, true);
       scan_.thumbIndex++;
       continue;
     }
@@ -316,6 +377,7 @@ bool RecentBooksActivity::stepLibraryScan() {
     Epub epub(book.path, "/.crosspoint");
     const bool generated = epub.load(true, true) && epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
     thumbGenBudgetMs = generated ? 400 : std::min<uint32_t>(thumbGenBudgetMs * 2, 3000);
+    recordIndexEntry(book.path, bookSize, bookStamp, thumbH, generated);
     if (generated) {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
       const auto& title = epub.getTitle();
@@ -384,7 +446,26 @@ void RecentBooksActivity::scanOneDirectory(const std::string& dirPath) {
       const auto& metrics = UITheme::getInstance().getMetrics();
       const int gridHeight =
           gridCoverHeight_ > 0 ? gridCoverHeight_ : (metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120);
-      const bool thumbOk = thumbHeightValid(UITheme::getCoverThumbPath(tmpl, gridHeight), gridHeight);
+      // A manga folder is stamped by its panels.idx: it is rewritten whenever the pages change,
+      // and reading it is one open instead of listing hundreds of page files. An index record
+      // that still matches means the recorded cover is good, so neither the thumbnail check nor
+      // the folder listing below has to run again.
+      uint32_t mangaSize = 0, mangaStamp = 0;
+      {
+        HalFile idxFile;
+        if (Storage.openFileForRead("LIB", idxPath, idxFile)) {
+          mangaSize = static_cast<uint32_t>(idxFile.size());
+          mangaStamp = idxFile.modifiedStamp();
+        }
+      }
+      const uint32_t mangaHash = static_cast<uint32_t>(std::hash<std::string>{}(fullPath));
+      const LibraryIndexEntry* mangaIndexed = findIndexEntry(mangaHash);
+      const bool indexSaysThumbOk = mangaIndexed && (mangaIndexed->flags & INDEX_FLAG_HAS_THUMB) &&
+                                    mangaIndexed->fileSize == mangaSize && mangaIndexed->modifiedStamp == mangaStamp &&
+                                    mangaIndexed->thumbHeight == static_cast<uint16_t>(gridHeight);
+      const bool thumbOk =
+          indexSaysThumbOk || thumbHeightValid(UITheme::getCoverThumbPath(tmpl, gridHeight), gridHeight);
+      recordIndexEntry(fullPath, mangaSize, mangaStamp, gridHeight, thumbOk);
       if (entry.coverBmpPath.empty() || coverIsRawImage || (coverIsTemplate && !thumbOk)) {
         const std::string coverBefore = entry.coverBmpPath;
         if (thumbOk) {
@@ -494,6 +575,7 @@ void RecentBooksActivity::applyLibraryScan() {
 }
 
 void RecentBooksActivity::finishLibraryScan() {
+  saveLibraryIndex();
   RecentBooksStore cache;
   cache.setBooks(scan_.results);
   JsonSettingsIO::saveRecentBooks(cache, LIBRARY_CACHE_JSON);
