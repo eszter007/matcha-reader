@@ -33,6 +33,14 @@ class VerticalSection {
   // const to callers (a read) but faults the page in from SD. The pointer returned by getPage()
   // is invalidated by the next getPage() call for a different index -- all existing callers
   // fetch-and-render one page at a time, never holding two pages.
+  //
+  // NOT thread-safe, and the slot is shared by BOTH tasks: the render task re-faults it from
+  // render()'s prewarm and image-warm tail (seconds long), the main task from the menu / word
+  // lookup / bookmark paths. Faulting a page mutates this one std::vector<VerticalGlyph>, so a
+  // concurrent pair of getPage() calls frees the glyph buffer under the other task -- observed
+  // as a heap_caps_free panic ("target pointer is outside heap areas") on the NEXT clear().
+  // Rule: main-task callers must hold a RenderLock across getPage() AND every use of its
+  // result; the render task is covered by the lock it renders under.
   mutable VerticalPage loadedPage_;
   mutable int loadedPageIndex_ = -1;
   // Set by getPage() when its last read failed because the glyph vector could not be reserved

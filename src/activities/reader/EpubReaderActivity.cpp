@@ -739,6 +739,14 @@ void EpubReaderActivity::openReaderMenu() {
   const bool showVerticalToggle = isJapaneseBook();
   bool hasPageText = false;
   if (verticalSection) {
+    // getPage() faults the page into the section's SINGLE shared page slot -- the same slot the
+    // render task re-faults from render()'s prewarm and image-warm tail, which runs for seconds
+    // while holding the render mutex. Faulting it from this (main) task unlocked runs
+    // readPage() on one std::vector<VerticalGlyph> from two tasks: clear() in one while the
+    // other is mid-push_back frees the buffer under it, and the damage detonates on the NEXT
+    // clear() as a free() of a non-heap pointer (crash report: heap_caps_free assert inside
+    // getPage -> ~basic_string). The lock must also span every use of the returned pointer.
+    RenderLock lock(*this);
     const VerticalPage* page = verticalSection->getPage();
     hasPageText = page && !PageTextExtractor::fromVerticalPage(*page).empty();
   } else if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
@@ -755,8 +763,14 @@ void EpubReaderActivity::openReaderMenu() {
         toggleAutoPageTurn(menu.pageTurnOption);
         if (menu.verticalOverride >= 0 && menu.verticalOverride != (useVerticalText() ? 1 : 0)) {
           verticalOverride = menu.verticalOverride;
-          section.reset();
-          verticalSection.reset();
+          {
+            // Every other section reset in this file takes the render lock: the render task can
+            // still be inside its (multi-second, section-touching) warm tail when the menu
+            // result lands, and freeing the section under it is a use-after-free.
+            RenderLock lock(*this);
+            section.reset();
+            verticalSection.reset();
+          }
           // Forcing vertical text on a non-ja book is the same signal
           // isJapaneseBook() covers at open: JP fallback follows it.
           sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
@@ -853,6 +867,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::DISPLAY_QR: {
       std::string pageText;
       if (verticalSection) {
+        RenderLock lock(*this);  // shared page slot -- see openReaderMenu()
         const VerticalPage* page = verticalSection->getPage();
         if (page) {
           pageText = PageTextExtractor::fromVerticalPage(*page);
@@ -917,6 +932,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::TRANSLATE_PAGE: {
       std::string pageText;
       if (verticalSection) {
+        RenderLock lock(*this);  // shared page slot -- see openReaderMenu()
         const VerticalPage* page = verticalSection->getPage();
         if (page) {
           pageText = PageTextExtractor::fromVerticalPage(*page);
@@ -934,10 +950,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         nextPageNumber = verticalSection ? verticalSection->currentPage
                          : section       ? section->currentPage
                                          : nextPageNumber;
-        section.reset();
-        verticalSection.reset();
-        if (auto* fcm = renderer.getFontCacheManager()) {
-          fcm->releaseAllFontMemory();
+        {
+          RenderLock lock(*this);  // the render task may still be in its warm tail
+          section.reset();
+          verticalSection.reset();
+          if (auto* fcm = renderer.getFontCacheManager()) {
+            fcm->releaseAllFontMemory();
+          }
         }
         startActivityForResult(
             std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pageText)),
@@ -2470,12 +2489,24 @@ void EpubReaderActivity::openWordLookupPanel() {
   // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
   const std::string scanCachePath = epub->getCachePath() + "/wlscan.bin";
   if (verticalSection) {
-    const VerticalPage* page = verticalSection->getPage();
-    if (page) {
-      startActivityForResult(std::make_unique<EpubReaderWordLookupActivity>(
-                                 renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
-                                 static_cast<uint16_t>(verticalSection->currentPage)),
-                             [this](const ActivityResult&) { requestUpdate(); });
+    // Built under the render lock, started after it: the constructor's scan copies every glyph
+    // out of *page, and the pointer is only valid while nothing else re-faults the section's
+    // single page slot -- which the render task's warm tail does, for seconds at a time. This
+    // exact race is what corrupted the glyph vector before the reported heap_caps_free panic
+    // (see openReaderMenu()). startActivityForResult() only queues, so it must not be called
+    // with the lock held (ActivityManager takes it again to perform the push).
+    std::unique_ptr<Activity> panel;
+    {
+      RenderLock lock(*this);
+      if (const VerticalPage* page = verticalSection->getPage()) {
+        panel = makeUniqueNoThrow<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
+                                                                static_cast<uint16_t>(currentSpineIndex),
+                                                                static_cast<uint16_t>(verticalSection->currentPage));
+        if (!panel) LOG_ERR("ERS", "OOM: word lookup panel");
+      }
+    }
+    if (panel) {
+      startActivityForResult(std::move(panel), [this](const ActivityResult&) { requestUpdate(); });
     }
   } else if (section) {
     auto page = section->loadPageFromSectionFile();
