@@ -118,6 +118,9 @@ void SdCardFont::freeStyleAll(PerStyle& s) {
   delete[] s.bmpIntervals;
   s.bmpIntervals = nullptr;
   s.intervalsAreBmp16 = false;
+  s.residentIntervalCount = 0;
+  s.tailIntervalCount = 0;
+  s.tailIntervalFileOffset = 0;
   freeStyleKernLigatureData(s);
   s.present = false;
 }
@@ -485,6 +488,12 @@ bool SdCardFont::load(const char* path) {
 
     auto& s = styles_[styleId];
     s.present = true;
+    // Per-load counters: a PerStyle slot is reused when another family is loaded into it, and
+    // a stale resident count would silently hide every glyph past it (device: half a page of
+    // text vanished after the first reload).
+    s.residentIntervalCount = 0;
+    s.tailIntervalCount = 0;
+    s.tailIntervalFileOffset = 0;
     s.header.intervalCount = readU32(tocBuf + 4);
     s.header.glyphCount = readU32(tocBuf + 8);
     s.header.advanceY = tocBuf[12];
@@ -567,12 +576,20 @@ bool SdCardFont::load(const char* path) {
         freeAll();
         return false;
       }
-      if (iv.first > UINT16_MAX || iv.last > UINT16_MAX || iv.offset > UINT16_MAX) {
+      // Intervals are sorted, so the first one reaching past the BMP starts the tail that
+      // stays on the card (see PerStyle::tailIntervalCount).
+      if (iv.first > UINT16_MAX) {
+        if (s.tailIntervalCount == 0) s.residentIntervalCount = j;
+        s.tailIntervalCount++;
+      } else if (iv.last > UINT16_MAX || iv.offset > UINT16_MAX) {
         canUseBmp16 = false;
       }
       expectedOffset += span;
       prevLast = iv.last;
     }
+    if (s.tailIntervalCount == 0) s.residentIntervalCount = s.header.intervalCount;
+    s.tailIntervalFileOffset =
+        s.intervalsFileOffset + s.residentIntervalCount * static_cast<uint32_t>(sizeof(EpdUnicodeInterval));
 
     if (!file.seekSet(s.intervalsFileOffset)) {
       LOG_ERR("SDCF", "Failed to seek back to intervals for style %u", i);
@@ -581,13 +598,13 @@ bool SdCardFont::load(const char* path) {
     }
 
     if (canUseBmp16) {
-      s.bmpIntervals = new (std::nothrow) PerStyle::BmpInterval16[s.header.intervalCount];
+      s.bmpIntervals = new (std::nothrow) PerStyle::BmpInterval16[s.residentIntervalCount];
       if (!s.bmpIntervals) {
         LOG_ERR("SDCF", "Failed to allocate compact intervals for style %u", i);
         freeAll();
         return false;
       }
-      for (uint32_t j = 0; j < s.header.intervalCount; ++j) {
+      for (uint32_t j = 0; j < s.residentIntervalCount; ++j) {
         if (file.read(reinterpret_cast<uint8_t*>(&iv), sizeof(iv)) != sizeof(iv)) {
           LOG_ERR("SDCF", "Failed to read compact interval %u for style %u", j, i);
           freeAll();
@@ -598,18 +615,24 @@ bool SdCardFont::load(const char* path) {
       }
       s.intervalsAreBmp16 = true;
     } else {
-      s.fullIntervals = new (std::nothrow) EpdUnicodeInterval[s.header.intervalCount];
+      s.fullIntervals = new (std::nothrow) EpdUnicodeInterval[s.residentIntervalCount];
       if (!s.fullIntervals) {
-        LOG_ERR("SDCF", "Failed to allocate %u intervals for style %u", s.header.intervalCount, i);
+        LOG_ERR("SDCF", "Failed to allocate %u intervals for style %u", s.residentIntervalCount, i);
         freeAll();
         return false;
       }
-      size_t intervalsBytes = s.header.intervalCount * sizeof(EpdUnicodeInterval);
+      size_t intervalsBytes = s.residentIntervalCount * sizeof(EpdUnicodeInterval);
       if (file.read(reinterpret_cast<uint8_t*>(s.fullIntervals), intervalsBytes) != static_cast<int>(intervalsBytes)) {
         LOG_ERR("SDCF", "Failed to read intervals for style %u", i);
         freeAll();
         return false;
       }
+    }
+    if (s.tailIntervalCount > 0) {
+      LOG_DBG("SDCF", "Style %u: %u resident intervals (%u bytes), %u above-BMP intervals stay on card", i,
+              s.residentIntervalCount,
+              s.residentIntervalCount * (s.intervalsAreBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))),
+              s.tailIntervalCount);
     }
 
     // Initialize stub data
@@ -644,8 +667,34 @@ bool SdCardFont::coversCodepoint(const uint32_t cp, const uint8_t styleId) const
 }
 
 int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const {
+  // Above the BMP the interval table is not resident (see PerStyle::tailIntervalCount):
+  // binary-search that short tail straight from the card.
+  if (codepoint > UINT16_MAX) {
+    if (s.tailIntervalCount == 0) return -1;
+    HalFile file;
+    if (!Storage.openFileForRead("SDCF", filePath_, file)) return -1;
+    int left = 0;
+    int right = static_cast<int>(s.tailIntervalCount) - 1;
+    while (left <= right) {
+      const int mid = left + (right - left) / 2;
+      EpdUnicodeInterval iv{};
+      if (!file.seekSet(s.tailIntervalFileOffset + static_cast<uint32_t>(mid) * sizeof(iv)) ||
+          file.read(reinterpret_cast<uint8_t*>(&iv), sizeof(iv)) != sizeof(iv)) {
+        return -1;
+      }
+      if (codepoint < iv.first) {
+        right = mid - 1;
+      } else if (codepoint > iv.last) {
+        left = mid + 1;
+      } else {
+        return static_cast<int32_t>(iv.offset + (codepoint - iv.first));
+      }
+    }
+    return -1;
+  }
+
   int left = 0;
-  int right = static_cast<int>(s.header.intervalCount) - 1;
+  int right = static_cast<int>(s.residentIntervalCount) - 1;
   while (left <= right) {
     int mid = left + (right - left) / 2;
     const uint32_t first = s.intervalsAreBmp16 ? s.bmpIntervals[mid].first : s.fullIntervals[mid].first;

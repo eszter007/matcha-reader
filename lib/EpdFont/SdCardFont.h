@@ -154,6 +154,15 @@ class SdCardFont {
     static_assert(sizeof(BmpInterval16) == 6, "BmpInterval16 must remain compact");
     BmpInterval16* bmpIntervals = nullptr;
     bool intervalsAreBmp16 = false;
+    // Codepoints above the BMP (rare kanji from JIS X 0213 plane 2) sort after every BMP
+    // interval, so they form a tail of the on-disk table. Keeping that tail resident cost
+    // ~3.5KB per style -- it also forces every interval to the 12-byte form -- on a heap
+    // where the vertical build already dips to single-digit KB. The tail stays on the card
+    // and is looked up per occurrence instead; these characters are far too rare for the
+    // extra seek to matter. residentIntervalCount is what the in-RAM tables actually hold.
+    uint32_t residentIntervalCount = 0;
+    uint32_t tailIntervalFileOffset = 0;
+    uint32_t tailIntervalCount = 0;
 
     // Persistent kern-class + ligature tables (lazy-loaded on first prewarm).
     // The full kern MATRIX is NOT resident — on Literata-class fonts a single
