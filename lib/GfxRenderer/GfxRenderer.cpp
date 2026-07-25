@@ -1112,6 +1112,11 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     hasTargetBounds = true;
   }
 
+  // Downscale only. The pixel loops below walk the SOURCE and map each pixel to a destination
+  // position, so a scale > 1 leaves whole destination rows and columns unwritten -- a white
+  // cross-hatch over the image (device photo, manga cover). Callers that need a small source to
+  // fill a bigger box go through the uncropped 1-bit path, which upscales properly, or have the
+  // thumbnail generated at the right size in the first place.
   if (hasTargetBounds && fitScale < 1.0f) {
     scale = fitScale;
     isScaled = true;

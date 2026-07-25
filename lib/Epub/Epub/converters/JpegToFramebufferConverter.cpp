@@ -17,6 +17,13 @@
 
 namespace {
 
+// See RenderConfig::lightenBy -- saturating lift applied before the Bayer screen.
+inline uint8_t lightenGray(const uint8_t gray, const uint8_t lightenBy) {
+  if (lightenBy == 0) return gray;
+  const int lifted = gray + lightenBy;
+  return lifted > 255 ? 255 : static_cast<uint8_t>(lifted);
+}
+
 // Context struct passed through JPEGDEC callbacks to avoid global mutable state.
 // The draw callback receives this via pDraw->pUser (set by setUserPointer()).
 // The file I/O callbacks receive the HalFile* via pFile->fHandle (set by jpegOpen()).
@@ -229,7 +236,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
         uint8_t gray = row[dstX - blockX];
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -288,7 +295,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -311,7 +318,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -337,7 +344,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
@@ -370,7 +377,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
       uint8_t dithered;
       if (useDithering) {
-        dithered = applyBayerDither4Level(gray, outX, outY);
+        dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
       } else {
         dithered = gray / 85;
         if (dithered > 3) dithered = 3;

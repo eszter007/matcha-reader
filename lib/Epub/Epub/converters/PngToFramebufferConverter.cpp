@@ -17,6 +17,13 @@
 
 namespace {
 
+// See RenderConfig::lightenBy -- saturating lift applied before the Bayer screen.
+inline uint8_t lightenGray(const uint8_t gray, const uint8_t lightenBy) {
+  if (lightenBy == 0) return gray;
+  const int lifted = gray + lightenBy;
+  return lifted > 255 ? 255 : static_cast<uint8_t>(lifted);
+}
+
 // Context struct passed through PNGdec callbacks to avoid global mutable state.
 // The draw callback receives this via pDraw->pUser (set by png.decode()).
 // The file I/O callbacks receive the HalFile* via pFile->fHandle (set by pngOpen()).
@@ -280,7 +287,7 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 
       uint8_t ditheredGray;
       if (useDithering) {
-        ditheredGray = applyBayerDither4Level(gray, outX, outY);
+        ditheredGray = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
       } else {
         ditheredGray = gray / 85;
         if (ditheredGray > 3) ditheredGray = 3;

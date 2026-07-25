@@ -36,6 +36,13 @@ struct RenderConfig {
   // untouched. Sources without an alpha channel render fully opaque. PNG only.
   bool alphaMask = false;
 
+  // Lifts the source tone before dithering (0 = off). The framebuffer path renders through a
+  // 4-level Bayer screen, which on the 1-bit framebuffer reads noticeably darker than the
+  // Atkinson 1-bit dithering used for the cached BMP cover thumbnails -- the same manga cover
+  // looked heavy on the home screen and light in the Library. Lifting the midtones brings the
+  // two in line without touching the shared dither routine.
+  uint8_t lightenBy = 0;
+
   // Background-prefetch mode: stream ONLY the .2bp pixel cache (cachePath, required) to SD and
   // never touch the framebuffer or read any renderer state. Because nothing shared with the
   // render task is accessed, the decode needs no rendering mutex and no framebuffer snapshot --
