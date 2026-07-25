@@ -638,7 +638,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (g.column != shiftColumn) {
       columnYShift = 0;
       shiftColumn = g.column;
-    } else if (columnYShift > 0) {
+    } else if (columnYShift != 0) {
+      // Positive slides the column tail up (cell-rounding leftover after a run), negative
+      // slides it down (ink that leaves its own cell, e.g. the low ellipsis dot stack).
       g.y = static_cast<uint16_t>(std::max(0, static_cast<int>(g.y) - columnYShift));
     }
     if (glyphs.size() < glyphs.capacity()) {
@@ -932,6 +934,106 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     return ESP.getMaxAllocHeap() >= growBytes;
   };
 
+  // Shared placement geometry for every sideways run -- embedded Latin words AND multi-digit
+  // numbers. drawText() takes the em-box TOP, so an upright glyph's ink starts (ascender -
+  // top) below its y while a rotated run is drawn from its ink start; these helpers are where
+  // that difference is accounted for once instead of per call site.
+  //
+  // Where the run's ink may start: just under the previous glyph's measured ink, or flush with
+  // the cell top when nothing precedes it in this column.
+  auto rotatedRunStartY = [&](const uint16_t columnArg, const int topYArg) -> int {
+    if (page.glyphs.empty()) return topYArg;
+    const VerticalGlyph& pg = page.glyphs.back();
+    if (pg.column != columnArg) return topYArg;
+    int startY = topYArg + std::max(5, cellPx / 4);
+    if (pg.renderKind == VerticalGlyph::RotatedPunct) {
+      // Brackets are placed from their cell box and hang roughly a full cell lower than that
+      // box (「 opens the character in the NEXT cell), so a run that only stepped one cell
+      // started inside the bracket's ink (device photo, 「Furz」).
+      int inkTop = 0, inkHeight = 0;
+      if (renderer_.verticalPunctInkBox(fontId_, pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style),
+                                        static_cast<int>(pg.y), cellPx, Kinsoku::verticalShiftType(pg.codepoint),
+                                        &inkTop, &inkHeight)) {
+        startY = std::max(startY, inkTop + inkHeight + std::max(3, cellPx / 8));
+      }
+    } else if (pg.renderKind == VerticalGlyph::Upright && pg.codepoint != 0) {
+      int gl = 0, gw = 0, gt = 0, gh = 0;
+      if (renderer_.getGlyphMetrics(fontId_, pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style), &gl, &gw, &gt,
+                                    &gh) &&
+          gh > 0) {
+        // pg.y already carries this column's slide-up; startY is computed on the raw grid and
+        // gets the same slide applied at push time, so compare in raw space.
+        const int pgRawY = static_cast<int>(pg.y) + ((pg.column == shiftColumn) ? columnYShift : 0);
+        startY = std::max(startY, pgRawY + ascender - gt + gh);
+      }
+    }
+    return startY;
+  };
+
+  // How far the character AFTER the run may be intruded upon: its ink only starts that far
+  // below its own cell top. Reports the ink offset inside the cell, or -1 when unknown.
+  auto nextGlyphInkOffset = [&](const size_t nextIdx, const uint32_t paragraphIndex) -> int {
+    if (nextIdx >= stream_.size() || stream_[nextIdx].paragraphIndex != paragraphIndex) return -1;
+    const auto& next = stream_[nextIdx];
+    const auto nextStyle = static_cast<EpdFontFamily::Style>(next.style);
+    if (Kinsoku::needsVerticalRotation(next.codepoint)) {
+      int inkTop = 0, inkHeight = 0;
+      if (renderer_.verticalPunctInkBox(fontId_, next.codepoint, nextStyle, 0, cellPx,
+                                        Kinsoku::verticalShiftType(next.codepoint), &inkTop, &inkHeight)) {
+        return inkTop;
+      }
+      return -1;
+    }
+    int gl = 0, gw = 0, gt = 0, gh = 0;
+    // Metrics for a glyph the SD font has not paged in yet come back empty, which silently
+    // disabled the tail allowance; page the one character in first.
+    const std::string nextChar = encodeCp(next.codepoint);
+    renderer_.ensureSdCardFontReady(fontId_, nextChar.c_str(), static_cast<uint8_t>(1u << (next.style & 3)));
+    if (renderer_.getGlyphMetrics(fontId_, next.codepoint, nextStyle, &gl, &gw, &gt, &gh) && gh > 0) {
+      return 2 * ascender - gt;
+    }
+    return -1;
+  };
+
+  // Rows the run occupies: enough that the next character's ink clears the run's, no more.
+  auto rotatedRunRows = [&](const int startY, const int inkWidthPx, const uint16_t rowArg,
+                            const int nextInkOffset) -> uint16_t {
+    const int intrusion = (nextInkOffset >= 0) ? std::max(0, nextInkOffset - 2) : 0;
+    const int endRow = static_cast<int>(std::ceil(static_cast<double>(startY + inkWidthPx - intrusion) / cellPx));
+    return static_cast<uint16_t>(std::max(1, endRow - static_cast<int>(rowArg)));
+  };
+
+  // getRenderAdvanceX ends at the pen, not at the ink: the last glyph's right side bearing is
+  // blank. Counting it made every run reserve up to a whole extra cell.
+  auto runInkWidth = [&](const std::string& s, const int advanceWidth, const EpdFontFamily::Style style) -> int {
+    if (s.empty()) return advanceWidth;
+    size_t lastStart = s.size() - 1;
+    while (lastStart > 0 && (static_cast<unsigned char>(s[lastStart]) & 0xC0) == 0x80) lastStart--;
+    const std::string lastChar = s.substr(lastStart);
+    const auto c0 = static_cast<unsigned char>(lastChar[0]);
+    uint32_t lastCp = c0;
+    if (c0 >= 0xC0 && lastChar.size() >= 2) {
+      lastCp = static_cast<uint32_t>(c0 & 0x1F) << 6 | (static_cast<unsigned char>(lastChar[1]) & 0x3F);
+    }
+    int gl = 0, gw = 0, gt = 0, gh = 0;
+    if (!renderer_.getGlyphMetrics(fontId_, lastCp, style, &gl, &gw, &gt, &gh) || gw <= 0) return advanceWidth;
+    const int lastAdvance = renderer_.getRenderAdvanceX(fontId_, lastChar.c_str(), style);
+    return advanceWidth - std::max(0, lastAdvance - (gl + gw));
+  };
+
+  // Take up the cell-rounding leftover after a run: the rest of the column slides up by it, so
+  // the next character follows at normal spacing instead of after a partly empty cell.
+  auto takeUpRunSlack = [&](const int startY, const int inkWidthPx, const uint16_t rowAfter, const uint16_t columnArg,
+                            const int nextInkOffset) {
+    if (nextInkOffset < 0 || rowAfter >= rowsPerColumn) return;
+    const int nextGridInkTop = rowAfter * cellPx + nextInkOffset;
+    const int slack = nextGridInkTop - (startY + inkWidthPx) - std::max(3, cellPx / 8);
+    if (slack > 0) {
+      columnYShift += slack;
+      shiftColumn = columnArg;
+    }
+  };
+
   size_t idx = 0;
   while (idx < stream_.size()) {
     // Emergency page split: the page's glyph vector is effectively full and the heap has no
@@ -1080,30 +1182,30 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
         renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
         const int runWidthPx = renderer_.getRenderAdvanceX(fontId_, runUtf8.c_str(), runStyle);
-        const int fontPctRun = (cellPx > 0) ? (ascender * 100 / cellPx) : 100;
-        const int runExtraNudge = (fontPctRun > 100) ? (cellPx * (fontPctRun - 100) / 30) : 0;
-        const int numericRotatedDownNudge = std::max(8, (cellPx * 9) / 10) + runExtraNudge * 2;
-        // Reserve rows for the run's FULL vertical span: the ink starts numericRotatedDownNudge
-        // below the cell top and extends runWidthPx further down. Reserving only
-        // ceil(runWidth/cell) let 4-digit years overrun their rows by most of a cell and
-        // overprint the following character (device photo: 1914年 with 14 fused into 年).
-        const uint16_t rowsNeeded = static_cast<uint16_t>(std::max(
-            1, static_cast<int>(std::ceil(static_cast<double>(numericRotatedDownNudge + runWidthPx) / cellPx))));
+        // Same measured placement as an embedded Latin word: start under the previous glyph's
+        // real ink, reserve only what the digits' ink needs. The old fixed 9/10-cell drop was
+        // a blunt guard against 4-digit years overprinting the following character (1914年)
+        // and left most of a cell empty behind the number (device photo, SCP－1305 だ。).
+        const int digitInkWidth = runInkWidth(runUtf8, runWidthPx, runStyle);
+        const int nextInkOffset = nextGlyphInkOffset(digitEnd, pc.paragraphIndex);
+        int startY = rotatedRunStartY(column, row * cellPx);
+        uint16_t rowsNeeded = rotatedRunRows(startY, digitInkWidth, row, nextInkOffset);
 
         if (row != 0 && row + rowsNeeded > rowsPerColumn) {
           column++;
           row = 0;
           finalizePageIfNeeded();
           row = columnStartRow(false);
+          startY = rotatedRunStartY(column, row * cellPx);
+          rowsNeeded = rotatedRunRows(startY, digitInkWidth, row, nextInkOffset);
         }
 
-        const int topY = row * cellPx;
         VerticalGlyph g;
         g.codepoint = 0;
         g.column = column;
         g.row = row;
         g.x = static_cast<uint16_t>(columnLeftX(column) + cellPx - ascender);
-        g.y = static_cast<uint16_t>(topY + numericRotatedDownNudge);
+        g.y = static_cast<uint16_t>(startY);
         g.paragraphIndex = pc.paragraphIndex;
         g.byteOffset = pc.byteOffset;
         g.style = pc.style;
@@ -1111,7 +1213,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         g.rotatedRunText = runUtf8;
         pushGlyph(page.glyphs, g);
 
+        const uint16_t digitColumn = column;
         row = static_cast<uint16_t>(row + rowsNeeded);
+        takeUpRunSlack(startY, digitInkWidth, row, digitColumn, nextInkOffset);
         if (row >= rowsPerColumn) {
           column++;
           row = 0;
@@ -1154,109 +1258,6 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       const auto runStyle = static_cast<EpdFontFamily::Style>(pc.style);
       renderer_.ensureSdCardFontReady(fontId_, runUtf8.c_str(), static_cast<uint8_t>(1u << (pc.style & 3)));
       const int maxColumnPx = rowsPerColumn * cellPx;
-      // Rotated-run placement is measured, not cell-guessed (device photos, Vita Sexualis:
-      // runs started inside the preceding kana's ink and left a dead cell after). The run
-      // starts just below the previous glyph's MEASURED ink bottom (kana overshoot their
-      // cell because the draw-side baseline sits at cell top + ascender), and consumes
-      // exactly the rows its rendered width covers -- the next character then lands in the
-      // first cell boundary past the run's real ink end.
-      const auto rotatedRunStartY = [&](const uint16_t columnArg, const int topYArg) -> int {
-        // Nothing above in this column: start flush with the cell top. A blanket safety
-        // nudge here bought no clearance and cost a whole cell whenever it tipped the run
-        // over a cell boundary (device photo: 34px dead space after Schopenhauer, which
-        // sits at a column start and needed 199px = just over six 33px cells).
-        if (page.glyphs.empty()) return topYArg;
-        const VerticalGlyph& pg = page.glyphs.back();
-        if (pg.column != columnArg) return topYArg;
-        int startY = topYArg + std::max(5, cellPx / 4);
-        if (pg.renderKind == VerticalGlyph::RotatedPunct) {
-          // Brackets are placed from their cell box and hang roughly a full cell lower than
-          // that box (「 opens the character in the NEXT cell), so a run that only stepped one
-          // cell started inside the bracket's ink (device photo, 「Furz」).
-          int inkTop = 0, inkHeight = 0;
-          if (renderer_.verticalPunctInkBox(fontId_, pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style),
-                                            static_cast<int>(pg.y), cellPx, Kinsoku::verticalShiftType(pg.codepoint),
-                                            &inkTop, &inkHeight)) {
-            startY = std::max(startY, inkTop + inkHeight + std::max(3, cellPx / 8));
-          }
-        } else if (pg.renderKind == VerticalGlyph::Upright && pg.codepoint != 0) {
-          int gl = 0, gw = 0, gt = 0, gh = 0;
-          if (renderer_.getGlyphMetrics(fontId_, pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style), &gl, &gw,
-                                        &gt, &gh) &&
-              gh > 0) {
-            // drawText() takes the em-box TOP, not the baseline: an upright glyph's ink
-            // starts (ascender - top) below its y. Rotated runs are drawn from their ink
-            // start directly, so the two only line up once that offset is added here.
-            // pg.y already carries this column's slide-up; startY is computed on the raw
-            // grid and gets the same slide applied at push time, so compare in raw space.
-            const int pgRawY = static_cast<int>(pg.y) + ((pg.column == shiftColumn) ? columnYShift : 0);
-            const int prevInkBottom = pgRawY + ascender - gt + gh;
-            startY = std::max(startY, prevInkBottom + std::max(3, cellPx / 8));
-          }
-        }
-        return startY;
-      };
-      // The character AFTER the run only inks from (cell top + ascender - its top) down,
-      // so the run's tail may reach that far into the next cell without touching it.
-      // Measured from the actual next glyph; 0 (no intrusion) when it is unknown.
-      int nextGlyphIntrusion = 0;
-      int nextGlyphTop = -1;
-      // A rotated bracket after the run is placed from its cell box, not from the em-box-top
-      // convention below, so its ink starts much earlier in its cell. Measure it the same way
-      // the renderer will, or the run's tail prints over it (device photo, 「Furz」).
-      int nextInkOffsetInCell = -1;
-      if (runEnd < stream_.size() && stream_[runEnd].paragraphIndex == pc.paragraphIndex &&
-          Kinsoku::needsVerticalRotation(stream_[runEnd].codepoint)) {
-        int inkTop = 0, inkHeight = 0;
-        if (renderer_.verticalPunctInkBox(fontId_, stream_[runEnd].codepoint,
-                                          static_cast<EpdFontFamily::Style>(stream_[runEnd].style), 0, cellPx,
-                                          Kinsoku::verticalShiftType(stream_[runEnd].codepoint), &inkTop, &inkHeight)) {
-          nextInkOffsetInCell = inkTop;
-          nextGlyphIntrusion = std::max(0, inkTop - 2);
-          nextGlyphTop = -1;  // handled through nextInkOffsetInCell below
-        }
-      } else if (runEnd < stream_.size() && stream_[runEnd].paragraphIndex == pc.paragraphIndex) {
-        int gl = 0, gw = 0, gt = 0, gh = 0;
-        // Metrics for a glyph the SD font has not paged in yet come back empty, which silently
-        // disabled both the tail allowance and the slide-up for that run (device log: a 24px
-        // gap surviving where comparable runs got 6px). Page the one character in first.
-        const std::string nextChar = encodeCp(stream_[runEnd].codepoint);
-        renderer_.ensureSdCardFontReady(fontId_, nextChar.c_str(),
-                                        static_cast<uint8_t>(1u << (stream_[runEnd].style & 3)));
-        if (renderer_.getGlyphMetrics(fontId_, stream_[runEnd].codepoint,
-                                      static_cast<EpdFontFamily::Style>(stream_[runEnd].style), &gl, &gw, &gt, &gh) &&
-            gh > 0) {
-          nextGlyphTop = gt;
-          // Same em-box-top convention: the next character's ink only starts
-          // (ascender + ascender - top) below its cell top, so the run's tail may reach
-          // that far before it can touch anything.
-          nextGlyphIntrusion = std::max(0, (2 * ascender - gt) - 2);
-        }
-      }
-      // getRenderAdvanceX ends at the pen, not at the ink: the last letter's right side
-      // bearing is blank. Counting it made every run reserve up to a whole extra cell,
-      // so the following kana started visibly late (device photo: gap after Liebeswerbung).
-      const auto runInkWidth = [&](const std::string& s, const int advanceWidth) -> int {
-        if (s.empty()) return advanceWidth;
-        // Back up over UTF-8 continuation bytes to the last character's start.
-        size_t lastStart = s.size() - 1;
-        while (lastStart > 0 && (static_cast<unsigned char>(s[lastStart]) & 0xC0) == 0x80) lastStart--;
-        const std::string lastChar = s.substr(lastStart);
-        const auto c0 = static_cast<unsigned char>(lastChar[0]);
-        uint32_t lastCp = c0;
-        if (c0 >= 0xC0 && lastChar.size() >= 2) {
-          lastCp = static_cast<uint32_t>(c0 & 0x1F) << 6 | (static_cast<unsigned char>(lastChar[1]) & 0x3F);
-        }
-        int gl = 0, gw = 0, gt = 0, gh = 0;
-        if (!renderer_.getGlyphMetrics(fontId_, lastCp, runStyle, &gl, &gw, &gt, &gh) || gw <= 0) return advanceWidth;
-        const int lastAdvance = renderer_.getRenderAdvanceX(fontId_, lastChar.c_str(), runStyle);
-        return advanceWidth - std::max(0, lastAdvance - (gl + gw));
-      };
-      const auto rotatedRunRows = [&](const int startY, const int widthPx, const int rowArg) -> uint16_t {
-        const int endRow =
-            static_cast<int>(std::ceil(static_cast<double>(startY + widthPx - nextGlyphIntrusion) / cellPx));
-        return static_cast<uint16_t>(std::max(1, endRow - rowArg));
-      };
       // JP sources separate embedded Latin from kana with ASCII spaces (それは Germinal や).
       // Drawn verbatim, the leading space pushes the first letter deep into the run's first
       // cell and the trailing space inflates the reserved rows -- the word floats low with a
@@ -1272,6 +1273,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         const size_t e = s.find_last_not_of(' ');
         s.assign(s, b, e - b + 1);
       };
+      const int nextInkOffset = nextGlyphInkOffset(runEnd, pc.paragraphIndex);
       std::string remaining = runUtf8;
       const bool hadLeadingSpace = !runUtf8.empty() && runUtf8[0] == ' ';
       trimSpaces(remaining);
@@ -1296,7 +1298,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       while (!remaining.empty()) {
         const int remWidthPx = renderer_.getRenderAdvanceX(fontId_, remaining.c_str(), runStyle);
         const int startY = rotatedRunStartY(column, row * cellPx);
-        const uint16_t remRows = rotatedRunRows(startY, runInkWidth(remaining, remWidthPx), row);
+        const uint16_t remRows =
+            rotatedRunRows(startY, runInkWidth(remaining, remWidthPx, runStyle), row, nextInkOffset);
         const uint16_t availRows = rowsPerColumn - row;
 
         if (remRows <= availRows) {
@@ -1314,23 +1317,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.rotatedRunText = remaining;
           pushGlyph(page.glyphs, g);
           row = static_cast<uint16_t>(row + remRows);
-          // Take up the cell-rounding leftover: everything after this word in this column
-          // slides up so the next character follows at normal spacing instead of after a
-          // partly empty cell. See columnYShift at pushGlyph.
-          if ((nextGlyphTop >= 0 || nextInkOffsetInCell >= 0) && row < rowsPerColumn) {
-            const int runInkEnd = startY + runInkWidth(remaining, remWidthPx);
-            const int nextGridInkTop =
-                row * cellPx + ((nextInkOffsetInCell >= 0) ? nextInkOffsetInCell : (2 * ascender - nextGlyphTop));
-            // A bracket closing a Latin word needs more air than a kana does: the slide-up
-            // below otherwise pins it at the same tight distance the general +cellPx/8 drop
-            // in the renderer was meant to relieve (device check, 「Furz」).
-            const int afterRunGap = (nextInkOffsetInCell >= 0) ? std::max(3, cellPx / 4) : std::max(3, cellPx / 8);
-            const int slack = nextGridInkTop - runInkEnd - afterRunGap;
-            if (slack > 0) {
-              columnYShift += slack;
-              shiftColumn = column;
-            }
-          }
+          takeUpRunSlack(startY, runInkWidth(remaining, remWidthPx, runStyle), row, g.column, nextInkOffset);
           if (row >= rowsPerColumn) {
             column++;
             row = 0;
@@ -1347,7 +1334,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
              sp = (sp == 0) ? std::string::npos : remaining.rfind(' ', sp - 1)) {
           std::string prefix = remaining.substr(0, sp);
           const int prefixPx = renderer_.getRenderAdvanceX(fontId_, prefix.c_str(), runStyle);
-          const uint16_t prefixRows = rotatedRunRows(startY, runInkWidth(prefix, prefixPx), row);
+          const uint16_t prefixRows =
+              rotatedRunRows(startY, runInkWidth(prefix, prefixPx, runStyle), row, nextInkOffset);
           if (prefixRows <= availRows) {
             breakAt = sp;
             break;
@@ -1409,7 +1397,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           continue;
         }
         const int chunkPx = renderer_.getRenderAdvanceX(fontId_, chunk.c_str(), runStyle);
-        const uint16_t chunkRows = rotatedRunRows(startY, runInkWidth(chunk, chunkPx), row);
+        const uint16_t chunkRows = rotatedRunRows(startY, runInkWidth(chunk, chunkPx, runStyle), row, nextInkOffset);
 
         VerticalGlyph g;
         g.codepoint = 0;
@@ -1506,7 +1494,33 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     }
 
     placeUpright(pc);
+    const uint16_t placedRow = row;
     row++;
+    // The ellipsis dot stack is drawn low enough to leave its own cell (it has to, or it
+    // floats above the rhythm of the upright glyphs around it). Reserve that overflow by
+    // sliding the rest of the column down, or the next character prints into the dots
+    // (device photo, book 2).
+    // Applied once per ellipsis GROUP (…… is two codepoints): the dots keep their own
+    // spacing, only what follows the group moves.
+    const bool endsEllipsisGroup =
+        (pc.codepoint == 0x2026 || pc.codepoint == 0x2025) &&
+        (idx + 1 >= stream_.size() || (stream_[idx + 1].codepoint != 0x2026 && stream_[idx + 1].codepoint != 0x2025));
+    if (endsEllipsisGroup && row < rowsPerColumn) {
+      const int nextInkOffset = nextGlyphInkOffset(idx + 1, pc.paragraphIndex);
+      int inkTop = 0, inkHeight = 0;
+      if (nextInkOffset >= 0 &&
+          renderer_.verticalPunctInkBox(fontId_, pc.codepoint, static_cast<EpdFontFamily::Style>(pc.style),
+                                        placedRow * cellPx, cellPx, Kinsoku::verticalShiftType(pc.codepoint), &inkTop,
+                                        &inkHeight)) {
+        // Half a cell of clearance, not the usual eighth: the dots sit low in their cell and
+        // still read tight against the next character at the nominal distance (device check).
+        const int deficit = (inkTop + inkHeight + std::max(3, cellPx / 2)) - (row * cellPx + nextInkOffset);
+        if (deficit > 0) {
+          columnYShift -= deficit;
+          shiftColumn = column;
+        }
+      }
+    }
     if (row >= rowsPerColumn) {
       column++;
       row = 0;
