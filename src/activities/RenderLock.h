@@ -4,7 +4,14 @@ class Activity;  // forward declaration
 
 // RAII helper to lock rendering mutex for the duration of a scope.
 class RenderLock {
-  bool isLocked = false;
+  bool isLocked = false;  // true only when THIS object owns the mutex and must release it
+  // True when the constructor found the lock already held BY THIS TASK. The guarantee the
+  // caller wanted (nobody else renders while I work) holds, but the release belongs to the
+  // outermost lock -- see the constructors for why nesting happens at all.
+  bool nested = false;
+
+  // True when the calling task is already the mutex holder (see the constructors).
+  static bool heldByCurrentTask();
 
  public:
   // Tag for the non-blocking constructor below.
@@ -21,7 +28,7 @@ class RenderLock {
   RenderLock(const RenderLock&) = delete;
   RenderLock& operator=(const RenderLock&) = delete;
   ~RenderLock();
-  bool held() const { return isLocked; }
+  bool held() const { return isLocked || nested; }
   void unlock();
   static bool peek();
 };

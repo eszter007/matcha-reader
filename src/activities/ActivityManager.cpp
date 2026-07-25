@@ -311,30 +311,55 @@ void ActivityManager::requestUpdateAndWait() {
 
 // RenderLock
 
+// renderingMutex is a plain (non-recursive) mutex, so a task that already holds it and
+// constructs another RenderLock would block on ITSELF, forever. That is never what a nested
+// acquire wants -- the state the inner lock is protecting is already protected by the outer one
+// -- and the paths that nest are not locally visible: openWordLookupPanel() has to hold the lock
+// across the panel's construction (the section's page slot must not be re-faulted while the scan
+// copies out of it), and the constructor's reclaimFontHeap() takes the lock in turn. So a nested
+// acquire is a no-op that owns nothing; the OUTERMOST RenderLock still does the single release.
+bool RenderLock::heldByCurrentTask() {
+  return xSemaphoreGetMutexHolder(activityManager.renderingMutex) == xTaskGetCurrentTaskHandle();
+}
+
 RenderLock::RenderLock() {
+  if (heldByCurrentTask()) {
+    nested = true;
+    return;
+  }
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }
 
 RenderLock::RenderLock([[maybe_unused]] Activity&) {
+  if (heldByCurrentTask()) {
+    nested = true;
+    return;
+  }
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }
 
-RenderLock::RenderLock(Try) { isLocked = (xSemaphoreTake(activityManager.renderingMutex, 0) == pdTRUE); }
-
-RenderLock::~RenderLock() {
-  if (isLocked) {
-    xSemaphoreGive(activityManager.renderingMutex);
-    isLocked = false;
+// held() is true when this task is already the holder: the caller's guarantee (nobody else is
+// rendering) holds, and a zero-timeout take by the holder would otherwise fail spuriously.
+RenderLock::RenderLock(Try) {
+  if (heldByCurrentTask()) {
+    nested = true;
+    return;
   }
+  isLocked = (xSemaphoreTake(activityManager.renderingMutex, 0) == pdTRUE);
 }
 
+RenderLock::~RenderLock() { unlock(); }
+
+// A nested lock owns nothing, so it only drops its claim -- releasing here would hand the mutex
+// away while the outer scope still relies on it.
 void RenderLock::unlock() {
   if (isLocked) {
     xSemaphoreGive(activityManager.renderingMutex);
     isLocked = false;
   }
+  nested = false;
 }
 
 /**
