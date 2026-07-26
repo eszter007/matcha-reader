@@ -425,6 +425,12 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
   stats.uniqueGroupsAccessed = groupCount;
 
+  // Every needed glyph carries an empty bitmap -- a page of nothing but spaces is the ordinary
+  // case. There is nothing to extract, and malloc(0) returns nullptr here, so the check below
+  // reported a heap failure that never happened and told the caller the glyph could not be
+  // loaded (device log: "Failed to allocate page buffer (0 bytes, 1 glyphs)" on a healthy heap).
+  if (totalBytes == 0) return 0;
+
   // Step 3: Allocate page buffer and lookup table for this slot
   slot.buffer = static_cast<uint8_t*>(malloc(totalBytes));
   slot.glyphs = static_cast<PageGlyphEntry*>(malloc(glyphCount * sizeof(PageGlyphEntry)));
