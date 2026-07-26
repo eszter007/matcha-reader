@@ -29,9 +29,9 @@ Japanese books are detected from EPUB metadata and rendered vertically — right
 
 Look up any word on the page, in vertical or horizontal mode. Conjugations resolve to their dictionary form automatically (読んで → 読む, 食べませんでした → 食べる, 眠ろう → 眠る), and the page is pre-scanned so you only land on words that actually have an entry.
 
-- **JMdict/Jitendex vocabulary** with readings, part-of-speech, definitions, and example sentences
+- **Vocabulary (e.g. JMdict/Jitendex)** with readings, part-of-speech, definitions, and example sentences; you can use any other Yomitan dictionary for vocabulary if you wish.
 - **Grammar dictionary** — patterns surface alongside vocabulary
-- **Name dictionary (JMnedict)** — names grouped with their honorifics (根岸さん as one unit)
+- **Name dictionary (e.g. JMnedict)** — names grouped with their honorifics (根岸さん as one unit). You can use any other Yomitan dictionary for names if you wish.
 - **The book's own furigana** — if the book annotated a reading, the entry opens with "In this book: はやし", remembered for the rest of the book even where it isn't annotated again
 - Counters (2年, 15人), compound words, and multi-reading kanji handled as units
 
