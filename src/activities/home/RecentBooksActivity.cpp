@@ -215,10 +215,9 @@ void RecentBooksActivity::saveLibraryIndex() {
 }
 
 const RecentBooksActivity::LibraryIndexEntry* RecentBooksActivity::findIndexEntry(const uint32_t pathHash) const {
-  for (const auto& e : libraryIndex_) {
-    if (e.pathHash == pathHash) return &e;
-  }
-  return nullptr;
+  const auto it = std::find_if(libraryIndex_.begin(), libraryIndex_.end(),
+                               [pathHash](const LibraryIndexEntry& e) { return e.pathHash == pathHash; });
+  return it != libraryIndex_.end() ? &*it : nullptr;
 }
 
 void RecentBooksActivity::recordIndexEntry(const std::string& path, const uint32_t fileSize,

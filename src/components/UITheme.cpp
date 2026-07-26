@@ -124,7 +124,7 @@ bool UITheme::getCoverThumbSize(const std::string& coverThumbPath, int* width, i
   if (coverThumbPath.empty() || !width || !height) return false;
 
   if (FsHelpers::hasJpgExtension(coverThumbPath) || FsHelpers::hasPngExtension(coverThumbPath)) {
-    ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverThumbPath);
+    const ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverThumbPath);
     ImageDimensions dims = {0, 0};
     if (!decoder || !decoder->getDimensions(coverThumbPath, dims) || dims.width <= 0 || dims.height <= 0) return false;
     *width = dims.width;
