@@ -60,8 +60,10 @@ EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
 EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
                                     &notoserif12BoldItalicFont);
 // No bold-italic at 16/18pt: the two largest reader sizes cost ~298KB of flash for a style
-// combination books use rarely, and that flash now carries the 8pt CJK subset the UI needs
-// at every screen. EpdFontFamily::getFont falls back to bold when boldItalic is null.
+// combination books use rarely, and that flash carries the 8pt CJK subset the UI needs at
+// every screen plus the headroom diagnostics builds need. Restoring them fits (release goes
+// to 98.6%, debug to 99.4%) but leaves no room to work in. EpdFontFamily::getFont falls back
+// to bold when boldItalic is null.
 EpdFont notoserif16RegularFont(&notoserif_16_regular);
 EpdFont notoserif16BoldFont(&notoserif_16_bold);
 EpdFont notoserif16ItalicFont(&notoserif_16_italic);
