@@ -33,7 +33,6 @@ Look up any word on the page, in vertical or horizontal mode. Conjugations resol
 - **Grammar dictionary** — patterns surface alongside vocabulary
 - **Name dictionary (e.g. JMnedict)** — names grouped with their honorifics (根岸さん as one unit). You can use any other Yomitan dictionary for names if you wish.
 - **The book's own furigana** — if the book annotated a reading, the entry opens with "In this book: はやし", remembered for the rest of the book even where it isn't annotated again
-- Counters (2年, 15人), compound words, and multi-reading kanji handled as units
 
 <p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup showing definition, reading, and example sentence"></p>
 
@@ -47,7 +46,7 @@ Translate the current page to English via Gemini 2.5 Flash. Works in any book, n
 
 Real panel detection, dictionary lookup, and translations extracted at conversion time so they appear instantly offline. Navigate panel by panel in reading order, each scaled to fill the screen; press Confirm on a panel to look up its text.
 
-Page images render directly — JPG, PNG, and BMP, no pre-conversion. Stepping quickly through panels paints in fast black-and-white and sharpens to full grayscale when you settle on one.
+Page images render directly, JPG, PNG, and BMP are supported. To get started, convert your manga using the [web tool](https://eszter007.github.io/matcha-reader-tools/). For optimal results, check the X3 or X4 option as the target resolution.
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="260" alt="Manga full-page view with panel highlights">
