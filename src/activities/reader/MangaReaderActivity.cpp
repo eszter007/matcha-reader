@@ -504,14 +504,20 @@ MangaReaderActivity::FullPageGeom MangaReaderActivity::computeFullPageGeom(const
   const float ratio = static_cast<float>(imgWidth) / static_cast<float>(imgHeight);
   const float screenRatio = static_cast<float>(g.screenW) / static_cast<float>(g.screenH);
   if (imgWidth > g.screenW || imgHeight > g.screenH) {
+    // Derive the fitted size from the aspect ratio, then centre with whatever is left over.
+    // Doing it the other way round -- truncating the margin and calling "screen minus twice the
+    // margin" the size -- made the box up to 2px LARGER than the real fit, because the truncated
+    // margin is counted twice. The decoder fits properly, so it wrote a pixel cache the reader
+    // then rejected on every read (device log: "Cache dimension mismatch: 480x682 vs 480x684"),
+    // and every page decoded from scratch three times per turn instead of once ever.
     if (ratio > screenRatio) {
-      g.y = static_cast<int>((g.screenH - g.screenW / ratio) / 2.0f);
       g.destWidth = g.screenW;
-      g.destHeight = g.screenH - 2 * g.y;
+      g.destHeight = std::min(g.screenH, static_cast<int>(g.screenW / ratio + 0.5f));
+      g.y = (g.screenH - g.destHeight) / 2;
     } else {
-      g.x = static_cast<int>((g.screenW - g.screenH * ratio) / 2.0f);
-      g.destWidth = g.screenW - 2 * g.x;
       g.destHeight = g.screenH;
+      g.destWidth = std::min(g.screenW, static_cast<int>(g.screenH * ratio + 0.5f));
+      g.x = (g.screenW - g.destWidth) / 2;
     }
   } else {
     g.x = (g.screenW - imgWidth) / 2;
