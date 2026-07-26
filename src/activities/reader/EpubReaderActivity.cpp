@@ -2312,6 +2312,11 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // nothing here: every vertical page render clearCache()s and re-prewarms anyway.
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->releaseAllFontMemory();
+      // The release just emptied the mini-font cache, so the idle warm's page is no longer
+      // warm. Without this the NEXT render trusts prewarmedVPage_, skips prewarmVerticalPageGlyphs
+      // entirely, and resolves every glyph one at a time through the on-demand miss path.
+      prewarmedVPage_ = -1;
+      prewarmedHPage_ = -1;
     }
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
@@ -3066,8 +3071,11 @@ void EpubReaderActivity::renderStatusBar() const {
     title = epub->getTitle();
   }
 
+  // section is null in vertical mode (verticalSection owns the chapter there), and null again
+  // between chapters -- upstream can't hit either case, so its call was unguarded.
+  const bool building = section && section->isBuilding();
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
-                    section->isBuilding());
+                    building);
 }
 
 int EpubReaderActivity::effectiveReaderFontId() const {

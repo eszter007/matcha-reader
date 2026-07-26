@@ -39,7 +39,13 @@ namespace {
 // the transient per-page staging buffer now prevents those drops on rebuild. (The
 // early-first-render / mid-build page-turn work layered on top changes no on-disk format, so
 // it needs no further bump -- a v80 cache built by this firmware is byte-identical.)
-constexpr uint8_t VSECTION_FILE_VERSION = 98;
+// v99: merge of upstream 1.5.0. Not a format change -- an invalidation. Upstream reworked the
+// measurement stack the vertical layout is built on (SD kern classes + ligatures, the advance-table
+// fast path, fallback-resolved text font ids), so a v98 cache's stored glyph positions no longer
+// match the cell VerticalTextBlock::computeCellPx re-derives at DRAW time from the new metrics --
+// the exact "cell flapping" mismatch that path exists to prevent. The horizontal pipeline
+// invalidates for the same reason (SECTION_FILE_VERSION 51); this one must not be forgotten.
+constexpr uint8_t VSECTION_FILE_VERSION = 99;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
