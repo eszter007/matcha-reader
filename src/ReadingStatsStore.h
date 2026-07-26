@@ -47,4 +47,4 @@ class ReadingStatsStore {
   bool loadFromFile();
 };
 
-#define READING_STATS ReadingStatsStore::getInstance()
+#define READING_STATS_STORE ReadingStatsStore::getInstance()

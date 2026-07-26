@@ -154,8 +154,10 @@ The result is a folder of page images, panel crops, and three small binaries (`p
 ## Building from Source
 
 ```bash
-git clone https://github.com/eszter007/matcha-reader.git
+git clone --recursive https://github.com/eszter007/matcha-reader.git
 cd matcha-reader
+# already cloned without --recursive? the SDK lives in a submodule:
+git submodule update --init --recursive
 pio run              # build
 pio run -t upload    # flash
 ```

@@ -23,9 +23,9 @@ class SdCardFontSystem {
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
   void ensureLoaded(GfxRenderer& renderer);
 
-  /// Resolve an SD card font ID from family name + fontSize enum.
+  /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
-  int resolveFontId(const char* familyName, uint8_t fontSizeEnum) const;
+  int resolveFontId(const char* familyName, uint8_t pointSize) const;
 
   /// Declare whether the current reading context needs proper Japanese rendering (Japanese
   /// EPUB, forced vertical text, manga). The JP fallback font is only loaded while needed --
@@ -75,13 +75,19 @@ class SdCardFontSystem {
   ///    card (extension families first) at the reader size and use that
   ///  - no CJK family on the card -> the built-in jōyō-subset fallback captured at begin()
   void ensureSelectedLoaded(GfxRenderer& renderer);
-  void ensureJpFallback(GfxRenderer& renderer, uint8_t sizeEnum);
+  void ensureJpFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);
   bool loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name, uint32_t cp) const;
 
   SdCardFontManager fallbackManager_;
   const EpdFontFamily* defaultGlobalFallback_ = nullptr;
   bool jpFallbackNeeded_ = false;
+  // Load the active SD family at the built-in UI point sizes and register each
+  // as a size-matched CJK fallback for the corresponding UI font, so CJK book
+  // titles/list rows render at the same size as the surrounding Latin UI text.
+  // No-op when no SD family is loaded. Safe to call repeatedly (sizes already
+  // loaded are reused).
+  void setupUiFallbacks(GfxRenderer& renderer);
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;

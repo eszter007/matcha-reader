@@ -252,8 +252,12 @@ void WordSelectionScan::initFromPage(const Page& page) {
     if (el->getTag() != TAG_PageLine) continue;
     const auto& line = static_cast<const PageLine&>(*el);
     if (!line.getBlock()) continue;
-    for (const auto& word : line.getBlock()->getWords()) {
+    const TextBlock& block = *line.getBlock();
+    for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
       if (oom) break;
+      // The arena stores words as NUL-terminated spans, not std::strings (upstream 1.5.0).
+      // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
+      const std::string_view word{block.wordText(wi), block.wordTextLen(wi)};
       if (word.empty()) continue;
       // Insert a separating space only between two ASCII-word boundaries.
       if (lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&

@@ -1,7 +1,7 @@
 #include "EpdFontFamily.h"
 
 const EpdFont* EpdFontFamily::getFont(const Style style) const {
-  // Extract font style bits (ignore UNDERLINE bit for font selection)
+  // Extract font style bits; render-time overlay bits do not affect font selection.
   const bool hasBold = (style & BOLD) != 0;
   const bool hasItalic = (style & ITALIC) != 0;
 
@@ -87,6 +87,10 @@ const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style
   }
   if (fallbackFamily) return fallbackFamily->getData(style);
   return f->data;
+}
+
+bool EpdFontFamily::hasCodepoint(const uint32_t cp, const Style style) const {
+  return getFont(style)->hasCodepoint(cp);
 }
 
 int8_t EpdFontFamily::getKerning(const uint32_t leftCp, const uint32_t rightCp, const Style style) const {

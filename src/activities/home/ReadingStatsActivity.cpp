@@ -68,7 +68,7 @@ const char* dayLabel(int dow) {
 
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
-  READING_STATS.loadFromFile();
+  READING_STATS_STORE.loadFromFile();
   const Today today = getToday();
   calYear = today.year;
   calMonth = today.month;
@@ -137,10 +137,10 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const int cardRadius = 12;
 
   const Today today = getToday();
-  const int streak = READING_STATS.getStreak(today.year, today.month, today.day);
-  const uint16_t weekMinutes = READING_STATS.getMinutesThisWeek(today.year, today.month, today.day);
+  const int streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
+  const uint16_t weekMinutes = READING_STATS_STORE.getMinutesThisWeek(today.year, today.month, today.day);
   bool weekDays[7] = {};
-  READING_STATS.getWeekStatus(today.year, today.month, today.day, today.dow, weekDays);
+  READING_STATS_STORE.getWeekStatus(today.year, today.month, today.day, today.dow, weekDays);
 
   int y = contentTop + 8;
 
@@ -159,7 +159,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const int row1TotalW = iconSize + 8 + streakTextW;
   const int row1X = cardX + (cardW - row1TotalW) / 2;
   const int row1Y = y + cardPad;
-  renderer.drawIcon(FlameIcon, row1X, row1Y, iconSize, iconSize);
+  renderer.drawIcon(FlameIcon, row1X, row1Y, iconSize);
   renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8, row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
                     streakBuf, true, EpdFontFamily::BOLD);
 
@@ -190,9 +190,9 @@ void ReadingStatsActivity::render(RenderLock&&) {
                       isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     const int ix = cx - circleSize / 2;
     if (weekDays[i]) {
-      renderer.drawIcon(CircleCheckIcon, ix, circlesY, circleSize, circleSize);
+      renderer.drawIcon(CircleCheckIcon, ix, circlesY, circleSize);
     } else {
-      renderer.drawIcon(CircleEmptyIcon, ix, circlesY, circleSize, circleSize);
+      renderer.drawIcon(CircleEmptyIcon, ix, circlesY, circleSize);
     }
   }
 
@@ -210,10 +210,10 @@ void ReadingStatsActivity::render(RenderLock&&) {
     const uint8_t* icon;
   };
 
-  const int booksFinished = READING_STATS.getBooksFinished();
-  const int daysRead = READING_STATS.getDaysRead();
-  const uint32_t totalMin = READING_STATS.getTotalMinutes();
-  const int longestStreak = READING_STATS.getLongestStreak();
+  const int booksFinished = READING_STATS_STORE.getBooksFinished();
+  const int daysRead = READING_STATS_STORE.getDaysRead();
+  const uint32_t totalMin = READING_STATS_STORE.getTotalMinutes();
+  const int longestStreak = READING_STATS_STORE.getLongestStreak();
 
   char booksBuf[16], daysBuf[16], timeBuf[16], streakLBuf[16];
   snprintf(booksBuf, sizeof(booksBuf), "%d", booksFinished);
@@ -241,9 +241,9 @@ void ReadingStatsActivity::render(RenderLock&&) {
 
     const int topPad = 16;
     if (i < 3) {
-      renderer.drawIcon(cards[i].icon, cx + halfW - iconSm - topPad, cy + topPad, iconSm, iconSm);
+      renderer.drawIcon(cards[i].icon, cx + halfW - iconSm - topPad, cy + topPad, iconSm);
     } else {
-      renderer.drawIcon(cards[i].icon, cx + halfW - 32 - topPad + 4, cy + topPad - 2, 32, 32);
+      renderer.drawIcon(cards[i].icon, cx + halfW - 32 - topPad + 4, cy + topPad - 2, 32);
     }
 
     const int valueY = cy + topPad + (iconSm - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
@@ -289,7 +289,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
   renderer.drawLine(rChevX + chevSz - 1, chevCenterY, rChevX - 1, chevCenterY + chevSz, true);
 
   // Days read count
-  const int daysReadMonth = READING_STATS.getDaysReadInMonth(calYear, calMonth);
+  const int daysReadMonth = READING_STATS_STORE.getDaysReadInMonth(calYear, calMonth);
   char daysReadBuf[32];
   snprintf(daysReadBuf, sizeof(daysReadBuf), tr(STR_DAYS_READ_IN_MONTH_FORMAT), daysReadMonth);
   const int drW = renderer.getTextWidth(SMALL_FONT_ID, daysReadBuf);
@@ -306,7 +306,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
 
   // Calendar grid
   bool monthStatus[32] = {};
-  READING_STATS.getMonthStatus(calYear, calMonth, monthStatus);
+  READING_STATS_STORE.getMonthStatus(calYear, calMonth, monthStatus);
   const int gridY = headerY + smallLH;
   const int circR = (cellSize - 6) / 2;
 

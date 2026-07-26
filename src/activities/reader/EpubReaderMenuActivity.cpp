@@ -62,6 +62,7 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+  items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
@@ -80,29 +81,62 @@ void EpubReaderMenuActivity::onEnter() {
 
 void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 
+void EpubReaderMenuActivity::closeCancelled() {
+  ActivityResult result;
+  result.isCancelled = true;
+  result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
+  setResult(std::move(result));
+  finish();
+}
+
+bool EpubReaderMenuActivity::handleHomeGesture() {
+  closeCancelled();
+  return true;
+}
+
 void EpubReaderMenuActivity::loop() {
-  // Handle navigation
-  buttonNavigator.onNext([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) {
+    // The popup acts on button press; if that input closed it, the trailing
+    // release must be swallowed below (Back would close the menu, Confirm
+    // would re-activate the selected item).
+    popupClosing = !optionPopup.isActive();
+    return;
+  }
+  if (popupClosing) {
+    if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
+        mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
+      return;  // closing press still held
+    }
+    popupClosing = false;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      return;  // swallow the release that closed the popup
+    }
+  }
 
-  buttonNavigator.onPrevious([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    closeCancelled();
+    return;
+  }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  auto activateSelected = [this] {
     const auto selectedAction = menuItems[selectedIndex].action;
     if (selectedAction == MenuAction::ROTATE_SCREEN) {
-      // Cycle orientation preview locally; actual rotation happens on menu exit.
-      pendingOrientation = (pendingOrientation + 1) % orientationLabels.size();
+      optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
+                       pendingOrientation, [this](int idx) {
+                         pendingOrientation = idx;
+                         requestUpdate();
+                       });
       requestUpdate();
       return;
     }
 
     if (selectedAction == MenuAction::AUTO_PAGE_TURN) {
-      selectedPageTurnOption = (selectedPageTurnOption + 1) % pageTurnLabels.size();
+      optionPopup.show(I18N.get(StrId::STR_AUTO_TURN_PAGES_PER_MIN), pageTurnLabels.data(),
+                       static_cast<int>(pageTurnLabels.size()), selectedPageTurnOption, [this](int idx) {
+                         selectedPageTurnOption = idx;
+                         requestUpdate();
+                       });
       requestUpdate();
       return;
     }
@@ -123,6 +157,48 @@ void EpubReaderMenuActivity::loop() {
                          static_cast<int8_t>(pendingVerticalEnabled ? 1 : 0),
                          static_cast<int8_t>(pendingFuriganaEnabled ? 1 : 0)});
     finish();
+  };
+
+  auto metrics = UITheme::getInstance().getMetrics();
+  Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int contentTop =
+      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
+  switch (handleListTouch(selectedIndex, static_cast<int>(menuItems.size()), contentTop, contentHeight, false)) {
+    case ListTouchResult::Activated:
+      activateSelected();
+      return;
+    case ListTouchResult::Consumed:
+      return;
+    case ListTouchResult::None:
+      break;
+  }
+
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
+    return;
+  }
+
+  // Handle navigation
+  buttonNavigator.onNext([this] {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
+  });
+
+  buttonNavigator.onPrevious([this] {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
+  });
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    activateSelected();
     return;
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
@@ -137,6 +213,8 @@ void EpubReaderMenuActivity::loop() {
 }
 
 void EpubReaderMenuActivity::render(RenderLock&&) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+
   renderer.clearScreen();
 
   auto metrics = UITheme::getInstance().getMetrics();

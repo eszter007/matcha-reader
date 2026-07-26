@@ -10,7 +10,6 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <JsonSettingsIO.h>
 #include <Memory.h>
 
 #include <algorithm>
@@ -34,6 +33,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"
 
@@ -140,9 +140,9 @@ void MangaReaderActivity::onExit() {
   // got marked finished even at 100% progress, unlike Epub/Txt readers.
   const bool atLastPage = book && book->getPageCount() > 0 && currentPage >= book->getPageCount() - 1;
   if (atLastPage) {
-    READING_STATS.loadFromFile();
-    READING_STATS.markBookFinished(book->getFolder());
-    READING_STATS.saveToFile();
+    READING_STATS_STORE.loadFromFile();
+    READING_STATS_STORE.markBookFinished(book->getFolder());
+    READING_STATS_STORE.saveToFile();
   }
 
   saveProgress();
@@ -1366,13 +1366,7 @@ void MangaReaderActivity::loadCachedBookmarks() {
     return;
   }
 
-  const std::string bmPath = BookmarkUtil::getBookmarkPath(book->getFolder());
-  if (Storage.exists(bmPath.c_str())) {
-    String json = Storage.readFile(bmPath.c_str());
-    if (!json.isEmpty()) {
-      JsonSettingsIO::loadBookmarks(cachedBookmarks, json.c_str());
-    }
-  }
+  BookmarkFile::load(book->getFolder(), cachedBookmarks);
 }
 
 // Manga has a flat page index (no chapters/xpath like Epub), so bookmarks
@@ -1431,10 +1425,8 @@ void MangaReaderActivity::addBookmark() {
     currentPageBookmarked = true;
   }
 
-  const std::string path = BookmarkUtil::getBookmarkPath(book->getFolder());
-  Storage.mkdir(BookmarkUtil::getBookmarksDir().c_str());
-  if (!JsonSettingsIO::saveBookmarks(cachedBookmarks, path.c_str())) {
-    LOG_ERR("MNG", "Failed to save bookmarks to: %s", path.c_str());
+  if (!BookmarkFile::save(book->getFolder(), cachedBookmarks)) {
+    LOG_ERR("MNG", "Failed to save bookmarks for: %s", book->getFolder().c_str());
   }
 }
 

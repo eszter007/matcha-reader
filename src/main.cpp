@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <BoardConfig.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -106,9 +107,11 @@ EpdFontFamily smallFontFamily(&smallFont);
 // alongside everything else. No bold variant; EpdFontFamily::getFont() falls
 // back to regular when bold is null, which is fine for an occasional-use
 // fallback font.
-EpdFont cjk10RegularFont(&notosansjp_joyo_10_regular);
-EpdFontFamily cjk10FontFamily(&cjk10RegularFont);
-
+// Only the 12pt subset is built in. The 10pt one cost ~340KB of flash for a slightly
+// better fit in the two smallest UI rows, and after the 1.5.0 merge (wolfSSL + the new
+// reader/build machinery) the release binary no longer fits the 6.4MB app partition.
+// The 10/8pt UI now falls back to 12pt CJK: kanji there are a touch large, Latin is
+// untouched, and an SD Japanese font (see the README) replaces the fallback entirely.
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
 EpdFontFamily cjk12FontFamily(&cjk12RegularFont);
 
@@ -328,9 +331,9 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
 #endif  // OMIT_FONTS
-  ui10FontFamily.setFallback(&cjk10FontFamily);
+  ui10FontFamily.setFallback(&cjk12FontFamily);
   ui12FontFamily.setFallback(&cjk12FontFamily);
-  smallFontFamily.setFallback(&cjk10FontFamily);
+  smallFontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
@@ -347,6 +350,8 @@ void setupDisplayAndFonts(bool seamless = false) {
 }
 
 void setup() {
+  BoardConfig::holdPowerRails();
+
   t1 = millis();
 
 #ifdef ENABLE_SERIAL_LOG
@@ -357,7 +362,9 @@ void setup() {
   // worked without the delay because USB was already enumerated.
   delay(250);
   Serial.begin(115200);
+#if LOG_SERIAL_HAS_TX_TIMEOUT
   logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
+#endif
 #endif
 
   HalSystem::begin();
@@ -407,8 +414,10 @@ void setup() {
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration");
-      gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
-                                   SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
+      if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
+                                        SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
+        powerManager.startDeepSleep(gpio);
+      }
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
       // If USB power caused a cold boot, go back to sleep
@@ -451,6 +460,7 @@ void setup() {
   const BootResume resume = isSilentReboot              ? BootResume::Silent
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
+  bool allowFastInitialReaderRefresh = false;
 
   setupDisplayAndFonts(resume != BootResume::Splash);
 
@@ -466,10 +476,21 @@ void setup() {
       APP_STATE.showBootScreen = true;
       APP_STATE.saveToFile();
       if (loadSleepFrameBuffer()) {
-        // Frame restored: swap the sleep moon for the loading icon.
+        const bool useDifferentialRefresh = gpio.deviceIsX3();
+        if (useDifferentialRefresh) {
+          // begin() clears the X3 controller RAM, so restore the saved frame as
+          // the baseline before replacing the moon with the loading icon.
+          renderer.cleanupGrayscaleWithFrameBuffer();
+        }
+
         const auto pageHeight = renderer.getScreenHeight();
         renderer.drawImage(LoadingIcon, 0, pageHeight - LOADINGICON_HEIGHT, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (useDifferentialRefresh) {
+          renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+          allowFastInitialReaderRefresh = true;
+        } else {
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        }
       } else {
         activityManager.goToBoot();  // frame file missing, fall back to the splash
       }
@@ -524,7 +545,7 @@ void setup() {
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
-    activityManager.goToReader(path);
+    activityManager.goToReader(path, allowFastInitialReaderRefresh);
   }
 
   if (resume == BootResume::Silent) {
@@ -554,6 +575,7 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
@@ -595,7 +617,7 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity() ||
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
       activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
@@ -648,8 +670,10 @@ void loop() {
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     LOG_DBG("MAIN", "Manual screen refresh triggered");
-    RenderLock lock;
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    if (!activityManager.handleForcedRefresh()) {
+      RenderLock lock;
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    }
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.

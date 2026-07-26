@@ -37,6 +37,15 @@ void EpubReaderFootnotesActivity::selectFootnote(const int index) {
 }
 
 void EpubReaderFootnotesActivity::loop() {
+  // Jump to the selected note's target. Named apart from the selectFootnote(int) member,
+  // which MOVES the selection (and reloads the note text shown in the panel).
+  const auto activateSelected = [this] {
+    if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
+      setResult(FootnoteResult{footnotes[selectedIndex].href});
+      finish();
+    }
+  };
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
@@ -47,11 +56,49 @@ void EpubReaderFootnotesActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
       mappedInput.wasReleased(MappedInputManager::Button::Power)) {
-    if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
-      setResult(FootnoteResult{footnotes[selectedIndex].href});
-      finish();
-    }
+    activateSelected();
     return;
+  }
+
+  if (!footnotes.empty()) {
+    const auto orientation = renderer.getOrientation();
+    const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
+    const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
+    const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
+    const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? 30 : 0;
+    const int contentX = isLandscapeCw ? hintGutterWidth : 0;
+    const int contentWidth = renderer.getScreenWidth() - hintGutterWidth;
+    const int contentY = isPortraitInverted ? 50 : 0;
+    constexpr int lineHeight = 36;
+    const int listTop = 60 + contentY;
+    const int visibleCount = std::max(1, (renderer.getScreenHeight() - listTop) / lineHeight);
+    int row = -1;
+    const auto touch = mappedInput.rowTouch(row, listTop, lineHeight, visibleCount, contentX, contentX + contentWidth);
+    if (touch != MappedInputManager::RowTouch::None) {
+      const int touched = row;
+      if (touched >= 0 && touched < static_cast<int>(footnotes.size())) {
+        if (touch == MappedInputManager::RowTouch::Down) {
+          if (selectedIndex != touched) {
+            selectFootnote(touched);
+          }
+        } else {
+          selectFootnote(touched);
+          activateSelected();
+        }
+        return;
+      }
+    }
+
+    // Swipes move through the note LIST (the note's own text scrolls with Up/Down below).
+    const auto swipe = mappedInput.wasSwipe();
+    if (swipe == MappedInputManager::SwipeDir::Up) {
+      selectFootnote(selectedIndex + 1);
+      return;
+    }
+    if (swipe == MappedInputManager::SwipeDir::Down) {
+      selectFootnote(selectedIndex - 1);
+      return;
+    }
   }
 
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right},

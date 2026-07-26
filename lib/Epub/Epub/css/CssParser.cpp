@@ -68,13 +68,6 @@ constexpr bool iequalsAscii(std::string_view value, std::string_view lowercaseKe
                     [](char a, char b) { return asciiToLower(a) == b; });
 }
 
-// Case-insensitive ASCII substring search. Only needed by text-decoration,
-// which accepts multi-value strings like "underline solid red".
-constexpr bool icontainsAscii(std::string_view value, std::string_view lowercaseKeyword) {
-  return std::search(value.begin(), value.end(), lowercaseKeyword.begin(), lowercaseKeyword.end(),
-                     [](char a, char b) { return asciiToLower(a) == b; }) != value.end();
-}
-
 // Walk s and invoke fn(token) for each non-empty run between delimiters.
 // Tokens are boundary-trimmed and yielded as string_views into s; no
 // allocation. Runs of consecutive delimiters coalesce — no empty tokens are
@@ -253,39 +246,100 @@ CssFontWeight CssParser::interpretFontWeight(std::string_view val) {
 }
 
 CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
-  // text-decoration can have multiple space-separated values
-  if (icontainsAscii(val, "underline")) {
-    return CssTextDecoration::Underline;
-  }
-  return CssTextDecoration::None;
+  // text-decoration can have multiple space-separated values. Compare whole tokens
+  // so malformed values like "notunderline" do not accidentally enable a line.
+  CssTextDecoration result = CssTextDecoration::None;
+  bool explicitNone = false;
+  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      explicitNone = true;
+    } else if (iequalsAscii(token, "underline")) {
+      result = result | CssTextDecoration::Underline;
+    } else if (iequalsAscii(token, "line-through")) {
+      result = result | CssTextDecoration::LineThrough;
+    }
+  });
+  return explicitNone ? CssTextDecoration::None : result;
 }
 
 CssTextEmphasis CssParser::interpretTextEmphasis(std::string_view val) {
   // Value is fill + shape in either order ("filled sesame", "open dot", ...).
   // "none" wins outright; a missing fill keyword means filled per the CSS spec.
-  if (icontainsAscii(val, "none")) return CssTextEmphasis::None;
-  const bool open = icontainsAscii(val, "open");
-  if (icontainsAscii(val, "sesame")) return open ? CssTextEmphasis::OpenSesame : CssTextEmphasis::FilledSesame;
-  if (icontainsAscii(val, "double-circle"))
-    return open ? CssTextEmphasis::OpenDoubleCircle : CssTextEmphasis::FilledDoubleCircle;
-  if (icontainsAscii(val, "circle")) return open ? CssTextEmphasis::OpenCircle : CssTextEmphasis::FilledCircle;
-  if (icontainsAscii(val, "triangle")) return open ? CssTextEmphasis::OpenTriangle : CssTextEmphasis::FilledTriangle;
-  if (icontainsAscii(val, "dot")) return open ? CssTextEmphasis::OpenDot : CssTextEmphasis::FilledDot;
-  // Bare "filled"/"open" (or a string mark we don't support): default shape.
-  // JP bouten convention is the sesame dot, which is also what EBPAJ books use.
-  return open ? CssTextEmphasis::OpenSesame : CssTextEmphasis::FilledSesame;
+  //
+  // Tokenised rather than substring-matched: "double-circle" contains "circle", so a contains()
+  // approach only works if the longer keyword is tested first -- an ordering dependency that is
+  // easy to break. Whole-token comparison removes it.
+  bool none = false, open = false;
+  CssTextEmphasis shape = CssTextEmphasis::FilledSesame;
+  bool haveShape = false;
+  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      none = true;
+    } else if (iequalsAscii(token, "open")) {
+      open = true;
+    } else if (iequalsAscii(token, "sesame")) {
+      shape = CssTextEmphasis::FilledSesame;
+      haveShape = true;
+    } else if (iequalsAscii(token, "double-circle")) {
+      shape = CssTextEmphasis::FilledDoubleCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "circle")) {
+      shape = CssTextEmphasis::FilledCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "triangle")) {
+      shape = CssTextEmphasis::FilledTriangle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "dot")) {
+      shape = CssTextEmphasis::FilledDot;
+      haveShape = true;
+    }
+  });
+  if (none) return CssTextEmphasis::None;
+  // Bare "filled"/"open" (or a string mark we don't support): default shape. The JP bouten
+  // convention is the sesame dot, which is also what EBPAJ books use.
+  if (!haveShape) shape = CssTextEmphasis::FilledSesame;
+  if (!open) return shape;
+  switch (shape) {
+    case CssTextEmphasis::FilledDoubleCircle:
+      return CssTextEmphasis::OpenDoubleCircle;
+    case CssTextEmphasis::FilledCircle:
+      return CssTextEmphasis::OpenCircle;
+    case CssTextEmphasis::FilledTriangle:
+      return CssTextEmphasis::OpenTriangle;
+    case CssTextEmphasis::FilledDot:
+      return CssTextEmphasis::OpenDot;
+    default:
+      return CssTextEmphasis::OpenSesame;
+  }
 }
 
 CssListStyleType CssParser::interpretListStyleType(std::string_view val) {
-  if (icontainsAscii(val, "none")) return CssListStyleType::NoMarker;
-  if (icontainsAscii(val, "square")) return CssListStyleType::Square;
-  if (icontainsAscii(val, "circle")) return CssListStyleType::Circle;
-  // Numbered and alphabetic/roman ordered types all render as decimal numbers.
-  if (icontainsAscii(val, "decimal") || icontainsAscii(val, "alpha") || icontainsAscii(val, "roman") ||
-      icontainsAscii(val, "latin")) {
-    return CssListStyleType::Decimal;
-  }
-  return CssListStyleType::Disc;
+  // Whole-keyword comparison, not substring: a @counter-style name containing "circle" is not
+  // list-style-type: circle, and the ordered families are matched by their real CSS names.
+  CssListStyleType result = CssListStyleType::Disc;
+  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      result = CssListStyleType::NoMarker;
+    } else if (iequalsAscii(token, "square")) {
+      result = CssListStyleType::Square;
+    } else if (iequalsAscii(token, "circle")) {
+      result = CssListStyleType::Circle;
+    } else if (iequalsAscii(token, "disc")) {
+      result = CssListStyleType::Disc;
+    } else {
+      // Numbered and alphabetic/roman ordered types all render as decimal numbers.
+      static constexpr const char* kOrdered[] = {"decimal",     "decimal-leading-zero", "lower-alpha", "upper-alpha",
+                                                 "lower-latin", "upper-latin",          "lower-roman", "upper-roman",
+                                                 "cjk-decimal", "japanese-informal"};
+      for (const char* k : kOrdered) {
+        if (iequalsAscii(token, k)) {
+          result = CssListStyleType::Decimal;
+          break;
+        }
+      }
+    }
+  });
+  return result;
 }
 
 CssLength CssParser::interpretLength(std::string_view val) {
@@ -444,22 +498,22 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     }
     style.defined.border = 1;
   } else if (iequalsAscii(name, "font")) {
-    // font shorthand ("italic small-caps bold 1em/1.4 serif"): only the style,
-    // variant and weight keywords render here -- size and family are the
-    // reader's settings. Family names that contain "Bold"/"Oblique" would
-    // false-positive, but book CSS uses the shorthand for cites and headings.
-    if (icontainsAscii(value, "italic") || icontainsAscii(value, "oblique")) {
-      style.fontStyle = CssFontStyle::Italic;
-      style.defined.fontStyle = 1;
-    }
-    if (icontainsAscii(value, "bold")) {
-      style.fontWeight = CssFontWeight::Bold;
-      style.defined.fontWeight = 1;
-    }
-    if (icontainsAscii(value, "small-caps")) {
-      style.fontVariant = CssFontVariant::SmallCaps;
-      style.defined.fontVariant = 1;
-    }
+    // font shorthand ("italic small-caps bold 1em/1.4 serif"): only the style, variant and
+    // weight keywords render here -- size and family are the reader's settings. Matching whole
+    // tokens rather than substrings also stops a family name like "BoldFace" from registering
+    // as bold.
+    forEachDelimitedToken(value, isCssWhitespace, [&style](const std::string_view token) {
+      if (iequalsAscii(token, "italic") || iequalsAscii(token, "oblique")) {
+        style.fontStyle = CssFontStyle::Italic;
+        style.defined.fontStyle = 1;
+      } else if (iequalsAscii(token, "bold")) {
+        style.fontWeight = CssFontWeight::Bold;
+        style.defined.fontWeight = 1;
+      } else if (iequalsAscii(token, "small-caps")) {
+        style.fontVariant = CssFontVariant::SmallCaps;
+        style.defined.fontVariant = 1;
+      }
+    });
   } else if (iequalsAscii(name, "padding-top")) {
     style.paddingTop = interpretLength(value);
     style.defined.paddingTop = 1;
@@ -548,6 +602,11 @@ CssStyle CssParser::parseDeclarations(std::string_view declBlock) {
 // Rule processing
 
 void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style) {
+  // Skip rules that don't define any supported properties to save RAM.
+  if (!style.defined.anySet()) {
+    return;
+  }
+
   // With an active incremental cache append, keep the resident map SMALL by flushing it to the
   // cache file periodically -- even mid-stylesheet. One real book's 818-rule stylesheet needs
   // ~100KB as a map, more than the warm-path heap has, so without this the parse truncates at
@@ -1184,6 +1243,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     return false;
   }
 
+  // Size the bucket array up front to avoid incremental rehashes while loading rules.
+  rulesBySelector_.reserve(ruleCount);
+
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
     return static_cast<size_t>(file.available()) >= neededBytes;
   };
@@ -1280,7 +1342,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
       rulesBySelector_.clear();
       return false;
     }
-    style.textDecoration = static_cast<CssTextDecoration>(enumVal);
+    style.textDecoration = static_cast<CssTextDecoration>(enumVal & CSS_TEXT_DECORATION_MASK);
 
     if (file.read(&enumVal, 1) != 1) {
       rulesBySelector_.clear();

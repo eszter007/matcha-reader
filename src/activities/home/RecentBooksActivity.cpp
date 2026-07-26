@@ -19,7 +19,6 @@
 #include <memory>
 
 #include "EpubProgressUtil.h"
-#include "JsonSettingsIO.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "XtcProgressUtil.h"
@@ -154,10 +153,9 @@ void RecentBooksActivity::loadRecentBooks() {
   // startLibraryScan) refreshes and re-persists the list afterwards.
   recentBooks = RECENT_BOOKS.getBooks();
 
-  const String cacheJson = Storage.readFile(LIBRARY_CACHE_JSON);
-  if (cacheJson.length() > 0) {
+  {
     RecentBooksStore cache;
-    if (JsonSettingsIO::loadRecentBooks(cache, cacheJson.c_str())) {
+    if (cache.loadFromPath(LIBRARY_CACHE_JSON)) {
       for (const auto& b : cache.getBooks()) {
         const bool known =
             std::any_of(recentBooks.begin(), recentBooks.end(), [&b](const auto& r) { return r.path == b.path; });
@@ -557,7 +555,7 @@ void RecentBooksActivity::finishLibraryScan() {
   saveLibraryIndex();
   RecentBooksStore cache;
   cache.setBooks(scan_.results);
-  JsonSettingsIO::saveRecentBooks(cache, LIBRARY_CACHE_JSON);
+  cache.saveToPath(LIBRARY_CACHE_JSON);
   scan_.results.clear();
   scan_.results.shrink_to_fit();
 }
@@ -849,6 +847,12 @@ void RecentBooksActivity::onExit() {
 }
 
 void RecentBooksActivity::loop() {
+  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight =
+      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+
   if (openShelfIndex >= 0) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       openShelfIndex = -1;
@@ -924,6 +928,21 @@ void RecentBooksActivity::loop() {
       promptRemoveBook(recentBooks[itemIdx].path, recentBooks[itemIdx].title);
       return;
     }
+  }
+
+  // Upstream's flat recents list (selectorIndex + handleListTouch) doesn't exist here: this
+  // screen is a tabbed cover GRID addressed by contentIndex/scrollRow. Swipes move one grid
+  // row; Back stays with the tab/shelf-aware handler below rather than always going home.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+    const int totalItems = getContentItemCount() + 1;
+    const int delta = (swipe == MappedInputManager::SwipeDir::Up) ? GRID_COLS : -GRID_COLS;
+    const int moved = std::clamp(contentIndex + delta, 0, std::max(0, totalItems - 1));
+    if (moved != contentIndex) {
+      contentIndex = moved;
+      requestUpdate();
+    }
+    return;
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
@@ -1061,7 +1080,7 @@ void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const i
   renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
 
   if (!hasCover) {
-    renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32, 32);
+    renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32);
     auto titleLines = renderer.wrappedText(SMALL_FONT_ID, title.c_str(), coverWidth - 8, 3);
     int textY = coverY + (coverHeight - 32) / 2 + 36;
     for (const auto& line : titleLines) {
