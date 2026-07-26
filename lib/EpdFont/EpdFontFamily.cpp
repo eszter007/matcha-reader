@@ -27,6 +27,15 @@ const EpdFontData* EpdFontFamily::getData(const Style style) const { return getF
 const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) const {
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->getGlyph(cp);
+  // The requested font may cover cp without it being RAM-resident: SD fonts keep only the
+  // current page's glyphs in their interval table, so hasGlyph() (residency) says no while
+  // hasCodepoint() (full coverage index, RAM-only, no card I/O) says yes. Give f its own
+  // on-demand load HERE, before the fallback chain. Otherwise a cold glyph walks straight
+  // past the selected font to the global fallback -- which is the reader-size companion
+  // (loaded at SETTINGS.fontPointSize) -- and a 12pt UI string draws in 14pt glyphs from a
+  // different typeface. Device log: a Home title measured 244px through UDDigiKyokasho_12
+  // and then drew from NotoSansJP_14, overflowing the card it had just been truncated to fit.
+  if (f->hasCodepoint(cp)) return f->getGlyph(cp);
   if (fallbackFamily) {
     const EpdFont* fbFont = fallbackFamily->getFont(style);
     if (fbFont->hasGlyph(cp)) return fbFont->getGlyph(cp);
@@ -63,6 +72,9 @@ const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style s
 const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style) const {
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->data;
+  // Mirrors getGlyph()'s own-font on-demand step above -- the pair must resolve to the same
+  // font or getGlyphBitmap() indexes one font's glyph array with another's pointer.
+  if (f->hasCodepoint(cp)) return f->data;
   if (fallbackFamily) {
     const EpdFont* fbFont = fallbackFamily->getFont(style);
     if (fbFont->hasGlyph(cp)) return fbFont->data;
@@ -85,7 +97,14 @@ const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style
       if (loaded) return gf->data;
     }
   }
-  if (fallbackFamily) return fallbackFamily->getData(style);
+  // Mirror getGlyph()'s last resort exactly: it returns f->getGlyph(cp) (f's replacement
+  // glyph), so the data MUST be f's too. Returning fallbackFamily's data here was the one
+  // step of the pair that was never mirrored -- it hands the caller a glyph from f paired
+  // with fontData from the fallback, and getGlyphBitmap() then computes the glyph index as a
+  // pointer difference across two unrelated arrays. With a 1-bit primary and a 2-bit
+  // compressed fallback that index sizes a scratch buffer from the wrong glyph's dataLength
+  // (ceil(w*h/8)) which compactSingleGlyph then fills at 2 bits per pixel (ceil(w*h/4)) --
+  // a heap overflow of roughly the buffer's own size.
   return f->data;
 }
 

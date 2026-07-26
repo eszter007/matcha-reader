@@ -64,7 +64,21 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
       LOG_ERR("GFX", "Compressed font but no FontDecompressor set");
       return nullptr;
     }
-    uint32_t glyphIndex = static_cast<uint32_t>(glyph - fontData->glyph);
+    const uint32_t glyphIndex = static_cast<uint32_t>(glyph - fontData->glyph);
+    // Belt and braces after the getGlyph/getDataForGlyph pairing fix: a glyph pointer that
+    // does not belong to fontData's array makes this difference meaningless, and every
+    // consumer downstream (group lookup, slab key, scratch sizing) trusts it. The glyph count
+    // isn't stored, but the interval table is sorted with contiguous offsets, so the last
+    // interval gives it in O(1). Only reached for built-in compressed fonts, whose interval
+    // table is always complete (SD fonts have groups == nullptr and never get here).
+    if (fontData->intervals && fontData->intervalCount > 0) {
+      const EpdUnicodeInterval& lastIv = fontData->intervals[fontData->intervalCount - 1];
+      const uint32_t glyphCount = lastIv.offset + (lastIv.last - lastIv.first + 1);
+      if (glyph < fontData->glyph || glyphIndex >= glyphCount) {
+        LOG_ERR("GFX", "Glyph/fontData mismatch (index %u, count %u); dropping glyph", glyphIndex, glyphCount);
+        return nullptr;
+      }
+    }
     // For page-buffer hits the pointer is stable for the page lifetime.
     // For hot-group hits it is valid only until the next getBitmap() call — callers
     // must consume it (draw the glyph) before requesting another bitmap.
@@ -195,13 +209,15 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   }
   const EpdFontFamily& primary = fontIt->second;
   const EpdFontFamily& fallback = fallbackIt->second;
+  // Redirecting is all-or-nothing: every glyph is then looked up in the fallback family. What
+  // that family lacks (a CJK-only SD font has no Latin) must land on a SIZE-MATCHED next stop,
+  // which SdCardFontSystem::registerUiFallbacks wires up -- without it the miss falls through
+  // to the global fallback, the companion loaded at the reader's point size, and a 12pt string
+  // draws part of itself at 14pt.
   const char* cursor = text;
   uint32_t cp;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
     // Only redirect for CJK the primary font cannot draw but the fallback can.
-    // Latin/symbol strings the built-in UI fonts already cover are left
-    // untouched, and a partial-coverage fallback (e.g. kana-only) is not worth
-    // dragging the whole string into for glyphs it would also miss.
     if (utf8IsCjkCodepoint(cp) && !primary.hasCodepoint(cp, style) && fallback.hasCodepoint(cp, style)) {
       return fallbackFontId;
     }
@@ -1689,6 +1705,14 @@ std::string GfxRenderer::truncatedText(const int fontId, const char* text, const
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";
 
+  // Warm the SD advance table for this exact string BEFORE measuring. drawText resolves
+  // glyphs through the on-demand loader, so it renders a CJK title at full width; measurement
+  // reads the advance table and, when that is still cold, prices every missing codepoint at 0
+  // (both its fallbacks -- the companion table and getGlyphResident -- answer from RAM only).
+  // The string then measures as ~0, counts as fitting, and is never truncated: on device a long
+  // Japanese title ran straight off the tile with no ellipsis.
+  ensureSdCardFontReady(resolveTextFontId(fontId, text, style), text, static_cast<uint8_t>(1u << (style & 0x03)));
+
   std::string item = text;
   // U+2026 HORIZONTAL ELLIPSIS (UTF-8: 0xE2 0x80 0xA6)
   const char* ellipsis = "\xe2\x80\xa6";
@@ -1702,7 +1726,7 @@ std::string GfxRenderer::truncatedText(const int fontId, const char* text, const
     utf8RemoveLastChar(item);
   }
 
-  return item.empty() ? ellipsis : item + ellipsis;
+  return item.empty() ? std::string(ellipsis) : item + ellipsis;
 }
 
 std::vector<std::string> GfxRenderer::wrappedText(const int fontId, const char* text, const int maxWidth,
@@ -1710,6 +1734,14 @@ std::vector<std::string> GfxRenderer::wrappedText(const int fontId, const char* 
   std::vector<std::string> lines;
 
   if (!text || maxWidth <= 0 || maxLines <= 0) return lines;
+
+  // Warm the SD advance table for this exact string BEFORE measuring. drawText resolves
+  // glyphs through the on-demand loader, so it renders a CJK title at full width; measurement
+  // reads the advance table and, when that is still cold, prices every missing codepoint at 0
+  // (both its fallbacks -- the companion table and getGlyphResident -- answer from RAM only).
+  // The string then measures as ~0, counts as fitting, and is never truncated: on device a long
+  // Japanese title ran straight off the tile with no ellipsis.
+  ensureSdCardFontReady(resolveTextFontId(fontId, text, style), text, static_cast<uint8_t>(1u << (style & 0x03)));
 
   std::string remaining = text;
   std::string currentLine;

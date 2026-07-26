@@ -194,6 +194,17 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
     const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, ui.pointSize);
     if (sdFontId != 0) {
       renderer.setFallbackFont(ui.fontId, sdFontId);
+      // ...and give that SD font the built-in family of the SAME size as its own next stop.
+      // Redirecting a string here is all-or-nothing, so whatever the SD font lacks (a CJK-only
+      // family like UDDigiKyokasho has no Latin) would otherwise fall through to the global
+      // fallback -- the companion loaded at the READER's point size. Device case: a 12pt Home
+      // title drew its kanji at 12pt and the ASCII "11" beside them at 14pt from a third
+      // typeface. With this, the miss lands on the matching built-in instead.
+      const auto& fontMap = renderer.getFontMap();
+      const auto builtinIt = fontMap.find(ui.fontId);
+      if (builtinIt != fontMap.end()) {
+        renderer.setFamilyFallback(sdFontId, &builtinIt->second);
+      }
     } else {
       LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, familyName.c_str());
     }

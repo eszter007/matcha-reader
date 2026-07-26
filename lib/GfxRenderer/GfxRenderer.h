@@ -129,6 +129,13 @@ class GfxRenderer {
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
+  // Point one registered family's glyph fallback at another. Used to give an SD font loaded
+  // for a UI size a SIZE-MATCHED next stop (the built-in family of that size) instead of
+  // letting it fall through to the global fallback, which is the reader-size companion.
+  void setFamilyFallback(int fontId, const EpdFontFamily* fallback) {
+    const auto it = fontMap.find(fontId);
+    if (it != fontMap.end()) it->second.setFallback(fallback);
+  }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
 
   // The companion/fallback SD font's advance table (nullptr when none). Measurement paths use

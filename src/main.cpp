@@ -59,18 +59,17 @@ EpdFont notoserif12ItalicFont(&notoserif_12_italic);
 EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
 EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
                                     &notoserif12BoldItalicFont);
+// No bold-italic at 16/18pt: the two largest reader sizes cost ~298KB of flash for a style
+// combination books use rarely, and that flash now carries the 8pt CJK subset the UI needs
+// at every screen. EpdFontFamily::getFont falls back to bold when boldItalic is null.
 EpdFont notoserif16RegularFont(&notoserif_16_regular);
 EpdFont notoserif16BoldFont(&notoserif_16_bold);
 EpdFont notoserif16ItalicFont(&notoserif_16_italic);
-EpdFont notoserif16BoldItalicFont(&notoserif_16_bolditalic);
-EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont,
-                                    &notoserif16BoldItalicFont);
+EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont);
 EpdFont notoserif18RegularFont(&notoserif_18_regular);
 EpdFont notoserif18BoldFont(&notoserif_18_bold);
 EpdFont notoserif18ItalicFont(&notoserif_18_italic);
-EpdFont notoserif18BoldItalicFont(&notoserif_18_bolditalic);
-EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont,
-                                    &notoserif18BoldItalicFont);
+EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont);
 
 EpdFont notosans12RegularFont(&notosans_12_regular);
 EpdFont notosans12BoldFont(&notosans_12_bold);
@@ -87,15 +86,11 @@ EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, 
 EpdFont notosans16RegularFont(&notosans_16_regular);
 EpdFont notosans16BoldFont(&notosans_16_bold);
 EpdFont notosans16ItalicFont(&notosans_16_italic);
-EpdFont notosans16BoldItalicFont(&notosans_16_bolditalic);
-EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont,
-                                   &notosans16BoldItalicFont);
+EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont);
 EpdFont notosans18RegularFont(&notosans_18_regular);
 EpdFont notosans18BoldFont(&notosans_18_bold);
 EpdFont notosans18ItalicFont(&notosans_18_italic);
-EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
-                                   &notosans18BoldItalicFont);
+EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont);
 
 #endif  // OMIT_FONTS
 
@@ -107,11 +102,14 @@ EpdFontFamily smallFontFamily(&smallFont);
 // alongside everything else. No bold variant; EpdFontFamily::getFont() falls
 // back to regular when bold is null, which is fine for an occasional-use
 // fallback font.
-// Only the 12pt subset is built in. The 10pt one cost ~340KB of flash for a slightly
-// better fit in the two smallest UI rows, and after the 1.5.0 merge (wolfSSL + the new
-// reader/build machinery) the release binary no longer fits the 6.4MB app partition.
-// The 10/8pt UI now falls back to 12pt CJK: kanji there are a touch large, Latin is
-// untouched, and an SD Japanese font (see the README) replaces the fallback entirely.
+// Two built-in CJK subsets, 8pt and 12pt. The SD font system would rather use the card's own
+// font at UI sizes, but no .cpfont ships 8 or 10pt (sd-fonts.yaml generates 12/14/16/18), so
+// these built-ins are what EVERY device renders UI Japanese with -- not just the ones without
+// an SD font. 8pt serves both the 8pt rows (library titles, list subtitles) and the 10pt ones
+// (the Continue Reading author): a hair small there, where 12pt was glaringly large.
+EpdFont cjk8RegularFont(&notosansjp_joyo_8_regular);
+EpdFontFamily cjk8FontFamily(&cjk8RegularFont);
+
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
 EpdFontFamily cjk12FontFamily(&cjk12RegularFont);
 
@@ -331,9 +329,9 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
 #endif  // OMIT_FONTS
-  ui10FontFamily.setFallback(&cjk12FontFamily);
+  ui10FontFamily.setFallback(&cjk8FontFamily);
   ui12FontFamily.setFallback(&cjk12FontFamily);
-  smallFontFamily.setFallback(&cjk12FontFamily);
+  smallFontFamily.setFallback(&cjk8FontFamily);
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);

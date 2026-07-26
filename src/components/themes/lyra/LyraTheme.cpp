@@ -544,16 +544,16 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->prewarmCache(UI_12_FONT_ID, book.title.c_str(), 1 << EpdFontFamily::BOLD);
       if (!book.author.empty()) {
-        fcm->prewarmCache(UI_10_FONT_ID, book.author.c_str(), 1 << EpdFontFamily::REGULAR);
+        fcm->prewarmCache(UI_12_FONT_ID, book.author.c_str(), 1 << EpdFontFamily::REGULAR);
       }
     }
 
     auto titleLines = renderer.wrappedText(UI_12_FONT_ID, book.title.c_str(), textWidth, 3, EpdFontFamily::BOLD);
 
-    auto author = renderer.truncatedText(UI_10_FONT_ID, book.author.c_str(), textWidth);
+    auto author = renderer.truncatedText(UI_12_FONT_ID, book.author.c_str(), textWidth);
     const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
     const int titleBlockHeight = titleLineHeight * static_cast<int>(titleLines.size());
-    const int authorHeight = book.author.empty() ? 0 : (renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2);
+    const int authorHeight = book.author.empty() ? 0 : (renderer.getLineHeight(UI_12_FONT_ID) * 3 / 2);
     const int totalBlockHeight = titleBlockHeight + authorHeight;
     int titleY = tileY + tileHeight / 2 - totalBlockHeight / 2;
     const int textX = tileX + hPaddingInSelection + coverWidth + LyraMetrics::values.verticalSpacing;
@@ -562,9 +562,9 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
       titleY += titleLineHeight;
     }
     if (!book.author.empty()) {
-      titleY += renderer.getLineHeight(UI_10_FONT_ID) / 2;
-      renderer.drawText(UI_10_FONT_ID, textX, titleY, author.c_str(), true);
-      titleY += renderer.getLineHeight(UI_10_FONT_ID);
+      titleY += renderer.getLineHeight(UI_12_FONT_ID) / 2;
+      renderer.drawText(UI_12_FONT_ID, textX, titleY, author.c_str(), true);
+      titleY += renderer.getLineHeight(UI_12_FONT_ID);
     }
     if (progressPercent >= 0) {
       char pctBuf[16];
