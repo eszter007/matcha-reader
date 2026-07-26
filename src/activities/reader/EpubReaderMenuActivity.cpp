@@ -84,7 +84,14 @@ void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 void EpubReaderMenuActivity::closeCancelled() {
   ActivityResult result;
   result.isCancelled = true;
-  result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
+  // The toggles must ride along on EVERY exit path. Vertical Text and Furigana don't close the
+  // menu when pressed -- they flip a pending flag and redraw -- so leaving with Back IS how the
+  // user commits them. Omitting them here leaves MenuResult's -1 defaults, which the reader
+  // reads as "unchanged", and the toggle silently does nothing. (Upstream added this early Back
+  // handler; the fork's own Back branch further down carried the flags and became unreachable.)
+  result.data =
+      MenuResult{-1, pendingOrientation, selectedPageTurnOption, static_cast<int8_t>(pendingVerticalEnabled ? 1 : 0),
+                 static_cast<int8_t>(pendingFuriganaEnabled ? 1 : 0)};
   setResult(std::move(result));
   finish();
 }
@@ -199,15 +206,6 @@ void EpubReaderMenuActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activateSelected();
-    return;
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    result.data =
-        MenuResult{-1, pendingOrientation, selectedPageTurnOption, static_cast<int8_t>(pendingVerticalEnabled ? 1 : 0),
-                   static_cast<int8_t>(pendingFuriganaEnabled ? 1 : 0)};
-    setResult(std::move(result));
-    finish();
     return;
   }
 }

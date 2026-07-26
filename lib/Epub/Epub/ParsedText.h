@@ -71,10 +71,14 @@ class ParsedText {
   const std::string& lastWord() const { return words.back(); }
   // Base text behind a ruby group, for the same harvest (a group ruby spans several words).
   const std::string& wordAt(size_t index) const { return words[index]; }
+  // Delegates so the sizing rule lives in ONE place: ensureRubyCapacity() only reserve()s, it
+  // does not resize, so writing rubyTexts.back() while the vector is still empty (no ruby seen
+  // in this block yet) wrote past the end -- device crash: Store access fault inside
+  // std::string::operator= during an incremental horizontal build, reached from the
+  // text-emphasis (bouten) path in flushPartWordBuffer.
   void setLastWordRuby(const std::string& ruby) {
     if (words.empty()) return;
-    ensureRubyCapacity();
-    rubyTexts.back() = ruby;
+    setRubyForWordAt(words.size() - 1, ruby);
   }
   std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
   void ensureRubyCapacity();
