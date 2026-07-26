@@ -1055,6 +1055,28 @@ def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) ->
 DEVICE_TARGETS = {"x3": (528, 792), "x4": (480, 800)}
 
 
+def normalize_for_output(img):
+    """Put an image into a mode that resizes and dithers predictably.
+
+    Palette/1-bit/alpha modes resize poorly (palette indices get interpolated). Sources WITH
+    transparency are composited onto WHITE -- that is exactly what the firmware's PNG renderer
+    does with alpha (convertLineToGray blends toward 255), and what e-ink paper looks like --
+    whereas a bare convert("RGB") would composite onto black and turn transparent regions into
+    black blobs. Grayscale sources stay grayscale.
+    """
+    from PIL import Image  # deferred like main()'s import, so --help works without Pillow
+
+    has_alpha = img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        return background
+    if img.mode not in ("RGB", "L"):
+        return img.convert("RGB")
+    return img
+
+
 def fit_to_device(img, target):
     """Downscale img to fit the device screen box; never upscale, never change aspect.
 
@@ -1077,19 +1099,7 @@ def fit_to_device(img, target):
     scale = min(tw / w, th / h)
     if scale >= 1.0:
         return img
-    # Palette/1-bit/alpha modes resize poorly (palette indices get interpolated), so normalize
-    # first. Sources WITH transparency are composited onto WHITE -- that is exactly what the
-    # firmware's PNG renderer does with alpha (convertLineToGray blends toward 255), and what
-    # e-ink paper looks like -- whereas a bare convert("RGB") would composite onto black and turn
-    # transparent regions into black blobs. Grayscale sources stay grayscale.
-    has_alpha = img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)
-    if has_alpha:
-        rgba = img.convert("RGBA")
-        background = Image.new("RGB", img.size, (255, 255, 255))
-        background.paste(rgba, mask=rgba.getchannel("A"))
-        img = background
-    elif img.mode not in ("RGB", "L"):
-        img = img.convert("RGB")
+    img = normalize_for_output(img)
     # Clamp to the box as belt-and-braces. Mathematically round() cannot exceed it (the binding
     # axis rounds onto the target within float precision; the other axis is strictly below), but
     # an explicit clamp makes "never exceeds the screen box" obvious rather than subtle.
@@ -1208,9 +1218,20 @@ def main():
             # crop rects, OCR text boxes, the page dims in panels.idx) then lives in the resized
             # space, matching the page/crop files actually written -- nothing needs rescaling.
             orig_size = img.size
+            # ...but keep the full-resolution page for the panel crops. A panel is shown zoomed to
+            # fill the screen, so cropping it out of the already-reduced page spends most of the
+            # pixel budget before the zoom even starts -- a quarter-page panel keeps a quarter of
+            # the reduced pixels and is then magnified, dither dots and all. Cropping at full
+            # resolution and fitting each panel to the screen afterwards gives every panel the
+            # whole budget, and dithers once at the size it is actually displayed at.
+            source_img = normalize_for_output(img)
             img = fit_to_device(img, device_target)
             was_resized = img.size != orig_size
             img_w, img_h = img.size
+            # Panel boxes stay in resized page space (panels.idx records the page at that size);
+            # only the crop is taken from the original, so map the rect back across.
+            panel_scale_x = source_img.width / img_w
+            panel_scale_y = source_img.height / img_h
 
             # Write the page to a canonical, trivially-sortable filename.
             if args.mono:
@@ -1257,7 +1278,16 @@ def main():
                 # full-page image anyway, so the crop is a redundant copy.
                 panel_path = None
                 if not is_full_page_panel(box, img_w, img_h):
-                    cropped = img.crop((mx1, my1, mx2, my2))
+                    cropped = source_img.crop((
+                        max(0, round(mx1 * panel_scale_x)),
+                        max(0, round(my1 * panel_scale_y)),
+                        min(source_img.width, round(mx2 * panel_scale_x)),
+                        min(source_img.height, round(my2 * panel_scale_y)),
+                    ))
+                    # Fit the panel itself to the screen, exactly as the page was fitted: the
+                    # firmware zooms a panel to fill the display, so this is the size it is
+                    # actually shown at -- and the one it should be dithered at.
+                    cropped = fit_to_device(cropped, device_target)
                     if args.mono:
                         panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.bmp")
                         cropped.convert("L").convert("1").save(panel_path, "BMP")
