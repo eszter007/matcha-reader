@@ -3121,7 +3121,11 @@ void EpubReaderActivity::openWordLookupPanel() {
       startActivityForResult(std::move(panel), [this](const ActivityResult&) { requestUpdate(); });
     }
   } else if (section) {
-    auto page = section->loadPageAt(section->currentPage);
+    // loadPage(), not loadPageAt(): with the incremental build the current page often lives only
+    // in the in-progress .part file, and loadPageAt() reads the COMMITTED file -- it returned
+    // nullptr and Word Lookup silently did nothing in horizontal mode while vertical (which has
+    // no incremental build) worked. loadPage() serves from the active build first.
+    auto page = section->loadPage(section->currentPage);
     if (page) {
       startActivityForResult(std::make_unique<EpubReaderWordLookupActivity>(
                                  renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
