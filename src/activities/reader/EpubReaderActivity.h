@@ -213,6 +213,11 @@ class EpubReaderActivity final : public Activity {
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
   // instead of paying the ~500-700ms per-page SD bulk load at button time.
   int prewarmedVPage_ = -1;
+  // Page index the last vertical render actually drew. The idle warm evicts it (the mini font
+  // cache holds exactly one page), so running that warm again after a re-render of the SAME
+  // page -- status bar tick, closed menu, bookmark toast -- costs two bulk SD loads and buys
+  // nothing. Device log: "idle warm page=20" twice around one re-render of page 19.
+  int lastRenderedVPage_ = -1;
   // Direction of the most recent page turn; the idle warm follows it (forward turns warm
   // the next page, backward turns the previous one) so sustained paging in EITHER
   // direction hits a warm cache. Written by pageTurn() on the loop() task.

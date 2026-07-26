@@ -1826,10 +1826,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // warm -- only the single turn right after a direction reversal is cold (the mini-font
     // cache holds exactly one page per style). getPage(target) also leaves that page in the
     // section's single-page read cache, so the turn skips the SD page read too.
-    prewarmedVPage_ = -1;
+    // Only after a real page change. A re-render of the same page still has its glyphs in the
+    // mini cache; warming the neighbour would evict them and make the next re-render pay a full
+    // bulk load again, for a neighbour that was already warmed after the first render.
+    const bool pageChanged = verticalSection->currentPage != lastRenderedVPage_;
+    lastRenderedVPage_ = verticalSection->currentPage;
     const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? verticalSection->currentPage + 1
                                                                             : verticalSection->currentPage - 1;
-    if (warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
+    if (pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
+      prewarmedVPage_ = -1;
       if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
         if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
       }

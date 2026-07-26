@@ -6,9 +6,9 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <SecureHttpClient.h>
 #include <WiFi.h>
 #include <esp_crt_bundle.h>
-#include <esp_http_client.h>
 
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -19,7 +19,22 @@
 namespace {
 
 constexpr int HTTP_BUF_SIZE = 2048;
-constexpr uint32_t MIN_HEAP_FOR_TLS = 55000;
+// wolfSSL, not mbedTLS: this request used to go through esp_http_client (the project's only
+// mbedTLS user), whose 16KB-per-direction record buffers are baked into the prebuilt framework
+// and needed ~55KB contiguous -- measured on an X4, a handshake at 53236 bytes failed with
+// ESP_ERR_HTTP_CONNECT after driving free heap to 356 bytes, so every translation from a
+// reading session paid a silent restart. SecureHttpClient runs wolfSSL, which is built from
+// source with our own user_settings.h (scripts/patch_wolfssl.py) and whose largest single
+// allocation is the ~17KB record buffer. Floors adopted from KOReaderSyncClient, which ported
+// the same way and measured handshakes succeeding inside a 43KB largest block.
+constexpr uint32_t MIN_FREE_FOR_TLS = 35000;
+constexpr uint32_t MIN_HEAP_FOR_TLS = 20000;
+// What bringing up the WiFi/lwIP stack takes out of the LARGEST CONTIGUOUS block, not out of
+// total free. Measured on device: 86004 at translation entry, 53236 left at the TLS gate --
+// 32768 exactly. The margin on top covers association-time variation; too generous a value
+// here costs a restart that wasn't needed, too tight costs the doubled WiFi+NTP this check
+// exists to avoid. Used to decide BEFORE the connect whether one pass can work.
+constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 // esp_wifi_init() (triggered by the first WiFi.mode(WIFI_STA) call) allocates its own TX/RX
 // buffer pools, NVS state, and wpa_supplicant/RRM tables -- many small-to-medium allocations, not
 // one big contiguous block, so this checks total free heap rather than getMaxAllocHeap(). Confirmed
@@ -31,39 +46,6 @@ constexpr uint32_t MIN_HEAP_FOR_TLS = 55000;
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
 constexpr const char* API_KEY_PATH = "/system/gemini.key";
 constexpr const char* GEMINI_MODEL = "gemini-2.5-flash";
-
-struct ResponseBuffer {
-  char* data = nullptr;
-  int len = 0;
-  int capacity = 0;
-
-  ~ResponseBuffer() { free(data); }
-
-  bool ensure(int size) {
-    if (size <= capacity) return true;
-    int newCap = capacity == 0 ? 1024 : capacity;
-    while (newCap < size) newCap *= 2;
-    char* newData = static_cast<char*>(realloc(data, newCap));
-    if (!newData) return false;
-    data = newData;
-    capacity = newCap;
-    return true;
-  }
-};
-
-esp_err_t httpEventHandler(esp_http_client_event_t* evt) {
-  auto* buf = static_cast<ResponseBuffer*>(evt->user_data);
-  if (evt->event_id == HTTP_EVENT_ON_DATA && buf) {
-    if (buf->ensure(buf->len + evt->data_len + 1)) {
-      memcpy(buf->data + buf->len, evt->data, evt->data_len);
-      buf->len += evt->data_len;
-      buf->data[buf->len] = '\0';
-    } else {
-      LOG_ERR("XLAT", "Response buffer OOM (%d bytes)", evt->data_len);
-    }
-  }
-  return ESP_OK;
-}
 
 }  // namespace
 
@@ -116,10 +98,24 @@ void EpubReaderTranslationActivity::onEnter() {
   }
 
   const uint32_t freeHeap = ESP.getFreeHeap();
-  LOG_DBG("XLAT", "Entering translation (free heap: %u)", static_cast<unsigned>(freeHeap));
-  if (freeHeap < MIN_HEAP_FOR_WIFI_INIT) {
-    LOG_ERR("XLAT", "Insufficient heap for WiFi init: %u < %u", static_cast<unsigned>(freeHeap),
-            static_cast<unsigned>(MIN_HEAP_FOR_WIFI_INIT));
+  const uint32_t maxAllocAtEntry = ESP.getMaxAllocHeap();
+  LOG_DBG("XLAT", "Entering translation (free heap: %u, max alloc: %u)", static_cast<unsigned>(freeHeap),
+          static_cast<unsigned>(maxAllocAtEntry));
+  // Decide about the restart HERE, before WiFi. The old gate sat after the connect, so a heap
+  // that couldn't carry TLS still paid for association and the NTP sync first (device log: 3.7s
+  // + 1.2s), then restarted and paid for both a second time. Bringing WiFi up costs a
+  // predictable slice of the largest block -- measured 100KB+ at entry down to 53KB at the TLS
+  // gate -- so if that slice would leave us short, restarting now makes it a single payment.
+  // Deliberately NOT "try TLS anyway and see": on the X3 the framebuffer is larger and the
+  // margin thinner, and a handshake that runs out mid-way is a crash, not a clean error.
+  const bool wontFitAfterWifi = maxAllocAtEntry < MIN_HEAP_FOR_TLS + WIFI_STACK_RESERVE;
+  // With wolfSSL's much lower requirement this should now be false for any normal reading
+  // session (measured entry: 86004, WiFi takes 32768, leaving 53236 against a 20000 floor) --
+  // the restart becomes the exception it was meant to be rather than the rule.
+  if (freeHeap < MIN_HEAP_FOR_WIFI_INIT || wontFitAfterWifi) {
+    LOG_ERR("XLAT", "Heap too tight for a one-pass translation (free %u, maxAlloc %u, need %u)",
+            static_cast<unsigned>(freeHeap), static_cast<unsigned>(maxAllocAtEntry),
+            static_cast<unsigned>(MIN_HEAP_FOR_TLS + WIFI_STACK_RESERVE));
     // A long reading session (Word Lookup, chapter builds) can leave the heap too fragmented for
     // the WiFi/TLS stack even after everything reclaimable was freed -- but a silent restart
     // clears it completely (~110KB contiguous right after boot). Stash the text and retry once
@@ -174,14 +170,27 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   // heap more fragmented than plain-text reading) total free can look comfortably above
   // MIN_HEAP_FOR_TLS while no single block that size actually exists, silently passing this check
   // only to fail deeper inside the TLS handshake instead of with this clear message.
+  // Release the glyph caches AGAIN, right at the gate. onEnter() already did it, but the WiFi
+  // selection screen and the return render in between re-warm them -- device log: 112KB free at
+  // entry, 51KB largest block here, 4KB short of the threshold, so every translation paid a
+  // silent restart (~10s: reboot, re-enter, reconnect WiFi) instead of just calling the API.
+  // Nothing is drawn between here and the request, and the reader re-warms on its next page.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+  }
+
+  // Both floors, for the two different failure modes: the record buffer needs one contiguous
+  // block, the handshake's session object and cert-verify temps need total room. A wrong guess
+  // fails soft -- wolfSSL returns MEMORY_E rather than aborting under -fno-exceptions.
   const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
-  LOG_DBG("XLAT", "Calling Gemini (max alloc: %u)", static_cast<unsigned>(maxAllocHeap));
-  if (maxAllocHeap < MIN_HEAP_FOR_TLS) {
-    LOG_ERR("XLAT", "Insufficient contiguous heap for TLS: %u < %u", static_cast<unsigned>(maxAllocHeap),
-            static_cast<unsigned>(MIN_HEAP_FOR_TLS));
-    // Fragmentation, not exhaustion: total free is typically ~100KB+ here with no 55KB hole (the
-    // WiFi driver's own init sprinkles allocations through whatever holes the reading session
-    // left). Retry once on a pristine post-restart heap; see onEnter() for the rationale.
+  const uint32_t freeHeapNow = ESP.getFreeHeap();
+  LOG_DBG("XLAT", "Calling Gemini (free: %u, max alloc: %u)", static_cast<unsigned>(freeHeapNow),
+          static_cast<unsigned>(maxAllocHeap));
+  if (maxAllocHeap < MIN_HEAP_FOR_TLS || freeHeapNow < MIN_FREE_FOR_TLS) {
+    LOG_ERR("XLAT", "Insufficient heap for TLS: free %u (need %u), largest block %u (need %u)",
+            static_cast<unsigned>(freeHeapNow), static_cast<unsigned>(MIN_FREE_FOR_TLS),
+            static_cast<unsigned>(maxAllocHeap), static_cast<unsigned>(MIN_HEAP_FOR_TLS));
+    // Retry once on a pristine post-restart heap; see onEnter() for the rationale.
     if (!resumedAfterRestart && stashAndRestart()) return false;
     errorMessage = tr(STR_TRANSLATION_LOW_MEMORY);
     return false;
@@ -204,49 +213,30 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   std::string body;
   serializeJson(reqDoc, body);
 
-  ResponseBuffer responseBuf;
-
-  esp_http_client_config_t httpConfig = {};
-  httpConfig.url = url.c_str();
-  httpConfig.event_handler = httpEventHandler;
-  httpConfig.user_data = &responseBuf;
-  httpConfig.method = HTTP_METHOD_POST;
-  httpConfig.timeout_ms = 30000;
-  httpConfig.buffer_size = HTTP_BUF_SIZE;
-  httpConfig.buffer_size_tx = HTTP_BUF_SIZE;
-  httpConfig.crt_bundle_attach = esp_crt_bundle_attach;
-
-  esp_http_client_handle_t client = esp_http_client_init(&httpConfig);
-  if (!client) {
+  freeink::SecureHttpClient http;
+  http.setInsecure();  // same as KOReaderSync: the wolfSSL transport has no CA bundle wired up
+  http.setTimeout(30000);
+  if (!http.begin(url)) {
+    LOG_ERR("XLAT", "Failed to open connection");
     errorMessage = tr(STR_TRANSLATION_FAILED);
     return false;
   }
+  http.addHeader("Content-Type", "application/json");
 
-  bool headerOk = esp_http_client_set_header(client, "Content-Type", "application/json") == ESP_OK;
-  if (headerOk) {
-    esp_http_client_set_post_field(client, body.c_str(), static_cast<int>(body.length()));
-  }
+  const int httpCode = http.POST(body);
+  const std::string response = http.getString();
+  http.end();
 
-  if (!headerOk) {
-    esp_http_client_cleanup(client);
-    errorMessage = tr(STR_TRANSLATION_FAILED);
-    return false;
-  }
+  LOG_DBG("XLAT", "Gemini response: HTTP %d (%u bytes)", httpCode, static_cast<unsigned>(response.size()));
 
-  esp_err_t err = esp_http_client_perform(client);
-  const int httpCode = esp_http_client_get_status_code(client);
-  esp_http_client_cleanup(client);
-
-  LOG_DBG("XLAT", "Gemini response: HTTP %d (err: %d)", httpCode, err);
-
-  if (err != ESP_OK || httpCode != 200 || !responseBuf.data) {
-    LOG_ERR("XLAT", "API call failed: err=%d http=%d", err, httpCode);
+  if (httpCode != 200 || response.empty()) {
+    LOG_ERR("XLAT", "API call failed: http=%d", httpCode);
     errorMessage = tr(STR_TRANSLATION_FAILED);
     return false;
   }
 
   JsonDocument respDoc;
-  DeserializationError jsonErr = deserializeJson(respDoc, responseBuf.data);
+  DeserializationError jsonErr = deserializeJson(respDoc, response);
   if (jsonErr) {
     LOG_ERR("XLAT", "JSON parse error: %s", jsonErr.c_str());
     errorMessage = tr(STR_TRANSLATION_FAILED);
