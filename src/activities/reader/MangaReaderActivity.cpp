@@ -90,7 +90,12 @@ void MangaReaderActivity::onEnter() {
         std::find_if(books.begin(), books.end(), [this](const auto& b) { return b.path == book->getFolder(); });
     if (r != books.end()) bookAuthor = r->author;
   }
-  RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getPageImagePath(0));
+  // The [HEIGHT]-templated thumb path, like Epub and Xtc record -- NOT the raw first page.
+  // Storing the raw page here overwrote the thumb path on every open, so the home screen found
+  // no cover, showed its progress popup and "generated" a thumbnail that was already on the card
+  // (device report: Loading on every return from a manga). Drawing it also meant scaling a
+  // full-size page into the card instead of blitting the cached one.
+  RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getThumbBmpPath());
 
   readingSessionStartMs = millis();
 
