@@ -1,5 +1,6 @@
 #include "MangaPanel.h"
 
+#include <BmpToBmpConverter.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -125,7 +126,8 @@ bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, vo
   if (cover.empty()) return false;
   const bool isJpg = FsHelpers::hasJpgExtension(cover);
   const bool isPng = FsHelpers::hasPngExtension(cover);
-  if (!isJpg && !isPng) return false;  // .bmp page images: no converter, callers draw them raw
+  const bool isBmp = FsHelpers::hasBmpExtension(cover);
+  if (!isJpg && !isPng && !isBmp) return false;
 
   Storage.mkdir(getCachePath().c_str());
   HalFile src;
@@ -135,10 +137,16 @@ bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, vo
   // Cover the 2:3 cover box and let the converter trim the overflow -- same box as Epub's, so a
   // manga thumb draws through the same fast packed path instead of a crop at draw time.
   const int targetWidth = (height * 2) / 3;
-  const bool ok =
-      isJpg
-          ? JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx)
-          : PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx);
+  bool ok;
+  if (isJpg) {
+    ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx);
+  } else if (isPng) {
+    ok = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx);
+  } else {
+    // Pages that are already bitmaps still need a thumbnail: drawing the full-size page into the
+    // cell instead makes a dithered cover come out near-black -- see BmpToBmpConverter.
+    ok = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx);
+  }
   // Explicit close() before Storage.remove() on the same path (required despite
   // DESTRUCTOR_CLOSES_FILE); a partial thumb must not survive to masquerade as a cached one.
   src.close();

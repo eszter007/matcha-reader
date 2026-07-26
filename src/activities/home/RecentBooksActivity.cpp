@@ -280,9 +280,15 @@ bool RecentBooksActivity::stepLibraryScan() {
     // covers gone after switching to RoundedRaff). The manga pass already re-checks the
     // height; the lookup below does the same here, so only raw (non-templated) paths skip.
     const bool coverIsTemplate = book.coverBmpPath.find("[HEIGHT]") != std::string::npos;
+    // .bmp counts too: pages that are already bitmaps still need a thumbnail, because drawing a
+    // full-size dithered page into the cell comes out near-black (see BmpToBmpConverter). The
+    // book-type gate matters now that .bmp is included -- an EPUB may carry a raw cover.bmp from
+    // an older build and must not be treated as a manga folder.
+    const bool isMangaEntry = !FsHelpers::hasEpubExtension(book.path) && !FsHelpers::hasXtcExtension(book.path);
     const bool coverIsRawImage =
-        !book.coverBmpPath.empty() && !coverIsTemplate &&
-        (FsHelpers::hasJpgExtension(book.coverBmpPath) || FsHelpers::hasPngExtension(book.coverBmpPath));
+        isMangaEntry && !book.coverBmpPath.empty() && !coverIsTemplate &&
+        (FsHelpers::hasJpgExtension(book.coverBmpPath) || FsHelpers::hasPngExtension(book.coverBmpPath) ||
+         FsHelpers::hasBmpExtension(book.coverBmpPath));
     // A manga templated by an EARLIER scan has to come back through here, and used to be skipped
     // for good: this branch only accepted raw paths, and the EPUB check below drops every
     // non-.epub entry. So the heights that scan happened to generate were the only ones a manga

@@ -102,8 +102,14 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     // handling below. Treating it as the latter is what left one EPUB permanently without a
     // cover on device while its neighbours were fine.
     {
-      const bool coverMissing = book.coverBmpPath.empty() ||
-                                !Storage.exists(UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight).c_str());
+      // A RAW image path (no [HEIGHT] placeholder) is a source, not a cover. Every generator
+      // produces templated thumb paths, so anything else means none was made yet -- and because
+      // the raw file of course exists, an exists() check alone reported "cover present" and the
+      // card drew the full-size page scaled into the cell. For a dithered manga page that comes
+      // out near-black (device report).
+      const bool coverIsThumb = book.coverBmpPath.find("[HEIGHT]") != std::string::npos;
+      const bool coverMissing =
+          !coverIsThumb || !Storage.exists(UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight).c_str());
       if (coverMissing) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
@@ -189,9 +195,13 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           // font caches would otherwise be sitting on -- the difference between a cover and no
           // cover on an X3.
           if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-          if (!manga::MangaBook(book.path).generateThumbBmp(coverHeight)) {
-            // Keep the recents entry pointing at the template: the Library's pass retries on its
-            // own budget, and a raw page path here would put the live decode back.
+          const manga::MangaBook mangaBook(book.path);
+          if (mangaBook.generateThumbBmp(coverHeight)) {
+            // Point the entry at the thumb: leaving the raw page path would send every later
+            // render back through the full-size scale that this generation exists to avoid.
+            book.coverBmpPath = mangaBook.getThumbBmpPath();
+            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+          } else {
             LOG_ERR("HOME", "Failed to generate manga cover thumb for %s", book.path.c_str());
           }
           coverRendered = false;
