@@ -69,19 +69,26 @@ Reading aids rendered above (horizontal) or beside (vertical) kanji, with positi
 
 ### Localization
 
-All UI chrome this fork adds — menu items and toggles (Word Lookup, Translate Page, Vertical Text, Furigana, Bookmarks/Toggle Bookmark, manga's Panels indicator), popups, and the bookmarks list screens (both EPUB and manga) — goes through the same `tr()`/i18n system as the rest of CrossPoint, so it follows the device's language setting. The same is true for the base CrossPoint UI (Library tabs, Insights, clock sync, firmware update, OPDS servers, keyboard hints, and everything else) — every `STR_*` key in `lib/I18n/translations/english.yaml` currently has a matching translation in all 26 other supported languages, with no English-fallback gaps. Translations were initially machine-translated for the languages that hadn't caught up yet — corrections are welcome via PR, same as any other string in `lib/I18n/translations/` (see [translators.md](docs/translators.md)).
+Everything this fork adds to the interface — menu items, toggles, popups, the bookmark screens — goes through the same `tr()` i18n system as the rest of CrossPoint and follows the device's language setting.
 
-Two features are intentionally **English-only regardless of device language**, since they're producing English *content*, not displaying translatable UI text:
-- **Dictionary Word Lookup** — definitions, part-of-speech, and grammar notes come from the underlying JMdict-based dictionary data, which is English-language by design.
-- **Page Translation** — the Gemini-powered translation always targets English (Japanese → English), both for EPUB "Translate Page" and manga's pre-extracted panel translations.
+Every `STR_*` key in `lib/I18n/translations/english.yaml` has a translation in all 26 other supported languages, with no English-fallback gaps. Languages that had fallen behind were machine-translated to close them; corrections are welcome via PR (see [translators.md](docs/translators.md)).
+
+Two features stay **English-only whatever the device language**, because they produce English *content* rather than display translatable UI:
+
+- **Word Lookup** — definitions and grammar notes come from JMdict-based data, which is English by design.
+- **Page Translation** — Gemini always targets English, for both EPUB pages and pre-extracted manga panels.
 
 ### CJK Fallback Font
 
-Non-Japanese-language books that contain occasional CJK characters (e.g. a stray Chinese loanword or Japanese proper noun) render using a curated built-in fallback font covering CJK punctuation, hiragana, katakana, fullwidth forms, and the 2,136 Jōyō kanji (常用漢字, Japan's standard list of common-use kanji) plus the 863 Jinmeiyō kanji (人名用漢字, name kanji that also appear regularly in fiction — 杖, 苺, 廻 …) — rather than the full ~21,000-character CJK Unified Ideographs block, which doesn't fit in the available flash budget alongside everything else. The fallback font is regular-weight only (no bold); `EpdFontFamily` falls back to regular for bold requests, which is expected for an occasional-use fallback. Japanese books rendered through the vertical-text engine (see above) use the full font selection path, not this fallback.
+A non-Japanese book with the occasional CJK character — a stray loanword, a proper noun — renders it from a curated built-in fallback font: CJK punctuation, kana, fullwidth forms, the 2,136 Jōyō kanji (常用漢字) and the 863 Jinmeiyō kanji (人名用漢字, name kanji that turn up regularly in fiction: 杖, 苺, 廻 …). The full ~21,000-character CJK block doesn't fit the flash budget alongside everything else.
+
+Regular weight only — bold requests fall back to regular, which is fine for occasional use. Japanese books go through the vertical-text engine and the full font selection path instead, not this fallback.
 
 ### Manga Panel Reader
 
-Read manga with real panel detection, dictionary lookup, and pre-extracted translations. A conversion tool (`tools/manga_convert/`) detects actual panel rectangles with a YOLO model trained on Manga109, asks Gemini what text appears in each panel (plus an English translation), and packs everything into a compact binary format the device reads natively. Page images are used directly — JPG, PNG, and BMP are all rendered without any pre-conversion. A **1-bit (black-and-white) BMP** renders especially fast: pure line art needs no 4-level gray refresh, so it paints in a single black-and-white pass instead of the usual gray sequence. The converter's **`--mono`** flag writes both pages and panel crops as 1-bit Floyd–Steinberg-dithered BMP, so page turns and panel-zoom both paint fast — ideal for line-art manga (screentone gradients become dither patterns, so it's less suited to heavily-toned art).
+Read manga with real panel detection, dictionary lookup, and pre-extracted translations. Conversion ([browser](https://eszter007.github.io/matcha-reader-tools/) or `tools/manga_convert/`) finds actual panel rectangles with a YOLO model trained on Manga109, asks Gemini what text each panel holds and how it translates, and packs it into a compact binary format the device reads natively.
+
+Page images are used as-is: JPG, PNG and BMP all render without pre-conversion. **1-bit BMP is the fastest** — pure line art needs no 4-level gray refresh, so it paints in a single black-and-white pass. The converter's **`--mono`** flag writes pages and panel crops that way, which suits line art; heavily screentoned art turns its gradients into dither patterns and looks better left in gray.
 
 - **Full-page view** — Displays the manga page scaled to screen with panel highlight rectangles. When the reading orientation is landscape, a page whose aspect doesn't match the screen rotates to fill it edge-to-edge instead of shrinking into a small centered box (same behavior panel-zoom already had).
 - **Panel-by-panel zoom** — Navigate panels in reading order with page turn buttons. Each panel is scaled to fill the screen, rotating to landscape when that fills more of the screen than portrait would. Stepping quickly through panels paints each in fast black-and-white; when you pause on one, it sharpens to full 4-level grayscale a moment later — so rapid navigation stays snappy while a panel you settle on still renders at full quality. (Mono `--mono` panels are already black-and-white, so they skip this and always paint in one pass.)
@@ -117,7 +124,9 @@ Read manga with real panel detection, dictionary lookup, and pre-extracted trans
 
 ### Transparent Sleep Screen
 
-A new **Transparent** option under Settings → Display → Sleep Screen overlays a wallpaper on the page you were reading, so the book peeks through underneath. Put the overlay images in a `transparent` folder inside your sleep-images folder (`/.sleep/transparent` or `/sleep/transparent`); one is picked at random on each sleep, avoiding recent repeats. PNGs use their real alpha channel — transparent pixels show the book, opaque pixels (including white) cover it. BMPs have no alpha channel, so their white pixels are the see-through areas instead. When sleep starts outside the reader (or no overlay image exists), it falls back to the regular custom sleep screen.
+**Settings → Display → Sleep Screen → Transparent** overlays a wallpaper on the page you were reading, so the book shows through underneath. Put the overlays in a `transparent` folder inside your sleep-images folder (`/.sleep/transparent` or `/sleep/transparent`); one is picked at random each time, avoiding recent repeats.
+
+PNGs use their real alpha channel: transparent pixels reveal the book, opaque ones (white included) cover it. BMPs have no alpha, so their white pixels become the see-through areas instead. Falling asleep outside the reader, or with no overlay available, uses the regular custom sleep screen.
 
 ### Library
 
@@ -158,7 +167,9 @@ The reader uses whatever font is selected in Settings (built-in Noto Serif/Sans 
 
 ### Per-Book Reader Settings
 
-Reading-relevant settings (font family, font size, line spacing, screen margin, book side margins, paragraph alignment, embedded style, hyphenation, focus reading, image rendering, orientation) are remembered **per book**. The global settings page (opened from the home menu) holds the defaults: a book you haven't opened yet starts with them. Once a book has been opened, its settings are pinned to that book — change the font size while reading a Japanese novel and your Latin-script books keep their own preferences. Settings edited while reading affect only the open book; the global defaults are restored when you leave it. (Vertical text and furigana were already per-book.) Applies to EPUBs; TXT/XTC use the global settings.
+Reading-relevant settings — font family and size, line spacing, screen and book side margins, paragraph alignment, embedded style, hyphenation, focus reading, image rendering, orientation — are remembered **per book**.
+
+The global settings page holds the defaults, which a book you haven't opened yet starts from. After that the book keeps its own: bump the font size in a Japanese novel and your Latin-script books are unaffected. Changes made while reading apply to that book alone, and the global defaults return when you leave it. (Vertical text and furigana were already per-book.) EPUBs only — TXT and XTC use the global settings.
 
 ### Book Side Margins
 
@@ -168,13 +179,20 @@ Some EPUBs stack their own CSS side margins across nested wrappers, producing a 
 
 ## Setup
 
+> **No Python needed.** [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) does the
+> dictionary, font, and manga conversions in your browser and hands back a zip already laid out for the SD card.
+> Files stay on your device — the one exception is manga OCR, where panel images go to Gemini if you supply your
+> own API key. The `tools/` scripts below are the scriptable equivalent, for batch jobs and CI.
+> ([source](https://github.com/eszter007/matcha-reader-tools))
+
 ### Flash the Firmware
 
 Flash this fork's firmware to your Xteink X4 using the standard CrossPoint flashing process. See the [upstream documentation](https://github.com/crosspoint-reader/crosspoint-reader) for flashing instructions.
 
 ### Install Dictionaries
 
-The word lookup feature requires dictionary files on the SD card. Three dictionaries are supported:
+The word lookup feature requires dictionary files on the SD card. Three dictionaries are supported — the
+[browser tool](https://eszter007.github.io/matcha-reader-tools/) converts all three, or use the commands below.
 
 #### 1. Vocabulary Dictionary (required)
 
@@ -228,7 +246,9 @@ Cards set up before the rename keep working unchanged: the firmware falls back t
 
 ### Install Japanese Fonts (optional)
 
-For the best vertical text experience, install Japanese `.cpfont` font files on the SD card. Place them in `/.fonts/` organized by family:
+For the best vertical text experience, install Japanese `.cpfont` font files on the SD card. Any TTF/OTF can be
+converted with the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Place them in `/.fonts/`
+organized by family:
 
 ```
 /.fonts/
@@ -324,7 +344,9 @@ This fork works with the [Crosspoint Emulator](https://github.com/eszter007/Cros
 
 ## Dictionary Converter
 
-The `tools/dict_convert/convert_jmdict.py` script converts dictionary sources to the binary format the device reads. Supported input formats:
+Same job as the [browser tool](https://eszter007.github.io/matcha-reader-tools/), as a script you can put in a
+pipeline. `tools/dict_convert/convert_jmdict.py` converts dictionary sources to the binary format the device
+reads. Supported input formats:
 
 | Format | Extension | Source |
 |--------|-----------|--------|
@@ -344,7 +366,8 @@ Output: binary `.idx` (sorted 40-byte records) + `.dat` (UTF-8 definitions) file
 
 ## Manga Conversion Tools
 
-The `tools/manga_convert/convert_manga.py` script prepares manga for the device. It detects real panel rectangles with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), then asks Gemini what text appears in each panel — and for an English translation of it — storing both directly in the panel data so "Translate Page" works instantly offline.
+Also available in the [browser](https://eszter007.github.io/matcha-reader-tools/), which needs no local Python or
+model download. The `tools/manga_convert/convert_manga.py` script prepares manga for the device. It detects real panel rectangles with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), then asks Gemini what text appears in each panel — and for an English translation of it — storing both directly in the panel data so "Translate Page" works instantly offline.
 
 ### Requirements
 
