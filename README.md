@@ -107,8 +107,6 @@ Page images are used as-is: JPG, PNG and BMP all render without pre-conversion. 
 </p>
 <p align="center"><em>Full-page view with panel highlights (left), panel-zoom on a single panel (right)</em></p>
 
-<p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library showing manga and Epub covers side by side"></p>
-
 ### Image Handling
 
 - Dedicated full-page images with aspect-aware rotation
@@ -136,6 +134,8 @@ The home menu's **Library** has two tabs:
 - **Shelves** — Folders on the SD card that contain books, shown as a list with a cover thumbnail, folder name, book count, and a chevron. Tap a shelf to see all books in that folder as a cover grid with progress.
 
 Tab switching uses the same pattern as Settings: Confirm cycles tabs when the tab row is focused, hold Up/Down to switch tabs from anywhere.
+
+<p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library showing manga and Epub covers side by side"></p>
 
 ### File Browser
 
