@@ -359,7 +359,7 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
       // page buffer (each style, plus one more per style if the font has a fallback), same trap
       // found and fixed for vertical-page rendering earlier this session.
       fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
     }
   }
 

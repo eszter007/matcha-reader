@@ -125,6 +125,14 @@ class GfxRenderer {
     sdCardFonts_.erase(fontId);
     sdCardFontScales_.erase(fontId);
   }
+
+  // Prewarm a string through the SAME resolution drawText uses. Prewarming the requested id
+  // warms a font the string will never be drawn with: a CJK title asked for at UI_12 draws
+  // from the SD font registered for that size, so warming UI_12 leaves every kanji cold and
+  // the render then pulls them one at a time through the on-demand miss handler (~16ms per
+  // glyph on device, and the 8-slot overflow ring evicts them again within the same title).
+  void prewarmText(int fontId, const char* text, uint8_t styleMask) const;
+
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   bool isFontCacheScanning() const;

@@ -267,8 +267,7 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
 
 bool BaseTheme::prewarmRows(const GfxRenderer& renderer, const int fontId, const uint8_t styleMask, const int first,
                             const int end, const std::function<std::string(int index)>& label) const {
-  auto* fcm = renderer.getFontCacheManager();
-  if (!fcm) return false;
+  if (!renderer.getFontCacheManager()) return false;
   std::string buf;
   buf.reserve(512);
   for (int i = first; i < end; i++) {
@@ -280,7 +279,11 @@ bool BaseTheme::prewarmRows(const GfxRenderer& renderer, const int fontId, const
   const bool hasNonAscii =
       std::any_of(buf.begin(), buf.end(), [](const char c) { return static_cast<unsigned char>(c) >= 0x80; });
   if (!hasNonAscii) return false;
-  fcm->prewarmCache(fontId, buf.c_str(), styleMask);
+  // Through the renderer, so the prewarm lands on the font the rows will actually be DRAWN
+  // with: a CJK row string is routed to the SD font registered for this size, and warming the
+  // requested id instead leaves every kanji to the per-glyph on-demand loader at render time.
+  // This helper backs the row prewarm of every theme, so the resolution has to happen here.
+  renderer.prewarmText(fontId, buf.c_str(), styleMask);
   return true;
 }
 

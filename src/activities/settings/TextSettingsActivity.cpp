@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "FontDownloadActivity.h"
 #include "MappedInputManager.h"
 #include "ReaderFontSizes.h"
 #include "SdCardFontSystem.h"
@@ -56,16 +57,7 @@ void TextSettingsActivity::onEnter() {
   usableHeight = renderer.getScreenHeight() - afterHeader - bottomReserved;
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
 
-  fonts_.clear();
-  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0));
-  fonts_.push_back({I18N.get(StrId::STR_NOTO_SERIF), true, static_cast<uint8_t>(CrossPointSettings::NOTOSERIF)});
-  fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::NOTOSANS)});
-  if (registry_) {
-    const auto& families = registry_->getFamilies();
-    for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
-    }
-  }
+  rebuildFamilyList();
 
   rebuildSizeList();
 
@@ -75,6 +67,20 @@ void TextSettingsActivity::onEnter() {
   selectedIndex_[static_cast<int>(Tab::Size)] = currentSizeIndex_ + 1;
 
   requestUpdate();
+}
+
+void TextSettingsActivity::rebuildFamilyList() {
+  fonts_.clear();
+  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0) + 1);
+  fonts_.push_back({I18N.get(StrId::STR_NOTO_SERIF), true, static_cast<uint8_t>(CrossPointSettings::NOTOSERIF)});
+  fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::NOTOSANS)});
+  if (registry_) {
+    const auto& families = registry_->getFamilies();
+    for (int i = 0; i < static_cast<int>(families.size()); i++) {
+      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
+    }
+  }
+  fonts_.push_back({I18N.get(StrId::STR_MANAGE_FONTS), false, MANAGE_FONTS_ROW});
 }
 
 void TextSettingsActivity::onExit() { Activity::onExit(); }
@@ -336,7 +342,16 @@ void TextSettingsActivity::applyFamily(int listIndex) {
 void TextSettingsActivity::activateRow(int row) {
   switch (tab_) {
     case Tab::Family:
-      if (row != currentFamilyIndex_) {
+      if (isManageFontsRow(row)) {
+        startActivityForResult(
+            std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
+              // Fonts may have been installed or deleted while we were away.
+              rebuildFamilyList();
+              currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+              rebuildSizeList();
+              requestUpdate();
+            });
+      } else if (row != currentFamilyIndex_) {
         applyFamily(row);
         requestUpdate();
       }

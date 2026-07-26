@@ -568,10 +568,10 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
         while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
         const char saved = resultDefinition[cut];
         resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
-        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
         resultDefinition[cut] = saved;
       } else {
-        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
       }
     }
   }

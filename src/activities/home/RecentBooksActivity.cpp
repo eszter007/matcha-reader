@@ -1195,7 +1195,7 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
       prewarmBuf += recentBooks[idx].title;
       prewarmBuf += ' ';
     }
-    fcm->prewarmCache(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
+    renderer.prewarmText(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
 
   for (int idx = firstIdx; idx <= lastIdx; idx++) {
@@ -1330,7 +1330,7 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
       prewarmBuf += shelves[i].folderName;
       prewarmBuf += ' ';
     }
-    fcm->prewarmCache(UI_10_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::BOLD);
+    renderer.prewarmText(UI_10_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::BOLD);
   }
 
   for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
@@ -1388,7 +1388,7 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
       prewarmBuf += shelfBooks[idx].title;
       prewarmBuf += ' ';
     }
-    fcm->prewarmCache(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
+    renderer.prewarmText(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
 
   for (int idx = firstIdx; idx <= lastIdx; idx++) {
@@ -1493,8 +1493,8 @@ bool RecentBooksActivity::tryPartialSelectionRedraw() {
   const int scrollOffset = scrollOffsetFor(newIdx - 1);
 
   if (fcm) {
-    fcm->prewarmCache(UI_10_FONT_ID, (shelves[oldIdx - 1].folderName + ' ' + shelves[newIdx - 1].folderName).c_str(),
-                      1 << EpdFontFamily::BOLD);
+    renderer.prewarmText(UI_10_FONT_ID, (shelves[oldIdx - 1].folderName + ' ' + shelves[newIdx - 1].folderName).c_str(),
+                         1 << EpdFontFamily::BOLD);
   }
   for (const int idx : {oldIdx - 1, newIdx - 1}) {
     const int itemY = contentTop + (idx - scrollOffset) * rowHeight;

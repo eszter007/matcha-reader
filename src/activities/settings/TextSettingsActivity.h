@@ -72,6 +72,15 @@ class TextSettingsActivity final : public Activity {
     bool isBuiltin;
     uint8_t settingIndex;
   };
+  // Sentinel settingIndex for the "Manage Fonts" row appended to the family list. It opens
+  // FontDownloadActivity instead of selecting a font -- the shortcut the pre-1.5.0 font
+  // picker had at the bottom of its list, so "the font I want isn't here" is one press away.
+  static constexpr uint8_t MANAGE_FONTS_ROW = 0xFF;
+  bool isManageFontsRow(int row) const {
+    return row >= 0 && row < static_cast<int>(fonts_.size()) && fonts_[row].settingIndex == MANAGE_FONTS_ROW;
+  }
+  // Rebuilds fonts_ (families installed on the card can change while this screen is open).
+  void rebuildFamilyList();
 
   struct SizeEntry {
     std::string name;  // the point size, rendered for display ("14 pt")

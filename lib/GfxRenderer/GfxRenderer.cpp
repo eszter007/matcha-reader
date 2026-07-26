@@ -193,6 +193,20 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   }
 }
 
+void GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t styleMask) const {
+  if (!fontCacheManager_ || text == nullptr || *text == '\0') return;
+  // styleMask is 1 << Style; resolution needs the Style itself. Lowest set bit wins when a
+  // caller asks for several at once -- they share a font family, so any of them resolves alike.
+  auto style = EpdFontFamily::REGULAR;
+  for (uint8_t bit = 0; bit < 4; bit++) {
+    if (styleMask & (1u << bit)) {
+      style = static_cast<EpdFontFamily::Style>(bit);
+      break;
+    }
+  }
+  fontCacheManager_->prewarmCache(resolveTextFontId(fontId, text, style), text, styleMask);
+}
+
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (fallbackFontMap_.empty() || text == nullptr || *text == '\0') {
     return fontId;
