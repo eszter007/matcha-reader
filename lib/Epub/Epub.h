@@ -57,6 +57,10 @@ class Epub {
   bool generateCoverBmp(bool cropped = false) const;
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
+  // Whether the book declares a cover image at all. Lets callers tell a permanent "there is
+  // nothing to render" apart from a generateThumbBmp() that merely failed this time -- the two
+  // deserve opposite handling, and conflating them costs a cover forever.
+  bool hasCoverImage() const;
   // shouldCancel is polled during the cover decode; on cancel nothing is written and the call
   // returns false, so a long thumbnail generation can give way to a button press.
   bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
