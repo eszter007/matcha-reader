@@ -1,7 +1,7 @@
 #pragma once
 
-#include <GfxRenderer.h>
 #include <Epub/VerticalParsedText.h>
+#include <GfxRenderer.h>
 
 struct Rect;
 class Page;
@@ -24,9 +24,9 @@ class EpubReaderWordLookupActivity final : public Activity {
                                         const VerticalPage& page, std::string scanCachePath = "",
                                         uint16_t spineIndex = 0, uint16_t pageIndex = 0);
   // Horizontal (yokogaki) reading mode.
-  explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                        const Page& page, std::string scanCachePath = "",
-                                        uint16_t spineIndex = 0, uint16_t pageIndex = 0);
+  explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Page& page,
+                                        std::string scanCachePath = "", uint16_t spineIndex = 0,
+                                        uint16_t pageIndex = 0);
 
   void onEnter() override;
   void onExit() override;
@@ -58,10 +58,23 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::string scanCachePath;
   uint16_t scanSpine = 0;
   uint16_t scanPage = 0;
+  // Book cache dir (derived from scanCachePath) for the furigana glossary; empty = disabled.
+  std::string bookCachePath;
+
+  // Prepend "In this book: <reading>" to resultDefinition when the book's furigana
+  // glossary has an entry for the selected surface text (see RubyGlossary). Books
+  // typically annotate a name's reading only on first appearance -- this surfaces it
+  // on every later occurrence too. No entry -> no line.
+  void prependBookReading(const std::string& surface);
 
   void reclaimFontHeap();
   void initScanFromCacheOrBurst(const char* label);
   void runInitialBurst(const char* label);
+  // Wraps scan.step(): if the scan aborted a walk under low heap (fewer entries than the page
+  // really has), release the font caches once and restart the walk over the intact glyph list,
+  // so a fragmented first open self-heals instead of the user having to reopen via the menu.
+  bool stepScan(uint32_t budgetMs);
+  bool scanHealAttempted = false;
   void moveCursor(int delta);
   void performLookup();
   void performLookupImpl();

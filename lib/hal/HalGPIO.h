@@ -67,6 +67,11 @@ class HalGPIO {
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;
+  // Live pin read, independent of update()/debounce state. Long background steps (cover
+  // thumbnail generation) run without ticking update(), so the cached button state is stale
+  // there; this lets them notice a press and bail out. Does not consume edges -- the normal
+  // update()/wasPressed() path still sees the press afterwards.
+  bool anyButtonDownRaw();
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;

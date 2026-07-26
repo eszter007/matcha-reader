@@ -8,11 +8,28 @@
 // Dat file contains the variable-length definition text that offset/length point into.
 struct DictIndexRecord {
   static constexpr size_t HEADWORD_SIZE = 32;
+
+  // Part-of-speech flags (posFlags field). Written by tools/dict_convert/convert_jmdict.py from
+  // JMdict partOfSpeech tags / Yomitan rules; used to validate deinflection candidates (a candidate
+  // produced by a godan rule must resolve to an entry that IS a godan verb -- prevents だとい
+  // matching 妥当 via the い→う masu-stem rule). 0 means "no POS data" (pre-flags dict files have a
+  // zero pad byte here) and accepts every candidate, so old dictionaries keep today's behaviour.
+  static constexpr uint8_t POS_V1 = 0x01;     // ichidan verb
+  static constexpr uint8_t POS_V5 = 0x02;     // godan verb
+  static constexpr uint8_t POS_VS = 0x04;     // suru verb
+  static constexpr uint8_t POS_VK = 0x08;     // kuru verb
+  static constexpr uint8_t POS_ADJ_I = 0x10;  // i-adjective
+  static constexpr uint8_t POS_OTHER = 0x20;  // tagged, but none of the above (noun, particle, ...)
+  // Kana READING record of an entry whose headwords are kanji (品柄→しながら). Set by the
+  // converter; kana-only lemmas stay unflagged. Hiragana segmentation suppresses uncommon
+  // flagged matches -- text that equals a rare kanji word's reading is morphology, not the word.
+  static constexpr uint8_t POS_READING = 0x40;
+
   char headword[HEADWORD_SIZE];
   uint32_t offset;
   uint16_t length;
   uint8_t priority;
-  uint8_t pad;
+  uint8_t posFlags;
 } __attribute__((packed));
 
 static_assert(sizeof(DictIndexRecord) == 40, "DictIndexRecord must be 40 bytes");
@@ -21,27 +38,46 @@ struct DictEntry {
   std::string headword;
   std::string definition;
   uint8_t priority;
+  uint8_t sourceDict = 0;  // DictIndex::DICT_* constant of the dictionary that answered (0 = unset)
+  uint8_t posFlags = 0;    // DictIndexRecord::POS_* flags of the best matched record (0 = none/unset)
 };
 
-// Opens jmdict.idx / jmdict.dat from the SD card and provides O(log n)
-// lookup by headword via binary search over the sorted index file.
+// Opens vocab.idx / vocab.dat (legacy: jmdict.idx / jmdict.dat) from the SD card and provides
+// O(log n) lookup by headword via binary search over the sorted index file.
 // No full-file load — each search step reads one 40-byte record.
 class DictIndex {
  public:
   // Check whether the dictionary files exist on the SD card.
   static bool isAvailable();
 
-  static constexpr const char* IDX_PATH = "/dict/jmdict.idx";
-  static constexpr const char* DAT_PATH = "/dict/jmdict.dat";
-  static constexpr const char* NAMES_IDX_PATH = "/dict/jmnedict.idx";
-  static constexpr const char* NAMES_DAT_PATH = "/dict/jmnedict.dat";
+  // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
+  // filenames (jmdict/jmnedict) -- resolved at runtime by the accessors below, so existing SD
+  // cards keep working without any re-conversion or renaming.
+  static constexpr const char* VOCAB_IDX_PATH = "/dict/vocab.idx";
+  static constexpr const char* VOCAB_DAT_PATH = "/dict/vocab.dat";
+  static constexpr const char* NAMES_IDX_PATH = "/dict/names.idx";
+  static constexpr const char* NAMES_DAT_PATH = "/dict/names.dat";
+  static constexpr const char* LEGACY_VOCAB_IDX_PATH = "/dict/jmdict.idx";
+  static constexpr const char* LEGACY_VOCAB_DAT_PATH = "/dict/jmdict.dat";
+  static constexpr const char* LEGACY_NAMES_IDX_PATH = "/dict/jmnedict.idx";
+  static constexpr const char* LEGACY_NAMES_DAT_PATH = "/dict/jmnedict.dat";
   static constexpr const char* GRAMMAR_IDX_PATH = "/dict/grammar.idx";
   static constexpr const char* GRAMMAR_DAT_PATH = "/dict/grammar.dat";
 
+  // Resolved paths for the vocab/names dictionaries: the preferred filename if it exists on the
+  // SD card, else the legacy one. Probed lazily on first use and cached; releaseCaches() clears
+  // the cache so files uploaded mid-session (web file transfer) are picked up by the next lookup
+  // session. Always returns a stable pointer to one of the constants above.
+  static const char* vocabIdxPath();
+  static const char* vocabDatPath();
+  static const char* namesIdxPath();
+  static const char* namesDatPath();
+
   // Which dictionaries lookupExact() should consult. Each dict search is ~2 SD reads, so scoping
   // out dictionaries a candidate can't possibly be in is the main lever for Word Lookup speed:
-  //  - deinflected (conjugated) candidates only live in jmdict (names/grammar aren't inflected);
-  //  - jmnedict holds proper names, which are kanji/katakana -- never pure hiragana;
+  //  - deinflected (conjugated) candidates only live in the vocab dict (names/grammar aren't
+  //    inflected);
+  //  - the names dict holds proper names, which are kanji/katakana -- never pure hiragana;
   //  - grammar holds multi-char patterns -- never a single character.
   static constexpr uint8_t DICT_JMDICT = 1;
   static constexpr uint8_t DICT_GRAMMAR = 2;
@@ -54,14 +90,17 @@ class DictIndex {
   // is left empty) and the adjacent-record collect walk -- existence, headword and matchLength are
   // still exact. The Word Lookup page scan uses this: it discards definitions for most positions,
   // and each avoided definition is 1-5 SD reads.
-  static bool lookupExact(const char* headword, DictEntry& out, uint8_t dictMask = DICT_ALL,
-                          bool needDefinition = true);
+  // posMask (DictIndexRecord::POS_* bits): when nonzero, only records whose posFlags intersect the
+  // mask (or records with posFlags==0, i.e. no POS data) count as hits. Used to validate
+  // deinflection candidates against the entry's actual word class.
+  static bool lookupExact(const char* headword, DictEntry& out, uint8_t dictMask = DICT_ALL, bool needDefinition = true,
+                          uint8_t posMask = 0);
 
   // Look up in a specific index/dat file pair. Collects ALL entries with
   // the same headword (scanning adjacent records) and merges definitions
-  // (unless needDefinition=false; see lookupExact).
+  // (unless needDefinition=false; see lookupExact). posMask: see lookupExact.
   static bool lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
-                           bool needDefinition = true);
+                           bool needDefinition = true, uint8_t posMask = 0);
 
   // Free all lookup caches (sparse-index tiers, record block caches) and close the dictionary
   // files, returning ~30KB to the heap pool. MUST be called when a Word Lookup activity exits:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/ usr / bin / env python3
 """Convert dictionary files to binary index files for CrossPoint Reader.
 
 Supported input formats:
@@ -6,18 +6,18 @@ Supported input formats:
   - Yomitan/Yomichan (.zip containing term_bank_N.json)
   - MDict (.mdx) — requires: pip install readmdict
 
-Emits:
-  jmdict.idx  -- sorted array of 40-byte records (headword + offset + length + priority)
-  jmdict.dat  -- variable-length definition text blob
+Emits (basename set by --name, default "vocab"):
+  vocab.idx  -- sorted array of 40-byte records (headword + offset + length + priority)
+  vocab.dat  -- variable-length definition text blob
 
 Usage:
-    # JMdict (default — downloads if no --input given)
+#JMdict(default — downloads if no-- input given)
     python3 convert_jmdict.py [--input jmdict-eng-3.5.0.json] [--output-dir ./output]
 
-    # Yomitan dictionary zip
+#Yomitan dictionary zip
     python3 convert_jmdict.py --input jmdict-yomitan.zip --output-dir ./output
 
-    # MDict .mdx file
+#MDict.mdx file
     python3 convert_jmdict.py --input dictionary.mdx --output-dir ./output
 """
 
@@ -35,7 +35,6 @@ RECORD_FORMAT = f"<{HEADWORD_SIZE}sIHBB"  # headword(32) + offset(4) + length(2)
 RECORD_SIZE = struct.calcsize(RECORD_FORMAT)
 
 assert RECORD_SIZE == 40, f"Record size mismatch: {RECORD_SIZE}"
-
 
 # ── Shared helpers ──────────────────────────────────────────────
 
@@ -55,16 +54,16 @@ def strip_html(html: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def write_binary(records: list, output_dir: str):
-    """Write (headword_bytes, definition_bytes, priority) triples to idx+dat files.
+def write_binary(records: list, output_dir: str, name: str = "vocab"):
+    """Write (headword_bytes, definition_bytes, priority, pos_flags) tuples to idx+dat files.
 
     Expects records to be pre-validated (headword_bytes < HEADWORD_SIZE).
     """
     records.sort(key=lambda r: r[0])
 
     os.makedirs(output_dir, exist_ok=True)
-    dat_path = os.path.join(output_dir, "jmdict.dat")
-    idx_path = os.path.join(output_dir, "jmdict.idx")
+    dat_path = os.path.join(output_dir, f"{name}.dat")
+    idx_path = os.path.join(output_dir, f"{name}.idx")
 
     dat_offset = 0
     index_entries = []
@@ -74,7 +73,7 @@ def write_binary(records: list, output_dir: str):
         prev_offset = 0
         prev_length = 0
 
-        for hw_bytes, def_bytes, priority in records:
+        for hw_bytes, def_bytes, priority, pos_flags in records:
             if def_bytes == prev_def:
                 offset = prev_offset
                 length = prev_length
@@ -91,11 +90,11 @@ def write_binary(records: list, output_dir: str):
                 prev_length = length
 
             padded_hw = hw_bytes + b"\x00" * (HEADWORD_SIZE - len(hw_bytes))
-            index_entries.append((padded_hw, offset, length, priority))
+            index_entries.append((padded_hw, offset, length, priority, pos_flags))
 
     with open(idx_path, "wb") as idx_f:
-        for padded_hw, offset, length, priority in index_entries:
-            idx_f.write(struct.pack(RECORD_FORMAT, padded_hw, offset, length, priority, 0))
+        for padded_hw, offset, length, priority, pos_flags in index_entries:
+            idx_f.write(struct.pack(RECORD_FORMAT, padded_hw, offset, length, priority, pos_flags))
 
     dat_size = os.path.getsize(dat_path)
     idx_size = os.path.getsize(idx_path)
@@ -104,8 +103,7 @@ def write_binary(records: list, output_dir: str):
     print(f"  {dat_path}: {dat_size:,} bytes")
     print(f"  Total: {(idx_size + dat_size) / 1024 / 1024:.1f} MB")
 
-
-# ── JMdict (jmdict-simplified JSON) ─────────────────────────────
+# ── JMdict(jmdict - simplified JSON) ─────────────────────────────
 
 
 def download_jmdict(output_path: str) -> str:
@@ -147,6 +145,55 @@ def compute_priority_jmdict(entry: dict) -> int:
                 break
     return 200 if is_common else 100
 
+#Part - of - speech flag bits-- must mirror DictIndexRecord::POS_* in lib / Dict / DictIndex.h.
+# 0 means "no POS data" and the firmware then accepts every deinflection candidate, so leaving
+#flags unset is always safe(fail open).
+POS_V1 = 0x01     # ichidan verb
+POS_V5 = 0x02     # godan verb
+POS_VS = 0x04     # suru verb
+POS_VK = 0x08     # kuru verb
+POS_ADJ_I = 0x10  # i-adjective
+POS_OTHER = 0x20  # tagged, but none of the above (noun, particle, na-adjective, ...)
+POS_READING = 0x40  # kana READING record of an entry that has kanji headwords (not a kana lemma)
+POS_ANY_VERB = POS_V1 | POS_V5 | POS_VS | POS_VK
+
+
+def pos_flags_from_tags(tags) -> int:
+    """Map JMdict partOfSpeech tags / Yomitan rules to POS flag bits.
+
+    Prefix-matches the verb classes so subtags stay covered (v5k-s, v5aru, v1-s, vs-i, adj-ix).
+    A verb-ish tag with an unrecognized class fails OPEN (all verb bits) rather than closed --
+    a wrongly-rejected real conjugation is worse than letting a rare archaic verb through.
+    Transitivity tags (vt/vi) say nothing about conjugation class and are ignored.
+    """
+    flags = 0
+    for t in tags:
+        if not t:
+            continue
+        if t in ("vt", "vi", "aux", "aux-adj", "exp"):
+            continue  # not a conjugation class
+        if t.startswith("v1"):
+            flags |= POS_V1
+        elif t.startswith("v5") or t.startswith("v4") or t.startswith("iv"):
+            flags |= POS_V5  # v4* (archaic yodan) conjugates closest to godan for our rule set
+        elif t.startswith("vs"):
+            flags |= POS_VS
+        elif t.startswith("vk"):
+            flags |= POS_VK
+        elif t.startswith("adj-i"):
+            flags |= POS_ADJ_I
+        elif t.startswith("v") or t == "aux-v":
+            flags |= POS_ANY_VERB  # unknown verb subtype: fail open across verb classes
+        else:
+            flags |= POS_OTHER
+    return flags
+
+
+def pos_flags_jmdict(entry: dict) -> int:
+    tags = []
+    for sense in entry.get("sense", []):
+        tags.extend(sense.get("partOfSpeech", []))
+    return pos_flags_from_tags(tags)
 
 def format_definition_jmdict(entry: dict) -> str:
     """Format an entry's readings and glosses into a compact display string."""
@@ -166,7 +213,7 @@ def format_definition_jmdict(entry: dict) -> str:
     return "\n".join(parts)
 
 
-def convert_jmdict(json_path: str, output_dir: str):
+def convert_jmdict(json_path: str, output_dir: str, name: str = "vocab"):
     """Convert JMdict JSON to binary index + data files."""
     print(f"Loading {json_path}...")
     with open(json_path, "r", encoding="utf-8") as f:
@@ -180,6 +227,7 @@ def convert_jmdict(json_path: str, output_dir: str):
         definition = format_definition_jmdict(entry)
         def_bytes = definition.encode("utf-8")
         priority = compute_priority_jmdict(entry)
+        pos_flags = pos_flags_jmdict(entry)
 
         seen_headwords = set()
         for kanji in entry.get("kanji", []):
@@ -188,21 +236,25 @@ def convert_jmdict(json_path: str, output_dir: str):
             if len(hw_bytes) >= HEADWORD_SIZE or hw_bytes in seen_headwords:
                 continue
             seen_headwords.add(hw_bytes)
-            records.append((hw_bytes, def_bytes, priority))
+            records.append((hw_bytes, def_bytes, priority, pos_flags))
 
+#Kana records of an entry that also has kanji headwords are READING records : text that
+#matches them is usually conjugation morphology, not the word(しながら vs 品柄).The
+#firmware suppresses uncommon flagged records in hiragana segmentation.Entries with no
+#kanji form at all are kana LEMMAS-- their kana record is the word itself, unflagged.
+        kana_flags = pos_flags | (POS_READING if entry.get("kanji") else 0)
         for kana in entry.get("kana", []):
             hw = kana["text"]
             hw_bytes = hw.encode("utf-8")
             if len(hw_bytes) >= HEADWORD_SIZE or hw_bytes in seen_headwords:
                 continue
             seen_headwords.add(hw_bytes)
-            records.append((hw_bytes, def_bytes, priority))
+            records.append((hw_bytes, def_bytes, priority, kana_flags))
 
     print(f"Generated {len(records)} index records")
-    write_binary(records, output_dir)
+    write_binary(records, output_dir, name)
 
-
-# ── Yomitan / Yomichan (.zip) ───────────────────────────────────
+# ── Yomitan / Yomichan(.zip) ───────────────────────────────────
 
 
 def flatten_structured_content(content) -> str:
@@ -223,7 +275,8 @@ def flatten_structured_content(content) -> str:
 
         inner = content.get("content", "")
         tag = content.get("tag", "")
-        data = content.get("data", {}) if isinstance(content.get("data"), dict) else {}
+        data = content.get("data", {}) if isinstance(content.get("data"), dict) else {
+}
         dc = data.get("content", "")
         cls = data.get("class", "")
         text = flatten_structured_content(inner)
@@ -235,26 +288,26 @@ def flatten_structured_content(content) -> str:
         if tag == "ruby":
             return text
 
-        # All tag-class spans → [noun] [math] [colloquial] etc. inline
+#All tag - class spans → [noun][math][colloquial] etc.inline
         if cls == "tag" and dc in ("part-of-speech-info", "field-info", "misc-info",
                                    "dialect-info", "language-info"):
             return "[" + text + "] "
         if cls == "tag" and dc == "forms-label":
             return ""
 
-        # Glossary list items — newline before to separate from POS tags
+#Glossary list items — newline before to separate from POS tags
         if dc == "glossary" and tag == "ul":
             return "\n" + text
         if tag == "li" and not dc:
             return "• " + text.strip() + "\n"
 
-        # Sense groups
+#Sense groups
         if dc == "sense-group" and tag in ("li", "div"):
             return text + "\n"
         if dc == "sense" and tag == "li":
             return text
 
-        # Notes — indented with arrow
+#Notes — indented with arrow
         if dc == "sense-note-label":
             return text + ": "
         if dc == "sense-note-content":
@@ -262,7 +315,7 @@ def flatten_structured_content(content) -> str:
         if dc == "sense-note" and cls == "extra-box":
             return "  → " + text
 
-        # Example sentences — each part on its own line, indented
+#Example sentences — each part on its own line, indented
         if dc == "example-sentence-a":
             return text + "\n"
         if dc == "example-sentence-b":
@@ -272,21 +325,21 @@ def flatten_structured_content(content) -> str:
         if dc == "example-keyword":
             return text
 
-        # Cross-references
+#Cross - references
         if dc == "xref" and cls == "extra-box":
             return ""
         if dc == "reference-label":
             return text + " "
 
-        # Other forms — skip to save space
+#Other forms — skip to save space
         if dc == "forms":
             return ""
 
-        # Attribution
+#Attribution
         if dc == "attribution-footnote":
             return ""
 
-        # Generic block elements
+#Generic block elements
         if tag in ("div", "p", "blockquote", "section"):
             if dc == "extra-info":
                 return text
@@ -301,14 +354,14 @@ def flatten_structured_content(content) -> str:
 def format_definition_yomitan(headword: str, reading: str, definitions) -> str:
     """Format a Yomitan entry's reading + definitions into display string."""
     parts = []
-    # Only show reading if it differs from headword (skip for kana-only entries)
+#Only show reading if it differs from headword(skip for kana - only entries)
     if reading and reading != headword:
         parts.append(f"【{reading}】")
 
     def flatten_list_defn(d) -> str:
-        # Yomitan list-form definitions (variant/redirect entries) like
-        # ["引っ張り上げる", ["redirected from 引っぱり上げる"]]. Join the string
-        # parts; drop "redirected from ..." cross-reference noise.
+#Yomitan list - form definitions(variant / redirect entries) like
+#["引っ張り上げる", ["redirected from 引っぱり上げる"]].Join the string
+#parts; drop "redirected from ..." cross - reference noise.
         if isinstance(d, str):
             if d.startswith("redirected from"):
                 return ""
@@ -334,7 +387,7 @@ def format_definition_yomitan(headword: str, reading: str, definitions) -> str:
             text = text.strip()
             if text:
                 non_empty.append(text)
-        # Drop pure-duplicate entries (redirect variant repeating the first gloss)
+#Drop pure - duplicate entries(redirect variant repeating the first gloss)
         deduped = []
         for t in non_empty:
             if t not in deduped:
@@ -362,7 +415,7 @@ def find_redirect_target(definitions) -> str:
         if isinstance(node, dict):
             data = node.get("data")
             if isinstance(data, dict) and data.get("content") == "redirect-glossary":
-                # The target headword is the link text (strip the ⟶ arrow).
+#The target headword is the link text(strip the ⟶ arrow).
                 txt = flatten_structured_content(node).replace("⟶", "").strip()
                 return txt
             return search(node.get("content"))
@@ -375,7 +428,7 @@ def find_redirect_target(definitions) -> str:
     return search(definitions)
 
 
-def convert_yomitan(zip_path: str, output_dir: str):
+def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
     """Convert a Yomitan/Yomichan .zip dictionary to binary index + data files."""
     import zipfile
 
@@ -397,8 +450,8 @@ def convert_yomitan(zip_path: str, output_dir: str):
 
         print(f"  Found {len(term_banks)} term bank files")
 
-        # Pass 1: load all entries; build a headword → best definition map for
-        # non-redirect entries so variant/redirect entries can be resolved.
+#Pass 1 : load all entries; build a headword → best definition map for
+#non - redirect entries so variant / redirect entries can be resolved.
         all_entries = []
         canonical_defs = {}  # headword → (definition_string, priority)
         for bank_name in term_banks:
@@ -411,10 +464,11 @@ def convert_yomitan(zip_path: str, output_dir: str):
                 if not headword or not isinstance(headword, str):
                     continue
                 reading = entry[1] if len(entry) > 1 else ""
+                rules = entry[3] if len(entry) > 3 and isinstance(entry[3], str) else ""
                 score = entry[4] if len(entry) > 4 else 0
                 definitions = entry[5] if len(entry) > 5 else []
                 redirect = find_redirect_target(definitions)
-                all_entries.append((headword, reading, score, definitions, redirect))
+                all_entries.append((headword, reading, score, definitions, redirect, rules))
                 if not redirect:
                     definition = format_definition_yomitan(headword, reading, definitions)
                     if definition:
@@ -423,15 +477,15 @@ def convert_yomitan(zip_path: str, output_dir: str):
                         if prev is None or priority > prev[1]:
                             canonical_defs[headword] = (definition, priority)
 
-        # Pass 2: emit records, resolving redirects to the target's real definition.
+#Pass 2 : emit records, resolving redirects to the target's real definition.
         records = []
         entry_count = 0
-        for headword, reading, score, definitions, redirect in all_entries:
+        for headword, reading, score, definitions, redirect, rules in all_entries:
             if redirect:
                 target = canonical_defs.get(redirect)
                 if not target:
                     continue  # dangling redirect — skip the useless circular entry
-                # Show the canonical spelling note + the real definition.
+#Show the canonical spelling note + the real definition.
                 definition = f"= {redirect}\n{target[0]}"
                 priority = target[1]
             else:
@@ -441,29 +495,34 @@ def convert_yomitan(zip_path: str, output_dir: str):
                 priority = max(0, min(255, int(score) + 128)) if isinstance(score, (int, float)) else 100
 
             def_bytes = definition.encode("utf-8")
+#Yomitan spec : empty rules = "word is not inflected" --that IS positive POS data
+#(a non - conjugating word), so stamp POS_OTHER rather than the fail - open 0.
+            pos_flags = pos_flags_from_tags(rules.split()) if rules.strip() else POS_OTHER
             seen_headwords = set()
             hw_bytes = headword.encode("utf-8")
             if len(hw_bytes) < HEADWORD_SIZE:
                 seen_headwords.add(hw_bytes)
-                records.append((hw_bytes, def_bytes, priority))
+                records.append((hw_bytes, def_bytes, priority, pos_flags))
 
             if reading and reading != headword and not redirect:
                 r_bytes = reading.encode("utf-8")
                 if len(r_bytes) < HEADWORD_SIZE and r_bytes not in seen_headwords:
                     r_def = format_definition_yomitan(reading, reading, definitions)
                     if r_def:
-                        records.append((r_bytes, r_def.encode("utf-8"), priority))
+#reading != headword means kana reading of a kanji headword : flag it
+#(see POS_READING above).
+                        records.append((r_bytes, r_def.encode("utf-8"), priority,
+                                        pos_flags | POS_READING))
 
             entry_count += 1
 
     print(f"Processed {entry_count} Yomitan entries → {len(records)} index records")
-    write_binary(records, output_dir)
+    write_binary(records, output_dir, name)
+
+# ── MDict(.mdx) ────────────────────────────────────────────────
 
 
-# ── MDict (.mdx) ────────────────────────────────────────────────
-
-
-def convert_mdict(mdx_path: str, output_dir: str):
+def convert_mdict(mdx_path: str, output_dir: str, name: str = "vocab"):
     """Convert an MDict .mdx file to binary index + data files.
 
     Requires: pip install readmdict
@@ -510,12 +569,11 @@ def convert_mdict(mdx_path: str, output_dir: str):
             continue
 
         def_bytes = definition.encode("utf-8")
-        records.append((hw_bytes, def_bytes, 100))
+        records.append((hw_bytes, def_bytes, 100, 0))
         entry_count += 1
 
     print(f"Processed {entry_count} MDict entries ({skipped} skipped) → {len(records)} index records")
-    write_binary(records, output_dir)
-
+    write_binary(records, output_dir, name)
 
 # ── Format detection & main ─────────────────────────────────────
 
@@ -546,6 +604,15 @@ def main():
     )
     parser.add_argument("--output-dir", default="output", help="Output directory (default: output)")
     parser.add_argument(
+        "--name",
+        default="vocab",
+        choices=["vocab", "names", "grammar"],
+        help="Which dictionary slot the output files fill (default: vocab -> vocab.idx/"
+        "vocab.dat). The device reads vocab (main dictionary), names (name dictionary), and "
+        "grammar (grammar dictionary); pass --name names or --name grammar to fill those "
+        "slots directly, no manual renaming needed.",
+    )
+    parser.add_argument(
         "--format",
         choices=["jmdict", "yomitan", "mdict"],
         help="Force input format (overrides auto-detection)",
@@ -557,14 +624,23 @@ def main():
         print(f"Detected format: {fmt}")
 
         if fmt == "mdict":
-            convert_mdict(args.input, args.output_dir)
+            convert_mdict(args.input, args.output_dir, args.name)
         elif fmt == "yomitan":
-            convert_yomitan(args.input, args.output_dir)
+            convert_yomitan(args.input, args.output_dir, args.name)
         else:
-            convert_jmdict(args.input, args.output_dir)
+            convert_jmdict(args.input, args.output_dir, args.name)
     else:
+        if args.name != "vocab":
+            print(
+                f"Error: --name {args.name} without --input would write the auto-downloaded "
+                "JMdict (a vocabulary dictionary) into the "
+                f"{args.name} slot. Pass --input with the actual "
+                f"{args.name} dictionary instead.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         json_path = download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))
-        convert_jmdict(json_path, args.output_dir)
+        convert_jmdict(json_path, args.output_dir, args.name)
 
 
 if __name__ == "__main__":

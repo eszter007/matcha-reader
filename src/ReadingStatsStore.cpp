@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <algorithm>
 #include <cstring>
 
 ReadingStatsStore ReadingStatsStore::instance;
@@ -13,7 +14,10 @@ static constexpr uint8_t STATS_VERSION = 2;
 namespace {
 int daysSinceEpoch(uint16_t y, uint8_t m, uint8_t d) {
   int yy = y, mm = m;
-  if (mm <= 2) { yy--; mm += 12; }
+  if (mm <= 2) {
+    yy--;
+    mm += 12;
+  }
   return 365 * yy + yy / 4 - yy / 100 + yy / 400 + (153 * (mm - 3) + 2) / 5 + d - 306;
 }
 
@@ -22,19 +26,20 @@ int dowFromDate(uint16_t y, uint8_t m, uint8_t d) {
 }
 
 void subtractDays(uint16_t& y, uint8_t& m, uint8_t& d, int n) {
-  int epoch = daysSinceEpoch(y, m, d) - n;
-  // Inverse of daysSinceEpoch: convert epoch days back to y/m/d.
-  // The forward formula adds d at the end, so the inverse subtracts 1
-  // to get the 0-based day-of-month before re-adding 1.
-  int a = epoch + 305;
-  int yy = (4 * a + 3) / 1461;
-  int doy = a - (365 * yy + yy / 4 - yy / 100 + yy / 400);
-  int mm = (5 * doy + 2) / 153;
-  d = static_cast<uint8_t>(doy - (153 * mm + 2) / 5 + 1);
-  mm += 3;
-  if (mm > 12) { mm -= 12; yy++; }
-  y = static_cast<uint16_t>(yy);
-  m = static_cast<uint8_t>(mm);
+  // Exact Gregorian inverse of daysSinceEpoch (Howard Hinnant's civil_from_days, shifted so
+  // day 0 = 0000-03-01). The previous version estimated the year with the Julian 1461-day
+  // cycle, which by the 2020s runs ~15 days late -- dates in the first half of March resolved
+  // into the previous March-based year and came back 1-2 days off, corrupting streaks and
+  // week/month views that cross early March.
+  const int z = daysSinceEpoch(y, m, d) - n + 305;                             // days since 0000-03-01
+  const int era = (z >= 0 ? z : z - 146096) / 146097;                          // 400-year eras
+  const unsigned doe = static_cast<unsigned>(z - era * 146097);                // [0, 146096]
+  const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;  // [0, 399]
+  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);                // [0, 365]
+  const unsigned mp = (5 * doy + 2) / 153;                                     // [0, 11], 0 = March
+  d = static_cast<uint8_t>(doy - (153 * mp + 2) / 5 + 1);
+  m = static_cast<uint8_t>(mp < 10 ? mp + 3 : mp - 9);
+  y = static_cast<uint16_t>(static_cast<int>(yoe) + era * 400 + (m <= 2 ? 1 : 0));
 }
 
 int daysInMonth(uint16_t y, uint8_t m) {
@@ -59,8 +64,9 @@ void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, ui
 }
 
 void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
-  for (const auto& p : finishedBookPaths) {
-    if (p == bookPath) return;
+  if (std::any_of(finishedBookPaths.begin(), finishedBookPaths.end(),
+                  [&bookPath](const std::string& p) { return p == bookPath; })) {
+    return;
   }
   finishedBookPaths.push_back(bookPath);
   booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
@@ -68,8 +74,7 @@ void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
 
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {
   for (int i = 0; i < dayCount; i++) {
-    if (days[i].year == year && days[i].month == month && days[i].day == day)
-      return days[i].minutesRead;
+    if (days[i].year == year && days[i].month == month && days[i].day == day) return days[i].minutesRead;
   }
   return 0;
 }
@@ -83,10 +88,13 @@ int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t
   if (getMinutesForDay(todayYear, todayMonth, todayDay) == 0) return 0;
   streak = 1;
   for (int i = 1; i < MAX_DAYS; i++) {
-    uint16_t py = todayYear; uint8_t pm = todayMonth, pd = todayDay;
+    uint16_t py = todayYear;
+    uint8_t pm = todayMonth, pd = todayDay;
     subtractDays(py, pm, pd, i);
-    if (getMinutesForDay(py, pm, pd) > 0) streak++;
-    else break;
+    if (getMinutesForDay(py, pm, pd) > 0)
+      streak++;
+    else
+      break;
   }
   return streak;
 }
@@ -97,12 +105,15 @@ int ReadingStatsStore::getLongestStreak() const {
   int maxStreak = 0, cur = 1;
   // Build epoch array on stack (MAX_DAYS ≤ 365, so 365*4 = 1460 bytes — OK)
   int epochs[MAX_DAYS];
-  for (int i = 0; i < dayCount; i++)
-    epochs[i] = daysSinceEpoch(days[i].year, days[i].month, days[i].day);
+  for (int i = 0; i < dayCount; i++) epochs[i] = daysSinceEpoch(days[i].year, days[i].month, days[i].day);
   // Simple O(n^2) sort — dayCount is small
   for (int i = 0; i < dayCount - 1; i++)
     for (int j = i + 1; j < dayCount; j++)
-      if (epochs[j] < epochs[i]) { int t = epochs[i]; epochs[i] = epochs[j]; epochs[j] = t; }
+      if (epochs[j] < epochs[i]) {
+        int t = epochs[i];
+        epochs[i] = epochs[j];
+        epochs[j] = t;
+      }
   maxStreak = 1;
   cur = 1;
   for (int i = 1; i < dayCount; i++) {
@@ -128,18 +139,20 @@ uint16_t ReadingStatsStore::getMinutesThisWeek(uint16_t todayYear, uint8_t today
   int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
   uint16_t total = 0;
   for (int i = 0; i <= dow; i++) {
-    uint16_t y = todayYear; uint8_t m = todayMonth, d = todayDay;
+    uint16_t y = todayYear;
+    uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, dow - i);
     total += getMinutesForDay(y, m, d);
   }
   return total;
 }
 
-void ReadingStatsStore::getWeekStatus(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay,
-                                      int todayDow, bool readDays[7]) const {
+void ReadingStatsStore::getWeekStatus(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, int todayDow,
+                                      bool readDays[7]) const {
   for (int i = 0; i < 7; i++) readDays[i] = false;
   for (int i = 0; i <= todayDow; i++) {
-    uint16_t y = todayYear; uint8_t m = todayMonth, d = todayDay;
+    uint16_t y = todayYear;
+    uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, todayDow - i);
     readDays[i] = getMinutesForDay(y, m, d) > 0;
   }
@@ -188,11 +201,20 @@ bool ReadingStatsStore::loadFromFile() {
   HalFile f;
   if (!Storage.openFileForRead("STAT", STATS_PATH, f)) return false;
   uint8_t version;
-  if (f.read(&version, 1) != 1) { f.close(); return false; }
+  if (f.read(&version, 1) != 1) {
+    f.close();
+    return false;
+  }
   uint16_t count;
-  if (f.read(reinterpret_cast<uint8_t*>(&count), 2) != 2) { f.close(); return false; }
+  if (f.read(reinterpret_cast<uint8_t*>(&count), 2) != 2) {
+    f.close();
+    return false;
+  }
   if (version >= 2) {
-    if (f.read(reinterpret_cast<uint8_t*>(&booksFinished), 2) != 2) { f.close(); return false; }
+    if (f.read(reinterpret_cast<uint8_t*>(&booksFinished), 2) != 2) {
+      f.close();
+      return false;
+    }
   }
   if (count > MAX_DAYS) count = MAX_DAYS;
   dayCount = 0;

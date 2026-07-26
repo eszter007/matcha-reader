@@ -17,6 +17,13 @@
 
 namespace {
 
+// See RenderConfig::lightenBy -- saturating lift applied before the Bayer screen.
+inline uint8_t lightenGray(const uint8_t gray, const uint8_t lightenBy) {
+  if (lightenBy == 0) return gray;
+  const int lifted = gray + lightenBy;
+  return lifted > 255 ? 255 : static_cast<uint8_t>(lifted);
+}
+
 // Context struct passed through PNGdec callbacks to avoid global mutable state.
 // The draw callback receives this via pDraw->pUser (set by png.decode()).
 // The file I/O callbacks receive the HalFile* via pFile->fHandle (set by pngOpen()).
@@ -37,7 +44,15 @@ struct PngContext {
   PixelCache cache;
   bool caching{false};
 
+  // Cache-only decode (background prefetch): skip every DirectPixelWriter/renderer access.
+  bool cacheOnly{false};
+  // Set when config->shouldCancel asked for an abort. PNGdec does surface a callback abort as
+  // PNG_QUIT_EARLY, but we track it explicitly anyway (uniform with the JPEG converter, where
+  // the library reports success after an abort) so a partial cache can never be finalized.
+  bool cancelled{false};
+
   uint8_t* grayLineBuffer{nullptr};
+  uint8_t* alphaLineBuffer{nullptr};  // per-pixel source alpha; only allocated for alphaMask
 };
 
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
@@ -165,9 +180,38 @@ void convertLineToGray(uint8_t* pPixels, uint8_t* grayLine, int width, int pixel
   }
 }
 
+// Extract the per-pixel source alpha for the mask path (no blending -- the mask needs the
+// raw coverage decision, not a white-composited gray). Types without alpha are fully opaque.
+void extractLineAlpha(uint8_t* pPixels, uint8_t* alphaLine, int width, int pixelType, uint8_t* palette, int hasAlpha) {
+  switch (pixelType) {
+    case PNG_PIXEL_INDEXED:
+      if (palette && hasAlpha) {
+        for (int x = 0; x < width; x++) alphaLine[x] = palette[768 + pPixels[x]];
+        return;
+      }
+      break;
+    case PNG_PIXEL_GRAY_ALPHA:
+      for (int x = 0; x < width; x++) alphaLine[x] = pPixels[x * 2 + 1];
+      return;
+    case PNG_PIXEL_TRUECOLOR_ALPHA:
+      for (int x = 0; x < width; x++) alphaLine[x] = pPixels[x * 4 + 3];
+      return;
+    default:
+      break;
+  }
+  memset(alphaLine, 255, width);
+}
+
 int pngDrawCallback(PNGDRAW* pDraw) {
   PngContext* ctx = reinterpret_cast<PngContext*>(pDraw->pUser);
   if (!ctx || !ctx->config || !ctx->renderer || !ctx->grayLineBuffer) return 0;
+
+  // Cooperative cancel: polled once per scanline. Returning 0 makes PNGdec stop with
+  // PNG_QUIT_EARLY (verified in png.inl 1.1.6).
+  if (ctx->config->shouldCancel && ctx->config->shouldCancel(ctx->config->cancelCtx)) {
+    ctx->cancelled = true;
+    return 0;
+  }
 
   int srcY = pDraw->y;
   int srcWidth = ctx->srcWidth;
@@ -189,6 +233,11 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   // Convert entire source line to grayscale (improves cache locality)
   convertLineToGray(pDraw->pPixels, ctx->grayLineBuffer, srcWidth, pDraw->iPixelType, pDraw->pPalette,
                     pDraw->iHasAlpha);
+  const bool alphaMask = ctx->config->alphaMask && ctx->alphaLineBuffer != nullptr;
+  if (alphaMask) {
+    extractLineAlpha(pDraw->pPixels, ctx->alphaLineBuffer, srcWidth, pDraw->iPixelType, pDraw->pPalette,
+                     pDraw->iHasAlpha);
+  }
 
   // Render scaled row using Bresenham-style integer stepping (no floating-point division).
   // dstWidth is also the ratio denominator below (error >= dstWidth) -- must stay the true,
@@ -199,11 +248,17 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   int screenWidth = ctx->screenWidth;
   bool useDithering = ctx->config->useDithering;
   bool caching = ctx->caching;
+  // Cache-only prefetch never touches the framebuffer: pw stays uninitialized (init reads
+  // renderer state, which a lock-free background decode must not do), so every pw call below is
+  // guarded. Constant per decode -- perfectly predicted, same cost class as `if (caching)`.
+  const bool cacheOnly = ctx->cacheOnly;
 
   // Pre-compute orientation and render-mode state once per row
-  DirectPixelWriter pw;
-  pw.init(*ctx->renderer);
-  pw.beginRow(outY);
+  DirectPixelWriter pw{};  // value-init: cacheOnly leaves it untouched (all uses below are guarded)
+  if (!cacheOnly) {
+    pw.init(*ctx->renderer);
+    pw.beginRow(outY);
+  }
 
   // The cache streams to disk one row at a time. Flushing rows below this one
   // (PNGdec delivers scanlines top to bottom) repositions the single-row band.
@@ -225,17 +280,25 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 
   for (int dstX = 0; dstX < loopWidth; dstX++) {
     int outX = outXBase + dstX;
-    if (outX < screenWidth) {
+    // Alpha-masked pixels are dropped entirely (the retained framebuffer shows through);
+    // everything else is written opaquely, including white -- see RenderConfig::alphaMask.
+    if (outX < screenWidth && !(alphaMask && ctx->alphaLineBuffer[srcX] < 128)) {
       uint8_t gray = ctx->grayLineBuffer[srcX];
 
       uint8_t ditheredGray;
       if (useDithering) {
-        ditheredGray = applyBayerDither4Level(gray, outX, outY);
+        ditheredGray = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
       } else {
         ditheredGray = gray / 85;
         if (ditheredGray > 3) ditheredGray = 3;
       }
-      pw.writePixel(outX, ditheredGray);
+      if (!cacheOnly) {
+        if (alphaMask) {
+          pw.writePixelOpaque(outX, ditheredGray);
+        } else {
+          pw.writePixel(outX, ditheredGray);
+        }
+      }
       if (caching) cw.writePixel(outX, ditheredGray);
     }
 
@@ -300,8 +363,19 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   PngContext ctx;
   ctx.renderer = &renderer;
   ctx.config = &config;
-  ctx.screenWidth = renderer.getScreenWidth();
-  ctx.screenHeight = renderer.getScreenHeight();
+  ctx.cacheOnly = config.cacheOnly;
+  if (ctx.cacheOnly) {
+    // Cache-only decode produces nothing without a cache stream, and it must not read renderer
+    // state (it runs without the rendering mutex): screen bounds are substituted with exact
+    // no-clip values once the destination size is known, further down.
+    if (config.cachePath.empty()) {
+      LOG_ERR("PNG", "cacheOnly decode without cachePath: %s", imagePath.c_str());
+      return false;
+    }
+  } else {
+    ctx.screenWidth = renderer.getScreenWidth();
+    ctx.screenHeight = renderer.getScreenHeight();
+  }
 
   int rc = png->open(imagePath.c_str(), pngOpenWithHandle, pngCloseWithHandle, pngReadWithHandle, pngSeekWithHandle,
                      pngDrawCallback);
@@ -344,6 +418,12 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     ctx.dstHeight = (int)(ctx.srcHeight * ctx.scale);
   }
   ctx.lastDstY = -1;  // Reset row tracking
+  if (ctx.cacheOnly) {
+    // Exact no-clip screen bounds so the full dstWidth x dstHeight lands in the cache -- same
+    // rationale as the JPEG converter (manga geometry is always on-screen anyway).
+    ctx.screenWidth = config.x + ctx.dstWidth;
+    ctx.screenHeight = config.y + ctx.dstHeight;
+  }
 
   LOG_DBG("PNG", "PNG %dx%d -> %dx%d (scale %.2f), bpp: %d", ctx.srcWidth, ctx.srcHeight, ctx.dstWidth, ctx.dstHeight,
           ctx.scale, png->getBpp());
@@ -369,6 +449,15 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     LOG_ERR("PNG", "Failed to allocate gray line buffer");
     return false;
   }
+  if (config.alphaMask) {
+    ctx.alphaLineBuffer = static_cast<uint8_t*>(malloc(grayBufSize));
+    if (!ctx.alphaLineBuffer) {
+      LOG_ERR("PNG", "Failed to allocate alpha line buffer");
+      free(ctx.grayLineBuffer);
+      ctx.grayLineBuffer = nullptr;
+      return false;
+    }
+  }
 
   // Stream the pixel cache to disk. PNGdec delivers source scanlines top to
   // bottom and we emit at most one (downscaled) output row per callback, so the
@@ -379,6 +468,15 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   ctx.caching = !config.cachePath.empty();
   if (ctx.caching) {
     if (!ctx.cache.begin(config.cachePath, ctx.dstWidth, ctx.dstHeight, config.x, config.y, 1)) {
+      if (ctx.cacheOnly) {
+        // The cache IS the output here -- decoding without it would be pure wasted work.
+        LOG_ERR("PNG", "cacheOnly: cache stream failed to start, skipping decode");
+        free(ctx.grayLineBuffer);
+        ctx.grayLineBuffer = nullptr;
+        free(ctx.alphaLineBuffer);
+        ctx.alphaLineBuffer = nullptr;
+        return false;
+      }
       LOG_ERR("PNG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
@@ -390,9 +488,17 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   free(ctx.grayLineBuffer);
   ctx.grayLineBuffer = nullptr;
+  free(ctx.alphaLineBuffer);
+  ctx.alphaLineBuffer = nullptr;
 
-  if (rc != PNG_SUCCESS) {
-    LOG_ERR("PNG", "Decode failed: %d", rc);
+  // A cancelled decode surfaces as PNG_QUIT_EARLY; ctx.cancelled double-checks it. Either way the
+  // image is incomplete: drop the partial cache and report failure.
+  if (rc != PNG_SUCCESS || ctx.cancelled) {
+    if (ctx.cancelled) {
+      LOG_DBG("PNG", "Decode cancelled: %s", imagePath.c_str());
+    } else {
+      LOG_ERR("PNG", "Decode failed: %d", rc);
+    }
     if (ctx.caching) ctx.cache.abort();
     return false;
   }

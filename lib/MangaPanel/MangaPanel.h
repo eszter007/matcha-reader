@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HalStorage.h>
+#include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 
 #include <cstdint>
 #include <string>
@@ -60,6 +61,21 @@ class MangaBook {
   std::string getPageImagePath(uint32_t pageIndex) const;
 
   std::string getCachePath() const;
+
+  // Cover thumbnails, mirroring Epub::getThumbBmpPath()/generateThumbBmp() so every book type
+  // offers the home screen and the Library the same cheap 1-bit BMP instead of a live page
+  // decode. Without one, a manga cover costs a full JPEG decode into the framebuffer on EVERY
+  // render (~466ms measured) -- and on an X3, whose larger framebuffer leaves less heap, the
+  // 20KB JPEGDEC does not fit at all and the cover silently does not appear.
+  std::string getThumbBmpPath() const;  // [HEIGHT]-templated, for UITheme::getCoverThumbPath()
+  std::string getThumbBmpPath(int height) const;
+  // Renders the cover page into a 2:3 box `height` tall. Caller should free what heap it can
+  // first (the converter needs ~52KB); returns false and leaves no file behind on failure.
+  bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+
+  // The folder's cover page: first page_NNNN, else the first non-panel-crop image. Empty when
+  // the folder holds no usable image. Costs a directory listing.
+  static std::string findCoverImage(const std::string& folderPath);
 
   // Table of contents (toc.idx), optional -- empty when the manga folder
   // has no toc.idx (most don't; SELECT_CHAPTER falls back to percent jump).

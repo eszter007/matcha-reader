@@ -268,13 +268,8 @@ bool BaseTheme::prewarmRows(const GfxRenderer& renderer, const int fontId, const
   }
   // Pure-ASCII text renders fine from the hot group -- don't spend a group decompression on it
   // (and don't make the caller clear a hot group that ASCII screens keep reusing).
-  bool hasNonAscii = false;
-  for (const char c : buf) {
-    if (static_cast<unsigned char>(c) >= 0x80) {
-      hasNonAscii = true;
-      break;
-    }
-  }
+  const bool hasNonAscii =
+      std::any_of(buf.begin(), buf.end(), [](const char c) { return static_cast<unsigned char>(c) >= 0x80; });
   if (!hasNonAscii) return false;
   fcm->prewarmCache(fontId, buf.c_str(), styleMask);
   return true;
@@ -339,8 +334,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
         return s;
       });
   if (rowSubtitle != nullptr) {
-    prewarmed |= prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
-                             rowSubtitle);
+    prewarmed |=
+        prewarmRows(renderer, SMALL_FONT_ID, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex, rowSubtitle);
   }
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
@@ -498,27 +493,19 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     const std::string coverBmpPath =
         UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
 
-    HalFile file;
-    if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
-      Bitmap bitmap(file);
-      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        hasCoverImage = true;
-        const int imgWidth = bitmap.getWidth();
-        const int imgHeight = bitmap.getHeight();
+    // Shared helper: manga carry a JPG/PNG cover, EPUB/XTC a generated BMP thumbnail -- this
+    // theme only read the BMP form and fell back to the placeholder card for every manga.
+    int imgWidth = 0, imgHeight = 0;
+    if (UITheme::getCoverThumbSize(coverBmpPath, &imgWidth, &imgHeight)) {
+      hasCoverImage = true;
+      // Calculate width based on aspect ratio, maintaining baseHeight
+      const float aspectRatio = static_cast<float>(imgWidth) / static_cast<float>(imgHeight);
+      bookWidth = static_cast<int>(baseHeight * aspectRatio);
 
-        // Calculate width based on aspect ratio, maintaining baseHeight
-        if (imgWidth > 0 && imgHeight > 0) {
-          const float aspectRatio = static_cast<float>(imgWidth) / static_cast<float>(imgHeight);
-          bookWidth = static_cast<int>(baseHeight * aspectRatio);
-
-          // Ensure width doesn't exceed reasonable limits (max 90% of screen width)
-          const int maxWidth = static_cast<int>(rect.width * 0.9f);
-          if (bookWidth > maxWidth) {
-            bookWidth = maxWidth;
-          }
-        } else {
-          bookWidth = rect.width / 2;  // Fallback
-        }
+      // Ensure width doesn't exceed reasonable limits (max 90% of screen width)
+      const int maxWidth = static_cast<int>(rect.width * 0.9f);
+      if (bookWidth > maxWidth) {
+        bookWidth = maxWidth;
       }
     }
   }
@@ -547,31 +534,23 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
       const std::string coverBmpPath =
           UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
 
-      // First time: load cover from SD and render
-      HalFile file;
-      if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
-        Bitmap bitmap(file);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          LOG_DBG("THEME", "Rendering bmp");
+      // First time: load cover from SD and render (same shared helper as the measure above;
+      // bookWidth and bookHeight already match the image's aspect ratio).
+      if (UITheme::drawCoverThumb(renderer, coverBmpPath, bookX, bookY, bookHeight, bookWidth) > 0) {
+        // Draw border around the card
+        renderer.drawRect(bookX, bookY, bookWidth, bookHeight);
 
-          // Draw the cover image (bookWidth and bookHeight already match image aspect ratio)
-          renderer.drawBitmap(bitmap, bookX, bookY, bookWidth, bookHeight);
+        // No bookmark ribbon when cover is shown - it would just cover the art
 
-          // Draw border around the card
-          renderer.drawRect(bookX, bookY, bookWidth, bookHeight);
+        // Store the buffer with cover image for fast navigation
+        coverBufferStored = storeCoverBuffer();
+        coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
 
-          // No bookmark ribbon when cover is shown - it would just cover the art
-
-          // Store the buffer with cover image for fast navigation
-          coverBufferStored = storeCoverBuffer();
-          coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
-
-          // First render: if selected, draw selection indicators now
-          if (bookSelected) {
-            LOG_DBG("THEME", "Drawing selection");
-            renderer.drawRect(bookX + 1, bookY + 1, bookWidth - 2, bookHeight - 2);
-            renderer.drawRect(bookX + 2, bookY + 2, bookWidth - 4, bookHeight - 4);
-          }
+        // First render: if selected, draw selection indicators now
+        if (bookSelected) {
+          LOG_DBG("THEME", "Drawing selection");
+          renderer.drawRect(bookX + 1, bookY + 1, bookWidth - 2, bookHeight - 2);
+          renderer.drawRect(bookX + 2, bookY + 2, bookWidth - 4, bookHeight - 4);
         }
       }
     }

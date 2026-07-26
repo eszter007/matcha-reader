@@ -22,6 +22,8 @@ class XtcReaderActivity final : public Activity {
 
   uint32_t currentPage = 0;
   int pagesUntilFullRefresh = 0;
+  // Session start for reading-stats recording (mirrors EpubReaderActivity).
+  unsigned long readingSessionStartMs = 0;
 
   // Reader menu / bookmarks / screenshot state (page-based, mirrors the manga reader).
   std::vector<BookmarkEntry> cachedBookmarks;

@@ -44,6 +44,19 @@ static constexpr Rule kRules[] = {
     {"\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // れば→る
     // Desire
     {"\xe3\x81\x9f\xe3\x81\x84", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // たい→る
+    // Suru progressive/compound て-forms. MUST precede the generic ichidan ている→る rule:
+    // rule order is candidate order, and the ichidan rule turns している into しる -- 知る, a real
+    // headword that then shadows する in the lookup's first-match-wins candidate walk. Mirrors the
+    // godan している→す block below, which is equally shadowed without these.
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x82\x8b", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // している→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\x9f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していた→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xaa\xe3\x81\x84", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していない→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xbe\xe3\x81\x99", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // しています→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xa6", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していて→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x8d\xe3\x81\x9f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // してきた→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x8f\xe3\x82\x8b", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // してくる→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\x8f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していく→する
+    {"\xe3\x81\x97\xe3\x81\xa6\xe3\x81\x84\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // していった→する
     // Progressive て+いる and compound auxiliaries
     {"\xe3\x81\xa6\xe3\x81\x84\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ている→る
     {"\xe3\x81\xa6\xe3\x81\x84\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ていた→る
@@ -56,6 +69,15 @@ static constexpr Rule kRules[] = {
     {"\xe3\x81\xa6\xe3\x81\x8a\xe3\x81\x8f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ておく→る (do in advance)
     {"\xe3\x81\xa6\xe3\x81\x97\xe3\x81\xbe\xe3\x81\x86", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てしまう→る
     {"\xe3\x81\xa6\xe3\x81\x97\xe3\x81\xbe\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てしまった→る
+    // Colloquial PAST contractions of てしまった / でしまった: strip the しまった part, leaving the
+    // bare te-form (keeping euphonic っ/ん/い) which the te-form rules below reduce to every verb
+    // class -- たまっちゃった -> たまって -> たまる, 死んじゃった -> 死んで -> 死ぬ. Only the PAST
+    // (った) forms: the present ちゃう/じゃう were tried and removed -- a godan renyoukei い→う rule
+    // turns ～ちゃい into ～ちゃう, so ちゃう→て mis-ate the い of the common ～ちゃいけない ("must
+    // not", where ちゃ = ては, NOT ちゃう). Greedy segmentation can't resolve that ちゃ ambiguity;
+    // the past forms don't end in い so they don't hit it.
+    {"\xe3\x81\xa1\xe3\x82\x83\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\xa6", WordCondition::DICT, WordCondition::DICT},  // ちゃった→て
+    {"\xe3\x81\x98\xe3\x82\x83\xe3\x81\xa3\xe3\x81\x9f", "\xe3\x81\xa7", WordCondition::DICT, WordCondition::DICT},  // じゃった→で
     {"\xe3\x81\xa6\xe3\x81\xbf\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てみる→る (try doing)
     {"\xe3\x81\xa6\xe3\x81\xbf\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てみた→る
     {"\xe3\x81\xa6\xe3\x81\x82\xe3\x82\x8b", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // てある→る (state result)
@@ -167,6 +189,26 @@ static constexpr Rule kRules[] = {
 
     // Ichidan polite negative past: ませんでした→る (食べませんでした→食べる)
     {"\xe3\x81\xbe\xe3\x81\x9b\xe3\x82\x93\xe3\x81\xa7\xe3\x81\x97\xe3\x81\x9f", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // ませんでした→る
+
+    // Negative conditional なければ, per verb class. Without direct rules this only resolves by
+    // CHAINING through ければ→い (adj-i conditional) -- しなければ→しない→(い→う)→しなう, and 撓う
+    // is a real godan verb, so the pre-する candidate wins the lookup (device report:
+    // しなければいけません showed 撓う). Direct rules are generated first, so the right verb wins
+    // the candidate order. Suru/kuru first (longest/most specific), then godan rows, then the
+    // generic ichidan fallback.
+    {"\xe3\x81\x97\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x99\xe3\x82\x8b", WordCondition::DICT, WordCondition::VS},  // しなければ→する
+    {"\xe3\x81\x93\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x8f\xe3\x82\x8b", WordCondition::DICT, WordCondition::VK},  // こなければ→くる
+    {"\xe3\x81\x8b\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x8f", WordCondition::DICT, WordCondition::V5},  // かなければ→く
+    {"\xe3\x81\x8c\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x90", WordCondition::DICT, WordCondition::V5},  // がなければ→ぐ
+    {"\xe3\x81\x95\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x99", WordCondition::DICT, WordCondition::V5},  // さなければ→す
+    {"\xe3\x81\x9f\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\xa4", WordCondition::DICT, WordCondition::V5},  // たなければ→つ
+    {"\xe3\x81\xaa\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\xac", WordCondition::DICT, WordCondition::V5},  // ななければ→ぬ
+    {"\xe3\x81\xb0\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\xb6", WordCondition::DICT, WordCondition::V5},  // ばなければ→ぶ
+    {"\xe3\x81\xbe\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x82\x80", WordCondition::DICT, WordCondition::V5},  // まなければ→む
+    {"\xe3\x82\x89\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V5},  // らなければ→る
+    {"\xe3\x82\x8f\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x86", WordCondition::DICT, WordCondition::V5},  // わなければ→う
+    {"\xe3\x81\x8f\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x81\x84", WordCondition::DICT, WordCondition::ADJ_I},  // くなければ→い (高くなければ→高い)
+    {"\xe3\x81\xaa\xe3\x81\x91\xe3\x82\x8c\xe3\x81\xb0", "\xe3\x82\x8b", WordCondition::DICT, WordCondition::V1},  // なければ→る (食べなければ→食べる)
 
     // Godan masu-stem (連用形): bare い-row ending (used for compound verbs and nominal forms)
     {"\xe3\x81\x8d", "\xe3\x81\x8f", WordCondition::DICT, WordCondition::V5},  // き→く

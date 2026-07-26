@@ -1,9 +1,11 @@
 #include "MangaPanel.h"
 
+#include <BmpToBmpConverter.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <PngToBmpConverter.h>
 
 #include <algorithm>
 #include <cstring>
@@ -78,6 +80,82 @@ std::string MangaBook::getTitle() const {
     return folderPath.substr(pos + 1);
   }
   return folderPath;
+}
+
+std::string MangaBook::findCoverImage(const std::string& folderPath) {
+  auto dir = Storage.open(folderPath.c_str());
+  if (!dir || !dir.isDirectory()) return "";
+  dir.rewindDirectory();
+  std::string firstPageImage;
+  std::string firstAnyImage;
+  for (auto mf = dir.openNextFile(); mf; mf = dir.openNextFile()) {
+    char imgName[200];
+    mf.getName(imgName, sizeof(imgName));
+    if (imgName[0] == '.' || mf.isDirectory()) continue;
+    std::string_view imgFn{imgName};
+    if (!FsHelpers::hasJpgExtension(imgFn) && !FsHelpers::hasPngExtension(imgFn) &&
+        !FsHelpers::hasBmpExtension(imgFn)) {
+      continue;
+    }
+    if (strncmp(imgName, "page_", 5) == 0) {
+      if (firstPageImage.empty() || imgFn < firstPageImage) firstPageImage = imgName;
+      // page_0000 is the first page by definition -- no reason to keep listing the remaining
+      // hundreds of files just to confirm it.
+      if (strncmp(imgName, "page_0000", 9) == 0) break;
+    } else if (!isPanelCropFile(imgName)) {
+      if (firstAnyImage.empty() || imgFn < firstAnyImage) firstAnyImage = imgName;
+    }
+  }
+  dir.close();
+  const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
+  return chosen.empty() ? "" : folderPath + "/" + chosen;
+}
+
+std::string MangaBook::getThumbBmpPath() const { return getCachePath() + "/thumb_[HEIGHT].bmp"; }
+
+std::string MangaBook::getThumbBmpPath(int height) const {
+  return getCachePath() + "/thumb_" + std::to_string(height) + ".bmp";
+}
+
+bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
+  if (height <= 0) return false;
+  const std::string thumbPath = getThumbBmpPath(height);
+  if (Storage.exists(thumbPath.c_str())) return true;
+
+  const std::string cover = findCoverImage(folderPath);
+  if (cover.empty()) return false;
+  const bool isJpg = FsHelpers::hasJpgExtension(cover);
+  const bool isPng = FsHelpers::hasPngExtension(cover);
+  const bool isBmp = FsHelpers::hasBmpExtension(cover);
+  if (!isJpg && !isPng && !isBmp) return false;
+
+  Storage.mkdir(getCachePath().c_str());
+  HalFile src;
+  if (!Storage.openFileForRead("MNG", cover, src)) return false;
+  HalFile out;
+  if (!Storage.openFileForWrite("MNG", thumbPath, out)) return false;
+  // Cover the 2:3 cover box and let the converter trim the overflow -- same box as Epub's, so a
+  // manga thumb draws through the same fast packed path instead of a crop at draw time.
+  const int targetWidth = (height * 2) / 3;
+  bool ok;
+  if (isJpg) {
+    ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx);
+  } else if (isPng) {
+    ok = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx);
+  } else {
+    // Pages that are already bitmaps still need a thumbnail: drawing the full-size page into the
+    // cell instead makes a dithered cover come out near-black -- see BmpToBmpConverter.
+    ok = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(src, out, targetWidth, height, shouldCancel, cancelCtx);
+  }
+  // Explicit close() before Storage.remove() on the same path (required despite
+  // DESTRUCTOR_CLOSES_FILE); a partial thumb must not survive to masquerade as a cached one.
+  src.close();
+  out.close();
+  if (!ok) {
+    Storage.remove(thumbPath.c_str());
+    LOG_ERR("MNG", "Thumb generation failed for %s (h=%d)", cover.c_str(), height);
+  }
+  return ok;
 }
 
 std::string MangaBook::getCachePath() const {
@@ -162,8 +240,7 @@ bool MangaBook::scanImages() {
       file.getName(name, sizeof(name));
       if (name[0] != '.' && !isPanelCropFile(name)) {
         std::string_view sv(name);
-        if (FsHelpers::hasBmpExtension(sv) || FsHelpers::hasJpgExtension(sv) ||
-            FsHelpers::hasPngExtension(sv)) {
+        if (FsHelpers::hasBmpExtension(sv) || FsHelpers::hasJpgExtension(sv) || FsHelpers::hasPngExtension(sv)) {
           imageFiles.emplace_back(name);
         }
       }

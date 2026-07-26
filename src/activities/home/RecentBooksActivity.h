@@ -53,18 +53,33 @@ class RecentBooksActivity final : public Activity {
 
   static constexpr int TAB_COUNT = 2;
   static constexpr int GRID_COLS = 3;
+  static constexpr int GRID_ROW_GAP = 16;
   static constexpr int COVER_PADDING = 4;
   static constexpr int CELL_TEXT_GAP = 4;
   static constexpr int SELECTION_RADIUS = 6;
 
   int getVisibleRows(int cellHeight, int contentHeight) const;
   int getCellHeight(int cellWidth) const;
+  // Cancel hook for the background thumbnail generation: a cover conversion takes seconds and
+  // runs on the UI task, so it polls the buttons directly (the debounced state is stale while
+  // no update() tick happens) and gives way to a press. The abandoned thumb is retried on the
+  // next visit. Static so it can be passed as a plain function pointer.
+  static bool thumbGenShouldCancel(void* ctx);
+  uint32_t thumbGenStartedMs = 0;   // start of the running conversion, for the slice budget
+  uint32_t thumbGenBudgetMs = 400;  // grows when a conversion keeps hitting the budget
+  // Cover height of one grid cell, recorded while drawing so the background thumb passes
+  // generate at exactly that size. Drawing a theme-sized thumb (300px, 400px in Classic) into
+  // a ~207px cell costs seconds per cover in software scaling -- a 1:1 draw is a few ms.
+  // 0 until the first grid render; the passes fall back to the theme's cover height.
+  mutable int gridCoverHeight_ = 0;
 
   void loadRecentBooks();
   void loadBookProgress();
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
   int readProgressPercent(const std::string& bookPath) const;
+  void fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,
+                           const std::vector<ShelfBook>* sBooks, int firstIdx, int lastIdx);
 
   int getContentItemCount() const;
   void renderBooksTab(int contentTop, int contentHeight);
@@ -73,7 +88,7 @@ class RecentBooksActivity final : public Activity {
 
   // Shared cell/row painters, used by both the full renders above and the partial fast path.
   void drawGridCell(int cellX, int cellY, int cellWidth, int cellHeight, const std::string& coverBmpPath,
-                    const std::string& title, int progressPercent, bool selected);
+                    const std::string& title, int progressPercent, bool selected, bool drawTitle = true);
   void drawShelfRow(int shelfIdx, int itemY, bool selected);
 
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
@@ -114,6 +129,29 @@ class RecentBooksActivity final : public Activity {
     size_t thumbIndex = 0;  // epub cover-thumb pass cursor over results
   };
   LibraryScanState scan_;
+
+  // Library index (/.crosspoint/library.idx): one record per book seen by a previous scan.
+  // Without it every Library visit re-examined each book on the card -- a file open per EPUB
+  // to check its cover thumbnail, a directory listing per manga folder to find its cover page
+  // -- which is what made the background scan cost seconds per slice. A record whose size and
+  // modification stamp still match means nothing about that book can have changed, so the scan
+  // trusts the recorded cover state and skips the I/O. Kept deliberately small (no strings):
+  // titles and cover paths already live in the persisted recents list.
+  struct LibraryIndexEntry {
+    uint32_t pathHash = 0;
+    uint32_t fileSize = 0;       // manga folders: size of panels.idx
+    uint32_t modifiedStamp = 0;  // packed FAT date/time, 0 when the driver has none
+    uint16_t thumbHeight = 0;    // cover height this thumb was verified for (theme-dependent)
+    uint8_t flags = 0;           // bit0: verified thumbnail present
+  };
+  static constexpr uint8_t INDEX_FLAG_HAS_THUMB = 1 << 0;
+  std::vector<LibraryIndexEntry> libraryIndex_;
+  bool libraryIndexDirty_ = false;
+  void loadLibraryIndex();
+  void saveLibraryIndex();
+  const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
+  void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
+                        bool hasThumb);
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   void applyLibraryScan();

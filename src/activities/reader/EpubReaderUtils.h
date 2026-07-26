@@ -8,8 +8,8 @@
 namespace EpubReaderUtils {
 
 // Persists reader progress for an EPUB to its cache directory. Returns true on success.
-inline bool saveProgress(const Epub& epub, int spineIndex, int pageNumber, int pageCount,
-                         int8_t verticalOverride, int8_t furiganaOverride, uint8_t pageBasedPercent = 0xFF) {
+inline bool saveProgress(const Epub& epub, int spineIndex, int pageNumber, int pageCount, int8_t verticalOverride,
+                         int8_t furiganaOverride, uint8_t pageBasedPercent = 0xFF) {
   if (spineIndex < 0 || spineIndex > 0xFFFF || pageNumber < 0 || pageNumber > 0xFFFF || pageCount < 0 ||
       pageCount > 0xFFFF) {
     LOG_ERR("ERS", "Progress values out of range: spine=%d page=%d count=%d", spineIndex, pageNumber, pageCount);

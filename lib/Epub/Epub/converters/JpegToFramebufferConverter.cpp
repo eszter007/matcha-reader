@@ -17,6 +17,13 @@
 
 namespace {
 
+// See RenderConfig::lightenBy -- saturating lift applied before the Bayer screen.
+inline uint8_t lightenGray(const uint8_t gray, const uint8_t lightenBy) {
+  if (lightenBy == 0) return gray;
+  const int lifted = gray + lightenBy;
+  return lifted > 255 ? 255 : static_cast<uint8_t>(lifted);
+}
+
 // Context struct passed through JPEGDEC callbacks to avoid global mutable state.
 // The draw callback receives this via pDraw->pUser (set by setUserPointer()).
 // The file I/O callbacks receive the HalFile* via pFile->fHandle (set by jpegOpen()).
@@ -46,6 +53,14 @@ struct JpegContext {
 
   PixelCache cache;
   bool caching{false};
+
+  // Cache-only decode (background prefetch): skip every DirectPixelWriter/renderer access.
+  bool cacheOnly{false};
+  // Set when config->shouldCancel asked for an abort. REQUIRED to detect cancellation: JPEGDEC's
+  // DecodeJPEG returns success after a callback-initiated early exit (iErr stays 0), so the rc
+  // alone cannot distinguish "decoded fully" from "aborted mid-image" -- and finalizing the cache
+  // for an aborted decode would persist a half-written .2bp as if it were complete.
+  bool cancelled{false};
 };
 
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
@@ -122,6 +137,22 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   JpegContext* ctx = reinterpret_cast<JpegContext*>(pDraw->pUser);
   if (!ctx || !ctx->config || !ctx->renderer) return 0;
 
+  // Cooperative cancel: polled once per MCU block (~10-30ms of decode), so an abort request
+  // takes effect almost immediately. Returning 0 makes DecodeJPEG's bContinue loops exit.
+  //
+  // A background cache warm that is nearly done is the exception: aborting there deletes the
+  // partial file, so the page the reader just asked for has to decode the WHOLE image again
+  // (measured on device: 4.4s for a 464x717 illustration). Past the two-thirds mark, finishing
+  // is cheaper than restarting, so the remaining blocks run and the cache survives.
+  if (ctx->config->shouldCancel && ctx->config->shouldCancel(ctx->config->cancelCtx)) {
+    const bool nearlyDone =
+        ctx->cacheOnly && ctx->caching && ctx->dstHeight > 0 && ctx->cache.flushedRows * 3 >= ctx->dstHeight * 2;
+    if (!nearlyDone) {
+      ctx->cancelled = true;
+      return 0;
+    }
+  }
+
   // In EIGHT_BIT_GRAYSCALE mode, pPixels contains 8-bit grayscale values
   // Buffer is densely packed: stride = pDraw->iWidth, valid columns = pDraw->iWidthUsed
   uint8_t* pixels = reinterpret_cast<uint8_t*>(pDraw->pPixels);
@@ -132,6 +163,11 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   if (stride <= 0 || blockH <= 0 || validW <= 0) return 1;
 
   const bool useDithering = ctx->config->useDithering;
+  // Cache-only prefetch never touches the framebuffer: pw stays uninitialized (init reads
+  // renderer state, which a lock-free background decode must not do), so every pw call below
+  // is guarded. The branch is constant per decode -- perfectly predicted, same cost class as
+  // the existing per-pixel `if (caching)`.
+  const bool cacheOnly = ctx->cacheOnly;
   bool caching = ctx->caching;
   const int32_t fineScaleFPX = ctx->fineScaleFPX;
   const int32_t invScaleFPX = ctx->invScaleFPX;
@@ -168,8 +204,8 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   if (dstYStart >= dstYEnd || dstXStart >= dstXEnd) return 1;
 
   // Pre-compute orientation and render-mode state once per callback invocation
-  DirectPixelWriter pw;
-  pw.init(renderer);
+  DirectPixelWriter pw{};  // value-init: cacheOnly leaves it untouched (all uses below are guarded)
+  if (!cacheOnly) pw.init(renderer);
 
   // The cache streams to disk one MCU-row band at a time. Flushing rows below
   // this block (raster order guarantees they are final) repositions the band;
@@ -192,7 +228,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   if (fineScaleFPX == FP_ONE && fineScaleFPY == FP_ONE) {
     for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int outY = cfgY + dstY;
-      pw.beginRow(outY);
+      if (!cacheOnly) pw.beginRow(outY);
       if (caching) cw.beginRow(outY, cacheOriginY);
       const uint8_t* row = &pixels[(dstY - blockY) * stride];
       for (int dstX = dstXStart; dstX < dstXEnd; dstX++) {
@@ -200,12 +236,12 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
         uint8_t gray = row[dstX - blockX];
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (!cacheOnly) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
@@ -226,7 +262,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
     for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int outY = cfgY + dstY;
-      pw.beginRow(outY);
+      if (!cacheOnly) pw.beginRow(outY);
       if (caching) cw.beginRow(outY, cacheOriginY);
       const int32_t srcFyFP = dstY * invScaleFPY;
       const int32_t fy = srcFyFP & FP_MASK;
@@ -259,12 +295,12 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (!cacheOnly) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -282,12 +318,12 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (!cacheOnly) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -308,12 +344,12 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
         } else {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (!cacheOnly) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
@@ -323,7 +359,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   // === Nearest-neighbor (downscale: fineScale < 1.0) ===
   for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
     const int outY = cfgY + dstY;
-    pw.beginRow(outY);
+    if (!cacheOnly) pw.beginRow(outY);
     if (caching) cw.beginRow(outY, cacheOriginY);
     const int32_t srcFyFP = dstY * invScaleFPY;
     int ly = (srcFyFP >> FP_SHIFT) - blockY;
@@ -341,12 +377,12 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
       uint8_t dithered;
       if (useDithering) {
-        dithered = applyBayerDither4Level(gray, outX, outY);
+        dithered = applyBayerDither4Level(lightenGray(gray, ctx->config->lightenBy), outX, outY);
       } else {
         dithered = gray / 85;
         if (dithered > 3) dithered = 3;
       }
-      pw.writePixel(outX, dithered);
+      if (!cacheOnly) pw.writePixel(outX, dithered);
       if (caching) cw.writePixel(outX, dithered);
     }
   }
@@ -402,8 +438,19 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   JpegContext ctx;
   ctx.renderer = &renderer;
   ctx.config = &config;
-  ctx.screenWidth = renderer.getScreenWidth();
-  ctx.screenHeight = renderer.getScreenHeight();
+  ctx.cacheOnly = config.cacheOnly;
+  if (ctx.cacheOnly) {
+    // Cache-only decode produces nothing without a cache stream, and it must not read renderer
+    // state (it runs without the rendering mutex): screen bounds are substituted with exact
+    // no-clip values once the destination size is known, further down.
+    if (config.cachePath.empty()) {
+      LOG_ERR("JPG", "cacheOnly decode without cachePath: %s", imagePath.c_str());
+      return false;
+    }
+  } else {
+    ctx.screenWidth = renderer.getScreenWidth();
+    ctx.screenHeight = renderer.getScreenHeight();
+  }
 
   int rc = jpeg->open(imagePath.c_str(), jpegOpen, jpegClose, jpegRead, jpegSeek, jpegDrawCallback);
   const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
@@ -479,6 +526,14 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   ctx.scaledSrcHeight = (srcHeight + jpegScaleDenom - 1) / jpegScaleDenom;
   ctx.dstWidth = destWidth;
   ctx.dstHeight = destHeight;
+  if (ctx.cacheOnly) {
+    // Exact no-clip screen bounds: the callback's clamp `screen - cfg < dst` never triggers, so
+    // the full destWidth x destHeight lands in the cache. Manga geometry always fits on screen
+    // anyway (applyFullPageGeometry/applyPanelGeometry produce on-screen rects), so this matches
+    // what a locked, framebuffer-backed decode of the same image would have cached.
+    ctx.screenWidth = config.x + destWidth;
+    ctx.screenHeight = config.y + destHeight;
+  }
   ctx.fineScaleFPX = (int32_t)((int64_t)destWidth * FP_ONE / ctx.scaledSrcWidth);
   ctx.invScaleFPX = (int32_t)((int64_t)ctx.scaledSrcWidth * FP_ONE / destWidth);
   ctx.fineScaleFPY = (int32_t)((int64_t)destHeight * FP_ONE / ctx.scaledSrcHeight);
@@ -499,6 +554,11 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   if (ctx.caching) {
     const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
     if (!ctx.cache.begin(config.cachePath, destWidth, destHeight, config.x, config.y, maxBlockDstRows)) {
+      if (ctx.cacheOnly) {
+        // The cache IS the output here -- decoding without it would be pure wasted work.
+        LOG_ERR("JPG", "cacheOnly: cache stream failed to start, skipping decode");
+        return false;
+      }
       LOG_ERR("JPG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
@@ -508,8 +568,15 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   rc = jpeg->decode(0, 0, jpegScaleOption);
   unsigned long decodeTime = millis() - decodeStart;
 
-  if (rc != 1) {
-    LOG_ERR("JPG", "Decode failed (rc=%d, lastError=%d)", rc, jpeg->getLastError());
+  // A cancelled decode reports SUCCESS from JPEGDEC (early exit leaves iErr==0) -- ctx.cancelled
+  // is the only reliable signal. Either way the image is incomplete: drop the partial cache so a
+  // later warm or render decode recreates it, and report failure to the caller.
+  if (rc != 1 || ctx.cancelled) {
+    if (ctx.cancelled) {
+      LOG_DBG("JPG", "Decode cancelled: %s", imagePath.c_str());
+    } else {
+      LOG_ERR("JPG", "Decode failed (rc=%d, lastError=%d)", rc, jpeg->getLastError());
+    }
     if (ctx.caching) ctx.cache.abort();
     return false;
   }

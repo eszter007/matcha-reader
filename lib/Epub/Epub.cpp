@@ -686,10 +686,14 @@ bool Epub::generateCoverBmp(bool cropped) const {
   return false;
 }
 
+bool Epub::hasCoverImage() const {
+  return bookMetadataCache && bookMetadataCache->isLoaded() && !bookMetadataCache->coreMetadata.coverItemHref.empty();
+}
+
 std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
-bool Epub::generateThumbBmp(int height) const {
+bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   // Already generated, return true
   if (Storage.exists(getThumbBmpPath(height).c_str())) {
     return true;
@@ -723,12 +727,14 @@ bool Epub::generateThumbBmp(int height) const {
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
       return false;
     }
-    // Use smaller target size for Continue Reading card (half of screen: 240x400)
-    // Generate 1-bit BMP for fast home screen rendering (no gray passes needed)
-    int THUMB_TARGET_WIDTH = height * 0.6;
+    // Generate 1-bit BMP for fast home screen rendering (no gray passes needed).
+    // Cover the 2:3 cover box and let the converter trim the overflow: fitting by height alone
+    // left covers narrower than the box with a white strip beside them, and any leftover crop
+    // at draw time costs the slow per-pixel path (device report).
+    int THUMB_TARGET_WIDTH = (height * 2) / 3;
     int THUMB_TARGET_HEIGHT = height;
-    const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverJpg, thumbBmp, THUMB_TARGET_WIDTH,
-                                                                             THUMB_TARGET_HEIGHT);
+    const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(
+        coverJpg, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT, shouldCancel, cancelCtx);
     // Explicitly close() files before calling Storage.remove()
     coverJpg.close();
     thumbBmp.close();
@@ -760,10 +766,10 @@ bool Epub::generateThumbBmp(int height) const {
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
       return false;
     }
-    int THUMB_TARGET_WIDTH = height * 0.6;
+    int THUMB_TARGET_WIDTH = (height * 2) / 3;  // 2:3 cover box, see the JPG branch above
     int THUMB_TARGET_HEIGHT = height;
-    const bool success =
-        PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
+    const bool success = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(
+        coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT, shouldCancel, cancelCtx);
     // Explicitly close() files before calling Storage.remove()
     coverPng.close();
     thumbBmp.close();

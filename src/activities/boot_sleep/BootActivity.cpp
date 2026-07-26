@@ -3,8 +3,8 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
-#include "fontIds.h"
 #include "GrayLogo.h"
+#include "fontIds.h"
 
 void BootActivity::onEnter() {
   Activity::onEnter();

@@ -273,6 +273,38 @@ When a template is necessary, limit instantiations: use explicit template instan
 
 **Rules**: NO exceptions, NO abort(), ALWAYS log before error return
 
+### Never persist a transient failure as a permanent truth
+
+On a 380KB device most failures mean **"not right now"**, not **"not ever"**: a conversion that
+could not find a contiguous block, a scan cut short by the idle budget, a decode abandoned
+because a button was pressed. Writing such an outcome into a cache, an index or a settings field
+turns one bad moment into a permanent state — and because the stored answer is then believed,
+nothing ever re-examines it. The failure also becomes invisible: later runs log no error,
+because no attempt is made.
+
+This has bitten the codebase four separate times:
+
+| Stored claim | What was actually true |
+|---|---|
+| "no dictionary matches on this page" (`wlscan.bin`) | the scan aborted early under heap pressure |
+| "thumbnail valid" (its header parsed) | the file was truncated mid-write |
+| "this book has no cover" (empty `coverBmpPath`) | one conversion failed; the cover existed |
+| "thumbnail present" (`library.idx` flag) | the file was gone |
+
+**Rules**:
+- Before persisting a result, ask what it would mean if it were wrong *forever*. If the answer
+  is "a feature silently stops working", do not persist the failure — leave the state absent so
+  the next attempt retries.
+- Distinguish the two outcomes at the source. A generator returning `false` usually conflates
+  "nothing to produce" (permanent, safe to record) with "could not produce it now" (transient,
+  must not be). Where a caller must tell them apart, expose a predicate for the permanent case —
+  see `Epub::hasCoverImage()`.
+- A cache or index may record that an artifact **was produced**. It cannot know the artifact
+  still exists: verify cheaply (`Storage.exists`) before trusting the record, and never let a
+  shortcut re-write its own unverified claim, which makes a wrong entry self-sustaining.
+- A partial result computed under low heap must be discarded, not saved. See
+  `WordSelectionScan::saveCache()`: a truncation flag suppresses the write.
+
 ### Heap Buffer Allocation
 
 **Prefer `makeUniqueNoThrow` over `malloc`.** Both are nothrow (return `nullptr` on OOM rather than calling `abort()`), but `malloc` requires a manual `free` on every return path — a common source of leaks. `makeUniqueNoThrow<uint8_t[]>(size)` from `lib/Memory/Memory.h` frees automatically when it goes out of scope.

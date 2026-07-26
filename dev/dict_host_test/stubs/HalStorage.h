@@ -98,3 +98,11 @@ class HalStorage {
 };
 
 #define Storage HalStorage::getInstance()
+
+// Minimal ESP heap-introspection stub (on device this arrives via the Arduino core through the
+// real HalStorage.h). Host heap is effectively unlimited, so report a huge block.
+struct EspStubClass {
+  unsigned getMaxAllocHeap() const { return 0x7FFFFFFF; }
+  unsigned getFreeHeap() const { return 0x7FFFFFFF; }
+};
+inline EspStubClass ESP;

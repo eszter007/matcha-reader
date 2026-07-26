@@ -192,10 +192,10 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   auto part = contents.add<JsonObject>();
   auto parts = part["parts"].to<JsonArray>();
   auto textPart = parts.add<JsonObject>();
-  textPart["text"] =
-      std::string("Translate the following Japanese text to English. "
-                   "Return only the translation, no commentary.\n\n") +
-      sourceText;
+  textPart["text"] = std::string(
+                         "Translate the following Japanese text to English. "
+                         "Return only the translation, no commentary.\n\n") +
+                     sourceText;
 
   auto config = reqDoc["generationConfig"].to<JsonObject>();
   config["temperature"] = 0.3;
@@ -222,8 +222,7 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
     return false;
   }
 
-  bool headerOk =
-      esp_http_client_set_header(client, "Content-Type", "application/json") == ESP_OK;
+  bool headerOk = esp_http_client_set_header(client, "Content-Type", "application/json") == ESP_OK;
   if (headerOk) {
     esp_http_client_set_post_field(client, body.c_str(), static_cast<int>(body.length()));
   }
@@ -362,10 +361,9 @@ void EpubReaderTranslationActivity::render(RenderLock&&) {
     }
 
     if (maxScrollOffset > 0) {
-      std::string scrollInfo =
-          std::to_string(scrollOffset + 1) + "/" + std::to_string(maxScrollOffset + 1);
-      renderer.drawText(SMALL_FONT_ID, screen.x + screen.width - metrics.contentSidePadding - 40,
-                        contentBottom + 2, scrollInfo.c_str(), true);
+      std::string scrollInfo = std::to_string(scrollOffset + 1) + "/" + std::to_string(maxScrollOffset + 1);
+      renderer.drawText(SMALL_FONT_ID, screen.x + screen.width - metrics.contentSidePadding - 40, contentBottom + 2,
+                        scrollInfo.c_str(), true);
     }
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", tr(STR_DIR_UP), tr(STR_DIR_DOWN));

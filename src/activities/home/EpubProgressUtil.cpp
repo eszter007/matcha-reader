@@ -50,8 +50,8 @@ int percentFromCache(const std::string& cachePath, const char* logTag) {
             readCumulativeSize(spineIndex, curCumulative) &&
             (spineIndex == 0 || readCumulativeSize(spineIndex - 1, prevCumulative)) &&
             curCumulative >= prevCumulative) {
-          const float bytesRead = static_cast<float>(prevCumulative) +
-                                  sectionProgress * static_cast<float>(curCumulative - prevCumulative);
+          const float bytesRead =
+              static_cast<float>(prevCumulative) + sectionProgress * static_cast<float>(curCumulative - prevCumulative);
           const int pct = static_cast<int>(bytesRead / static_cast<float>(totalSize) * 100.0f + 0.5f);
           return std::clamp(pct, 0, 100);
         }

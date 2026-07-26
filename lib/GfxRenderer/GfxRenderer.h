@@ -190,9 +190,12 @@ class GfxRenderer {
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
   void drawIcon(const uint8_t bitmap[], int x, int y, int width, int height) const;
-  void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
-                  float cropY = 0) const;
-  void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;
+  // allowUpscale: by default the image only shrinks to fit maxWidth x maxHeight (covers and sleep
+  // screens rely on this); pass true to also grow a source smaller than the box up to fill it
+  // (manga panel zoom). Only wired through the 1-bit path -- the grayscale path always shrink-fits.
+  void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
+                  bool allowUpscale = false) const;
+  void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, bool allowUpscale = false) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Text
@@ -212,6 +215,9 @@ class GfxRenderer {
   /// Returns the kerning adjustment between two adjacent codepoints.
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // Render-truth advance for SHORT strings: resolves glyphs exactly as the draw loops do
+  // (on-demand SD load), so layout reservations match drawn ink. See implementation note.
+  int getRenderAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   bool getGlyphMetrics(int fontId, uint32_t cp, EpdFontFamily::Style style, int* left, int* width, int* top,
                        int* height) const;
   int getFontAscenderSize(int fontId) const;
@@ -237,9 +243,14 @@ class GfxRenderer {
   // Renders a single codepoint rotated 90° CCW and positioned inside a vertical
   // cell. shiftType is from Kinsoku::verticalShiftType():
   // 0=no bias, 2=closing bracket, 3=opening bracket, 4=dash/choonpu.
-  void drawCharVerticalRotatedInCell(int fontId, int cellLeftX, int cellTopY, int cellSize, uint32_t cp,
-                                     int shiftType, bool black = true,
-                                     EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // Reports where drawCharVerticalRotatedInCell() would put this glyph's ink (top y and
+  // height, in cellTopY's coordinate space) without drawing. Vertical layout uses it so a
+  // rotated Latin run keeps clear of the brackets it sits between.
+  bool verticalPunctInkBox(int fontId, uint32_t cp, EpdFontFamily::Style style, int cellTopY, int cellSize,
+                           int shiftType, int* inkTop, int* inkHeight) const;
+  void drawCharVerticalRotatedInCell(int fontId, int cellLeftX, int cellTopY, int cellSize, uint32_t cp, int shiftType,
+                                     bool black = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                                     int* inkTopOut = nullptr, int* inkHeightOut = nullptr) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

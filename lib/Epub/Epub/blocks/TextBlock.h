@@ -2,6 +2,7 @@
 #include <EpdFontFamily.h>
 #include <HalStorage.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,10 +34,7 @@ class TextBlock final : public Block {
   // True when any word on this line carries a furigana annotation -- layout gives such lines
   // extra leading so the ruby doesn't invade the line above (or clip at the page top).
   bool hasRuby() const {
-    for (const auto& r : wordRuby) {
-      if (!r.empty()) return true;
-    }
-    return false;
+    return std::any_of(wordRuby.begin(), wordRuby.end(), [](const auto& r) { return !r.empty(); });
   }
 
   explicit TextBlock(std::vector<std::string> words, std::vector<int16_t> word_xpos,

@@ -2,9 +2,9 @@
 
 #include <EpdFontFamily.h>
 #include <FontCacheManager.h>
-#include <SdCardFont.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <SdCardFont.h>
 
 #include <algorithm>
 #include <cctype>
@@ -74,7 +74,6 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
   }
 
   const char* wantedFamily = SETTINGS.sdFontFamilyName;
-
 
   const std::string& currentFamily = manager_.currentFamilyName();
   const uint8_t sizeEnum = fontSizeEnumFromSettings();
@@ -182,8 +181,7 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t siz
   // first -- they exist exactly for this -- then any other family that proves CJK-capable
   // when loaded. When both extensions are installed, match the selected style: built-in
   // Noto Serif pairs with NotoSerifJP, everything else with NotoSansJP.
-  const bool preferSerif = SETTINGS.sdFontFamilyName[0] == '\0' &&
-                           SETTINGS.fontFamily == CrossPointSettings::NOTOSERIF;
+  const bool preferSerif = SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == CrossPointSettings::NOTOSERIF;
   auto extensionRank = [preferSerif](const std::string& name) {
     std::string norm;
     for (const char c : name) {

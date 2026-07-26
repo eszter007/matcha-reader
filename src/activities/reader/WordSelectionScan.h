@@ -45,6 +45,17 @@ class WordSelectionScan {
   bool step(uint32_t maxMillis);
   bool isDone() const { return phase == Phase::Done; }
 
+  // True when initFrom*() or step() abandoned work because the heap couldn't grow a vector, so
+  // the selectable list is a partial (often tiny) result. Callers that can free heap (release
+  // font caches) then restartStepScan() to recover the full result -- see restartStepScan().
+  bool wasTruncated() const { return scanTruncated; }
+
+  // Re-run the step scan over the already-built allGlyphs after the caller has freed heap. Clears
+  // the partial selectable map, the truncation flag, and the scan cursor, but KEEPS allGlyphs
+  // (the step()-time abort never touches it), so a single low-heap rescan recovers every word the
+  // fragmented first pass dropped. No-op-safe if allGlyphs is empty.
+  void restartStepScan();
+
   // Single-slot per-book result cache: the completed selectable map for ONE (spine, page),
   // self-validated by a hash of allGlyphs (so a section rebuild with different layout/content
   // invalidates it) and the main dictionary's file size (so a dictionary swap does too). Also
@@ -61,9 +72,9 @@ class WordSelectionScan {
   static constexpr uint16_t kNoRestoredCursor = 0xFFFF;
   uint16_t restoredCursorIndex = kNoRestoredCursor;
 
-  std::vector<GlyphRef> allGlyphs;          // Full glyph list for building lookup text
-  std::vector<GlyphRef> selectableGlyphs;   // Positions with a dictionary match
-  std::vector<size_t> selectToAllIdx;       // Maps selectableGlyphs index -> allGlyphs index
+  std::vector<GlyphRef> allGlyphs;         // Full glyph list for building lookup text
+  std::vector<GlyphRef> selectableGlyphs;  // Positions with a dictionary match
+  std::vector<size_t> selectToAllIdx;      // Maps selectableGlyphs index -> allGlyphs index
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
@@ -73,6 +84,13 @@ class WordSelectionScan {
   static bool isHiragana(uint32_t cp);
   static bool isCJK(uint32_t cp);
   static bool isDigitCp(uint32_t cp);
+  // A katakana run of >=2 chars immediately followed by an honorific (さん/くん/ちゃん/さま/様/氏)
+  // is almost always a proper name being addressed, so it should stay one unit even when no
+  // dictionary covers it -- otherwise a fictional name fragments into unrelated real sub-words
+  // (ヘムレンさん -> ヘム=heme + レン). Returns the katakana run length IN CHARS, or 0 if `text`
+  // (from byte 0) doesn't start with such a name+honorific pattern. Shared by the scan (to group
+  // the selectable unit) and the runtime lookup (to display the whole name).
+  static size_t katakanaNameRunBeforeHonorific(const std::string& text);
   // A greedy dictionary match can absorb a trailing case-particle onto a kanji stem (東の, 私は)
   // and land on a junk entry. When the match is [kanji...][particle] and the stem alone is a
   // valid word, shorten `result` to the stem.

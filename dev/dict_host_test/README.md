@@ -11,8 +11,8 @@ From the repo root:
 
 ```
 cd dev/dict_host_test
-g++ -std=c++17 \
-  -I stubs -I ../../lib/Dict \
+g++ -std=c++20 \
+  -I stubs -I ../../lib/Dict -I ../../lib/Memory \
   -o dtest \
   ../../lib/Dict/Deinflector.cpp \
   ../../lib/Dict/DictIndex.cpp \

@@ -26,8 +26,7 @@ class GfxRenderer {
                 text);
   }
 
-  void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black,
-                            EpdFontFamily::Style style) const {
+  void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black, EpdFontFamily::Style style) const {
     std::printf("  drawRotated   font=%d x=%4d y=%4d black=%d style=%d text=\"%s\"\n", fontId, x, y, black, style,
                 text);
   }

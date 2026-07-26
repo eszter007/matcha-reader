@@ -250,12 +250,30 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
                     xhtml = zf.read(full_href).decode("utf-8", "ignore")
                 except KeyError:
                     continue
-                img_m = re.search(r'(?:src|xlink:href)="([^"]+)"', xhtml)
-                if not img_m:
-                    continue
-                img_href = img_m.group(1)
+                # Take the first src-like attribute that is an IMAGE. Kobo-processed EPUBs
+                # inject <script src=".../kobo.js"> (and style links) BEFORE the page's <img>,
+                # so grabbing the first src outright extracted kobo.js as the "page image" and
+                # the conversion died on an unidentifiable image.
                 xhtml_dir = os.path.dirname(full_href)
-                src_in_zip = os.path.normpath(os.path.join(xhtml_dir, img_href)).replace(os.sep, "/")
+                src_in_zip = None
+                for attr_m in re.finditer(r'(?:src|xlink:href)="([^"]+)"', xhtml):
+                    # hrefs may carry a fragment/query ("page.jpg#frag"); strip both
+                    # so the extension check and the zip lookup see the real path.
+                    candidate = attr_m.group(1).split("#", 1)[0].split("?", 1)[0]
+                    if not candidate or not is_image(candidate):
+                        continue
+                    # Only accept a candidate that resolves to a real ZIP member, so a
+                    # missing/external image href falls through to the next candidate
+                    # instead of dropping the whole spine page.
+                    resolved = os.path.normpath(os.path.join(xhtml_dir, candidate)).replace(os.sep, "/")
+                    try:
+                        zf.getinfo(resolved)
+                    except KeyError:
+                        continue
+                    src_in_zip = resolved
+                    break
+                if not src_in_zip:
+                    continue
 
             try:
                 data = zf.read(src_in_zip)
@@ -1033,6 +1051,63 @@ def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) ->
 # ── Main pipeline ─────────────────────────────────────────────────
 
 
+# Device screen sizes (portrait width x height) for --x3 / --x4 downscaling.
+DEVICE_TARGETS = {"x3": (528, 792), "x4": (480, 800)}
+
+
+def normalize_for_output(img):
+    """Put an image into a mode that resizes and dithers predictably.
+
+    Palette/1-bit/alpha modes resize poorly (palette indices get interpolated). Sources WITH
+    transparency are composited onto WHITE -- that is exactly what the firmware's PNG renderer
+    does with alpha (convertLineToGray blends toward 255), and what e-ink paper looks like --
+    whereas a bare convert("RGB") would composite onto black and turn transparent regions into
+    black blobs. Grayscale sources stay grayscale.
+    """
+    from PIL import Image  # deferred like main()'s import, so --help works without Pillow
+
+    has_alpha = img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        return background
+    if img.mode not in ("RGB", "L"):
+        return img.convert("RGB")
+    return img
+
+
+def fit_to_device(img, target):
+    """Downscale img to fit the device screen box; never upscale, never change aspect.
+
+    The firmware rotates a page/panel whose aspect doesn't match the screen so it fills the
+    display (a landscape image on the portrait screen renders rotated), so landscape images are
+    fitted against the swapped box. The result keeps every pixel the device can actually show and
+    drops the ones it never could -- the ESP32-C3 then decodes far fewer pixels per page/panel.
+
+    Returns img unchanged when target is None (default: keep original resolution) or the image
+    already fits.
+    """
+    if target is None:
+        return img
+    from PIL import Image  # deferred like main()'s import, so --help works without Pillow
+
+    tw, th = target
+    w, h = img.size
+    if w > h:
+        tw, th = th, tw
+    scale = min(tw / w, th / h)
+    if scale >= 1.0:
+        return img
+    img = normalize_for_output(img)
+    # Clamp to the box as belt-and-braces. Mathematically round() cannot exceed it (the binding
+    # axis rounds onto the target within float precision; the other axis is strictly below), but
+    # an explicit clamp makes "never exceeds the screen box" obvious rather than subtle.
+    new_w = min(tw, max(1, round(w * scale)))
+    new_h = min(th, max(1, round(h * scale)))
+    return img.resize((new_w, new_h), Image.LANCZOS)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert manga (image folder / CBZ / EPUB) into CrossPoint Reader format.",
@@ -1054,7 +1129,32 @@ def main():
     )
     parser.add_argument("--title", help="Book title written to meta.bin (overrides value auto-detected from source)")
     parser.add_argument("--author", help="Book author written to meta.bin (overrides value auto-detected from source)")
+    parser.add_argument(
+        "--mono",
+        action="store_true",
+        help="Write pages and panel crops as 1-bit (black/white) Floyd-Steinberg-dithered BMP instead of JPEG. "
+             "The device renders 1-bit BMP with a single fast black-and-white refresh (no 4-level gray pass), so "
+             "pages and panels paint noticeably faster. Best for pure line-art manga; screentone gradients become "
+             "dither patterns. Pairs naturally with --no-ocr: when OCR is enabled the (dithered) panel crop is what "
+             "gets sent to Gemini, so text recognition on toned pages is less accurate than from a JPEG crop.",
+    )
+    size_group = parser.add_mutually_exclusive_group()
+    size_group.add_argument(
+        "--x3",
+        action="store_true",
+        help="Downscale pages and panel crops to fit the Xteink X3 screen (528x792; landscape images fit the "
+             "rotated box). The device never displays more pixels than its screen, so this shrinks files and "
+             "makes on-device decoding much faster with no visible quality loss. Never upscales. Applies to "
+             "every output format (JPEG/PNG/BMP). Default without --x3/--x4: keep original resolution.",
+    )
+    size_group.add_argument(
+        "--x4",
+        action="store_true",
+        help="Downscale pages and panel crops to fit the Xteink X4 screen (480x800). See --x3.",
+    )
     args = parser.parse_args()
+
+    device_target = DEVICE_TARGETS["x3"] if args.x3 else DEVICE_TARGETS["x4"] if args.x4 else None
 
     api_key = None
     if not args.no_ocr:
@@ -1114,15 +1214,48 @@ def main():
             print(f"[{page_idx + 1}/{len(pages)}] {os.path.basename(src_path)}")
 
             img = Image.open(src_path)
+            # Downscale FIRST, before panel detection: every coordinate downstream (panel boxes,
+            # crop rects, OCR text boxes, the page dims in panels.idx) then lives in the resized
+            # space, matching the page/crop files actually written -- nothing needs rescaling.
+            orig_size = img.size
+            # ...but keep the full-resolution page for the panel crops. A panel is shown zoomed to
+            # fill the screen, so cropping it out of the already-reduced page spends most of the
+            # pixel budget before the zoom even starts -- a quarter-page panel keeps a quarter of
+            # the reduced pixels and is then magnified, dither dots and all. Cropping at full
+            # resolution and fitting each panel to the screen afterwards gives every panel the
+            # whole budget, and dithers once at the size it is actually displayed at.
+            source_img = normalize_for_output(img)
+            img = fit_to_device(img, device_target)
+            was_resized = img.size != orig_size
             img_w, img_h = img.size
+            # Panel boxes stay in resized page space (panels.idx records the page at that size);
+            # only the crop is taken from the original, so map the rect back across.
+            panel_scale_x = source_img.width / img_w
+            panel_scale_y = source_img.height / img_h
 
-            # Copy page to a canonical, trivially-sortable filename.
-            ext = Path(src_path).suffix.lower()
-            if ext not in (".jpg", ".jpeg", ".png"):
-                ext = ".jpg"
-                img.convert("RGB").save(os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92)
+            # Write the page to a canonical, trivially-sortable filename.
+            if args.mono:
+                # 1-bit Floyd-Steinberg-dithered BMP (convert("1") defaults to FS dithering). The
+                # device renders these BW-only, in a single fast refresh.
+                img.convert("L").convert("1").save(os.path.join(args.output_dir, f"page_{page_idx:04d}.bmp"), "BMP")
             else:
-                shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
+                ext = Path(src_path).suffix.lower()
+                if ext not in (".jpg", ".jpeg", ".png"):
+                    ext = ".jpg"
+                    img.convert("RGB").save(
+                        os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
+                    )
+                elif was_resized:
+                    # Resized: the source file no longer matches -- re-encode in the source's own
+                    # format so the output keeps its extension (PNG stays PNG, JPEG stays JPEG).
+                    if ext == ".png":
+                        img.save(os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "PNG", optimize=True)
+                    else:
+                        img.convert("RGB").save(
+                            os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
+                        )
+                else:
+                    shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
             boxes = detect_panels(img)
             boxes = sort_panels_manga_order(boxes)
@@ -1145,9 +1278,22 @@ def main():
                 # full-page image anyway, so the crop is a redundant copy.
                 panel_path = None
                 if not is_full_page_panel(box, img_w, img_h):
-                    cropped = img.crop((mx1, my1, mx2, my2))
-                    panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.jpg")
-                    cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
+                    cropped = source_img.crop((
+                        max(0, round(mx1 * panel_scale_x)),
+                        max(0, round(my1 * panel_scale_y)),
+                        min(source_img.width, round(mx2 * panel_scale_x)),
+                        min(source_img.height, round(my2 * panel_scale_y)),
+                    ))
+                    # Fit the panel itself to the screen, exactly as the page was fitted: the
+                    # firmware zooms a panel to fill the display, so this is the size it is
+                    # actually shown at -- and the one it should be dithered at.
+                    cropped = fit_to_device(cropped, device_target)
+                    if args.mono:
+                        panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.bmp")
+                        cropped.convert("L").convert("1").save(panel_path, "BMP")
+                    else:
+                        panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.jpg")
+                        cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
                 panel_paths.append(panel_path)
                 panel_rects.append((mx1, my1, mx2, my2))
 

@@ -10,6 +10,7 @@
 
 #include "Epub/FootnoteEntry.h"
 #include "Epub/ParsedText.h"
+#include "Epub/RubyGlossary.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
@@ -40,6 +41,19 @@ class ChapterHtmlSlimParser {
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+
+  // Boxed (kakomi) block tracking: a block element whose CSS defines a full 4-side border gets
+  // a PageBox rect around its laid-out lines; a box split across pages renders half-open at the
+  // seam. TOP-only borders (EBPAJ .k-solid-top) emit a full-width separator rule instead.
+  int boxDepth = -1;
+  uint8_t boxEdges = 0;
+  int16_t boxStartY = 0;
+  bool boxContinued = false;          // continued from the previous page: omit the top edge
+  bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
+  void flushPendingBlockLayout();
+  void emitBoxRect(bool openBottom);
+  void maybeEmitOpenBoxForPageBreak();
+  void closeBoxBlock();
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;
@@ -50,6 +64,9 @@ class ChapterHtmlSlimParser {
   bool focusReadingEnabled;
   const CssParser* cssParser;
   bool embeddedStyle;
+  // "Book side margins" setting: honor the book's horizontal CSS margins/padding
+  // (clamped per element) instead of zeroing them. See BlockStyle::fromCssStyle.
+  bool honorBookInsets;
   uint8_t imageRendering;
   std::string contentBase;
   std::string imageBasePath;
@@ -65,6 +82,9 @@ class ChapterHtmlSlimParser {
     CssTextDirection direction = CssTextDirection::Ltr;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
+    bool hasEmphasis = false;
+    CssTextEmphasis emphasis = CssTextEmphasis::None;
+    bool hasSmallCaps = false, smallCaps = false;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -76,6 +96,21 @@ class ChapterHtmlSlimParser {
   CssTextDirection effectiveDirection = CssTextDirection::Ltr;
   bool effectiveSup = false;
   bool effectiveSub = false;
+  // Active text-emphasis mark (JP bouten) -- rendered as synthetic per-glyph ruby.
+  CssTextEmphasis effectiveEmphasis = CssTextEmphasis::None;
+  // font-variant: small-caps -- approximated by uppercasing (no per-word size support).
+  bool effectiveSmallCaps = false;
+
+  // Ordered/unordered list nesting for list-style-type markers. Fixed-depth
+  // stack: nesting past kMaxListDepth reuses the innermost tracked context.
+  struct ListCtx {
+    uint16_t counter = 0;
+    CssListStyleType type = CssListStyleType::Disc;
+  };
+  static constexpr int kMaxListDepth = 8;
+  ListCtx listStack[kMaxListDepth];
+  int listDepth = 0;
+
   int tableDepth = 0;
   int tableRowIndex = 0;
   int tableColIndex = 0;
@@ -94,7 +129,20 @@ class ChapterHtmlSlimParser {
   bool inRubyBlock = false;
   bool inRtTag = false;
   std::string pendingRubyText;
+  // Whole-<ruby>-element accumulation for the glossary: mono-ruby elements
+  // (小<rt>こ</rt>林<rt>ばやし</rt>) also record 小林 -> こばやし so whole-word
+  // lookups match, not just the per-character pairs.
+  std::string rubyElemBase;
+  std::string rubyElemRuby;
+  int rubyElemRunCount = 0;
 
+ public:
+  // Per-book furigana glossary harvest: unique (base, ruby) pairs seen during this parse,
+  // merged into <cache>/ruby.bin by the section build after a successful parse (see
+  // RubyGlossary). Bounded by RubyGlossary's per-section cap.
+  std::vector<RubyGlossary::Pair> rubyHarvest;
+
+ private:
   // Footnote link tracking
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;
@@ -126,7 +174,8 @@ class ChapterHtmlSlimParser {
                                  const bool embeddedStyle, const std::string& contentBase,
                                  const std::string& imageBasePath, const uint8_t imageRendering = 0,
                                  std::vector<std::string> tocAnchors = {},
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
+                                 const bool honorBookInsets = false)
 
       : epub(epub),
         filepath(filepath),
@@ -143,6 +192,7 @@ class ChapterHtmlSlimParser {
         popupFn(popupFn),
         cssParser(cssParser),
         embeddedStyle(embeddedStyle),
+        honorBookInsets(honorBookInsets),
         imageRendering(imageRendering),
         contentBase(contentBase),
         imageBasePath(imageBasePath),

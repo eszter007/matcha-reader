@@ -4,6 +4,7 @@
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
 
+#include <atomic>
 #include <optional>
 
 #include "BookmarkEntry.h"
@@ -36,6 +37,64 @@ class EpubReaderActivity final : public Activity {
   int pagesUntilFullRefresh = 0;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
+
+  // Snapshot of the layout-affecting settings the currently-resident section was
+  // built with. The reader menu is pushed on top of this activity, so editing a
+  // setting (e.g. screenMargin) never null-resets the section -- the new value
+  // moves the draw origin but the cached line layout keeps the old width, so text
+  // overflows one side until the book is reopened. render() compares this against
+  // the current settings and reflows in place on a mismatch.
+  struct LayoutSig {
+    int fontId = -1;
+    uint16_t viewportWidth = 0;
+    uint16_t viewportHeight = 0;
+    float lineCompression = 0.0f;
+    uint8_t paragraphAlignment = 0;
+    bool extraParagraphSpacing = false;
+    bool hyphenationEnabled = false;
+    bool embeddedStyle = false;
+    uint8_t imageRendering = 0;
+    bool focusReadingEnabled = false;
+    bool bookCssMargins = false;
+    bool operator==(const LayoutSig& o) const {
+      return fontId == o.fontId && viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight &&
+             lineCompression == o.lineCompression && paragraphAlignment == o.paragraphAlignment &&
+             extraParagraphSpacing == o.extraParagraphSpacing && hyphenationEnabled == o.hyphenationEnabled &&
+             embeddedStyle == o.embeddedStyle && imageRendering == o.imageRendering &&
+             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins;
+    }
+    bool operator!=(const LayoutSig& o) const { return !(*this == o); }
+  };
+  LayoutSig sectionLayoutSig;
+
+  // Per-book reader preferences. The global settings page (opened from home)
+  // holds the DEFAULTS: a book with no prefs file opens with them. Once a book
+  // has been opened, its reading-relevant settings are pinned to the book
+  // (readerprefs.bin in its cache dir) and reapplied on every open; settings
+  // edited while reading affect only the book -- the global values captured in
+  // globalPrefsSnapshot are restored (RAM and, if a mid-session save leaked
+  // book values into the global file, re-saved) on exit. Vertical/furigana
+  // overrides already live per-book in progress.bin and are untouched.
+  struct ReaderPrefs {
+    uint8_t fontFamily = 0;
+    char sdFontFamilyName[32] = {};
+    uint8_t fontSize = 0;
+    uint8_t lineSpacing = 0;
+    uint8_t screenMargin = 0;
+    uint8_t bookCssMargins = 0;
+    uint8_t paragraphAlignment = 0;
+    uint8_t embeddedStyle = 0;
+    uint8_t hyphenationEnabled = 0;
+    uint8_t focusReadingEnabled = 0;
+    uint8_t imageRendering = 0;
+    uint8_t orientation = 0;
+    bool operator==(const ReaderPrefs&) const = default;
+  };
+  ReaderPrefs globalPrefsSnapshot;
+  static ReaderPrefs capturePrefsFromSettings();
+  static void applyPrefsToSettings(const ReaderPrefs& prefs);
+  bool loadBookPrefs(ReaderPrefs& out) const;
+  void saveBookPrefs(const ReaderPrefs& prefs) const;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   // Signals that the next render should reposition within the newly loaded section
@@ -81,9 +140,62 @@ class EpubReaderActivity final : public Activity {
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
 
+  // --- Background image-cache warm (render-task tail) ---
+  // After a page is fully displayed, the render task warms the NEXT page's image .pxc pixel
+  // cache in place (ImageBlock::warmCache, cacheOnly decode) so landing on a full-page
+  // illustration is a cache read instead of a multi-second decode. No extra task: the warm
+  // runs at the tail of render(), still holding the RenderLock, and gets out of the way via
+  // cooperative cancellation with two signals polled per decode block:
+  //   1. imageWarmInputStamp_ -- bumped by the loop task on ANY button press (and in
+  //      pageTurn() for tilt/auto turns) BEFORE any handler can push/pop an activity or take
+  //      the RenderLock, so those blocking acquires only ever wait one decode block.
+  //   2. the render task's own pending task-notification value -- a queued render (page turn
+  //      already requested, requestUpdateAndWait from another task) cancels the warm even
+  //      when no new button press is involved.
+  std::atomic<uint32_t> imageWarmInputStamp_{0};
+  uint32_t imageWarmStampSnapshot_ = 0;  // render task only: stamp value at warm start
+  std::string imageWarmFailedPath_;      // render task only: give-up-once decode-failure target
+  void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
+  static bool imageWarmShouldCancel(const void* ctx);
+
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
-                      int orientedMarginBottom, int orientedMarginLeft);
+                      int orientedMarginBottom, int orientedMarginLeft, bool glyphsAlreadyWarm = false);
+  // Horizontal analog of prewarmedVPage_: the page index whose glyphs currently sit warm in
+  // the font cache from the idle next-page prewarm; -1 = cold/unknown. Written on the render
+  // task only.
+  int prewarmedHPage_ = -1;
   void renderStatusBar() const;
+  // Bulk-loads a vertical page's glyphs into the SD-font mini cache (heap-gated). Returns
+  // false when the heap was too tight to prewarm -- rendering still works via the slower
+  // per-glyph on-demand path.
+  bool prewarmVerticalPageGlyphs(const VerticalPage& vpage);
+  // Draws one vertical TEXT page into the framebuffer; shared by the normal render path and
+  // the early-first-render hook. Does not touch the display. glyphsAlreadyWarm skips the
+  // prewarm when the page's glyphs were pre-loaded during idle (see prewarmedVPage_).
+  void renderVerticalPageBody(const VerticalPage& vpage, bool glyphsAlreadyWarm = false);
+  // Page index whose glyphs currently sit in the SD-font mini cache from the idle next-page
+  // warm; -1 = cache cold/unknown. Kindle-class turns: the NEXT page's glyphs are loaded
+  // while the reader looks at the current one, so a forward turn renders warm (~200ms)
+  // instead of paying the ~500-700ms per-page SD bulk load at button time.
+  int prewarmedVPage_ = -1;
+  // Direction of the most recent page turn; the idle warm follows it (forward turns warm
+  // the next page, backward turns the previous one) so sustained paging in EITHER
+  // direction hits a warm cache. Written by pageTurn() on the loop() task.
+  std::atomic<bool> lastTurnForward_{true};
+  // Early-first-render: invoked mid-build by VerticalSection the moment the reader's target
+  // page is laid out (and again for every mid-build page-turn request), so text is on screen
+  // seconds into a ~17s whole-chapter build and the user can keep turning pages while the
+  // rest of the chapter builds.
+  static void earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, int pageIndex);
+  void earlyRenderVerticalPage(const VerticalPage& page, int pageIndex);
+  // True while a vertical chapter build runs on the render task. Read by pageTurn() on the
+  // loop() task: while building, the section's pageCount is still 0, so the normal turn path
+  // would misread every press as "past the last page" and jump to the next spine (observed:
+  // a press during the build teleported the reader to the end of the book).
+  std::atomic<bool> verticalBuildInProgress_{false};
+  // Page index currently on screen from the early-render path; -1 until it first fires.
+  // Written on the render task, read by pageTurn() on the loop() task.
+  std::atomic<int> earlyDisplayedPage_{-1};
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
@@ -103,6 +215,8 @@ class EpubReaderActivity final : public Activity {
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
   void openWordLookupPanel();
+  void openReaderMenu();
+  static constexpr uint16_t kSpineProbeFailed = 0xFFFF;  // session marker: cache probe failed, don't retry
   // Page numbering across the logical ToC chapter: spine files without their own ToC entry
   // (inline illustration files etc.) inherit the previous entry's tocIndex, so the "page X/Y"
   // counter runs to the next REAL chapter instead of resetting at every spine-file boundary.

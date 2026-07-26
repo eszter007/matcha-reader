@@ -27,7 +27,8 @@ class EpubReaderMenuActivity final : public Activity {
     WORD_LOOKUP,
     TRANSLATE_PAGE,
     TOGGLE_VERTICAL,
-    TOGGLE_FURIGANA
+    TOGGLE_FURIGANA,
+    READER_SETTINGS
   };
 
   // hasWordLookup gates whether Word Lookup appears at all (book-level: is
@@ -58,8 +59,8 @@ class EpubReaderMenuActivity final : public Activity {
   };
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
-                                               bool showVerticalToggle, bool verticalEnabled, bool furiganaEnabled,
-                                               bool imageReaderMinimal);
+                                              bool showVerticalToggle, bool verticalEnabled, bool furiganaEnabled,
+                                              bool imageReaderMinimal);
 
   std::vector<MenuItem> menuItems;
   bool hasPageText = true;

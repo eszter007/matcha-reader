@@ -29,9 +29,12 @@ struct Dict {
   const char* dat;
 };
 const Dict kDicts[] = {
-    {"jmdict", DictIndex::IDX_PATH, DictIndex::DAT_PATH},
+    {"vocab", DictIndex::VOCAB_IDX_PATH, DictIndex::VOCAB_DAT_PATH},
     {"grammar", DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH},
-    {"jmnedict", DictIndex::NAMES_IDX_PATH, DictIndex::NAMES_DAT_PATH},
+    {"names", DictIndex::NAMES_IDX_PATH, DictIndex::NAMES_DAT_PATH},
+    // Legacy basenames -- exercised so the fallback pairs stay verifiable too.
+    {"jmdict (legacy)", DictIndex::LEGACY_VOCAB_IDX_PATH, DictIndex::LEGACY_VOCAB_DAT_PATH},
+    {"jmnedict (legacy)", DictIndex::LEGACY_NAMES_IDX_PATH, DictIndex::LEGACY_NAMES_DAT_PATH},
 };
 
 uint32_t crc32(const std::string& s) {
@@ -63,9 +66,8 @@ void probe(const Dict& d, const std::string& key) {
     std::snprintf(buf, sizeof(buf), "%02x", b);
     kh += buf;
   }
-  std::printf("%s|%s|%d|%d|%d|%08x\n", d.name, kh.c_str(), found ? 1 : 0,
-              found ? e.priority : -1, found ? (int)e.definition.size() : -1,
-              found ? crc32(e.definition) : 0u);
+  std::printf("%s|%s|%d|%d|%d|%08x\n", d.name, kh.c_str(), found ? 1 : 0, found ? e.priority : -1,
+              found ? (int)e.definition.size() : -1, found ? crc32(e.definition) : 0u);
 }
 }  // namespace
 
@@ -74,6 +76,9 @@ int main() {
   if (root) Storage.root_ = root;
 
   for (const auto& d : kDicts) {
+    // Fresh handles per dict: the preferred and legacy vocab/names entries map to the SAME
+    // handle slot (handlesFor), and an opened slot would silently keep serving the prior file.
+    DictIndex::releaseCaches();
     std::string idxPath = std::string(Storage.root_) + d.idx;
     FILE* f = std::fopen(idxPath.c_str(), "rb");
     if (!f) {
@@ -90,8 +95,8 @@ int main() {
     for (size_t r = 0; r < count; r += stride) {
       std::string hw = readHeadword(f, r);
       if (hw.empty()) continue;
-      probe(d, hw);                 // exact hit
-      probe(d, hw + "\x01");        // near-miss just after this headword
+      probe(d, hw);                                              // exact hit
+      probe(d, hw + "\x01");                                     // near-miss just after this headword
       if (hw.size() > 3) probe(d, hw.substr(0, hw.size() - 1));  // prefix (hit or miss)
     }
     std::fclose(f);

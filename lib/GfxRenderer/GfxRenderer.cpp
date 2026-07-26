@@ -264,8 +264,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
       outerBase = cursorX + fontData->ascender - top;  // screenX = outerBase + glyphY
       innerBase = cursorY - left;                      // screenY = innerBase - glyphX
     } else if constexpr (rotation == TextRotation::Rotated90CCW) {
-      outerBase = cursorX + top;    // screenX = outerBase - glyphY; baseline at cursorX
-      innerBase = cursorY + left;   // screenY = innerBase + glyphX
+      outerBase = cursorX + top;   // screenX = outerBase - glyphY; baseline at cursorX
+      innerBase = cursorY + left;  // screenY = innerBase + glyphX
     } else {
       outerBase = cursorY - top;   // screenY = outerBase + glyphY
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
@@ -1081,11 +1081,11 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
 }
 
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
-                             const float cropX, const float cropY) const {
+                             const float cropX, const float cropY, const bool allowUpscale) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
   // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
   if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
-    drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight);
+    drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight, allowUpscale);
     return;
   }
 
@@ -1112,6 +1112,11 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     hasTargetBounds = true;
   }
 
+  // Downscale only. The pixel loops below walk the SOURCE and map each pixel to a destination
+  // position, so a scale > 1 leaves whole destination rows and columns unwritten -- a white
+  // cross-hatch over the image (device photo, manga cover). Callers that need a small source to
+  // fill a bigger box go through the uncropped 1-bit path, which upscales properly, or have the
+  // thumbnail generated at the right size in the first place.
   if (hasTargetBounds && fitScale < 1.0f) {
     scale = fitScale;
     isScaled = true;
@@ -1198,17 +1203,31 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 }
 
 void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
-                                 const int maxHeight) const {
+                                 const int maxHeight, const bool allowUpscale) const {
+  const int srcW = bitmap.getWidth();
+  const int srcH = bitmap.getHeight();
+  if (srcW <= 0 || srcH <= 0) return;
+
+  // Fit within the target box preserving aspect. Shrink-to-fit is unconditional (covers, sleep
+  // screens); growing past 1:1 happens only when the caller opts in (manga panel zoom passes
+  // allowUpscale so a small mono crop fills the screen). Without the opt-in, scale is clamped to
+  // <= 1.0f exactly as before, so every existing caller is byte-for-byte unchanged.
   float scale = 1.0f;
-  bool isScaled = false;
-  if (maxWidth > 0 && bitmap.getWidth() > maxWidth) {
-    scale = static_cast<float>(maxWidth) / static_cast<float>(bitmap.getWidth());
-    isScaled = true;
+  bool hasBounds = false;
+  if (maxWidth > 0) {
+    scale = static_cast<float>(maxWidth) / static_cast<float>(srcW);
+    hasBounds = true;
   }
-  if (maxHeight > 0 && bitmap.getHeight() > maxHeight) {
-    scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight()));
-    isScaled = true;
+  if (maxHeight > 0) {
+    const float heightScale = static_cast<float>(maxHeight) / static_cast<float>(srcH);
+    scale = hasBounds ? std::min(scale, heightScale) : heightScale;
+    hasBounds = true;
   }
+  if (!hasBounds) scale = 1.0f;
+  if (scale > 1.0f && !allowUpscale) scale = 1.0f;
+
+  const bool upscale = scale > 1.0f;
+  const bool isScaled = scale != 1.0f;
 
   // Same fixed-point + preload treatment as drawBitmap() -- no FPU, so per-pixel float math
   // and per-row SD reads dominated this path too.
@@ -1216,7 +1235,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
   bitmap.preload();
 
   // For 1-bit BMP, output is still 2-bit packed (for consistency with readNextRow)
-  const int outputRowSize = (bitmap.getWidth() + 3) / 4;
+  const int outputRowSize = (srcW + 3) / 4;
   auto* outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
   auto* rowBytes = static_cast<uint8_t*>(malloc(bitmap.getRowBytes()));
 
@@ -1227,7 +1246,10 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     return;
   }
 
-  for (int bmpY = 0; bmpY < bitmap.getHeight(); bmpY++) {
+  const int screenW = getScreenWidth();
+  const int screenH = getScreenHeight();
+
+  for (int bmpY = 0; bmpY < srcH; bmpY++) {
     // Read rows sequentially using readNextRow
     if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
       LOG_ERR("GFX", "Failed to read row %d from 1-bit bitmap", bmpY);
@@ -1237,18 +1259,48 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     }
 
     // Calculate screen Y based on whether BMP is top-down or bottom-up
-    const int bmpYOffset = bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY;
+    const int bmpYOffset = bitmap.isTopDown() ? bmpY : srcH - 1 - bmpY;
+
+    if (upscale) {
+      // Enlarging: nearest-neighbour leaves gaps, so each source pixel paints the whole
+      // destination span it maps to. Spans are computed from adjacent scaled boundaries, so they
+      // tile the output exactly -- neighbouring pixels neither overlap nor leave holes. Only black
+      // is painted; white source pixels leave the (pre-cleared) background, so no darkest-wins
+      // merge is needed at this scale.
+      int screenY0 = y + ((bmpYOffset * scaleFP) >> 16);
+      int screenY1 = y + (((bmpYOffset + 1) * scaleFP) >> 16);
+      if (screenY0 < 0) screenY0 = 0;
+      if (screenY1 > screenH) screenY1 = screenH;
+      if (screenY1 <= screenY0) continue;
+
+      for (int bmpX = 0; bmpX < srcW; bmpX++) {
+        int screenX0 = x + ((bmpX * scaleFP) >> 16);
+        if (screenX0 >= screenW) break;  // spans only advance rightward
+        const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+        if (val >= 3) continue;  // white -> leave background
+        int screenX1 = x + (((bmpX + 1) * scaleFP) >> 16);
+        if (screenX0 < 0) screenX0 = 0;
+        if (screenX1 > screenW) screenX1 = screenW;
+        for (int sy = screenY0; sy < screenY1; sy++) {
+          for (int sx = screenX0; sx < screenX1; sx++) {
+            drawPixel(sx, sy, true);
+          }
+        }
+      }
+      continue;
+    }
+
     int screenY = y + (isScaled ? ((bmpYOffset * scaleFP) >> 16) : bmpYOffset);
-    if (screenY >= getScreenHeight()) {
+    if (screenY >= screenH) {
       continue;  // Continue reading to keep row counter in sync
     }
     if (screenY < 0) {
       continue;
     }
 
-    for (int bmpX = 0; bmpX < bitmap.getWidth(); bmpX++) {
+    for (int bmpX = 0; bmpX < srcW; bmpX++) {
       int screenX = x + (isScaled ? ((bmpX * scaleFP) >> 16) : bmpX);
-      if (screenX >= getScreenWidth()) {
+      if (screenX >= screenW) {
         break;
       }
       if (screenX < 0) {
@@ -1331,11 +1383,17 @@ void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoi
   free(nodeX);
 }
 
-// For performance measurement (using static to allow "const" methods)
+// For performance measurement (using static to allow "const" methods).
+// frameTimed gates the displayBuffer log: renders that draw over the existing
+// frame WITHOUT a clearScreen (battery/status partial updates) used to log the
+// time since the previous frame's clear -- minutes-old anchors that read as
+// fake 6-43s "renders" in field logs and derailed a crash investigation.
 static unsigned long start_ms = 0;
+static bool frameTimed = false;
 
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
+  frameTimed = true;
   if (_stripActive) {
     // Clear only the active band's scratch, not the shared framebuffer.
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
@@ -1384,8 +1442,10 @@ void GfxRenderer::invertScreen() const {
 }
 
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
-  auto elapsed = millis() - start_ms;
-  LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  if (frameTimed) {
+    LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", millis() - start_ms);
+    frameTimed = false;
+  }
   display.displayBuffer(refreshMode, fadingFix);
 }
 
@@ -1712,12 +1772,53 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       // glyph loader -- measurement must not do per-glyph SD reads (indexing speed).
       prevAdvanceFP = fallbackSdFont_->getAdvance(cp, 0);
     }
+
     if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
     }
     prevCp = cp;
   }
   widthPx += fp4::toPixel(prevAdvanceFP);  // final glyph's advance
+  return widthPx;
+}
+
+int GfxRenderer::getRenderAdvanceX(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  // Render-truth measurement: walks the same glyph/kerning sequence as drawText and
+  // drawTextRotated90CCW, resolving glyphs through getGlyph() (on-demand SD load) exactly
+  // as rendering will. getTextAdvanceX's fast paths price non-resident glyphs from advance
+  // tables or a companion font and can under-report -- observed on device as a rotated
+  // year-run measuring ~half its drawn width, so the following kanji overprinted its tail.
+  // Short strings only: each cold glyph costs an SD read, so bulk word indexing must keep
+  // using getTextAdvanceX.
+  if (text == nullptr || *text == '\0') return 0;
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+  const auto& font = fontIt->second;
+  int widthPx = 0;
+  int32_t prevAdvanceFP = 0;  // 12.4 fixed-point, same snap arithmetic as the draw loops
+  uint32_t cp;
+  uint32_t prevCp = 0;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    if (cp >= 0x0591 && cp <= 0x05C7) continue;
+    if (utf8IsCombiningMark(cp)) continue;
+    cp = font.applyLigatures(cp, text, style);
+    if (prevCp != 0) {
+      const auto kernFP = font.getKerning(prevCp, cp, style);
+      widthPx += fp4::toPixel(prevAdvanceFP + kernFP);
+    }
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
+      // drawText halves the cursor advance for scaled SUP/SUB glyphs; mirror it so the
+      // render-truth contract holds for those styles too.
+      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    }
+    prevCp = cp;
+  }
+  widthPx += fp4::toPixel(prevAdvanceFP);
   return widthPx;
 }
 
@@ -1901,9 +2002,15 @@ void GfxRenderer::drawCharVerticalCornerTopRight(const int fontId, const int cel
   renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, cursorX, cursorY, black, style);
 }
 
+// Shared by the drawing path and by verticalPunctInkBox(): when inkTopOut is non-null the
+// function stops once the ink box is known and reports it instead of painting. Vertical layout
+// needs the SAME numbers the drawer uses -- rotated punctuation is placed from its cell box with
+// several font-adaptive nudges, and a layout that guessed instead ran embedded Latin words into
+// the brackets around them (device photo, 「Furz」).
 void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cellLeftX, const int cellTopY,
                                                 const int cellSize, const uint32_t cp, const int shiftType,
-                                                const bool black, const EpdFontFamily::Style style) const {
+                                                const bool black, const EpdFontFamily::Style style, int* inkTopOut,
+                                                int* inkHeightOut) const {
   // Ellipsis glyphs are often horizontally designed and become too tall/ink-heavy
   // when rotated from proportional fonts. Render a centered vertical dot stack
   // directly in the cell to keep stable spacing and avoid overlaps.
@@ -1925,6 +2032,11 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     int startY = cellTopY + std::max(1, cellSize / 3) + cellSize / 3 + ellipsisExtra;
     const int maxStartY = cellTopY + std::max(1, cellSize - totalH - 1) + ellipsisExtra;
     if (startY > maxStartY) startY = maxStartY;
+    if (inkTopOut) {
+      *inkTopOut = startY;
+      *inkHeightOut = totalH;
+      return;
+    }
     const int startX = cellLeftX + (cellSize - dotSize) / 2;
     for (int i = 0; i < dotCount; i++) {
       const int y = startY + i * (dotSize + gap);
@@ -1970,26 +2082,36 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     drawY += baselineExcess * 2;
   }
 
-  if (shiftType == 2) {          // closing bracket/quote
-    const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3009 || cp == 0x300B ||
-                                  cp == 0x3011 || cp == 0x3015);
+  if (shiftType == 2) {  // closing bracket/quote
+    // Corner/lenticular/tortoise brackets (」』】〕) have their rotated ink hugging the
+    // right of the em box, so pull them left onto the column axis. Angle brackets 〉》 are
+    // symmetric chevrons -- the same pull pushed them visibly LEFT of the column (device
+    // photo, 〈夏〉); leave them ink-centered.
+    const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3011 || cp == 0x3015);
     if (isSquareBracket) {
       drawX = cellLeftX + (cellSize - rotatedW) / 2 - cellSize / 3;
     }
-    const int closingBias = std::max(1, cellSize / 6 + extraNudge * 2);
+    // +cellSize/4: the closing bracket read high against the Japanese character it closes
+    // (device check, tuned in two steps). After an embedded Latin word the distance is set by
+    // the run layout instead, so that case is tuned separately in VerticalParsedText.
+    const int closingBias = std::max(1, cellSize / 6 + cellSize / 4 + extraNudge * 2);
     drawY = cellTopY + cellSize - rotatedH + closingBias;
-  } else if (shiftType == 3) {   // opening bracket/quote
+  } else if (shiftType == 3) {  // opening bracket/quote
     // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
     // deep, the bracket read as hanging low/left of the character it opens (device photos with
     // UDDigiKyokasho). The maxX clamp below already grants opening brackets right overhang.
-    // Round parens stay purely ink-centered: the corner-bracket right shift pushed their
-    // rotated arc off the column axis (device photos, kyokasho).
-    const bool roundParen = (cp == 0xFF08);
+    // Round parens and angle brackets stay purely ink-centered: the corner-bracket right
+    // shift pushed the paren arc -- and the symmetric 〈《 chevrons (device photo, 〈夏〉) --
+    // off the column axis to the RIGHT.
+    const bool inkCentered = (cp == 0xFF08 || cp == 0x3008 || cp == 0x300A);
     // baselineExcess: tall fonts (Noto) left the opening bracket hanging too high above the
     // character it opens (kyokasho, baselineExcess 0, is unaffected).
-    const int openingBias = std::max(1, cellSize / 2 + extraNudge + baselineExcess);
+    // 1/2 -> 3/8 cell: the bracket still read low against the character it opens (device
+    // check). The vertical layout measures this through verticalPunctInkBox(), so the run
+    // and character spacing around it follows automatically.
+    const int openingBias = std::max(1, (cellSize * 3) / 8 + extraNudge + baselineExcess);
     drawY = cellTopY + cellSize + openingBias;
-    if (!roundParen) drawX += cellSize / 4;
+    if (!inkCentered) drawX += cellSize / 4;
   }
 
   int minX = cellLeftX;
@@ -2006,6 +2128,12 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   drawX = std::clamp(drawX, minX, maxX);
   drawY = std::clamp(drawY, minY, maxY);
 
+  if (inkTopOut) {
+    *inkTopOut = drawY;
+    *inkHeightOut = rotatedH;
+    return;
+  }
+
   // Rotated90CCW mapping:
   //   screenX in [cursorX + top - (height-1), cursorX + top]
   //   screenY in [cursorY + left, cursorY + left + (width-1)]
@@ -2015,12 +2143,31 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
 
   // TEMP diagnostics for vertical punctuation tuning (strip with the other telemetry)
   if (cp == 0x30FC || shiftType == 3) {
-    LOG_DBG("VROT", "cp=%04X shift=%d cell=%d asc=%d pct=%d nudge=%d rotW=%d rotH=%d gTop=%d gLeft=%d cellTopY=%d drawX=%d drawY=%d",
+    LOG_DBG("VROT",
+            "cp=%04X shift=%d cell=%d asc=%d pct=%d nudge=%d rotW=%d rotH=%d gTop=%d gLeft=%d cellTopY=%d drawX=%d "
+            "drawY=%d",
             (unsigned)cp, shiftType, cellSize, ascender, fontPct, extraNudge, rotatedW, rotatedH, glyph->top,
             glyph->left, cellTopY, drawX, drawY);
   }
 
   renderCharImpl<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorX, cursorY, black, style);
+}
+
+bool GfxRenderer::verticalPunctInkBox(const int fontId, const uint32_t cp, const EpdFontFamily::Style style,
+                                      const int cellTopY, const int cellSize, const int shiftType, int* inkTop,
+                                      int* inkHeight) const {
+  if (!inkTop || !inkHeight) return false;
+  *inkTop = INT32_MIN;
+  drawCharVerticalRotatedInCell(fontId, 0, cellTopY, cellSize, cp, shiftType, true, style, inkTop, inkHeight);
+  if (*inkTop == INT32_MIN) return false;  // no glyph / font missing
+  // VerticalTextBlock applies these extra drops at the call site, so mirror them here or the
+  // layout would read an ink box the drawer never uses.
+  if (cp == 0x2025 || cp == 0x2026) {
+    *inkTop += std::max(1, (cellSize * 7) / 8);
+  } else if (shiftType == 4) {
+    *inkTop += std::max(1, (cellSize * 3) / 8);
+  }
+  return true;
 }
 
 uint8_t* GfxRenderer::getFrameBuffer() const { return frameBuffer; }

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <vector>
 
 namespace {
 // Re-opening the idx/dat files on every lookup was the dominant cost of building the Word Lookup
@@ -35,8 +36,8 @@ constexpr size_t SPX_KEY_SIZE = DictIndexRecord::HEADWORD_SIZE;  // 32
 // scan; smaller -> bigger fine windows, and a big fine window is a slow SD read (transfer time,
 // not just per-transaction overhead) that the fine-window cache below must then absorb. 128 keeps
 // the coarse heap ~10KB (safe headroom under the resident reader) and the fine window ~4KB.
-constexpr size_t MAX_COARSE = 128;                              // RAM coarse entries per dict
-constexpr size_t FINE_SLICE_BYTES = 3904;                       // one coarse bracket (>= max cstride*32)
+constexpr size_t MAX_COARSE = 128;         // RAM coarse entries per dict
+constexpr size_t FINE_SLICE_BYTES = 3904;  // one coarse bracket (>= max cstride*32)
 
 struct CoarseEntry {
   char key[SPX_KEY_SIZE];
@@ -121,14 +122,43 @@ struct DictFileHandles {
   }
 };
 
-DictFileHandles g_jmdictHandles;
+DictFileHandles g_vocabHandles;
 DictFileHandles g_grammarHandles;
 DictFileHandles g_namesHandles;
 
 DictFileHandles& handlesFor(const char* idxPath) {
   if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0) return g_grammarHandles;
-  if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0) return g_namesHandles;
-  return g_jmdictHandles;
+  if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0 ||
+      std::strcmp(idxPath, DictIndex::LEGACY_NAMES_IDX_PATH) == 0) {
+    return g_namesHandles;
+  }
+  return g_vocabHandles;
+}
+
+// Resolved idx path for the vocab/names pairs: preferred filename if present on the SD card,
+// else legacy. nullptr = not probed yet. Cleared by DictIndex::releaseCaches() so dictionary
+// files uploaded mid-session (web file transfer) are picked up by the next lookup session.
+const char* g_vocabIdxResolved = nullptr;
+const char* g_namesIdxResolved = nullptr;
+
+const char* resolveIdxPath(const char*& cache, const char* preferred, const char* legacy) {
+  if (cache) return cache;
+  if (Storage.exists(preferred)) {
+    cache = preferred;
+  } else if (Storage.exists(legacy)) {
+    LOG_INF("DICT", "Using legacy dictionary filename: %s", legacy);
+    cache = legacy;
+  } else {
+    // Neither present: cache the preferred name anyway. Leaving this case un-cached would
+    // re-run both exists() probes inside EVERY lookupExact() when an optional dict (names) is
+    // absent -- thousands of SD probes per page scan, where the pre-rename code paid nothing
+    // (lookupInFile's triedOpen cache). Tradeoff: files uploaded mid-session are noticed at
+    // the next lookup session (releaseCaches() clears this cache AND the triedOpen latches)
+    // or reboot. isAvailable() alone reflects a preferred-named upload immediately, since it
+    // re-runs exists() on the resolved path; a legacy-named upload needs the re-probe.
+    cache = preferred;
+  }
+  return cache;
 }
 
 // Derive "/dict/foo.spx" from "/dict/foo.idx" into out (must be >= strlen(idxPath)+1).
@@ -160,8 +190,7 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   if (version != SPX_VERSION || stride == 0 || fineCount == 0) return;
   // Stale sidecar (dict file changed) -> fall back to the full search rather than mis-locate.
   if (idxCount != recordCount) {
-    LOG_ERR("DICT", "spx %s stale: %u records vs idx %u", spxPath, idxCount,
-            static_cast<unsigned>(recordCount));
+    LOG_ERR("DICT", "spx %s stale: %u records vs idx %u", spxPath, idxCount, static_cast<unsigned>(recordCount));
     return;
   }
 
@@ -175,15 +204,14 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   auto fineCache = makeUniqueNoThrow<uint8_t[]>(fineBytes);
   if (!coarse || !fineCache) {
     // Not enough contiguous heap right now -> stay on the full search. Not fatal.
-    LOG_ERR("DICT", "spx alloc failed (%u coarse, %u B fine); using full search",
-            static_cast<unsigned>(coarseCount), static_cast<unsigned>(fineBytes));
+    LOG_ERR("DICT", "spx alloc failed (%u coarse, %u B fine); using full search", static_cast<unsigned>(coarseCount),
+            static_cast<unsigned>(fineBytes));
     return;
   }
   for (size_t c = 0; c < coarseCount; c++) {
     const uint32_t fineIdx = static_cast<uint32_t>(c) * cstride;  // < fineCount by construction
     h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fineIdx) * SPX_KEY_SIZE);
-    if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) !=
-        static_cast<int>(SPX_KEY_SIZE)) {
+    if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) != static_cast<int>(SPX_KEY_SIZE)) {
       return;  // partial -> leave spxOk false
     }
     coarse[c].fineIdx = fineIdx;
@@ -200,8 +228,7 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
   h.spxCoarseCount = coarseCount;
   h.spxOk = true;
   LOG_INF("DICT", "spx %s: %u checkpoints, %u coarse in RAM (%u B)", spxPath, fineCount,
-          static_cast<unsigned>(coarseCount),
-          static_cast<unsigned>(coarseCount * sizeof(CoarseEntry)));
+          static_cast<unsigned>(coarseCount), static_cast<unsigned>(coarseCount * sizeof(CoarseEntry)));
 }
 
 // Narrow the search to the .idx record window [*lo,*hi) that must contain `key` (a 32-byte,
@@ -282,8 +309,7 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 
   h.idxFile.seek(start * sizeof(DictIndexRecord));
   const size_t bytesToRead = count * sizeof(DictIndexRecord);
-  if (h.idxFile.read(reinterpret_cast<uint8_t*>(h.blockCache.get()), bytesToRead) !=
-      static_cast<int>(bytesToRead)) {
+  if (h.idxFile.read(reinterpret_cast<uint8_t*>(h.blockCache.get()), bytesToRead) != static_cast<int>(bytesToRead)) {
     h.blockStart = SIZE_MAX;  // invalidate on read failure -- don't serve a partial block later
     return false;
   }
@@ -295,12 +321,24 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 }
 }  // namespace
 
-bool DictIndex::isAvailable() {
-  return Storage.exists(IDX_PATH) && Storage.exists(DAT_PATH);
+const char* DictIndex::vocabIdxPath() {
+  return resolveIdxPath(g_vocabIdxResolved, VOCAB_IDX_PATH, LEGACY_VOCAB_IDX_PATH);
+}
+const char* DictIndex::vocabDatPath() {
+  // Pair the .dat with whichever .idx was resolved -- never mix legacy and preferred halves.
+  return vocabIdxPath() == LEGACY_VOCAB_IDX_PATH ? LEGACY_VOCAB_DAT_PATH : VOCAB_DAT_PATH;
+}
+const char* DictIndex::namesIdxPath() {
+  return resolveIdxPath(g_namesIdxResolved, NAMES_IDX_PATH, LEGACY_NAMES_IDX_PATH);
+}
+const char* DictIndex::namesDatPath() {
+  return namesIdxPath() == LEGACY_NAMES_IDX_PATH ? LEGACY_NAMES_DAT_PATH : NAMES_DAT_PATH;
 }
 
+bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
+
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
-                             bool needDefinition) {
+                             bool needDefinition, uint8_t posMask) {
   DictFileHandles& h = handlesFor(idxPath);
   if (!h.opened) {
     // Optional dictionaries (grammar, jmnedict) may genuinely not be on the SD card -- without
@@ -308,8 +346,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     // fail again, once per candidate/window/character for the whole page.
     if (h.triedOpen) return false;
     h.triedOpen = true;
-    if (!Storage.openFileForRead("DICT", idxPath, h.idxFile) ||
-        !Storage.openFileForRead("DICT", datPath, h.datFile)) {
+    if (!Storage.openFileForRead("DICT", idxPath, h.idxFile) || !Storage.openFileForRead("DICT", datPath, h.datFile)) {
       return false;
     }
     h.opened = true;
@@ -366,68 +403,123 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
     } else if (cmp > 0) {
       lo = mid + 1;
     } else {
+      // POS gate: a record with flags counts only if it intersects the caller's mask; a record
+      // with posFlags==0 (no POS data, e.g. a pre-flags dict file) always counts. posMask==0
+      // means the caller doesn't care (exact surface-form lookups).
+      const auto posAccept = [posMask](uint8_t flags) { return posMask == 0 || flags == 0 || (flags & posMask) != 0; };
+      constexpr size_t kMaxSiblingScan = 32;  // bound the walks for a pathological reading
+
       // Existence-only mode: the caller discards the definition (page scan), so skip the
       // backward walk, the collect walk, and all .dat payload reads -- each is an SD transaction.
-      if (!needDefinition) {
+      // With a POS mask, the record the binary search landed on may be the wrong homophone
+      // (しる could land on 汁 while the mask wants the verb 知る), so only take the fast path
+      // when that record already passes; otherwise fall through to the sibling walk below.
+      if (!needDefinition && posAccept(rec.posFlags)) {
         out.headword = headword;
         out.priority = rec.priority;
+        out.posFlags = rec.posFlags;
         out.definition.clear();
         return true;
       }
 
-      // Found a match — scan backwards to find the first record with this headword
+      // Found a match — scan backwards to find the first record with this headword. Bounded per
+      // direction so the sibling window is anchored on MID, not on the block start: real homophone
+      // blocks reach 54 records (こう), and a window of kMaxSiblingScan counted from `first` could
+      // push the compatible sibling past the cap when the binary search lands late in the block.
+      // Anchoring both bounds on mid guarantees mid±kMaxSiblingScan coverage (up to 65 records).
       size_t first = mid;
-      while (first > 0) {
+      while (first > 0 && (mid - first) < kMaxSiblingScan) {
         DictIndexRecord prevRec;
         if (!readIndexRecord(h, first - 1, recordCount, prevRec)) break;
         if (std::memcmp(key, prevRec.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         first--;
       }
+      const size_t scanEnd = std::min(recordCount, mid + 1 + kMaxSiblingScan);
 
-      // Collect all entries with this headword, pick highest priority and merge
-      struct Entry { std::string def; uint8_t priority; };
-      std::vector<Entry> entries;
-      constexpr int kMaxEntries = 5;
+      // POS-filtered existence check: any sibling with compatible flags is a hit. Served almost
+      // entirely from the block cache (the backward walk above just fetched this block).
+      if (!needDefinition) {
+        for (size_t idx = first; idx < scanEnd; idx++) {
+          DictIndexRecord r;
+          if (!readIndexRecord(h, idx, recordCount, r)) break;
+          if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
+          if (posAccept(r.posFlags)) {
+            out.headword = headword;
+            out.priority = r.priority;
+            out.posFlags = r.posFlags;
+            out.definition.clear();
+            return true;
+          }
+        }
+        return false;
+      }
 
-      for (size_t idx = first; idx < recordCount && static_cast<int>(entries.size()) < kMaxEntries; idx++) {
+      // Two passes so the highest-priority senses win even when they sit past the first few in
+      // storage order. The index groups all same-reading records together but NOT by priority, so
+      // a reading with many homophones (ほう: 方/法/報/...袍) could bury the common word (方) behind
+      // rarer ones (袍) and the old "read the first 5, then sort those" lost it. Pass 1 walks every
+      // sibling reading ONLY the index record (priority + payload location, no .dat read); pass 2
+      // reads definitions for just the top-priority few. Pass 1 is cheap index-only SD reads; pass
+      // 2 does the same handful of .dat reads as before.
+      struct Sib {
+        uint8_t priority;
+        uint8_t posFlags;
+        uint32_t offset;
+        uint16_t length;
+      };
+      std::vector<Sib> sibs;
+      sibs.reserve(kMaxSiblingScan);
+      for (size_t idx = first; idx < scanEnd && sibs.size() < kMaxSiblingScan; idx++) {
         DictIndexRecord r;
         if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
+        if (!posAccept(r.posFlags)) continue;  // wrong word class for this deinflection candidate
+        sibs.push_back({r.priority, r.posFlags, r.offset, r.length});
+      }
+      if (sibs.empty()) return false;
 
-        // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions --
-        // confirmed by a real device crash_report with the heap run down mid-lookup-session.
-        // Skip entries that don't comfortably fit (the user gets a shorter definition instead
-        // of a reboot). The size sanity cap also rejects a corrupt/misread record length
-        // before it can become a huge allocation request.
+      // Selection sort by priority (highest first) -- <=32 uint8 compares, negligible.
+      for (size_t a = 0; a < sibs.size(); a++) {
+        size_t best = a;
+        for (size_t b = a + 1; b < sibs.size(); b++)
+          if (sibs[b].priority > sibs[best].priority) best = b;
+        if (best != a) std::swap(sibs[a], sibs[best]);
+      }
+
+      // Read definitions for the top-priority siblings, already in priority order.
+      struct Entry {
+        std::string def;
+        uint8_t priority;
+      };
+      std::vector<Entry> entries;
+      uint8_t bestFlags = 0;  // posFlags of the first (highest-priority) entry actually read
+      constexpr int kMaxEntries = 5;
+      for (size_t s = 0; s < sibs.size() && static_cast<int>(entries.size()) < kMaxEntries; s++) {
+        // def.resize() is a bare allocation that abort()s on OOM under -fno-exceptions -- confirmed
+        // by a real device crash_report with the heap run down mid-lookup-session. Skip entries
+        // that don't comfortably fit (shorter definition instead of a reboot); the size cap also
+        // rejects a corrupt/misread record length before it becomes a huge allocation request.
         constexpr uint32_t MAX_DEF_BYTES = 16 * 1024;
-        if (r.length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < r.length + 8 * 1024) {
-          LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(r.length),
+        if (sibs[s].length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < sibs[s].length + 8 * 1024) {
+          LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(sibs[s].length),
                   ESP.getMaxAllocHeap());
-          if (entries.empty()) continue;  // keep trying: a later sibling entry may be smaller
+          if (entries.empty()) continue;  // keep trying: a lower-priority sibling may be smaller
           break;
         }
-
-        datFile.seek(r.offset);
+        datFile.seek(sibs[s].offset);
         std::string def;
-        def.resize(r.length);
-        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), r.length) != static_cast<int>(r.length)) continue;
-
-        entries.push_back({std::move(def), r.priority});
+        def.resize(sibs[s].length);
+        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) != static_cast<int>(sibs[s].length))
+          continue;
+        if (entries.empty()) bestFlags = sibs[s].posFlags;
+        entries.push_back({std::move(def), sibs[s].priority});
       }
 
       if (entries.empty()) return false;
 
-      // Sort by priority (highest first)
-      for (size_t a = 0; a < entries.size(); a++) {
-        for (size_t b = a + 1; b < entries.size(); b++) {
-          if (entries[b].priority > entries[a].priority) {
-            std::swap(entries[a], entries[b]);
-          }
-        }
-      }
-
       out.headword = headword;
       out.priority = entries[0].priority;
+      out.posFlags = bestFlags;
       if (entries.size() == 1) {
         out.definition = std::move(entries[0].def);
       } else {
@@ -455,28 +547,42 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   return false;
 }
 
-bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMask, bool needDefinition) {
+bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMask, bool needDefinition,
+                            uint8_t posMask) {
   g_lookupExactCalls++;
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
-  if ((dictMask & DICT_JMDICT) && lookupInFile(headword, IDX_PATH, DAT_PATH, out, needDefinition)) return true;
-  if ((dictMask & DICT_GRAMMAR) && lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition))
+  if ((dictMask & DICT_JMDICT) &&
+      lookupInFile(headword, vocabIdxPath(), vocabDatPath(), out, needDefinition, posMask)) {
+    out.sourceDict = DICT_JMDICT;
     return true;
-  if ((dictMask & DICT_NAMES) && lookupInFile(headword, NAMES_IDX_PATH, NAMES_DAT_PATH, out, needDefinition))
+  }
+  if ((dictMask & DICT_GRAMMAR) &&
+      lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition, posMask)) {
+    out.sourceDict = DICT_GRAMMAR;
     return true;
+  }
+  if ((dictMask & DICT_NAMES) && lookupInFile(headword, namesIdxPath(), namesDatPath(), out, needDefinition, posMask)) {
+    out.sourceDict = DICT_NAMES;
+    return true;
+  }
   return false;
 }
 
 void DictIndex::releaseCaches() {
-  g_jmdictHandles.release();
+  g_vocabHandles.release();
   g_grammarHandles.release();
   g_namesHandles.release();
+  // Re-probe filenames next session: dictionary files can be added/replaced mid-session via the
+  // web file transfer, including switching between legacy and preferred names.
+  g_vocabIdxResolved = nullptr;
+  g_namesIdxResolved = nullptr;
 }
 
 void DictIndex::logAndResetStats(const char* label) {
-  LOG_INF("DICT", "%s: %u lookupExact, idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)",
-          label, g_lookupExactCalls, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
+  LOG_INF("DICT", "%s: %u lookupExact, idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)", label,
+          g_lookupExactCalls, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
           g_recordCacheMisses + g_fineReads);
   g_lookupExactCalls = 0;
   g_recordCacheHits = 0;

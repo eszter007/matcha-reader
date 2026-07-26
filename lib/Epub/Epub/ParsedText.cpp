@@ -197,6 +197,21 @@ void stripSoftHyphensInPlace(std::string& word) {
 // Returns the advance width for a word while ignoring soft hyphen glyphs and optionally appending a visible hyphen.
 // Uses advance width (sum of glyph advances + kerning) rather than bounding box width so that italic glyph overhangs
 // don't inflate inter-word spacing.
+// A measured width of zero means the advance data isn't resident (advance-table cap, cold
+// font after a change). Never lay a word out at zero width -- that bakes overlapping words
+// into the cached layout (device photo: TCY dates overprinting their neighbours). Estimate
+// em-uniform CJK at 7/8 em per codepoint instead; keep the estimate OUT of getTextAdvanceX
+// itself, whose zero is a meaningful "not resident" answer to probing callers (the vertical
+// cell measurement handles it with its own deliberate fallback).
+uint16_t fallbackWordWidth(const GfxRenderer& renderer, const int fontId, const std::string& word) {
+  const int emPx = renderer.getLineHeight(fontId);
+  size_t cpCount = 0;
+  for (const char c : word) {
+    if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) cpCount++;
+  }
+  return static_cast<uint16_t>(std::max<size_t>(1, cpCount) * ((emPx * 7) / 8));
+}
+
 uint16_t measureWordWidth(const GfxRenderer& renderer, const int fontId, const std::string& word,
                           const EpdFontFamily::Style style, const bool appendHyphen = false) {
   if (word.size() == 1 && word[0] == ' ' && !appendHyphen) {
@@ -204,7 +219,8 @@ uint16_t measureWordWidth(const GfxRenderer& renderer, const int fontId, const s
   }
   const bool hasSoftHyphen = containsSoftHyphen(word);
   if (!hasSoftHyphen && !appendHyphen) {
-    return renderer.getTextAdvanceX(fontId, word.c_str(), style);
+    const int w = renderer.getTextAdvanceX(fontId, word.c_str(), style);
+    return w > 0 ? static_cast<uint16_t>(w) : fallbackWordWidth(renderer, fontId, word);
   }
 
   std::string sanitized = word;
@@ -214,7 +230,8 @@ uint16_t measureWordWidth(const GfxRenderer& renderer, const int fontId, const s
   if (appendHyphen) {
     sanitized.push_back('-');
   }
-  return renderer.getTextAdvanceX(fontId, sanitized.c_str(), style);
+  const int w = renderer.getTextAdvanceX(fontId, sanitized.c_str(), style);
+  return w > 0 ? static_cast<uint16_t>(w) : fallbackWordWidth(renderer, fontId, sanitized);
 }
 
 // Checks if a UTF-8 codepoint should be counted as part of a word for Focus Reading

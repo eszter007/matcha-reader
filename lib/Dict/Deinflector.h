@@ -8,12 +8,12 @@
 // A rule applies only when the input word's condition matches condIn,
 // and the output candidate gets condOut for further chaining.
 enum class WordCondition : uint8_t {
-  V1 = 0,    // ichidan verb (食べる)
-  V5 = 1,    // godan verb (書く)
-  VS = 2,    // suru verb (する)
-  VK = 3,    // kuru verb (来る)
-  ADJ_I = 4, // i-adjective (美しい)
-  DICT = 5,  // any dictionary form (terminal)
+  V1 = 0,     // ichidan verb (食べる)
+  V5 = 1,     // godan verb (書く)
+  VS = 2,     // suru verb (する)
+  VK = 3,     // kuru verb (来る)
+  ADJ_I = 4,  // i-adjective (美しい)
+  DICT = 5,   // any dictionary form (terminal)
 };
 
 struct DeinflectionCandidate {

@@ -143,51 +143,25 @@ void RoundedRaffTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
         const std::string coverBmpPath =
             UITheme::getCoverThumbPath(coverPath, RoundedRaffMetrics::values.homeCoverHeight);
 
-        // First time: load cover from SD and render
-        if (FsHelpers::hasJpgExtension(coverBmpPath) || FsHelpers::hasPngExtension(coverBmpPath)) {
-          ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(coverBmpPath);
-          if (decoder) {
-            ImageDimensions dims = {0, 0};
-            if (decoder->getDimensions(coverBmpPath, dims) && dims.width > 0 && dims.height > 0) {
-              const int drawW = RoundedRaffMetrics::values.homeCoverHeight * dims.width / dims.height;
-              RenderConfig config;
-              config.x = tileX + (tileWidth - drawW) / 2;
-              config.y = imgY;
-              config.maxWidth = drawW;
-              config.maxHeight = RoundedRaffMetrics::values.homeCoverHeight;
-              config.useGrayscale = false;
-              config.useDithering = true;
-              if (decoder->decodeToFramebuffer(coverBmpPath, renderer, config)) {
-                coverWidth = drawW;
-                renderer.maskRoundedRectOutsideCorners(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth,
-                                                       RoundedRaffMetrics::values.homeCoverHeight, kCoverRadius,
-                                                       Color::LightGray);
-              } else {
-                hasCover = false;
-              }
-            } else {
-              hasCover = false;
-            }
-          } else {
-            hasCover = false;
-          }
-        } else {
-          HalFile file;
-          if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
-            Bitmap bitmap(file);
-            if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-              coverWidth = bitmap.getWidth();
-              renderer.drawBitmap(bitmap, tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth,
-                                  RoundedRaffMetrics::values.homeCoverHeight);
-              renderer.maskRoundedRectOutsideCorners(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth,
-                                                     RoundedRaffMetrics::values.homeCoverHeight, kCoverRadius,
-                                                     Color::LightGray);
-            } else {
-              hasCover = false;
-            }
-            file.close();
+        // First time: load cover from SD and render. Shared helper: manga carry a JPG/PNG
+        // cover, EPUB/XTC a generated BMP thumbnail.
+        int srcW = 0, srcH = 0;
+        int drawn = 0;
+        if (UITheme::getCoverThumbSize(coverBmpPath, &srcW, &srcH)) {
+          const int drawW = RoundedRaffMetrics::values.homeCoverHeight * srcW / srcH;
+          const int drawX = tileX + (tileWidth - drawW) / 2;
+          drawn = UITheme::drawCoverThumb(renderer, coverBmpPath, drawX, imgY,
+                                          RoundedRaffMetrics::values.homeCoverHeight, drawW);
+          if (drawn > 0) {
+            // coverWidth is shared with the frame/placeholder drawing below and survives
+            // between renders: only a successful draw may change it, or a failed cover would
+            // shrink the placeholder to zero width and vanish.
+            coverWidth = drawn;
+            renderer.maskRoundedRectOutsideCorners(drawX, imgY, coverWidth, RoundedRaffMetrics::values.homeCoverHeight,
+                                                   kCoverRadius, Color::LightGray);
           }
         }
+        if (drawn == 0) hasCover = false;
       }
 
       // Draw either way
@@ -363,16 +337,15 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
   const int rowWidth = rect.width - sidePadding * 2;
 
   const int pageEndIndex = std::min(itemCount, pageStartIndex + pageItems);
-  bool prewarmed =
-      prewarmRows(renderer, kTitleFontId, (1 << EpdFontFamily::BOLD) | (1 << EpdFontFamily::REGULAR), pageStartIndex,
-                  pageEndIndex, [&](int i) {
-                    std::string s = rowTitle(i);
-                    if (rowValue != nullptr) s += rowValue(i);
-                    return s;
-                  });
+  bool prewarmed = prewarmRows(renderer, kTitleFontId, (1 << EpdFontFamily::BOLD) | (1 << EpdFontFamily::REGULAR),
+                               pageStartIndex, pageEndIndex, [&](int i) {
+                                 std::string s = rowTitle(i);
+                                 if (rowValue != nullptr) s += rowValue(i);
+                                 return s;
+                               });
   if (rowSubtitle != nullptr) {
-    prewarmed |= prewarmRows(renderer, kSubtitleFontId, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex,
-                             rowSubtitle);
+    prewarmed |=
+        prewarmRows(renderer, kSubtitleFontId, 1 << EpdFontFamily::REGULAR, pageStartIndex, pageEndIndex, rowSubtitle);
   }
 
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {

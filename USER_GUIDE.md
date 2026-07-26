@@ -36,8 +36,13 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
   - [5. Reader Menu](#5-reader-menu)
       - [5.1 Chapter Selection](#51-chapter-selection)
       - [5.2 Bookmarks](#52-bookmarks)
-  - [6. Current Limitations & Roadmap](#6-current-limitations--roadmap)
-  - [7. Troubleshooting Issues & Escaping Bootloop](#7-troubleshooting-issues--escaping-bootloop)
+  - [6. Japanese Reading Features](#6-japanese-reading-features)
+    - [6.1 Reading a Japanese Book](#61-reading-a-japanese-book)
+    - [6.2 Word Lookup](#62-word-lookup)
+    - [6.3 Page Translation](#63-page-translation)
+    - [6.4 Reading Manga](#64-reading-manga)
+  - [7. Current Limitations & Roadmap](#7-current-limitations--roadmap)
+  - [8. Troubleshooting Issues & Escaping Bootloop](#8-troubleshooting-issues--escaping-bootloop)
 
 ## 1. Hardware Overview
 
@@ -611,7 +616,55 @@ To open bookmarks, press **Confirm** while inside a book. Then navigate to the *
 
 Bookmarks are stored in the `.crosspoint/bookmarks` folder in the JSON format.
 
-## 6. Current Limitations & Roadmap
+## 6. Japanese Reading Features
+
+These are specific to the Matcha Reader fork. See the [README](README.md) for what they are and how to set
+up the dictionaries, fonts, and API key they need.
+
+### 6.1 Reading a Japanese Book
+
+Copy a Japanese EPUB to the SD card and open it from the Library. Vertical text activates on its own when the
+book declares `<dc:language>ja</dc:language>` — no setting to find.
+
+The reader menu (**Confirm**) gains **Vertical Text: ON/OFF** and **Furigana: ON/OFF** for Japanese books. Both
+toggle in place without leaving the menu, and both are remembered per book.
+
+### 6.2 Word Lookup
+
+Reader menu → **Word Lookup**.
+
+| Button | Action |
+| --- | --- |
+| Left / Right | Move between matched words on the page |
+| Up / Down | Scroll a long definition |
+| Back | Return to reading |
+
+The header counts your position (e.g. 10/35). The page is pre-scanned, so you only ever land on a word the
+dictionary actually has.
+
+For one-press access, set **Settings → Controls → Short power button click** to **Word Lookup**. It then opens
+straight from the page, in both EPUBs and manga.
+
+### 6.3 Page Translation
+
+Reader menu → **Translate Page**, then wait for "Translating…". Up/Down scrolls, Back returns. Needs Wi-Fi and a
+Gemini API key in `/system/gemini.key`.
+
+### 6.4 Reading Manga
+
+Copy a converted manga folder anywhere on the SD card — any depth, any folder name. It appears in the Library
+grid, on shelves, and in Continue Reading with its cover, title, author, and progress.
+
+| Button | Full-page view | Panel zoom |
+| --- | --- | --- |
+| Page turn | Enter panel zoom at the first panel | Next panel, then next page |
+| Confirm | Reader menu | Word lookup for this panel's text |
+| Back | Leave the book | Back to full-page view |
+| Hold Back | Jump to the file browser | Jump to the file browser |
+
+Reaching the last page marks the manga finished in Insights, the same as an EPUB.
+
+## 7. Current Limitations & Roadmap
 
 Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
 
@@ -622,7 +675,7 @@ Please note that this firmware is currently in active development. The following
 
 ---
 
-## 7. Troubleshooting Issues & Escaping Bootloop
+## 8. Troubleshooting Issues & Escaping Bootloop
 
 If an issue or crash is encountered while using Crosspoint, feel free to raise an issue ticket and attach the logs.
 

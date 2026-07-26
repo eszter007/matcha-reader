@@ -1,9 +1,8 @@
 #include "EpubReaderWordLookupActivity.h"
 
-#include "DefinitionTextRenderer.h"
-
 #include <Arduino.h>
 #include <DictIndex.h>
+#include <Epub/RubyGlossary.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -11,7 +10,10 @@
 #include <Logging.h>
 #include <WordLookup.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
+#include "DefinitionTextRenderer.h"
 #include "Epub/Page.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
@@ -24,6 +26,8 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
+  const size_t slash = this->scanCachePath.find_last_of('/');
+  if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
   initScanFromCacheOrBurst("vertical");
@@ -36,6 +40,8 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
+  const size_t slash = this->scanCachePath.find_last_of('/');
+  if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromPage(page);
   initScanFromCacheOrBurst("horizontal");
@@ -59,6 +65,12 @@ void EpubReaderWordLookupActivity::reclaimFontHeap() {
   if (ESP.getMaxAllocHeap() < 40 * 1024) {
     LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
     if (auto* fcm = renderer.getFontCacheManager()) {
+      // This runs on the main task; the render task may be mid-render with glyph
+      // pointers into the font cache (it holds the render lock for the whole
+      // render()). Freeing under the lock waits that render out -- releasing
+      // without it is a cross-task use-after-free (confirmed crash_report:
+      // renderCharImpl faulted while this path freed the cache).
+      RenderLock lock;
       fcm->releaseAllFontMemory();
       LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
     }
@@ -81,9 +93,34 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
   const uint32_t scanStart = millis();
   LOG_INF("WLA", "progressive scan (%s): %u characters", label, static_cast<unsigned>(scan.allGlyphs.size()));
   while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
-    scan.step(50);
+    stepScan(50);
   }
   LOG_INF("WLA", "progressive scan (%s): first word after %u ms", label, millis() - scanStart);
+}
+
+// See the header: heal a low-heap-truncated scan once by freeing fonts and re-walking the intact
+// glyph list. cursorIndex is intentionally left alone -- the rebuilt selectable list only grows,
+// and every caller already guards against an out-of-range cursor while it refills, so the user's
+// position resumes naturally once the rescan passes it again.
+bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
+  const bool done = scan.step(budgetMs);
+  if (scan.wasTruncated() && !scanHealAttempted && !scan.allGlyphs.empty()) {
+    scanHealAttempted = true;
+    LOG_INF("WLA", "Scan truncated by low heap; releasing fonts and rescanning (maxAlloc=%u)", ESP.getMaxAllocHeap());
+    // Heal under the render lock: this runs on the main task (loop()), and the
+    // render task may be mid-render, drawing definition text from font-cache
+    // glyphs and reading scan.selectableGlyphs. Freeing the cache / resetting the
+    // scan without the lock is a cross-task use-after-free (confirmed
+    // crash_report: renderCharImpl faulted at this exact moment).
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+    scan.restartStepScan();
+    return false;  // not done -- caller keeps stepping over the freshly-reset scan
+  }
+  return done;
 }
 
 void EpubReaderWordLookupActivity::onEnter() {
@@ -131,7 +168,7 @@ void EpubReaderWordLookupActivity::moveCursor(int delta) {
   if (delta > 0 && !scan.isDone() && cursorIndex + delta >= static_cast<int>(scan.selectableGlyphs.size())) {
     const size_t want = static_cast<size_t>(cursorIndex + delta) + 1;
     while (!scan.isDone() && scan.selectableGlyphs.size() < want) {
-      scan.step(50);
+      stepScan(50);
     }
   }
   if (scan.selectableGlyphs.empty()) return;
@@ -146,8 +183,10 @@ void EpubReaderWordLookupActivity::moveCursor(int delta) {
   if (scan.isDone()) {
     // The full page is mapped, so "the end" is real -- cycle past it instead of dead-ending,
     // matching how e-reader dictionaries commonly let you loop through a page's word list.
-    if (newIndex < 0) newIndex = maxIdx;
-    else if (newIndex > maxIdx) newIndex = 0;
+    if (newIndex < 0)
+      newIndex = maxIdx;
+    else if (newIndex > maxIdx)
+      newIndex = 0;
   } else {
     // Background scan still running: "the end" isn't final yet, so clamp instead of cycling --
     // wrapping to word one here would be surprising and skip words not yet discovered.
@@ -173,6 +212,19 @@ std::string EpubReaderWordLookupActivity::buildLookupText(size_t startIdx) const
     charCount++;
   }
   return text;
+}
+
+void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface) {
+  if (bookCachePath.empty() || surface.empty()) return;
+  std::string readings;
+  if (!RubyGlossary::lookup(bookCachePath, surface, readings)) return;
+  std::string line = tr(STR_IN_THIS_BOOK);
+  line += ' ';
+  line += readings;
+  // Blank line: DefinitionText::drawWrapped renders an empty line as a half-line gap,
+  // visually separating the book reading from the dictionary entry below it.
+  line += "\n\n";
+  resultDefinition = line + resultDefinition;
 }
 
 void EpubReaderWordLookupActivity::performLookup() {
@@ -222,10 +274,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       if (c >= '0' && c <= '9') {
         digitPrefix.push_back(static_cast<char>(c));
         b += 1;
-      } else if (c == 0xEF && b + 2 < text.size() &&
-                 static_cast<unsigned char>(text[b + 1]) == 0xBC &&
-                 static_cast<unsigned char>(text[b + 2]) >= 0x90 &&
-                 static_cast<unsigned char>(text[b + 2]) <= 0x99) {
+      } else if (c == 0xEF && b + 2 < text.size() && static_cast<unsigned char>(text[b + 1]) == 0xBC &&
+                 static_cast<unsigned char>(text[b + 2]) >= 0x90 && static_cast<unsigned char>(text[b + 2]) <= 0x99) {
         // Fullwidth digit ０-９ (U+FF10–U+FF19)
         digitPrefix.append(text, b, 3);
         b += 3;
@@ -240,20 +290,76 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     }
   }
 
+  // Fictional katakana name + honorific (ヘムレンさん): if the dictionary only covers a prefix of
+  // the name (ヘム) or nothing, show the whole katakana run instead. It has no dictionary entry,
+  // so the definition body stays empty -- but it reads as one name rather than "heme". Dictionary
+  // names (スナフキン) cover the whole run, so this branch doesn't fire for them.
+  const size_t nameRun = WordSelectionScan::katakanaNameRunBeforeHonorific(text);
+  if (nameRun >= 2) {
+    WordLookupResult nr;
+    int nrChars = 0;
+    if (WordLookup::lookup(text, 0, nr)) {
+      size_t pos = 0;
+      while (pos < nr.matchLength && pos < text.size()) {
+        auto c = static_cast<unsigned char>(text[pos]);
+        if (c < 0x80)
+          pos += 1;
+        else if ((c & 0xE0) == 0xC0)
+          pos += 2;
+        else if ((c & 0xF0) == 0xE0)
+          pos += 3;
+        else
+          pos += 4;
+        nrChars++;
+      }
+    }
+    if (static_cast<int>(nameRun) > nrChars) {
+      size_t nb = 0;
+      int nc = 0;
+      while (nb < text.size() && nc < static_cast<int>(nameRun)) {
+        auto c = static_cast<unsigned char>(text[nb]);
+        if (c < 0x80)
+          nb += 1;
+        else if ((c & 0xE0) == 0xC0)
+          nb += 2;
+        else if ((c & 0xF0) == 0xE0)
+          nb += 3;
+        else
+          nb += 4;
+        nc++;
+      }
+      hasResult = true;
+      resultHeadword = digitPrefix + text.substr(0, nb);
+      resultDefinition = tr(STR_LOOKUP_NAME);  // no dictionary entry -- label it as a name
+      resultMatchLen = static_cast<int>(nameRun);
+      // Names are the glossary's prime case: the book's own furigana is often the ONLY
+      // source for a name's reading.
+      prependBookReading(text.substr(0, nb));
+      requestUpdate();  // this early return would otherwise skip the requestUpdate() at the end,
+                        // leaving the name un-rendered (screen keeps the previous word -> looks skipped)
+      return;
+    }
+  }
+
   WordLookupResult result;
   if (WordLookup::lookup(text, 0, result)) {
     WordSelectionScan::stripTrailingParticle(text, result);
     hasResult = true;
     resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
+    prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;
     size_t pos = 0;
     while (pos < result.matchLength && pos < text.size()) {
       auto c = static_cast<unsigned char>(text[pos]);
-      if (c < 0x80) pos += 1;
-      else if ((c & 0xE0) == 0xC0) pos += 2;
-      else if ((c & 0xF0) == 0xE0) pos += 3;
-      else pos += 4;
+      if (c < 0x80)
+        pos += 1;
+      else if ((c & 0xE0) == 0xC0)
+        pos += 2;
+      else if ((c & 0xF0) == 0xE0)
+        pos += 3;
+      else
+        pos += 4;
       chars++;
     }
     resultMatchLen = chars;
@@ -266,16 +372,27 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       for (size_t b = 0; b < result.matchLength && b < text.size();) {
         auto c = static_cast<unsigned char>(text[b]);
         uint32_t cp = 0;
-        if (c < 0x80) { cp = c; b += 1; }
-        else if ((c & 0xE0) == 0xC0) { cp = ((c & 0x1F) << 6) | (text[b+1] & 0x3F); b += 2; }
-        else if ((c & 0xF0) == 0xE0) { cp = ((c & 0x0F) << 12) | ((text[b+1] & 0x3F) << 6) | (text[b+2] & 0x3F); b += 3; }
-        else { b += 4; }
-        if (cp < 0x3040 || cp > 0x309F) { allHiragana = false; break; }
+        if (c < 0x80) {
+          cp = c;
+          b += 1;
+        } else if ((c & 0xE0) == 0xC0) {
+          cp = ((c & 0x1F) << 6) | (text[b + 1] & 0x3F);
+          b += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+          cp = ((c & 0x0F) << 12) | ((text[b + 1] & 0x3F) << 6) | (text[b + 2] & 0x3F);
+          b += 3;
+        } else {
+          b += 4;
+        }
+        if (cp < 0x3040 || cp > 0x309F) {
+          allHiragana = false;
+          break;
+        }
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH,
-                                     DictIndex::GRAMMAR_DAT_PATH, gramEntry)) {
+        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+                                    gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
         }
       }
@@ -304,7 +421,10 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       size_t scanStart = allStart;
       for (int b = 0; b < backoff && scanStart > 0; b++) {
         scanStart--;
-        if (scan.allGlyphs[scanStart].paragraphIndex != paraIdx) { scanStart++; break; }
+        if (scan.allGlyphs[scanStart].paragraphIndex != paraIdx) {
+          scanStart++;
+          break;
+        }
       }
 
       std::string gramText;
@@ -320,16 +440,20 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         int cnt = 0;
         for (size_t b = 0; b < gramText.size() && cnt < wLen; cnt++) {
           auto c = static_cast<unsigned char>(gramText[b]);
-          if (c < 0x80) b += 1;
-          else if ((c & 0xE0) == 0xC0) b += 2;
-          else if ((c & 0xF0) == 0xE0) b += 3;
-          else b += 4;
+          if (c < 0x80)
+            b += 1;
+          else if ((c & 0xE0) == 0xC0)
+            b += 2;
+          else if ((c & 0xF0) == 0xE0)
+            b += 3;
+          else
+            b += 4;
           byteEnd = b;
         }
         std::string window = gramText.substr(0, byteEnd);
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH,
-                                     DictIndex::GRAMMAR_DAT_PATH, gramEntry)) {
+        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+                                    gramEntry)) {
           if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
             bestGramLen = wLen;
             hasGrammar = true;
@@ -348,8 +472,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     // Built with one guarded reserve + appends: the old `a + b + c` temporary chain peaked at
     // roughly twice the combined definition size in contiguous heap -- an abort() risk exactly
     // when definitions are long. If even the reserve doesn't fit, keep the main result alone.
-    const size_t mergedLen =
-        resultDefinition.size() + grammarHeadword.size() + grammarDefinition.size() + 32;
+    const size_t mergedLen = resultDefinition.size() + grammarHeadword.size() + grammarDefinition.size() + 32;
     if (ESP.getMaxAllocHeap() > mergedLen + 8 * 1024) {
       resultDefinition.reserve(mergedLen);
       resultDefinition += "\n\n— Grammar: ";
@@ -381,10 +504,16 @@ void EpubReaderWordLookupActivity::loop() {
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { moveCursor(-1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
-    if (hasResult && scrollOffset < maxScroll) { scrollOffset = std::min(maxScroll, scrollOffset + 5); requestUpdate(); }
+    if (hasResult && scrollOffset < maxScroll) {
+      scrollOffset = std::min(maxScroll, scrollOffset + 5);
+      requestUpdate();
+    }
   });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
-    if (scrollOffset > 0) { scrollOffset = std::max(0, scrollOffset - 5); requestUpdate(); }
+    if (scrollOffset > 0) {
+      scrollOffset = std::max(0, scrollOffset - 5);
+      requestUpdate();
+    }
   });
 
   // Progressive background scan: keep mapping the page's selectable words in small slices
@@ -393,7 +522,7 @@ void EpubReaderWordLookupActivity::loop() {
   // task only ever reads counter sizes -- so no lock is needed and, unlike the abandoned
   // reader-idle precompute, nothing can starve another activity's rendering.
   if (!scan.isDone()) {
-    const bool done = scan.step(40);
+    const bool done = stepScan(40);
     // The open can show "No match" if the initial burst found nothing yet -- promote the first
     // word as soon as the background scan discovers it.
     if (!hasResult && !scan.selectableGlyphs.empty()) {
@@ -419,12 +548,31 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
   // same fix, and same root cause, as the vertical-page-turn slowness fixed earlier this session.
   // Without this, dictionary definitions (which merge up to 5 entries and can run to hundreds of
   // characters spanning many different compressed font groups) fall through the slow one-by-one
-  // glyph fallback path a character at a time.
+  // glyph fallback path a character at a time. ONE prewarm per string: the FontDecompressor reuses
+  // its 4 page-buffer slots WITHIN a call but not across calls, so per-line prewarming exhausts
+  // them ("All 4 slots full") and is slower, not faster.
   if (hasResult) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
       fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      // Prewarm only the ON-SCREEN slice of the definition, in ONE call. A merged 5-entry
+      // definition can run to thousands of bytes, but only ~13 lines show; warming the whole
+      // thing was the ~1s-per-step navigation cost (renders serialize on the RenderLock, so a
+      // slow render stalls the next keypress). ~1KB covers a full screen of Latin OR CJK. Only
+      // when scrollOffset==0 (navigating a new word); a scrolled view warms the whole definition
+      // since its visible window is further in. ONE call, not per-line: the decompressor reuses
+      // its 4 page-buffer slots within a call but not across calls.
+      constexpr size_t kVisiblePrewarmBytes = 1024;
+      if (scrollOffset == 0 && resultDefinition.size() > kVisiblePrewarmBytes) {
+        size_t cut = kVisiblePrewarmBytes;  // back up to a UTF-8 lead byte so the last char is whole
+        while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
+        const char saved = resultDefinition[cut];
+        resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
+        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        resultDefinition[cut] = saved;
+      } else {
+        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      }
     }
   }
 
@@ -432,8 +580,8 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
     // "No match found" is only the truth once nothing is still in flight; during fast
     // navigation or while the progressive scan is still mapping the page, show Loading.
     const bool stillWorking = lookupInFlight || !scan.isDone();
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID,
-                              screen.y + screen.height / 2, stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
+    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2,
+                              stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
   } else {
     const int maxWidth = screen.width - metrics.contentSidePadding * 2;
     const int textX = screen.x + metrics.contentSidePadding;
@@ -457,8 +605,8 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
     // is the top of the buttons; stay a hair above it.
     const int maxDefY = screen.y + screen.height - 2;
     const int firstDefY = defY;
-    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH,
-                                                  maxWidth, maxDefY, scrollOffset);
+    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
+                                                  maxDefY, scrollOffset);
 
     totalLines = wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
@@ -473,8 +621,6 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   Rect screen = theme.getScreenSafeArea(renderer, true, false);
 
   const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + metrics.verticalSpacing;
-  const int contentBottom = screen.y + screen.height - footerHeight;
 
   // Position counter (35/50) shown right-aligned on the header baseline.
   std::string posText;

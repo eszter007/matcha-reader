@@ -38,14 +38,29 @@ std::string PageTextExtractor::fromVerticalPage(const VerticalPage& page) {
       prevParagraph = g.paragraphIndex;
     }
 
-    if (g.renderKind == VerticalGlyph::RotatedRun) {
+    // BOTH run kinds store their text in rotatedRunText and leave codepoint == 0. Letting
+    // UprightRun (tate-chu-yoko digits) fall through to encodeUtf8(0) embedded a NUL byte in
+    // the returned string -- every c_str() consumer (the render prewarm!) silently truncated
+    // there, so most of the page missed the selected font's prewarm and fell back to the
+    // companion font mid-page (confirmed on-device: Kyokasho page flipping to NotoSans after
+    // the first tate-chu-yoko number).
+    if (g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
       if (!g.rotatedRunText.empty()) {
         text += g.rotatedRunText;
       }
       continue;
     }
+    if (g.codepoint == 0) continue;  // never emit NUL into a string with c_str() consumers
 
     encodeUtf8(g.codepoint, text);
+
+    // Furigana readings render as real glyphs (smaller font, same family) -- include them so
+    // the prewarm covers them too; otherwise every ruby character is an on-demand SD read
+    // through the 8-slot overflow ring on EVERY page render (measured: 120 reads, ~750ms/page
+    // on a furigana-dense book).
+    if (!g.rubyText.empty()) {
+      text += g.rubyText;
+    }
   }
 
   return text;

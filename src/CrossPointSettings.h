@@ -25,6 +25,7 @@ class CrossPointSettings {
     BLANK = 4,
     COVER_CUSTOM = 5,
     QUICK_RESUME = 6,
+    TRANSPARENT = 7,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -239,6 +240,9 @@ class CrossPointSettings {
 
   // Reader screen margin settings
   uint8_t screenMargin = 5;
+  // Honor the book's own horizontal CSS margins/padding (clamped per element).
+  // Default off: the text column's side margins come only from screenMargin.
+  uint8_t bookCssMargins = 0;
   // OPDS browser settings
   char opdsServerUrl[128] = "";
   char opdsUsername[64] = "";

@@ -1,11 +1,68 @@
 #include "Section.h"
 
+#include <FontCacheManager.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
 
+#include "Epub/RubyGlossary.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
+
+namespace {
+// Stream an (X)HTML file and collect its distinct class-attribute tokens (case-insensitive,
+// bounded). Rolling prefix matching handles `class="` split across read-chunk boundaries.
+// Used to filter the CSS cache load down to the chapter's actual vocabulary.
+void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, const size_t maxOut) {
+  out.clear();
+  HalFile f;
+  if (!HalStorage::getInstance().openFileForRead("SCT", path, f)) return;
+  constexpr char NEEDLE[] = "class=\"";
+  constexpr size_t NLEN = sizeof(NEEDLE) - 1;
+  uint8_t buf[512];
+  size_t matched = 0;
+  bool inValue = false;
+  std::string token;
+  auto commit = [&]() {
+    if (token.empty()) return;
+    for (const auto& u : out) {
+      if (u.size() == token.size() && strcasecmp(u.c_str(), token.c_str()) == 0) {
+        token.clear();
+        return;
+      }
+    }
+    if (out.size() < maxOut) out.push_back(token);
+    token.clear();
+  };
+  size_t n;
+  while ((n = f.read(buf, sizeof(buf))) > 0 && out.size() < maxOut) {
+    for (size_t i = 0; i < n; i++) {
+      const char c = static_cast<char>(buf[i]);
+      if (inValue) {
+        if (c == '"') {
+          commit();
+          inValue = false;
+        } else if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+          commit();
+        } else if (token.size() < 48) {
+          token.push_back(c);
+        }
+        continue;
+      }
+      if (c == NEEDLE[matched]) {
+        matched++;
+        if (matched == NLEN) {
+          inValue = true;
+          matched = 0;
+        }
+      } else {
+        matched = (c == NEEDLE[0]) ? 1 : 0;
+      }
+    }
+  }
+}
+}  // namespace
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
@@ -16,10 +73,18 @@ namespace {
 // session confirmed is often large on this device, so CSS rules that were silently skipped while
 // this section was originally cached may now parse successfully, changing layout. Cached section
 // files built under the old guard must not be reused as-is.
-constexpr uint8_t SECTION_FILE_VERSION = 37;  // v37: synthesized space width (layouts built with zero-width spaces)
+// v46: "Book side margins" setting (honor vs ignore book CSS horizontal insets) is a layout
+// input; it joins the header match params and widens the header by one bool.
+// v47: text-emphasis (bouten as synthetic ruby), small-caps transform, and
+// list-style-type markers change parsed section content.
+// v48: gaiji inline images emit replacement text instead of image blocks.
+// v49: CSS cache v12 parses per-side borders + font shorthand; sections built
+// against v11 rules lack those edges/styles.
+// v50: force re-parse so the furigana glossary (ruby.bin) harvests existing books.
+constexpr uint8_t SECTION_FILE_VERSION = 50;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
                                  sizeof(uint32_t) + sizeof(uint32_t);
 
 struct PageLutEntry {
@@ -34,7 +99,6 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
     LOG_ERR("SCT", "File not open for writing page %d", pageCount);
     return 0;
   }
-
 
   const uint32_t position = file.position();
   if (!page->serialize(file)) {
@@ -51,7 +115,7 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
                                      const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                      const uint16_t viewportHeight, const bool hyphenationEnabled,
                                      const bool embeddedStyle, const uint8_t imageRendering,
-                                     const bool focusReadingEnabled) {
+                                     const bool focusReadingEnabled, const bool honorBookInsets) {
   if (!file) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
@@ -60,7 +124,8 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
                                    sizeof(extraParagraphSpacing) + sizeof(paragraphAlignment) + sizeof(viewportWidth) +
                                    sizeof(viewportHeight) + sizeof(pageCount) + sizeof(hyphenationEnabled) +
                                    sizeof(embeddedStyle) + sizeof(imageRendering) + sizeof(focusReadingEnabled) +
-                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
+                                   sizeof(honorBookInsets) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                   sizeof(uint32_t),
                 "Header size mismatch");
   serialization::writePod(file, SECTION_FILE_VERSION);
   serialization::writePod(file, fontId);
@@ -73,6 +138,7 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
   serialization::writePod(file, embeddedStyle);
   serialization::writePod(file, imageRendering);
   serialization::writePod(file, focusReadingEnabled);
+  serialization::writePod(file, honorBookInsets);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -83,7 +149,8 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                               const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
-                              const uint8_t imageRendering, const bool focusReadingEnabled) {
+                              const uint8_t imageRendering, const bool focusReadingEnabled,
+                              const bool honorBookInsets) {
   // Missing cache file is the normal case for unbuilt chapters (the book-progress counter
   // probes every spine per page turn) -- check silently instead of logging per probe.
   if (!Storage.exists(filePath.c_str())) return false;
@@ -112,6 +179,7 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     bool fileEmbeddedStyle;
     uint8_t fileImageRendering;
     bool fileFocusReadingEnabled;
+    bool fileHonorBookInsets;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -122,12 +190,14 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     serialization::readPod(file, fileEmbeddedStyle);
     serialization::readPod(file, fileImageRendering);
     serialization::readPod(file, fileFocusReadingEnabled);
+    serialization::readPod(file, fileHonorBookInsets);
 
     if (fontId != fileFontId || lineCompression != fileLineCompression ||
         extraParagraphSpacing != fileExtraParagraphSpacing || paragraphAlignment != fileParagraphAlignment ||
         viewportWidth != fileViewportWidth || viewportHeight != fileViewportHeight ||
         hyphenationEnabled != fileHyphenationEnabled || embeddedStyle != fileEmbeddedStyle ||
-        imageRendering != fileImageRendering || focusReadingEnabled != fileFocusReadingEnabled) {
+        imageRendering != fileImageRendering || focusReadingEnabled != fileFocusReadingEnabled ||
+        honorBookInsets != fileHonorBookInsets) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();
@@ -138,6 +208,13 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
   serialization::readPod(file, pageCount);
   // Explicit close() required: member variable persists beyond function scope
   file.close();
+  // A 0-page section is never legitimate for a real chapter -- it means a build went wrong.
+  // Treating it as valid would show an empty chapter forever (cache poisoning); rebuild instead.
+  if (pageCount == 0) {
+    LOG_ERR("SCT", "Cached section has 0 pages; discarding for rebuild");
+    clearCache();
+    return false;
+  }
   LOG_DBG("SCT", "Deserialization succeeded: %d pages", pageCount);
   return true;
 }
@@ -162,7 +239,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const uint8_t imageRendering, const bool focusReadingEnabled,
-                                const std::function<void()>& popupFn) {
+                                const bool honorBookInsets, const std::function<void()>& popupFn) {
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
 
@@ -190,7 +267,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, 4096);  // 4KB chunks: see VerticalSection PARSE_BUFFER_SIZE
+    success =
+        epub->readItemContentsToStream(localPath, tmpHtml, 4096);  // 4KB chunks: see VerticalSection PARSE_BUFFER_SIZE
     fileSize = tmpHtml.size();
     // Explicitly close() file before calling Storage.remove()
     tmpHtml.close();
@@ -213,7 +291,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
   writeSectionFileHeader(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
+                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled,
+                         honorBookInsets);
   std::vector<PageLutEntry> lut = {};
 
   // Derive the content base directory and image cache path prefix for the parser
@@ -225,7 +304,23 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   if (embeddedStyle) {
     cssParser = epub->getCssParser();
     if (cssParser) {
-      if (!cssParser->loadFromCache()) {
+      // The rule map needs tens of KB of small allocations; mid-session the font caches
+      // usually hold the largest blocks. Release them first (they reload lazily) instead of
+      // letting the load abort and the build retry forever.
+      if (ESP.getMaxAllocHeap() < 64 * 1024) {
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          LOG_INF("SCT", "Low heap before CSS load (maxAlloc=%u); releasing font memory", ESP.getMaxAllocHeap());
+          fcm->releaseAllFontMemory();
+        }
+      }
+      // Load only the rules this chapter can actually use: the temp HTML is already on disk,
+      // so scan its class attributes and filter the cache load on them. The full EBPAJ table
+      // (observed at the 1500-rule cap) cannot fit mid-session; a chapter's own vocabulary is
+      // a few dozen classes.
+      std::vector<std::string> usedClasses;
+      collectHtmlClasses(tmpHtmlPath, usedClasses, 64);
+      LOG_DBG("SCT", "%u distinct classes in chapter html", static_cast<unsigned>(usedClasses.size()));
+      if (!cssParser->loadFromCache(&usedClasses)) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
         // Low heap is the one failure where retrying can succeed: the cache file is VALID, the
         // rule table just doesn't fit right now. Building anyway would persist this chapter
@@ -260,7 +355,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
           lut.push_back({this->onPageComplete(std::move(page)), paragraphIndex, listItemIndex});
         }
       },
-      embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser);
+      embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser,
+      honorBookInsets);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   success = visitor.parseAndBuildPages();
 
@@ -275,6 +371,10 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     }
     return false;
   }
+
+  // Persist harvested furigana pairs for the per-book glossary (see RubyGlossary); runs
+  // after the parse so the transient merge buffer doesn't compete with layout's peak memory.
+  RubyGlossary::merge(epub->getCachePath(), visitor.rubyHarvest);
 
   const uint32_t lutOffset = file.position();
   bool hasFailedLutRecords = false;
@@ -349,23 +449,29 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   return true;
 }
 
-std::unique_ptr<Page> Section::loadPageFromSectionFile() {
-  if (!Storage.openFileForRead("SCT", filePath, file)) {
+std::unique_ptr<Page> Section::loadPageFromSectionFile() { return loadPageFromSectionFile(currentPage); }
+
+std::unique_ptr<Page> Section::loadPageFromSectionFile(const int pageIndex) {
+  if (pageIndex < 0 || pageIndex >= pageCount) {
+    return nullptr;
+  }
+  // Local file handle, and pageIndex instead of the currentPage member: the image-warm path
+  // peeks the NEXT page from the render task while the loop task may be adjusting currentPage
+  // for a page turn -- this overload must not touch any shared state.
+  HalFile pageFile;
+  if (!Storage.openFileForRead("SCT", filePath, pageFile)) {
     return nullptr;
   }
 
-  file.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
+  pageFile.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
   uint32_t lutOffset;
-  serialization::readPod(file, lutOffset);
-  file.seek(lutOffset + sizeof(uint32_t) * currentPage);
+  serialization::readPod(pageFile, lutOffset);
+  pageFile.seek(lutOffset + sizeof(uint32_t) * pageIndex);
   uint32_t pagePos;
-  serialization::readPod(file, pagePos);
-  file.seek(pagePos);
+  serialization::readPod(pageFile, pagePos);
+  pageFile.seek(pagePos);
 
-  auto page = Page::deserialize(file);
-  // Explicit close() required: member variable persists beyond function scope
-  file.close();
-  return page;
+  return Page::deserialize(pageFile);
 }
 
 std::string Section::getTextFromSectionFile() {

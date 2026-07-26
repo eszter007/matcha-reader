@@ -34,6 +34,8 @@
 void XtcReaderActivity::onEnter() {
   Activity::onEnter();
 
+  readingSessionStartMs = millis();
+
   if (!xtc) {
     return;
   }
@@ -56,6 +58,11 @@ void XtcReaderActivity::onEnter() {
 void XtcReaderActivity::onExit() {
   Activity::onExit();
 
+  // Record the sub-interval tail of the session; whole minutes were already flushed
+  // periodically from loop(). XTC books never counted toward the reading streak at all
+  // before this -- reading an XTC book all day left the day unregistered.
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
+
   freePageBuffer();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
@@ -63,6 +70,10 @@ void XtcReaderActivity::onExit() {
 }
 
 void XtcReaderActivity::loop() {
+  // Crash-proof stats: flush whole minutes every few minutes so an exit path that
+  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
+  ReaderUtils::flushReadingStats(readingSessionStartMs);
+
   // Auto-dismiss the bookmark toast.
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
@@ -226,16 +237,15 @@ void XtcReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction a
       break;
     case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
       if (!xtc) break;
-      startActivityForResult(
-          std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, xtc->getPath(),
-                                                   std::vector<manga::TocEntry>{}),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled && xtc) {
-              const uint32_t target = std::get<PageResult>(result.data).page;
-              if (target < xtc->getPageCount()) currentPage = target;
-            }
-            requestUpdate();
-          });
+      startActivityForResult(std::make_unique<MangaBookmarksActivity>(renderer, mappedInput, xtc->getPath(),
+                                                                      std::vector<manga::TocEntry>{}),
+                             [this](const ActivityResult& result) {
+                               if (!result.isCancelled && xtc) {
+                                 const uint32_t target = std::get<PageResult>(result.data).page;
+                                 if (target < xtc->getPageCount()) currentPage = target;
+                               }
+                               requestUpdate();
+                             });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SCREENSHOT:
@@ -289,8 +299,7 @@ void XtcReaderActivity::addBookmark() {
   const size_t countBefore = cachedBookmarks.size();
   cachedBookmarks.erase(std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
                                        [&](const BookmarkEntry& b) {
-                                         return b.computedSpineIndex == 0 &&
-                                                b.computedChapterPageCount == pageCount &&
+                                         return b.computedSpineIndex == 0 && b.computedChapterPageCount == pageCount &&
                                                 b.computedChapterProgress == currentPage;
                                        }),
                         cachedBookmarks.end());

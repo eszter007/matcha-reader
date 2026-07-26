@@ -22,6 +22,8 @@ class MappedInputManager {
   bool wasReleased(Button button) const;
   bool isPressed(Button button) const;
   bool wasAnyPressed() const;
+  // See HalGPIO::anyButtonDownRaw() -- for cancelling long background work.
+  bool anyButtonDownRaw() const { return gpio.anyButtonDownRaw(); }
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   Labels mapLabels(const char* back, const char* confirm, const char* previous, const char* next) const;

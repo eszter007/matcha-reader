@@ -154,6 +154,15 @@ class SdCardFont {
     static_assert(sizeof(BmpInterval16) == 6, "BmpInterval16 must remain compact");
     BmpInterval16* bmpIntervals = nullptr;
     bool intervalsAreBmp16 = false;
+    // Codepoints above the BMP (rare kanji from JIS X 0213 plane 2) sort after every BMP
+    // interval, so they form a tail of the on-disk table. Keeping that tail resident cost
+    // ~3.5KB per style -- it also forces every interval to the 12-byte form -- on a heap
+    // where the vertical build already dips to single-digit KB. The tail stays on the card
+    // and is looked up per occurrence instead; these characters are far too rare for the
+    // extra seek to matter. residentIntervalCount is what the in-RAM tables actually hold.
+    uint32_t residentIntervalCount = 0;
+    uint32_t tailIntervalFileOffset = 0;
+    uint32_t tailIntervalCount = 0;
 
     // Persistent kern-class + ligature tables (lazy-loaded on first prewarm).
     // The full kern MATRIX is NOT resident — on Literata-class fonts a single
@@ -231,17 +240,22 @@ class SdCardFont {
   // Bounded to ADVANCE_CACHE_LIMIT entries; persists across layout passes
   // (across calls to clearCache()) so repeated indexing of the same font
   // amortizes SD reads. Cleared only on font unload or clearPersistentCache().
-  static constexpr uint32_t ADVANCE_CACHE_LIMIT = 768;
+  // 1536, not 768: a single kanji-heavy chapter (100KB text) exceeds 768 unique codepoints,
+  // and every capped-out codepoint falls back to an approximate width at layout time --
+  // observed on device first as overlapping words (zero fallback), then as visibly loose
+  // spacing (em fallback). 1536 entries x 8B = 12KB per active style; measurement accuracy is
+  // worth that.
+  static constexpr uint32_t ADVANCE_CACHE_LIMIT = 1536;
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
   // Kana and kanji are drawn on the full em in CJK fonts: one measured advance covers the
   // entire range, so layout never does per-kanji SD reads (a chapter has thousands of unique
   // kanji vs one 18-byte read). 0 = not yet measured.
   uint16_t fullWidthAdvance_[MAX_STYLES] = {};
   static bool isUniformFullWidth(uint32_t cp) {
-    return (cp >= 0x3041 && cp <= 0x30FF)     // hiragana + katakana
-           || (cp >= 0x3400 && cp <= 0x4DBF)  // CJK ext A
-           || (cp >= 0x4E00 && cp <= 0x9FFF)  // CJK unified
-           || (cp >= 0xF900 && cp <= 0xFAFF); // CJK compat
+    return (cp >= 0x3041 && cp <= 0x30FF)      // hiragana + katakana
+           || (cp >= 0x3400 && cp <= 0x4DBF)   // CJK ext A
+           || (cp >= 0x4E00 && cp <= 0x9FFF)   // CJK unified
+           || (cp >= 0xF900 && cp <= 0xFAFF);  // CJK compat
   }
   uint32_t advanceTableSize_[MAX_STYLES] = {};
   bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;

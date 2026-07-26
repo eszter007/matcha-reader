@@ -13,8 +13,8 @@ std::string PixelCacheIO::pathFor(const std::string& imagePath) {
   return imagePath + ".pxc";
 }
 
-bool PixelCacheIO::renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y,
-                                   int expectedWidth, int expectedHeight) {
+bool PixelCacheIO::renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
+                                   int expectedHeight) {
   HalFile cacheFile;
   if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
     return false;

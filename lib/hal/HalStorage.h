@@ -75,6 +75,9 @@ class HalFile : public Print {
   void flush();
   size_t getName(char* name, size_t len);
   size_t size();
+  // Last-modified stamp packed as (FAT date << 16 | FAT time), 0 when unavailable. Used as a
+  // change signal for the Library index so unchanged books are not re-examined.
+  uint32_t modifiedStamp();
   size_t fileSize();
   uint64_t fileSize64();
   bool seek(size_t pos);

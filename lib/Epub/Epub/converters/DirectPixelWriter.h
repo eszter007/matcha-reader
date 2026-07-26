@@ -18,6 +18,7 @@ struct DirectPixelWriter {
   uint8_t* fb;
   GfxRenderer::RenderMode mode;
   uint16_t displayWidthBytes;  // Runtime framebuffer stride (X4: 100, X3: 99)
+  int displayWidth;            // Physical width in pixels; bounds-guards phyX in writePixel()
   // Active write target: for tiled grayscale, fb is the band scratch, originY is
   // the band's top physical row, and clipRows is the band height. Off-band
   // pixels are dropped. With no strip active these collapse to the full frame
@@ -41,6 +42,7 @@ struct DirectPixelWriter {
     clipRows = renderer.getWriteRows();
     mode = renderer.getRenderMode();
     displayWidthBytes = renderer.getDisplayWidthBytes();
+    displayWidth = renderer.getDisplayWidth();
 
     const int phyW = renderer.getDisplayWidth();
     const int phyH = renderer.getDisplayHeight();
@@ -170,6 +172,14 @@ struct DirectPixelWriter {
     const int phyX = rowPhyXBase + logicalX * phyXStepX;
     const int phyY = rowPhyYBase + logicalX * phyYStepX;
 
+    // Bounds guard on X (mirrors the Y band guard below). Callers are documented to pre-clamp
+    // destination ranges, but renderFromCache renders at the CACHED dimensions, which are
+    // allowed to differ from the fit by +-1px -- a single over-wide column then lands one pixel
+    // past the row and, on the last physical row, one byte past the framebuffer, corrupting the
+    // heap (detected later as a multi_heap_free assert on the next free). The unsigned compare
+    // drops any off-frame column in one branch.
+    if (static_cast<unsigned>(phyX) >= static_cast<unsigned>(displayWidth)) return;
+
     // Band-local row. The unsigned compare drops both off-band pixels (strip
     // mode) and any out-of-frame row (full-frame mode) in one branch.
     const int sy = phyY - originY;
@@ -179,6 +189,32 @@ struct DirectPixelWriter {
     const uint8_t bitMask = 1 << (7 - (phyX & 7));
 
     if (state) {
+      fb[byteIndex] &= ~bitMask;  // Clear bit (draw black)
+    } else {
+      fb[byteIndex] |= bitMask;  // Set bit (draw white)
+    }
+  }
+
+  // Alpha-mask overlay path: unlike writePixel(), value 3 writes WHITE in BW mode instead
+  // of leaving the framebuffer untouched -- the mask already decided this pixel is opaque,
+  // so it must cover whatever the framebuffer holds. Grayscale nudge passes keep the normal
+  // semantics (they only ever lighten pixels the base pass drew).
+  inline void writePixelOpaque(int logicalX, uint8_t pixelValue) const {
+    if (mode != GfxRenderer::BW) {
+      writePixel(logicalX, pixelValue);
+      return;
+    }
+
+    const int phyX = rowPhyXBase + logicalX * phyXStepX;
+    const int phyY = rowPhyYBase + logicalX * phyYStepX;
+
+    const int sy = phyY - originY;
+    if (static_cast<unsigned>(sy) >= static_cast<unsigned>(clipRows)) return;
+
+    const uint16_t byteIndex = static_cast<uint16_t>(sy * displayWidthBytes + (phyX >> 3));
+    const uint8_t bitMask = 1 << (7 - (phyX & 7));
+
+    if (pixelValue < 3) {
       fb[byteIndex] &= ~bitMask;  // Clear bit (draw black)
     } else {
       fb[byteIndex] |= bitMask;  // Set bit (draw white)

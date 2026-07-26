@@ -200,6 +200,13 @@ int32_t bmpJpegSeek(JPEGFILE* pFile, int32_t pos) {
 // Context passed to the JPEGDEC draw callback via setUserPointer()
 struct BmpConvertCtx {
   Print* bmpOut;
+  BmpConvertCancelFn shouldCancel = nullptr;
+  void* cancelCtx = nullptr;
+  bool cancelled = false;
+  // Output rows actually emitted. A decode that stops early (out of memory, a malformed
+  // stream, JPEGDEC bailing) leaves the rest of the BMP as zero bytes -- solid black -- and
+  // JPEGDEC can still report success, so the row count is what proves the image is complete.
+  int rowsWritten = 0;
   int srcWidth;
   int srcHeight;
   int outWidth;
@@ -274,6 +281,7 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
   }
 
   ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
+  ctx->rowsWritten++;
 }
 
 // Matches the progressive-JPEG smoothing used by JpegToFramebufferConverter, but stays
@@ -395,6 +403,7 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
   }
 
   ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
+  ctx->rowsWritten++;
   ctx->currentOutY++;
 }
 
@@ -405,6 +414,13 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
 int bmpDrawCallback(JPEGDRAW* pDraw) {
   auto* ctx = reinterpret_cast<BmpConvertCtx*>(pDraw->pUser);
   if (!ctx || ctx->error) return 0;
+
+  // Cooperative cancel, polled once per MCU block: a thumbnail conversion takes seconds and
+  // runs on the UI task, so without this a button press waits for the whole image.
+  if (ctx->shouldCancel && ctx->shouldCancel(ctx->cancelCtx)) {
+    ctx->cancelled = true;
+    return 0;
+  }
 
   const uint8_t* pixels = reinterpret_cast<uint8_t*>(pDraw->pPixels);
   const int stride = pDraw->iWidth;
@@ -480,7 +496,8 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
-                                                     int targetHeight, bool oneBit, bool crop) {
+                                                     int targetHeight, bool oneBit, bool crop,
+                                                     BmpConvertCancelFn shouldCancel, void* cancelCtx) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
   if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
@@ -567,6 +584,17 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     needsScaling = true;
   }
 
+  // crop mode scaled so the image COVERS the target, then emitted the whole (larger) result --
+  // callers had to crop again at draw time, which is the slow per-pixel path, and a source
+  // narrower than the target box left white edges. Emit exactly the requested box instead:
+  // the sampling above already maps output pixels back to source pixels, so trimming the
+  // output extent keeps the top-left anchored and drops the overflow (manga covers want the
+  // top kept). The scale factors stay as computed, so nothing is stretched.
+  if (crop && targetWidth > 0 && targetHeight > 0) {
+    if (outWidth > targetWidth) outWidth = targetWidth;
+    if (outHeight > targetHeight) outHeight = targetHeight;
+  }
+
   const bool smoothUpscale =
       progressiveDecode && needsScaling && scaleSrcWidth <= outWidth && scaleSrcHeight <= outHeight;
 
@@ -600,6 +628,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.smoothNextOutY = 0;
   ctx.smoothPrevY = -1;
   ctx.error = false;
+  ctx.shouldCancel = shouldCancel;
+  ctx.cancelCtx = cancelCtx;
 
   // MCU row buffer: MAX_MCU_HEIGHT rows × decoded srcWidth columns of grayscale
   ctx.mcuBuf = makeUniqueNoThrow<uint8_t[]>(MAX_MCU_HEIGHT * ctx.srcWidth);
@@ -669,8 +699,22 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     finishSmoothUpscale(&ctx);
   }
 
+  if (ctx.cancelled) {
+    // JPEGDEC reports a callback-initiated exit as success, so this flag is what distinguishes
+    // "aborted for a button press" from a real decode. The caller drops the partial output.
+    LOG_DBG("JPG", "JPEG->BMP conversion cancelled");
+    return false;
+  }
+
   if (rc != 1 || ctx.error) {
     LOG_ERR("JPG", "JPEG decode failed (rc=%d, err=%d)", rc, jpeg->getLastError());
+    return false;
+  }
+
+  if (ctx.rowsWritten < outHeight) {
+    // Short output: the caller must drop the file rather than cache a half-decoded cover
+    // (device photo from an X3: top of the thumbnail streaked, the rest solid black).
+    LOG_ERR("JPG", "Incomplete JPEG->BMP: %d of %d rows written", ctx.rowsWritten, outHeight);
     return false;
   }
 
@@ -694,6 +738,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& b
 
 // Convert to 1-bit BMP (black and white only, no grays) for fast home screen rendering
 bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
-                                                         int targetMaxHeight) {
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true);
+                                                         int targetMaxHeight, BmpConvertCancelFn shouldCancel,
+                                                         void* cancelCtx) {
+  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, shouldCancel,
+                                     cancelCtx);
 }

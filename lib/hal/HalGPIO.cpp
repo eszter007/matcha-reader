@@ -217,6 +217,8 @@ bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed
 
 bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
 
+bool HalGPIO::anyButtonDownRaw() { return inputMgr.getState() != 0; }
+
 bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
 
 bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }

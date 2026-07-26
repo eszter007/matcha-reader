@@ -1,5 +1,6 @@
 #include "KOReaderSyncActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -205,6 +206,17 @@ void KOReaderSyncActivity::performUpload() {
   progress.document = documentHash;
   progress.progress = localProgress.xpath;
   progress.percentage = localProgress.percentage;
+
+  // The upload needs only localProgress (already a value) -- release the Epub that
+  // ensureEpubLoaded() reloaded for progress mapping and the fonts re-warmed while rendering the
+  // result screen's CJK chapter name. Without this the second TLS handshake sees only ~45KB free
+  // (< MIN_HEAP_FOR_TLS) and fails, even though the fetch handshake succeeded. goToReader()
+  // rebuilds both on return.
+  epub.reset();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+  }
+  LOG_DBG("KOSync", "Released epub+fonts before upload (heap: %u)", (unsigned)ESP.getFreeHeap());
 
   const auto result = KOReaderSyncClient::updateProgress(progress);
 

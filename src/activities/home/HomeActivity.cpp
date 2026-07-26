@@ -1,16 +1,13 @@
 #include "HomeActivity.h"
 
-#include "EpubProgressUtil.h"
-#include "XtcProgressUtil.h"
-
 #include <Bitmap.h>
 #include <Epub.h>
-#include <FsHelpers.h>
-#include <MangaPanel.h>
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <MangaPanel.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
@@ -19,9 +16,11 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "EpubProgressUtil.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "XtcProgressUtil.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -99,9 +98,19 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
   int progress = 0;
   for (RecentBook& book : recentBooks) {
-    if (!book.coverBmpPath.empty()) {
-      std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-      if (!Storage.exists(coverPath.c_str())) {
+    // An EMPTY cover path is "not produced yet", not "this book has none" -- see the failure
+    // handling below. Treating it as the latter is what left one EPUB permanently without a
+    // cover on device while its neighbours were fine.
+    {
+      // A RAW image path (no [HEIGHT] placeholder) is a source, not a cover. Every generator
+      // produces templated thumb paths, so anything else means none was made yet -- and because
+      // the raw file of course exists, an exists() check alone reported "cover present" and the
+      // card drew the full-size page scaled into the cell. For a dithered manga page that comes
+      // out near-black (device report).
+      const bool coverIsThumb = book.coverBmpPath.find("[HEIGHT]") != std::string::npos;
+      const bool coverMissing =
+          !coverIsThumb || !Storage.exists(UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight).c_str());
+      if (coverMissing) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
@@ -116,10 +125,23 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-          bool success = epub.generateThumbBmp(coverHeight);
-          if (!success) {
+          const bool success = epub.generateThumbBmp(coverHeight);
+          if (success) {
+            // Also covers the recovery case: a book whose path was cleared by an earlier build
+            // gets it back here instead of staying blank forever.
+            book.coverBmpPath = epub.getThumbBmpPath();
+            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+          } else if (!epub.hasCoverImage()) {
+            // Genuinely no cover in the book: a permanent fact, worth recording so later visits
+            // stop re-parsing it.
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
             book.coverBmpPath = "";
+          } else {
+            // The book HAS a cover, the conversion just didn't fit right now. Clearing the path
+            // here (as this did) turned one low-heap moment into a permanent verdict: the entry
+            // lost its path, the "is it missing?" check above skipped it from then on, and the
+            // cover never came back. Keep it and retry on the next visit.
+            LOG_ERR("HOME", "Cover thumb failed for %s; keeping path to retry", book.path.c_str());
           }
           // Discard the placeholder buffer captured on the first paint so the
           // next render redraws the real cover instead of restoring the stale
@@ -127,7 +149,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           coverRendered = false;
           coverBufferStored = false;
           freeCoverBuffer();
-          requestUpdate();
         } else if (FsHelpers::hasXtcExtension(book.path)) {
           // Handle XTC file
           Xtc xtc(book.path, "/.crosspoint");
@@ -142,16 +163,48 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             // more than the largest free block once the font caches are warm, so the thumb
             // generation would fail and the cover would be missing. Coalesce the heap first.
             if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-            bool success = xtc.generateThumbBmp(coverHeight);
-            if (!success) {
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-              book.coverBmpPath = "";
+            const bool success = xtc.generateThumbBmp(coverHeight);
+            if (success) {
+              book.coverBmpPath = xtc.getThumbBmpPath();
+              RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+            } else {
+              // Keep the path and retry next visit -- see the EPUB branch. This one fails on
+              // heap most of all (the XTH cover page needs ~104KB contiguous), which is exactly
+              // the transient condition that must not be recorded as permanent.
+              LOG_ERR("HOME", "Cover thumb failed for %s; keeping path to retry", book.path.c_str());
             }
             coverRendered = false;
             coverBufferStored = false;
             freeCoverBuffer();
-            requestUpdate();
           }
+        } else if (manga::MangaBook::isMangaFolder(book.path)) {
+          // Manga folders used to fall through here with no generator at all, so the card
+          // resolved its own [HEIGHT] against a thumb only the Library ever wrote -- and only at
+          // the heights the Library itself draws. The X4 hid that behind a live page decode
+          // (~466ms per render); the X3 has no heap for one, so its manga covers were simply
+          // missing. Generating here makes the home screen self-sufficient, like the two
+          // branches above, instead of depending on the Library's idle scan having run.
+          if (!showingLoading) {
+            showingLoading = true;
+            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+          }
+          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+          // Same reason as the XTC branch: the converter needs ~52KB contiguous, which the warm
+          // font caches would otherwise be sitting on -- the difference between a cover and no
+          // cover on an X3.
+          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+          const manga::MangaBook mangaBook(book.path);
+          if (mangaBook.generateThumbBmp(coverHeight)) {
+            // Point the entry at the thumb: leaving the raw page path would send every later
+            // render back through the full-size scale that this generation exists to avoid.
+            book.coverBmpPath = mangaBook.getThumbBmpPath();
+            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+          } else {
+            LOG_ERR("HOME", "Failed to generate manga cover thumb for %s", book.path.c_str());
+          }
+          coverRendered = false;
+          coverBufferStored = false;
+          freeCoverBuffer();
         }
       }
     }
@@ -308,6 +361,17 @@ void HomeActivity::render(RenderLock&&) {
     return;
   }
 
+  // Covers BEFORE the first paint, not after. Generating them afterwards meant the card was
+  // drawn and pushed to the panel with no cover yet -- a half-empty tile the user then watched
+  // being replaced (device report: "the white right half should never be visible"). Nothing to
+  // generate is the common case and costs only a few exists() checks, so the usual path still
+  // paints exactly once; when there IS work, the progress popup covers it and the card is drawn
+  // once, finished.
+  if (!recentsLoaded && !recentsLoading) {
+    recentsLoading = true;
+    loadRecentCovers(metrics.homeCoverHeight);
+  }
+
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
@@ -337,14 +401,6 @@ void HomeActivity::render(RenderLock&&) {
   lastRenderValid = true;
   lastSelectorIndex = selectorIndex;
   renderer.displayBuffer();
-
-  if (!firstRenderDone) {
-    firstRenderDone = true;
-    requestUpdate();
-  } else if (!recentsLoaded && !recentsLoading) {
-    recentsLoading = true;
-    loadRecentCovers(metrics.homeCoverHeight);
-  }
 }
 
 void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }

@@ -55,4 +55,4 @@ bool needsVerticalRotation(uint32_t codepoint);
 // upper-right of their cell relative to a centered position.
 bool isSmallKana(uint32_t codepoint);
 
-} // namespace Kinsoku
+}  // namespace Kinsoku

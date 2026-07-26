@@ -66,6 +66,9 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  // Caller must check !isEmpty() first (used by the furigana-glossary harvest to pair a
+  // just-closed <rt> reading with its base word).
+  const std::string& lastWord() const { return words.back(); }
   void setLastWordRuby(const std::string& ruby) {
     if (!wordRuby.empty()) wordRuby.back() = ruby;
   }

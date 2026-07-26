@@ -1,5 +1,6 @@
 #include "TxtReaderActivity.h"
 
+#include <Arduino.h>
 #include <BidiUtils.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -27,6 +28,8 @@ constexpr uint8_t CACHE_VERSION = 3;          // Increment when cache format cha
 void TxtReaderActivity::onEnter() {
   Activity::onEnter();
 
+  readingSessionStartMs = millis();
+
   if (!txt) {
     return;
   }
@@ -49,6 +52,11 @@ void TxtReaderActivity::onEnter() {
 void TxtReaderActivity::onExit() {
   Activity::onExit();
 
+  // Record the sub-interval tail of the session; whole minutes were already flushed
+  // periodically from loop(). TXT books never counted toward the reading streak at all
+  // before this.
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
+
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
@@ -60,6 +68,10 @@ void TxtReaderActivity::onExit() {
 }
 
 void TxtReaderActivity::loop() {
+  // Crash-proof stats: flush whole minutes every few minutes so an exit path that
+  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
+  ReaderUtils::flushReadingStats(readingSessionStartMs);
+
   // Long press BACK (1s+) goes to file selection
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     activityManager.goToFileBrowser(txt ? txt->getPath() : "");

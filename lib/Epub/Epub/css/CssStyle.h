@@ -61,6 +61,29 @@ enum class CssDisplay : uint8_t { Block = 0, None = 1 };
 // Vertical alignment options for inline elements (e.g. superscript/subscript)
 enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
 
+// text-emphasis-style (JP bouten/圏点). Fill x shape collapsed into one enum;
+// "none" resets an inherited mark. Parsed from text-emphasis(-style) and the
+// -epub-/-webkit- prefixed forms EPUB templates ship.
+enum class CssTextEmphasis : uint8_t {
+  None = 0,
+  FilledDot = 1,
+  OpenDot = 2,
+  FilledCircle = 3,
+  OpenCircle = 4,
+  FilledSesame = 5,
+  OpenSesame = 6,
+  FilledTriangle = 7,
+  OpenTriangle = 8,
+  FilledDoubleCircle = 9,
+  OpenDoubleCircle = 10,
+};
+
+// font-variant(-caps): only small-caps is rendering-relevant on e-ink
+enum class CssFontVariant : uint8_t { Normal = 0, SmallCaps = 1 };
+
+// list-style-type: alphabetic/roman ordered types are approximated as Decimal
+enum class CssListStyleType : uint8_t { Disc = 0, Circle = 1, Square = 2, Decimal = 3, NoMarker = 4 };
+
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
   uint16_t textAlign : 1;
@@ -81,6 +104,10 @@ struct CssPropertyFlags {
   uint16_t display : 1;
   uint16_t direction : 1;
   uint16_t verticalAlign : 1;
+  uint16_t border : 1;
+  uint16_t textEmphasis : 1;
+  uint16_t fontVariant : 1;
+  uint16_t listStyleType : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -100,12 +127,16 @@ struct CssPropertyFlags {
         imageWidth(0),
         display(0),
         direction(0),
-        verticalAlign(0) {}
+        verticalAlign(0),
+        border(0),
+        textEmphasis(0),
+        fontVariant(0),
+        listStyleType(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign;
+           imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType;
   }
 
   void clearAll() {
@@ -113,10 +144,11 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = 0;
+    textEmphasis = fontVariant = listStyleType = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..17.
+// Cache serializes defined flags as uint32_t with bit indices 0..21.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -143,6 +175,20 @@ struct CssStyle {
   CssLength imageWidth;     // Width for img when both or only width set
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
+  // Border edges bitmask (TOP/RIGHT/BOTTOM/LEFT). A full 4-side mask is a boxed/kakomi block;
+  // a TOP-only mask is a separator rule above the block (EBPAJ .k-solid-top). See the
+  // border-style parsing in CssParser.cpp.
+  static constexpr uint8_t BORDER_TOP = 1 << 0;
+  static constexpr uint8_t BORDER_RIGHT = 1 << 1;
+  static constexpr uint8_t BORDER_BOTTOM = 1 << 2;
+  static constexpr uint8_t BORDER_LEFT = 1 << 3;
+  static constexpr uint8_t BORDER_ALL = 0x0F;
+  uint8_t borderEdges = 0;
+  [[nodiscard]] bool isFullBorderBox() const { return defined.border && borderEdges == BORDER_ALL; }
+
+  CssTextEmphasis textEmphasis = CssTextEmphasis::None;     // JP bouten marks
+  CssFontVariant fontVariant = CssFontVariant::Normal;      // small-caps
+  CssListStyleType listStyleType = CssListStyleType::Disc;  // list markers
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -221,6 +267,22 @@ struct CssStyle {
       verticalAlign = base.verticalAlign;
       defined.verticalAlign = 1;
     }
+    if (base.hasBorder()) {
+      borderEdges = base.borderEdges;
+      defined.border = 1;
+    }
+    if (base.hasTextEmphasis()) {
+      textEmphasis = base.textEmphasis;
+      defined.textEmphasis = 1;
+    }
+    if (base.hasFontVariant()) {
+      fontVariant = base.fontVariant;
+      defined.fontVariant = 1;
+    }
+    if (base.hasListStyleType()) {
+      listStyleType = base.listStyleType;
+      defined.listStyleType = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -241,6 +303,10 @@ struct CssStyle {
   [[nodiscard]] bool hasDisplay() const { return defined.display; }
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
+  [[nodiscard]] bool hasBorder() const { return defined.border; }
+  [[nodiscard]] bool hasTextEmphasis() const { return defined.textEmphasis; }
+  [[nodiscard]] bool hasFontVariant() const { return defined.fontVariant; }
+  [[nodiscard]] bool hasListStyleType() const { return defined.listStyleType; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -254,6 +320,9 @@ struct CssStyle {
     imageHeight = imageWidth = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
+    textEmphasis = CssTextEmphasis::None;
+    fontVariant = CssFontVariant::Normal;
+    listStyleType = CssListStyleType::Disc;
     defined.clearAll();
   }
 };

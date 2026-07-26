@@ -187,8 +187,8 @@ void MangaBookmarksActivity::render(RenderLock&&) {
         break;
       }
     }
-    std::string subtitle = std::to_string(bookmark.computedChapterProgress + 1) + "/" +
-                           std::to_string(bookmark.computedChapterPageCount);
+    std::string subtitle =
+        std::to_string(bookmark.computedChapterProgress + 1) + "/" + std::to_string(bookmark.computedChapterPageCount);
     if (!tocEntries.empty()) {
       subtitle += " - " + chapterTitle;
     }
