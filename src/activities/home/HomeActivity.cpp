@@ -149,7 +149,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           coverRendered = false;
           coverBufferStored = false;
           freeCoverBuffer();
-          requestUpdate();
         } else if (FsHelpers::hasXtcExtension(book.path)) {
           // Handle XTC file
           Xtc xtc(book.path, "/.crosspoint");
@@ -177,7 +176,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             coverRendered = false;
             coverBufferStored = false;
             freeCoverBuffer();
-            requestUpdate();
           }
         } else if (manga::MangaBook::isMangaFolder(book.path)) {
           // Manga folders used to fall through here with no generator at all, so the card
@@ -207,7 +205,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           coverRendered = false;
           coverBufferStored = false;
           freeCoverBuffer();
-          requestUpdate();
         }
       }
     }
@@ -364,6 +361,17 @@ void HomeActivity::render(RenderLock&&) {
     return;
   }
 
+  // Covers BEFORE the first paint, not after. Generating them afterwards meant the card was
+  // drawn and pushed to the panel with no cover yet -- a half-empty tile the user then watched
+  // being replaced (device report: "the white right half should never be visible"). Nothing to
+  // generate is the common case and costs only a few exists() checks, so the usual path still
+  // paints exactly once; when there IS work, the progress popup covers it and the card is drawn
+  // once, finished.
+  if (!recentsLoaded && !recentsLoading) {
+    recentsLoading = true;
+    loadRecentCovers(metrics.homeCoverHeight);
+  }
+
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
@@ -393,14 +401,6 @@ void HomeActivity::render(RenderLock&&) {
   lastRenderValid = true;
   lastSelectorIndex = selectorIndex;
   renderer.displayBuffer();
-
-  if (!firstRenderDone) {
-    firstRenderDone = true;
-    requestUpdate();
-  } else if (!recentsLoaded && !recentsLoading) {
-    recentsLoading = true;
-    loadRecentCovers(metrics.homeCoverHeight);
-  }
 }
 
 void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }

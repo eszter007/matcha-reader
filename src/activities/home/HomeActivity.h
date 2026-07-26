@@ -14,7 +14,6 @@ class HomeActivity final : public Activity {
   int selectorIndex = 0;
   bool recentsLoading = false;
   bool recentsLoaded = false;
-  bool firstRenderDone = false;
   // Partial-redraw state: after a full render, a cursor move between two MENU rows only erases
   // and redraws the menu block over the intact frame, skipping the header, cover tile, and
   // button hints (the bulk of a render). Any other update (recents load completion, battery
