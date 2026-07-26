@@ -161,6 +161,8 @@ The home menu shows an **Insights** entry (between File Transfer and Settings) t
 
 Reading time is recorded automatically when you close a book (minimum 1 minute to count). Manga counts toward "books finished" the same as EPUBs — reaching the last page marks it, independent of session length. Books finished are counted once per book (no double-counting on re-open). Stats persist in `/system/reading_stats.bin` on the SD card root — unaffected by cache clears or firmware updates.
 
+<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights screen with reading streak, stat cards, and monthly calendar"></p>
+
 ### Font Selection
 
 The reader uses whatever font is selected in Settings (built-in Noto Serif/Sans or SD card fonts like UDDigiKyokasho). No font is auto-overridden — the user's choice is always respected.
