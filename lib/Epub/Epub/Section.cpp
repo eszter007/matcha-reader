@@ -102,7 +102,9 @@ namespace {
 // rotated image loaded as unrotated-with-natural-dims and drew nothing at all.
 // v56: ruby lines no longer get the ruby shift baked into their cached y (render applies it),
 // which was collapsing the leading after every furigana-carrying line.
-constexpr uint8_t SECTION_FILE_VERSION = 56;
+// v57: bouten marks carry an ideographic space per mark so the SUP-scaled ruby run matches the
+// width of the text it marks; without it the marks bunched into the middle at half width.
+constexpr uint8_t SECTION_FILE_VERSION = 57;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

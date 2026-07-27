@@ -322,20 +322,34 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
   if (effectiveEmphasis != CssTextEmphasis::None) {
     if (const char* mark = emphasisMarkUtf8(effectiveEmphasis)) {
-      // Synthetic per-glyph ruby: one full-width mark per codepoint sits above
-      // each character (aligning 1:1 over full-width CJK glyphs). A real <rt>
-      // annotation following this word simply overwrites the marks - furigana
-      // wins over bouten. Marks render through the ruby path, so they follow
-      // the furigana visibility toggle.
+      // Synthetic per-glyph ruby: one mark per codepoint, each followed by an ideographic space.
+      //
+      // The spacer is what makes the marks line up. Ruby draws in SUP style, which drawText
+      // renders at 50% scale, and TextBlock::render centres the whole ruby string over the whole
+      // word. Bare marks therefore advance only N/2 character widths and bunch into the middle
+      // third of the run they are meant to mark -- observed on device as a dense row of marks
+      // roughly a third the width of the emphasised text, aligned with none of it. U+3000 is
+      // full-width, so at SUP it is another 0.5 character: mark + space = exactly one character
+      // cell, making the run the same width as the text and putting one mark per character.
+      //
+      // U+3000 shares its block (CJK Symbols and Punctuation) with the brackets and kutouten used
+      // on every page, so it is present wherever the marks themselves are.
+      //
+      // A real <rt> annotation following this word simply overwrites the marks - furigana wins
+      // over bouten. Marks render through the ruby path, so they follow the furigana toggle.
       int cps = 0;
       for (int i = 0; partWordBuffer[i] != '\0'; i++) {
         if ((static_cast<unsigned char>(partWordBuffer[i]) & 0xC0) != 0x80) cps++;
       }
       if (cps > 0 && cps <= 24) {
+        static constexpr char IDEOGRAPHIC_SPACE[] = "\xE3\x80\x80";  // U+3000
         std::string marks;
         const size_t markLen = strlen(mark);
-        marks.reserve(markLen * cps);
-        for (int i = 0; i < cps; i++) marks.append(mark, markLen);
+        marks.reserve((markLen + sizeof(IDEOGRAPHIC_SPACE) - 1) * cps);
+        for (int i = 0; i < cps; i++) {
+          marks.append(mark, markLen);
+          marks.append(IDEOGRAPHIC_SPACE, sizeof(IDEOGRAPHIC_SPACE) - 1);
+        }
         currentTextBlock->setLastWordRuby(marks);
       }
     }
