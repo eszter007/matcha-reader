@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ContentAccess.h>
 #include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 #include <Print.h>
 
@@ -30,6 +31,11 @@ class Epub {
   std::unique_ptr<CssParser> cssParser;
   // CSS files
   std::vector<std::string> cssFiles;
+  // Optional alternative item source, set in load(). Null unless a build
+  // provides one, in which case every item is read from the ZIP.
+  contentaccess::HandlePtr itemSource;
+  // User-presentable reason load() refused the book (empty otherwise).
+  std::string accessError;
 
   bool findContentOpfFile(std::string* contentOpfFile) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true);
@@ -50,6 +56,8 @@ class Epub {
   void setupCacheDir() const;
   const std::string& getCachePath() const;
   const std::string& getPath() const;
+  // Empty unless load() refused the book because its content is not readable here.
+  const std::string& getAccessError() const { return accessError; }
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;

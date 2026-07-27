@@ -382,6 +382,10 @@ void Epub::parseCssFiles() const {
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
 
+  // Open the optional content accessor before any parsing. Ships as a no-op
+  // here, so this always succeeds with a null handle and costs one call.
+  if (!contentaccess::open(filepath, &itemSource, &accessError)) return false;
+
   // Initialize spine/TOC cache
   bookMetadataCache.reset(new BookMetadataCache(cachePath));
   // Always create CssParser - needed for inline style parsing even without CSS files
@@ -798,6 +802,10 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
 
   const std::string path = FsHelpers::normalisePath(itemHref);
 
+  if (contentaccess::handles(itemSource, path)) {
+    return contentaccess::readToBytes(itemSource, path, size, trailingNullByte);
+  }
+
   const auto content = ZipFile(filepath).readFileToMemory(path.c_str(), size, trailingNullByte);
   if (!content) {
     LOG_DBG("EBP", "Failed to read item %s", path.c_str());
@@ -815,6 +823,11 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
   }
 
   const std::string path = FsHelpers::normalisePath(itemHref);
+
+  if (contentaccess::handles(itemSource, path)) {
+    return contentaccess::readToStream(itemSource, path, out);
+  }
+
   return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize, allowEarlyStop);
 }
 

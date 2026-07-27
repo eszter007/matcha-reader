@@ -97,6 +97,16 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     return epub;
   }
 
+  // A book load() refused because its content isn't readable on this device --
+  // tell the user instead of silently dropping back to the library.
+  if (!epub->getAccessError().empty()) {
+    LOG_ERR("READER", "book unavailable: %s", epub->getAccessError().c_str());
+    renderer.clearScreen();
+    GUI.drawPopup(renderer, tr(STR_BOOK_NOT_READABLE));
+    delay(2500);
+    return nullptr;
+  }
+
   LOG_ERR("READER", "Failed to load epub");
   return nullptr;
 }
