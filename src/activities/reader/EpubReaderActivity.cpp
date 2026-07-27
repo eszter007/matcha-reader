@@ -3127,6 +3127,28 @@ void EpubReaderActivity::openWordLookupPanel() {
     // no incremental build) worked. loadPage() serves from the active build first.
     auto page = section->loadPage(section->currentPage);
     if (page) {
+      // Hand the dictionary a heap it can work in. An incremental build keeps its parser,
+      // BuildContext and page LUT resident for as long as the chapter is open -- the one-shot
+      // build this replaced freed all of it when it finished -- and the panel arrived with a
+      // ~6KB largest block, at which DictIndex refuses EVERY entry it finds ("Skipping entry
+      // (43 bytes, maxAlloc=6132)"). Matches were found and could not be loaded, which the UI
+      // reported as "no match found". Vertical mode has no incremental build, hence no symptom.
+      //
+      // Suspend rather than abandon: suspendBuild() persists what was laid out as a partial
+      // section file, so the pages already built stay readable and the rebuild resumes from
+      // that watermark instead of starting over. The page above is already loaded, so nothing
+      // here needs the build to still be live.
+      if (section->isBuilding()) {
+        RenderLock lock(*this);  // the render task may be inside the build; every other reset here takes it too
+        section->suspendBuild();
+      }
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        fcm->releaseAllFontMemory();
+        prewarmedVPage_ = -1;  // the release emptied the mini font cache
+        prewarmedHPage_ = -1;
+      }
+      LOG_DBG("ERS", "Word lookup: maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
+
       startActivityForResult(std::make_unique<EpubReaderWordLookupActivity>(
                                  renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
                                  static_cast<uint16_t>(section->currentPage)),
