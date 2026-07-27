@@ -89,6 +89,13 @@ struct VerticalPage {
   uint16_t rowsPerColumn = 0;
   // If non-empty, this page is an image page — render the image instead of glyphs.
   std::string imagePath;
+  // Book-internal href the image was extracted from. Kept so a render can re-extract when
+  // imagePath is missing: the build extracts eagerly, and that extraction needs one contiguous
+  // 32KB inflate window at the exact moment the layout has the heap at its tightest (measured
+  // 11.7KB free / 10.7KB largest block on a dense vertical chapter). Without the href, a failure
+  // there was permanent — the layout persisted pointing at a file that no longer existed and
+  // nothing could ever recreate it. A render has the heap back (~95KB), so it can simply retry.
+  std::string imageSrcPath;
   int16_t imageWidth = 0;
   int16_t imageHeight = 0;
   bool imageRotated = false;  // true = landscape image rotated 90° CW to fill portrait screen

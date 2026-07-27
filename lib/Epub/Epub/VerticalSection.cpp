@@ -45,7 +45,7 @@ namespace {
 // match the cell VerticalTextBlock::computeCellPx re-derives at DRAW time from the new metrics --
 // the exact "cell flapping" mismatch that path exists to prevent. The horizontal pipeline
 // invalidates for the same reason (SECTION_FILE_VERSION 51); this one must not be forgotten.
-constexpr uint8_t VSECTION_FILE_VERSION = 99;
+constexpr uint8_t VSECTION_FILE_VERSION = 100;  // v100: image pages carry their source href
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -555,6 +555,7 @@ bool writePage(Sink& file, const VerticalPage& page) {
   serialization::writePod(file, isImg);
   if (isImg) {
     serialization::writeString(file, page.imagePath);
+    serialization::writeString(file, page.imageSrcPath);
     serialization::writePod(file, page.imageWidth);
     serialization::writePod(file, page.imageHeight);
     serialization::writePod(file, page.imageRotated);
@@ -616,11 +617,13 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
   page.glyphs.clear();
   page.boxes.clear();
   page.imagePath.clear();
+  page.imageSrcPath.clear();
 
   bool isImg = false;
   serialization::readPod(file, isImg);
   if (isImg) {
     serialization::readString(file, page.imagePath);
+    serialization::readString(file, page.imageSrcPath);
     serialization::readPod(file, page.imageWidth);
     serialization::readPod(file, page.imageHeight);
     serialization::readPod(file, page.imageRotated);
@@ -1096,6 +1099,9 @@ struct LayoutPageSink final : ParagraphSink {
 
     VerticalPage page;
     page.imagePath = cachedPath;
+    // Recorded even when the extraction above succeeded: a cache can record that an artifact was
+    // produced, never that it still exists. Costs one short string on image pages only.
+    page.imageSrcPath = resolvedSrc;
     page.imageWidth = static_cast<int16_t>(displayW);
     page.imageHeight = static_cast<int16_t>(displayH);
     page.imageRotated = rotated;

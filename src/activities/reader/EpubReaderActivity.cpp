@@ -1720,7 +1720,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                             UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
         const auto drawImagePage = [&]() {
           if (vpage->imageRotated) {
-            ImageBlock imgBlock(vpage->imagePath, "", vpage->imageWidth, vpage->imageHeight);
+            ImageBlock imgBlock(vpage->imagePath, vpage->imageSrcPath, vpage->imageWidth, vpage->imageHeight);
             imgBlock.setRotated(true, static_cast<int16_t>(reserve));
             imgBlock.render(renderer, 0, 0);  // ImageBlock handles rotation + centering
           } else {
@@ -1729,7 +1729,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             // Shared with warmNextPageImageCache so a background-warmed cache has EXACTLY the
             // dimensions this render asks for.
             ImageBlock::fitWithin(viewportWidth, viewportHeight, iw, ih);
-            ImageBlock fitBlock(vpage->imagePath, "", static_cast<int16_t>(iw), static_cast<int16_t>(ih));
+            ImageBlock fitBlock(vpage->imagePath, vpage->imageSrcPath, static_cast<int16_t>(iw),
+                                static_cast<int16_t>(ih));
             const int imgX = orientedMarginLeft + (viewportWidth - iw) / 2;
             const int imgY = orientedMarginTop + (viewportHeight - ih) / 2;
             fitBlock.render(renderer, imgX, imgY);
@@ -2461,7 +2462,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
       if (page.imageRotated) {
         const int reserve = UITheme::getInstance().getStatusBarHeight() +
                             UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
-        ImageBlock block(page.imagePath, "", page.imageWidth, page.imageHeight);
+        ImageBlock block(page.imagePath, page.imageSrcPath, page.imageWidth, page.imageHeight);
         block.setRotated(true, static_cast<int16_t>(reserve));
         return warmBlock(block);
       }
@@ -2469,7 +2470,8 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
       int iw = page.imageWidth;
       int ih = page.imageHeight;
       ImageBlock::fitWithin(viewportWidth, viewportHeight, iw, ih);
-      return warmBlock(ImageBlock(page.imagePath, "", static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
+      return warmBlock(
+          ImageBlock(page.imagePath, page.imageSrcPath, static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
     };
 
     if (vp && !warmVerticalPage(*vp)) return;  // cancelled: the reader wants the render task back
@@ -3107,6 +3109,17 @@ void EpubReaderActivity::openWordLookupPanel() {
     // exact race is what corrupted the glyph vector before the reported heap_caps_free panic
     // (see openReaderMenu()). startActivityForResult() only queues, so it must not be called
     // with the lock held (ActivityManager takes it again to perform the push).
+    // Same reclaim as the horizontal branch below, for the same reason: the scan aborts on a
+    // failed allocation (pushGlyphSafe -> scanTruncated) and shows whatever it had, which
+    // surfaces as INCOMPLETE matches rather than none. Vertical has no incremental build to
+    // suspend, but the glyph caches are the bulk of it and reload lazily on the next page.
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      prewarmedVPage_ = -1;  // the release emptied the mini font cache
+      prewarmedHPage_ = -1;
+    }
+    LOG_DBG("ERS", "Word lookup (vertical): maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
+
     std::unique_ptr<Activity> panel;
     {
       RenderLock lock(*this);
