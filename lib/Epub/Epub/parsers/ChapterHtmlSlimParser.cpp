@@ -791,7 +791,24 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 HalFile cachedImageFile;
                 bool extractSuccess = false;
                 if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-                  extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+                  {
+                    // The zip inflate window is one contiguous 32KB block and the heap here is
+                    // fragmented, not full: measured 89992 free with a largest block of 30708, so
+                    // the malloc fallback fails and the image is lost. Freeing more cannot fix a
+                    // fragmentation problem -- font reclaim and suspending the build each moved
+                    // maxAlloc by exactly 0.
+                    //
+                    // InflateStream::init() prefers the lent framebuffer (buildscratch) over the
+                    // heap, and 48KB comfortably holds its ~11KB state + 32KB window. The blocking
+                    // full build holds a loan throughout and its extractions succeed; the
+                    // incremental chunk loop deliberately runs without one (so the popup can draw)
+                    // and its extractions fail. Take a loan for the extraction itself, which draws
+                    // nothing. Nesting-safe: under an outer loan this is inert and behaviour is
+                    // unchanged. The chapter HTML is parsed from a temp file, so no outer inflate
+                    // is holding the scratch at this point.
+                    GfxRenderer::FrameBufferLoan loan(self->renderer);
+                    extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+                  }
                   cachedImageFile.flush();
                   cachedImageFile.close();
                 }

@@ -1070,7 +1070,25 @@ struct LayoutPageSink final : ParagraphSink {
       }
       HalFile cachedFile;
       if (Storage.openFileForWrite("VSC", cachedPath, cachedFile)) {
-        const bool extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
+        bool extracted = false;
+        {
+          // ...and the reason freeing was not enough: the heap is FRAGMENTED, not full. Measured
+          // at the moment of failure: 89992 bytes free but a largest block of 30708, against the
+          // 32768 the window needs. Releasing more bytes cannot help when they come back in
+          // pieces -- font reclaim moved maxAlloc by 0, and so did suspending the section build.
+          //
+          // InflateStream::init() already has the answer: it claims the lent framebuffer via
+          // buildscratch (state ~11KB + window 32KB fit in 48KB) instead of the heap. That is why
+          // the blocking full build's extractions succeed -- it holds a loan for its whole
+          // duration -- while this path, which never took one, fails on the same book.
+          //
+          // Scoped to the extraction call alone: nothing may draw or display while the bytes are
+          // lent, and the early-render hook only fires at page boundaries, never inside this call.
+          // Restore hands back a white framebuffer, which the next page render repaints anyway;
+          // the panel keeps showing its last refreshed image throughout (e-ink is persistent).
+          GfxRenderer::FrameBufferLoan loan(renderer);
+          extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
+        }
         cachedFile.flush();
         cachedFile.close();
         if (!extracted) {
