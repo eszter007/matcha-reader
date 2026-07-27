@@ -992,27 +992,35 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
                 self->currentPageNextY = 0;
 
-                // NOT rotating aspect-mismatched images to fill the screen, despite that being the
-                // intent here originally. ImageBlock::render() does not implement rotation at all:
-                // `rotated` and reserveMargin_ are read only by warmCache(), and render() bounds-
-                // checks the RAW stored width/height before drawing. So storing natural dims and
-                // relying on "ImageBlock rotates + centers itself" draws nothing whatsoever --
-                // observed as a blank page, with render() logging "Invalid render position: (8,14)
-                // size (1920x848) screen (480x800)" on every pass.
+                // Rotate when the image aspect doesn't match the viewport, so it fills the screen (the
+                // user tilts the device to view it). Natural dims are stored deliberately: only
+                // ImageBlock::render() knows the rotated frame, and it fits + centres there.
                 //
-                // That was unreachable until images started extracting successfully (dee87656);
-                // before, these images were dropped at extraction and never reached a render.
-                // Fitting upright shows a smaller image than a rotated fill would, but it shows
-                // one, which is the whole point. Restore the rotate path only alongside real
-                // rotation support in render(), not by re-adding this branch.
-                //
+                // This was disabled for one commit (0d4d1aa0) because render() did NOT implement
+                // rotation -- it bounds-checked the natural dims against the upright screen and drew
+                // nothing at all. Re-enabled now that it does. If a wide image ever goes blank
+                // again, check render()'s rotated branch before touching this one.
+                const bool viewportIsPortrait = self->viewportHeight > self->viewportWidth;
+                const bool imageIsLandscape = dims.width > dims.height;
+                const bool rotateImage = dims.width > 0 && dims.height > 0 && (viewportIsPortrait == imageIsLandscape);
+
                 // nothrow: make_shared uses bare new, which aborts on OOM under
                 // -fno-exceptions; images arrive mid-parse when the heap is at its
                 // most loaded, so this must fail soft into the null-check below.
                 std::shared_ptr<ImageBlock> imageBlock;
                 int xPos = 0;
                 int yPos = 0;
-                {
+                if (rotateImage) {
+                  // Store natural dims; render() fits and centres them in the rotated frame.
+                  imageBlock = std::shared_ptr<ImageBlock>(
+                      new (std::nothrow) ImageBlock(cachedImagePath, resolvedPath, static_cast<int16_t>(dims.width),
+                                                    static_cast<int16_t>(dims.height)));
+                  if (imageBlock) {
+                    const int reserve = std::max(self->renderer.getScreenWidth() - self->viewportWidth,
+                                                 self->renderer.getScreenHeight() - self->viewportHeight);
+                    imageBlock->setRotated(true, static_cast<int16_t>(reserve));
+                  }
+                } else {
                   // Scale to fit the full viewport, preserving aspect ratio.
                   // Don't upscale small images beyond their natural size.
                   const float sx = static_cast<float>(self->viewportWidth) / dims.width;

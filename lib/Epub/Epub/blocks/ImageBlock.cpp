@@ -318,9 +318,15 @@ void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
 
 void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
-  renderer.fillRect(x, y, width, height, true);
-  if (width > 2 && height > 2) {
-    renderer.fillRect(x + 1, y + 1, width - 2, height - 2, false);
+  renderPlaceholderAt(renderer, x, y, width, height);
+}
+
+// Sized form: render() needs the placeholder to match the geometry it actually drew at, which for
+// a rotated block is the fitted size in the rotated frame, not the stored natural size.
+void ImageBlock::renderPlaceholderAt(GfxRenderer& renderer, const int x, const int y, const int w, const int h) const {
+  renderer.fillRect(x, y, w, h, true);
+  if (w > 2 && h > 2) {
+    renderer.fillRect(x + 1, y + 1, w - 2, h - 2, false);
   }
 }
 
@@ -335,13 +341,49 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
 
+  // Rotated images draw UPRIGHT IN THE ADJACENT ORIENTATION: the panel is physically the same, so
+  // turning the logical frame 90 degrees turns the picture on screen and the reader tilts the
+  // device. The same trick MangaReaderActivity uses for full pages ((o + 3) % 4).
+  //
+  // This is what the `rotated` flag always promised and never did -- render() used to bounds-check
+  // the block's natural dimensions against the upright screen, reject them, and draw nothing
+  // ("Invalid render position: ... size (1920x848) screen (480x800)"). The block deliberately
+  // stores natural dims: only here is the target frame known.
+  //
+  // The fit MUST match warmCache()'s exactly, or the .pxc it wrote is rejected on a dimension
+  // mismatch and every pass re-decodes. warmCache computes it from the unswapped screen
+  // (getScreenHeight() for width, getScreenWidth() for height); after setOrientation those are
+  // simply getScreenWidth()/getScreenHeight() here, so the two agree by construction.
+  struct OrientationGuard {
+    GfxRenderer& r;
+    GfxRenderer::Orientation saved;
+    bool active = false;
+    ~OrientationGuard() {
+      if (active) r.setOrientation(saved);
+    }
+  } orientation{renderer, static_cast<GfxRenderer::Orientation>(renderer.getOrientation())};
+
+  int drawX = x, drawY = y, drawW = width, drawH = height;
+  if (rotated) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((static_cast<int>(orientation.saved) + 3) % 4));
+    orientation.active = true;
+    fitWithin(std::max(1, renderer.getScreenWidth() - 2 * reserveMargin_),
+              std::max(1, renderer.getScreenHeight() - 2 * reserveMargin_), drawW, drawH);
+    // Centred in the rotated frame; the caller's x/y are upright-frame coordinates and mean
+    // nothing here, which is why callers pass (0, 0) for a rotated block.
+    drawX = (renderer.getScreenWidth() - drawW) / 2;
+    drawY = (renderer.getScreenHeight() - drawH) / 2;
+    LOG_DBG("IMG", "Rotated fit: %dx%d -> %dx%d at %d,%d (frame %dx%d)", width, height, drawW, drawH, drawX, drawY,
+            renderer.getScreenWidth(), renderer.getScreenHeight());
+  }
+
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
 
-  // Bounds check render position using logical screen dimensions
-  if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
-    LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
-            screenHeight);
+  // Bounds check the DRAWN geometry (a rotated block was fitted above), not the stored natural size
+  if (drawX < 0 || drawY < 0 || drawX + drawW > screenWidth || drawY + drawH > screenHeight) {
+    LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", drawX, drawY, drawW, drawH,
+            screenWidth, screenHeight);
     return;
   }
 
@@ -351,18 +393,18 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // and discarded the result — the dominant cost of AA on image pages. The check
   // is orientation-aware and returns true when no strip is active, so the BW
   // pass and non-tiled controllers render the image exactly as before.
-  if (!renderer.glyphIntersectsStrip(x, y, x + width - 1, y + height - 1)) {
+  if (!renderer.glyphIntersectsStrip(drawX, drawY, drawX + drawW - 1, drawY + drawH - 1)) {
     return;
   }
 
   if (imageFailedThisSession(imagePath)) {
-    renderPlaceholder(renderer, x, y);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }
 
   // Try to render from cache first
   std::string cachePath = getCachePath(imagePath);
-  if (renderFromCache(renderer, cachePath, x, y, width, height)) {
+  if (renderFromCache(renderer, cachePath, drawX, drawY, drawW, drawH)) {
     return;  // Successfully rendered from cache
   }
 
@@ -392,7 +434,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
-    renderPlaceholder(renderer, x, y);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }
   size_t fileSize = file.size();
@@ -401,17 +443,17 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
-    renderPlaceholder(renderer, x, y);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }
 
   LOG_DBG("IMG", "Decoding and caching: %s", imagePath.c_str());
 
   RenderConfig config;
-  config.x = x;
-  config.y = y;
-  config.maxWidth = width;
-  config.maxHeight = height;
+  config.x = drawX;
+  config.y = drawY;
+  config.maxWidth = drawW;
+  config.maxHeight = drawH;
   config.useGrayscale = true;
   config.useDithering = true;
   config.performanceMode = false;
@@ -422,7 +464,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (!decoder) {
     LOG_ERR("IMG", "No decoder found for image: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
-    renderPlaceholder(renderer, x, y);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }
 
@@ -432,7 +474,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
-    renderPlaceholder(renderer, x, y);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }
 
@@ -444,6 +486,13 @@ bool ImageBlock::serialize(HalFile& file) {
   serialization::writeString(file, srcPath);
   serialization::writePod(file, width);
   serialization::writePod(file, height);
+  // rotated/reserveMargin_ were NOT persisted before v55, which is why the rotate-to-fill path
+  // never worked in a cached section: the parser set the flag, serialize() dropped it, and every
+  // load produced an unrotated block still holding NATURAL dimensions -- which render() then
+  // rejected as out of bounds, drawing nothing. The flag is layout state, not a render-time
+  // decision, so it has to survive the round trip with the dims it belongs to.
+  serialization::writePod(file, rotated);
+  serialization::writePod(file, reserveMargin_);
   return true;
 }
 
@@ -455,7 +504,13 @@ std::unique_ptr<ImageBlock> ImageBlock::deserialize(HalFile& file) {
   int16_t w, h;
   serialization::readPod(file, w);
   serialization::readPod(file, h);
-  return std::unique_ptr<ImageBlock>(new (std::nothrow) ImageBlock(path, src, w, h));
+  bool rot = false;
+  int16_t reserve = 0;
+  serialization::readPod(file, rot);
+  serialization::readPod(file, reserve);
+  auto block = std::unique_ptr<ImageBlock>(new (std::nothrow) ImageBlock(path, src, w, h));
+  if (block && rot) block->setRotated(true, reserve);
+  return block;
 }
 
 // Shared by the rotated render path, the vertical reader's image-page fit and warmCache(), so a

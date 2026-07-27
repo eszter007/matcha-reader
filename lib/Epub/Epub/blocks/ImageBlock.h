@@ -28,6 +28,9 @@ class ImageBlock final : public Block {
   bool hasValidCache() const;
   bool needsDecode() const;
   void renderPlaceholder(GfxRenderer& renderer, int x, int y) const;
+  // Sized form, used by render() so a rotated block's placeholder matches the geometry actually
+  // drawn (fitted, in the rotated frame) rather than its stored natural size.
+  void renderPlaceholderAt(GfxRenderer& renderer, int x, int y, int w, int h) const;
   static void clearSessionRenderFailures();
 
   // A page render draws its image up to ~13 times (BW double-refresh plus every

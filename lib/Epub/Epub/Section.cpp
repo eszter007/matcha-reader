@@ -95,7 +95,12 @@ namespace {
 // v53: aspect-mismatched images are fitted upright rather than marked rotated. A v52 cache has
 // their natural dimensions baked into the block, which render() rejects as out of bounds, so
 // those pages must be re-laid-out to become visible.
-constexpr uint8_t SECTION_FILE_VERSION = 53;
+// v54: render() implements rotation, so those images go back to being stored rotated (natural
+// dims, fitted in the rotated frame at draw time) and fill the screen again. v53 caches hold the
+// upright fit and would keep showing the small version.
+// v55: ImageBlock serializes `rotated` + reserveMargin_. They were never persisted, so a cached
+// rotated image loaded as unrotated-with-natural-dims and drew nothing at all.
+constexpr uint8_t SECTION_FILE_VERSION = 55;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
