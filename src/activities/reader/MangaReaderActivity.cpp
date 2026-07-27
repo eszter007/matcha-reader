@@ -531,14 +531,49 @@ MangaReaderActivity::FullPageGeom MangaReaderActivity::computeFullPageGeom(const
   return g;
 }
 
-MangaReaderActivity::FullPageGeom MangaReaderActivity::applyFullPageGeometry(const int imgWidth, const int imgHeight) {
-  const int savedOrientation = renderer.getOrientation();
-  FullPageGeom g = computeFullPageGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight());
-  g.savedOrientation = savedOrientation;
+MangaReaderActivity::FullPageGeom MangaReaderActivity::adoptFullPageGeom(FullPageGeom g) {
+  g.savedOrientation = renderer.getOrientation();
   if (g.rotated) {
-    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4));
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((g.savedOrientation + 3) % 4));
   }
   return g;
+}
+
+MangaReaderActivity::FullPageGeom MangaReaderActivity::applyFullPageGeometry(const int imgWidth, const int imgHeight) {
+  return adoptFullPageGeom(
+      computeFullPageGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight()));
+}
+
+bool MangaReaderActivity::fullPageGeomFromCache(const PixelCacheIO::Reader& cache, FullPageGeom& out) {
+  if (!cache.isOpen()) return false;
+  const int cw = cache.width(), ch = cache.height();
+
+  // The header holds the fitted on-screen size, not the source size -- so the geometry has to be
+  // re-derived from it, and only accepted when the derivation is provably the same one the
+  // decode made. Two properties make that possible:
+  //
+  //  * The fit preserves aspect, and rounding is monotonic, so destWidth > destHeight exactly
+  //    when imgWidth > imgHeight -- which is the only thing computeFullPageGeom needs the source
+  //    for (its rotate test). A square cache is the one case that loses the answer (a rotated
+  //    landscape page can fit to a square), so bail there.
+  //  * Feeding the fitted size back through computeFullPageGeom is a fixed point when the cache
+  //    belongs to this screen: it already fits, so it comes back unscaled and centred the same
+  //    way. A cache fitted to different screen dimensions generally is not.
+  //
+  // The fixed point alone would also accept a cache that is merely smaller than the screen (a
+  // stale one written under a different fit rule would sit centred and undersized forever), so
+  // require it to touch a screen edge as well -- i.e. to actually be a fill. A page whose source
+  // is smaller than the screen legitimately does not, and simply falls back to the probe.
+  if (cw == ch) return false;
+
+  const FullPageGeom g = computeFullPageGeom(cw, ch, renderer.getScreenWidth(), renderer.getScreenHeight());
+  if (g.destWidth != cw || g.destHeight != ch) return false;
+  if (cw != g.screenW && ch != g.screenH) return false;
+
+  LOG_DBG("MANGA", "Geometry from cache header: %dx%d at %d,%d (rot %d) -- source header not read", cw, ch, g.x, g.y,
+          (int)g.rotated);
+  out = adoptFullPageGeom(g);
+  return true;
 }
 
 void MangaReaderActivity::renderFullPage() {
@@ -559,20 +594,6 @@ void MangaReaderActivity::renderFullPage() {
     return;
   }
 
-  ImageDimensions dims = {0, 0};
-  if (!decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
-    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true);
-    renderer.displayBuffer();
-    return;
-  }
-
-  const FullPageGeom g = applyFullPageGeometry(dims.width, dims.height);
-  const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
-  const bool rotatePage = g.rotated;
-  const int x = g.x, y = g.y;
-  const int destWidth = g.destWidth, destHeight = g.destHeight;
-  const int screenW = g.screenW, screenH = g.screenH;
-
   // Only JPEG/PNG pages stream a .2bp pixel cache; the BMP converter renders straight to the
   // framebuffer and never writes one, so for a BMP page the cache would be a guaranteed miss on
   // every plane -- an SD open attempt for nothing. Skip it entirely for BMP (mirrors the
@@ -581,6 +602,35 @@ void MangaReaderActivity::renderFullPage() {
   const bool useCache = !FsHelpers::hasBmpExtension(imgPath);
   const std::string cachePath =
       useCache ? book->getCachePath() + "/page_" + std::to_string(currentPage) + ".2bp" : std::string();
+
+  // One open serves this whole page turn: the header below, then all three render passes. On
+  // device an open costs ~85ms (SdFat walks a FAT directory holding a chapter's worth of cache
+  // entries), so the open-per-pass this replaces was the single largest cost of a page turn --
+  // larger than any pass's own read. Kept alive until the last pass has run.
+  PixelCacheIO::Reader cache;
+  if (useCache) cache.open(cachePath);
+
+  // A warm cache (a revisited page, or the next page warmed by the idle prefetch) already knows
+  // the on-screen size, so the source image never has to be opened for its dimensions -- that
+  // probe is an SD open plus a JPEG marker walk, measured at 86ms of every page turn, spent to
+  // recompute a number the passes below then go on to supply themselves for free. Falls through
+  // to the probe whenever the cache can't prove its geometry (see fullPageGeomFromCache).
+  FullPageGeom g;
+  if (!fullPageGeomFromCache(cache, g)) {
+    ImageDimensions dims = {0, 0};
+    if (!decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
+      renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true);
+      renderer.displayBuffer();
+      return;
+    }
+    g = applyFullPageGeometry(dims.width, dims.height);
+  }
+
+  const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
+  const bool rotatePage = g.rotated;
+  const int x = g.x, y = g.y;
+  const int destWidth = g.destWidth, destHeight = g.destHeight;
+  const int screenW = g.screenW, screenH = g.screenH;
 
   RenderConfig config;
   config.x = x;
@@ -622,8 +672,14 @@ void MangaReaderActivity::renderFullPage() {
   // (BW + LSB + MSB), each a full JPEG parse/IDCT/scale -- the dominant cost of "turning pages in
   // manga is slow". ImageBlock (regular EPUB images) already had this same cache-read
   // optimization; manga bypassed ImageBlock entirely and never got it.
-  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!cache.render(renderer, x, y, destWidth, destHeight)) {
+    // Cold page (or a cache that failed to open or read): decode, which also streams the cache to
+    // disk. Open it afterwards so the two grayscale passes still read pixels instead of decoding
+    // the JPEG twice more -- that hand-off is the entire reason the cache exists. Any handle from
+    // a failed read is stale by now (the decode just rewrote the file), hence the close first.
+    cache.close();
     decoder->decodeToFramebuffer(imgPath, renderer, config);
+    if (useCache) cache.open(cachePath);
   }
 
   // Status bar: page number
@@ -643,14 +699,14 @@ void MangaReaderActivity::renderFullPage() {
   // real decode if the cache write failed (e.g. under memory pressure) or wasn't enabled.
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!cache.render(renderer, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
   renderer.copyGrayscaleLsbBuffers();
 
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, destWidth, destHeight)) {
+  if (!cache.render(renderer, x, y, destWidth, destHeight)) {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
   }
   renderer.copyGrayscaleMsbBuffers();
@@ -792,14 +848,25 @@ void MangaReaderActivity::renderPanelZoom() {
   config.useDithering = !bwOnly;
   config.cachePath = cachePath;
 
+  // One open for every pass this render performs -- the BW rebuild here plus, on a deferred gray
+  // upgrade, both plane passes below. See the Reader comment in renderFullPage(): an open is
+  // ~85ms, so an upgrade under the old open-per-pass API spent ~255ms of its ~400ms budget just
+  // reopening the same crop. Not opened for a BW-only panel, which never touches the cache.
+  PixelCacheIO::Reader cache;
+  if (useCache && !bwOnly) cache.open(cachePath);
+
   // Populate the BW framebuffer. BW-only decodes the 1-bit BMP straight to BW; the grayscale path
   // renders from the .2bp pixel cache when warm (revisited/prefetched JPEG panel) and only decodes
   // on a cold pass (or always, for a cacheless BMP crop), same as renderFullPage().
   if (bwOnly) {
     renderer.setRenderMode(GfxRenderer::BW);
     decoder->decodeToFramebuffer(panelImgPath, renderer, config);
-  } else if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+  } else if (!cache.render(renderer, x, y, fitW, fitH)) {
+    // Cold crop: the decode streams the cache, so reopen it for the plane passes below (same
+    // hand-off as renderFullPage()).
+    cache.close();
     decoder->decodeToFramebuffer(panelImgPath, renderer, config);
+    if (useCache) cache.open(cachePath);
   }
 
   // Panel indicator and status
@@ -846,14 +913,14 @@ void MangaReaderActivity::renderPanelZoom() {
       // plane -- same approach as renderFullPage(), see the comment there for the full rationale.
       renderer.clearScreen(0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-      if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+      if (!cache.render(renderer, x, y, fitW, fitH)) {
         decoder->decodeToFramebuffer(panelImgPath, renderer, config);
       }
       renderer.copyGrayscaleLsbBuffers();
 
       renderer.clearScreen(0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-      if (!useCache || !PixelCacheIO::renderFromCache(renderer, cachePath, x, y, fitW, fitH)) {
+      if (!cache.render(renderer, x, y, fitW, fitH)) {
         decoder->decodeToFramebuffer(panelImgPath, renderer, config);
       }
       renderer.copyGrayscaleMsbBuffers();

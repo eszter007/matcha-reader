@@ -14,6 +14,10 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
+namespace PixelCacheIO {
+class Reader;
+}
+
 class MangaReaderActivity final : public Activity {
  public:
   explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -86,6 +90,14 @@ class MangaReaderActivity final : public Activity {
   // Touches NO renderer state: rotation is just a screen-dim swap here, which matches what
   // setOrientation((o+3)%4) does to getScreenWidth/Height. savedOrientation is left at 0.
   static FullPageGeom computeFullPageGeom(int imgWidth, int imgHeight, int screenW, int screenH);
+  // Stamps savedOrientation and applies the rotation, so a geometry obtained any way (from the
+  // source dimensions or recovered from a warm pixel cache) enters the render path identically.
+  FullPageGeom adoptFullPageGeom(FullPageGeom g);
+  // Recovers the full-page geometry from an open cache's header alone, so a page whose pixels are
+  // already cached never opens the source image just to read its dimensions. Returns false when
+  // the cached size cannot be proven to be this screen's fit -- the caller must then probe the
+  // source. See the definition for what "proven" means.
+  bool fullPageGeomFromCache(const PixelCacheIO::Reader& cache, FullPageGeom& out);
 
   void prefetchNextPageCache();
 
