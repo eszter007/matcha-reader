@@ -296,6 +296,9 @@ void HomeActivity::loop() {
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
         break;
+      case HomeMenuItem::READING_STATS:
+        onStatsOpen();
+        break;
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
         break;
