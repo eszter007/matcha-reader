@@ -369,9 +369,20 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // The build only header-probed the image for dimensions; pull the actual
   // file out of the book now, on first visit to the page.
   if (!srcPath.empty() && extractFn && !Storage.exists(imagePath.c_str())) {
-    LOG_DBG("IMG", "Lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
+    LOG_DBG("IMG", "Lazy-extracting %s -> %s (maxAlloc=%u)", srcPath.c_str(), imagePath.c_str(),
+            (unsigned)ESP.getMaxAllocHeap());
     if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
-      LOG_ERR("IMG", "Lazy extraction failed: %s", srcPath.c_str());
+      // Nearly always the zip inflate window -- one contiguous 32KB block -- not the entry.
+      // Measured on the horizontal path: free=68620 but maxAlloc=25588..29684, because the
+      // incremental section build stays resident for as long as the chapter is open.
+      //
+      // Releasing font caches here was tried and does NOTHING: maxAlloc 29684 -> 29684 measured,
+      // i.e. not one contiguous byte, while costing a glyph reload. Do not re-add it. The block
+      // is held by the build, so the only lever that moves this number is suspendBuild() (the
+      // word-lookup path takes it from 6132 to 38900 that way), which has to be driven from a
+      // context that owns the build, not from inside a render.
+      LOG_ERR("IMG", "Lazy extraction failed (maxAlloc=%u, inflate window needs 32768): %s",
+              (unsigned)ESP.getMaxAllocHeap(), srcPath.c_str());
     }
   }
 

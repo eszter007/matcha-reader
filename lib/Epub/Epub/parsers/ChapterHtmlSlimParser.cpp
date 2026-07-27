@@ -810,6 +810,33 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
               }
 
+              // Neither the header probe nor the full extraction produced dimensions -- on this
+              // device that is almost always a transient OOM, since both need a zip inflate stream
+              // and images arrive mid-parse when the build's heap is at its worst (measured: 11
+              // images in a row failing at "Failed to init inflate stream").
+              //
+              // The image used to be dropped from the layout here and replaced by alt text. Because
+              // no ImageBlock was created, nothing retained resolvedPath, so ImageBlock's lazy
+              // extractor had nothing to attach to and the image stayed gone for the life of the
+              // section cache -- a transient failure made permanent, the same shape as the vertical
+              // bug that VerticalPage::imageSrcPath fixed.
+              //
+              // Reserve a viewport-sized box and let the block carry its source href instead:
+              // render() re-extracts once the heap has recovered, and fits the real image inside
+              // the reserved box. Costs a too-generous reservation on the failure path, which is
+              // strictly better than losing the image. Falls through to the old behaviour when
+              // there is no href to recover from, which is the only genuinely unrecoverable case.
+              if (!gotDimensions && !resolvedPath.empty()) {
+                // Never leave a partial behind: render() skips lazy extraction when the file
+                // already exists, and would then decode a truncated image.
+                Storage.remove(cachedImagePath.c_str());
+                dims.width = static_cast<int>(self->viewportWidth);
+                dims.height = static_cast<int>(self->viewportHeight);
+                gotDimensions = true;
+                LOG_INF("EHP", "Image %s unavailable during build; reserving box for lazy extraction",
+                        resolvedPath.c_str());
+              }
+
               if (gotDimensions) {
                 LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
 

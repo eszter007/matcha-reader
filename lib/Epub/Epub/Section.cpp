@@ -89,7 +89,10 @@ namespace {
 // v50: force re-parse so the furigana glossary (ruby.bin) harvests existing books.
 // v51: merge of upstream 1.5.0 -- arena TextBlock, ruby group distribution, lazy image
 // extraction and the incremental/partial build format all land at once.
-constexpr uint8_t SECTION_FILE_VERSION = 51;
+// v52: images whose build-time extraction failed are laid out with a recoverable ImageBlock
+// instead of being dropped to alt text. The byte layout is unchanged -- the bump exists to
+// rebuild caches that recorded the drop, which no amount of re-rendering can undo.
+constexpr uint8_t SECTION_FILE_VERSION = 52;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
