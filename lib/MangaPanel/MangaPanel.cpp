@@ -1,5 +1,6 @@
 #include "MangaPanel.h"
 
+#include <Arduino.h>
 #include <BmpToBmpConverter.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -234,8 +235,16 @@ bool MangaBook::scanImages() {
     return false;
   }
 
+  // This scan dominates opening a manga (6017ms of an 8225ms first loop iteration, measured on
+  // device). The per-entry cost is the same slow-directory behaviour that makes a single file open
+  // ~85ms, so what decides the fix is how many entries there are versus how many are page images:
+  // a converted book carries a p<page>_<panel> crop per panel in the same folder, which would put
+  // most of the cost in entries this loop only skips. Counted rather than assumed.
   char name[200];
+  uint32_t entriesSeen = 0, cropsSkipped = 0;
+  const unsigned long scanStart = millis();
   for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    entriesSeen++;
     if (!file.isDirectory()) {
       file.getName(name, sizeof(name));
       if (name[0] != '.' && !isPanelCropFile(name)) {
@@ -243,14 +252,19 @@ bool MangaBook::scanImages() {
         if (FsHelpers::hasBmpExtension(sv) || FsHelpers::hasJpgExtension(sv) || FsHelpers::hasPngExtension(sv)) {
           imageFiles.emplace_back(name);
         }
+      } else if (isPanelCropFile(name)) {
+        cropsSkipped++;
       }
     }
     file.close();
   }
   dir.close();
+  const unsigned long scanMs = millis() - scanStart;
 
   sortPageFileList(imageFiles);
-  LOG_DBG("MNG", "Found %u page images in %s", (unsigned)imageFiles.size(), dirPath.c_str());
+  LOG_DBG("MNG", "Found %u page images in %s (%ums, %u dir entries, %u panel crops skipped)",
+          (unsigned)imageFiles.size(), dirPath.c_str(), (unsigned)scanMs, (unsigned)entriesSeen,
+          (unsigned)cropsSkipped);
   return true;
 }
 

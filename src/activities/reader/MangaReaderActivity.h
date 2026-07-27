@@ -140,6 +140,12 @@ class MangaReaderActivity final : public Activity {
   // Panel crop format for this book (uniform per book): the converter writes p<page>_<panel>.jpg
   // normally, or .bmp with --mono. panelCropPath() picks the extension from this.
   bool panelCropIsBmp = false;
+  // Panel crop location for this book. Conversions since the directory-scan fix put crops in a
+  // subfolder, so the book folder holds only page images and opening it does not walk a crop per
+  // panel; books converted before that have them loose alongside the pages. Detected once in
+  // onEnter() -- both layouts stay readable.
+  static constexpr const char* PANEL_CROP_SUBDIR = "panels";
+  bool panelCropsInSubdir = false;
   // True when this page's panel crops are 1-bit monochrome BMP -> renderPanelZoom takes the same
   // single-BW-wave fast path as a mono full page. Detected once per page in loadCurrentPagePanels.
   bool panelsBwOnly = false;

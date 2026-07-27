@@ -70,6 +70,19 @@ void MangaReaderActivity::onEnter() {
 
   if (!book) return;
 
+  // Which layout this book's panel crops use. Newer conversions put them in a subfolder so the
+  // book folder holds only page images: MangaBook::scanImages() walks every entry on open, and on
+  // device that ran 6499ms for 2396 entries of which 219 were pages and 974 were crops. Probed
+  // once per book, never per page -- an SD open is ~85ms here. The flat layout stays supported
+  // indefinitely; re-converting is an optimisation the reader may take, not a requirement.
+  {
+    std::string subdir = book->getFolder();
+    if (subdir.empty() || subdir.back() != '/') subdir += '/';
+    subdir += PANEL_CROP_SUBDIR;
+    panelCropsInSubdir = Storage.exists(subdir.c_str());
+    LOG_DBG("MRA", "Panel crops: %s layout", panelCropsInSubdir ? "subfolder" : "flat (legacy)");
+  }
+
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   // Base screen dims for the prefetch worker's geometry math -- captured here, the one moment
   // that is single-threaded by construction (no render has been requested yet). See the header.
@@ -229,6 +242,10 @@ std::string MangaReaderActivity::panelCropPathExt(const int panelIdx, const char
   snprintf(cropName, sizeof(cropName), "p%u_%d%s", static_cast<unsigned>(currentPage), panelIdx, ext);
   std::string path = book->getFolder();
   if (path.empty() || path.back() != '/') path += '/';  // path.back() on an empty string is UB
+  if (panelCropsInSubdir) {
+    path += PANEL_CROP_SUBDIR;
+    path += '/';
+  }
   path += cropName;
   return path;
 }
