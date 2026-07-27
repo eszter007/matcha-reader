@@ -100,7 +100,9 @@ namespace {
 // upright fit and would keep showing the small version.
 // v55: ImageBlock serializes `rotated` + reserveMargin_. They were never persisted, so a cached
 // rotated image loaded as unrotated-with-natural-dims and drew nothing at all.
-constexpr uint8_t SECTION_FILE_VERSION = 55;
+// v56: ruby lines no longer get the ruby shift baked into their cached y (render applies it),
+// which was collapsing the leading after every furigana-carrying line.
+constexpr uint8_t SECTION_FILE_VERSION = 56;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

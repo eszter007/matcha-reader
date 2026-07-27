@@ -1937,12 +1937,17 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  // Furigana renders ABOVE the line's ascender: without extra leading it overlaps the
-  // previous line's text (and clips at the page top -- the same headroom fixes both, since a
-  // fresh page starts at the padded offset too). The shift therefore goes into the line's y as
-  // well as into the height; upstream only widens the height, which leaves the ruby overlapping
-  // the line above. Applied per ruby-carrying line at LAYOUT time so the section cache stays
-  // independent of the display-side furigana toggle.
+  // Furigana renders ABOVE the line's ascender, so a ruby-carrying line needs extra leading or
+  // the annotation overlaps the line above (and clips at the page top). That headroom goes into
+  // the line's HEIGHT only -- deliberately not into its y.
+  //
+  // TextBlock::render() already shifts every word down by the same getRubyShift(ascender) before
+  // drawing, which is what creates the room the ruby is then raised into. Adding it to y here as
+  // well applied it twice: the line's text landed at nextY + 2*rubyExtra while the following line
+  // sat at nextY + base + rubyExtra, so the gap collapsed to base - rubyExtra. Measured on device
+  // as ~0.62 of normal leading, with descenders of the ruby line visibly colliding with the
+  // ascenders of the next -- the long-standing "horizontal line spacing is too tight" report,
+  // which only ever affected lines carrying furigana.
   const int rubyExtra = line->getRubyShift(renderer.getFontAscenderSize(fontId));
   const int lineHeight = renderer.getLineHeight(fontId, lineCompression) + rubyExtra;
 
@@ -1979,7 +1984,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
 
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
-  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY + rubyExtra));
+  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
   currentPageNextY += lineHeight;
 }
 
