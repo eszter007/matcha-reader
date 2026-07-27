@@ -150,6 +150,12 @@ bool loadPxcSlot(uint64_t cacheHash, HalFile& cacheFile, uint16_t cachedWidth, u
   for (size_t i = 0; i < chunkCount; i++) {
     const size_t want = remaining < PXC_CHUNK_SIZE ? remaining : PXC_CHUNK_SIZE;
     if (ESP.getFreeHeap() < remaining + PXC_HEAP_RESERVE || ESP.getMaxAllocHeap() < want + PXC_MAX_ALLOC_RESERVE) {
+      // Logged because the difference between hitting and missing this gate is the whole cost of
+      // an image page: warm, the payload is read once; cold, every band pass re-streams it (7
+      // passes x 90KB measured on a vertical image page, ~1.2s of a 2.1s render).
+      LOG_DBG("IMG", "PXC slot declined: need free>=%u (have %u), maxAlloc>=%u (have %u)",
+              (unsigned)(remaining + PXC_HEAP_RESERVE), (unsigned)ESP.getFreeHeap(),
+              (unsigned)(want + PXC_MAX_ALLOC_RESERVE), (unsigned)ESP.getMaxAllocHeap());
       releasePxcSlot();
       return false;
     }
@@ -491,8 +497,21 @@ ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shoul
   }
 
   if (!Storage.exists(imagePath.c_str())) {
-    LOG_ERR("IMG", "Warm: image file not found: %s", imagePath.c_str());
-    return WarmResult::Failed;
+    // Same recovery render() performs, and for the same reason: the build extracts eagerly and can
+    // lose an image to a transient OOM (the 32KB inflate window vs. the layout's own heap peak).
+    // Doing it here too means the retry lands on the idle warm task instead of inline in the first
+    // page render that reaches the image -- measured at ~3.5s when render had to do it (1.5s
+    // extract + 1.4s decode). Without this the warm simply reported the miss and gave up, leaving
+    // that cost on the page turn.
+    if (srcPath.empty() || !extractFn) {
+      LOG_ERR("IMG", "Warm: image file not found and no source to re-extract: %s", imagePath.c_str());
+      return WarmResult::Failed;
+    }
+    LOG_DBG("IMG", "Warm: lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
+    if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str()) || !Storage.exists(imagePath.c_str())) {
+      LOG_ERR("IMG", "Warm: lazy extraction failed: %s", srcPath.c_str());
+      return WarmResult::Failed;
+    }
   }
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {

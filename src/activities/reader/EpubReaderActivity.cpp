@@ -1718,6 +1718,20 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       if (vpage->isImagePage()) {
         const int reserve = UITheme::getInstance().getStatusBarHeight() +
                             UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
+        // Release ImageBlock's pixel-cache RAM slot on every exit from this branch. renderContents()
+        // (the horizontal path) has always had this guard; vertical never did, so any time the slot
+        // DID engage here its 6x16KB stayed resident for good. Observed on device: the heap fell
+        // 132KB -> 30KB across a single image page and never recovered, after which maxAlloc sat at
+        // 8692 and everything downstream failed -- "Page record needs 8424 bytes, refusing read"
+        // spinning every 30ms, and image re-extraction unable to obtain its 32KB inflate window.
+        // Latent for as long as the slot's heap gate kept declining; a leak the moment it stopped.
+        struct PxcSlotGuard {
+          ~PxcSlotGuard() { ImageBlock::releaseRenderCache(); }
+        } pxcSlotGuard;
+
+        // NOT releasing font memory here: measured, it returns ~2.7KB (and 0 when the caches are
+        // already cold), nowhere near the ~65KB the slot's gate needs, while costing a glyph and
+        // kern-table reload on the next text page. The gate is cleared by not leaking, not by this.
         const auto drawImagePage = [&]() {
           if (vpage->imageRotated) {
             ImageBlock imgBlock(vpage->imagePath, vpage->imageSrcPath, vpage->imageWidth, vpage->imageHeight);
