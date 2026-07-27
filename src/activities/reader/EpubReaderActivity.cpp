@@ -1732,12 +1732,16 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // NOT releasing font memory here: measured, it returns ~2.7KB (and 0 when the caches are
         // already cold), nowhere near the ~65KB the slot's gate needs, while costing a glyph and
         // kern-table reload on the next text page. The gate is cleared by not leaking, not by this.
+        (void)reserve;  // only the (disabled) rotate path needed it -- see below
         const auto drawImagePage = [&]() {
-          if (vpage->imageRotated) {
-            ImageBlock imgBlock(vpage->imagePath, vpage->imageSrcPath, vpage->imageWidth, vpage->imageHeight);
-            imgBlock.setRotated(true, static_cast<int16_t>(reserve));
-            imgBlock.render(renderer, 0, 0);  // ImageBlock handles rotation + centering
-          } else {
+          // The imageRotated branch is deliberately gone: ImageBlock::render() does not implement
+          // rotation. `rotated` and reserveMargin_ are read only by warmCache(); render() bounds-
+          // checks the RAW stored width/height, so passing natural dims with setRotated(true) drew
+          // nothing at all ("Invalid render position: ... size (1920x848) screen (480x800)"). The
+          // horizontal parser had the same broken branch and it is removed there too. Fitting
+          // upright shows a smaller image than a rotated fill, but it shows one. Re-enable only
+          // together with real rotation support in render().
+          {
             int iw = vpage->imageWidth;
             int ih = vpage->imageHeight;
             // Shared with warmNextPageImageCache so a background-warmed cache has EXACTLY the

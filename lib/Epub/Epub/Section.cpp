@@ -92,7 +92,10 @@ namespace {
 // v52: images whose build-time extraction failed are laid out with a recoverable ImageBlock
 // instead of being dropped to alt text. The byte layout is unchanged -- the bump exists to
 // rebuild caches that recorded the drop, which no amount of re-rendering can undo.
-constexpr uint8_t SECTION_FILE_VERSION = 52;
+// v53: aspect-mismatched images are fitted upright rather than marked rotated. A v52 cache has
+// their natural dimensions baked into the block, which render() rejects as out of bounds, so
+// those pages must be re-laid-out to become visible.
+constexpr uint8_t SECTION_FILE_VERSION = 53;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
