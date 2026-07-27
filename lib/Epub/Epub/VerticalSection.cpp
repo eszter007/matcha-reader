@@ -45,7 +45,12 @@ namespace {
 // match the cell VerticalTextBlock::computeCellPx re-derives at DRAW time from the new metrics --
 // the exact "cell flapping" mismatch that path exists to prevent. The horizontal pipeline
 // invalidates for the same reason (SECTION_FILE_VERSION 51); this one must not be forgotten.
-constexpr uint8_t VSECTION_FILE_VERSION = 100;  // v100: image pages carry their source href
+// v100: image pages carry their source href.
+// v101: image pages built while extraction was failing stored the VIEWPORT box as the image size
+// (the displayW/displayH fallback when getDimensions fails). config.useExactDimensions stretches
+// the decode to exactly that box, so those pages rendered visibly distorted once the image finally
+// became available. Extraction is reliable now (dee87656), so a rebuild records true dimensions.
+constexpr uint8_t VSECTION_FILE_VERSION = 101;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
