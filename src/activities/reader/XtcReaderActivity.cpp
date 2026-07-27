@@ -636,7 +636,12 @@ void XtcReaderActivity::renderPage() {
   }
   // White pixels are already cleared by clearScreen()
 
-  free(pageBuffer);
+  // NOT freeing pageBuffer here. It is owned for the whole activity (see ensurePageBuffer's
+  // comment) and released by freePageBuffer() in onExit(). A raw free() here left the pointer and
+  // pageBufferSize intact, so the next page turn took ensurePageBuffer's "already big enough"
+  // early return and rendered into freed memory -- heap corruption surfacing later as
+  // "assert failed: multi_heap_free ... (head != NULL)". Leftover from the pre-reuse model, when
+  // every page turn did its own malloc/free.
 
   if (SETTINGS.statusBarSpec().xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
     renderStatusBarOverlay(StatusBarOverlayPosition::Top);
