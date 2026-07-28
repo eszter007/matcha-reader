@@ -23,17 +23,23 @@ namespace {
 // Tab labels for Font | Size | Layout | Style (shared by render and loop touch hit-testing).
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
-int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontFamilyName, uint8_t fontFamily) {
-  if (sdFontFamilyName[0] != '\0' && registry) {
-    const auto& families = registry->getFamilies();
-    for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      if (families[i].name == sdFontFamilyName) {
-        return CrossPointSettings::BUILTIN_FONT_COUNT + i;
-      }
+// Position of the active family within the DISPLAYED list. The list hides the JP
+// extension families, so a registry index is not a list index -- match by name.
+int findCurrentFontIndex(const std::vector<TextSettingsActivity::FontEntry>& fonts, const char* sdFontFamilyName,
+                         uint8_t fontFamily) {
+  if (sdFontFamilyName[0] != '\0') {
+    for (int i = 0; i < static_cast<int>(fonts.size()); i++) {
+      if (!fonts[i].isBuiltin && fonts[i].name == sdFontFamilyName) return i;
     }
+    // Selected family is hidden or gone (JP extension carried over from an older
+    // build, or the card was swapped): fall through to the built-in entry.
   }
 
-  return fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
+  const uint8_t builtin = fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
+  for (int i = 0; i < static_cast<int>(fonts.size()); i++) {
+    if (fonts[i].isBuiltin && fonts[i].settingIndex == builtin) return i;
+  }
+  return 0;
 }
 
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE};
@@ -61,7 +67,7 @@ void TextSettingsActivity::onEnter() {
 
   rebuildSizeList();
 
-  currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+  currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
   std::fill(std::begin(selectedIndex_), std::end(selectedIndex_), 1);       // default to the first list row
   selectedIndex_[static_cast<int>(Tab::Family)] = currentFamilyIndex_ + 1;  // Family/Size open on current selection
   selectedIndex_[static_cast<int>(Tab::Size)] = currentSizeIndex_ + 1;
@@ -78,6 +84,15 @@ void TextSettingsActivity::rebuildFamilyList() {
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
+      // The JP extension families (NotoSansJP/NotoSerifJP) are the Japanese half of
+      // the built-in Noto Serif/Sans entries, not fonts in their own right: listing
+      // them would show four Noto rows instead of two, and selecting one directly
+      // makes it the reader font for Latin books too, bypassing the coverage-driven
+      // companion logic in SdCardFontSystem::ensureJpFallback(). Hidden here for the
+      // same reason the settings picker hides them -- see isBuiltinJpExtension.
+      if (SdCardFontSystem::isBuiltinJpExtension(families[i].name)) continue;
+      // settingIndex stays the REGISTRY index (what sdFontFamilyName resolves against);
+      // the list position is separate now that the list is filtered.
       fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
     }
   }
@@ -348,7 +363,7 @@ void TextSettingsActivity::activateRow(int row) {
             std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
               // Fonts may have been installed or deleted while we were away.
               rebuildFamilyList();
-              currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+              currentFamilyIndex_ = findCurrentFontIndex(fonts_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
               rebuildSizeList();
               requestUpdate();
             });

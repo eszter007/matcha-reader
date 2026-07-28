@@ -307,6 +307,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
   int getReaderFontId() const;
+  /// Reader font id ignoring any SD selection: the built-in Noto Serif/Sans at the
+  /// current size. Used as the Latin fallback when the selected SD family has no
+  /// Latin glyphs and the book is not Japanese.
+  int getBuiltinReaderFontId() const;
   int getRubyFontId() const;
 
   // Drop the SD font selection and fall back to the built-in family. The reader

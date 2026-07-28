@@ -296,6 +296,15 @@ void EpubReaderActivity::onEnter() {
       cachedChapterTotalPageCount = data[4] + (data[5] << 8);
       verticalOverride = static_cast<int8_t>(data[6]);
       furiganaOverride = static_cast<int8_t>(data[7]);
+      // Drop a forced-vertical flag stored against a non-Japanese book (set before
+      // vertical was restricted to Japanese books, or on a book whose language was
+      // later corrected). useVerticalText() already ignores it; clearing it here
+      // keeps the stored state honest, so the reader menu shows what is in effect.
+      // Rewritten to progress.bin by the next save.
+      if (verticalOverride == 1 && !isJapaneseBook()) {
+        LOG_INF("ERS", "Clearing forced-vertical flag on a non-Japanese book");
+        verticalOverride = -1;
+      }
       LOG_DBG("ERS", "Loaded cache: spine=%d page=%d vertical=%d furigana=%d", currentSpineIndex, nextPageNumber,
               verticalOverride, furiganaOverride);
     }
@@ -485,7 +494,11 @@ void EpubReaderActivity::loop() {
           if (auto* fcm = renderer.getFontCacheManager()) {
             const auto t0 = millis();
             auto scope = fcm->createPrewarmScope();
-            p->render(renderer, SETTINGS.getReaderFontId(), 0, 0);  // scan only, no pixels
+            // MUST be the effective font, not the raw setting: render() recomputes and stores
+            // each line's word x-positions, so scanning with a different font rewrites the
+            // page's layout. With a CJK-only family selected (UDDigiKyokasho) every Latin
+            // glyph and the space measure zero, which collapsed all word gaps on the page.
+            p->render(renderer, effectiveReaderFontId(), 0, 0);  // scan only, no pixels
             scope.endScanAndPrewarm();
             LOG_DBG("ERS", "Idle prewarm: page %d in %lums", nextPage, millis() - t0);
           }
@@ -505,7 +518,12 @@ void EpubReaderActivity::loop() {
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
     // Reuse the last render's viewport so the extension paginates identically to the partial.
-    const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    // readerRenderSpec() takes fontId straight from settings; the reader may be
+    // substituting a different font for this book (effectiveReaderFontId: a Latin book
+    // read with a CJK-only family). The LAYOUT must be measured with the font that will
+    // actually draw it, or word widths and spaces come from a font with no Latin glyphs.
+    ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    buildSpec.fontId = effectiveReaderFontId();
     if (!section->startBuild(buildSpec)) {
       // Not fatal: the partial keeps serving its pages; crossing the watermark falls back to
       // the blocking extension in render(). Don't retry every tick.
@@ -934,7 +952,12 @@ void EpubReaderActivity::openReaderMenu() {
   // never show Word Lookup at all.
   const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
   const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
-  const bool showVerticalToggle = isJapaneseBook();
+  // Same reasoning as isJapaneseContent above, and for a worse failure: verticalOverride is
+  // persisted per book in progress.bin, so a book whose metadata isn't dc:language=ja but
+  // that has vertical forced on reopens in tategaki -- vertical columns, CJK breaking, no
+  // word spaces. Gating the toggle on isJapaneseBook() alone then HIDES the only control
+  // that turns it back off, leaving the book permanently unreadable.
+  const bool showVerticalToggle = isJapaneseBook() || verticalOverride == 1;
   bool hasPageText = false;
   if (verticalSection) {
     // getPage() faults the page into the section's SINGLE shared page slot -- the same slot the
@@ -1470,7 +1493,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   buildViewportWidth = viewportWidth;
   buildViewportHeight = viewportHeight;
 
-  const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  // readerRenderSpec() takes fontId straight from settings; the reader may be
+  // substituting a different font for this book (effectiveReaderFontId: a Latin book
+  // read with a CJK-only family). The LAYOUT must be measured with the font that will
+  // actually draw it, or word widths and spaces come from a font with no Latin glyphs.
+  ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  renderSpec.fontId = effectiveReaderFontId();
 
   // Reflow a resident section when a layout-affecting setting changed under it.
   // The reader menu is pushed on top of this activity, so editing e.g. screenMargin
@@ -2370,7 +2398,12 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     return;
   }
 
-  const ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  // readerRenderSpec() takes fontId straight from settings; the reader may be
+  // substituting a different font for this book (effectiveReaderFontId: a Latin book
+  // read with a CJK-only family). The LAYOUT must be measured with the font that will
+  // actually draw it, or word widths and spaces come from a font with no Latin glyphs.
+  ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  spec.fontId = effectiveReaderFontId();
   Section nextSection(epub, nextSpineIndex, renderer);
   if (nextSection.loadSectionFile(spec) && !nextSection.isPartial()) {
     return;
@@ -3103,13 +3136,27 @@ void EpubReaderActivity::renderStatusBar() const {
 }
 
 int EpubReaderActivity::effectiveReaderFontId() const {
-  const int companion = sdFontSystem.companionFontId();
-  if (companion != 0) {
-    const bool jpBook = isJapaneseBook() || useVerticalText();
-    const bool coversPrimary = sdFontSystem.selectedFontCovers(jpBook ? 0x3042 : 'a');
-    if (!coversPrimary) {
-      LOG_DBG("ERS", "Effective font: companion %d (jp=%d, selected lacks primary script)", companion, jpBook);
-      return companion;
+  const bool jpBook = isJapaneseBook() || useVerticalText();
+  const bool coversPrimary = sdFontSystem.selectedFontCovers(jpBook ? 0x3042 : 'a');
+  if (!coversPrimary) {
+    // The selected family cannot carry this book's primary script. Substitute a
+    // font that can -- which one depends on the direction of the miss:
+    //  - Japanese book, selected font has no CJK -> the companion, which
+    //    ensureJpFallback() picked as the style-matched JP family.
+    //  - Latin book, selected font has no Latin (a CJK-only family such as
+    //    UDDigiKyokasho) -> the BUILT-IN Noto Serif/Sans, not the companion.
+    //    The companion is chosen for Japanese, so using it here renders an
+    //    English book in a Japanese typeface.
+    if (jpBook) {
+      const int companion = sdFontSystem.companionFontId();
+      if (companion != 0) {
+        LOG_DBG("ERS", "Effective font: companion %d (jp book, selected lacks CJK)", companion);
+        return companion;
+      }
+    } else {
+      const int builtin = SETTINGS.getBuiltinReaderFontId();
+      LOG_DBG("ERS", "Effective font: built-in %d (latin book, selected lacks Latin)", builtin);
+      return builtin;
     }
   }
   return SETTINGS.getReaderFontId();
@@ -3426,9 +3473,15 @@ bool EpubReaderActivity::isJapaneseBook() const {
 }
 
 bool EpubReaderActivity::useVerticalText() const {
+  // Vertical (tategaki) is a Japanese typesetting mode: it stacks characters in
+  // columns and breaks per-character, so a Latin book laid out this way loses its
+  // word spaces and is unreadable. Never apply it to a non-Japanese book, not even
+  // with the per-book override forced on -- that override is persisted in
+  // progress.bin, so once set it would follow the book forever.
+  if (!isJapaneseBook()) return false;
   if (verticalOverride == 0) return false;
   if (verticalOverride == 1) return true;
-  return isJapaneseBook();
+  return true;  // auto: isJapaneseBook() is true here
 }
 
 bool EpubReaderActivity::useFurigana() const {

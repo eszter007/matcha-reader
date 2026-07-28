@@ -21,6 +21,15 @@ class TextSettingsActivity final : public Activity {
  public:
   enum class Tab : uint8_t { Family, Size, Layout, Style, Count };
 
+  // One row of the family list. Public so the list-position helper in the .cpp can
+  // take it: the displayed list hides the JP extension families, so a family's list
+  // position no longer matches its registry index and has to be looked up by name.
+  struct FontEntry {
+    std::string name;
+    bool isBuiltin;
+    uint8_t settingIndex;
+  };
+
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,
                        Tab initialTab = Tab::Family);
 
@@ -67,11 +76,6 @@ class TextSettingsActivity final : public Activity {
   int& selectedIndex();
   int selectedIndex() const;
 
-  struct FontEntry {
-    std::string name;
-    bool isBuiltin;
-    uint8_t settingIndex;
-  };
   // Sentinel settingIndex for the "Manage Fonts" row appended to the family list. It opens
   // FontDownloadActivity instead of selecting a font -- the shortcut the pre-1.5.0 font
   // picker had at the bottom of its list, so "the font I want isn't here" is one press away.

@@ -95,6 +95,21 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
     registry_.discover();
   }
 
+  // A JP extension family must never be the SELECTED reader font: it is the
+  // Japanese half of a built-in Noto entry and is hidden from both pickers, so a
+  // selection carried over from an older build would be stuck and would render
+  // Latin books in the JP face. Revert it to the matching built-in and let
+  // ensureJpFallback() bring the extension back as the companion where needed.
+  if (SETTINGS.sdFontFamilyName[0] != '\0' && isBuiltinJpExtension(SETTINGS.sdFontFamilyName)) {
+    std::string norm;
+    for (const char* c = SETTINGS.sdFontFamilyName; *c; ++c) {
+      if (std::isalnum(static_cast<unsigned char>(*c))) norm.push_back(static_cast<char>(std::tolower(*c)));
+    }
+    SETTINGS.fontFamily = norm == "notoserifjp" ? CrossPointSettings::NOTOSERIF : CrossPointSettings::NOTOSANS;
+    LOG_INF("SDFS", "Reverting hidden JP extension selection '%s' to built-in", SETTINGS.sdFontFamilyName);
+    SETTINGS.sdFontFamilyName[0] = '\0';
+  }
+
   const char* wantedFamily = SETTINGS.sdFontFamilyName;
 
   const std::string& currentFamily = manager_.currentFamilyName();
@@ -247,7 +262,15 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
   const bool selectedHasLatin = selected.empty()  // built-ins always have Latin
                                     ? true
                                     : loadedFamilyCovers(manager_, selected, 'a');
-  const bool needsCompanion = !selectedHasLatin || (jpFallbackNeeded_ && !selectedHasCjk);
+  // Only load a companion for a book that actually needs Japanese. A Latin book read
+  // with a CJK-only family (UDDigiKyokasho) does NOT: the reader already substitutes
+  // the built-in Noto Serif/Sans for it (effectiveReaderFontId). Loading a companion
+  // anyway sets fallbackSdFont_ and redirects the global fallback to a JP family,
+  // which then prices/draws the built-in font's glyphs -- collapsing the word spaces
+  // and making Latin text render as if it were Japanese. jpFallbackNeeded_ is the
+  // book-level signal; within a Japanese book a companion still covers either hole
+  // (no CJK in the selected font, or no Latin for embedded English).
+  const bool needsCompanion = jpFallbackNeeded_ && (!selectedHasCjk || !selectedHasLatin);
   if (!needsCompanion) {
     if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
     return;

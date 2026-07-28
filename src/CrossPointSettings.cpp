@@ -328,13 +328,7 @@ void CrossPointSettings::clearSdFontFamily() {
   saveToFile();
 }
 
-int CrossPointSettings::getReaderFontId() const {
-  // Check SD card font first
-  if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {
-    int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, fontPointSize);
-    if (id != 0) return id;
-  }
-
+int CrossPointSettings::getBuiltinReaderFontId() const {
   // A built-in family only exists at BUILTIN_READER_POINT_SIZES, so a size
   // carried over from an SD family may not be one of them. ensureLoaded()
   // normally persists the snap; snap again here (without allocating — this runs
@@ -353,6 +347,16 @@ int CrossPointSettings::getReaderFontId() const {
     default:
       return sans ? NOTOSANS_14_FONT_ID : NOTOSERIF_14_FONT_ID;
   }
+}
+
+int CrossPointSettings::getReaderFontId() const {
+  // Check SD card font first
+  if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {
+    int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, fontPointSize);
+    if (id != 0) return id;
+  }
+
+  return getBuiltinReaderFontId();
 }
 
 int CrossPointSettings::getRubyFontId() const {
