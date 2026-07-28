@@ -302,6 +302,8 @@
 
   <div id="wifi-container"></div>
   <div id="opds-container"></div>
+  <!-- Filled in by /pluginhost.js when a build serves one; otherwise stays empty. -->
+  <div id="plugin-container" data-mount="settings"></div>
 
   <div class="card">
     <p style="text-align: center; color: #95a5a6; margin: 0;">
@@ -828,5 +830,7 @@
   loadWifiNetworks();
   loadOpdsServers();
 </script>
+<!-- Served only by builds that register extra routes; 404s harmlessly otherwise. -->
+<script src="/pluginhost.js"></script>
 </body>
 </html>
