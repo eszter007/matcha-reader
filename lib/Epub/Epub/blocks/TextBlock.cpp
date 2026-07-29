@@ -129,6 +129,11 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
   // per-word x offsets in the arena are only valid for THIS font.
   const int fontId = blockStyle.resolveFontId(baseFontId);
 
+  // Ink polarity for every mark this block puts down: glyphs, ruby and decoration lines. The
+  // black panel underneath was already painted by the PageBox emitted just before this line
+  // (ChapterHtmlSlimParser::addLineToPage), so drawing white here lands on black, not on the page.
+  const bool inkBlack = !blockStyle.isInverted();
+
   const bool scanning = renderer.isFontCacheScanning();
   const int ascender = renderer.getFontAscenderSize(fontId);
 
@@ -232,7 +237,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
 
   const auto flushDecoration = [&](DecorationLineTracker& line) {
     if (line.active()) {
-      renderer.drawLine(line.startX, line.yPos, line.endX, line.yPos, 2, true);
+      renderer.drawLine(line.startX, line.yPos, line.endX, line.yPos, 2, inkBlack);
       line.reset();
     }
   };
@@ -278,11 +283,11 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
           std::min<size_t>({static_cast<size_t>(boundary), static_cast<size_t>(wordTextLen(i)), sizeof(boldBuf) - 1});
       memcpy(boldBuf, word, boldLen);
       boldBuf[boldLen] = '\0';
-      renderer.drawText(fontId, drawX, wordY, boldBuf, true, boldStyle, baseDir);
+      renderer.drawText(fontId, drawX, wordY, boldBuf, inkBlack, boldStyle, baseDir);
       const int suffixX = drawX + focusSuffixXArr[i];
-      renderer.drawText(fontId, suffixX, wordY, word + boldLen, true, currentStyle, baseDir);
+      renderer.drawText(fontId, suffixX, wordY, word + boldLen, inkBlack, currentStyle, baseDir);
     } else {
-      renderer.drawText(fontId, drawX, wordY, word, true, currentStyle, baseDir);
+      renderer.drawText(fontId, drawX, wordY, word, inkBlack, currentStyle, baseDir);
     }
 
     // Horizontal ruby text rendering
@@ -291,7 +296,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
       // Slightly above the ascender: fonts whose glyphs fill the em to the top
       // (UDDigiKyokasho) otherwise overlap their own base word.
       const int rubyY = wordY - ascender - std::max(1, ascender / 12);
-      renderer.drawText(fontId, rubies[i].x, rubyY, rubies[i].text.c_str(), true, EpdFontFamily::SUP,
+      renderer.drawText(fontId, rubies[i].x, rubyY, rubies[i].text.c_str(), inkBlack, EpdFontFamily::SUP,
                         rubies[i].baseDir);
     }
 
@@ -382,6 +387,8 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.isRtl);
   serialization::writePod(file, blockStyle.directionDefined);
   serialization::writePod(file, blockStyle.fontId);
+  serialization::writePod(file, blockStyle.inkMode);
+  serialization::writePod(file, blockStyle.inkModeDefined);
 
   return true;
 }
@@ -468,6 +475,11 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, blockStyle.isRtl);
   serialization::readPod(file, blockStyle.directionDefined);
   serialization::readPod(file, blockStyle.fontId);
+  serialization::readPod(file, blockStyle.inkMode);
+  serialization::readPod(file, blockStyle.inkModeDefined);
+  // A corrupt byte must not commit the line to white-on-nothing: only the exact Inverted value
+  // survives, anything else falls back to the always-legible Normal.
+  if (blockStyle.inkMode != CssInkMode::Inverted) blockStyle.inkMode = CssInkMode::Normal;
 
   return block;
 }

@@ -39,7 +39,9 @@ class CssParser {
   //      cached under v11 lack their edges/style bits.
   // v13: +font-size as a 12th CssLength and defined bit 22 -- the record grew by 5 bytes,
   //      so a v12 record cannot be read with the v13 layout.
-  static constexpr uint8_t CSS_CACHE_VERSION = 13;
+  // v14: +inkMode (color/background-color polarity) as a 7th trailing enum byte and defined
+  //      bit 23 -- the record grew by 1 byte, so a v13 record mis-parses under v14 framing.
+  static constexpr uint8_t CSS_CACHE_VERSION = 14;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -223,10 +225,25 @@ class CssParser {
 
   std::string cachePath;
 
+  /**
+   * The colours seen so far inside ONE `{ ... }` rule block, as luma (0 = black, 255 = white).
+   * Purely transient: it lives on the stack for the duration of the block and is folded into the
+   * single CssStyle::inkMode byte by resolveInkMode(). Deliberately not a CssStyle member -- a
+   * heavy book's rule map holds hundreds of styles at once and every byte there multiplies.
+   */
+  struct InkColors {
+    static constexpr int16_t UNSET = -1;
+    int16_t textLuma = UNSET;  // `color`
+    int16_t bgLuma = UNSET;    // `background-color`
+    [[nodiscard]] bool any() const { return textLuma != UNSET || bgLuma != UNSET; }
+  };
+
   // Internal parsing helpers
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
   static CssStyle parseDeclarations(std::string_view declBlock);
-  static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style);
+  static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style, InkColors& ink);
+  /** Fold the block's colours into style.inkMode. Call once, after the block's last declaration. */
+  static void resolveInkMode(CssStyle& style, const InkColors& ink);
 
   // Individual property value parsers
   static CssTextAlign interpretAlignment(std::string_view val);

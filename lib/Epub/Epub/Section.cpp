@@ -107,7 +107,10 @@ namespace {
 // v58: CSS font-size is honoured, so every TextBlock stores the font id it was laid out with
 // (BlockStyle::fontId, 4 bytes after directionDefined). A v57 record has neither the field nor
 // the heading-sized line positions.
-constexpr uint8_t SECTION_FILE_VERSION = 58;
+// v59: CSS color/background-color become an ink mode. Every TextBlock stores it (2 bytes after
+// fontId) and every PageBox stores a fill flag, so a v58 record is one byte short per box and
+// mis-frames the block that follows; inverted blocks also gain a panel element a v58 page lacks.
+constexpr uint8_t SECTION_FILE_VERSION = 59;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

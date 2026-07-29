@@ -95,6 +95,9 @@ void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset,
   if (width <= 0 || height <= 0) return;
   const int x = xPos + xOffset;
   const int y = yPos + yOffset;
+  // Fill first: any border edges are drawn over it, and the block's text is drawn over both
+  // because the page renders its elements in insertion order.
+  if (filled) renderer.fillRect(x, y, width, height, true);
   if (edges & CssStyle::BORDER_TOP) renderer.drawLine(x, y, x + width, y, true);
   if (edges & CssStyle::BORDER_BOTTOM) renderer.drawLine(x, y + height, x + width, y + height, true);
   if (edges & CssStyle::BORDER_LEFT) renderer.drawLine(x, y, x, y + height, true);
@@ -107,6 +110,7 @@ bool PageBox::serialize(HalFile& file) {
   serialization::writePod(file, width);
   serialization::writePod(file, height);
   serialization::writePod(file, edges);
+  serialization::writePod(file, filled);
   return true;
 }
 
@@ -116,16 +120,18 @@ std::unique_ptr<PageBox> PageBox::deserialize(HalFile& file) {
   int16_t width = 0;
   int16_t height = 0;
   uint8_t edges = 0;
+  bool filled = false;
   serialization::readPod(file, xPos);
   serialization::readPod(file, yPos);
   serialization::readPod(file, width);
   serialization::readPod(file, height);
   serialization::readPod(file, edges);
+  serialization::readPod(file, filled);
   if (width <= 0 || height <= 0) {
     LOG_ERR("PGE", "Deserialization failed: invalid box metadata (w=%d h=%d)", width, height);
     return nullptr;
   }
-  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, edges, xPos, yPos));
+  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, edges, xPos, yPos, filled));
 }
 
 bool PageHorizontalRule::serialize(HalFile& file) {

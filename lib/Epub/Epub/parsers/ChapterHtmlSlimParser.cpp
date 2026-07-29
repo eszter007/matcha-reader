@@ -372,6 +372,39 @@ void ChapterHtmlSlimParser::flushPendingBlockLayout() {
   wordsExtractedInBlock = 0;
 }
 
+// Black panel behind ONE line of a CssInkMode::Inverted block, pushed before the line itself so
+// the white glyphs land on top of it.
+//
+// The rect is the block's PADDING box, not the glyph run: a heading that asks for
+// `background-color` + `padding` wants a bar spanning the column, and the padding is already
+// reserved in the layout whether or not it is painted. Horizontally that is
+// [marginLeft, viewportWidth - marginRight) -- margins stay outside the panel, padding inside it.
+// Vertically each line covers exactly its own line height, so consecutive lines abut seamlessly
+// and a block split across a page break simply stops and resumes.
+void ChapterHtmlSlimParser::emitInvertedPanel(const BlockStyle& blockStyle, const int16_t lineHeight) {
+  if (!currentPage) return;
+
+  const int left = std::max(0, static_cast<int>(blockStyle.marginLeft));
+  const int right = std::max(left + 1, viewportWidth - std::max(0, static_cast<int>(blockStyle.marginRight)));
+
+  // Stitch the block's top padding onto its first panel line. Clamped at the page top: after a
+  // page break the padding was consumed on the previous page and there is nothing to cover.
+  const int top = std::max(0, currentPageNextY - pendingPanelTopPad);
+  pendingPanelTopPad = 0;
+  const int height = currentPageNextY - top + lineHeight;
+  if (height <= 0) return;
+
+  auto panel = std::shared_ptr<PageBox>(
+      new (std::nothrow) PageBox(static_cast<int16_t>(right - left), static_cast<int16_t>(height),
+                                 /*edges=*/0, static_cast<int16_t>(left), static_cast<int16_t>(top), /*filled=*/true));
+  if (!panel) {
+    LOG_ERR("EHP", "OOM: inverted panel box");
+    return;
+  }
+  currentPage->elements.push_back(panel);
+  lastPanelBox = std::move(panel);
+}
+
 void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
   if (!currentPage || boxDepth < 0 || boxAwaitingFirstLine) return;  // no box content on this page yet
   const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
@@ -2005,6 +2038,12 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   }
   pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
 
+  // Panel BEFORE the line: page elements render in insertion order, so the fill has to be pushed
+  // first or it would paint over the text it is meant to sit behind.
+  if (line->getBlockStyle().isInverted()) {
+    emitInvertedPanel(line->getBlockStyle(), static_cast<int16_t>(lineHeight));
+  }
+
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
@@ -2038,9 +2077,28 @@ void ChapterHtmlSlimParser::makePages() {
   const uint16_t effectiveWidth =
       (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
 
+  // Hand the block's top padding to its first panel line: currentPageNextY has already advanced
+  // past it, so without this the panel would start below the padding it is meant to fill.
+  if (blockStyle.isInverted()) {
+    pendingPanelTopPad = std::max<int16_t>(0, blockStyle.paddingTop);
+    lastPanelBox = nullptr;
+  }
+
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
       [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
+
+  // ... and its bottom padding to the last one, which is only identifiable now the block is laid
+  // out. The last line always sits on the still-open page (a page is completed on the NEXT line
+  // that does not fit), so the box is still both alive and unwritten.
+  if (blockStyle.isInverted()) {
+    if (lastPanelBox && blockStyle.paddingBottom > 0) {
+      lastPanelBox->extendHeight(std::min<int16_t>(
+          blockStyle.paddingBottom, static_cast<int16_t>(std::max(0, viewportHeight - currentPageNextY))));
+    }
+    pendingPanelTopPad = 0;
+    lastPanelBox = nullptr;
+  }
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches

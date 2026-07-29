@@ -95,6 +95,21 @@ enum class CssFontVariant : uint8_t { Normal = 0, SmallCaps = 1 };
 // list-style-type: alphabetic/roman ordered types are approximated as Decimal
 enum class CssListStyleType : uint8_t { Disc = 0, Circle = 1, Square = 2, Decimal = 3, NoMarker = 4 };
 
+// Ink polarity for a block, distilled from `color` + `background-color` at PARSE time.
+//
+// The panel is 1-bit: there is no colour to reproduce, only a contrast POLARITY. So the two
+// declarations collapse into this single byte and no RGB ever reaches the rule map or the cache
+// -- one real trade book carries 415 rules, and anything stored per rule multiplies by that.
+//
+// Normal is also the safe fallback in every ambiguous case: it draws the text BLACK regardless of
+// what the CSS asked for, so a misjudged rule can never make text invisible. Inverted is only
+// chosen when the book explicitly asks for light-on-dark, where dropping the background WOULD
+// make the text invisible (the h1 trap: color:#fff on background-color:#a7a9ac).
+enum class CssInkMode : uint8_t {
+  Normal = 0,    // dark ink straight onto the page
+  Inverted = 1,  // light ink on a filled dark panel
+};
+
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
   uint16_t textAlign : 1;
@@ -120,6 +135,7 @@ struct CssPropertyFlags {
   uint16_t fontVariant : 1;
   uint16_t listStyleType : 1;
   uint16_t fontSize : 1;
+  uint16_t inkMode : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -144,13 +160,14 @@ struct CssPropertyFlags {
         textEmphasis(0),
         fontVariant(0),
         listStyleType(0),
-        fontSize(0) {}
+        fontSize(0),
+        inkMode(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType ||
-           fontSize;
+           fontSize || inkMode;
   }
 
   void clearAll() {
@@ -158,11 +175,11 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = 0;
-    textEmphasis = fontVariant = listStyleType = fontSize = 0;
+    textEmphasis = fontVariant = listStyleType = fontSize = inkMode = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..22.
+// Cache serializes defined flags as uint32_t with bit indices 0..23.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -207,6 +224,9 @@ struct CssStyle {
   CssTextEmphasis textEmphasis = CssTextEmphasis::None;     // JP bouten marks
   CssFontVariant fontVariant = CssFontVariant::Normal;      // small-caps
   CssListStyleType listStyleType = CssListStyleType::Disc;  // list markers
+  // color + background-color, distilled to a polarity. See CssInkMode; derived in
+  // CssParser::resolveInkMode() from the two colours' luma, which are never stored.
+  CssInkMode inkMode = CssInkMode::Normal;
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -305,6 +325,10 @@ struct CssStyle {
       fontSize = base.fontSize;
       defined.fontSize = 1;
     }
+    if (base.hasInkMode()) {
+      inkMode = base.inkMode;
+      defined.inkMode = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -330,6 +354,9 @@ struct CssStyle {
   [[nodiscard]] bool hasFontVariant() const { return defined.fontVariant; }
   [[nodiscard]] bool hasListStyleType() const { return defined.listStyleType; }
   [[nodiscard]] bool hasFontSize() const { return defined.fontSize; }
+  // Distinguishes "the book said nothing about colour" from "the book set colours and they came
+  // out Normal" -- an explicit Normal must be able to cancel an inherited Inverted panel.
+  [[nodiscard]] bool hasInkMode() const { return defined.inkMode; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -347,6 +374,7 @@ struct CssStyle {
     textEmphasis = CssTextEmphasis::None;
     fontVariant = CssFontVariant::Normal;
     listStyleType = CssListStyleType::Disc;
+    inkMode = CssInkMode::Normal;
     defined.clearAll();
   }
 };

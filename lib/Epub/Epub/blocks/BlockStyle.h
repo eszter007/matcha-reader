@@ -43,6 +43,15 @@ struct BlockStyle {
   // line -- the reader-font-substitution bug, one layer down.
   int32_t fontId = 0;
 
+  // Ink polarity from CSS color/background-color (see CssInkMode). Inverted means this block's
+  // lines each paint a black panel across the block's PADDING box and draw their text white --
+  // the panel rect is emitted by ChapterHtmlSlimParser::addLineToPage, which is the only place
+  // that knows the column width and the line height; TextBlock::render only flips the ink.
+  CssInkMode inkMode = CssInkMode::Normal;
+  bool inkModeDefined = false;  // distinguishes "unstyled" from "explicitly Normal" during cascade
+
+  [[nodiscard]] bool isInverted() const { return inkMode == CssInkMode::Inverted; }
+
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
   // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
@@ -106,6 +115,13 @@ struct BlockStyle {
       if (child.fontId == 0) {
         result.fontId = fontId;
       }
+      // Ink polarity inherits like colour does, and on the same axis and for the same reason as
+      // font-size: a <span> inside an h1 panel must stay white-on-black, but a closed panel must
+      // not leak onto the paragraph that follows it (that merge uses the Vertical axis).
+      if (!child.inkModeDefined && inkModeDefined) {
+        result.inkMode = inkMode;
+        result.inkModeDefined = true;
+      }
     } else {
       result.marginTop = std::max(child.marginTop, marginTop);
       result.marginBottom = std::max(child.marginBottom, marginBottom);
@@ -168,6 +184,10 @@ struct BlockStyle {
       blockStyle.alignment = blockStyle.textAlignDefined ? cssStyle.textAlign : CssTextAlign::Justify;
     } else {
       blockStyle.alignment = paragraphAlignment;
+    }
+    if (cssStyle.hasInkMode()) {
+      blockStyle.inkMode = cssStyle.inkMode;
+      blockStyle.inkModeDefined = true;
     }
     // RTL direction from CSS/HTML
     if (cssStyle.hasDirection()) {

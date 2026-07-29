@@ -18,6 +18,7 @@
 #include "Epub/css/CssStyle.h"
 
 class Page;
+class PageBox;
 class GfxRenderer;
 class Epub;
 
@@ -56,6 +57,14 @@ class ChapterHtmlSlimParser {
   int16_t boxStartY = 0;
   bool boxContinued = false;          // continued from the previous page: omit the top edge
   bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
+  // Inverted-block panel tracking (CSS color/background-color, see CssInkMode). Each line of an
+  // inverted block gets a filled PageBox pushed just before it, so the panel survives a page break
+  // and needs no knowledge of the block's total height. Only the block's own padding needs
+  // stitching on: the top pad onto the first line, the bottom pad onto the last.
+  int16_t pendingPanelTopPad = 0;                   // consumed by the first panel line of the block
+  std::shared_ptr<PageBox> lastPanelBox = nullptr;  // grown by the bottom pad once the block closes
+  void emitInvertedPanel(const BlockStyle& blockStyle, int16_t lineHeight);
+
   void flushPendingBlockLayout();
   void emitBoxRect(bool openBottom);
   void maybeEmitOpenBoxForPageBreak();

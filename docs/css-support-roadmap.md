@@ -6,7 +6,7 @@ What the reader's CSS engine currently ignores, why it matters, and how to add i
 
 The stylesheet of a real trade book (*The Coaching Habit*, Page Two, 2016 —
 14,875 bytes, 931 lines) was dumped after decryption and every declaration
-classified against `CssParser::applyDeclaration`:
+classified against `CssParser::parseDeclarationIntoStyle`:
 
 | | declarations |
 |---|---|
@@ -24,20 +24,18 @@ same way.
 (+`-epub-`/`-webkit-`) · `font-style` · `font-weight` · `font-variant(-caps)` ·
 `font` · `display` · `direction` · `margin{,-top,-right,-bottom,-left}` ·
 `padding{,-top,-right,-bottom,-left}` · `border{,-top,-right,-bottom,-left,-style}` ·
-`list-style(-type)` · `width` · `height` · `vertical-align`
+`list-style(-type)` · `width` · `height` · `vertical-align` · `font-size` ·
+`color` / `background-color` (as an ink-polarity decision, see Phase 2)
 
 ## Ignored, ranked by measured impact
 
 | n | property | effect of ignoring |
 |---|---|---|
 | 65 | `font-family` | 12 `@font-face` faces ignored; everything uses the reader font |
-| **45** | **`font-size`** | `h1{4em}`, `h2{2.2em}`, `h3{1.2em}` all render at body size |
 | 15 | `line-height` | book leading lost; only the global Line Spacing applies |
-| 12 | `color` | **can make text invisible** — see the `h1` trap below |
 | 13 | `page-break-{inside,before,after}` | sections run together |
 | 8 | `letter-spacing` | tracking on headings lost |
 | 8 | `float` | pull-quotes and figures fall inline |
-| 5 | `background-color` | heading bars / callout panels vanish |
 | 3+18 | `hyphens`, `hyphenate-limit-*` (+vendor) | book's hyphenation prefs ignored |
 | 3 | `border-radius` | rounded panels square (harmless on 1-bit) |
 | 3 | `text-transform` | `uppercase` headings render as authored |
@@ -45,7 +43,7 @@ same way.
 | 1 | `max-width` | over-wide blocks |
 | 1 | `border-collapse` | table borders doubled |
 
-### The `h1` trap — fix before or with `font-size`
+### The `h1` trap — fixed in Phase 2
 
 ```css
 h1 { color:#fff; background-color:#a7a9ac; padding:.5em 5%; border-radius:20px; }
@@ -54,8 +52,8 @@ h1 { color:#fff; background-color:#a7a9ac; padding:.5em 5%; border-radius:20px; 
 `padding` **is** supported; `color` and `background-color` are **not**. The
 indent is reserved while the white text and grey panel are dropped → **white
 text on a white page: invisible chapter titles**, with padding still consuming
-space. Ignoring the whole rule would be better than what happens today, so
-`color` must not lag far behind `font-size`.
+space. Ignoring the whole rule would be better than what happened before Phase 2,
+which is why `color` was not allowed to lag far behind `font-size`.
 
 ---
 
@@ -63,12 +61,12 @@ space. Ignoring the whole rule would be better than what happens today, so
 
 | concern | file |
 |---|---|
-| property dispatch | `lib/Epub/Epub/css/CssParser.cpp` — `applyDeclaration()`, ~line 400, `iequalsAscii(name, ...)` chain |
+| property dispatch | `lib/Epub/Epub/css/CssParser.cpp` — `parseDeclarationIntoStyle()` (there is no `applyDeclaration`), `iequalsAscii(name, ...)` chain |
 | style struct + enums | `lib/Epub/Epub/css/CssStyle.h` — `CssStyle`, `CssLength`, `CssPropertyFlags` |
-| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **12**); serialiser ~line 944, reader ~line 1031, `RULE_FIXED_BYTES` ~line 1047 |
+| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **14**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
 | style → layout | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` — `currentCssStyle`, ~lines 200-310 |
 | line breaking / gaps | `lib/Epub/Epub/ParsedText.cpp` |
-| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **57**) |
+| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **59**) |
 
 ### Rules that apply to every item below
 
@@ -77,9 +75,11 @@ space. Ignoring the whole rule would be better than what happens today, so
    with a per-version comment — add one. Miss this and stale caches render with
    the old layout and never self-correct (see `reader-font-substitution`).
 2. **`RULE_FIXED_BYTES` must match the serialiser exactly.** It is
-   `5 + 11*(sizeof(float)+1) + 6 + sizeof(uint32_t)` — the `11` is the
-   `CssLength` count. Adding a `CssLength` means +1 there; adding a byte enum
-   means +1 to the `6`.
+   `CSS_LEADING_ENUM_BYTES + CSS_LENGTH_FIELD_COUNT*(sizeof(float)+1) +
+   CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t)`. Adding a `CssLength` means +1 to
+   `CSS_LENGTH_FIELD_COUNT`; adding a byte enum means +1 to
+   `CSS_TRAILING_ENUM_BYTES`. All three constants live at file scope in
+   `CssParser.cpp` and every reader derives from them.
 3. **Every new field needs a `defined` bit** in `CssPropertyFlags`, or
    inheritance/cascade can't tell "unset" from "set to the default".
 4. **Heap.** Rules are held in RAM during parse. `CssParser` already tracks
@@ -94,7 +94,7 @@ space. Ignoring the whole rule would be better than what happens today, so
 
 ---
 
-## Phase 1 — `font-size` *(highest payoff)*
+## Phase 1 — `font-size` *(highest payoff)* — **done**
 
 Makes headings look like headings. 45 declarations in the sample book.
 
@@ -114,24 +114,32 @@ Makes headings look like headings. 45 declarations in the sample book.
 sizes per chapter and snap the rest, or a heading-heavy book will thrash the
 font cache. Measure `maxAlloc` during a chapter build before and after.
 
-## Phase 2 — `color` + `background-color`
+## Phase 2 — `color` + `background-color` — **done**
 
-Stops invisible text. Only three outcomes matter on a 1-bit panel:
+Stops invisible text. Only two outcomes matter on a 1-bit panel, held in one
+`CssInkMode : uint8_t { Normal, Inverted }` byte (+ a `defined` bit) derived at
+parse time — no RGB is stored per rule or in the cache:
 
-- normal (dark on light)
-- **light text on a dark background → invert or force black**
-- everything else → ignore
+- **Inverted** — the text is meaningfully lighter than its background
+  (Rec.601 luma delta ≥ 64 of 255). The block's lines each paint a black panel
+  across the block's *padding box* and draw their glyphs, ruby and decorations
+  white.
+- **Normal** — everything else, including a light `color` with no background and
+  a dark `background-color` with no `color`. Normal draws black text on the
+  untouched page, so it is always legible; only `Inverted` can be wrong in a way
+  that costs contrast, which is why the threshold errs toward `Normal`.
 
-Store one `CssInkMode : uint8_t { Normal, Inverted }` byte (+`defined` bit),
-derived at parse time from the luminance of `color` vs `background-color`. That
-avoids storing RGB per rule and keeps the cache small. Renderer already draws
-black-on-white or white-on-black.
+An unspecified side falls back to the page's own polarity (black text, white
+page), which is what makes both single-sided cases resolve to `Normal`.
+Colours are only compared *within one rule block* — the engine has no cascade of
+colour across selectors, so `body{background:#000}` + `p{color:#fff}` in separate
+rules resolves to `Normal` (safe) rather than `Inverted`.
 
 ## Phase 3 — `page-break-before` / `-after` / `-inside`
 
 `always` / `avoid` on block boundaries, in the paginator. Two bits per block
-(before/after) plus one for `avoid-inside`. Bump `SECTION_FILE_VERSION` only —
-no `CssLength`, so `RULE_FIXED_BYTES` grows by 1 byte.
+(before/after) plus one for `avoid-inside`. Needs a `CSS_CACHE_VERSION` bump too:
+no `CssLength`, so `CSS_TRAILING_ENUM_BYTES` grows by 1.
 
 ## Phase 4 — descendant selectors
 

@@ -77,6 +77,7 @@ Reading streak, weekly minutes, books finished, total time, and a monthly calend
 - **Transparent sleep screen** — a wallpaper overlaid on the page you were reading, so the book shows through
 - **Book side margins** — ignore the book's own CSS side margins by default, so the text column follows your margin setting
 - **Headings look like headings** — the book's CSS `font-size` is honoured, scaled from *your* reading size and snapped to the built-in sizes around it, so `h1`/`h2` no longer render at body size (built-in fonts only; an SD card font is loaded at one size)
+- **No more invisible chapter titles** — a heading the book styles as light text on a coloured panel is drawn as white text on a black bar instead of vanishing into the page; every other colour combination is simply read as normal black text
 - **File browser** shows every file on the card, unsupported ones greyed out rather than hidden; opening a folder with `panels.idx` starts the manga reader
 - **Your font choice sticks** — nothing auto-overrides the font you picked in Settings, in any book
 - **Fully localized** — every string this fork adds goes through the same i18n system as the rest of CrossPoint, translated in all 27 languages. Dictionary definitions and translations stay English, since that's the content, not the interface

@@ -56,7 +56,7 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 // Bump CSS_CACHE_VERSION whenever any of these change. See writeRuleRecord.
 constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeight, decoration, direction
 constexpr size_t CSS_LENGTH_FIELD_COUNT = 12;  // CssLength members written, in order
-constexpr size_t CSS_TRAILING_ENUM_BYTES = 6;  // display, verticalAlign, border, emphasis, variant, listType
+constexpr size_t CSS_TRAILING_ENUM_BYTES = 7;  // display, verticalAlign, border, emphasis, variant, listType, inkMode
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
@@ -158,6 +158,133 @@ std::string_view stripTrailingImportant(std::string_view value) {
     value.remove_suffix(1);
   }
   return value;
+}
+
+// --- colour -> luma ---------------------------------------------------------------------------
+//
+// Rec.601 luma as integers: (77R + 151G + 28B) >> 8 approximates 0.299R + 0.587G + 0.114B to
+// within one 8-bit step, with no float and no table lookup. Deliberately NOT the gamma-decoded
+// WCAG relative luminance, which needs a pow() per channel: the only question ever asked of the
+// result is which of two colours is lighter (resolveInkMode), and both measures agree on that
+// for the near-neutral greys books actually use for panels.
+constexpr uint8_t lumaOfRgb(const uint32_t r, const uint32_t g, const uint32_t b) {
+  return static_cast<uint8_t>((77u * r + 151u * g + 28u * b) >> 8);
+}
+constexpr uint8_t lumaOfHex(const uint32_t hex) {
+  return lumaOfRgb((hex >> 16) & 0xFFu, (hex >> 8) & 0xFFu, hex & 0xFFu);
+}
+
+// The CSS named colours EPUB stylesheets realistically use, reduced to luma at COMPILE time: the
+// table is 8 bytes per entry in flash and no RGB triple exists at runtime.
+struct NamedColorLuma {
+  const char* name;
+  uint8_t luma;
+};
+constexpr NamedColorLuma NAMED_COLORS[] = {
+    {"black", lumaOfHex(0x000000)},      {"white", lumaOfHex(0xFFFFFF)},       {"silver", lumaOfHex(0xC0C0C0)},
+    {"gray", lumaOfHex(0x808080)},       {"grey", lumaOfHex(0x808080)},        {"darkgray", lumaOfHex(0xA9A9A9)},
+    {"darkgrey", lumaOfHex(0xA9A9A9)},   {"lightgray", lumaOfHex(0xD3D3D3)},   {"lightgrey", lumaOfHex(0xD3D3D3)},
+    {"dimgray", lumaOfHex(0x696969)},    {"dimgrey", lumaOfHex(0x696969)},     {"slategray", lumaOfHex(0x708090)},
+    {"slategrey", lumaOfHex(0x708090)},  {"gainsboro", lumaOfHex(0xDCDCDC)},   {"whitesmoke", lumaOfHex(0xF5F5F5)},
+    {"ghostwhite", lumaOfHex(0xF8F8FF)}, {"snow", lumaOfHex(0xFFFAFA)},        {"ivory", lumaOfHex(0xFFFFF0)},
+    {"beige", lumaOfHex(0xF5F5DC)},      {"linen", lumaOfHex(0xFAF0E6)},       {"red", lumaOfHex(0xFF0000)},
+    {"darkred", lumaOfHex(0x8B0000)},    {"crimson", lumaOfHex(0xDC143C)},     {"maroon", lumaOfHex(0x800000)},
+    {"orange", lumaOfHex(0xFFA500)},     {"orangered", lumaOfHex(0xFF4500)},   {"gold", lumaOfHex(0xFFD700)},
+    {"yellow", lumaOfHex(0xFFFF00)},     {"lightyellow", lumaOfHex(0xFFFFE0)}, {"olive", lumaOfHex(0x808000)},
+    {"khaki", lumaOfHex(0xF0E68C)},      {"tan", lumaOfHex(0xD2B48C)},         {"brown", lumaOfHex(0xA52A2A)},
+    {"green", lumaOfHex(0x008000)},      {"darkgreen", lumaOfHex(0x006400)},   {"lime", lumaOfHex(0x00FF00)},
+    {"lightgreen", lumaOfHex(0x90EE90)}, {"teal", lumaOfHex(0x008080)},        {"cyan", lumaOfHex(0x00FFFF)},
+    {"aqua", lumaOfHex(0x00FFFF)},       {"blue", lumaOfHex(0x0000FF)},        {"darkblue", lumaOfHex(0x00008B)},
+    {"navy", lumaOfHex(0x000080)},       {"lightblue", lumaOfHex(0xADD8E6)},   {"steelblue", lumaOfHex(0x4682B4)},
+    {"royalblue", lumaOfHex(0x4169E1)},  {"purple", lumaOfHex(0x800080)},      {"indigo", lumaOfHex(0x4B0082)},
+    {"violet", lumaOfHex(0xEE82EE)},     {"magenta", lumaOfHex(0xFF00FF)},     {"fuchsia", lumaOfHex(0xFF00FF)},
+    {"pink", lumaOfHex(0xFFC0CB)},
+};
+
+constexpr int hexDigitValue(const char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  const char lower = asciiToLower(c);
+  if (lower >= 'a' && lower <= 'f') return lower - 'a' + 10;
+  return -1;
+}
+
+// s is the body after '#'. Accepts 3/4/6/8 digits; the 4- and 8-digit forms carry alpha, which is
+// dropped (a 1-bit panel has nothing to blend against).
+bool tryParseHexColorLuma(const std::string_view s, uint8_t& lumaOut) {
+  if (s.size() != 3 && s.size() != 4 && s.size() != 6 && s.size() != 8) return false;
+  int digits[8];
+  for (size_t i = 0; i < s.size(); ++i) {
+    digits[i] = hexDigitValue(s[i]);
+    if (digits[i] < 0) return false;
+  }
+  if (s.size() <= 4) {
+    // Shorthand: each digit is doubled, #abc == #aabbcc, i.e. value * 17.
+    lumaOut = lumaOfRgb(digits[0] * 17, digits[1] * 17, digits[2] * 17);
+  } else {
+    lumaOut = lumaOfRgb(digits[0] * 16 + digits[1], digits[2] * 16 + digits[3], digits[4] * 16 + digits[5]);
+  }
+  return true;
+}
+
+// rgb()/rgba(), with integer or percentage channels and either comma or space separators.
+bool tryParseRgbFunctionLuma(const std::string_view s, uint8_t& lumaOut) {
+  const size_t open = s.find('(');
+  if (open == std::string_view::npos || s.empty() || s.back() != ')') return false;
+  const std::string_view fn = trimCssWhitespace(s.substr(0, open));
+  if (!iequalsAscii(fn, "rgb") && !iequalsAscii(fn, "rgba")) return false;
+
+  const std::string_view args = s.substr(open + 1, s.size() - open - 2);
+  uint32_t channels[3] = {0, 0, 0};
+  size_t count = 0;
+  bool malformed = false;
+  forEachDelimitedToken(
+      args, [](const char c) { return c == ',' || c == '/' || isCssWhitespace(c); },
+      [&](std::string_view token) {
+        if (malformed || count >= 3) return;  // 4th token is alpha; ignored
+        float channelValue = 0.0f;
+        if (token.back() == '%') {
+          if (!tryParseNumber(token.substr(0, token.size() - 1), channelValue)) {
+            malformed = true;
+            return;
+          }
+          channelValue = channelValue * 255.0f / 100.0f;
+        } else if (!tryParseNumber(token, channelValue)) {
+          malformed = true;
+          return;
+        }
+        channels[count++] = static_cast<uint32_t>(std::clamp(channelValue, 0.0f, 255.0f));
+      });
+  if (malformed || count < 3) return false;
+  lumaOut = lumaOfRgb(channels[0], channels[1], channels[2]);
+  return true;
+}
+
+// Parse a CSS colour to luma (0 = black, 255 = white). Anything unrecognised -- `transparent`,
+// `inherit`, `currentColor`, hsl(), a var() reference -- returns false, and the caller leaves the
+// property UNSET rather than guessing. Never persist a guess: an ink mode is stored in the CSS
+// cache and would then be believed forever.
+bool tryParseColorLuma(std::string_view val, uint8_t& lumaOut) {
+  val = trimCssWhitespace(stripTrailingImportant(val));
+  if (val.empty()) return false;
+  if (val.front() == '#') return tryParseHexColorLuma(val.substr(1), lumaOut);
+  if (val.find('(') != std::string_view::npos) return tryParseRgbFunctionLuma(val, lumaOut);
+  for (const auto& [name, luma] : NAMED_COLORS) {
+    if (iequalsAscii(val, name)) {
+      lumaOut = luma;
+      return true;
+    }
+  }
+  return false;
+}
+
+// The `background` shorthand carries the colour among image/position/repeat keywords; take the
+// first token that parses as one.
+bool tryParseBackgroundShorthandLuma(const std::string_view val, uint8_t& lumaOut) {
+  bool found = false;
+  forEachDelimitedToken(stripTrailingImportant(val), isCssWhitespace, [&](const std::string_view token) {
+    if (!found && tryParseColorLuma(token, lumaOut)) found = true;
+  });
+  return found;
 }
 
 }  // anonymous namespace
@@ -399,7 +526,7 @@ bool CssParser::tryInterpretLength(std::string_view val, CssLength& out) {
 
 // Declaration parsing
 
-void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style) {
+void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style, InkColors& ink) {
   const size_t colonPos = decl.find(':');
   if (colonPos == std::string_view::npos || colonPos == 0) return;
 
@@ -475,6 +602,18 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
   } else if (iequalsAscii(name, "list-style-type") || iequalsAscii(name, "list-style")) {
     style.listStyleType = interpretListStyleType(value);
     style.defined.listStyleType = 1;
+  } else if (iequalsAscii(name, "color")) {
+    // Only the luma is kept, and only until the rule block closes -- see InkColors and
+    // resolveInkMode(). An unparseable colour records nothing, so the cascade keeps whatever an
+    // ancestor set instead of this rule asserting a polarity it could not derive.
+    uint8_t luma = 0;
+    if (tryParseColorLuma(value, luma)) ink.textLuma = luma;
+  } else if (iequalsAscii(name, "background-color")) {
+    uint8_t luma = 0;
+    if (tryParseColorLuma(value, luma)) ink.bgLuma = luma;
+  } else if (iequalsAscii(name, "background")) {
+    uint8_t luma = 0;
+    if (tryParseBackgroundShorthandLuma(value, luma)) ink.bgLuma = luma;
   } else if (iequalsAscii(name, "margin-top")) {
     style.marginTop = interpretLength(value);
     style.defined.marginTop = 1;
@@ -633,18 +772,43 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
   }
 }
 
+// Minimum luma separation before a rule counts as light-on-dark. 64 is a quarter of the 0..255
+// range: high enough that a subtle tint stays Normal (white on #ddd is a delta of 34), low enough
+// that the panels books actually draw do invert (the h1 trap's #fff on #a7a9ac is 87).
+//
+// The asymmetry is deliberate. Normal draws black text on the untouched page, which is legible
+// whatever the book intended, so a missed inversion costs only fidelity. Only Inverted can be
+// wrong in a way that hurts -- it commits a whole block to a black panel.
+constexpr int16_t INK_INVERT_MIN_LUMA_DELTA = 64;
+
+void CssParser::resolveInkMode(CssStyle& style, const InkColors& ink) {
+  // Said nothing about colour: leave the property unset so an ancestor's polarity still applies.
+  if (!ink.any()) return;
+
+  // The unspecified side falls back to the page's own polarity: black text on a white page. That
+  // is what makes a lone `color:#fff` come out Normal (delta 0, drawn black and therefore
+  // visible) and a lone dark `background-color` come out Normal too -- inverting there would put
+  // the book's default BLACK text on a black panel.
+  const int16_t textLuma = ink.textLuma != InkColors::UNSET ? ink.textLuma : 0;
+  const int16_t bgLuma = ink.bgLuma != InkColors::UNSET ? ink.bgLuma : 255;
+  style.inkMode = (textLuma - bgLuma >= INK_INVERT_MIN_LUMA_DELTA) ? CssInkMode::Inverted : CssInkMode::Normal;
+  style.defined.inkMode = 1;
+}
+
 CssStyle CssParser::parseDeclarations(std::string_view declBlock) {
   CssStyle style;
+  InkColors ink;
 
   size_t start = 0;
   for (size_t i = 0; i <= declBlock.size(); ++i) {
     if (i == declBlock.size() || declBlock[i] == ';') {
       if (i > start) {
-        parseDeclarationIntoStyle(declBlock.substr(start, i - start), style);
+        parseDeclarationIntoStyle(declBlock.substr(start, i - start), style, ink);
       }
       start = i + 1;
     }
   }
+  resolveInkMode(style, ink);
 
   return style;
 }
@@ -789,6 +953,9 @@ bool CssParser::loadFromStream(HalFile& source) {
   int bodyDepth = 0;
   bool skippingRule = false;
   CssStyle currentStyle;
+  // Scoped to the rule block being read, exactly like currentStyle: colours are only comparable
+  // against each other within one block, and nothing about them outlives resolveInkMode().
+  InkColors currentInk;
 
   auto handleChar = [&](const char c) {
     if (inAtRule) {
@@ -815,6 +982,7 @@ bool CssParser::loadFromStream(HalFile& source) {
       if (c == '{') {
         bodyDepth = 1;
         currentStyle = CssStyle{};
+        currentInk = InkColors{};
         declBuffer.clear();
         if (selector.size() > MAX_SELECTOR_LENGTH * 4) {
           skippingRule = true;
@@ -834,9 +1002,10 @@ bool CssParser::loadFromStream(HalFile& source) {
       --bodyDepth;
       if (bodyDepth == 0) {
         if (!skippingRule && !declBuffer.empty()) {
-          parseDeclarationIntoStyle(declBuffer, currentStyle);
+          parseDeclarationIntoStyle(declBuffer, currentStyle, currentInk);
         }
         if (!skippingRule) {
+          resolveInkMode(currentStyle, currentInk);
           processRuleBlockWithStyle(selector, currentStyle);
         }
         selector.clear();
@@ -852,7 +1021,7 @@ bool CssParser::loadFromStream(HalFile& source) {
     if (!skippingRule) {
       if (c == ';') {
         if (!declBuffer.empty()) {
-          parseDeclarationIntoStyle(declBuffer, currentStyle);
+          parseDeclarationIntoStyle(declBuffer, currentStyle, currentInk);
           declBuffer.clear();
         }
       } else {
@@ -1008,7 +1177,7 @@ bool CssParser::saveToCache() const {
 
 // One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 12 CssLength
 // (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
-// fontVariant + listStyleType + definedBits(4).
+// fontVariant + listStyleType + inkMode + definedBits(4).
 // The framing constants (CSS_LEADING_ENUM_BYTES / CSS_LENGTH_FIELD_COUNT /
 // CSS_TRAILING_ENUM_BYTES, file scope) must describe exactly what this function writes --
 // every reader below is derived from them.
@@ -1046,6 +1215,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   file.write(static_cast<uint8_t>(style.textEmphasis));
   file.write(static_cast<uint8_t>(style.fontVariant));
   file.write(static_cast<uint8_t>(style.listStyleType));
+  file.write(static_cast<uint8_t>(style.inkMode));
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -1071,6 +1241,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   if (style.defined.fontVariant) definedBits |= 1 << 20;
   if (style.defined.listStyleType) definedBits |= 1 << 21;
   if (style.defined.fontSize) definedBits |= 1 << 22;
+  if (style.defined.inkMode) definedBits |= 1 << 23;
   file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
 }
 
@@ -1162,12 +1333,15 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     if (!lenOk) break;
     uint8_t displayVal, verticalAlignVal, borderVal;
     uint8_t emphasisVal, variantVal, listTypeVal;  // v11 record tail; unused by the vertical engine
+    // inkMode (v14) is read only to keep the stream aligned -- the vertical engine paints no
+    // block backgrounds, so a panel there would be a new feature, not a regression to avoid.
     // (font-size is read as lens[11] above; the vertical engine keeps one cell size per column,
     // so a per-block size is not applied there.)
+    uint8_t inkModeVal;
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
         file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
-        file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
+        file.read(&inkModeVal, 1) != 1 || file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
 
@@ -1460,6 +1634,16 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.fontVariant = static_cast<CssFontVariant>(variantVal);
     style.listStyleType = static_cast<CssListStyleType>(listTypeVal);
 
+    // Read inkMode (v14+). Anything outside the enum is coerced to Normal: an unrecognised value
+    // must never turn into a black panel.
+    uint8_t inkModeVal;
+    if (file.read(&inkModeVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.inkMode =
+        inkModeVal == static_cast<uint8_t>(CssInkMode::Inverted) ? CssInkMode::Inverted : CssInkMode::Normal;
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
@@ -1489,6 +1673,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.defined.fontVariant = (definedBits & 1 << 20) != 0;
     style.defined.listStyleType = (definedBits & 1 << 21) != 0;
     style.defined.fontSize = (definedBits & 1 << 22) != 0;
+    style.defined.inkMode = (definedBits & 1 << 23) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.
