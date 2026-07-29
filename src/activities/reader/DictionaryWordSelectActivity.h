@@ -36,11 +36,18 @@ class DictionaryWordSelectActivity final : public Activity {
     uint16_t row;
     const char* text;
     EpdFontFamily::Style style;
+    // The font the line was laid out with: a block carrying a CSS font-size is drawn with its
+    // own (larger) font, and measuring its words with the reader's font would size the
+    // highlight box for text that is not there.
+    int fontId;
   };
 
   enum class Popup : uint8_t { None, Busy, NotFound, Error };
 
   void extractWords();
+  // Hit-test / highlight height for a word: its own line height when the block carries a CSS
+  // font-size, the page's otherwise.
+  int wordHeight(const WordBox& word) const;
   int closestInRow(uint16_t row, int centerX) const;
   int wordAt(int x, int y) const;
   void moveVertical(int direction);

@@ -545,12 +545,18 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   return 0;
 }
 // Consumes data to minimize memory usage
-void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
+void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int baseFontId, const uint16_t viewportWidth,
                                        const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                                        const bool includeLastLine) {
   if (words.empty()) {
     return;
   }
+
+  // Every measurement below is made with the BLOCK's font (CSS font-size), and the emitted
+  // TextBlocks carry the same blockStyle, so TextBlock::render() resolves the identical id.
+  // Measuring here with the reader's font while drawing with a larger one is exactly the
+  // layout/draw disagreement that mis-positions a whole line.
+  const int fontId = blockStyle.resolveFontId(baseFontId);
 
   // Per-paragraph RTL auto-detection: only when CSS/HTML didn't explicitly set direction.
   // Explicit dir="ltr" must be respected and not overridden by content heuristic.

@@ -104,7 +104,10 @@ namespace {
 // which was collapsing the leading after every furigana-carrying line.
 // v57: bouten marks carry an ideographic space per mark so the SUP-scaled ruby run matches the
 // width of the text it marks; without it the marks bunched into the middle at half width.
-constexpr uint8_t SECTION_FILE_VERSION = 57;
+// v58: CSS font-size is honoured, so every TextBlock stores the font id it was laid out with
+// (BlockStyle::fontId, 4 bytes after directionDefined). A v57 record has neither the field nor
+// the heading-sized line positions.
+constexpr uint8_t SECTION_FILE_VERSION = 58;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

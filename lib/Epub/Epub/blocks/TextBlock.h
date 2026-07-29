@@ -94,7 +94,9 @@ class TextBlock final : public Block {
 
   // suppressRuby: the per-book Furigana toggle. Kept as a render-time flag (not a layout one)
   // so flipping it needs no section rebuild -- the ruby strings stay in the block either way.
-  void render(const GfxRenderer& renderer, int fontId, int x, int y, bool suppressRuby = false) const;
+  // baseFontId is the reader's font; a block with a CSS font-size draws with
+  // BlockStyle::resolveFontId(baseFontId), the same id it was measured with.
+  void render(const GfxRenderer& renderer, int baseFontId, int x, int y, bool suppressRuby = false) const;
   BlockType getType() override { return TEXT_BLOCK; }
   bool serialize(HalFile& file) const;
   static std::unique_ptr<TextBlock> deserialize(HalFile& file);

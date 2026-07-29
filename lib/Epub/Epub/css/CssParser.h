@@ -37,7 +37,9 @@ class CssParser {
   // v11: +textEmphasis/fontVariant/listStyleType bytes and defined bits 19-21
   // v12: border-top/bottom/left/right and the font shorthand are parsed; rules
   //      cached under v11 lack their edges/style bits.
-  static constexpr uint8_t CSS_CACHE_VERSION = 12;
+  // v13: +font-size as a 12th CssLength and defined bit 22 -- the record grew by 5 bytes,
+  //      so a v12 record cannot be read with the v13 layout.
+  static constexpr uint8_t CSS_CACHE_VERSION = 13;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

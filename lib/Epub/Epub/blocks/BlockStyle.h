@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "Epub/ReaderFontScale.h"
 #include "Epub/css/CssStyle.h"
 
 /**
@@ -32,10 +33,23 @@ struct BlockStyle {
   bool isRtl = false;              // true if resolved direction is RTL
   bool directionDefined = false;   // true if direction was explicitly set in CSS/HTML
 
+  // Per-block font from CSS font-size, 0 = "the reader's font" (font ids are never 0, see
+  // the sentinel assertions in fontIds.h). Resolved ONCE, at parse time, by cssBlockFontId().
+  //
+  // Everything that touches this block's geometry must go through resolveFontId() with the
+  // reader's font as the base: measurement (ParsedText::layoutAndExtractLines), line height
+  // (ChapterHtmlSlimParser::addLineToPage) and drawing (TextBlock::render). A path that
+  // measures with one font and draws with another silently mis-positions every word on the
+  // line -- the reader-font-substitution bug, one layer down.
+  int32_t fontId = 0;
+
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
   // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
   bool fromBrElement = false;
+
+  // The font this block is laid out AND drawn with. Single source of truth; see fontId.
+  [[nodiscard]] int resolveFontId(const int baseFontId) const { return fontId != 0 ? fontId : baseFontId; }
 
   // Combined insets (margin + padding)
   [[nodiscard]] int16_t leftInset() const { return marginLeft + paddingLeft; }
@@ -84,6 +98,14 @@ struct BlockStyle {
         result.alignment = alignment;
         result.textAlignDefined = true;
       }
+      // font-size is inherited in CSS: a <p> inside a container that sets font-size renders at
+      // the container's size unless it sets its own. Deliberately only on the Horizontal
+      // (parent -> child nesting) axis: the Vertical combine is also used to merge a CLOSED
+      // block's style onto the next one, where inheriting would leak a heading's font onto the
+      // text that follows it.
+      if (child.fontId == 0) {
+        result.fontId = fontId;
+      }
     } else {
       result.marginTop = std::max(child.marginTop, marginTop);
       result.marginBottom = std::max(child.marginBottom, marginBottom);
@@ -113,9 +135,13 @@ struct BlockStyle {
   // user can't control (blockquote/list indents are dropped too). When true, each
   // side is honored but clamped to MAX_HORIZONTAL_INSET_EM per element. Vertical
   // margins/padding (paragraph spacing) are always honored.
+  // baseFontId is the reader's font; the block's own font is derived from it and the CSS
+  // font-size (0 keeps the reader's font). Passing 0 disables per-block sizing entirely.
   static BlockStyle fromCssStyle(const CssStyle& cssStyle, const float emSize, const CssTextAlign paragraphAlignment,
-                                 const uint16_t viewportWidth = 0, const bool honorHorizontalInsets = false) {
+                                 const uint16_t viewportWidth = 0, const bool honorHorizontalInsets = false,
+                                 const int baseFontId = 0) {
     BlockStyle blockStyle;
+    blockStyle.fontId = baseFontId != 0 ? cssBlockFontId(cssStyle, baseFontId) : 0;
     const float vw = viewportWidth;
     blockStyle.marginTop = cssStyle.marginTop.toPixelsInt16(emSize, vw);
     blockStyle.marginBottom = cssStyle.marginBottom.toPixelsInt16(emSize, vw);

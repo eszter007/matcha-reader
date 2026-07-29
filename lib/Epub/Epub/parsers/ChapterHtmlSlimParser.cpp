@@ -15,6 +15,7 @@
 #include "../../../../src/fontIds.h"
 #include "Epub.h"
 #include "Epub/Page.h"
+#include "Epub/ReaderFontScale.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
@@ -1221,14 +1222,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
-  const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
+  // CSS em inside a block resolves against that block's OWN font size, so an element with a
+  // font-size gets its margins/padding/indent measured in the larger em too.
+  const int blockFontId = cssBlockFontId(cssStyle, self->fontId);
+  const float emSize =
+      static_cast<float>(self->renderer.getFontAscenderSize(blockFontId != 0 ? blockFontId : self->fontId));
   const auto userAlignmentBlockStyle =
       BlockStyle::fromCssStyle(cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment),
-                               self->viewportWidth, self->honorBookInsets);
+                               self->viewportWidth, self->honorBookInsets, self->fontId);
 
   if (strcmp(name, "hr") == 0) {
-    auto hrBlockStyle =
-        BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Left, self->viewportWidth, self->honorBookInsets);
+    auto hrBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Left, self->viewportWidth,
+                                                 self->honorBookInsets, self->fontId);
     if (!self->embeddedStyle) {
       hrBlockStyle.marginLeft = 0;
       hrBlockStyle.marginRight = 0;
@@ -1248,8 +1253,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   if (matches(name, HEADER_TAGS, std::size(HEADER_TAGS))) {
     self->currentCssStyle = cssStyle;
-    auto headerBlockStyle =
-        BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth, self->honorBookInsets);
+    auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth,
+                                                     self->honorBookInsets, self->fontId);
     headerBlockStyle.textAlignDefined = true;
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
@@ -1962,8 +1967,12 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   // as ~0.62 of normal leading, with descenders of the ruby line visibly colliding with the
   // ascenders of the next -- the long-standing "horizontal line spacing is too tight" report,
   // which only ever affected lines carrying furigana.
-  const int rubyExtra = line->getRubyShift(renderer.getFontAscenderSize(fontId));
-  const int lineHeight = renderer.getLineHeight(fontId, lineCompression) + rubyExtra;
+  // A block with a CSS font-size was measured and will be drawn with its own font, so its
+  // leading has to come from that font too -- otherwise an 18pt heading gets 14pt of vertical
+  // room and collides with the line below it.
+  const int lineFontId = line->getBlockStyle().resolveFontId(fontId);
+  const int rubyExtra = line->getRubyShift(renderer.getFontAscenderSize(lineFontId));
+  const int lineHeight = renderer.getLineHeight(lineFontId, lineCompression) + rubyExtra;
 
   if (!currentPage) {
     currentPage.reset(new Page());
@@ -2013,10 +2022,10 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageNextY = 0;
   }
 
-  const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
-
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+  // Paragraph spacing follows the block's own font, like its line height does.
+  const int lineHeight = renderer.getLineHeight(blockStyle.resolveFontId(fontId), lineCompression);
   if (blockStyle.marginTop > 0) {
     currentPageNextY += blockStyle.marginTop;
   }

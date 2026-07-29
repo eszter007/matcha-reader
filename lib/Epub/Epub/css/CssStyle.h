@@ -119,6 +119,7 @@ struct CssPropertyFlags {
   uint16_t textEmphasis : 1;
   uint16_t fontVariant : 1;
   uint16_t listStyleType : 1;
+  uint16_t fontSize : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -142,12 +143,14 @@ struct CssPropertyFlags {
         border(0),
         textEmphasis(0),
         fontVariant(0),
-        listStyleType(0) {}
+        listStyleType(0),
+        fontSize(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType;
+           imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType ||
+           fontSize;
   }
 
   void clearAll() {
@@ -155,11 +158,11 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = 0;
-    textEmphasis = fontVariant = listStyleType = 0;
+    textEmphasis = fontVariant = listStyleType = fontSize = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..21.
+// Cache serializes defined flags as uint32_t with bit indices 0..22.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -184,6 +187,10 @@ struct CssStyle {
   CssLength paddingRight;   // Padding right
   CssLength imageHeight;    // Height for img (e.g. 2em) – width derived from aspect ratio when only height set
   CssLength imageWidth;     // Width for img when both or only width set
+  // font-size, kept as a raw length: the em base is the READER's font size (not a fixed 16px),
+  // and the usable sizes depend on the loaded family, so resolution happens at layout time in
+  // cssBlockFontId() (Epub/ReaderFontScale.h). Keyword values are stored as em multiples.
+  CssLength fontSize;
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
   // Border edges bitmask (TOP/RIGHT/BOTTOM/LEFT). A full 4-side mask is a boxed/kakomi block;
@@ -294,6 +301,10 @@ struct CssStyle {
       listStyleType = base.listStyleType;
       defined.listStyleType = 1;
     }
+    if (base.hasFontSize()) {
+      fontSize = base.fontSize;
+      defined.fontSize = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -318,6 +329,7 @@ struct CssStyle {
   [[nodiscard]] bool hasTextEmphasis() const { return defined.textEmphasis; }
   [[nodiscard]] bool hasFontVariant() const { return defined.fontVariant; }
   [[nodiscard]] bool hasListStyleType() const { return defined.listStyleType; }
+  [[nodiscard]] bool hasFontSize() const { return defined.fontSize; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -329,6 +341,7 @@ struct CssStyle {
     marginTop = marginBottom = marginLeft = marginRight = CssLength{};
     paddingTop = paddingBottom = paddingLeft = paddingRight = CssLength{};
     imageHeight = imageWidth = CssLength{};
+    fontSize = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     textEmphasis = CssTextEmphasis::None;

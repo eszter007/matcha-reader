@@ -50,6 +50,17 @@ constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
 // Prevents parsing of extremely long or malformed selectors
 constexpr size_t MAX_SELECTOR_LENGTH = 256;
 
+// Serialized rule-record framing. ONE definition, shared by the writer and all three readers
+// (validateCache skips records, loadFromCache bounds-checks them, collectVerticalStyles
+// streams them): the counts drifting apart is how a cache format silently mis-parses.
+// Bump CSS_CACHE_VERSION whenever any of these change. See writeRuleRecord.
+constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeight, decoration, direction
+constexpr size_t CSS_LENGTH_FIELD_COUNT = 12;  // CssLength members written, in order
+constexpr size_t CSS_TRAILING_ENUM_BYTES = 6;  // display, verticalAlign, border, emphasis, variant, listType
+constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
+                                    CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
+                                    CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
+
 // Check if character is CSS whitespace
 constexpr bool isCssWhitespace(const char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 
@@ -417,6 +428,45 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
              iequalsAscii(name, "-epub-text-emphasis") || iequalsAscii(name, "-webkit-text-emphasis")) {
     style.textEmphasis = interpretTextEmphasis(value);
     style.defined.textEmphasis = 1;
+  } else if (iequalsAscii(name, "font-size")) {
+    // Stored as a raw length; the em base is the reader's own font size, resolved at layout
+    // time (cssBlockFontId). Absolute units are normalised into em multiples of the CSS
+    // initial size (16px / 12pt) so one scale factor covers every unit downstream.
+    // stripTrailingImportant matters here: "4em !important" would otherwise leave "em
+    // !important" as the unit and fall back to pixels.
+    const std::string_view sizeValue = stripTrailingImportant(value);
+    CssLength len;
+    if (tryInterpretLength(sizeValue, len)) {
+      style.fontSize = len;
+      style.defined.fontSize = 1;
+    } else {
+      // Keywords. Ratios follow the CSS absolute-size scale; smaller/larger are the
+      // relative-size steps applied to the parent (approximated as the reader size).
+      float em = 0.0f;
+      if (iequalsAscii(sizeValue, "xx-small")) {
+        em = 0.6f;
+      } else if (iequalsAscii(sizeValue, "x-small")) {
+        em = 0.75f;
+      } else if (iequalsAscii(sizeValue, "small") || iequalsAscii(sizeValue, "smaller")) {
+        em = 0.83f;
+      } else if (iequalsAscii(sizeValue, "medium")) {
+        em = 1.0f;
+      } else if (iequalsAscii(sizeValue, "large")) {
+        em = 1.2f;
+      } else if (iequalsAscii(sizeValue, "larger")) {
+        em = 1.2f;
+      } else if (iequalsAscii(sizeValue, "x-large")) {
+        em = 1.5f;
+      } else if (iequalsAscii(sizeValue, "xx-large")) {
+        em = 2.0f;
+      }
+      if (em > 0.0f) {
+        style.fontSize = CssLength{em, CssUnit::Em};
+        style.defined.fontSize = 1;
+      }
+      // Anything else (inherit/initial/unset) leaves the property undefined so the
+      // cascade keeps whatever an ancestor set.
+    }
   } else if (iequalsAscii(name, "font-variant") || iequalsAscii(name, "font-variant-caps")) {
     // Only small-caps matters for rendering; anything else resets to normal.
     style.fontVariant =
@@ -956,9 +1006,12 @@ bool CssParser::saveToCache() const {
   return true;
 }
 
-// One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 11 CssLength
+// One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 12 CssLength
 // (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
 // fontVariant + listStyleType + definedBits(4).
+// The framing constants (CSS_LEADING_ENUM_BYTES / CSS_LENGTH_FIELD_COUNT /
+// CSS_TRAILING_ENUM_BYTES, file scope) must describe exactly what this function writes --
+// every reader below is derived from them.
 void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, const CssStyle& style) {
   const auto selectorLen = static_cast<uint16_t>(selector.size());
   file.write(reinterpret_cast<const uint8_t*>(&selectorLen), sizeof(selectorLen));
@@ -986,6 +1039,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   writeLength(style.paddingRight);
   writeLength(style.imageHeight);
   writeLength(style.imageWidth);
+  writeLength(style.fontSize);
   file.write(static_cast<uint8_t>(style.display));
   file.write(static_cast<uint8_t>(style.verticalAlign));
   file.write(style.borderEdges);
@@ -1016,6 +1070,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   if (style.defined.textEmphasis) definedBits |= 1 << 19;
   if (style.defined.fontVariant) definedBits |= 1 << 20;
   if (style.defined.listStyleType) definedBits |= 1 << 21;
+  if (style.defined.fontSize) definedBits |= 1 << 22;
   file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
 }
 
@@ -1043,8 +1098,7 @@ bool CssParser::validateCache() const {
     return false;
   }
 
-  // selectorLen is followed by this many fixed bytes (see writeRuleRecord).
-  constexpr size_t RULE_FIXED_BYTES = 5 + 11 * (sizeof(float) + 1) + 6 + sizeof(uint32_t);
+  // selectorLen is followed by RULE_FIXED_BYTES fixed bytes (see writeRuleRecord).
   for (uint16_t i = 0; i < ruleCount; ++i) {
     uint16_t selectorLen = 0;
     if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) return false;
@@ -1092,12 +1146,12 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     selector.resize(selectorLen);
     if (file.read(selector.data(), selectorLen) != selectorLen) break;
 
-    uint8_t enums[5];  // textAlign, fontStyle, fontWeight, textDecoration, direction
-    if (file.read(enums, 5) != 5) break;
+    uint8_t enums[CSS_LEADING_ENUM_BYTES];  // textAlign, fontStyle, fontWeight, textDecoration, direction
+    if (file.read(enums, CSS_LEADING_ENUM_BYTES) != CSS_LEADING_ENUM_BYTES) break;
     struct RawLen {
       float v;
       uint8_t u;
-    } lens[11];  // textIndent, mT, mB, mL, mR, pT, pB, pL, pR, imgH, imgW
+    } lens[CSS_LENGTH_FIELD_COUNT];  // textIndent, mT, mB, mL, mR, pT, pB, pL, pR, imgH, imgW, fontSize
     bool lenOk = true;
     for (auto& l : lens) {
       if (file.read(&l.v, sizeof(float)) != sizeof(float) || file.read(&l.u, 1) != 1) {
@@ -1108,6 +1162,8 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     if (!lenOk) break;
     uint8_t displayVal, verticalAlignVal, borderVal;
     uint8_t emphasisVal, variantVal, listTypeVal;  // v11 record tail; unused by the vertical engine
+    // (font-size is read as lens[11] above; the vertical engine keeps one cell size per column,
+    // so a per-block size is not applied there.)
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
         file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
@@ -1250,10 +1306,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     return static_cast<size_t>(file.available()) >= neededBytes;
   };
 
-  constexpr size_t CSS_LENGTH_FIELD_COUNT = 11;
-  constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
-  constexpr size_t CSS_FIXED_STYLE_BYTES =
-      5 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) + sizeof(uint8_t) + sizeof(uint32_t);
+  // The style payload after the selector is RULE_FIXED_BYTES (file-scope, shared with
+  // validateCache). It previously counted the six trailing enum bytes as one, which only
+  // ever made this bounds check laxer than the record it guards.
 
   // Below this, `rulesBySelector_[selector] = style` allocates a new map node every iteration.
   // std::map's internal allocator (like every other unguarded STL allocation in this loop) aborts
@@ -1310,7 +1365,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     }
     std::string selector(selectorBuf.get(), selectorLen);
 
-    if (!hasRemainingBytes(CSS_FIXED_STYLE_BYTES)) {
+    if (!hasRemainingBytes(RULE_FIXED_BYTES)) {
       LOG_DBG("CSS", "Truncated CSS cache while reading style payload");
       rulesBySelector_.clear();
       return false;
@@ -1366,7 +1421,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     if (!readLength(style.textIndent) || !readLength(style.marginTop) || !readLength(style.marginBottom) ||
         !readLength(style.marginLeft) || !readLength(style.marginRight) || !readLength(style.paddingTop) ||
         !readLength(style.paddingBottom) || !readLength(style.paddingLeft) || !readLength(style.paddingRight) ||
-        !readLength(style.imageHeight) || !readLength(style.imageWidth)) {
+        !readLength(style.imageHeight) || !readLength(style.imageWidth) || !readLength(style.fontSize)) {
       rulesBySelector_.clear();
       return false;
     }
@@ -1433,6 +1488,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.defined.textEmphasis = (definedBits & 1 << 19) != 0;
     style.defined.fontVariant = (definedBits & 1 << 20) != 0;
     style.defined.listStyleType = (definedBits & 1 << 21) != 0;
+    style.defined.fontSize = (definedBits & 1 << 22) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.
