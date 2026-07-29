@@ -630,6 +630,12 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
 
+  // Open this element on the CSS ancestor chain FIRST, before any of the early returns below:
+  // every start tag must push exactly once so endElement's single pop stays paired with it.
+  // Elements inside a skipped subtree are pushed too -- they style nothing, but they are real
+  // ancestors of the elements that follow.
+  self->cssPath.push(name);
+
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
     self->depth += 1;
@@ -681,6 +687,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
+  // The chain entry for this element was pushed with its tag only; its classes are known
+  // now, and a descendant selector needs them for the elements nested inside it.
+  self->cssPath.setTopClasses(classAttr);
+
   auto centeredBlockStyle = BlockStyle();
   centeredBlockStyle.textAlignDefined = true;
   centeredBlockStyle.alignment = CssTextAlign::Center;
@@ -689,7 +699,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // before tag-specific branches emit any content or metadata.
   CssStyle cssStyle;
   if (self->cssParser) {
-    cssStyle = self->cssParser->resolveStyle(name, classAttr);
+    cssStyle = self->cssParser->resolveStyle(name, classAttr, &self->cssPath);
     if (!styleAttr.empty()) {
       CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
       cssStyle.applyOver(inlineStyle);
@@ -846,7 +856,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
       // Skip image if CSS display:none
       if (self->cssParser) {
-        CssStyle imgDisplayStyle = self->cssParser->resolveStyle("img", classAttr);
+        CssStyle imgDisplayStyle = self->cssParser->resolveStyle("img", classAttr, &self->cssPath);
         if (!styleAttr.empty()) {
           imgDisplayStyle.applyOver(CssParser::parseInlineStyle(styleAttr));
         }
@@ -1748,6 +1758,12 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+
+  // Close this element on the CSS ancestor chain FIRST, pairing with the single push at the
+  // top of startElement. Every early return below must leave the chain already popped, or a
+  // <rt>/<ruby> subtree would leak an entry and every later element would match against a
+  // phantom ancestor.
+  self->cssPath.pop();
 
   // Ruby text: </rt> distributes ruby to base words, </ruby> resets ruby state
   if (strcmp(name, "rt") == 0) {

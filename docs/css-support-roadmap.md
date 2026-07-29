@@ -62,11 +62,12 @@ which is why `color` was not allowed to lag far behind `font-size`.
 | concern | file |
 |---|---|
 | property dispatch | `lib/Epub/Epub/css/CssParser.cpp` — `parseDeclarationIntoStyle()` (there is no `applyDeclaration`), `iequalsAscii(name, ...)` chain |
+| selector syntax + ancestor stack | `lib/Epub/Epub/css/CssSelector.h` — `parse()`, `forEachCandidate()`, `CssElementPath` (host-testable, no Arduino deps) |
 | style struct + enums | `lib/Epub/Epub/css/CssStyle.h` — `CssStyle`, `CssLength`, `CssPropertyFlags` |
-| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **15**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
+| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **16**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
 | style → layout | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` — `currentCssStyle`, ~lines 200-310 |
 | line breaking / gaps | `lib/Epub/Epub/ParsedText.cpp` |
-| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **60**) |
+| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **61**) |
 
 ### Rules that apply to every item below
 
@@ -86,11 +87,13 @@ which is why `color` was not allowed to lag far behind `font-size`.
    `wasHeapTruncated()`; new per-rule bytes multiply by rule count (415 rules
    observed on one book). Prefer byte enums and packed `CssLength` over new
    `std::string` members — a string per rule is what OOMs a 380 KB device.
-5. **Selectors:** only ONE descendant form is supported (the EBPAJ
-   `writing-mode` scoping, `CssParser.cpp` ~line 656). Rules like `.callout p`
-   never match regardless of property support. Worth fixing on its own (see
-   Phase 4) — otherwise property work silently under-delivers on books that
-   style via nested containers.
+5. **Selectors:** `tag`, `.class`, `tag.class`, and two of those joined by a
+   descendant or child combinator, all parsed by `lib/Epub/Epub/css/CssSelector.h`
+   (see Phase 4). Three or more compounds, pseudo-classes, attribute/id/sibling
+   selectors and the universal selector are still dropped. The EBPAJ
+   `writing-mode` scoping (`.hltr X` / `.vrtl X`) keeps its own `h|`/`v|` key
+   space and takes precedence — storing `.vrtl X` as an ordinary descendant rule
+   would let the horizontal engine apply vertical-only styling.
 
 ---
 
@@ -170,14 +173,47 @@ would have been without the property. Every page boundary goes through
 `breakPage()`, which refuses to flush a page with no elements on it. Those two
 rules together are the guarantee: no blank page, and no block that fails to land.
 
-## Phase 4 — descendant selectors
+## Phase 4 — descendant selectors — **done**
 
-Support `A B` (descendant) and `A > B` (child) for at least two levels. This is
-what makes the other phases actually land on books that scope styles via
-containers. Needs a small tag stack in `ChapterHtmlSlimParser` and a selector
-representation change → `CSS_CACHE_VERSION` bump.
+`A B` (descendant) and `A > B` (child), where each side is `tag`, `.class` or
+`tag.class`. Selector lists (`h1, h2, h3 {…}`) were already split per selector and
+now accept compound members. The selector subset, its normalized storage key and
+the candidate enumeration live in `lib/Epub/Epub/css/CssSelector.h` — header-only
+and free of Arduino/HAL deps, so the host test compiles the same code the device
+runs.
 
-**Do this before assuming a phase "didn't work".**
+**Two compounds, not three.** `.a .b p` is REJECTED rather than approximated by
+its rightmost two: `.b p` matches outside `.a` too, which applies styling the
+author scoped away. Dropping it is what those selectors did before, so nothing
+regresses; a wrong match would be new damage.
+
+**Matching.** A rule is stored under its normalized selector (`.callout p`,
+`blockquote>p`) in the same map as simple rules, so a compound rule costs one
+map node like any other. `resolveStyle` enumerates the keys the element *could*
+match (its own forms, and each recorded ancestor's forms joined by each
+combinator) and does one hash lookup each — no scan of the rule table. The
+ancestor walk is skipped entirely unless the table holds a compound rule, so a
+book without them performs exactly the lookups it did before.
+
+**Specificity.** Every match is collected and applied in ascending
+`16*classes + types` order: `p` < `div p` < `.note` < {`p.note`, `.c p`} <
+`div p.note` < `.c .note`. On a tie, the LAST match in enumeration order wins —
+simple before compound, outer ancestor before inner, descendant before child.
+That is a documented deviation: real CSS breaks a tie by document order, which
+this rule table cannot preserve (the map is unordered and the cache is written in
+map order). Rules sharing one selector still merge in source order.
+
+**Ancestor stack.** `CssElementPath` (also in `CssSelector.h`): 12 inline
+entries of 16-byte tag + 32-byte classes, one push per start tag and one pop per
+end tag in `ChapterHtmlSlimParser`, no heap and no per-element allocation. Past
+12 levels the recorded entries stay a *prefix* of the real chain, so an over-deep
+document loses matches instead of inventing them, and the child combinator turns
+itself off once the real parent is no longer recorded. A tag or class name too
+long for its buffer is dropped, never truncated into a name that could collide.
+
+`CSS_CACHE_VERSION` 15 → 16 (the record framing is unchanged; the bump exists
+because a v15 cache was written by a parser that dropped these rules) and
+`SECTION_FILE_VERSION` 60 → 61.
 
 ## Phase 5 — `line-height`
 

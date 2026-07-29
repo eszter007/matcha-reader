@@ -113,7 +113,11 @@ namespace {
 // v60: CSS page-break-{before,after,inside} are honoured, so blocks land on different pages than
 // a v59 build put them on. The byte layout is unchanged -- the bump exists because the PAGINATION
 // changed, and a cached section would otherwise keep showing chapters running together.
-constexpr uint8_t SECTION_FILE_VERSION = 60;
+// v61: descendant (`.callout p`) and child (`blockquote > p`) selectors match, so rules that
+// were dropped for the whole life of this engine now apply -- different fonts, spacing,
+// alignment and page breaks than a v60 build laid out. The byte layout is unchanged; the bump
+// exists because a cached section would otherwise keep showing the unstyled result.
+constexpr uint8_t SECTION_FILE_VERSION = 61;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

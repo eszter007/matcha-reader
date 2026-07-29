@@ -325,7 +325,7 @@ size_t CssParser::SvHash::operator()(CompositeKey k) const noexcept {
   // Hash the case-folded concatenation of every piece without materializing
   // it — the running hash continues across pieces as if they were one buffer.
   size_t h = FNV_OFFSET_BASIS;
-  for (std::string_view piece : k.pieces) {
+  for (std::string_view piece : k) {
     for (char c : piece) h = fnv1aMix(h, asciiToLower(c));
   }
   return h;
@@ -353,10 +353,10 @@ bool CssParser::SvEqual::operator()(const std::string& a, const std::string& b) 
 
 bool CssParser::SvEqual::operator()(CompositeKey k, std::string_view sv) const noexcept {
   size_t total = 0;
-  for (std::string_view piece : k.pieces) total += piece.size();
+  for (std::string_view piece : k) total += piece.size();
   if (total != sv.size()) return false;
   size_t i = 0;
-  for (std::string_view piece : k.pieces) {
+  for (std::string_view piece : k) {
     for (char c : piece) {
       if (asciiToLower(c) != asciiToLower(sv[i++])) return false;
     }
@@ -888,43 +888,43 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
           return;
         }
 
-        // TODO: Support richer CSS selector syntax in the future. For now we only
-        // handle `tag`, `.class`, or `tag.class`. Reject anything containing a
-        // character that introduces unsupported syntax:
-        //   '+'  adjacent sibling combinator
-        //   '>'  child combinator
-        //   '['  attribute selector
-        //   ':'  pseudo class/element
-        //   '#'  ID selector
-        //   '~'  general sibling combinator
-        //   '*'  wildcard
-        //   ' '  descendant combinator
-        // Single-pass scan via find_first_of instead of eight sequential find() calls.
-        //
-        // ONE descendant form IS supported: the EBPAJ template's writing-mode scoping,
-        // `.hltr X` / `.vrtl X` (the body carries class hltr or vrtl). These carry the entire
-        // h/v split of the standard Japanese template (margins, indents, rules) -- dropping
-        // them dropped all of that styling. They are stored under a scope-prefixed key
-        // ("h|X" / "v|X"; '|' can never appear in a real selector) that only scope-aware
-        // lookups (resolveStyle's "h|", the vertical collector's "v|") ever find.
-        constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~*";
-        std::string scopedKey;
-        if (const size_t sp = sel.find(' '); sp != std::string_view::npos) {
-          const std::string_view first = trimCssWhitespace(sel.substr(0, sp));
-          const std::string_view rest = trimCssWhitespace(sel.substr(sp + 1));
-          const bool hScope = iequalsAscii(first, ".hltr");
-          const bool vScope = iequalsAscii(first, ".vrtl");
-          if ((!hScope && !vScope) || rest.empty() ||
-              rest.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos ||
-              rest.find(' ') != std::string_view::npos) {
-            return;  // unsupported descendant selector
-          }
-          scopedKey.reserve(rest.size() + 2);
-          scopedKey += hScope ? "h|" : "v|";
-          scopedKey.append(rest.data(), rest.size());
-          sel = scopedKey;
-        } else if (sel.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos) {
-          return;
+        // Normalize the selector into the key it is stored under, or drop it.
+        // CssSelector::parse accepts `tag`, `.class`, `tag.class`, and two of those joined by
+        // a descendant or child combinator; everything else (pseudo, attribute, id, sibling,
+        // and three-compound selectors) is rejected -- see CssSelector.h.
+        CssSelector::Selector parsed;
+        if (!CssSelector::parse(sel, parsed)) {
+          return;  // unsupported selector syntax
+        }
+
+        // The EBPAJ template's writing-mode scoping keeps its own key space and takes
+        // precedence over ordinary descendant storage: `.hltr X` / `.vrtl X` (the body carries
+        // class hltr or vrtl) carry the entire h/v split of the standard Japanese template
+        // (margins, indents, rules), and are stored under a scope-prefixed key ("h|X" / "v|X";
+        // '|' can never appear in a real selector) that only scope-aware lookups
+        // (resolveStyle's "h|", the vertical collector's "v|") ever find. Storing `.vrtl X` as
+        // an ordinary descendant rule instead would let the HORIZONTAL engine apply
+        // vertical-only styling to a Japanese book -- the one mis-match this whole area has to
+        // avoid. `.hltr > X` stays dropped exactly as it was before compound support: routing
+        // it through the scope would widen it to every X, and routing it through the generic
+        // path would need the `.vrtl` twin to behave differently from its sibling spelling.
+        const bool scopedSelector =
+            parsed.combinator == CssSelector::DESCENDANT_COMBINATOR && parsed.ancestor.tag.empty() &&
+            (iequalsAscii(parsed.ancestor.cls, "hltr") || iequalsAscii(parsed.ancestor.cls, "vrtl"));
+        std::string builtKey;
+        if (scopedSelector) {
+          builtKey += iequalsAscii(parsed.ancestor.cls, "hltr") ? "h|" : "v|";
+          const CssSelector::Selector subjectOnly{{}, parsed.subject, 0};
+          CssSelector::forEachKeyPiece(
+              subjectOnly, [&builtKey](const std::string_view piece) { builtKey.append(piece.data(), piece.size()); });
+          sel = builtKey;
+        } else if (parsed.combinator != 0) {
+          // Normalized compound key: `.callout   p` and `blockquote > p` both collapse to the
+          // single-character-combinator form, so the two spellings share one rule.
+          builtKey.reserve(sel.size());
+          CssSelector::forEachKeyPiece(
+              parsed, [&builtKey](const std::string_view piece) { builtKey.append(piece.data(), piece.size()); });
+          sel = builtKey;
         }
 
         // Skip if this would exceed the rule limit
@@ -960,7 +960,13 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
           }
           rulesBySelector_.emplace(std::string(sel), style);
         }
+        noteCombinatorsIn(sel);
       });
+}
+
+void CssParser::noteCombinatorsIn(const std::string_view key) {
+  if (key.find(CssSelector::DESCENDANT_COMBINATOR) != std::string_view::npos) hasDescendantRules_ = true;
+  if (key.find(CssSelector::CHILD_COMBINATOR) != std::string_view::npos) hasChildRules_ = true;
 }
 
 // Main parsing entry point
@@ -1115,7 +1121,8 @@ bool CssParser::loadFromStream(HalFile& source) {
 
 // Style resolution
 
-CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view classAttr) const {
+CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::string_view classAttr,
+                                 const CssElementPath* path) const {
   static bool lowHeapWarningLogged = false;
   if (ESP.getMaxAllocHeap() < MIN_FREE_HEAP_FOR_CSS) {
     if (!lowHeapWarningLogged) {
@@ -1126,36 +1133,80 @@ CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view clas
     return CssStyle{};
   }
 
-  CssStyle result;
+  // Matching rules are collected first and applied in ascending specificity afterwards,
+  // because the enumeration order is not the cascade order once compound selectors exist:
+  // `div p` (1+1) must apply before `.note` (16), which is found later, and `.callout p`
+  // (16+1) ties with `p.note` (1+16). Storage is a fixed stack array: an element matching more
+  // than MAX_CANDIDATES rules has never been observed, and the overflow path drops the
+  // LOWEST-specificity match, which is the one the rest would have overridden anyway.
+  //
+  // Deviation from the real cascade: CSS breaks a specificity tie by document order, which
+  // this rule table does not preserve (the map is unordered, and the cache is written in map
+  // order and merged per selector on load). A tie therefore resolves to the last match in
+  // enumeration order -- simple before compound, outer ancestor before inner, descendant
+  // before child -- i.e. the more narrowly scoped rule wins. Same-selector rules from
+  // anywhere in the stylesheet(s) are still merged in source order by applyOver at parse and
+  // cache-load time, so the common `p {...} ... p {...}` case is unaffected.
+  struct Candidate {
+    const CssStyle* style;
+    uint8_t spec;
+  };
+  constexpr size_t MAX_CANDIDATES = 16;
+  Candidate candidates[MAX_CANDIDATES];
+  size_t candidateCount = 0;
 
-  // At each cascade level, the base rule applies first and the "h|"-scoped rule (the EBPAJ
-  // template's `.hltr X` horizontal-mode variant) applies over it: this resolver feeds the
-  // HORIZONTAL layout engine, which renders exactly what those rules describe. The vertical
-  // engine reads the "v|" scope through collectVerticalStyles() instead.
-  auto applyBoth = [&](auto&&... keyPieces) {
-    if (auto it = rulesBySelector_.find(CompositeKey{keyPieces...}); it != rulesBySelector_.end()) {
-      result.applyOver(it->second);
+  const auto addCandidate = [&](const CssStyle* style, const uint8_t spec) {
+    if (candidateCount < MAX_CANDIDATES) {
+      candidates[candidateCount++] = Candidate{style, spec};
+      return;
     }
-    if (auto it = rulesBySelector_.find(CompositeKey{"h|", keyPieces...}); it != rulesBySelector_.end()) {
-      result.applyOver(it->second);
+    size_t weakest = 0;
+    for (size_t i = 1; i < candidateCount; ++i) {
+      if (candidates[i].spec < candidates[weakest].spec) weakest = i;
+    }
+    if (candidates[weakest].spec >= spec) return;  // nothing to gain by swapping
+    for (size_t i = weakest; i + 1 < candidateCount; ++i) candidates[i] = candidates[i + 1];
+    candidates[candidateCount - 1] = Candidate{style, spec};
+  };
+
+  // A simple selector also has a "h|"-scoped twin (the EBPAJ template's `.hltr X`
+  // horizontal-mode variant), which applies over its unscoped form at the same specificity:
+  // this resolver feeds the HORIZONTAL layout engine, which renders exactly what those rules
+  // describe. The vertical engine reads the "v|" scope through collectVerticalStyles().
+  const auto emit = [&](const std::string_view* pieces, const size_t count, const uint8_t spec, const bool simple) {
+    if (const auto it = rulesBySelector_.find(CompositeKey(pieces, count)); it != rulesBySelector_.end()) {
+      addCandidate(&it->second, spec);
+    }
+    if (!simple) return;
+    std::string_view scoped[CssSelector::MAX_KEY_PIECES + 1];
+    scoped[0] = "h|";
+    for (size_t i = 0; i < count; ++i) scoped[i + 1] = pieces[i];
+    if (const auto it = rulesBySelector_.find(CompositeKey(scoped, count + 1)); it != rulesBySelector_.end()) {
+      addCandidate(&it->second, spec);
     }
   };
 
-  // 1. Apply element-level style (lowest priority). The map's hash/equal are
-  // case-insensitive, so the raw tagName view can be used as the lookup key.
-  applyBoth(tagName);
+  // The ancestor walk is skipped entirely unless the table actually holds a compound rule,
+  // so a book without them does exactly the lookups it did before compound support existed.
+  const bool walkAncestors = path != nullptr && (hasDescendantRules_ || hasChildRules_);
+  const size_t ancestorCount = walkAncestors ? path->ancestorCount() : 0;
+  CssSelector::forEachCandidate(
+      CssSelector::ElementRef{tagName, classAttr}, [path](const size_t i) { return path->ancestor(i); }, ancestorCount,
+      walkAncestors && path->parentRecorded(), hasDescendantRules_, hasChildRules_, emit);
 
-  if (classAttr.empty()) return result;
+  // Stable insertion sort, ascending specificity: equal specificities keep emission order.
+  for (size_t i = 1; i < candidateCount; ++i) {
+    const Candidate v = candidates[i];
+    size_t j = i;
+    while (j > 0 && candidates[j - 1].spec > v.spec) {
+      candidates[j] = candidates[j - 1];
+      --j;
+    }
+    candidates[j] = v;
+  }
 
-  // TODO: Support combinations of classes (e.g. style on .class1.class2)
-  // 2. Apply class styles (medium priority). The transparent hash/equal accept
-  // a CompositeKey, so we never materialize the concatenation.
-  forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) { applyBoth(".", cls); });
-
-  // TODO: Support combinations of classes (e.g. style on p.class1.class2)
-  // 3. Apply element.class styles (higher priority).
-  forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) { applyBoth(tagName, ".", cls); });
-
+  CssStyle result;
+  for (size_t i = 0; i < candidateCount; ++i) result.applyOver(*candidates[i].style);
   return result;
 }
 
@@ -1389,6 +1440,14 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     if (selector.size() >= 2 && selector[1] == '|') {
       if (selector[0] != 'v') continue;
       selector.erase(0, 2);
+    }
+
+    // Compound selectors (v16+) are skipped: the vertical engine matches a block by its own
+    // tag/class alone and tracks no ancestor chain, so it could not honour one -- and keeping
+    // them would spend entries of the bounded `out` cap on rules that can never match there.
+    if (selector.find(CssSelector::DESCENDANT_COMBINATOR) != std::string::npos ||
+        selector.find(CssSelector::CHILD_COMBINATOR) != std::string::npos) {
+      continue;
     }
 
     VerticalBlockStyle vs;
@@ -1738,20 +1797,35 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     if (selector.size() >= 2 && selector[0] == 'v' && selector[1] == '|') continue;
 
     // Chapter-usage filter: skip class selectors the chapter never references (see header doc).
+    // A compound selector names a class on either side and can only match if EVERY one of them
+    // is present, so each is checked -- taking the whole tail after the first '.' (as this did
+    // before compound keys existed) would test the nonexistent class "callout p" for
+    // ".callout p" and drop every descendant rule the chapter needs.
     if (usedClasses != nullptr) {
       std::string_view sel(selector);
       if (sel.size() >= 2 && sel[0] == 'h' && sel[1] == '|') sel.remove_prefix(2);
-      if (const size_t dot = sel.find('.'); dot != std::string_view::npos) {
-        const std::string_view cls = sel.substr(dot + 1);
-        bool used = false;
-        for (const auto& u : *usedClasses) {
-          if (u.size() == cls.size() && strncasecmp(u.c_str(), cls.data(), cls.size()) == 0) {
-            used = true;
+      bool allClassesUsed = true;
+      while (!sel.empty()) {
+        const size_t end = sel.find_first_of(" >");
+        const std::string_view compound = sel.substr(0, end);
+        if (const size_t dot = compound.find('.'); dot != std::string_view::npos) {
+          const std::string_view cls = compound.substr(dot + 1);
+          bool used = false;
+          for (const auto& u : *usedClasses) {
+            if (u.size() == cls.size() && strncasecmp(u.c_str(), cls.data(), cls.size()) == 0) {
+              used = true;
+              break;
+            }
+          }
+          if (!used) {
+            allClassesUsed = false;
             break;
           }
         }
-        if (!used) continue;
+        if (end == std::string_view::npos) break;
+        sel.remove_prefix(end + 1);
       }
+      if (!allClassesUsed) continue;
     }
 
     // The incremental (per-file) cache writer can emit the same selector once per CSS file, so
@@ -1762,6 +1836,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     } else {
       rulesBySelector_[selector] = style;
     }
+    noteCombinatorsIn(selector);
   }
 
   LOG_DBG("CSS", "Loaded %u rules from cache", ruleCount);

@@ -105,6 +105,12 @@ class ChapterHtmlSlimParser {
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   const CssParser* cssParser;
+  // Chain of open elements, for descendant (`.callout p`) and child (`div > p`) selectors.
+  // Pushed at the top of startElement and popped at the top of endElement -- one push per
+  // start tag and one pop per end tag, independent of the tag-specific branches below (which
+  // maintain `depth` on their own paths). Fixed 12-entry inline storage, no heap: see
+  // CssElementPath.
+  CssElementPath cssPath;
   bool embeddedStyle;
   // "Book side margins" setting: honor the book's horizontal CSS margins/padding
   // (clamped per element) instead of zeroing them. See BlockStyle::fromCssStyle.
