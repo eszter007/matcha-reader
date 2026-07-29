@@ -123,7 +123,11 @@ namespace {
 // keep drawing the old spacing forever.
 // v63: CSS text-transform and hyphens:none change laid-out words and line breaks; letter-spacing
 // changes every tracked word position and adds one serialized byte to BlockStyle.
-constexpr uint8_t SECTION_FILE_VERSION = 63;
+// v64: the PageBox border byte now packs dotted/dashed style and thickness, bottom-only borders
+// are emitted at element close, and inline-block heading rules shrink to their content.
+// v65: partial-border spacing now collapses adjacent vertical margins instead of adding the
+// full-box clearance after headings, quotes and empty worksheet rules.
+constexpr uint8_t SECTION_FILE_VERSION = 65;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

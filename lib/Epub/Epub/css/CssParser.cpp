@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstring>
 #include <string_view>
 
@@ -61,7 +62,7 @@ constexpr size_t CSS_TRAILING_ENUM_BYTES = 9;
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
-static_assert(RULE_FIXED_BYTES == 88, "CSS v18 rule framing must stay in sync with writeRuleRecord");
+static_assert(RULE_FIXED_BYTES == 88, "CSS v19 rule framing must stay in sync with writeRuleRecord");
 
 // Check if character is CSS whitespace
 constexpr bool isCssWhitespace(const char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
@@ -555,6 +556,36 @@ bool CssParser::tryInterpretLength(std::string_view val, CssLength& out) {
   return true;
 }
 
+CssBorderLineStyle borderLineStyleFrom(const std::string_view value) {
+  CssBorderLineStyle result = CssBorderLineStyle::Solid;
+  forEachDelimitedToken(value, isCssWhitespace, [&result](const std::string_view token) {
+    if (iequalsAscii(token, "dotted")) {
+      result = CssBorderLineStyle::Dotted;
+    } else if (iequalsAscii(token, "dashed")) {
+      result = CssBorderLineStyle::Dashed;
+    } else if (iequalsAscii(token, "double")) {
+      result = CssBorderLineStyle::Double;
+    }
+  });
+  return result;
+}
+
+uint8_t borderLineWidthFrom(const std::string_view value) {
+  uint8_t result = 1;
+  forEachDelimitedToken(value, isCssWhitespace, [&result](const std::string_view token) {
+    size_t numericEnd = 0;
+    while (numericEnd < token.size() && (std::isdigit(token[numericEnd]) || token[numericEnd] == '.' ||
+                                         token[numericEnd] == '+' || token[numericEnd] == '-')) {
+      ++numericEnd;
+    }
+    float width = 0.0f;
+    if (numericEnd == 0 || !tryParseNumber(token.substr(0, numericEnd), width) || !(width > 0.0f)) return;
+    const int rounded = static_cast<int>(std::lround(width));
+    result = static_cast<uint8_t>(std::clamp(rounded, 1, 4));
+  });
+  return result;
+}
+
 // Declaration parsing
 
 void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style, InkColors& ink) {
@@ -785,14 +816,14 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       if (styled(bottom)) edges |= CssStyle::BORDER_BOTTOM;
       if (styled(left)) edges |= CssStyle::BORDER_LEFT;
     }
-    style.borderEdges = edges;
+    style.setBorderSpec(edges, borderLineStyleFrom(value), 1);
     style.defined.border = 1;
   } else if (iequalsAscii(name, "border")) {
     // Shorthand ("1px solid #000" / "none"): a stroke-style keyword means all four sides.
     const bool styled =
         value.find("solid") != std::string_view::npos || value.find("double") != std::string_view::npos ||
         value.find("dashed") != std::string_view::npos || value.find("dotted") != std::string_view::npos;
-    style.borderEdges = styled ? CssStyle::BORDER_ALL : 0;
+    style.setBorderSpec(styled ? CssStyle::BORDER_ALL : 0, borderLineStyleFrom(value), borderLineWidthFrom(value));
     style.defined.border = 1;
   } else if (iequalsAscii(name, "border-top") || iequalsAscii(name, "border-bottom") ||
              iequalsAscii(name, "border-left") || iequalsAscii(name, "border-right")) {
@@ -811,10 +842,12 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     } else if (iequalsAscii(name, "border-right")) {
       bit = CssStyle::BORDER_RIGHT;
     }
+    uint8_t edges = style.borderEdgeMask();
+    edges = styled ? static_cast<uint8_t>(edges | bit) : static_cast<uint8_t>(edges & ~bit);
     if (styled) {
-      style.borderEdges |= bit;
+      style.setBorderSpec(edges, borderLineStyleFrom(value), borderLineWidthFrom(value));
     } else {
-      style.borderEdges &= static_cast<uint8_t>(~bit);
+      style.setBorderEdgeMask(edges);
     }
     style.defined.border = 1;
   } else if (iequalsAscii(name, "font")) {
@@ -871,7 +904,13 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     }
   } else if (iequalsAscii(name, "display")) {
     const std::string_view displayValue = stripTrailingImportant(value);
-    style.display = iequalsAscii(displayValue, "none") ? CssDisplay::None : CssDisplay::Block;
+    if (iequalsAscii(displayValue, "none")) {
+      style.display = CssDisplay::None;
+    } else if (iequalsAscii(displayValue, "inline-block")) {
+      style.display = CssDisplay::InlineBlock;
+    } else {
+      style.display = CssDisplay::Block;
+    }
     style.defined.display = 1;
   } else if (iequalsAscii(name, "direction")) {
     const std::string_view directionValue = stripTrailingImportant(value);
@@ -1573,7 +1612,7 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
       vs.hangEm = emOf(lens[5].v, lens[5].u);
     }
     if ((definedBits & (1u << 0)) && enums[0] == static_cast<uint8_t>(CssTextAlign::Center)) vs.alignCenter = true;
-    if (definedBits & (1u << 18)) vs.borderEdges = borderVal;
+    if (definedBits & (1u << 18)) vs.borderEdges = CssStyle::edgeMaskOf(borderVal);
     if (!vs.any()) continue;
 
     // Merge with an existing entry for the same selector (later record overrides per property).

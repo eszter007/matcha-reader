@@ -64,10 +64,10 @@ which is why `color` was not allowed to lag far behind `font-size`.
 | property dispatch | `lib/Epub/Epub/css/CssParser.cpp` — `parseDeclarationIntoStyle()` (there is no `applyDeclaration`), `iequalsAscii(name, ...)` chain |
 | selector syntax + ancestor stack | `lib/Epub/Epub/css/CssSelector.h` — `parse()`, `forEachCandidate()`, `CssElementPath` (host-testable, no Arduino deps) |
 | style struct + enums | `lib/Epub/Epub/css/CssStyle.h` — `CssStyle`, `CssLength`, `CssPropertyFlags` |
-| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **18**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
+| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **19**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
 | style → layout | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` — `currentCssStyle`, ~lines 200-310 |
 | line breaking / gaps | `lib/Epub/Epub/ParsedText.cpp` |
-| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **63**) |
+| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **65**) |
 
 ### Rules that apply to every item below
 
@@ -278,8 +278,11 @@ stream aligned: a column's advance is a cell grid, not a leading.
 implicit spaces and drawing. `hyphens:none` can suppress the user's global hyphenation setting
 per block but can never force hyphenation on. `max-width` shares the existing image-width path.
 
-`CSS_CACHE_VERSION` is **18** (14 packed lengths plus 9 trailing enum/flag bytes,
-for **88 fixed bytes**) and `SECTION_FILE_VERSION` is **63**.
+`CSS_CACHE_VERSION` is **19** (14 packed lengths plus 9 trailing enum/flag bytes,
+for **88 fixed bytes**) and `SECTION_FILE_VERSION` is **65**. The v19 border byte
+retains dotted/dashed/solid style and 1–4 px width without growing a rule; partial
+top/bottom borders are emitted at element close, and `inline-block` heading rules
+shrink to their text instead of spanning the full column.
 
 `widows`/`orphans` remain ignored: the streaming paginator cannot honour them cheaply without
 buffering paragraph tails and destabilising Phase 3 forward progress. `float` needs real block

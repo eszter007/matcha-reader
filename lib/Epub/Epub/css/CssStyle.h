@@ -72,8 +72,9 @@ constexpr CssTextDecoration operator&(const CssTextDecoration a, const CssTextDe
 constexpr uint8_t CSS_TEXT_DECORATION_MASK =
     static_cast<uint8_t>(CssTextDecoration::Underline) | static_cast<uint8_t>(CssTextDecoration::LineThrough);
 
-// Display options - only None and Block are relevant for e-ink rendering
-enum class CssDisplay : uint8_t { Block = 0, None = 1 };
+// Display options retained by the block renderer.
+enum class CssDisplay : uint8_t { Block = 0, None = 1, InlineBlock = 2 };
+enum class CssBorderLineStyle : uint8_t { Solid = 0, Dotted = 1, Dashed = 2, Double = 3 };
 
 // Vertical alignment options for inline elements (e.g. superscript/subscript)
 enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
@@ -275,16 +276,43 @@ struct CssStyle {
   CssLength letterSpacing;
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
-  // Border edges bitmask (TOP/RIGHT/BOTTOM/LEFT). A full 4-side mask is a boxed/kakomi block;
-  // a TOP-only mask is a separator rule above the block (EBPAJ .k-solid-top). See the
-  // border-style parsing in CssParser.cpp.
+  // Packed border byte: low nibble is TOP/RIGHT/BOTTOM/LEFT, bits 4..5 are the line style,
+  // bits 6..7 encode widths 1..4 px. Packing preserves the v18 per-rule RAM footprint while
+  // retaining enough of the publisher's border declaration for 1-bit rendering.
   static constexpr uint8_t BORDER_TOP = 1 << 0;
   static constexpr uint8_t BORDER_RIGHT = 1 << 1;
   static constexpr uint8_t BORDER_BOTTOM = 1 << 2;
   static constexpr uint8_t BORDER_LEFT = 1 << 3;
   static constexpr uint8_t BORDER_ALL = 0x0F;
+  static constexpr uint8_t BORDER_EDGE_MASK = 0x0F;
+  static constexpr uint8_t BORDER_STYLE_SHIFT = 4;
+  static constexpr uint8_t BORDER_STYLE_MASK = 0x30;
+  static constexpr uint8_t BORDER_WIDTH_SHIFT = 6;
+  static constexpr uint8_t BORDER_WIDTH_MASK = 0xC0;
   uint8_t borderEdges = 0;
-  [[nodiscard]] bool isFullBorderBox() const { return defined.border && borderEdges == BORDER_ALL; }
+  [[nodiscard]] static constexpr uint8_t makeBorderSpec(const uint8_t edges, const CssBorderLineStyle style,
+                                                        const uint8_t width) {
+    const uint8_t clampedWidth = width < 1 ? 1 : (width > 4 ? 4 : width);
+    return static_cast<uint8_t>((edges & BORDER_EDGE_MASK) | (static_cast<uint8_t>(style) << BORDER_STYLE_SHIFT) |
+                                ((clampedWidth - 1) << BORDER_WIDTH_SHIFT));
+  }
+  [[nodiscard]] static constexpr uint8_t edgeMaskOf(const uint8_t spec) { return spec & BORDER_EDGE_MASK; }
+  [[nodiscard]] static constexpr CssBorderLineStyle lineStyleOf(const uint8_t spec) {
+    return static_cast<CssBorderLineStyle>((spec & BORDER_STYLE_MASK) >> BORDER_STYLE_SHIFT);
+  }
+  [[nodiscard]] static constexpr uint8_t lineWidthOf(const uint8_t spec) {
+    return static_cast<uint8_t>(((spec & BORDER_WIDTH_MASK) >> BORDER_WIDTH_SHIFT) + 1);
+  }
+  [[nodiscard]] uint8_t borderEdgeMask() const { return edgeMaskOf(borderEdges); }
+  [[nodiscard]] CssBorderLineStyle borderLineStyle() const { return lineStyleOf(borderEdges); }
+  [[nodiscard]] uint8_t borderLineWidth() const { return lineWidthOf(borderEdges); }
+  void setBorderSpec(const uint8_t edges, const CssBorderLineStyle style, const uint8_t width) {
+    borderEdges = makeBorderSpec(edges, style, width);
+  }
+  void setBorderEdgeMask(const uint8_t edges) {
+    borderEdges = static_cast<uint8_t>((borderEdges & ~BORDER_EDGE_MASK) | (edges & BORDER_EDGE_MASK));
+  }
+  [[nodiscard]] bool isFullBorderBox() const { return defined.border && borderEdgeMask() == BORDER_ALL; }
 
   CssTextEmphasis textEmphasis = CssTextEmphasis::None;     // JP bouten marks
   CssFontVariant fontVariant = CssFontVariant::Normal;      // small-caps
@@ -510,6 +538,7 @@ struct CssStyle {
     letterSpacing = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
+    borderEdges = 0;
     textEmphasis = CssTextEmphasis::None;
     fontVariant = CssFontVariant::Normal;
     listStyleType = CssListStyleType::Disc;

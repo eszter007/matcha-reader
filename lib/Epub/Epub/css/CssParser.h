@@ -56,7 +56,9 @@ class CssParser {
   // v18: +letter-spacing as a 14th CssLength (defined bit 28) and +text-transform/hyphens packed
   //      into a 9th trailing enum byte (defined bits 26/27) -- the record grew by 6 bytes
   //      (82 -> 88 fixed), so a v17 record cannot be read with the v18 framing.
-  static constexpr uint8_t CSS_CACHE_VERSION = 18;
+  // v19: the existing border byte now also packs line style + 1..4px width, and display retains
+  //      inline-block so close-time heading rules can shrink to their text. Framing is unchanged.
+  static constexpr uint8_t CSS_CACHE_VERSION = 19;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -191,7 +193,7 @@ class CssParser {
     float afterEm = 0;         // v margin-left: extra gap after the block's last column
     float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
     bool alignCenter = false;  // text-align: center -> column content vertically centered
-    uint8_t borderEdges = 0;   // CssStyle::BORDER_* mask (full = box, TOP = separator rule)
+    uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
     [[nodiscard]] bool any() const {
       return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0;
     }

@@ -4,11 +4,35 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <cstdlib>
 #include <new>
 
 #include "css/CssStyle.h"
 
 namespace {
+
+void drawPatternedLine(GfxRenderer& renderer, const int x1, const int y1, const int x2, const int y2,
+                       const uint8_t borderSpec) {
+  const uint8_t thickness = CssStyle::lineWidthOf(borderSpec);
+  const CssBorderLineStyle style = CssStyle::lineStyleOf(borderSpec);
+  if (style == CssBorderLineStyle::Solid || style == CssBorderLineStyle::Double) {
+    renderer.drawLine(x1, y1, x2, y2, style == CssBorderLineStyle::Double ? 1 : thickness, true);
+    return;
+  }
+
+  const bool horizontal = y1 == y2;
+  const int length = horizontal ? std::abs(x2 - x1) + 1 : std::abs(y2 - y1) + 1;
+  const int on = style == CssBorderLineStyle::Dotted ? thickness : thickness * 3;
+  const int gap = style == CssBorderLineStyle::Dotted ? thickness : thickness * 2;
+  for (int offset = 0; offset < length; offset += on + gap) {
+    const int end = std::min(length - 1, offset + on - 1);
+    if (horizontal) {
+      renderer.drawLine(x1 + offset, y1, x1 + end, y1, thickness, true);
+    } else {
+      renderer.drawLine(x1, y1 + offset, x1, y1 + end, thickness, true);
+    }
+  }
+}
 
 template <typename Predicate>
 void renderFilteredPageElements(const std::vector<std::shared_ptr<PageElement>>& elements, GfxRenderer& renderer,
@@ -98,10 +122,26 @@ void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset,
   // Fill first: any border edges are drawn over it, and the block's text is drawn over both
   // because the page renders its elements in insertion order.
   if (filled) renderer.fillRect(x, y, width, height, true);
-  if (edges & CssStyle::BORDER_TOP) renderer.drawLine(x, y, x + width, y, true);
-  if (edges & CssStyle::BORDER_BOTTOM) renderer.drawLine(x, y + height, x + width, y + height, true);
-  if (edges & CssStyle::BORDER_LEFT) renderer.drawLine(x, y, x, y + height, true);
-  if (edges & CssStyle::BORDER_RIGHT) renderer.drawLine(x + width, y, x + width, y + height, true);
+  const uint8_t edges = CssStyle::edgeMaskOf(borderSpec);
+  if (edges & CssStyle::BORDER_TOP) drawPatternedLine(renderer, x, y, x + width, y, borderSpec);
+  if (edges & CssStyle::BORDER_BOTTOM) {
+    drawPatternedLine(renderer, x, y + height, x + width, y + height, borderSpec);
+  }
+  if (edges & CssStyle::BORDER_LEFT) drawPatternedLine(renderer, x, y, x, y + height, borderSpec);
+  if (edges & CssStyle::BORDER_RIGHT) {
+    drawPatternedLine(renderer, x + width, y, x + width, y + height, borderSpec);
+  }
+  if (CssStyle::lineStyleOf(borderSpec) == CssBorderLineStyle::Double) {
+    constexpr int inset = 2;
+    if (edges & CssStyle::BORDER_TOP) drawPatternedLine(renderer, x, y + inset, x + width, y + inset, borderSpec);
+    if (edges & CssStyle::BORDER_BOTTOM) {
+      drawPatternedLine(renderer, x, y + height - inset, x + width, y + height - inset, borderSpec);
+    }
+    if (edges & CssStyle::BORDER_LEFT) drawPatternedLine(renderer, x + inset, y, x + inset, y + height, borderSpec);
+    if (edges & CssStyle::BORDER_RIGHT) {
+      drawPatternedLine(renderer, x + width - inset, y, x + width - inset, y + height, borderSpec);
+    }
+  }
 }
 
 bool PageBox::serialize(HalFile& file) {
@@ -109,7 +149,7 @@ bool PageBox::serialize(HalFile& file) {
   serialization::writePod(file, yPos);
   serialization::writePod(file, width);
   serialization::writePod(file, height);
-  serialization::writePod(file, edges);
+  serialization::writePod(file, borderSpec);
   serialization::writePod(file, filled);
   return true;
 }
@@ -119,19 +159,19 @@ std::unique_ptr<PageBox> PageBox::deserialize(HalFile& file) {
   int16_t yPos = 0;
   int16_t width = 0;
   int16_t height = 0;
-  uint8_t edges = 0;
+  uint8_t borderSpec = 0;
   bool filled = false;
   serialization::readPod(file, xPos);
   serialization::readPod(file, yPos);
   serialization::readPod(file, width);
   serialization::readPod(file, height);
-  serialization::readPod(file, edges);
+  serialization::readPod(file, borderSpec);
   serialization::readPod(file, filled);
   if (width <= 0 || height <= 0) {
     LOG_ERR("PGE", "Deserialization failed: invalid box metadata (w=%d h=%d)", width, height);
     return nullptr;
   }
-  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, edges, xPos, yPos, filled));
+  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, borderSpec, xPos, yPos, filled));
 }
 
 bool PageHorizontalRule::serialize(HalFile& file) {

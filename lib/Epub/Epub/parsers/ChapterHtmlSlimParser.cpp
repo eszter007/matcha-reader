@@ -430,6 +430,7 @@ void ChapterHtmlSlimParser::breakPage() {
     completedPageCount++;
     currentPage.reset(new (std::nothrow) Page());
     if (!currentPage) LOG_ERR("EHP", "OOM: page after break");
+    boxFirstElementIndex = 0;
   }
   // Pending top spacing dies with the boundary: a block that starts a page starts it at the top.
   currentPageNextY = 0;
@@ -504,11 +505,50 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
                            : static_cast<int16_t>(std::min<int>(
                                  viewportHeight - 1, std::max<int>(yTop + 1, currentPageNextY - lineHeight2 / 3)));
   if (yBottom <= yTop) return;
-  uint8_t edges = boxEdges;
+  uint8_t edges = CssStyle::edgeMaskOf(boxBorderSpec);
   if (boxContinued) edges &= static_cast<uint8_t>(~CssStyle::BORDER_TOP);
   if (openBottom) edges &= static_cast<uint8_t>(~CssStyle::BORDER_BOTTOM);
-  auto box = std::shared_ptr<PageBox>(new (std::nothrow) PageBox(static_cast<int16_t>(viewportWidth - 5),
-                                                                 static_cast<int16_t>(yBottom - yTop), edges, 2, yTop));
+
+  int16_t x = 2;
+  int16_t width = static_cast<int16_t>(viewportWidth - 5);
+  if (boxShrinkToContent) {
+    int contentLeft = viewportWidth;
+    int contentRight = 0;
+    for (size_t i = boxFirstElementIndex; i < currentPage->elements.size(); ++i) {
+      const auto& element = currentPage->elements[i];
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto line = std::static_pointer_cast<PageLine>(element);
+      const auto& text = line->getBlock();
+      const int lineFontId = text->getBlockStyle().resolveFontId(fontId);
+      int rightmostX = 0;
+      uint16_t rightmostWord = 0;
+      for (uint16_t word = 0; word < text->wordCount(); ++word) {
+        const int wordX = line->xPos + text->wordXpos(word);
+        contentLeft = std::min(contentLeft, wordX);
+        if (wordX >= rightmostX) {
+          rightmostX = wordX;
+          rightmostWord = word;
+        }
+      }
+      if (text->wordCount() > 0) {
+        // x positions already encode every earlier word's advance. Measure only the final
+        // visual word instead of walking the whole heading through the small SD-font cache.
+        const int wordWidth =
+            renderer.getTextAdvanceX(lineFontId, text->wordText(rightmostWord), text->wordStyle(rightmostWord),
+                                     text->getBlockStyle().letterSpacing);
+        contentRight = std::max(contentRight, rightmostX + wordWidth);
+      }
+    }
+    if (contentRight > contentLeft) {
+      x = static_cast<int16_t>(std::max(2, contentLeft));
+      width = static_cast<int16_t>(std::min<int>(viewportWidth - 3, contentRight + 2) - x);
+    }
+  }
+
+  const uint8_t borderSpec =
+      CssStyle::makeBorderSpec(edges, CssStyle::lineStyleOf(boxBorderSpec), CssStyle::lineWidthOf(boxBorderSpec));
+  auto box = std::shared_ptr<PageBox>(new (std::nothrow)
+                                          PageBox(width, static_cast<int16_t>(yBottom - yTop), borderSpec, x, yTop));
   if (box) currentPage->elements.push_back(box);
 }
 
@@ -520,13 +560,29 @@ void ChapterHtmlSlimParser::maybeEmitOpenBoxForPageBreak() {
 
 void ChapterHtmlSlimParser::closeBoxBlock() {
   flushPendingBlockLayout();
+  if (boxAwaitingFirstLine) {
+    if (!currentPage) currentPage.reset(new (std::nothrow) Page());
+    if (currentPage) {
+      boxStartY = currentPageNextY;
+      currentPageNextY =
+          static_cast<int16_t>(std::min<int>(viewportHeight, currentPageNextY + std::max<int16_t>(1, boxEmptyAdvance)));
+      boxAwaitingFirstLine = false;
+    }
+  }
   emitBoxRect(/*openBottom=*/false);
-  // Clear the bottom border line before any following text: the line sits at
-  // currentPageNextY + pad/2, so advance past it plus half a line of air.
-  const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
-  currentPageNextY =
-      static_cast<int16_t>(currentPageNextY + std::max(2, lineHeight / 12) + std::max(4, lineHeight / 2));
+  // Full boxes need a little clearance after their closing edge. Partial publisher rules already
+  // carry their own margin/padding; adding the old box clearance here doubled the space after
+  // headings, quotes and worksheet lines.
+  if (CssStyle::edgeMaskOf(boxBorderSpec) == CssStyle::BORDER_ALL) {
+    const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+    currentPageNextY =
+        static_cast<int16_t>(currentPageNextY + std::max(2, lineHeight / 12) + std::max(4, lineHeight / 2));
+  }
   boxDepth = -1;
+  boxBorderSpec = 0;
+  boxEmptyAdvance = 0;
+  boxFirstElementIndex = 0;
+  boxShrinkToContent = false;
   boxContinued = false;
   boxAwaitingFirstLine = false;
 }
@@ -746,34 +802,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->skipUntilDepth = self->depth;
     self->depth += 1;
     return;
-  }
-
-  // Boxed (kakomi) blocks and separator rules from CSS borders (EBPAJ .k-solid / .k-solid-top).
-  if (self->boxDepth < 0 && cssStyle.hasBorder() && cssStyle.borderEdges != 0 && isHeaderOrBlock(name) &&
-      self->tableDepth == 0) {
-    if (cssStyle.borderEdges == CssStyle::BORDER_ALL) {
-      LOG_DBG("EHP", "box open: <%s class=%s> at depth %d", name, classAttr.c_str(), self->depth);
-      self->flushPendingBlockLayout();  // drain pre-box content so the rect starts below it
-      self->boxDepth = self->depth;
-      self->boxEdges = cssStyle.borderEdges;
-      self->boxContinued = false;
-      self->boxAwaitingFirstLine = true;
-    } else if (cssStyle.borderEdges & CssStyle::BORDER_TOP) {
-      // Partial top border = separator rule above the block, full text width.
-      self->flushPendingBlockLayout();
-      const int lh = static_cast<int>(self->renderer.getLineHeight(self->fontId) * self->lineCompression);
-      if (!self->currentPage) {
-        self->currentPage.reset(new (std::nothrow) Page());
-        self->currentPageNextY = 0;
-      }
-      if (self->currentPage) {
-        self->currentPageNextY = static_cast<int16_t>(self->currentPageNextY + lh / 4);
-        auto rule = std::shared_ptr<PageHorizontalRule>(new (std::nothrow) PageHorizontalRule(
-            static_cast<uint16_t>(self->viewportWidth - 5), 1, 2, self->currentPageNextY));
-        if (rule) self->currentPage->elements.push_back(rule);
-        self->currentPageNextY = static_cast<int16_t>(self->currentPageNextY + lh / 4);
-      }
-    }
   }
 
   // Special handling for tables/cells: flatten into per-cell paragraphs with a prefixed header.
@@ -1363,6 +1391,27 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       BlockStyle::fromCssStyle(cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment),
                                self->viewportWidth, self->honorBookInsets, self->fontId);
 
+  // Defer every block border until its content is placed. This keeps top/bottom pairs together
+  // across page breaks and lets bottom-only heading/worksheet rules render at all.
+  if (self->boxDepth < 0 && cssStyle.hasBorder() && cssStyle.borderEdgeMask() != 0 && isHeaderOrBlock(name) &&
+      self->tableDepth == 0) {
+    self->flushPendingBlockLayout();
+    self->boxDepth = self->depth;
+    self->boxBorderSpec = cssStyle.borderEdges;
+    self->boxContinued = false;
+    self->boxAwaitingFirstLine = true;
+    self->boxShrinkToContent = cssStyle.display == CssDisplay::InlineBlock;
+    self->boxFirstElementIndex = self->currentPage ? self->currentPage->elements.size() : 0;
+    // Adjacent CSS vertical margins collapse. For an empty worksheet paragraph, advancing by the
+    // sum makes each ruled row roughly twice as tall as the publisher intended.
+    const int emptySpacing = std::max(userAlignmentBlockStyle.topInset(), userAlignmentBlockStyle.bottomInset());
+    self->boxEmptyAdvance =
+        static_cast<int16_t>(std::clamp(emptySpacing, std::max(1, self->renderer.getLineHeight(self->fontId) / 2),
+                                        static_cast<int>(self->viewportHeight)));
+    LOG_DBG("EHP", "border open: <%s class=%s> edges=0x%02x style=%u width=%u", name, classAttr.c_str(),
+            cssStyle.borderEdgeMask(), static_cast<unsigned>(cssStyle.borderLineStyle()), cssStyle.borderLineWidth());
+  }
+
   if (strcmp(name, "hr") == 0) {
     auto hrBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Left, self->viewportWidth,
                                                  self->honorBookInsets, self->fontId);
@@ -1385,7 +1434,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   if (matches(name, HEADER_TAGS, std::size(HEADER_TAGS))) {
     self->currentCssStyle = cssStyle;
-    auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth,
+    // HTML headings default to left alignment. The former hard-coded Center made every h2/h3
+    // ignore the publisher unless it repeated `text-align:left`, which is why the comparison
+    // book's inline-block headings floated in the middle of the page.
+    const auto headingAlignment = self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None)
+                                      ? CssTextAlign::Left
+                                      : static_cast<CssTextAlign>(self->paragraphAlignment);
+    auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, headingAlignment, self->viewportWidth,
                                                      self->honorBookInsets, self->fontId);
     headerBlockStyle.textAlignDefined = true;
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
