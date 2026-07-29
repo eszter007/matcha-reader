@@ -55,9 +55,9 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 // streams them): the counts drifting apart is how a cache format silently mis-parses.
 // Bump CSS_CACHE_VERSION whenever any of these change. See writeRuleRecord.
 constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeight, decoration, direction
-constexpr size_t CSS_LENGTH_FIELD_COUNT = 13;  // CssLength members written, in order
-// display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks
-constexpr size_t CSS_TRAILING_ENUM_BYTES = 8;
+constexpr size_t CSS_LENGTH_FIELD_COUNT = 14;  // CssLength members written, in order
+// display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks, textFlags
+constexpr size_t CSS_TRAILING_ENUM_BYTES = 9;
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
@@ -639,6 +639,62 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.lineHeight = len;
       style.defined.lineHeight = 1;
     }
+  } else if (iequalsAscii(name, "letter-spacing")) {
+    // Tracking. Stored raw for the same reason line-height is: `0.05em` has to resolve against
+    // the BLOCK's own font size. `normal` (and inherit/initial) parses as no length and leaves
+    // the property UNSET, which renders identically to 0 but still stops the cascade.
+    // A bare number is invalid CSS here (unlike line-height), so the Pixels fallback in
+    // tryInterpretLength is the right reading of a unitless value and Number is never produced.
+    CssLength len;
+    if (tryInterpretLength(stripTrailingImportant(value), len)) {
+      style.letterSpacing = len;
+      style.defined.letterSpacing = 1;
+    }
+  } else if (iequalsAscii(name, "text-transform")) {
+    const std::string_view ttValue = stripTrailingImportant(value);
+    bool recognised = true;
+    if (iequalsAscii(ttValue, "uppercase")) {
+      style.setTextTransform(CssTextTransform::Uppercase);
+    } else if (iequalsAscii(ttValue, "lowercase")) {
+      style.setTextTransform(CssTextTransform::Lowercase);
+    } else if (iequalsAscii(ttValue, "capitalize")) {
+      style.setTextTransform(CssTextTransform::Capitalize);
+    } else if (iequalsAscii(ttValue, "none")) {
+      // Recorded, not ignored: an explicit `none` is how a book cancels an ancestor's uppercase.
+      style.setTextTransform(CssTextTransform::None);
+    } else {
+      // full-width / full-size-kana (the CJK values) and inherit/initial/unset: leave the
+      // property alone rather than silently rewriting the text in a way the book did not ask for.
+      recognised = false;
+    }
+    if (recognised) style.defined.textTransform = 1;
+  } else if (iequalsAscii(name, "hyphens") || iequalsAscii(name, "-moz-hyphens") ||
+             iequalsAscii(name, "-webkit-hyphens") || iequalsAscii(name, "-ms-hyphens") ||
+             iequalsAscii(name, "-epub-hyphens") || iequalsAscii(name, "adobe-hyphenate")) {
+    // The book may only SUPPRESS hyphenation, never force it on: the user's global Hyphenation
+    // setting stays the outer gate (see ParsedText::hyphenationActive). `auto`/`manual` are
+    // therefore recorded as "not suppressed" -- which is what makes a child's `hyphens: auto`
+    // cancel an ancestor's `hyphens: none` rather than inherit it.
+    // Adobe's `adobe-hyphenate: none` is the EPUB2-era spelling of the same request.
+    const std::string_view hValue = stripTrailingImportant(value);
+    if (iequalsAscii(hValue, "none")) {
+      style.setHyphensNone(true);
+      style.defined.hyphens = 1;
+    } else if (iequalsAscii(hValue, "auto") || iequalsAscii(hValue, "manual")) {
+      style.setHyphensNone(false);
+      style.defined.hyphens = 1;
+    }
+  } else if (iequalsAscii(name, "hyphenate-limit-chars") || iequalsAscii(name, "hyphenate-limit-lines") ||
+             iequalsAscii(name, "hyphenate-limit-zone") || iequalsAscii(name, "hyphenate-limit-last") ||
+             iequalsAscii(name, "-webkit-hyphenate-limit-before") ||
+             iequalsAscii(name, "-webkit-hyphenate-limit-after") ||
+             iequalsAscii(name, "-webkit-hyphenate-limit-lines") || iequalsAscii(name, "-ms-hyphenate-limit-chars") ||
+             iequalsAscii(name, "-ms-hyphenate-limit-lines") || iequalsAscii(name, "-ms-hyphenate-limit-zone") ||
+             iequalsAscii(name, "-epub-hyphenate-limit-before") || iequalsAscii(name, "-epub-hyphenate-limit-after")) {
+    // Accepted and ignored, deliberately. The hyphenator's break points come from the pattern
+    // dictionary, not from a per-book budget, so there is nothing here to honour -- but naming
+    // the family keeps 18 declarations out of the "unknown property" bucket, where they would
+    // otherwise be counted as a gap that still needs closing.
   } else if (iequalsAscii(name, "page-break-before") || iequalsAscii(name, "break-before") ||
              iequalsAscii(name, "page-break-after") || iequalsAscii(name, "break-after") ||
              iequalsAscii(name, "page-break-inside") || iequalsAscii(name, "break-inside")) {
@@ -1320,6 +1376,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   writeLength(style.imageWidth);
   writeLength(style.fontSize);
   writeLength(style.lineHeight);
+  writeLength(style.letterSpacing);
   file.write(static_cast<uint8_t>(style.display));
   file.write(static_cast<uint8_t>(style.verticalAlign));
   file.write(style.borderEdges);
@@ -1328,6 +1385,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   file.write(static_cast<uint8_t>(style.listStyleType));
   file.write(static_cast<uint8_t>(style.inkMode));
   file.write(style.pageBreaks);
+  file.write(style.textFlags);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -1356,6 +1414,9 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   if (style.defined.inkMode) definedBits |= 1 << 23;
   if (style.defined.pageBreak) definedBits |= 1 << 24;
   if (style.defined.lineHeight) definedBits |= 1 << 25;
+  if (style.defined.textTransform) definedBits |= 1 << 26;
+  if (style.defined.hyphens) definedBits |= 1 << 27;
+  if (style.defined.letterSpacing) definedBits |= 1 << 28;
   file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
 }
 
@@ -1436,7 +1497,7 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     struct RawLen {
       float v;
       uint8_t u;
-    } lens[CSS_LENGTH_FIELD_COUNT];  // textIndent, mT, mB, mL, mR, pT, pB, pL, pR, imgH, imgW, fontSize, lineHeight
+    } lens[CSS_LENGTH_FIELD_COUNT];  // textIndent, mT..mR, pT..pR, imgH, imgW, fontSize, lineHeight, letterSpacing
     bool lenOk = true;
     for (auto& l : lens) {
       if (file.read(&l.v, sizeof(float)) != sizeof(float) || file.read(&l.u, 1) != 1) {
@@ -1455,11 +1516,15 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     // pageBreaks (v15) is likewise read for alignment only: the vertical engine paginates
     // columns through its own layout path, so honouring breaks there is new work, not a
     // regression this has to avoid.
-    uint8_t inkModeVal, pageBreaksVal;
+    // textFlags (v18) the same: text-transform is applied to the horizontal parser's word buffer
+    // long before this cache is streamed, and hyphenation never runs on Japanese text at all.
+    // (letter-spacing is lens[13], skipped like the two lengths above: a column advances by a
+    // cell grid, so a per-glyph tracking delta has no meaning there.)
+    uint8_t inkModeVal, pageBreaksVal, textFlagsVal;
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
         file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
-        file.read(&inkModeVal, 1) != 1 || file.read(&pageBreaksVal, 1) != 1 ||
+        file.read(&inkModeVal, 1) != 1 || file.read(&pageBreaksVal, 1) != 1 || file.read(&textFlagsVal, 1) != 1 ||
         file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
@@ -1723,7 +1788,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
         !readLength(style.marginLeft) || !readLength(style.marginRight) || !readLength(style.paddingTop) ||
         !readLength(style.paddingBottom) || !readLength(style.paddingLeft) || !readLength(style.paddingRight) ||
         !readLength(style.imageHeight) || !readLength(style.imageWidth) || !readLength(style.fontSize) ||
-        !readLength(style.lineHeight)) {
+        !readLength(style.lineHeight) || !readLength(style.letterSpacing)) {
       rulesBySelector_.clear();
       return false;
     }
@@ -1786,6 +1851,16 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
       if (v == CssPageBreak::Always || v == CssPageBreak::Avoid) style.setPageBreak(slot, v);
     }
 
+    // Read the packed text-transform/hyphens byte (v18+). Masked down to the bits this build
+    // defines: an unknown bit must not survive into a style, and the 2-bit transform slot has no
+    // undefined value, so the mask is the whole validation needed.
+    uint8_t textFlagsVal;
+    if (file.read(&textFlagsVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.textFlags = static_cast<uint8_t>(textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT));
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
@@ -1818,6 +1893,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.defined.inkMode = (definedBits & 1 << 23) != 0;
     style.defined.pageBreak = (definedBits & 1 << 24) != 0;
     style.defined.lineHeight = (definedBits & 1 << 25) != 0;
+    style.defined.textTransform = (definedBits & 1 << 26) != 0;
+    style.defined.hyphens = (definedBits & 1 << 27) != 0;
+    style.defined.letterSpacing = (definedBits & 1 << 28) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.

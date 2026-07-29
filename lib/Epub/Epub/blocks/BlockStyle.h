@@ -55,6 +55,17 @@ struct BlockStyle {
   // during the build, and what reaches the cache is the resulting line positions.
   uint8_t lineHeightPct = 0;
 
+  // CSS letter-spacing as a per-glyph advance delta in whole pixels (0 = none). Resolved once,
+  // at parse time, by cssLetterSpacingPx() against this block's own font size.
+  //
+  // Unlike lineHeightPct this IS serialized with the block: the tracking is not baked into the
+  // cached x positions, it is re-applied glyph by glyph when the line is drawn. Measurement
+  // (ParsedText::measureWordWidth) and drawing (TextBlock::render) both hand this exact byte to
+  // the renderer, which is what keeps the two from disagreeing.
+  int8_t letterSpacing = 0;
+  bool letterSpacingDefined = false;  // build-only, like textIndentDefined: "unstyled" vs an
+                                      // explicit `letter-spacing: normal` cancelling an ancestor
+
   // Ink polarity from CSS color/background-color (see CssInkMode). Inverted means this block's
   // lines each paint a black panel across the block's PADDING box and draw their text white --
   // the panel rect is emitted by ChapterHtmlSlimParser::addLineToPage, which is the only place
@@ -84,6 +95,13 @@ struct BlockStyle {
   [[nodiscard]] bool keepWithNext() const {
     return cssPageBreakGet(pageBreaks, CssPageBreakSlot::After) == CssPageBreak::Avoid;
   }
+
+  // CSS hyphens: none. A per-block SUPPRESSION only -- the user's global Hyphenation setting is
+  // the outer gate and a book can never turn hyphenation on (see ParsedText::hyphenationActive).
+  // Inherited on the same axis as font-size, because hyphens is an inherited property and a
+  // heading that suppresses it must not hand that on to the body text after it.
+  bool suppressHyphens = false;
+  bool hyphensDefined = false;  // build-only: lets a child's `hyphens: auto` cancel an ancestor's
 
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
@@ -153,6 +171,18 @@ struct BlockStyle {
       // must not hand its leading to the body text after it (that merge uses the Vertical axis).
       if (child.lineHeightPct == 0) {
         result.lineHeightPct = lineHeightPct;
+      }
+      // letter-spacing and hyphens are inherited CSS properties, and inherit on this axis for
+      // exactly the reason font-size does: a <span> inside a tracked-out heading has to keep the
+      // tracking, but a CLOSED heading must not hand it to the paragraph that follows (that merge
+      // uses the Vertical axis).
+      if (!child.letterSpacingDefined && letterSpacingDefined) {
+        result.letterSpacing = letterSpacing;
+        result.letterSpacingDefined = true;
+      }
+      if (!child.hyphensDefined && hyphensDefined) {
+        result.suppressHyphens = suppressHyphens;
+        result.hyphensDefined = true;
       }
       // Ink polarity inherits like colour does, and on the same axis and for the same reason as
       // font-size: a <span> inside an h1 panel must stay white-on-black, but a closed panel must
@@ -232,6 +262,15 @@ struct BlockStyle {
     // The em base is this block's OWN font size: the percentage is applied to the leading of
     // blockStyle.fontId, so `h1 { line-height: 1.3em }` resolves against the h1's font.
     blockStyle.lineHeightPct = cssLineHeightPercent(cssStyle);
+    // Same em base for the same reason: emSize is already this block's own font size.
+    if (cssStyle.hasLetterSpacing()) {
+      blockStyle.letterSpacing = cssLetterSpacingPx(cssStyle, emSize);
+      blockStyle.letterSpacingDefined = true;
+    }
+    if (cssStyle.hasHyphens()) {
+      blockStyle.suppressHyphens = cssStyle.hyphensNone();
+      blockStyle.hyphensDefined = true;
+    }
     // RTL direction from CSS/HTML
     if (cssStyle.hasDirection()) {
       blockStyle.isRtl = (cssStyle.direction == CssTextDirection::Rtl);

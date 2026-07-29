@@ -64,6 +64,34 @@ constexpr uint8_t CSS_LINE_HEIGHT_MIN_PCT = 80;
 constexpr uint8_t CSS_LINE_HEIGHT_MAX_PCT = 200;
 
 /**
+ * Band cssLetterSpacingPx() clamps into, in whole device pixels.
+ *
+ * The negative side is the tight one on purpose: tracking a heading out is a design choice the
+ * panel can show, but tracking text IN past a couple of pixels starts colliding glyphs at 12pt,
+ * and the collision is not recoverable at 1 bit. The positive side is generous enough for the
+ * widest real display tracking (0.3em at 18pt) and still far from a line of one word.
+ */
+constexpr int8_t CSS_LETTER_SPACING_MIN_PX = -2;
+constexpr int8_t CSS_LETTER_SPACING_MAX_PX = 10;
+
+/**
+ * CSS letter-spacing -> a per-glyph advance delta in WHOLE pixels.
+ *
+ * @param emPx the block's own font size in pixels (its ascender size, the same em base the
+ *             block's margins and indents resolve against)
+ *
+ * Whole pixels, not a fraction, because this number is added AFTER the 12.4 fixed-point advance
+ * has been snapped -- once in GfxRenderer::getTextAdvanceX (measurement) and once in
+ * GfxRenderer::drawText (the draw). Both add the SAME integer the same number of times, so the
+ * cursor they compute cannot drift apart, which is the failure mode that matters here
+ * (`reader-font-substitution`, one layer down: measure with one metric, draw with another).
+ *
+ * Returns 0 when the property is unset, when it is a percentage (not valid CSS here), or when it
+ * rounds to zero -- all of which mean "no tracking" and cost nothing to conflate.
+ */
+int8_t cssLetterSpacingPx(const CssStyle& style, float emPx);
+
+/**
  * Apply a cssLineHeightPercent() result to a computed leading. 0 leaves it untouched.
  * Integer, round-to-nearest: this is the ONE value that becomes a line's vertical advance, so
  * layout, the page-fit test and the stored y all use the same number by construction.

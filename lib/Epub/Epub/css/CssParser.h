@@ -53,7 +53,10 @@ class CssParser {
   //      silently keep the book unstyled with no way to notice.
   // v17: +line-height as a 13th CssLength and defined bit 25 -- the record grew by 5 bytes
   //      (77 -> 82 fixed), so a v16 record cannot be read with the v17 framing.
-  static constexpr uint8_t CSS_CACHE_VERSION = 17;
+  // v18: +letter-spacing as a 14th CssLength (defined bit 28) and +text-transform/hyphens packed
+  //      into a 9th trailing enum byte (defined bits 26/27) -- the record grew by 6 bytes
+  //      (82 -> 88 fixed), so a v17 record cannot be read with the v18 framing.
+  static constexpr uint8_t CSS_CACHE_VERSION = 18;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

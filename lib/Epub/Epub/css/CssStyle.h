@@ -130,6 +130,12 @@ enum class CssPageBreak : uint8_t { Auto = 0, Always = 1, Avoid = 2 };
 // Bit offset of each property inside the packed byte. Bits 6-7 are unused.
 enum class CssPageBreakSlot : uint8_t { Before = 0, After = 2, Inside = 4 };
 
+// text-transform. Applied to the TEXT at parse time (ChapterHtmlSlimParser::flushPartWordBuffer),
+// so nothing about it reaches the layout or the section cache -- what is cached is the transformed
+// word. Capitalize acts on the first letter of a word, which is exactly the unit the parser
+// flushes, so it needs no word-boundary scan of its own.
+enum class CssTextTransform : uint8_t { None = 0, Uppercase = 1, Lowercase = 2, Capitalize = 3 };
+
 constexpr CssPageBreak cssPageBreakGet(const uint8_t packed, const CssPageBreakSlot slot) {
   return static_cast<CssPageBreak>((packed >> static_cast<uint8_t>(slot)) & 0x03u);
 }
@@ -138,6 +144,14 @@ constexpr uint8_t cssPageBreakWith(const uint8_t packed, const CssPageBreakSlot 
   const auto shift = static_cast<uint8_t>(slot);
   return static_cast<uint8_t>((packed & ~(0x03u << shift)) | (static_cast<uint8_t>(value) << shift));
 }
+
+// Layout of CssStyle::textFlags. Two properties in ONE byte, exactly like CssStyle::pageBreaks and
+// for the same reason: a heavy book holds hundreds of rules in RAM during a parse (415 observed),
+// so a byte per property costs twice as much for no extra information.
+//   bits 0-1  CssTextTransform
+//   bit  2    hyphens: none  (the ONLY hyphens value that changes anything -- see hyphensNone())
+constexpr uint8_t CSS_TEXT_TRANSFORM_MASK = 0x03;
+constexpr uint8_t CSS_HYPHENS_NONE_BIT = 1 << 2;
 
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
@@ -167,6 +181,9 @@ struct CssPropertyFlags {
   uint16_t inkMode : 1;
   uint16_t pageBreak : 1;
   uint16_t lineHeight : 1;
+  uint16_t textTransform : 1;
+  uint16_t hyphens : 1;
+  uint16_t letterSpacing : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -194,13 +211,16 @@ struct CssPropertyFlags {
         fontSize(0),
         inkMode(0),
         pageBreak(0),
-        lineHeight(0) {}
+        lineHeight(0),
+        textTransform(0),
+        hyphens(0),
+        letterSpacing(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType ||
-           fontSize || inkMode || pageBreak || lineHeight;
+           fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens || letterSpacing;
   }
 
   void clearAll() {
@@ -209,10 +229,11 @@ struct CssPropertyFlags {
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = 0;
     textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = lineHeight = 0;
+    textTransform = hyphens = letterSpacing = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..25.
+// Cache serializes defined flags as uint32_t with bit indices 0..28.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -247,6 +268,11 @@ struct CssStyle {
   // computed leading at layout time by cssLineHeightPercent() (Epub/ReaderFontScale.h), where
   // the user's Line Spacing setting clamps it.
   CssLength lineHeight;
+  // letter-spacing (tracking), kept as a raw length like the two above: `0.05em` has to resolve
+  // against the BLOCK's own font size, which only exists once font-size has become a font id.
+  // Turned into a whole-pixel per-glyph delta at layout time by cssLetterSpacingPx()
+  // (Epub/ReaderFontScale.h). `normal` leaves the property unset, which is the same as 0.
+  CssLength letterSpacing;
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
   // Border edges bitmask (TOP/RIGHT/BOTTOM/LEFT). A full 4-side mask is a boxed/kakomi block;
@@ -274,6 +300,24 @@ struct CssStyle {
   [[nodiscard]] CssPageBreak pageBreakInside() const { return cssPageBreakGet(pageBreaks, CssPageBreakSlot::Inside); }
   void setPageBreak(const CssPageBreakSlot slot, const CssPageBreak value) {
     pageBreaks = cssPageBreakWith(pageBreaks, slot, value);
+  }
+
+  // text-transform + hyphens, packed. See CSS_TEXT_TRANSFORM_MASK.
+  uint8_t textFlags = 0;
+
+  [[nodiscard]] CssTextTransform textTransform() const {
+    return static_cast<CssTextTransform>(textFlags & CSS_TEXT_TRANSFORM_MASK);
+  }
+  void setTextTransform(const CssTextTransform value) {
+    textFlags = static_cast<uint8_t>((textFlags & ~CSS_TEXT_TRANSFORM_MASK) | static_cast<uint8_t>(value));
+  }
+  // Only `hyphens: none` is recorded. `auto`/`manual` are the states the reader is already in
+  // (the user's global Hyphenation setting decides), so storing them would be recording a
+  // request the book cannot make: a book may SUPPRESS hyphenation, never force it on.
+  [[nodiscard]] bool hyphensNone() const { return (textFlags & CSS_HYPHENS_NONE_BIT) != 0; }
+  void setHyphensNone(const bool value) {
+    textFlags = static_cast<uint8_t>(value ? (textFlags | CSS_HYPHENS_NONE_BIT)
+                                           : (textFlags & static_cast<uint8_t>(~CSS_HYPHENS_NONE_BIT)));
   }
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
@@ -377,6 +421,21 @@ struct CssStyle {
       lineHeight = base.lineHeight;
       defined.lineHeight = 1;
     }
+    if (base.hasLetterSpacing()) {
+      letterSpacing = base.letterSpacing;
+      defined.letterSpacing = 1;
+    }
+    // Per property, not a whole-byte copy, for the same reason pageBreaks merges per slot: two
+    // stylesheets can style one selector, one with text-transform and one with hyphens, and a
+    // byte copy would let the later record silently drop the earlier property.
+    if (base.hasTextTransform()) {
+      setTextTransform(base.textTransform());
+      defined.textTransform = 1;
+    }
+    if (base.hasHyphens()) {
+      setHyphensNone(base.hyphensNone());
+      defined.hyphens = 1;
+    }
     if (base.hasInkMode()) {
       inkMode = base.inkMode;
       defined.inkMode = 1;
@@ -426,6 +485,15 @@ struct CssStyle {
   // packed byte then says which. An all-auto declaration leaves the flag clear so it cannot make
   // an otherwise empty rule look worth keeping.
   [[nodiscard]] bool hasPageBreak() const { return defined.pageBreak; }
+  // Set only when the declaration named a transform this engine can apply -- `none` included,
+  // because an explicit `none` must be able to cancel an ancestor's `uppercase`.
+  [[nodiscard]] bool hasTextTransform() const { return defined.textTransform; }
+  // Set by any recognised `hyphens` value, so `hyphens: auto` on a child cancels an ancestor's
+  // `hyphens: none` instead of inheriting it. The stored bit still says only "suppress or not".
+  [[nodiscard]] bool hasHyphens() const { return defined.hyphens; }
+  // `letter-spacing: normal` leaves this clear; 0 and unset render identically, but the flag
+  // still lets an explicit `normal` stop the cascade from inheriting a parent's tracking.
+  [[nodiscard]] bool hasLetterSpacing() const { return defined.letterSpacing; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -439,6 +507,7 @@ struct CssStyle {
     imageHeight = imageWidth = CssLength{};
     fontSize = CssLength{};
     lineHeight = CssLength{};
+    letterSpacing = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     textEmphasis = CssTextEmphasis::None;
@@ -446,6 +515,7 @@ struct CssStyle {
     listStyleType = CssListStyleType::Disc;
     inkMode = CssInkMode::Normal;
     pageBreaks = 0;
+    textFlags = 0;
     defined.clearAll();
   }
 };

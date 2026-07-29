@@ -16,6 +16,9 @@ namespace {
 constexpr float CSS_INITIAL_PX = 16.0f;
 constexpr float CSS_INITIAL_PT = 12.0f;
 
+// pt -> px at the CSS reference resolution (96/72), matching CssLength::toPixels().
+constexpr float PT_TO_PX = 1.33f;
+
 // A book that asks for 12em would otherwise walk straight off the ladder; clamping first
 // keeps the arithmetic in range and makes the "snapped" log meaningful.
 constexpr float MIN_SCALE = 0.5f;
@@ -124,6 +127,41 @@ uint8_t cssLineHeightPercent(const CssStyle& style) {
   const auto rounded = static_cast<int>(std::lround(percent));
   return static_cast<uint8_t>(
       std::clamp(rounded, static_cast<int>(CSS_LINE_HEIGHT_MIN_PCT), static_cast<int>(CSS_LINE_HEIGHT_MAX_PCT)));
+}
+
+int8_t cssLetterSpacingPx(const CssStyle& style, const float emPx) {
+  if (!style.hasLetterSpacing()) return 0;
+
+  const CssLength& len = style.letterSpacing;
+  float px;
+  switch (len.unit) {
+    case CssUnit::Number:
+    case CssUnit::Em:
+    case CssUnit::Rem:
+      // The em base is the BLOCK's own font: `h1 { letter-spacing: .05em }` tracks against the
+      // h1's size, which is where the caller's emPx comes from (ChapterHtmlSlimParser resolves
+      // the block font id BEFORE computing emSize).
+      px = len.value * emPx;
+      break;
+    case CssUnit::Points:
+      px = len.value * PT_TO_PX;
+      break;
+    case CssUnit::Percent:
+      // Not valid CSS for letter-spacing. Treat as no tracking rather than guessing a base.
+      return 0;
+    case CssUnit::Pixels:
+    default:
+      px = len.value;
+      break;
+  }
+  if (!(px > -1000.0f && px < 1000.0f)) return 0;  // rejects NaN and absurd values in one test
+
+  const int rounded = static_cast<int>(std::lround(px));
+  // Whole pixels, because the value is added AFTER the fixed-point advance is snapped, in both
+  // the measurement and the draw -- an integer is what makes those two agree exactly.
+  // A declaration that rounds to 0 is honoured as 0: sub-pixel tracking this panel cannot show.
+  return static_cast<int8_t>(std::clamp(rounded, static_cast<int>(CSS_LETTER_SPACING_MIN_PX),
+                                        static_cast<int>(CSS_LETTER_SPACING_MAX_PX)));
 }
 
 int cssBlockFontId(const CssStyle& style, const int baseFontId) {
