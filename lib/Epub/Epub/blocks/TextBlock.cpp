@@ -161,7 +161,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
         // Compute actual width for the group
         int groupActualWidth = 0;
         for (int k = 0; k < groupWordCount; ++k) {
-          groupActualWidth += renderer.getTextAdvanceX(fontId, wordText(i + k), wordStyle(i + k));
+          groupActualWidth +=
+              renderer.getTextAdvanceX(fontId, wordText(i + k), wordStyle(i + k), blockStyle.letterSpacing);
         }
 
         const char* word = wordText(i);
@@ -169,7 +170,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
         const int leaderWordX_shifted = leaderWordX + accumulatedShift;
         const auto baseDir =
             static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
-        const int rubyWidth = renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP);
+        const int rubyWidth =
+            renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
         const int screenWidth = renderer.getScreenWidth();
 
         int rubyX = 0;
@@ -283,11 +285,12 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
           std::min<size_t>({static_cast<size_t>(boundary), static_cast<size_t>(wordTextLen(i)), sizeof(boldBuf) - 1});
       memcpy(boldBuf, word, boldLen);
       boldBuf[boldLen] = '\0';
-      renderer.drawText(fontId, drawX, wordY, boldBuf, inkBlack, boldStyle, baseDir);
+      renderer.drawText(fontId, drawX, wordY, boldBuf, inkBlack, boldStyle, baseDir, blockStyle.letterSpacing);
       const int suffixX = drawX + focusSuffixXArr[i];
-      renderer.drawText(fontId, suffixX, wordY, word + boldLen, inkBlack, currentStyle, baseDir);
+      renderer.drawText(fontId, suffixX, wordY, word + boldLen, inkBlack, currentStyle, baseDir,
+                        blockStyle.letterSpacing);
     } else {
-      renderer.drawText(fontId, drawX, wordY, word, inkBlack, currentStyle, baseDir);
+      renderer.drawText(fontId, drawX, wordY, word, inkBlack, currentStyle, baseDir, blockStyle.letterSpacing);
     }
 
     // Horizontal ruby text rendering
@@ -297,7 +300,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
       // (UDDigiKyokasho) otherwise overlap their own base word.
       const int rubyY = wordY - ascender - std::max(1, ascender / 12);
       renderer.drawText(fontId, rubies[i].x, rubyY, rubies[i].text.c_str(), inkBlack, EpdFontFamily::SUP,
-                        rubies[i].baseDir);
+                        rubies[i].baseDir, blockStyle.letterSpacing);
     }
 
     if (scanning) {
@@ -306,7 +309,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
 
     if (EpdFontFamily::hasTextDecoration(currentStyle)) {
       int lineStartX = drawX;
-      int lineWidth = renderer.getTextWidth(fontId, word, currentStyle, baseDir);
+      int lineWidth = renderer.getTextWidth(fontId, word, currentStyle, baseDir, blockStyle.letterSpacing);
 
       if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
         lineWidth = (lineWidth + 1) / 2;
@@ -316,8 +319,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
       if (wordTextLen(i) >= 3 && static_cast<uint8_t>(word[0]) == 0xE2 && static_cast<uint8_t>(word[1]) == 0x80 &&
           static_cast<uint8_t>(word[2]) == 0x83) {
         const char* visibleText = word + 3;
-        lineStartX += renderer.getTextAdvanceX(fontId, "\xe2\x80\x83", currentStyle);
-        lineWidth = renderer.getTextWidth(fontId, visibleText, currentStyle, baseDir);
+        lineStartX += renderer.getTextAdvanceX(fontId, "\xe2\x80\x83", currentStyle, blockStyle.letterSpacing);
+        lineWidth = renderer.getTextWidth(fontId, visibleText, currentStyle, baseDir, blockStyle.letterSpacing);
         if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
           lineWidth = (lineWidth + 1) / 2;
         }
@@ -387,6 +390,7 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.isRtl);
   serialization::writePod(file, blockStyle.directionDefined);
   serialization::writePod(file, blockStyle.fontId);
+  serialization::writePod(file, blockStyle.letterSpacing);
   serialization::writePod(file, blockStyle.inkMode);
   serialization::writePod(file, blockStyle.inkModeDefined);
 
@@ -475,6 +479,7 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, blockStyle.isRtl);
   serialization::readPod(file, blockStyle.directionDefined);
   serialization::readPod(file, blockStyle.fontId);
+  serialization::readPod(file, blockStyle.letterSpacing);
   serialization::readPod(file, blockStyle.inkMode);
   serialization::readPod(file, blockStyle.inkModeDefined);
   // A corrupt byte must not commit the line to white-on-nothing: only the exact Inverted value

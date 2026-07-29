@@ -55,6 +55,11 @@ struct BlockStyle {
   // during the build, and what reaches the cache is the resulting line positions.
   uint8_t lineHeightPct = 0;
 
+  // Build-only resolved text transform. Text is rewritten before it enters ParsedText, so the
+  // transformed bytes -- not this enum -- are what reach the section cache.
+  CssTextTransform textTransform = CssTextTransform::None;
+  bool textTransformDefined = false;
+
   // CSS letter-spacing as a per-glyph advance delta in whole pixels (0 = none). Resolved once,
   // at parse time, by cssLetterSpacingPx() against this block's own font size.
   //
@@ -172,6 +177,10 @@ struct BlockStyle {
       if (child.lineHeightPct == 0) {
         result.lineHeightPct = lineHeightPct;
       }
+      if (!child.textTransformDefined && textTransformDefined) {
+        result.textTransform = textTransform;
+        result.textTransformDefined = true;
+      }
       // letter-spacing and hyphens are inherited CSS properties, and inherit on this axis for
       // exactly the reason font-size does: a <span> inside a tracked-out heading has to keep the
       // tracking, but a CLOSED heading must not hand it to the paragraph that follows (that merge
@@ -262,6 +271,10 @@ struct BlockStyle {
     // The em base is this block's OWN font size: the percentage is applied to the leading of
     // blockStyle.fontId, so `h1 { line-height: 1.3em }` resolves against the h1's font.
     blockStyle.lineHeightPct = cssLineHeightPercent(cssStyle);
+    if (cssStyle.hasTextTransform()) {
+      blockStyle.textTransform = cssStyle.textTransform();
+      blockStyle.textTransformDefined = true;
+    }
     // Same em base for the same reason: emSize is already this block's own font size.
     if (cssStyle.hasLetterSpacing()) {
       blockStyle.letterSpacing = cssLetterSpacingPx(cssStyle, emSize);

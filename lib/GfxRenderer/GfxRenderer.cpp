@@ -11,6 +11,7 @@
 #include <algorithm>
 
 #include "FontCacheManager.h"
+#include "TextAdvance.h"
 
 namespace {
 
@@ -572,7 +573,7 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
 }
 
 int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style,
-                              const BidiUtils::BidiBaseDir baseDir) const {
+                              const BidiUtils::BidiBaseDir baseDir, const int8_t letterSpacing) const {
   if (text == nullptr || *text == '\0') {
     return 0;
   }
@@ -589,8 +590,8 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   std::string visual;
   const char* renderedText = resolveVisualText(text, visual, baseDir);
 
-  if (fontIt->second.getFallback()) {
-    return getTextAdvanceX(fontId, renderedText, style);
+  if (fontIt->second.getFallback() || letterSpacing != 0) {
+    return getTextAdvanceX(fontId, renderedText, style, letterSpacing);
   }
   int w = 0, h = 0;
   fontIt->second.getTextDimensions(renderedText, &w, &h, style);
@@ -604,7 +605,8 @@ void GfxRenderer::drawCenteredText(const int fontId, const int y, const char* te
 }
 
 void GfxRenderer::drawText(const int fontId, const int x, const int y, const char* text, const bool black,
-                           const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir) const {
+                           const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
+                           const int8_t letterSpacing) const {
   // cannot draw a NULL / empty string
   if (text == nullptr || *text == '\0') {
     return;
@@ -666,7 +668,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     // where they fall on the line.
     if (prevCp != 0) {
       const auto kernFP = font.getKerning(prevCp, cp, style);  // 4.4 fixed-point kern
-      lastBaseX += fp4::toPixel(prevAdvanceFP + kernFP);       // snap 12.4 fixed-point to nearest pixel
+      lastBaseX += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
     }
 
     const EpdGlyph* glyph = font.getGlyph(cp, style);
@@ -1956,7 +1958,7 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
   return true;
 }
 
-int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style) const {
+int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style, const int8_t letterSpacing) const {
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
@@ -1966,7 +1968,7 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
     // and Latin text rendered overlapping. The companion's advance table supplies the space
     // without any SD I/O.
     if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
-    if (advFP != 0) return fp4::toPixel(advFP);
+    if (advFP != 0) return textAdvance::withLetterSpacing(fp4::toPixel(advFP), 1, letterSpacing);
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -1976,15 +1978,16 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   }
 
   const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
-  if (spaceGlyph && spaceGlyph->advanceX != 0) return fp4::toPixel(spaceGlyph->advanceX);
+  if (spaceGlyph && spaceGlyph->advanceX != 0)
+    return textAdvance::withLetterSpacing(fp4::toPixel(spaceGlyph->advanceX), 1, letterSpacing);
   // No usable space glyph anywhere in the chain (some cpfonts ship without one, and without a
   // replacement glyph the advance table can't stage it either): synthesize the typographic
   // default of ~1/4 em rather than collapsing every word gap to zero.
-  return std::max(2, getLineHeight(fontId) / 4);
+  return std::max(1, textAdvance::withLetterSpacing(std::max(2, getLineHeight(fontId) / 4), 1, letterSpacing));
 }
 
 int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
-                                 const EpdFontFamily::Style style) const {
+                                 const EpdFontFamily::Style style, const int8_t letterSpacing) const {
   // Advance table fast-path for SD card fonts during layout.
   // Kern data is not loaded during layout (consistent with previous metadataOnly behavior),
   // so we return just the space advance without kerning.
@@ -1993,7 +1996,9 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
     int32_t advFP = sdIt->second->getAdvance(' ', resolvedStyle);
     if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
-    if (advFP != 0) return fp4::toPixel(advFP);  // 0 = no space glyph anywhere: fallback chain below
+    if (advFP != 0)
+      return textAdvance::withLetterSpacing(fp4::toPixel(advFP), 1,
+                                            letterSpacing);  // 0 = no space glyph anywhere: fallback chain below
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -2003,13 +2008,13 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
   if (spaceAdvanceFP == 0) {
     // Synthesized ~1/4 em space -- see getSpaceWidth. (12.4 fixed-point: px << 4.)
-    return std::max(2, getLineHeight(fontId) / 4);
+    return std::max(1, textAdvance::withLetterSpacing(std::max(2, getLineHeight(fontId) / 4), 1, letterSpacing));
   }
   // Combine space advance + flanking kern into one fixed-point sum before snapping.
   // Snapping the combined value avoids the +/-1 px error from snapping each component separately.
   const int32_t kernFP = static_cast<int32_t>(font.getKerning(leftCp, ' ', style)) +
                          static_cast<int32_t>(font.getKerning(' ', rightCp, style));
-  return fp4::toPixel(spaceAdvanceFP + kernFP);
+  return textAdvance::withLetterSpacing(fp4::toPixel(spaceAdvanceFP + kernFP), 1, letterSpacing);
 }
 
 int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
@@ -2020,7 +2025,8 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
   return fp4::toPixel(kernFP);                                           // snap 4.4 fixed-point to nearest pixel
 }
 
-int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {
+int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style,
+                                 const int8_t letterSpacing) const {
   // Match the font drawText would use for CJK-bearing strings (see resolveTextFontId).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
   // Measure the exact codepoint stream drawText renders: bidi-reordered and
@@ -2046,6 +2052,7 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       return 0;
     }
     const auto& font = fontIt->second;
+    size_t glyphCount = 0;
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
       // RTL vowel marks (niqqud/harakat) are zero-advance overlays in drawText — no width.
       if (BidiUtils::isTransparentMark(cp)) {
@@ -2063,8 +2070,9 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
         }
       }
       widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
+      glyphCount++;
     }
-    return fp4::toPixel(widthFP);
+    return textAdvance::withLetterSpacing(fp4::toPixel(widthFP), glyphCount, letterSpacing);
   }
 
   const auto fontIt = fontMap.find(resolvedFontId);
@@ -2076,6 +2084,7 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   uint32_t cp;
   uint32_t prevCp = 0;
   int widthPx = 0;
+  size_t glyphCount = 0;
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
   const auto& font = fontIt->second;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
@@ -2107,9 +2116,10 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
     }
     prevCp = cp;
+    glyphCount++;
   }
   widthPx += fp4::toPixel(prevAdvanceFP);  // final glyph's advance
-  return widthPx;
+  return textAdvance::withLetterSpacing(widthPx, glyphCount, letterSpacing);
 }
 
 int GfxRenderer::getRenderAdvanceX(const int fontId, const char* text, const EpdFontFamily::Style style) const {

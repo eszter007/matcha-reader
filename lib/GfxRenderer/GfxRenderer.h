@@ -265,21 +265,22 @@ class GfxRenderer {
 
   // Text
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
-                   BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
+                   BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
   void drawCenteredText(int fontId, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                         BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
   void drawText(int fontId, int x, int y, const char* text, bool black = true,
                 EpdFontFamily::Style style = EpdFontFamily::REGULAR,
-                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
-  int getSpaceWidth(int fontId, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
+  int getSpaceWidth(int fontId, EpdFontFamily::Style style = EpdFontFamily::REGULAR, int8_t letterSpacing = 0) const;
   /// Returns the total inter-word advance: fp4::toPixel(spaceAdvance + kern(leftCp,' ') + kern(' ',rightCp)).
   /// Using a single snap avoids the +/-1 px rounding error that arises when space advance and kern are
   /// snapped separately and then added as integers.
-  int getSpaceAdvance(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
+  int getSpaceAdvance(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style,
+                      int8_t letterSpacing = 0) const;
   /// Returns the kerning adjustment between two adjacent codepoints.
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
-  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
+  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style, int8_t letterSpacing = 0) const;
   // Render-truth advance for SHORT strings: resolves glyphs exactly as the draw loops do
   // (on-demand SD load), so layout reservations match drawn ink. See implementation note.
   int getRenderAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;

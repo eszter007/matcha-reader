@@ -64,10 +64,10 @@ which is why `color` was not allowed to lag far behind `font-size`.
 | property dispatch | `lib/Epub/Epub/css/CssParser.cpp` — `parseDeclarationIntoStyle()` (there is no `applyDeclaration`), `iequalsAscii(name, ...)` chain |
 | selector syntax + ancestor stack | `lib/Epub/Epub/css/CssSelector.h` — `parse()`, `forEachCandidate()`, `CssElementPath` (host-testable, no Arduino deps) |
 | style struct + enums | `lib/Epub/Epub/css/CssStyle.h` — `CssStyle`, `CssLength`, `CssPropertyFlags` |
-| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **17**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
+| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **18**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
 | style → layout | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` — `currentCssStyle`, ~lines 200-310 |
 | line breaking / gaps | `lib/Epub/Epub/ParsedText.cpp` |
-| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **62**) |
+| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **63**) |
 
 ### Rules that apply to every item below
 
@@ -271,13 +271,19 @@ fixed bytes) and `SECTION_FILE_VERSION` 61 → 62 (byte layout unchanged; line
 positions are not). The vertical engine reads the new length only to keep the
 stream aligned: a column's advance is a cell grid, not a leading.
 
-## Phase 6 — long tail
+## Phase 6 — long tail — **done (supported subset)**
 
-`text-transform:uppercase` (transform at parse, watch UTF-8) · `letter-spacing`
-(per-glyph advance already exists in `getSpaceAdvance`-adjacent code) ·
-`widows`/`orphans` · `max-width` · `float` (needs real block layout — likely
-**out of scope**, see SCOPE.md) · `hyphens:none` (map to the existing
-hyphenation flag).
+`text-transform` rewrites ASCII case only and leaves every non-ASCII UTF-8 byte untouched.
+`letter-spacing` is clamped to -2..10 whole pixels and the same delta is used by measurement,
+implicit spaces and drawing. `hyphens:none` can suppress the user's global hyphenation setting
+per block but can never force hyphenation on. `max-width` shares the existing image-width path.
+
+`CSS_CACHE_VERSION` is **18** (14 packed lengths plus 9 trailing enum/flag bytes,
+for **88 fixed bytes**) and `SECTION_FILE_VERSION` is **63**.
+
+`widows`/`orphans` remain ignored: the streaming paginator cannot honour them cheaply without
+buffering paragraph tails and destabilising Phase 3 forward progress. `float` needs real block
+layout and remains out of scope; `border-radius` is not meaningful on the 1-bit panel.
 
 ## Explicitly out of scope
 

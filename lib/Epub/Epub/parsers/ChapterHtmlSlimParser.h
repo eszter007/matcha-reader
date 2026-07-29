@@ -134,6 +134,8 @@ class ChapterHtmlSlimParser {
     bool hasEmphasis = false;
     CssTextEmphasis emphasis = CssTextEmphasis::None;
     bool hasSmallCaps = false, smallCaps = false;
+    bool hasTextTransform = false;
+    CssTextTransform textTransform = CssTextTransform::None;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -149,6 +151,7 @@ class ChapterHtmlSlimParser {
   CssTextEmphasis effectiveEmphasis = CssTextEmphasis::None;
   // font-variant: small-caps -- approximated by uppercasing (no per-word size support).
   bool effectiveSmallCaps = false;
+  CssTextTransform effectiveTextTransform = CssTextTransform::None;
 
   // Ordered/unordered list nesting for list-style-type markers. Fixed-depth
   // stack: nesting past kMaxListDepth reuses the innermost tracked context.
@@ -215,6 +218,7 @@ class ChapterHtmlSlimParser {
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
+  static void applyTextTransformToEntry(StyleStackEntry& entry, const CssStyle& css);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
   // XML callbacks

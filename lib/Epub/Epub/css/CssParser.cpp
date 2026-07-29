@@ -61,6 +61,7 @@ constexpr size_t CSS_TRAILING_ENUM_BYTES = 9;
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
+static_assert(RULE_FIXED_BYTES == 88, "CSS v18 rule framing must stay in sync with writeRuleRecord");
 
 // Check if character is CSS whitespace
 constexpr bool isCssWhitespace(const char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
@@ -645,8 +646,13 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     // the property UNSET, which renders identically to 0 but still stops the cascade.
     // A bare number is invalid CSS here (unlike line-height), so the Pixels fallback in
     // tryInterpretLength is the right reading of a unitless value and Number is never produced.
+    const std::string_view spacingValue = stripTrailingImportant(value);
     CssLength len;
-    if (tryInterpretLength(stripTrailingImportant(value), len)) {
+    if (iequalsAscii(spacingValue, "normal")) {
+      // Explicit zero is defined so it cancels inherited tracking.
+      style.letterSpacing = CssLength{};
+      style.defined.letterSpacing = 1;
+    } else if (tryInterpretLength(spacingValue, len)) {
       style.letterSpacing = len;
       style.defined.letterSpacing = 1;
     }
@@ -686,10 +692,20 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     }
   } else if (iequalsAscii(name, "hyphenate-limit-chars") || iequalsAscii(name, "hyphenate-limit-lines") ||
              iequalsAscii(name, "hyphenate-limit-zone") || iequalsAscii(name, "hyphenate-limit-last") ||
+             iequalsAscii(name, "hyphenate-limit-before") || iequalsAscii(name, "hyphenate-limit-after") ||
+             iequalsAscii(name, "-moz-hyphenate-limit-chars") || iequalsAscii(name, "-moz-hyphenate-limit-lines") ||
+             iequalsAscii(name, "-moz-hyphenate-limit-zone") || iequalsAscii(name, "-moz-hyphenate-limit-last") ||
+             iequalsAscii(name, "-moz-hyphenate-limit-before") || iequalsAscii(name, "-moz-hyphenate-limit-after") ||
              iequalsAscii(name, "-webkit-hyphenate-limit-before") ||
              iequalsAscii(name, "-webkit-hyphenate-limit-after") ||
-             iequalsAscii(name, "-webkit-hyphenate-limit-lines") || iequalsAscii(name, "-ms-hyphenate-limit-chars") ||
-             iequalsAscii(name, "-ms-hyphenate-limit-lines") || iequalsAscii(name, "-ms-hyphenate-limit-zone") ||
+             iequalsAscii(name, "-webkit-hyphenate-limit-chars") ||
+             iequalsAscii(name, "-webkit-hyphenate-limit-lines") ||
+             iequalsAscii(name, "-webkit-hyphenate-limit-zone") || iequalsAscii(name, "-webkit-hyphenate-limit-last") ||
+             iequalsAscii(name, "-ms-hyphenate-limit-chars") || iequalsAscii(name, "-ms-hyphenate-limit-lines") ||
+             iequalsAscii(name, "-ms-hyphenate-limit-zone") || iequalsAscii(name, "-ms-hyphenate-limit-last") ||
+             iequalsAscii(name, "-ms-hyphenate-limit-before") || iequalsAscii(name, "-ms-hyphenate-limit-after") ||
+             iequalsAscii(name, "-epub-hyphenate-limit-chars") || iequalsAscii(name, "-epub-hyphenate-limit-lines") ||
+             iequalsAscii(name, "-epub-hyphenate-limit-zone") || iequalsAscii(name, "-epub-hyphenate-limit-last") ||
              iequalsAscii(name, "-epub-hyphenate-limit-before") || iequalsAscii(name, "-epub-hyphenate-limit-after")) {
     // Accepted and ignored, deliberately. The hyphenator's break points come from the pattern
     // dictionary, not from a per-book budget, so there is nothing here to honour -- but naming
@@ -847,7 +863,7 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.imageHeight = len;
       style.defined.imageHeight = 1;
     }
-  } else if (iequalsAscii(name, "width")) {
+  } else if (iequalsAscii(name, "width") || iequalsAscii(name, "max-width")) {
     CssLength len;
     if (tryInterpretLength(value, len)) {
       style.imageWidth = len;
@@ -1341,9 +1357,10 @@ bool CssParser::saveToCache() const {
   return true;
 }
 
-// One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 13 CssLength
+// One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 14 CssLength
 // (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
-// fontVariant + listStyleType + inkMode + pageBreaks + definedBits(4) = selectorLen + 82 bytes.
+// fontVariant + listStyleType + inkMode + pageBreaks + textFlags + definedBits(4)
+// = selectorLen + 88 bytes.
 // The framing constants (CSS_LEADING_ENUM_BYTES / CSS_LENGTH_FIELD_COUNT /
 // CSS_TRAILING_ENUM_BYTES, file scope) must describe exactly what this function writes --
 // every reader below is derived from them.

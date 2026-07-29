@@ -14,6 +14,7 @@
 
 #include "../../../../src/fontIds.h"
 #include "Epub.h"
+#include "Epub/AsciiTextTransform.h"
 #include "Epub/Page.h"
 #include "Epub/ReaderFontScale.h"
 #include "Epub/converters/ImageDecoderFactory.h"
@@ -194,6 +195,13 @@ void ChapterHtmlSlimParser::applyTextDecorationToEntry(StyleStackEntry& entry, c
   }
 }
 
+void ChapterHtmlSlimParser::applyTextTransformToEntry(StyleStackEntry& entry, const CssStyle& css) {
+  if (css.hasTextTransform()) {
+    entry.hasTextTransform = true;
+    entry.textTransform = css.textTransform();
+  }
+}
+
 void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration defaultDecoration,
                                                      const CssStyle& cssStyle) {
   StyleStackEntry entry;
@@ -209,6 +217,7 @@ void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration def
     entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
   }
   applyDirectionToEntry(entry, cssStyle);
+  applyTextTransformToEntry(entry, cssStyle);
   inlineStyleStack.push_back(entry);
   updateEffectiveInlineStyle();
 }
@@ -226,6 +235,7 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveSub = false;
   effectiveEmphasis = currentCssStyle.hasTextEmphasis() ? currentCssStyle.textEmphasis : CssTextEmphasis::None;
   effectiveSmallCaps = currentCssStyle.hasFontVariant() && currentCssStyle.fontVariant == CssFontVariant::SmallCaps;
+  effectiveTextTransform = currentTextBlock ? currentTextBlock->getBlockStyle().textTransform : CssTextTransform::None;
 
   // Apply inline style stack in order
   for (const auto& entry : inlineStyleStack) {
@@ -257,6 +267,9 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     }
     if (entry.hasSmallCaps) {
       effectiveSmallCaps = entry.smallCaps;
+    }
+    if (entry.hasTextTransform) {
+      effectiveTextTransform = entry.textTransform;
     }
   }
 
@@ -317,6 +330,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
+  applyAsciiTextTransform(partWordBuffer, effectiveTextTransform, !nextWordContinues);
   if (effectiveSmallCaps) {
     smallCapsTransform(partWordBuffer);
   }
@@ -540,6 +554,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
 
       flushPendingAnchor();
+      updateEffectiveInlineStyle();
       return;
     }
 
@@ -551,6 +566,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Vertical));
       listItemBulletOnly = false;
       flushPendingAnchor();
+      updateEffectiveInlineStyle();
       return;
     }
 
@@ -562,6 +578,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   currentTextBlock.reset(new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
+  updateEffectiveInlineStyle();
 }
 
 void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
@@ -1327,6 +1344,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
       }
       applyDirectionToEntry(entry, cssStyle);
+      applyTextTransformToEntry(entry, cssStyle);
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
 
@@ -1467,6 +1485,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
+    applyTextTransformToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, ITALIC_TAGS, std::size(ITALIC_TAGS))) {
@@ -1487,6 +1506,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
+    applyTextTransformToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
@@ -1503,6 +1523,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       entry.hasSub = true;
       entry.sub = true;
     }
+    applyTextTransformToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "ol") == 0 || strcmp(name, "ul") == 0) {
@@ -1520,7 +1541,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     // Handle span and other inline elements for CSS styling
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
         cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || cssStyle.hasTextEmphasis() ||
-        cssStyle.hasFontVariant()) {
+        cssStyle.hasFontVariant() || cssStyle.hasTextTransform()) {
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -1538,6 +1559,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       }
       applyTextDecorationToEntry(entry, cssStyle);
       applyDirectionToEntry(entry, cssStyle);
+      applyTextTransformToEntry(entry, cssStyle);
       if (cssStyle.hasVerticalAlign()) {
         if (cssStyle.verticalAlign == CssVerticalAlign::Super) {
           entry.hasSup = true;

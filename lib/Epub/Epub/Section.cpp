@@ -121,7 +121,9 @@ namespace {
 // sits at a different y. The byte layout is unchanged (the leading is consumed during the build
 // and what is stored is the resulting positions); the bump exists because a v61 section would
 // keep drawing the old spacing forever.
-constexpr uint8_t SECTION_FILE_VERSION = 62;
+// v63: CSS text-transform and hyphens:none change laid-out words and line breaks; letter-spacing
+// changes every tracked word position and adds one serialized byte to BlockStyle.
+constexpr uint8_t SECTION_FILE_VERSION = 63;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
