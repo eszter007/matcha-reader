@@ -26,14 +26,14 @@ same way.
 `padding{,-top,-right,-bottom,-left}` · `border{,-top,-right,-bottom,-left,-style}` ·
 `list-style(-type)` · `width` · `height` · `vertical-align` · `font-size` ·
 `color` / `background-color` (as an ink-polarity decision, see Phase 2) ·
-`page-break-{before,after,inside}` + the `break-*` aliases (see Phase 3)
+`page-break-{before,after,inside}` + the `break-*` aliases (see Phase 3) ·
+`line-height` (see Phase 5)
 
 ## Ignored, ranked by measured impact
 
 | n | property | effect of ignoring |
 |---|---|---|
 | 65 | `font-family` | 12 `@font-face` faces ignored; everything uses the reader font |
-| 15 | `line-height` | book leading lost; only the global Line Spacing applies |
 | 8 | `letter-spacing` | tracking on headings lost |
 | 8 | `float` | pull-quotes and figures fall inline |
 | 3+18 | `hyphens`, `hyphenate-limit-*` (+vendor) | book's hyphenation prefs ignored |
@@ -64,10 +64,10 @@ which is why `color` was not allowed to lag far behind `font-size`.
 | property dispatch | `lib/Epub/Epub/css/CssParser.cpp` — `parseDeclarationIntoStyle()` (there is no `applyDeclaration`), `iequalsAscii(name, ...)` chain |
 | selector syntax + ancestor stack | `lib/Epub/Epub/css/CssSelector.h` — `parse()`, `forEachCandidate()`, `CssElementPath` (host-testable, no Arduino deps) |
 | style struct + enums | `lib/Epub/Epub/css/CssStyle.h` — `CssStyle`, `CssLength`, `CssPropertyFlags` |
-| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **16**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
+| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **17**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
 | style → layout | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` — `currentCssStyle`, ~lines 200-310 |
 | line breaking / gaps | `lib/Epub/Epub/ParsedText.cpp` |
-| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **61**) |
+| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **62**) |
 
 ### Rules that apply to every item below
 
@@ -215,10 +215,61 @@ long for its buffer is dropped, never truncated into a name that could collide.
 because a v15 cache was written by a parser that dropped these rules) and
 `SECTION_FILE_VERSION` 60 → 61.
 
-## Phase 5 — `line-height`
+## Phase 5 — `line-height` — **done**
 
-Per-block leading, resolved as a multiple of the block's font size, clamped so
-the global Line Spacing setting still has authority. `SECTION_FILE_VERSION` bump.
+Per-block leading. 15 declarations in the sample book. Stored as a 13th
+`CssLength` on `CssStyle` plus a `defined.lineHeight` bit; resolved at layout time
+by `cssLineHeightPercent()` (`lib/Epub/Epub/ReaderFontScale.h`), which is
+host-testable and free of renderer state.
+
+**Forms accepted**, all reduced to a multiple of the element's own font size:
+
+| declaration | multiple |
+|---|---|
+| `1.4` (unitless — CSS's preferred form) | 1.4 |
+| `1.3em`, `1.3rem` | 1.3 |
+| `120%` | 1.2 |
+| `18px`, `14pt` | normalised through the CSS initial size (16px / 12pt), like `font-size` |
+| `normal`, `inherit`, `initial`, unparseable | none — the property stays UNSET |
+
+The unitless form needs a unit of its own: `tryInterpretLength()` resolves an
+absent unit to `Pixels`, which is right everywhere else but would read
+`line-height: 1.4` as 1.4 *pixels*. Hence `CssUnit::Number`, produced only here
+and resolving exactly like `Em` in `toPixels()`.
+
+**The em base is the block's own font size.** The multiple is divided by CSS's
+`normal` (1.2 em) — which is what a font's `advanceY` already is — giving a
+percentage OF the leading the reader had already computed for that block. That
+leading comes from `getLineHeight(blockStyle.resolveFontId(...), lineCompression)`,
+so `h1 { line-height: 1.3em }` resolves against the h1's Phase-1 font, not the
+body's.
+
+**How the book combines with the user's Line Spacing setting.** The percentage
+multiplies a value that *already contains* `SETTINGS.getReaderLineCompression()`,
+and is clamped to **80..200%** of it:
+
+```
+leading = clamp(declaredMultiple / 1.2, 0.8, 2.0) × getLineHeight(blockFont, lineCompression)
+```
+
+So Tight stays tighter than Normal stays tighter than Wide for the same book, and
+no book can crush its text together or spend a whole screen on four lines. An
+explicit declaration that computes to exactly the default yields 100, not 0, so it
+still stops the cascade from inheriting an ancestor's leading.
+
+**One value, one place.** `addLineToPage` computes the line's advance once; the
+Phase-3 page-fit test, the inverted panel's height and the `y` written into the
+section cache all read that same number, so layout and drawing cannot disagree
+(the `reader-font-substitution` failure mode). The ruby headroom is added *after*
+it — furigana room is not part of the book's line box, and folding it in would
+undo the fix in `6ba186d8`. `line-height` inherits on the same axis as
+`font-size` (parent → child nesting only), so a closed heading cannot leak its
+leading onto the body text after it.
+
+`CSS_CACHE_VERSION` 16 → 17 (the record grew by one `CssLength`: 77 → **82**
+fixed bytes) and `SECTION_FILE_VERSION` 61 → 62 (byte layout unchanged; line
+positions are not). The vertical engine reads the new length only to keep the
+stream aligned: a column's advance is a cell grid, not a leading.
 
 ## Phase 6 — long tail
 

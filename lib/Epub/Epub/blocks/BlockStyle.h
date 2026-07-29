@@ -43,6 +43,18 @@ struct BlockStyle {
   // line -- the reader-font-substitution bug, one layer down.
   int32_t fontId = 0;
 
+  // CSS line-height, as a percentage of the leading this block would otherwise have had
+  // (80..200, clamped by cssLineHeightPercent; 0 = the book said nothing, keep the reader's).
+  // One byte, not a float: a percent is finer than the pixel the leading rounds to anyway.
+  //
+  // Applied in ChapterHtmlSlimParser::addLineToPage, which is the ONE place a line's vertical
+  // advance is computed -- the page-fit test, the inverted panel's height and the y written
+  // into the section cache all read that single value, so they cannot disagree.
+  //
+  // Deliberately NOT serialized with the rest of this struct (like pageBreaks): it is consumed
+  // during the build, and what reaches the cache is the resulting line positions.
+  uint8_t lineHeightPct = 0;
+
   // Ink polarity from CSS color/background-color (see CssInkMode). Inverted means this block's
   // lines each paint a black panel across the block's PADDING box and draw their text white --
   // the panel rect is emitted by ChapterHtmlSlimParser::addLineToPage, which is the only place
@@ -136,6 +148,12 @@ struct BlockStyle {
       if (child.fontId == 0) {
         result.fontId = fontId;
       }
+      // line-height inherits exactly like font-size, on the same axis and for the same reason:
+      // a <span> inside a tightly-led heading has to keep that leading, but a CLOSED heading
+      // must not hand its leading to the body text after it (that merge uses the Vertical axis).
+      if (child.lineHeightPct == 0) {
+        result.lineHeightPct = lineHeightPct;
+      }
       // Ink polarity inherits like colour does, and on the same axis and for the same reason as
       // font-size: a <span> inside an h1 panel must stay white-on-black, but a closed panel must
       // not leak onto the paragraph that follows it (that merge uses the Vertical axis).
@@ -211,6 +229,9 @@ struct BlockStyle {
       blockStyle.inkModeDefined = true;
     }
     blockStyle.pageBreaks = cssStyle.pageBreaks;
+    // The em base is this block's OWN font size: the percentage is applied to the leading of
+    // blockStyle.fontId, so `h1 { line-height: 1.3em }` resolves against the h1's font.
+    blockStyle.lineHeightPct = cssLineHeightPercent(cssStyle);
     // RTL direction from CSS/HTML
     if (cssStyle.hasDirection()) {
       blockStyle.isRtl = (cssStyle.direction == CssTextDirection::Rtl);

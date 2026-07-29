@@ -51,7 +51,9 @@ class CssParser {
   //      normalized selector itself. The RECORD framing is unchanged; the bump exists because a
   //      v15 cache was written by a parser that dropped every such rule, so reusing it would
   //      silently keep the book unstyled with no way to notice.
-  static constexpr uint8_t CSS_CACHE_VERSION = 16;
+  // v17: +line-height as a 13th CssLength and defined bit 25 -- the record grew by 5 bytes
+  //      (77 -> 82 fixed), so a v16 record cannot be read with the v17 framing.
+  static constexpr uint8_t CSS_CACHE_VERSION = 17;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

@@ -2103,9 +2103,15 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   // A block with a CSS font-size was measured and will be drawn with its own font, so its
   // leading has to come from that font too -- otherwise an 18pt heading gets 14pt of vertical
   // room and collides with the line below it.
+  // A CSS line-height scales the leading that the block's font and the user's Line Spacing
+  // setting produced (see cssLineHeightPercent: it is a clamped percentage OF that value, so
+  // the user's setting stays inside the result). It is applied BEFORE the ruby headroom, which
+  // is not part of the book's line box -- it is room the annotation needs above the ascender.
   const int lineFontId = line->getBlockStyle().resolveFontId(fontId);
   const int rubyExtra = line->getRubyShift(renderer.getFontAscenderSize(lineFontId));
-  const int lineHeight = renderer.getLineHeight(lineFontId, lineCompression) + rubyExtra;
+  const int leading =
+      applyCssLineHeight(renderer.getLineHeight(lineFontId, lineCompression), line->getBlockStyle().lineHeightPct);
+  const int lineHeight = leading + rubyExtra;
 
   // Keep-together buffering (page-break-inside/after: avoid): hold the line instead of placing
   // it, so the block can still be moved to the next page as a unit. Buffering is abandoned the
@@ -2189,8 +2195,10 @@ void ChapterHtmlSlimParser::makePages() {
 
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
-  // Paragraph spacing follows the block's own font, like its line height does.
-  const int lineHeight = renderer.getLineHeight(blockStyle.resolveFontId(fontId), lineCompression);
+  // Paragraph spacing follows the block's own font AND its own line-height, like its line
+  // height does: a heading led at 0.83 gets a proportionally tighter half-line after it.
+  const int lineHeight = applyCssLineHeight(renderer.getLineHeight(blockStyle.resolveFontId(fontId), lineCompression),
+                                            blockStyle.lineHeightPct);
   if (blockStyle.marginTop > 0) {
     currentPageNextY += blockStyle.marginTop;
   }

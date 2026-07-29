@@ -4,7 +4,12 @@
 
 // Matches order of PARAGRAPH_ALIGNMENT in CrossPointSettings
 enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3, None = 4 };
-enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4 };
+// Number is the UNITLESS form ("line-height: 1.4"), which CSS defines as a multiple of the
+// element's own font size. It exists because tryInterpretLength() has no unit to key on and
+// falls back to Pixels, which is right for every other property but would turn `line-height:
+// 1.4` into 1.4 PIXELS. It resolves exactly like Em in toPixels(); the distinction is kept
+// because only line-height produces it and a bare number is not a length.
+enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4, Number = 5 };
 enum class CssTextDirection : uint8_t { Ltr = 0, Rtl = 1 };
 
 // Represents a CSS length value with its unit, allowing deferred resolution to pixels
@@ -30,6 +35,7 @@ struct CssLength {
     switch (unit) {
       case CssUnit::Em:
       case CssUnit::Rem:
+      case CssUnit::Number:
         return value * emSize;
       case CssUnit::Points:
         return value * 1.33f;  // Approximate pt to px conversion
@@ -160,6 +166,7 @@ struct CssPropertyFlags {
   uint16_t fontSize : 1;
   uint16_t inkMode : 1;
   uint16_t pageBreak : 1;
+  uint16_t lineHeight : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -186,13 +193,14 @@ struct CssPropertyFlags {
         listStyleType(0),
         fontSize(0),
         inkMode(0),
-        pageBreak(0) {}
+        pageBreak(0),
+        lineHeight(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType ||
-           fontSize || inkMode || pageBreak;
+           fontSize || inkMode || pageBreak || lineHeight;
   }
 
   void clearAll() {
@@ -200,11 +208,11 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = 0;
-    textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = 0;
+    textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = lineHeight = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..24.
+// Cache serializes defined flags as uint32_t with bit indices 0..25.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -233,6 +241,12 @@ struct CssStyle {
   // and the usable sizes depend on the loaded family, so resolution happens at layout time in
   // cssBlockFontId() (Epub/ReaderFontScale.h). Keyword values are stored as em multiples.
   CssLength fontSize;
+  // line-height, kept as a raw length for the same reason font-size is: its em base is the
+  // BLOCK's own font size, which is only known once font-size has been resolved to a font id.
+  // A unitless number carries CssUnit::Number. Turned into a percentage of the reader's
+  // computed leading at layout time by cssLineHeightPercent() (Epub/ReaderFontScale.h), where
+  // the user's Line Spacing setting clamps it.
+  CssLength lineHeight;
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
   // Border edges bitmask (TOP/RIGHT/BOTTOM/LEFT). A full 4-side mask is a boxed/kakomi block;
@@ -359,6 +373,10 @@ struct CssStyle {
       fontSize = base.fontSize;
       defined.fontSize = 1;
     }
+    if (base.hasLineHeight()) {
+      lineHeight = base.lineHeight;
+      defined.lineHeight = 1;
+    }
     if (base.hasInkMode()) {
       inkMode = base.inkMode;
       defined.inkMode = 1;
@@ -398,6 +416,9 @@ struct CssStyle {
   [[nodiscard]] bool hasFontVariant() const { return defined.fontVariant; }
   [[nodiscard]] bool hasListStyleType() const { return defined.listStyleType; }
   [[nodiscard]] bool hasFontSize() const { return defined.fontSize; }
+  // `line-height: normal` (and inherit/initial) leaves this clear, so the block keeps the
+  // reader's own leading rather than an assertion the book never made.
+  [[nodiscard]] bool hasLineHeight() const { return defined.lineHeight; }
   // Distinguishes "the book said nothing about colour" from "the book set colours and they came
   // out Normal" -- an explicit Normal must be able to cancel an inherited Inverted panel.
   [[nodiscard]] bool hasInkMode() const { return defined.inkMode; }
@@ -417,6 +438,7 @@ struct CssStyle {
     paddingTop = paddingBottom = paddingLeft = paddingRight = CssLength{};
     imageHeight = imageWidth = CssLength{};
     fontSize = CssLength{};
+    lineHeight = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     textEmphasis = CssTextEmphasis::None;

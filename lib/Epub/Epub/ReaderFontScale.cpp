@@ -21,6 +21,37 @@ constexpr float CSS_INITIAL_PT = 12.0f;
 constexpr float MIN_SCALE = 0.5f;
 constexpr float MAX_SCALE = 4.0f;
 
+// What CSS `line-height: normal` computes to for a typical text face, and therefore what a
+// font's own advanceY (which is what getLineHeight returns) already represents. Dividing the
+// declared multiple by it converts "1.3 times the font size" into "1.083 times the leading the
+// reader was going to use", which is the only form the layout can act on.
+constexpr float CSS_NORMAL_LINE_HEIGHT = 1.2f;
+
+// Reduce a CssLength to a multiple of the element's own font size. Absolute units go through
+// the CSS initial size, exactly as cssFontSizeScale does, so `18px` means 1.125 of the READER's
+// size rather than 18 device pixels. Returns 0 for a non-positive or NaN value.
+float lengthAsFontSizeMultiple(const CssLength& len) {
+  float multiple;
+  switch (len.unit) {
+    case CssUnit::Number:
+    case CssUnit::Em:
+    case CssUnit::Rem:
+      multiple = len.value;
+      break;
+    case CssUnit::Percent:
+      multiple = len.value / 100.0f;
+      break;
+    case CssUnit::Points:
+      multiple = len.value / CSS_INITIAL_PT;
+      break;
+    case CssUnit::Pixels:
+    default:
+      multiple = len.value / CSS_INITIAL_PX;
+      break;
+  }
+  return multiple > 0.0f ? multiple : 0.0f;  // the comparison also rejects NaN
+}
+
 // The point sizes each built-in reader family is compiled at, ascending. These are the
 // ONLY sizes a block can be laid out in: they cost no extra RAM beyond their glyph cache
 // because main.cpp registers all of them at boot.
@@ -74,27 +105,25 @@ const SizeStep& snapToLadder(const SizeStep* ladder, const size_t count, const i
 float cssFontSizeScale(const CssStyle& style) {
   if (!style.hasFontSize()) return 0.0f;
 
-  const CssLength& len = style.fontSize;
-  float scale;
-  switch (len.unit) {
-    case CssUnit::Em:
-    case CssUnit::Rem:
-      // rem is treated as em on purpose: the root font size IS the reader's font size here.
-      scale = len.value;
-      break;
-    case CssUnit::Percent:
-      scale = len.value / 100.0f;
-      break;
-    case CssUnit::Points:
-      scale = len.value / CSS_INITIAL_PT;
-      break;
-    case CssUnit::Pixels:
-    default:
-      scale = len.value / CSS_INITIAL_PX;
-      break;
-  }
-  if (!(scale > 0.0f)) return 0.0f;  // also rejects NaN
+  // rem is treated as em on purpose: the root font size IS the reader's font size here.
+  const float scale = lengthAsFontSizeMultiple(style.fontSize);
+  if (scale <= 0.0f) return 0.0f;
   return std::clamp(scale, MIN_SCALE, MAX_SCALE);
+}
+
+uint8_t cssLineHeightPercent(const CssStyle& style) {
+  if (!style.hasLineHeight()) return 0;
+
+  const float multiple = lengthAsFontSizeMultiple(style.lineHeight);
+  if (multiple <= 0.0f) return 0;
+
+  // The book's ask, expressed against the leading the reader had already computed for this
+  // block -- which is where the user's Line Spacing setting lives, so the clamp below is a band
+  // around THEIR value, not around a fixed default.
+  const float percent = 100.0f * multiple / CSS_NORMAL_LINE_HEIGHT;
+  const auto rounded = static_cast<int>(std::lround(percent));
+  return static_cast<uint8_t>(
+      std::clamp(rounded, static_cast<int>(CSS_LINE_HEIGHT_MIN_PCT), static_cast<int>(CSS_LINE_HEIGHT_MAX_PCT)));
 }
 
 int cssBlockFontId(const CssStyle& style, const int baseFontId) {

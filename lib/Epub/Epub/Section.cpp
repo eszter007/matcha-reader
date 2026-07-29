@@ -117,7 +117,11 @@ namespace {
 // were dropped for the whole life of this engine now apply -- different fonts, spacing,
 // alignment and page breaks than a v60 build laid out. The byte layout is unchanged; the bump
 // exists because a cached section would otherwise keep showing the unstyled result.
-constexpr uint8_t SECTION_FILE_VERSION = 61;
+// v62: CSS line-height scales each block's leading, so every line after the first styled block
+// sits at a different y. The byte layout is unchanged (the leading is consumed during the build
+// and what is stored is the resulting positions); the bump exists because a v61 section would
+// keep drawing the old spacing forever.
+constexpr uint8_t SECTION_FILE_VERSION = 62;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

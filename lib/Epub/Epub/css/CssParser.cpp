@@ -55,7 +55,7 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 // streams them): the counts drifting apart is how a cache format silently mis-parses.
 // Bump CSS_CACHE_VERSION whenever any of these change. See writeRuleRecord.
 constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeight, decoration, direction
-constexpr size_t CSS_LENGTH_FIELD_COUNT = 12;  // CssLength members written, in order
+constexpr size_t CSS_LENGTH_FIELD_COUNT = 13;  // CssLength members written, in order
 // display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks
 constexpr size_t CSS_TRAILING_ENUM_BYTES = 8;
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
@@ -136,6 +136,16 @@ size_t collectEdgeValueTokens(std::string_view s, std::string_view (&out)[4]) {
     if (count < 4) out[count++] = tok;
   });
   return count;
+}
+
+// True when the token is a bare number with no unit suffix ("1.4", "2"). tryInterpretLength()
+// resolves an absent unit to Pixels, which is right for every property that takes a length --
+// line-height is the one property whose unitless form means a MULTIPLE of the font size, so it
+// has to be told apart afterwards. Looking at the last character is enough: every unit this
+// parser understands (em, rem, pt, px, %) ends in something that is not a digit or a dot.
+constexpr bool isUnitlessNumber(std::string_view v) {
+  v = trimCssWhitespace(v);
+  return !v.empty() && ((v.back() >= '0' && v.back() <= '9') || v.back() == '.');
 }
 
 std::string_view stripTrailingImportant(std::string_view value) {
@@ -613,6 +623,21 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       }
       // Anything else (inherit/initial/unset) leaves the property undefined so the
       // cascade keeps whatever an ancestor set.
+    }
+  } else if (iequalsAscii(name, "line-height")) {
+    // Stored raw like font-size, and for the same reason: the em base is the BLOCK's own font
+    // size, which is not known until font-size has been resolved to a font id at layout time.
+    // `normal` (and inherit/initial/unset) parses as no length and leaves the property UNSET,
+    // so the reader's own leading stands -- the correct answer, not a value to record.
+    const std::string_view lhValue = stripTrailingImportant(value);
+    CssLength len;
+    if (tryInterpretLength(lhValue, len)) {
+      // The unitless form is the one CSS itself prefers and the one books use most, but
+      // tryInterpretLength has no unit to key on and defaults to Pixels -- which would read
+      // `line-height: 1.4` as 1.4 PIXELS and collapse the block to a single band of ink.
+      if (isUnitlessNumber(lhValue)) len.unit = CssUnit::Number;
+      style.lineHeight = len;
+      style.defined.lineHeight = 1;
     }
   } else if (iequalsAscii(name, "page-break-before") || iequalsAscii(name, "break-before") ||
              iequalsAscii(name, "page-break-after") || iequalsAscii(name, "break-after") ||
@@ -1260,9 +1285,9 @@ bool CssParser::saveToCache() const {
   return true;
 }
 
-// One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 12 CssLength
+// One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 13 CssLength
 // (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
-// fontVariant + listStyleType + inkMode + pageBreaks + definedBits(4) = selectorLen + 77 bytes.
+// fontVariant + listStyleType + inkMode + pageBreaks + definedBits(4) = selectorLen + 82 bytes.
 // The framing constants (CSS_LEADING_ENUM_BYTES / CSS_LENGTH_FIELD_COUNT /
 // CSS_TRAILING_ENUM_BYTES, file scope) must describe exactly what this function writes --
 // every reader below is derived from them.
@@ -1294,6 +1319,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   writeLength(style.imageHeight);
   writeLength(style.imageWidth);
   writeLength(style.fontSize);
+  writeLength(style.lineHeight);
   file.write(static_cast<uint8_t>(style.display));
   file.write(static_cast<uint8_t>(style.verticalAlign));
   file.write(style.borderEdges);
@@ -1329,6 +1355,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   if (style.defined.fontSize) definedBits |= 1 << 22;
   if (style.defined.inkMode) definedBits |= 1 << 23;
   if (style.defined.pageBreak) definedBits |= 1 << 24;
+  if (style.defined.lineHeight) definedBits |= 1 << 25;
   file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
 }
 
@@ -1409,7 +1436,7 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     struct RawLen {
       float v;
       uint8_t u;
-    } lens[CSS_LENGTH_FIELD_COUNT];  // textIndent, mT, mB, mL, mR, pT, pB, pL, pR, imgH, imgW, fontSize
+    } lens[CSS_LENGTH_FIELD_COUNT];  // textIndent, mT, mB, mL, mR, pT, pB, pL, pR, imgH, imgW, fontSize, lineHeight
     bool lenOk = true;
     for (auto& l : lens) {
       if (file.read(&l.v, sizeof(float)) != sizeof(float) || file.read(&l.u, 1) != 1) {
@@ -1423,7 +1450,8 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     // inkMode (v14) is read only to keep the stream aligned -- the vertical engine paints no
     // block backgrounds, so a panel there would be a new feature, not a regression to avoid.
     // (font-size is read as lens[11] above; the vertical engine keeps one cell size per column,
-    // so a per-block size is not applied there.)
+    // so a per-block size is not applied there. line-height is lens[12] and is skipped for the
+    // same reason: a column's advance is a cell grid, not a leading.)
     // pageBreaks (v15) is likewise read for alignment only: the vertical engine paginates
     // columns through its own layout path, so honouring breaks there is new work, not a
     // regression this has to avoid.
@@ -1694,7 +1722,8 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     if (!readLength(style.textIndent) || !readLength(style.marginTop) || !readLength(style.marginBottom) ||
         !readLength(style.marginLeft) || !readLength(style.marginRight) || !readLength(style.paddingTop) ||
         !readLength(style.paddingBottom) || !readLength(style.paddingLeft) || !readLength(style.paddingRight) ||
-        !readLength(style.imageHeight) || !readLength(style.imageWidth) || !readLength(style.fontSize)) {
+        !readLength(style.imageHeight) || !readLength(style.imageWidth) || !readLength(style.fontSize) ||
+        !readLength(style.lineHeight)) {
       rulesBySelector_.clear();
       return false;
     }
@@ -1788,6 +1817,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.defined.fontSize = (definedBits & 1 << 22) != 0;
     style.defined.inkMode = (definedBits & 1 << 23) != 0;
     style.defined.pageBreak = (definedBits & 1 << 24) != 0;
+    style.defined.lineHeight = (definedBits & 1 << 25) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.
