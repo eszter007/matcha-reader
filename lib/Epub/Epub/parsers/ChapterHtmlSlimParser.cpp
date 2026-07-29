@@ -405,6 +405,77 @@ void ChapterHtmlSlimParser::emitInvertedPanel(const BlockStyle& blockStyle, cons
   lastPanelBox = std::move(panel);
 }
 
+// The ONE place a page boundary is made. Everything about CSS page breaks that could go wrong --
+// a blank page, a block that never lands anywhere -- is prevented here: a page with no elements
+// on it is never flushed, it is simply reused. A break therefore always leaves content behind and
+// always starts the next block at y = 0, so pagination cannot fail to move forward.
+void ChapterHtmlSlimParser::breakPage() {
+  if (currentPage && !currentPage->elements.empty()) {
+    maybeEmitOpenBoxForPageBreak();
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
+    completedPageCount++;
+    currentPage.reset(new (std::nothrow) Page());
+    if (!currentPage) LOG_ERR("EHP", "OOM: page after break");
+  }
+  // Pending top spacing dies with the boundary: a block that starts a page starts it at the top.
+  currentPageNextY = 0;
+}
+
+// Start buffering this block's lines if it asks to be kept together (page-break-inside: avoid) or
+// to keep the following block with it (page-break-after: avoid).
+//
+// Nothing is gained by buffering a block that already starts a page: moving it would move it to
+// another empty page and it would be split at exactly the same line, so the (bounded) buffering
+// work is skipped and the block is laid out normally.
+void ChapterHtmlSlimParser::beginKeepTogether(const BlockStyle& blockStyle) {
+  keepingBlockTogether = false;
+  keepBufferHeight = 0;
+  keepWithNextReserve = 0;
+  keepBuffer.clear();
+
+  if (!blockStyle.keepTogether() && !blockStyle.keepWithNext()) return;
+  if (!currentPage || currentPage->elements.empty()) return;
+
+  // One allocation for the parser's lifetime (64 pointers, ~512 bytes) instead of a realloc per
+  // heading; the cap is enforced in addLineToPage, so it never grows past this.
+  if (keepBuffer.capacity() < KEEP_MAX_LINES) keepBuffer.reserve(KEEP_MAX_LINES);
+  keepingBlockTogether = true;
+  if (blockStyle.keepWithNext()) {
+    // Room for ONE line of the reader's own font, not the block's: the block asking to be kept
+    // with the next one is a heading, and what has to fit after it is body text.
+    keepWithNextReserve = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
+  }
+}
+
+// Place the buffered block, breaking the page first if it does not fit where it stands.
+void ChapterHtmlSlimParser::finishKeepTogether() {
+  if (!keepingBlockTogether) return;
+
+  // The buffer is bounded by one viewport height, so the block always fits on a page BY ITSELF;
+  // the only question is whether it fits on this one. `need` includes the keep-with-next reserve
+  // when that still leaves the block placeable -- an ambition, dropped rather than obeyed if
+  // honouring it would push the block off every page.
+  int16_t need = static_cast<int16_t>(keepBufferHeight + keepWithNextReserve);
+  if (need > viewportHeight) need = keepBufferHeight;
+  if (currentPage && !currentPage->elements.empty() && currentPageNextY + need > viewportHeight) {
+    breakPage();
+  }
+  flushKeepBuffer();
+}
+
+// Hand the buffered lines to the normal placement path. Called both when the decision has been
+// made (finishKeepTogether) and when the block turns out to be too tall to keep together at all
+// (addLineToPage) -- in the second case the lines placed so far must still reach the page.
+void ChapterHtmlSlimParser::flushKeepBuffer() {
+  keepingBlockTogether = false;  // cleared FIRST: addLineToPage must not re-buffer the replay
+  keepWithNextReserve = 0;
+  keepBufferHeight = 0;
+  for (auto& buffered : keepBuffer) {
+    addLineToPage(std::move(buffered));
+  }
+  keepBuffer.clear();
+}
+
 void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
   if (!currentPage || boxDepth < 0 || boxAwaitingFirstLine) return;  // no box content on this page yet
   const int lineHeight = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
@@ -1296,6 +1367,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);
     self->blockStyleStack.push_back(accumulated);
     self->startNewTextBlock(accumulated.withoutBottom());
+    // AFTER startNewTextBlock: that call flushes the PREVIOUS block, which must stay on the page
+    // it was already on. The break is spent by the first block laid out from here on.
+    if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, std::size(BLOCK_TAGS))) {
@@ -1317,6 +1391,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                                                                                   BlockStyle::CombineAxis::Horizontal);
       self->blockStyleStack.push_back(accumulated);
       self->startNewTextBlock(accumulated.withoutBottom());
+      // See the header branch above: raised only once the previous block has been flushed.
+      if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
@@ -1845,10 +1921,18 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
         const auto style = self->currentTextBlock->getBlockStyle();
         self->currentTextBlock->setBlockStyle(style.addBottom(self->blockStyleStack.back()));
       }
+      // page-break-after: always on the element that is closing. Read from its OWN stack entry
+      // (the accumulated style of this element, about to be popped) and raised as a one-shot,
+      // so a container gets one break after its content rather than one per child block.
+      const bool breakAfterElement =
+          cssPageBreakGet(self->blockStyleStack.back().pageBreaks, CssPageBreakSlot::After) == CssPageBreak::Always;
       self->blockStyleStack.pop_back();
       // Start a new text block with the parent style to prevent subsequent bare text
       // from inheriting the closed block style (e.g. alignment or margins).
       self->startNewTextBlock(self->blockStyleStack.back());
+      // After startNewTextBlock: it flushes this element's own last block, which belongs on the
+      // page it is already on. The break applies to whatever comes next.
+      if (breakAfterElement) self->pendingForcedBreak = true;
     }
 
     // </li> closes: if the bullet never got inline text (empty <li> or <li> with only
@@ -2007,17 +2091,35 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   const int rubyExtra = line->getRubyShift(renderer.getFontAscenderSize(lineFontId));
   const int lineHeight = renderer.getLineHeight(lineFontId, lineCompression) + rubyExtra;
 
+  // Keep-together buffering (page-break-inside/after: avoid): hold the line instead of placing
+  // it, so the block can still be moved to the next page as a unit. Buffering is abandoned the
+  // moment the block cannot fit on a page by itself -- from there it is laid out and split
+  // exactly as an unstyled block would be, which is what guarantees the layout still terminates.
+  if (keepingBlockTogether) {
+    if (keepBufferHeight + lineHeight <= viewportHeight && keepBuffer.size() < KEEP_MAX_LINES) {
+      keepBufferHeight = static_cast<int16_t>(keepBufferHeight + lineHeight);
+      keepBuffer.push_back(std::move(line));
+      return;
+    }
+    flushKeepBuffer();
+  }
+
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
   }
 
   if (currentPageNextY + lineHeight > viewportHeight) {
-    maybeEmitOpenBoxForPageBreak();
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
-    completedPageCount++;
-    currentPage.reset(new Page());
-    currentPageNextY = 0;
+    if (currentPage->elements.empty()) {
+      // Nothing on this page to leave behind, so a boundary here would emit a BLANK page and put
+      // the line at y = 0 on the next one regardless. Do that directly: drop the pending top
+      // spacing (which is all that can push a line off an otherwise empty page, unless the line
+      // is simply taller than the viewport) and keep the line here.
+      currentPageNextY = 0;
+    } else {
+      breakPage();
+      if (!currentPage) return;
+    }
   }
 
   // First laid-out line inside an open box: its y anchors the box rect's top edge.
@@ -2056,6 +2158,14 @@ void ChapterHtmlSlimParser::makePages() {
     return;
   }
 
+  // A pending `page-break-before/after: always` lands here, ahead of the block's own top spacing
+  // (a block that starts a page has no margin above it). It waits for a block with actual content
+  // so the break cannot be spent on an empty wrapper and leave the real content mid-page.
+  if (pendingForcedBreak && !currentTextBlock->isEmpty()) {
+    pendingForcedBreak = false;
+    breakPage();
+  }
+
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
@@ -2084,9 +2194,16 @@ void ChapterHtmlSlimParser::makePages() {
     lastPanelBox = nullptr;
   }
 
+  // page-break-inside/after: avoid -- buffer the lines, then decide (see beginKeepTogether).
+  beginKeepTogether(blockStyle);
+
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
       [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
+
+  // Before the panel stitching below: the buffered lines are only placed now, and it is their
+  // placement that sets lastPanelBox.
+  finishKeepTogether();
 
   // ... and its bottom padding to the last one, which is only identifiable now the block is laid
   // out. The last line always sits on the still-open page (a page is completed on the NEXT line

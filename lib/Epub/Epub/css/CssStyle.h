@@ -110,6 +110,29 @@ enum class CssInkMode : uint8_t {
   Inverted = 1,  // light ink on a filled dark panel
 };
 
+// page-break-before / -after / -inside, and the modern break-before / -after / -inside aliases.
+//
+// Three properties, two bits each, packed into ONE byte on CssStyle (see pageBreaks). A rule map
+// holds hundreds of rules in RAM during a parse -- 415 on one real trade book -- so a byte per
+// property would cost three times as much for no extra information. `auto` is the zero value, so
+// an unstyled rule's byte is 0 and the packing needs no separate "unset" encoding per property.
+//
+// `page` (and the CSS3 spread keywords) map to Always: this reader has one page per screen, so
+// "start a new page on the left/right/recto/verso" can only mean "start a new page".
+enum class CssPageBreak : uint8_t { Auto = 0, Always = 1, Avoid = 2 };
+
+// Bit offset of each property inside the packed byte. Bits 6-7 are unused.
+enum class CssPageBreakSlot : uint8_t { Before = 0, After = 2, Inside = 4 };
+
+constexpr CssPageBreak cssPageBreakGet(const uint8_t packed, const CssPageBreakSlot slot) {
+  return static_cast<CssPageBreak>((packed >> static_cast<uint8_t>(slot)) & 0x03u);
+}
+
+constexpr uint8_t cssPageBreakWith(const uint8_t packed, const CssPageBreakSlot slot, const CssPageBreak value) {
+  const auto shift = static_cast<uint8_t>(slot);
+  return static_cast<uint8_t>((packed & ~(0x03u << shift)) | (static_cast<uint8_t>(value) << shift));
+}
+
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
   uint16_t textAlign : 1;
@@ -136,6 +159,7 @@ struct CssPropertyFlags {
   uint16_t listStyleType : 1;
   uint16_t fontSize : 1;
   uint16_t inkMode : 1;
+  uint16_t pageBreak : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -161,13 +185,14 @@ struct CssPropertyFlags {
         fontVariant(0),
         listStyleType(0),
         fontSize(0),
-        inkMode(0) {}
+        inkMode(0),
+        pageBreak(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType ||
-           fontSize || inkMode;
+           fontSize || inkMode || pageBreak;
   }
 
   void clearAll() {
@@ -175,11 +200,11 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = 0;
-    textEmphasis = fontVariant = listStyleType = fontSize = inkMode = 0;
+    textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..23.
+// Cache serializes defined flags as uint32_t with bit indices 0..24.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -227,6 +252,15 @@ struct CssStyle {
   // color + background-color, distilled to a polarity. See CssInkMode; derived in
   // CssParser::resolveInkMode() from the two colours' luma, which are never stored.
   CssInkMode inkMode = CssInkMode::Normal;
+  // page-break-{before,after,inside} packed two bits per property. See CssPageBreak.
+  uint8_t pageBreaks = 0;
+
+  [[nodiscard]] CssPageBreak pageBreakBefore() const { return cssPageBreakGet(pageBreaks, CssPageBreakSlot::Before); }
+  [[nodiscard]] CssPageBreak pageBreakAfter() const { return cssPageBreakGet(pageBreaks, CssPageBreakSlot::After); }
+  [[nodiscard]] CssPageBreak pageBreakInside() const { return cssPageBreakGet(pageBreaks, CssPageBreakSlot::Inside); }
+  void setPageBreak(const CssPageBreakSlot slot, const CssPageBreak value) {
+    pageBreaks = cssPageBreakWith(pageBreaks, slot, value);
+  }
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -329,6 +363,16 @@ struct CssStyle {
       inkMode = base.inkMode;
       defined.inkMode = 1;
     }
+    if (base.hasPageBreak()) {
+      // Per property, not a whole-byte copy: two files can style the same selector, one with
+      // `page-break-after: avoid` and one with `page-break-inside: avoid`, and a byte copy would
+      // let the later record silently drop the earlier property. Auto never overwrites, which is
+      // also what makes it safe to merge without a defined bit per property.
+      if (base.pageBreakBefore() != CssPageBreak::Auto) setPageBreak(CssPageBreakSlot::Before, base.pageBreakBefore());
+      if (base.pageBreakAfter() != CssPageBreak::Auto) setPageBreak(CssPageBreakSlot::After, base.pageBreakAfter());
+      if (base.pageBreakInside() != CssPageBreak::Auto) setPageBreak(CssPageBreakSlot::Inside, base.pageBreakInside());
+      defined.pageBreak = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -357,6 +401,10 @@ struct CssStyle {
   // Distinguishes "the book said nothing about colour" from "the book set colours and they came
   // out Normal" -- an explicit Normal must be able to cancel an inherited Inverted panel.
   [[nodiscard]] bool hasInkMode() const { return defined.inkMode; }
+  // Set when ANY of the three page-break properties resolved to something other than auto; the
+  // packed byte then says which. An all-auto declaration leaves the flag clear so it cannot make
+  // an otherwise empty rule look worth keeping.
+  [[nodiscard]] bool hasPageBreak() const { return defined.pageBreak; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -375,6 +423,7 @@ struct CssStyle {
     fontVariant = CssFontVariant::Normal;
     listStyleType = CssListStyleType::Disc;
     inkMode = CssInkMode::Normal;
+    pageBreaks = 0;
     defined.clearAll();
   }
 };

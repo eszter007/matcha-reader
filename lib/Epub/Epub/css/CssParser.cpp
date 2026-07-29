@@ -56,7 +56,8 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 // Bump CSS_CACHE_VERSION whenever any of these change. See writeRuleRecord.
 constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeight, decoration, direction
 constexpr size_t CSS_LENGTH_FIELD_COUNT = 12;  // CssLength members written, in order
-constexpr size_t CSS_TRAILING_ENUM_BYTES = 7;  // display, verticalAlign, border, emphasis, variant, listType, inkMode
+// display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks
+constexpr size_t CSS_TRAILING_ENUM_BYTES = 8;
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
@@ -158,6 +159,25 @@ std::string_view stripTrailingImportant(std::string_view value) {
     value.remove_suffix(1);
   }
   return value;
+}
+
+// page-break-* / break-* values. Everything that means "start a new page" on a single-column
+// reader collapses to Always: the spread keywords (left/right/recto/verso) cannot be honoured as
+// spreads here, and forcing the break is much closer to the author's intent than ignoring it.
+// `avoid-page` is the break-* spelling of `avoid`.
+//
+// Anything else -- auto, inherit, the column/region keywords (avoid-column, column, region) --
+// returns Auto, which never overwrites an existing value and never sets the defined bit. A
+// property we cannot honour must stay absent rather than be cached as an assertion.
+constexpr CssPageBreak interpretPageBreak(const std::string_view value) {
+  if (iequalsAscii(value, "always") || iequalsAscii(value, "page") || iequalsAscii(value, "left") ||
+      iequalsAscii(value, "right") || iequalsAscii(value, "recto") || iequalsAscii(value, "verso")) {
+    return CssPageBreak::Always;
+  }
+  if (iequalsAscii(value, "avoid") || iequalsAscii(value, "avoid-page")) {
+    return CssPageBreak::Avoid;
+  }
+  return CssPageBreak::Auto;
 }
 
 // --- colour -> luma ---------------------------------------------------------------------------
@@ -593,6 +613,20 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       }
       // Anything else (inherit/initial/unset) leaves the property undefined so the
       // cascade keeps whatever an ancestor set.
+    }
+  } else if (iequalsAscii(name, "page-break-before") || iequalsAscii(name, "break-before") ||
+             iequalsAscii(name, "page-break-after") || iequalsAscii(name, "break-after") ||
+             iequalsAscii(name, "page-break-inside") || iequalsAscii(name, "break-inside")) {
+    // Both spellings, one code path: EPUB3 books ship the CSS3 break-* names, EPUB2 books the
+    // page-break-* ones, and plenty of trade stylesheets carry both for the same element.
+    const CssPageBreak resolved = interpretPageBreak(stripTrailingImportant(value));
+    if (resolved != CssPageBreak::Auto) {
+      const CssPageBreakSlot slot =
+          (iequalsAscii(name, "page-break-inside") || iequalsAscii(name, "break-inside")) ? CssPageBreakSlot::Inside
+          : (iequalsAscii(name, "page-break-after") || iequalsAscii(name, "break-after")) ? CssPageBreakSlot::After
+                                                                                          : CssPageBreakSlot::Before;
+      style.setPageBreak(slot, resolved);
+      style.defined.pageBreak = 1;
     }
   } else if (iequalsAscii(name, "font-variant") || iequalsAscii(name, "font-variant-caps")) {
     // Only small-caps matters for rendering; anything else resets to normal.
@@ -1177,7 +1211,7 @@ bool CssParser::saveToCache() const {
 
 // One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 12 CssLength
 // (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
-// fontVariant + listStyleType + inkMode + definedBits(4).
+// fontVariant + listStyleType + inkMode + pageBreaks + definedBits(4) = selectorLen + 77 bytes.
 // The framing constants (CSS_LEADING_ENUM_BYTES / CSS_LENGTH_FIELD_COUNT /
 // CSS_TRAILING_ENUM_BYTES, file scope) must describe exactly what this function writes --
 // every reader below is derived from them.
@@ -1216,6 +1250,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   file.write(static_cast<uint8_t>(style.fontVariant));
   file.write(static_cast<uint8_t>(style.listStyleType));
   file.write(static_cast<uint8_t>(style.inkMode));
+  file.write(style.pageBreaks);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -1242,6 +1277,7 @@ void CssParser::writeRuleRecord(HalFile& file, const std::string& selector, cons
   if (style.defined.listStyleType) definedBits |= 1 << 21;
   if (style.defined.fontSize) definedBits |= 1 << 22;
   if (style.defined.inkMode) definedBits |= 1 << 23;
+  if (style.defined.pageBreak) definedBits |= 1 << 24;
   file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
 }
 
@@ -1337,11 +1373,15 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     // block backgrounds, so a panel there would be a new feature, not a regression to avoid.
     // (font-size is read as lens[11] above; the vertical engine keeps one cell size per column,
     // so a per-block size is not applied there.)
-    uint8_t inkModeVal;
+    // pageBreaks (v15) is likewise read for alignment only: the vertical engine paginates
+    // columns through its own layout path, so honouring breaks there is new work, not a
+    // regression this has to avoid.
+    uint8_t inkModeVal, pageBreaksVal;
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
         file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
-        file.read(&inkModeVal, 1) != 1 || file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
+        file.read(&inkModeVal, 1) != 1 || file.read(&pageBreaksVal, 1) != 1 ||
+        file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
 
@@ -1644,6 +1684,20 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.inkMode =
         inkModeVal == static_cast<uint8_t>(CssInkMode::Inverted) ? CssInkMode::Inverted : CssInkMode::Normal;
 
+    // Read the packed page-break byte (v15+). Bits 6-7 are unused and each 2-bit slot has one
+    // undefined value (3), so the byte is masked down to slots the paginator understands rather
+    // than trusted: a stray value must degrade to `auto`, never to a spurious forced break.
+    uint8_t pageBreaksVal;
+    if (file.read(&pageBreaksVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.pageBreaks = 0;
+    for (const CssPageBreakSlot slot : {CssPageBreakSlot::Before, CssPageBreakSlot::After, CssPageBreakSlot::Inside}) {
+      const CssPageBreak v = cssPageBreakGet(pageBreaksVal, slot);
+      if (v == CssPageBreak::Always || v == CssPageBreak::Avoid) style.setPageBreak(slot, v);
+    }
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
@@ -1674,6 +1728,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     style.defined.listStyleType = (definedBits & 1 << 21) != 0;
     style.defined.fontSize = (definedBits & 1 << 22) != 0;
     style.defined.inkMode = (definedBits & 1 << 23) != 0;
+    style.defined.pageBreak = (definedBits & 1 << 24) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.

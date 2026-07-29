@@ -41,7 +41,9 @@ class CssParser {
   //      so a v12 record cannot be read with the v13 layout.
   // v14: +inkMode (color/background-color polarity) as a 7th trailing enum byte and defined
   //      bit 23 -- the record grew by 1 byte, so a v13 record mis-parses under v14 framing.
-  static constexpr uint8_t CSS_CACHE_VERSION = 14;
+  // v15: +page-break-{before,after,inside} packed into an 8th trailing enum byte and defined
+  //      bit 24 -- one more byte again, so a v14 record is short by one under v15 framing.
+  static constexpr uint8_t CSS_CACHE_VERSION = 15;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

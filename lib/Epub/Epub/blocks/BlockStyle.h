@@ -52,6 +52,27 @@ struct BlockStyle {
 
   [[nodiscard]] bool isInverted() const { return inkMode == CssInkMode::Inverted; }
 
+  // CSS page-break-{before,after,inside}, packed exactly as CssStyle::pageBreaks (2 bits each).
+  // Only the `avoid` values are read from here, by ChapterHtmlSlimParser::makePages:
+  //   - inside:avoid -> lay the block out as a unit if it fits on a page by itself
+  //   - after:avoid  -> keep one line of room after it so the next block starts on the same page
+  // Deliberately NOT inherited by getCombinedBlockStyle: a nested <p> keeps its own byte, so a
+  // container's `avoid` reaches only the blocks the container itself opens (its bare text), not
+  // every paragraph inside it. The block, not the container, is this engine's unit of pagination.
+  //
+  // The `always` values are NOT taken from a block style at all: a container's accumulated style
+  // is reused for every text block it opens (blockStyleStack), so a forced break read from here
+  // would fire once per paragraph instead of once per element. Those are raised as a one-shot
+  // pending break when the element opens/closes -- see ChapterHtmlSlimParser::pendingForcedBreak.
+  uint8_t pageBreaks = 0;
+
+  [[nodiscard]] bool keepTogether() const {
+    return cssPageBreakGet(pageBreaks, CssPageBreakSlot::Inside) == CssPageBreak::Avoid;
+  }
+  [[nodiscard]] bool keepWithNext() const {
+    return cssPageBreakGet(pageBreaks, CssPageBreakSlot::After) == CssPageBreak::Avoid;
+  }
+
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
   // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
@@ -189,6 +210,7 @@ struct BlockStyle {
       blockStyle.inkMode = cssStyle.inkMode;
       blockStyle.inkModeDefined = true;
     }
+    blockStyle.pageBreaks = cssStyle.pageBreaks;
     // RTL direction from CSS/HTML
     if (cssStyle.hasDirection()) {
       blockStyle.isRtl = (cssStyle.direction == CssTextDirection::Rtl);

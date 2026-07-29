@@ -110,7 +110,10 @@ namespace {
 // v59: CSS color/background-color become an ink mode. Every TextBlock stores it (2 bytes after
 // fontId) and every PageBox stores a fill flag, so a v58 record is one byte short per box and
 // mis-frames the block that follows; inverted blocks also gain a panel element a v58 page lacks.
-constexpr uint8_t SECTION_FILE_VERSION = 59;
+// v60: CSS page-break-{before,after,inside} are honoured, so blocks land on different pages than
+// a v59 build put them on. The byte layout is unchanged -- the bump exists because the PAGINATION
+// changed, and a cached section would otherwise keep showing chapters running together.
+constexpr uint8_t SECTION_FILE_VERSION = 60;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

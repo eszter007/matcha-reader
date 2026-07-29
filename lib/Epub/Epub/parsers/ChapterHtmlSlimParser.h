@@ -65,6 +65,33 @@ class ChapterHtmlSlimParser {
   std::shared_ptr<PageBox> lastPanelBox = nullptr;  // grown by the bottom pad once the block closes
   void emitInvertedPanel(const BlockStyle& blockStyle, int16_t lineHeight);
 
+  // --- CSS page-break control (see BlockStyle::pageBreaks) -------------------------------------
+  //
+  // Every page boundary in this parser goes through breakPage(), which refuses to flush a page
+  // with no elements on it. That single rule is what makes the break properties safe: no
+  // combination of them can emit a blank page, and no block can bounce between pages, because a
+  // break only ever happens when there is content to leave behind.
+  //
+  // `always` is raised as a ONE-SHOT pending break by the element that declares it (open for
+  // -before, close for -after) rather than read from a block style: a container's accumulated
+  // style is reused for every text block it opens, so reading it per block would break a page
+  // before every paragraph in the container instead of once.
+  bool pendingForcedBreak = false;
+  // `inside: avoid` / `after: avoid`: the block's lines are buffered instead of being placed, so
+  // the block can move to the next page as a UNIT once its total height is known (streaming
+  // layout means the height is not knowable before the last line). Buffering stops the moment
+  // the block exceeds what a page can hold, so the buffer is bounded by one viewport height and
+  // an over-long block is simply split, as it would have been without the property.
+  static constexpr size_t KEEP_MAX_LINES = 64;
+  bool keepingBlockTogether = false;
+  int16_t keepBufferHeight = 0;     // sum of the buffered lines' heights
+  int16_t keepWithNextReserve = 0;  // room to leave after the block for `after: avoid`
+  std::vector<std::shared_ptr<TextBlock>> keepBuffer;
+  void breakPage();
+  void beginKeepTogether(const BlockStyle& blockStyle);
+  void finishKeepTogether();
+  void flushKeepBuffer();
+
   void flushPendingBlockLayout();
   void emitBoxRect(bool openBottom);
   void maybeEmitOpenBoxForPageBreak();

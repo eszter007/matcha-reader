@@ -25,7 +25,8 @@ same way.
 `font` · `display` · `direction` · `margin{,-top,-right,-bottom,-left}` ·
 `padding{,-top,-right,-bottom,-left}` · `border{,-top,-right,-bottom,-left,-style}` ·
 `list-style(-type)` · `width` · `height` · `vertical-align` · `font-size` ·
-`color` / `background-color` (as an ink-polarity decision, see Phase 2)
+`color` / `background-color` (as an ink-polarity decision, see Phase 2) ·
+`page-break-{before,after,inside}` + the `break-*` aliases (see Phase 3)
 
 ## Ignored, ranked by measured impact
 
@@ -33,7 +34,6 @@ same way.
 |---|---|---|
 | 65 | `font-family` | 12 `@font-face` faces ignored; everything uses the reader font |
 | 15 | `line-height` | book leading lost; only the global Line Spacing applies |
-| 13 | `page-break-{inside,before,after}` | sections run together |
 | 8 | `letter-spacing` | tracking on headings lost |
 | 8 | `float` | pull-quotes and figures fall inline |
 | 3+18 | `hyphens`, `hyphenate-limit-*` (+vendor) | book's hyphenation prefs ignored |
@@ -63,10 +63,10 @@ which is why `color` was not allowed to lag far behind `font-size`.
 |---|---|
 | property dispatch | `lib/Epub/Epub/css/CssParser.cpp` — `parseDeclarationIntoStyle()` (there is no `applyDeclaration`), `iequalsAscii(name, ...)` chain |
 | style struct + enums | `lib/Epub/Epub/css/CssStyle.h` — `CssStyle`, `CssLength`, `CssPropertyFlags` |
-| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **14**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
+| cache format | `CssParser.h` — `CSS_CACHE_VERSION` (currently **15**); the framing constants (`CSS_LEADING_ENUM_BYTES` / `CSS_LENGTH_FIELD_COUNT` / `CSS_TRAILING_ENUM_BYTES` / `RULE_FIXED_BYTES`) are defined once at `CssParser.cpp` ~line 53 and shared by `writeRuleRecord`, `validateCache`, `loadFromCache` and `collectVerticalStyles` |
 | style → layout | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` — `currentCssStyle`, ~lines 200-310 |
 | line breaking / gaps | `lib/Epub/Epub/ParsedText.cpp` |
-| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **59**) |
+| section cache format | `lib/Epub/Epub/Section.cpp` — `SECTION_FILE_VERSION` (currently **60**) |
 
 ### Rules that apply to every item below
 
@@ -135,11 +135,40 @@ Colours are only compared *within one rule block* — the engine has no cascade 
 colour across selectors, so `body{background:#000}` + `p{color:#fff}` in separate
 rules resolves to `Normal` (safe) rather than `Inverted`.
 
-## Phase 3 — `page-break-before` / `-after` / `-inside`
+## Phase 3 — `page-break-before` / `-after` / `-inside` — **done**
 
-`always` / `avoid` on block boundaries, in the paginator. Two bits per block
-(before/after) plus one for `avoid-inside`. Needs a `CSS_CACHE_VERSION` bump too:
-no `CssLength`, so `CSS_TRAILING_ENUM_BYTES` grows by 1.
+`always` and `avoid` on block boundaries, in the paginator. Both spellings are
+accepted (`page-break-*` and the CSS3 `break-*`); `page` and the spread keywords
+(`left`/`right`/`recto`/`verso`) all mean `always` on a one-page-per-screen
+reader. Everything else — `auto`, `inherit`, the column/region values — leaves
+the property unset. Three properties, two bits each, in ONE `CssStyle` byte
+(`pageBreaks`) plus one `defined` bit; `CSS_TRAILING_ENUM_BYTES` 7 → 8.
+
+| declaration | what the paginator does |
+|---|---|
+| `-before: always` | the block starts a new page |
+| `-after: always` | the next block starts a new page |
+| `-inside: avoid` | the block is laid out on one page if it fits on a page at all |
+| `-after: avoid` | one line of room is kept after the block, so a heading is not orphaned at the page bottom |
+
+`always` is raised as a one-shot pending break by the element that declares it
+(open for `-before`, close for `-after`), NOT read from a block style: a
+container's accumulated style is reused for every text block it opens, so
+reading it per block would break a page before every paragraph inside it.
+The `avoid` values do come from the block style, and are not inherited: a
+container's `-inside: avoid` reaches only the blocks the container itself opens,
+not the `<p>`s nested inside it. The block, not the container, is this engine's
+unit of pagination — which is also why `h1,h2,…{page-break-inside:avoid}`, the
+form books actually use, lands exactly as intended.
+
+**Forward progress.** Layout is streaming (`layoutAndExtractLines` hands over one
+line at a time), so a block's height is not known until its last line. An
+`avoid` block therefore BUFFERS its lines and places them once the height is
+known — and stops buffering the moment the block exceeds one viewport height, so
+the buffer is bounded by a page and an over-long block is split exactly as it
+would have been without the property. Every page boundary goes through
+`breakPage()`, which refuses to flush a page with no elements on it. Those two
+rules together are the guarantee: no blank page, and no block that fails to land.
 
 ## Phase 4 — descendant selectors
 
