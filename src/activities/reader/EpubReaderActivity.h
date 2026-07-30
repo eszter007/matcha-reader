@@ -176,6 +176,9 @@ class EpubReaderActivity final : public Activity {
   std::atomic<uint32_t> imageWarmInputStamp_{0};
   uint32_t imageWarmStampSnapshot_ = 0;  // render task only: stamp value at warm start
   std::string imageWarmFailedPath_;      // render task only: give-up-once decode-failure target
+  static constexpr uint32_t NO_IMAGE_REFINE = UINT32_MAX;
+  std::atomic<uint32_t> pendingHorizontalImageRefine_{NO_IMAGE_REFINE};
+  std::atomic<uint32_t> requestedHorizontalImageRefine_{NO_IMAGE_REFINE};
   void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
   static bool imageWarmShouldCancel(const void* ctx);
   // Viewport of the last render(), captured so loop()'s lazy partial-extension start
@@ -194,7 +197,8 @@ class EpubReaderActivity final : public Activity {
   int lastSavedPageCount = -1;
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
-                      int orientedMarginBottom, int orientedMarginLeft, bool glyphsAlreadyWarm = false);
+                      int orientedMarginBottom, int orientedMarginLeft, bool glyphsAlreadyWarm = false,
+                      bool grayscaleRefineOnly = false);
   // Horizontal analog of prewarmedVPage_: the page index whose glyphs currently sit warm in
   // the font cache from the idle next-page prewarm; -1 = cold/unknown. Written on the render
   // task only.

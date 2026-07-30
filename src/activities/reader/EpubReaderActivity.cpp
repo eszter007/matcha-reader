@@ -464,11 +464,28 @@ void EpubReaderActivity::loop() {
   // stamp per decode block, so the wait stays in the milliseconds).
   if (mappedInput.wasAnyPressed()) {
     imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
+    pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   }
 
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
   ReaderUtils::flushReadingStats(readingSessionStartMs);
+  // A horizontal image is shown immediately in BW; refine it only after the reader
+  // leaves the page idle. The render lock keeps this behind the foreground render,
+  // and any input above cancels the pending refinement before it can be queued.
+  constexpr unsigned long IMAGE_REFINE_IDLE_MS = 150;
+  uint32_t pendingRefine = pendingHorizontalImageRefine_.load(std::memory_order_relaxed);
+  if (pendingRefine != NO_IMAGE_REFINE && section && lastRenderCompleteMs != 0 &&
+      millis() - lastRenderCompleteMs >= IMAGE_REFINE_IDLE_MS && !RenderLock::peek()) {
+    const uint32_t currentKey =
+        (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
+    if (pendingRefine == currentKey && pendingHorizontalImageRefine_.compare_exchange_strong(
+                                           pendingRefine, NO_IMAGE_REFINE, std::memory_order_relaxed)) {
+      requestedHorizontalImageRefine_.store(currentKey, std::memory_order_relaxed);
+      requestUpdate();
+      return;
+    }
+  }
   // Idle glyph prewarm for the likely next page (currentPage + 1). The scan
   // pass draws nothing (FCM scan mode suppresses pixels), so the displayed
   // framebuffer is untouched; endScanAndPrewarm loads only glyphs not already
@@ -1357,6 +1374,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   // bump didn't fire -- cancel a running image warm before the chapter-boundary branches below
   // block on the RenderLock it holds.
   imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
+  pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   lastTurnForward_.store(isForwardTurn, std::memory_order_relaxed);
 
   // A vertical chapter is still building on the render task: pageCount is 0 until the build
@@ -2274,8 +2292,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
 
     const auto start = millis();
+    const uint32_t currentKey =
+        (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
+    const bool grayscaleRefineOnly =
+        requestedHorizontalImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == currentKey;
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft,
-                   /*glyphsAlreadyWarm=*/prewarmedHPage_ == section->currentPage);
+                   /*glyphsAlreadyWarm=*/prewarmedHPage_ == section->currentPage, grayscaleRefineOnly);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
   }
@@ -2441,6 +2463,7 @@ bool EpubReaderActivity::applyDeferredReposition() {
 
 bool EpubReaderActivity::imageWarmShouldCancel(const void* ctx) {
   const auto* self = static_cast<const EpubReaderActivity*>(ctx);
+  if (self->mappedInput.anyButtonDownRaw()) return true;
   if (self->imageWarmInputStamp_.load(std::memory_order_relaxed) != self->imageWarmStampSnapshot_) {
     return true;
   }
@@ -2541,28 +2564,43 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   if (!section || section->pageCount == 0) {
     return;
   }
-  std::unique_ptr<Page> peeked;
-  const int nextPage = section->currentPage + 1;
-  if (nextPage < section->pageCount) {
-    peeked = section->loadPageAt(nextPage);
-  } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
-    Section nextSection(epub, currentSpineIndex + 1, renderer);
-    if (nextSection.loadSectionFile(SETTINGS.readerRenderSpec(viewportWidth, viewportHeight)) &&
-        nextSection.pageCount > 0) {
-      peeked = nextSection.loadPageAt(0);
+  constexpr int IMAGE_WARM_LOOKAHEAD_PAGES = 8;
+  const auto warmHorizontalPage = [&](const Page& page) -> bool {
+    for (const auto& el : page.elements) {
+      if (el->getTag() == TAG_PageImage &&
+          !warmBlock(static_cast<const PageImage&>(*el).getImageBlock())) {
+        return false;
+      }
     }
+    return true;
+  };
+
+  const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
+  const int direction = forward ? 1 : -1;
+  int warmedAhead = 0;
+  for (int pageIndex = section->currentPage + direction;
+       pageIndex >= 0 && pageIndex < section->pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
+       pageIndex += direction, warmedAhead++) {
+    if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+    auto page = section->loadPageAt(pageIndex);
+    if (!page || !warmHorizontalPage(*page)) return;
   }
-  if (!peeked) {
-    LOG_DBG("IWARM", "skip: no next horizontal page peeked (page %d/%d)", section->currentPage,
-            section->pageCount);  // TEMP
-    return;
-  }
-  for (const auto& el : peeked->elements) {
-    if (el->getTag() != TAG_PageImage) {
-      continue;
-    }
-    if (!warmBlock(static_cast<const PageImage&>(*el).getImageBlock())) {
-      break;  // cancelled -- input or a queued render wants the CPU/SD
+
+  // Continue the same short lookahead across the chapter boundary in the
+  // reader's actual turn direction.
+  const int adjacentSpine = currentSpineIndex + direction;
+  if (warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES && adjacentSpine >= 0 &&
+      adjacentSpine < epub->getSpineItemsCount()) {
+    Section adjacentSection(epub, adjacentSpine, renderer);
+    if (adjacentSection.loadSectionFile(SETTINGS.readerRenderSpec(viewportWidth, viewportHeight)) &&
+        adjacentSection.pageCount > 0) {
+      for (int pageIndex = forward ? 0 : adjacentSection.pageCount - 1;
+           pageIndex >= 0 && pageIndex < adjacentSection.pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
+           pageIndex += direction, warmedAhead++) {
+        if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+        auto page = adjacentSection.loadPageAt(pageIndex);
+        if (!page || !warmHorizontalPage(*page)) return;
+      }
     }
   }
 }
@@ -2574,7 +2612,8 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
-                                        const int orientedMarginLeft, const bool glyphsAlreadyWarm) {
+                                        const int orientedMarginLeft, const bool glyphsAlreadyWarm,
+                                        const bool grayscaleRefineOnly) {
   const auto t0 = millis();
   const int fontId = effectiveReaderFontId();
 
@@ -2596,7 +2635,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // persists (the next idle warm clears and rebuilds it).
   auto* fcm = renderer.getFontCacheManager();
   std::optional<FontCacheManager::PrewarmScope> prewarm;
-  if (!glyphsAlreadyWarm && fcm) {
+  if (!grayscaleRefineOnly && !glyphsAlreadyWarm && fcm) {
     prewarm.emplace(fcm->createPrewarmScope());
     page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());  // scan pass
     prewarm->endScanAndPrewarm();
@@ -2605,8 +2644,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   const bool pageHasImages = page->hasImages();
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
-  const bool manualRefreshPending = forcedRefreshPending;
-  forcedRefreshPending = false;
+  const bool manualRefreshPending = !grayscaleRefineOnly && forcedRefreshPending;
+  if (!grayscaleRefineOnly) forcedRefreshPending = false;
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   const bool tiledGrayscale = needsAnyGrayscale && renderer.supportsStripGrayscale();
@@ -2624,40 +2663,26 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     }
   };
 
-  if (pageHasImagesNeedingDecode) {
+  if (!grayscaleRefineOnly && pageHasImagesNeedingDecode) {
     page->renderWithImagePlaceholders(renderer, fontId, orientedMarginLeft, orientedMarginTop);
     renderStatusBar();
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     renderer.clearScreen();
   }
 
-  page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
-  renderStatusBar();
-  const auto tBwRender = millis();
+  auto tBwRender = tPrewarm;
+  auto tDisplay = tBwRender;
+  if (!grayscaleRefineOnly) {
+    page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
+    renderStatusBar();
+    tBwRender = millis();
+  }
 
-  if (pageHasImages) {
-    // Double FAST_REFRESH with selective image blanking (pablohc's technique):
-    // HALF_REFRESH sets particles too firmly for the grayscale LUT to adjust.
-    // Instead, blank only the image area and do two fast refreshes.
-    // Step 1: Display page with image area blanked (text appears, image area white)
-    // Step 2: Re-render with images and display again (images appear clean)
-    int16_t imgX, imgY, imgW, imgH;
-    if (page->getImageBoundingBox(imgX, imgY, imgW, imgH)) {
-      // Image pages intentionally bypass the regular refresh cadence. Preserve
-      // the manual clean pass before their double-FAST grayscale pipeline.
-      if (manualRefreshPending) {
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-      }
-      renderer.fillRect(imgX + orientedMarginLeft, imgY + orientedMarginTop, imgW, imgH, false);
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-
-      // Re-render page content to restore images into the blanked area
-      // Status bar is not re-rendered here to avoid reading stale dynamic values (e.g. battery %)
-      page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    } else {
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-    }
+  if (!grayscaleRefineOnly && pageHasImages) {
+    // Put the final image on the panel in one pass. The old selective-blank
+    // double refresh showed a white frame and delayed the picture; grayscale
+    // now refines separately after the page stays idle.
+    renderer.displayBuffer(manualRefreshPending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
     // The image's own page is handled above and doesn't count toward the full
     // refresh cadence. But the grayscale pass below leaves gray charge in the
     // image region that a plain fast diff on the *next* page can't clear, so
@@ -2665,12 +2690,25 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // HALF ghost-cleanup path, which drives every pixel to its target
     // regardless of residue.
     pagesUntilFullRefresh = 1;
-  } else {
+  } else if (!grayscaleRefineOnly) {
     // Async form: start the waveform and return so the grayscale plane rendering
     // below overlaps the panel's refresh time instead of following it.
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
   }
-  const auto tDisplay = millis();
+  tDisplay = millis();
+
+  if (!grayscaleRefineOnly && pageHasImages) {
+    const uint32_t currentKey =
+        (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
+    pendingHorizontalImageRefine_.store(currentKey, std::memory_order_relaxed);
+    LOG_DBG("ERS", "Page render (image BW): prewarm=%lums bw_render=%lums display=%lums total=%lums",
+            tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tDisplay - t0);
+    return;
+  }
+
+  if (grayscaleRefineOnly) {
+    imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+  }
 
   // Tiled grayscale: render each plane band-by-band, leaving the BW
   // framebuffer intact so no full-frame storeBwBuffer is needed; controller
@@ -2682,7 +2720,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // rendering below overlaps the panel's refresh time; only the controller
   // RAM writes wait for BUSY.
   if (tiledGrayscale) {
-    constexpr int STRIP_ROWS = 80;
+    // Image rendering re-reads the whole row-major pixel cache for every
+    // physical strip. Match the vertical image path's 160-row fast tier,
+    // falling back to 80 rows below if the larger scratch does not fit.
+    int stripRows = pageHasImages ? 160 : 80;
     const int gh = renderer.getDisplayHeight();
     const int gwBytes = renderer.getDisplayWidthBytes();
     const size_t planeBytes = static_cast<size_t>(gwBytes) * gh;
@@ -2691,8 +2732,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // the controller, so it can run while the refresh is still in flight.
     auto renderPlaneToBuffer = [&](const bool lsbPlane, uint8_t* buf) {
       renderer.setRenderMode(lsbPlane ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
-      for (int y = 0; y < gh; y += STRIP_ROWS) {
-        const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+      for (int y = 0; y < gh; y += stripRows) {
+        const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
         renderer.beginStripTarget(buf + static_cast<size_t>(y) * gwBytes, y, rows);
         renderer.clearScreen(0x00);
         renderGrayscalePass();
@@ -2758,10 +2799,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // Per-strip scratch tier: blocking panels (X3) and the OOM fallback.
       // The strip writes below need the panel idle, so wait out any pending
       // async refresh first (no-op on blocking panels).
-      auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+      auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
+      if (!scratch && pageHasImages) {
+        stripRows = 80;
+        scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
+      }
       renderer.waitRefreshComplete();
       if (!scratch) {
-        LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * STRIP_ROWS);
+        LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * stripRows);
         if (overlapRefresh) {
           // The BW refresh ran the shadow-free async path, so controller RAM's
           // differential baseline was never rebuilt. Even with AA skipped it must
@@ -2772,9 +2817,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       } else {
         // Bands may be streamed in any order: X4 windows each via setRamArea,
         // X3 via PTL.
+        bool cancelled = false;
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-        for (int y = 0; y < gh; y += STRIP_ROWS) {
-          const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+        for (int y = 0; y < gh && !cancelled; y += stripRows) {
+          if (pageHasImages && imageWarmShouldCancel(this)) {
+            cancelled = true;
+            break;
+          }
+          const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
           renderer.beginStripTarget(scratch.get(), y, rows);
           renderer.clearScreen(0x00);
           renderGrayscalePass();
@@ -2785,8 +2835,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
         // MSB plane.
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-        for (int y = 0; y < gh; y += STRIP_ROWS) {
-          const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+        for (int y = 0; y < gh && !cancelled; y += stripRows) {
+          if (pageHasImages && imageWarmShouldCancel(this)) {
+            cancelled = true;
+            break;
+          }
+          const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
           renderer.beginStripTarget(scratch.get(), y, rows);
           renderer.clearScreen(0x00);
           renderGrayscalePass();
@@ -2796,7 +2850,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         const auto tGrayMsb = millis();
 
         renderer.setRenderMode(GfxRenderer::BW);
-        renderer.displayGrayBuffer();
+        if (!cancelled) renderer.displayGrayBuffer();
         const auto tGrayDisplay = millis();
 
         // BW framebuffer is intact; re-sync controller RAM for the next
@@ -2807,9 +2861,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         const auto tEnd = millis();
         LOG_DBG("ERS",
                 "Page render (tiled): prewarm=%lums bw_render=%lums display=%lums gray_lsb=%lums "
-                "gray_msb=%lums gray_display=%lums cleanup=%lums total=%lums",
+                "gray_msb=%lums gray_display=%lums cleanup=%lums total=%lums cancelled=%d",
                 tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayLsb - tDisplay, tGrayMsb - tGrayLsb,
-                tGrayDisplay - tGrayMsb, tCleanup - tGrayDisplay, tEnd - t0);
+                tGrayDisplay - tGrayMsb, tCleanup - tGrayDisplay, tEnd - t0, cancelled);
       }
     }
   } else {
