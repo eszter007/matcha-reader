@@ -13,6 +13,7 @@
 #include <MangaPanel.h>
 #include <Memory.h>
 #include <PngToBmpConverter.h>
+#include <Xtc.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -174,7 +175,7 @@ void RecentBooksActivity::loadRecentBooks() {
 namespace {
 constexpr char LIBRARY_INDEX_PATH[] = "/.crosspoint/library.idx";
 constexpr uint32_t LIBRARY_INDEX_MAGIC = 0x4C494258;  // "LIBX"
-constexpr uint8_t LIBRARY_INDEX_VERSION = 1;
+constexpr uint8_t LIBRARY_INDEX_VERSION = 3;
 constexpr size_t LIBRARY_INDEX_MAX_ENTRIES = 2048;  // guards a corrupt count against the heap
 }  // namespace
 
@@ -271,7 +272,7 @@ bool RecentBooksActivity::stepLibraryScan() {
     return false;
   }
 
-  // Epub cover-thumb pass, one book per slice.
+  // EPUB/XTC cover-thumb pass, one book per slice.
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int thumbH =
       gridCoverHeight_ > 0 ? gridCoverHeight_ : (metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120);
@@ -338,11 +339,14 @@ bool RecentBooksActivity::stepLibraryScan() {
       scan_.thumbIndex++;
       return false;  // heavy step: one per slice
     }
-    if ((!book.coverBmpPath.empty() && !coverIsTemplate) || !FsHelpers::hasEpubExtension(book.path)) {
+    const bool isEpub = FsHelpers::hasEpubExtension(book.path);
+    const bool isXtc = FsHelpers::hasXtcExtension(book.path);
+    if ((!book.coverBmpPath.empty() && !coverIsTemplate) || (!isEpub && !isXtc)) {
       scan_.thumbIndex++;
       continue;
     }
-    std::string cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(book.path));
+    std::string cachePath =
+        std::string("/.crosspoint/") + (isEpub ? "epub_" : "xtc_") + std::to_string(std::hash<std::string>{}(book.path));
     std::string thumbPath = cachePath + "/thumb_" + std::to_string(thumbH) + ".bmp";
 
     // Index shortcut: a record whose size, modification stamp and cover height all still match
@@ -384,14 +388,23 @@ bool RecentBooksActivity::stepLibraryScan() {
     // streaked, half-black thumbnail (user report). Fonts reload lazily afterwards. Same step
     // the home screen already takes before generating XTC thumbs.
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+    Storage.remove(thumbPath.c_str());  // validated stale above; generators otherwise return early
     thumbGenStartedMs = millis();
-    Epub epub(book.path, "/.crosspoint");
-    const bool generated = epub.load(true, true) && epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
+    bool generated = false;
+    std::string title;
+    if (isEpub) {
+      Epub epub(book.path, "/.crosspoint");
+      generated = epub.load(true, true) && epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
+      title = epub.getTitle();
+    } else {
+      Xtc xtc(book.path, "/.crosspoint");
+      generated = xtc.load() && xtc.generateThumbBmp(thumbH);
+      title = xtc.getTitle();
+    }
     thumbGenBudgetMs = generated ? 400 : std::min<uint32_t>(thumbGenBudgetMs * 2, 3000);
     recordIndexEntry(book.path, bookSize, bookStamp, thumbH, generated);
     if (generated) {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
-      const auto& title = epub.getTitle();
       if (!title.empty()) book.title = title;
       // Surface the new cover immediately (the list was already applied after the walk).
       {

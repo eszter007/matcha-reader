@@ -126,7 +126,7 @@ class RecentBooksActivity final : public Activity {
     bool walkDone = false;
     std::vector<std::string> dirStack;
     std::vector<RecentBook> results;
-    size_t thumbIndex = 0;  // epub cover-thumb pass cursor over results
+    size_t thumbIndex = 0;  // EPUB/XTC cover-thumb pass cursor over results
   };
   LibraryScanState scan_;
 
