@@ -43,9 +43,9 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
 
-// Minimum free heap required to apply CSS during rendering
-// If below this threshold, we skip CSS to avoid display artifacts.
-constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
+// Headroom for one selector-map insertion. Cache loads are streamed, so requiring enough
+// contiguous heap for the entire book-wide rule table rejects safe chapter-filtered loads.
+constexpr size_t MIN_MAX_ALLOC_FOR_CSS_RULE = 4 * 1024;
 
 // Maximum length for a single selector string
 // Prevents parsing of extremely long or malformed selectors
@@ -1086,8 +1086,7 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
           // for a single hash-node insert (a selector string + CssStyle, a few hundred bytes) was
           // confirmed on a real device to flood-reject nearly every remaining rule the moment free
           // heap dipped anywhere below 48KB, silently discarding most of a chapter's styling.
-          constexpr uint32_t MIN_FREE_HEAP_FOR_ONE_RULE = 4 * 1024;
-          if (ESP.getMaxAllocHeap() < MIN_FREE_HEAP_FOR_ONE_RULE) {
+          if (ESP.getMaxAllocHeap() < MIN_MAX_ALLOC_FOR_CSS_RULE) {
             LOG_ERR("CSS", "Low heap (%u bytes) while parsing CSS rules; skipping remaining selectors",
                     ESP.getMaxAllocHeap());
             limitReached = true;
@@ -1259,16 +1258,6 @@ bool CssParser::loadFromStream(HalFile& source) {
 
 CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::string_view classAttr,
                                  const CssElementPath* path) const {
-  static bool lowHeapWarningLogged = false;
-  if (ESP.getMaxAllocHeap() < MIN_FREE_HEAP_FOR_CSS) {
-    if (!lowHeapWarningLogged) {
-      lowHeapWarningLogged = true;
-      LOG_DBG("CSS", "Warning: low heap (%u bytes) below MIN_FREE_HEAP_FOR_CSS (%u), returning empty style",
-              ESP.getMaxAllocHeap(), static_cast<unsigned>(MIN_FREE_HEAP_FOR_CSS));
-    }
-    return CssStyle{};
-  }
-
   // Matching rules are collected first and applied in ascending specificity afterwards,
   // because the enumeration order is not the cascade order once compound selectors exist:
   // `div p` (1+1) must apply before `.note` (16), which is found later, and `.callout p`
@@ -1721,8 +1710,10 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     return false;
   }
 
-  // Size the bucket array up front to avoid incremental rehashes while loading rules.
-  rulesBySelector_.reserve(ruleCount);
+  // A chapter-filtered load keeps only a small subset of a book-wide cache. Reserving the
+  // book's full rule count here defeats that filter and can consume the last contiguous block
+  // before the first record is even inspected.
+  if (usedClasses == nullptr) rulesBySelector_.reserve(ruleCount);
 
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
     return static_cast<size_t>(file.available()) >= neededBytes;
@@ -1737,20 +1728,11 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
   // the whole process on OOM under -fno-exceptions -- there is no way to catch that at the call
   // site. Bail out gracefully (drop the cache, fall back to unstyled rendering) instead of letting
   // a large SD-card font's memory footprint plus CSS rule growth crash the device mid-loop.
-  // Reuses MIN_FREE_HEAP_FOR_CSS (see file-scope constant) for consistency with the same guard
-  // in processRuleBlockWithStyle() -- a device crash at ~28KB free showed the earlier 24KB
-  // threshold here cut it too close.
+  // The load is streamed and chapter-filtered; guard each retained map insertion rather than
+  // requiring one large contiguous block for the book-wide rule count.
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
-    if (ESP.getMaxAllocHeap() < MIN_FREE_HEAP_FOR_CSS) {
-      LOG_ERR("CSS", "Low heap (%u bytes) while loading CSS cache at rule %u/%u; aborting cache load",
-              ESP.getMaxAllocHeap(), i, ruleCount);
-      rulesBySelector_.clear();
-      cacheLoadFailedForHeap_ = true;  // cache file is VALID -- caller must not delete/rebuild it
-      return false;
-    }
-
     // Read selector string
     uint16_t selectorLen = 0;
     if (!hasRemainingBytes(sizeof(selectorLen))) {
@@ -1990,6 +1972,16 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
         sel.remove_prefix(end + 1);
       }
       if (!allClassesUsed) continue;
+    }
+
+    // Check only when this rule will allocate. A filtered load may safely stream past hundreds
+    // of irrelevant records even when there is not enough heap to materialize the whole cache.
+    if (ESP.getMaxAllocHeap() < MIN_MAX_ALLOC_FOR_CSS_RULE) {
+      LOG_ERR("CSS", "Low heap (%u bytes) while loading CSS cache at rule %u/%u; aborting cache load",
+              ESP.getMaxAllocHeap(), i, ruleCount);
+      rulesBySelector_.clear();
+      cacheLoadFailedForHeap_ = true;  // cache file is VALID -- caller must not delete/rebuild it
+      return false;
     }
 
     // The incremental (per-file) cache writer can emit the same selector once per CSS file, so
