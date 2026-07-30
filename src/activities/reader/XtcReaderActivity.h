@@ -61,8 +61,6 @@ class XtcReaderActivity final : public Activity {
   };
 
   void renderPage();
-  // Opens chapter selection when the book has chapters (short-press Confirm); no-op otherwise
-  void openChapterSelection();
   void renderStatusBarOverlay(StatusBarOverlayPosition position) const;
   StatusBarInfo getStatusBarInfo() const;
   void saveProgress() const;

@@ -1212,7 +1212,7 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   fillPageProgressNow(bookProgress, &recentBooks, nullptr, firstIdx, lastIdx);
 
   // Prewarm titles for the full rows only (the peek row's titles are never drawn).
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
     for (int idx = firstIdx; idx <= titledLastIdx; idx++) {
@@ -1347,7 +1347,7 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
   // unconditionally on every render (unlike cover-fallback titles below), so without this, non-Latin
   // names (e.g. Japanese folders) hit FontDecompressor's slow single-slot fallback on every navigation
   // step -- one full ~64KB group decompression per name that lands in a different glyph group.
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
     for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
@@ -1405,7 +1405,7 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
 
   fillPageProgressNow(shelfBookProgress, nullptr, &shelfBooks, firstIdx, lastIdx);
 
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
     for (int idx = firstIdx; idx <= titledLastIdx; idx++) {

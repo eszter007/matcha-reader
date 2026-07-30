@@ -130,13 +130,12 @@ bool folderForLanguage(const std::string& language, std::string& folderNameOut) 
   std::vector<DictionaryEntry> entries;
   discover(entries);
   const std::string prefix = lang + "/";
-  for (const auto& entry : entries) {
-    if (entry.name.compare(0, prefix.size(), prefix) == 0) {
-      folderNameOut = entry.name;
-      return true;
-    }
-  }
-  return false;
+  const auto entry = std::find_if(entries.begin(), entries.end(), [&prefix](const auto& candidate) {
+    return candidate.name.compare(0, prefix.size(), prefix) == 0;
+  });
+  if (entry == entries.end()) return false;
+  folderNameOut = entry->name;
+  return true;
 }
 
 }  // namespace DictionaryRegistry

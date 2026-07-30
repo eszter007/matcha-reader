@@ -541,7 +541,7 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     // text (e.g. Japanese titles) falls through FontDecompressor's slow single-slot "hot group" path,
     // which decompresses up to ~64KB per glyph-group miss on every render -- this is what crashed on
     // real hardware (a failed allocation there used to abort the process; see FontDecompressor.cpp).
-    if (auto* fcm = renderer.getFontCacheManager()) {
+    if (renderer.getFontCacheManager()) {
       renderer.prewarmText(UI_12_FONT_ID, book.title.c_str(), 1 << EpdFontFamily::BOLD);
       if (!book.author.empty()) {
         renderer.prewarmText(UI_12_FONT_ID, book.author.c_str(), 1 << EpdFontFamily::REGULAR);

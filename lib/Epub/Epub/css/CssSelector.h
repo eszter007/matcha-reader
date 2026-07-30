@@ -403,6 +403,6 @@ class CssElementPath {
     char tag[MAX_TAG_LEN + 1];
     char classes[MAX_CLASS_LEN + 1];
   };
-  Entry entries_[MAX_DEPTH];
+  Entry entries_[MAX_DEPTH]{};
   size_t depth_ = 0;
 };

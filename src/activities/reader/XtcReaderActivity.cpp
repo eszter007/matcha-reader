@@ -69,17 +69,6 @@ void XtcReaderActivity::onExit() {
   xtc.reset();
 }
 
-void XtcReaderActivity::openChapterSelection() {
-  if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
-    startActivityForResult(std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
-                           [this](const ActivityResult& result) {
-                             if (!result.isCancelled) {
-                               currentPage = std::get<PageResult>(result.data).page;
-                             }
-                           });
-  }
-}
-
 void XtcReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
