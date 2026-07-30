@@ -49,6 +49,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "activities/settings/SettingsActivity.h"
+#include "activities/settings/TextSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
@@ -1105,6 +1106,24 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::FOOTNOTES: {
       openFootnotesPanel();
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::TEXT_SETTINGS: {
+      startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                                    TextSettingsActivity::Tab::Family),
+                             [this](const ActivityResult&) {
+                               SETTINGS.saveToFile();
+                               // Font/size/spacing/margin changes invalidate the current
+                               // layout: preserve position and force a re-layout, mirroring
+                               // applyOrientation()'s reflow.
+                               RenderLock lock(*this);
+                               if (section) {
+                                 cachedSpineIndex = currentSpineIndex;
+                                 cachedChapterTotalPageCount = section->pageCount;
+                                 nextPageNumber = section->currentPage;
+                               }
+                               section.reset();
+                             });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
@@ -2646,6 +2665,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   const bool manualRefreshPending = !grayscaleRefineOnly && forcedRefreshPending;
   if (!grayscaleRefineOnly) forcedRefreshPending = false;
+  // The reader starts with zero here, which means the normal refresh cycle
+  // would use a HALF refresh for its first page. Keep that same clean base for
+  // image pages: a FAST refresh otherwise runs directly over the
+  // retained frame after a silent restart (for example, when returning from
+  // KOReader sync), leaving the old UI mixed with the image.
+  const bool cleanImageBasePending =
+      !grayscaleRefineOnly && (manualRefreshPending || pagesUntilFullRefresh == 0);
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   const bool tiledGrayscale = needsAnyGrayscale && renderer.supportsStripGrayscale();
@@ -2682,7 +2708,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // Put the final image on the panel in one pass. The old selective-blank
     // double refresh showed a white frame and delayed the picture; grayscale
     // now refines separately after the page stays idle.
-    renderer.displayBuffer(manualRefreshPending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+    renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
     // The image's own page is handled above and doesn't count toward the full
     // refresh cadence. But the grayscale pass below leaves gray charge in the
     // image region that a plain fast diff on the *next* page can't clear, so
