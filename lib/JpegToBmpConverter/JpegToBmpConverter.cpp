@@ -601,8 +601,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   if (!progressiveDecode && targetWidth > 0 && targetHeight > 0) {
     constexpr int candidates[] = {8, 4, 2};
     for (const int candidate : candidates) {
-      if ((srcWidth + candidate - 1) / candidate >= outWidth &&
-          (srcHeight + candidate - 1) / candidate >= outHeight) {
+      if ((srcWidth + candidate - 1) / candidate >= outWidth && (srcHeight + candidate - 1) / candidate >= outHeight) {
         decodeScale = candidate;
         break;
       }

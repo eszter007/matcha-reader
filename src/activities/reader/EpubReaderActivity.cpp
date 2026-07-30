@@ -457,10 +457,10 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   orientedMarginTop += SETTINGS.screenMargin;
   orientedMarginLeft += SETTINGS.screenMargin;
 
-  startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page),
-                                                                        orientedMarginLeft, orientedMarginTop,
-                                                                        std::move(dictionaryFolder)),
-                         [this](const ActivityResult&) { requestUpdate(); });
+  startActivityForResult(
+      std::make_unique<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page), orientedMarginLeft,
+                                                     orientedMarginTop, std::move(dictionaryFolder)),
+      [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void EpubReaderActivity::loop() {
@@ -2579,8 +2579,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   constexpr int IMAGE_WARM_LOOKAHEAD_PAGES = 8;
   const auto warmHorizontalPage = [&](const Page& page) -> bool {
     for (const auto& el : page.elements) {
-      if (el->getTag() == TAG_PageImage &&
-          !warmBlock(static_cast<const PageImage&>(*el).getImageBlock())) {
+      if (el->getTag() == TAG_PageImage && !warmBlock(static_cast<const PageImage&>(*el).getImageBlock())) {
         return false;
       }
     }
@@ -2601,8 +2600,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   // Continue the same short lookahead across the chapter boundary in the
   // reader's actual turn direction.
   const int adjacentSpine = currentSpineIndex + direction;
-  if (warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES && adjacentSpine >= 0 &&
-      adjacentSpine < epub->getSpineItemsCount()) {
+  if (warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES && adjacentSpine >= 0 && adjacentSpine < epub->getSpineItemsCount()) {
     Section adjacentSection(epub, adjacentSpine, renderer);
     if (adjacentSection.loadSectionFile(SETTINGS.readerRenderSpec(viewportWidth, viewportHeight)) &&
         adjacentSection.pageCount > 0) {
@@ -2663,8 +2661,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // image pages: a FAST refresh otherwise runs directly over the
   // retained frame after a silent restart (for example, when returning from
   // KOReader sync), leaving the old UI mixed with the image.
-  const bool cleanImageBasePending =
-      !grayscaleRefineOnly && (manualRefreshPending || pagesUntilFullRefresh == 0);
+  const bool cleanImageBasePending = !grayscaleRefineOnly && (manualRefreshPending || pagesUntilFullRefresh == 0);
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   const bool tiledGrayscale = needsAnyGrayscale && renderer.supportsStripGrayscale();
@@ -2720,8 +2717,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     const uint32_t currentKey =
         (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
     pendingHorizontalImageRefine_.store(currentKey, std::memory_order_relaxed);
-    LOG_DBG("ERS", "Page render (image BW): prewarm=%lums bw_render=%lums display=%lums total=%lums",
-            tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tDisplay - t0);
+    LOG_DBG("ERS", "Page render (image BW): prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
+            tBwRender - tPrewarm, tDisplay - tBwRender, tDisplay - t0);
     return;
   }
 

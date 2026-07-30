@@ -160,8 +160,8 @@ int8_t cssLetterSpacingPx(const CssStyle& style, const float emPx) {
   // Whole pixels, because the value is added AFTER the fixed-point advance is snapped, in both
   // the measurement and the draw -- an integer is what makes those two agree exactly.
   // A declaration that rounds to 0 is honoured as 0: sub-pixel tracking this panel cannot show.
-  return static_cast<int8_t>(std::clamp(rounded, static_cast<int>(CSS_LETTER_SPACING_MIN_PX),
-                                        static_cast<int>(CSS_LETTER_SPACING_MAX_PX)));
+  return static_cast<int8_t>(
+      std::clamp(rounded, static_cast<int>(CSS_LETTER_SPACING_MIN_PX), static_cast<int>(CSS_LETTER_SPACING_MAX_PX)));
 }
 
 int cssBlockFontId(const CssStyle& style, const int baseFontId) {

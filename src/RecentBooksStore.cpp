@@ -24,9 +24,7 @@ void RecentBooksStore::toJson(JsonDocument& doc) const {
   }
 }
 
-bool RecentBooksStore::fromJson(JsonVariantConst doc) {
-  return fromJson(doc, MAX_RECENT_BOOKS);
-}
+bool RecentBooksStore::fromJson(JsonVariantConst doc) { return fromJson(doc, MAX_RECENT_BOOKS); }
 
 bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
   // Tolerate a missing/invalid 'books' key (treat as empty list); only a

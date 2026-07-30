@@ -128,7 +128,8 @@ DictFileHandles g_namesHandles;
 
 DictFileHandles& handlesFor(const char* idxPath) {
   if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::OLD_GRAMMAR_IDX_PATH) == 0) return g_grammarHandles;
+      std::strcmp(idxPath, DictIndex::OLD_GRAMMAR_IDX_PATH) == 0)
+    return g_grammarHandles;
   if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0 ||
       std::strcmp(idxPath, DictIndex::JP_LEGACY_NAMES_IDX_PATH) == 0 ||
       std::strcmp(idxPath, DictIndex::OLD_NAMES_IDX_PATH) == 0 ||
@@ -332,26 +333,26 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 
 const char* DictIndex::vocabIdxPath() {
   return resolveIdxPath(g_vocabIdxResolved, VOCAB_IDX_PATH, JP_LEGACY_VOCAB_IDX_PATH, OLD_VOCAB_IDX_PATH,
-                         LEGACY_VOCAB_IDX_PATH);
+                        LEGACY_VOCAB_IDX_PATH);
 }
 const char* DictIndex::vocabDatPath() {
   // Pair the .dat with whichever .idx was resolved -- never mix legacy and preferred halves.
   const char* path = vocabIdxPath();
   return std::strcmp(path, JP_LEGACY_VOCAB_IDX_PATH) == 0 ? JP_LEGACY_VOCAB_DAT_PATH
-       : std::strcmp(path, LEGACY_VOCAB_IDX_PATH) == 0     ? LEGACY_VOCAB_DAT_PATH
-       : std::strcmp(path, OLD_VOCAB_IDX_PATH) == 0        ? OLD_VOCAB_DAT_PATH
-                                                           : VOCAB_DAT_PATH;
+         : std::strcmp(path, LEGACY_VOCAB_IDX_PATH) == 0  ? LEGACY_VOCAB_DAT_PATH
+         : std::strcmp(path, OLD_VOCAB_IDX_PATH) == 0     ? OLD_VOCAB_DAT_PATH
+                                                          : VOCAB_DAT_PATH;
 }
 const char* DictIndex::namesIdxPath() {
   return resolveIdxPath(g_namesIdxResolved, NAMES_IDX_PATH, JP_LEGACY_NAMES_IDX_PATH, OLD_NAMES_IDX_PATH,
-                         LEGACY_NAMES_IDX_PATH);
+                        LEGACY_NAMES_IDX_PATH);
 }
 const char* DictIndex::namesDatPath() {
   const char* path = namesIdxPath();
   return std::strcmp(path, JP_LEGACY_NAMES_IDX_PATH) == 0 ? JP_LEGACY_NAMES_DAT_PATH
-       : std::strcmp(path, LEGACY_NAMES_IDX_PATH) == 0     ? LEGACY_NAMES_DAT_PATH
-       : std::strcmp(path, OLD_NAMES_IDX_PATH) == 0        ? OLD_NAMES_DAT_PATH
-                                                           : NAMES_DAT_PATH;
+         : std::strcmp(path, LEGACY_NAMES_IDX_PATH) == 0  ? LEGACY_NAMES_DAT_PATH
+         : std::strcmp(path, OLD_NAMES_IDX_PATH) == 0     ? OLD_NAMES_DAT_PATH
+                                                          : NAMES_DAT_PATH;
 }
 const char* DictIndex::grammarIdxPath() {
   return resolveIdxPath(g_grammarIdxResolved, GRAMMAR_IDX_PATH, nullptr, OLD_GRAMMAR_IDX_PATH, nullptr);

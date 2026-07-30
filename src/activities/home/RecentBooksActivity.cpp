@@ -345,8 +345,8 @@ bool RecentBooksActivity::stepLibraryScan() {
       scan_.thumbIndex++;
       continue;
     }
-    std::string cachePath =
-        std::string("/.crosspoint/") + (isEpub ? "epub_" : "xtc_") + std::to_string(std::hash<std::string>{}(book.path));
+    std::string cachePath = std::string("/.crosspoint/") + (isEpub ? "epub_" : "xtc_") +
+                            std::to_string(std::hash<std::string>{}(book.path));
     std::string thumbPath = cachePath + "/thumb_" + std::to_string(thumbH) + ".bmp";
 
     // Index shortcut: a record whose size, modification stamp and cover height all still match
