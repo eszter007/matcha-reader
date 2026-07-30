@@ -167,6 +167,12 @@ void DictionaryWordSelectActivity::performLookup() {
   popupMsg = indexing ? StrId::STR_DICT_INDEXING : StrId::STR_DICT_LOOKING_UP;
   requestUpdateAndWait();  // paint the page + busy popup before blocking on SD
 
+  {
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
+  LOG_DBG("DICT", "Lookup maxAlloc after font release: %u", ESP.getMaxAllocHeap());
+
   bool ok = dictOpenOk;
   Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
   if (ok && indexing) ok = dict.buildIndex(&indexBuildYield, nullptr, &indexResult);

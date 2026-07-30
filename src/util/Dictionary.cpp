@@ -58,6 +58,13 @@ uint32_t readBe32(const uint8_t* p) {
 // continuation/lead byte, so accented words keep their edges.
 bool isWordByte(unsigned char c) { return c >= 0x80 || std::isalnum(c) != 0; }
 
+// Babylon's Duden conversion appends a comma to most index headwords
+// ("Intelligenz,"). It is metadata punctuation, not part of the lookup key.
+void normalizeIndexHeadword(char* word) {
+  const size_t len = strlen(word);
+  if (len > 0 && word[len - 1] == ',') word[len - 1] = '\0';
+}
+
 // True when the .ifo declares 64-bit index offsets, which this reader does not
 // support (only scans the first 2KB — idxoffsetbits always appears early).
 bool ifoDeclares64BitOffsets(const std::string& ifoPath) {
@@ -247,6 +254,7 @@ DictLocation Dictionary::locate(const char* target, std::string* matchedHeadword
           lo = 0;
           break;
         }
+        normalizeIndexHeadword(wordBuf);
         if (StringUtils::asciiCaseCmp(wordBuf, target) <= 0) {
           lo = mid;
         } else {
@@ -270,6 +278,7 @@ DictLocation Dictionary::locate(const char* target, std::string* matchedHeadword
     // the end of the index rather than risk reporting a read failure for what
     // is really a miss.
     if (readWordInto(idx, wordBuf, sizeof(wordBuf)) < 0) break;
+    normalizeIndexHeadword(wordBuf);
     uint8_t suffix[8];
     if (idx.read(suffix, 8) != 8) break;
 
