@@ -103,6 +103,16 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
 // and every caller already guards against an out-of-range cursor while it refills, so the user's
 // position resumes naturally once the rescan passes it again.
 bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
+  // Definition rendering leaves compressed-font groups resident. Reclaim before the next scan
+  // slice needs to grow a vector; waiting until that growth fails discards progress and rescans
+  // the whole page. This is the same recovery used below, just before damage instead of after it.
+  if (ESP.getMaxAllocHeap() < 20 * 1024) {
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("WLA", "Reclaimed fonts before scan: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+  }
   const bool done = scan.step(budgetMs);
   if (scan.wasTruncated() && !scanHealAttempted && !scan.allGlyphs.empty()) {
     scanHealAttempted = true;
@@ -521,7 +531,9 @@ void EpubReaderWordLookupActivity::loop() {
   // slice never swallows a button press). Everything here runs on the main task -- the render
   // task only ever reads counter sizes -- so no lock is needed and, unlike the abandoned
   // reader-idle precompute, nothing can starve another activity's rendering.
-  if (!scan.isDone()) {
+  // The render task's font decompressor can temporarily consume nearly the entire largest block.
+  // Do not overlap that transient allocation with dictionary reads/vector growth.
+  if (!scan.isDone() && !RenderLock::peek()) {
     const bool done = stepScan(40);
     // The open can show "No match" if the initial burst found nothing yet -- promote the first
     // word as soon as the background scan discovers it.
@@ -664,4 +676,8 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     }
   }
+
+  // The framebuffer owns the finished pixels; keeping the decompressed glyph slab until the
+  // next keypress only fragments the heap while the dictionary caches are resident.
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
 }
