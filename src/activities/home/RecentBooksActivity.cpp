@@ -34,7 +34,7 @@ constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
 constexpr int SHELF_THUMB_WIDTH = 36;
 constexpr int SHELF_THUMB_HEIGHT = 54;
-constexpr uint32_t THUMB_IDLE_MS = 5000;
+constexpr uint32_t THUMB_IDLE_MS = 2000;
 
 // Diagnostic artifact written by HalSystem::checkPanic() to the SD root -- a .txt file the
 // library walk would otherwise list as a book.
@@ -560,7 +560,7 @@ void RecentBooksActivity::applyLibraryScan() {
       RenderLock lock;  // the render task reads these lists concurrently
       recentBooks = std::move(fresh);
       markAllProgressPending();
-      loadShelves();
+      if (shelvesLoaded) loadShelves();
       lastRendered.valid = false;
       LOG_DBG("RBA", "Library scan applied: %u books", static_cast<unsigned>(recentBooks.size()));
     }
@@ -611,6 +611,7 @@ bool RecentBooksActivity::fillPendingProgress(const int maxCount) {
 }
 
 void RecentBooksActivity::loadShelves() {
+  shelvesLoaded = true;
   shelves.clear();
 
   for (const auto& book : recentBooks) {
@@ -847,7 +848,7 @@ void RecentBooksActivity::onEnter() {
 
   loadRecentBooks();
   loadBookProgress();
-  loadShelves();
+  shelvesLoaded = false;
   startLibraryScan();
 
   selectedTab = 0;
@@ -910,6 +911,7 @@ void RecentBooksActivity::loop() {
     if (contentIndex == 0) {
       selectedTab = (selectedTab + 1) % TAB_COUNT;
       hasChangedTab = true;
+      if (selectedTab == 1 && !shelvesLoaded) loadShelves();
       requestUpdate();
     } else {
       const int itemIdx = contentIndex - 1;
@@ -1003,6 +1005,7 @@ void RecentBooksActivity::loop() {
   if (hasChangedTab) {
     contentIndex = (contentIndex == 0) ? 0 : 1;
     scrollRow = 0;
+    if (selectedTab == 1 && !shelvesLoaded) loadShelves();
   }
 
   // Background work, one slice per tick: re-scan the card (stale-while-revalidate) and fill
@@ -1042,7 +1045,7 @@ void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::s
       LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
       loadRecentBooks();
       loadBookProgress();
-      loadShelves();
+      if (shelvesLoaded) loadShelves();
       if (recentBooks.empty()) {
         contentIndex = 0;
       } else if (contentIndex - 1 >= static_cast<int>(recentBooks.size())) {

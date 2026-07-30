@@ -307,6 +307,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
   int getReaderFontId() const;
+  /// Built-in Noto Serif at the current reader size, used when a selected CJK-only
+  /// family cannot render a Latin book.
+  int getBuiltinSerifReaderFontId() const;
   /// Reader font id ignoring any SD selection: the built-in Noto Serif/Sans at the
   /// current size. Used as the Latin fallback when the selected SD family has no
   /// Latin glyphs and the book is not Japanese.

@@ -38,6 +38,7 @@ class RecentBooksActivity final : public Activity {
     int bookCount = 0;
   };
   std::vector<ShelfInfo> shelves;
+  bool shelvesLoaded = false;
 
   // Shelf detail view
   struct ShelfBook {

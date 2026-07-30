@@ -276,19 +276,14 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
     return;
   }
 
-  // Selected font (built-in, or a Latin-only SD font) can't render Japanese: load the best
-  // CJK family from the card at the reader size. Extension families (NotoSansJP/NotoSerifJP)
-  // first -- they exist exactly for this -- then any other family that proves CJK-capable
-  // when loaded. When both extensions are installed, match the selected style: built-in
-  // Noto Serif pairs with NotoSerifJP, everything else with NotoSansJP.
-  const bool preferSerif = SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == CrossPointSettings::NOTOSERIF;
-  auto extensionRank = [preferSerif](const std::string& name) {
+  // Selected font (built-in, or a Latin-only SD font) can't render Japanese: prefer
+  // NotoSerifJP, then any other family that proves CJK-capable when loaded.
+  auto extensionRank = [](const std::string& name) {
     std::string norm;
     for (const char c : name) {
       if (std::isalnum(static_cast<unsigned char>(c))) norm.push_back(static_cast<char>(std::tolower(c)));
     }
-    const bool isSerifExt = norm == "notoserifjp";
-    return isSerifExt == preferSerif ? 0 : 1;  // 0 = style-matched extension
+    return norm == "notoserifjp" ? 0 : 1;
   };
   std::vector<const SdCardFontFamilyInfo*> candidates;
   for (const auto& fam : registry_.getFamilies()) {

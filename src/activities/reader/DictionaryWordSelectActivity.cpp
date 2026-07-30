@@ -161,7 +161,7 @@ void DictionaryWordSelectActivity::performLookup() {
   popup = Popup::Busy;
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
-    dictOpenOk = dict.open(SETTINGS.dictionaryName);
+    dictOpenOk = dict.open(folderName.c_str());
   }
   const bool indexing = dictOpenOk && dict.needsIndex();
   popupMsg = indexing ? StrId::STR_DICT_INDEXING : StrId::STR_DICT_LOOKING_UP;

@@ -349,6 +349,22 @@ int CrossPointSettings::getBuiltinReaderFontId() const {
   }
 }
 
+int CrossPointSettings::getBuiltinSerifReaderFontId() const {
+  const uint8_t pt =
+      snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
+  switch (pt) {
+    case 12:
+      return NOTOSERIF_12_FONT_ID;
+    case 16:
+      return NOTOSERIF_16_FONT_ID;
+    case 18:
+      return NOTOSERIF_18_FONT_ID;
+    case 14:
+    default:
+      return NOTOSERIF_14_FONT_ID;
+  }
+}
+
 int CrossPointSettings::getReaderFontId() const {
   // Check SD card font first
   if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {

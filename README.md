@@ -73,6 +73,7 @@ Reading streak, weekly minutes, books finished, total time, and a monthly calend
 - **Per-book reader settings** — font, size, spacing, margins, orientation and more are remembered per book; the global settings page holds the defaults for books you haven't opened yet
 - **CJK fallback font** — a non-Japanese book with the odd kanji renders it from a built-in font covering kana, the 2,136 Jōyō and 863 Jinmeiyō kanji
 - **Chapter splitting** — Japanese novels shipped as one giant XHTML file get real chapters (and a working ToC) when uploaded with **Optimize EPUB**
+- **Device-ready EPUB images** — **Optimize EPUB** fits images to the X3/X4 screen and writes dithered 1-bit BMPs using the manga pipeline's Atkinson diffusion
 - **Instant image page turns** — the next page's image decodes in the background, so illustrated novels don't stall on it
 - **Transparent sleep screen** — a wallpaper overlaid on the page you were reading, so the book shows through
 - **Book side margins** — ignore the book's own CSS side margins by default, so the text column follows your margin setting
@@ -100,9 +101,9 @@ Reading streak, weekly minutes, books finished, total time, and a monthly calend
 
 | Dictionary | Source | Output |
 | --- | --- | --- |
-| Vocabulary (required) | [Jitendex](https://github.com/stephenmk/Jitendex), Yomitan format | `dict/vocab.*` |
-| Names (recommended) | [JMnedict](https://github.com/JMdictProject), Yomitan format | `dict/names.*` |
-| Grammar (optional) | e.g. "Dictionary of Japanese Grammar", Yomitan format | `dict/grammar.*` |
+| Vocabulary (required) | [Jitendex](https://github.com/stephenmk/Jitendex), Yomitan format | `dictionaries/jp/vocab.*` |
+| Names (recommended) | [JMnedict](https://github.com/JMdictProject), Yomitan format | `dictionaries/jp/names.*` |
+| Grammar (optional) | e.g. "Dictionary of Japanese Grammar", Yomitan format | `dictionaries/jp/grammar.*` |
 
 Use the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the script:
 
@@ -112,7 +113,9 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dict/          # add --name names / --name grammar for the other two
 ```
 
-Any Yomitan dictionary, jmdict-simplified JSON, or MDict `.mdx` works as input. Cards set up before the rename keep working — the firmware falls back to the legacy `jmdict.*` / `jmnedict.*` names.
+Any Yomitan dictionary, jmdict-simplified JSON, or MDict `.mdx` works as input. Cards set up before the move keep working — the firmware also checks the legacy `/dict/` layout.
+
+For regular StarDict dictionaries, use `/dictionaries/<language>/<dictionary>/` (for example `/dictionaries/en/oxford/`). Tagged EPUBs select the first matching language folder automatically; the Reader setting is only used for EPUBs without a language tag. Japanese (`ja`) always uses the Yomitan files in `/dictionaries/jp/`.
 
 **3. Install Japanese fonts** (optional). The built-in Noto Serif/Sans handle Japanese fine; a dedicated font looks better. Convert any TTF/OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and place the result in `/.fonts/<Family>/regular.cpfont`. UDDigiKyokasho is picked as the default when present.
 

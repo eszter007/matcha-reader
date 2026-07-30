@@ -49,10 +49,10 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "activities/settings/SettingsActivity.h"
-#include "activities/settings/TextSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
+#include "util/DictionaryRegistry.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -430,7 +430,17 @@ void EpubReaderActivity::showBuildPopup() {
 }
 
 void EpubReaderActivity::openDictionaryWordSelect() {
-  if (SETTINGS.dictionaryName[0] == '\0') {
+  if (isJapaneseBook()) {
+    openWordLookupPanel();
+    return;
+  }
+  std::string dictionaryFolder;
+  if (epub && !epub->getLanguage().empty()) {
+    DictionaryRegistry::folderForLanguage(epub->getLanguage(), dictionaryFolder);
+  } else {
+    dictionaryFolder = SETTINGS.dictionaryName;
+  }
+  if (dictionaryFolder.empty()) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
     requestUpdate();
@@ -448,7 +458,8 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   orientedMarginLeft += SETTINGS.screenMargin;
 
   startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page),
-                                                                        orientedMarginLeft, orientedMarginTop),
+                                                                        orientedMarginLeft, orientedMarginTop,
+                                                                        std::move(dictionaryFolder)),
                          [this](const ActivityResult&) { requestUpdate(); });
 }
 
@@ -1106,24 +1117,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::FOOTNOTES: {
       openFootnotesPanel();
-      break;
-    }
-    case EpubReaderMenuActivity::MenuAction::TEXT_SETTINGS: {
-      startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                    TextSettingsActivity::Tab::Family),
-                             [this](const ActivityResult&) {
-                               SETTINGS.saveToFile();
-                               // Font/size/spacing/margin changes invalidate the current
-                               // layout: preserve position and force a re-layout, mirroring
-                               // applyOrientation()'s reflow.
-                               RenderLock lock(*this);
-                               if (section) {
-                                 cachedSpineIndex = currentSpineIndex;
-                                 cachedChapterTotalPageCount = section->pageCount;
-                                 nextPageNumber = section->currentPage;
-                               }
-                               section.reset();
-                             });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
@@ -3222,9 +3215,9 @@ int EpubReaderActivity::effectiveReaderFontId() const {
     // The selected family cannot carry this book's primary script. Substitute a
     // font that can -- which one depends on the direction of the miss:
     //  - Japanese book, selected font has no CJK -> the companion, which
-    //    ensureJpFallback() picked as the style-matched JP family.
+    //    ensureJpFallback() picked as the Noto Serif JP family.
     //  - Latin book, selected font has no Latin (a CJK-only family such as
-    //    UDDigiKyokasho) -> the BUILT-IN Noto Serif/Sans, not the companion.
+    //    UDDigiKyokasho) -> the BUILT-IN Noto Serif, not the companion.
     //    The companion is chosen for Japanese, so using it here renders an
     //    English book in a Japanese typeface.
     if (jpBook) {
@@ -3234,7 +3227,7 @@ int EpubReaderActivity::effectiveReaderFontId() const {
         return companion;
       }
     } else {
-      const int builtin = SETTINGS.getBuiltinReaderFontId();
+      const int builtin = SETTINGS.getBuiltinSerifReaderFontId();
       LOG_DBG("ERS", "Effective font: built-in %d (latin book, selected lacks Latin)", builtin);
       return builtin;
     }

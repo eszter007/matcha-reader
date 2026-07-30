@@ -192,7 +192,7 @@ void MangaWordLookupActivity::performLookupImpl() {
     resultMatchLen = chars;
 
     // Check grammar dictionary for short hiragana matches
-    if (chars <= 3 && Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
+    if (chars <= 3 && Storage.exists(DictIndex::grammarIdxPath())) {
       bool allHiragana = true;
       for (size_t b = 0; b < result.matchLength && b < text.size();) {
         auto c = static_cast<unsigned char>(text[b]);
@@ -216,7 +216,7 @@ void MangaWordLookupActivity::performLookupImpl() {
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
         }
@@ -229,7 +229,7 @@ void MangaWordLookupActivity::performLookupImpl() {
   // allocation abort() -- see EpubReaderWordLookupActivity's grammar scan.
   if (ESP.getMaxAllocHeap() < 16 * 1024) {
     LOG_ERR("MWLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) &&
+  } else if (Storage.exists(DictIndex::grammarIdxPath()) &&
              cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
     const size_t allStart = scan.selectToAllIdx[cursorIndex];
     int bestGramLen = 0;
@@ -263,7 +263,7 @@ void MangaWordLookupActivity::performLookupImpl() {
         }
         std::string window = gramText.substr(0, byteEnd);
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(window.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
             bestGramLen = wLen;

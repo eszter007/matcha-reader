@@ -16,11 +16,11 @@
 class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                        std::unique_ptr<Page> page, int marginLeft, int marginTop)
+                                        std::unique_ptr<Page> page, int marginLeft, int marginTop, std::string folderName)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         page(std::move(page)),
         marginLeft(marginLeft),
-        marginTop(marginTop) {}
+        marginTop(marginTop), folderName(std::move(folderName)) {}
 
   void onEnter() override;
   void loop() override;
@@ -68,6 +68,7 @@ class DictionaryWordSelectActivity final : public Activity {
   Dictionary dict;
   bool dictOpenAttempted = false;
   bool dictOpenOk = false;
+  std::string folderName;
 
   Popup popup = Popup::None;
   StrId popupMsg = StrId::STR_DICT_NOT_FOUND;

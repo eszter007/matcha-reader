@@ -4,6 +4,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 
 #include "StringUtils.h"
@@ -15,6 +16,13 @@ namespace {
 // lets users keep the folder out of the file browser (hidden by default,
 // see FileBrowserActivity's showHiddenFiles check).
 constexpr const char* DICT_ROOTS[] = {"/dictionaries", "/.dictionaries"};
+
+std::string languageFolder(const std::string& language) {
+  if (language.size() < 2) return {};
+  std::string out = language.substr(0, 2);
+  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
+  return out == "ja" ? "jp" : out;
+}
 
 // Find the single .idx stem inside one dictionary folder. Returns false when
 // the folder holds no .idx or more than one distinct stem (ambiguous).
@@ -78,13 +86,19 @@ void discover(std::vector<DictionaryEntry>& out) {
 
       std::string folderPath = std::string(dictRoot) + "/" + name;
       std::string stem;
-      if (!findStem(folderPath.c_str(), stem)) continue;
-
-      DictionaryEntry e;
-      e.name = name;
-      e.stem = std::move(stem);
-      out.push_back(std::move(e));
-      LOG_DBG("DREG", "Found dictionary: %s", name);
+      if (findStem(folderPath.c_str(), stem)) {
+        out.push_back({name, std::move(stem)});
+        continue;
+      }
+      auto languageDir = Storage.open(folderPath.c_str());
+      if (!languageDir || !languageDir.isDirectory()) continue;
+      languageDir.rewindDirectory();
+      char child[128];
+      for (auto nested = languageDir.openNextFile(); nested; nested = languageDir.openNextFile()) {
+        nested.getName(child, sizeof(child));
+        if (!nested.isDirectory() || child[0] == '.') continue;
+        if (findStem((folderPath + "/" + child).c_str(), stem)) out.push_back({std::string(name) + "/" + child, stem});
+      }
     }
   }
 
@@ -96,9 +110,9 @@ void discover(std::vector<DictionaryEntry>& out) {
 
 bool resolveBasePath(const char* folderName, std::string& basePathOut) {
   if (!folderName || folderName[0] == '\0') return false;
-  // folderName is persisted in the settings JSON: reject separators and dot
-  // prefixes so a crafted value cannot escape the dictionary roots.
-  if (folderName[0] == '.' || strpbrk(folderName, "/\\") != nullptr) return false;
+  if (folderName[0] == '.' || strpbrk(folderName, "\\") != nullptr || strstr(folderName, "..") != nullptr) return false;
+  const char* slash = strchr(folderName, '/');
+  if (slash && (slash == folderName || slash[1] == '\0' || strchr(slash + 1, '/'))) return false;
 
   for (const char* dictRoot : DICT_ROOTS) {
     std::string folderPath = std::string(dictRoot) + "/" + folderName;
@@ -106,6 +120,21 @@ bool resolveBasePath(const char* folderName, std::string& basePathOut) {
     if (!findStem(folderPath.c_str(), stem)) continue;
     basePathOut = folderPath + "/" + stem;
     return true;
+  }
+  return false;
+}
+
+bool folderForLanguage(const std::string& language, std::string& folderNameOut) {
+  const std::string lang = languageFolder(language);
+  if (lang.empty()) return false;
+  std::vector<DictionaryEntry> entries;
+  discover(entries);
+  const std::string prefix = lang + "/";
+  for (const auto& entry : entries) {
+    if (entry.name.compare(0, prefix.size(), prefix) == 0) {
+      folderNameOut = entry.name;
+      return true;
+    }
   }
   return false;
 }

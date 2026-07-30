@@ -127,8 +127,11 @@ DictFileHandles g_grammarHandles;
 DictFileHandles g_namesHandles;
 
 DictFileHandles& handlesFor(const char* idxPath) {
-  if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0) return g_grammarHandles;
+  if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0 ||
+      std::strcmp(idxPath, DictIndex::OLD_GRAMMAR_IDX_PATH) == 0) return g_grammarHandles;
   if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0 ||
+      std::strcmp(idxPath, DictIndex::JP_LEGACY_NAMES_IDX_PATH) == 0 ||
+      std::strcmp(idxPath, DictIndex::OLD_NAMES_IDX_PATH) == 0 ||
       std::strcmp(idxPath, DictIndex::LEGACY_NAMES_IDX_PATH) == 0) {
     return g_namesHandles;
   }
@@ -140,12 +143,18 @@ DictFileHandles& handlesFor(const char* idxPath) {
 // files uploaded mid-session (web file transfer) are picked up by the next lookup session.
 const char* g_vocabIdxResolved = nullptr;
 const char* g_namesIdxResolved = nullptr;
+const char* g_grammarIdxResolved = nullptr;
 
-const char* resolveIdxPath(const char*& cache, const char* preferred, const char* legacy) {
+const char* resolveIdxPath(const char*& cache, const char* preferred, const char* jpLegacy, const char* old,
+                           const char* legacy) {
   if (cache) return cache;
   if (Storage.exists(preferred)) {
     cache = preferred;
-  } else if (Storage.exists(legacy)) {
+  } else if (jpLegacy && Storage.exists(jpLegacy)) {
+    cache = jpLegacy;
+  } else if (Storage.exists(old)) {
+    cache = old;
+  } else if (legacy && Storage.exists(legacy)) {
     LOG_INF("DICT", "Using legacy dictionary filename: %s", legacy);
     cache = legacy;
   } else {
@@ -322,17 +331,34 @@ bool readIndexRecord(DictFileHandles& h, size_t idx, size_t recordCount, DictInd
 }  // namespace
 
 const char* DictIndex::vocabIdxPath() {
-  return resolveIdxPath(g_vocabIdxResolved, VOCAB_IDX_PATH, LEGACY_VOCAB_IDX_PATH);
+  return resolveIdxPath(g_vocabIdxResolved, VOCAB_IDX_PATH, JP_LEGACY_VOCAB_IDX_PATH, OLD_VOCAB_IDX_PATH,
+                         LEGACY_VOCAB_IDX_PATH);
 }
 const char* DictIndex::vocabDatPath() {
   // Pair the .dat with whichever .idx was resolved -- never mix legacy and preferred halves.
-  return vocabIdxPath() == LEGACY_VOCAB_IDX_PATH ? LEGACY_VOCAB_DAT_PATH : VOCAB_DAT_PATH;
+  const char* path = vocabIdxPath();
+  return std::strcmp(path, JP_LEGACY_VOCAB_IDX_PATH) == 0 ? JP_LEGACY_VOCAB_DAT_PATH
+       : std::strcmp(path, LEGACY_VOCAB_IDX_PATH) == 0     ? LEGACY_VOCAB_DAT_PATH
+       : std::strcmp(path, OLD_VOCAB_IDX_PATH) == 0        ? OLD_VOCAB_DAT_PATH
+                                                           : VOCAB_DAT_PATH;
 }
 const char* DictIndex::namesIdxPath() {
-  return resolveIdxPath(g_namesIdxResolved, NAMES_IDX_PATH, LEGACY_NAMES_IDX_PATH);
+  return resolveIdxPath(g_namesIdxResolved, NAMES_IDX_PATH, JP_LEGACY_NAMES_IDX_PATH, OLD_NAMES_IDX_PATH,
+                         LEGACY_NAMES_IDX_PATH);
 }
 const char* DictIndex::namesDatPath() {
-  return namesIdxPath() == LEGACY_NAMES_IDX_PATH ? LEGACY_NAMES_DAT_PATH : NAMES_DAT_PATH;
+  const char* path = namesIdxPath();
+  return std::strcmp(path, JP_LEGACY_NAMES_IDX_PATH) == 0 ? JP_LEGACY_NAMES_DAT_PATH
+       : std::strcmp(path, LEGACY_NAMES_IDX_PATH) == 0     ? LEGACY_NAMES_DAT_PATH
+       : std::strcmp(path, OLD_NAMES_IDX_PATH) == 0        ? OLD_NAMES_DAT_PATH
+                                                           : NAMES_DAT_PATH;
+}
+const char* DictIndex::grammarIdxPath() {
+  return resolveIdxPath(g_grammarIdxResolved, GRAMMAR_IDX_PATH, nullptr, OLD_GRAMMAR_IDX_PATH, nullptr);
+}
+const char* DictIndex::grammarDatPath() {
+  const char* path = grammarIdxPath();
+  return std::strcmp(path, OLD_GRAMMAR_IDX_PATH) == 0 ? OLD_GRAMMAR_DAT_PATH : GRAMMAR_DAT_PATH;
 }
 
 bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
@@ -559,7 +585,7 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
     return true;
   }
   if ((dictMask & DICT_GRAMMAR) &&
-      lookupInFile(headword, GRAMMAR_IDX_PATH, GRAMMAR_DAT_PATH, out, needDefinition, posMask)) {
+      lookupInFile(headword, grammarIdxPath(), grammarDatPath(), out, needDefinition, posMask)) {
     out.sourceDict = DICT_GRAMMAR;
     return true;
   }
@@ -578,6 +604,7 @@ void DictIndex::releaseCaches() {
   // web file transfer, including switching between legacy and preferred names.
   g_vocabIdxResolved = nullptr;
   g_namesIdxResolved = nullptr;
+  g_grammarIdxResolved = nullptr;
 }
 
 void DictIndex::logAndResetStats(const char* label) {

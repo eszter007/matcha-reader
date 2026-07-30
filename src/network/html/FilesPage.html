@@ -4089,8 +4089,8 @@ function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}) {
     for (const item of items) {
       const href = item.getAttribute('href') || '';
       const type = item.getAttribute('media-type') || '';
-      if (href.endsWith('.jpg') && type.match(/^image\/(png|gif|webp|bmp)$/)) {
-        item.setAttribute('media-type', 'image/jpeg');
+      if (href.endsWith('.bmp') && type.match(/^image\/(png|gif|webp|jpe?g)$/)) {
+        item.setAttribute('media-type', 'image/bmp');
       }
     }
 
@@ -4108,8 +4108,8 @@ function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}) {
     for (const [splitKey, splitInfo] of Object.entries(splitImages)) {
       const parts = splitInfo.parts || splitInfo;
       let origHref = opfDir && splitKey.startsWith(opfDir + '/') ? splitKey.substring(opfDir.length + 1) : splitKey;
-      const origHrefJpg = origHref.replace(/\.(png|gif|webp|bmp|jpeg)$/i, '.jpg');
-      const part1Href = origHrefJpg.replace(/\.jpg$/i, '_part1.jpg');
+      const origHrefJpg = origHref.replace(/\.(png|gif|webp|bmp|jpe?g)$/i, '.bmp');
+      const part1Href = origHrefJpg.replace(/\.bmp$/i, '_part1.bmp');
 
       for (const item of items) {
         const h = item.getAttribute('href') || '';
@@ -4127,7 +4127,7 @@ function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}) {
           const newItem = doc.createElementNS(ns, 'item');
           newItem.setAttribute('id', `img-${p.id}`);
           newItem.setAttribute('href', href);
-          newItem.setAttribute('media-type', 'image/jpeg');
+          newItem.setAttribute('media-type', 'image/bmp');
           manifestEl.appendChild(newItem);
         }
       }
@@ -4136,21 +4136,21 @@ function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}) {
     t = safeSerialize(doc, opfOriginal);
   } catch (e) {
     // Regex fallback
-    t = t.replace(/(<(?:\w+:)?item\b[^>]*href="[^"]+\.jpg"[^>]*)media-type="image\/(png|gif|webp|bmp)"/g, '$1media-type="image/jpeg"');
-    t = t.replace(/(<(?:\w+:)?item\b[^>]*)media-type="image\/(png|gif|webp|bmp)"([^>]*href="[^"]+\.jpg")/g, '$1media-type="image/jpeg"$3');
+    t = t.replace(/(<(?:\w+:)?item\b[^>]*href="[^"]+\.bmp"[^>]*)media-type="image\/(png|gif|webp|jpe?g)"/g, '$1media-type="image/bmp"');
+    t = t.replace(/(<(?:\w+:)?item\b[^>]*)media-type="image\/(png|gif|webp|jpe?g)"([^>]*href="[^"]+\.bmp")/g, '$1media-type="image/bmp"$3');
     t = t.replace(/\s+svg(?=["'\s>])/g, '');
     for (const [splitKey, splitInfo] of Object.entries(splitImages)) {
       const parts = splitInfo.parts || splitInfo;
       let origHref = opfDir && splitKey.startsWith(opfDir + '/') ? splitKey.substring(opfDir.length + 1) : splitKey;
-      const origHrefJpg = origHref.replace(/\.(png|gif|webp|bmp|jpeg)$/i, '.jpg');
-      const part1Href = origHrefJpg.replace(/\.jpg$/i, '_part1.jpg');
+      const origHrefJpg = origHref.replace(/\.(png|gif|webp|bmp|jpe?g)$/i, '.bmp');
+      const part1Href = origHrefJpg.replace(/\.bmp$/i, '_part1.bmp');
       const origImgRegex = new RegExp(`(href=["'])(${escapeRegex(origHref)}|${escapeRegex(origHrefJpg)})(["'])`, 'gi');
       t = t.replace(origImgRegex, `$1${part1Href}$3`);
       let adds = '';
       for (let j = 1; j < parts.length; j++) {
         const p = parts[j];
         const href = opfDir && p.path.startsWith(opfDir + '/') ? p.path.substring(opfDir.length + 1) : p.path;
-        adds += `<item id="img-${xmlEscape(p.id)}" href="${xmlEscape(href)}" media-type="image/jpeg"/>\n`;
+        adds += `<item id="img-${xmlEscape(p.id)}" href="${xmlEscape(href)}" media-type="image/bmp"/>\n`;
       }
       if (adds && t.includes('</manifest>')) t = t.replace('</manifest>', adds + '</manifest>');
     }
@@ -4383,6 +4383,34 @@ function applyGrayscale(ctx, width, height) {
   ctx.putImageData(imageData, 0, 0);
 }
 
+// Same 1-bit Atkinson diffusion used by the manga thumbnail pipeline. Images
+// have already been fitted to the device canvas before this runs.
+async function canvasToDitheredBmp(canvas) {
+  const { width, height } = canvas;
+  const pixels = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+  const rowBytes = Math.ceil(width / 32) * 4;
+  const bytes = new Uint8Array(62 + rowBytes * height);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x42, 0x4d]); view.setUint32(2, bytes.length, true); view.setUint32(10, 62, true);
+  view.setUint32(14, 40, true); view.setInt32(18, width, true); view.setInt32(22, -height, true);
+  view.setUint16(26, 1, true); view.setUint16(28, 1, true); view.setUint32(34, rowBytes * height, true);
+  view.setUint32(38, 2835, true); view.setUint32(42, 2835, true); view.setUint32(46, 2, true); view.setUint32(50, 2, true);
+  bytes.set([0, 0, 0, 0, 255, 255, 255, 0], 54);
+  let e0 = new Int16Array(width + 4), e1 = new Int16Array(width + 4), e2 = new Int16Array(width + 4);
+  for (let y = 0; y < height; y++) {
+    const dst = 62 + y * rowBytes;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4, a = pixels[i + 3] / 255;
+      let gray = Math.max(0, Math.min(255, Math.round((pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114) * a + 255 * (1 - a)) + e0[x + 2]));
+      const white = gray >= 128, error = (gray - (white ? 255 : 0)) >> 3;
+      e0[x + 3] += error; e0[x + 4] += error; e1[x + 1] += error; e1[x + 2] += error; e1[x + 3] += error; e2[x + 2] += error;
+      if (white) bytes[dst + (x >> 3)] |= 0x80 >> (x & 7);
+    }
+    [e0, e1, e2] = [e1, e2, new Int16Array(width + 4)];
+  }
+  return new Blob([bytes], { type: 'image/bmp' });
+}
+
 function shouldSkipAutoCrop(imagePath, width, height, ignoreToggle = false) {
   if (!ignoreToggle && !ENABLE_AUTO_CROP) return true;
   if (autoCropProtectedPaths.has(imagePath)) return true;
@@ -4611,7 +4639,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
 
         // Step 3: If WIDTH > 480, split vertically
         if (rotW <= MAX_WIDTH) {
-          const blob = await new Promise(res => rotCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+          const blob = await canvasToDitheredBmp(rotCanvas);
           const arrBuf = await blob.arrayBuffer();
           resolve({
             parts: [{ data: arrBuf, suffix: '', width: rotW, height: rotH, size: arrBuf.byteLength }],
@@ -4676,7 +4704,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
             // Draw the slice
             partCtx.drawImage(rotCanvas, x, 0, partW, rotH, 0, 0, partW, rotH);
 
-            const blob = await new Promise(res => partCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+            const blob = await canvasToDitheredBmp(partCanvas);
             const arrBuf = await blob.arrayBuffer();
             parts.push({ data: arrBuf, suffix: `_part${i + 1}`, width: partW, height: rotH, size: arrBuf.byteLength });
           }
@@ -4712,7 +4740,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
 
         // Check if split needed
         if (scaledW <= MAX_WIDTH) {
-          const blob = await new Promise(res => scaledCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+          const blob = await canvasToDitheredBmp(scaledCanvas);
           const arrBuf = await blob.arrayBuffer();
           resolve({
             parts: [{ data: arrBuf, suffix: '', width: scaledW, height: scaledH, size: arrBuf.byteLength }],
@@ -4764,7 +4792,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
             // Draw the slice
             partCtx.drawImage(scaledCanvas, x, 0, partW, scaledH, 0, 0, partW, scaledH);
 
-            const blob = await new Promise(res => partCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+            const blob = await canvasToDitheredBmp(partCanvas);
             const arrBuf = await blob.arrayBuffer();
             parts.push({ data: arrBuf, suffix: `_part${i + 1}`, width: partW, height: scaledH, size: arrBuf.byteLength });
           }
@@ -4808,7 +4836,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
         if (fitsInScreen && !sourceWasCropped) {
           // Already fits after rotation - just apply grayscale
           applyGrayscale(rotCtx, rotW, rotH);
-          const blob = await new Promise(res => rotCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+          const blob = await canvasToDitheredBmp(rotCanvas);
           const arrBuf = await blob.arrayBuffer();
           resolve({
             parts: [{ data: arrBuf, suffix: '', width: rotW, height: rotH, size: arrBuf.byteLength }],
@@ -4831,7 +4859,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
           scaledCtx.drawImage(rotCanvas, 0, 0, newW, newH);
           applyGrayscale(scaledCtx, newW, newH);
 
-          const blob = await new Promise(res => scaledCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+          const blob = await canvasToDitheredBmp(scaledCanvas);
           const arrBuf = await blob.arrayBuffer();
           resolve({
             parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
@@ -4857,7 +4885,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
           ctx.drawImage(sourceCanvas, 0, 0);
           applyGrayscale(ctx, sourceW, sourceH);
 
-          const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+          const blob = await canvasToDitheredBmp(c);
           const arrBuf = await blob.arrayBuffer();
           resolve({
             parts: [{ data: arrBuf, suffix: '', width: sourceW, height: sourceH, size: arrBuf.byteLength }],
@@ -4880,7 +4908,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
           ctx.drawImage(sourceCanvas, 0, 0, newW, newH);
           applyGrayscale(ctx, newW, newH);
 
-          const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
+          const blob = await canvasToDitheredBmp(c);
           const arrBuf = await blob.arrayBuffer();
           resolve({
             parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
@@ -5171,7 +5199,7 @@ async function convertEpubFile(file, progressCallback) {
       const meta = result.meta;
 
       const baseName = path.replace(/\.[^.]+$/, '');
-      const newExt = '.jpg';
+      const newExt = '.bmp';
 
       // Log image processing
       const imgName = path.split('/').pop();
@@ -5179,7 +5207,8 @@ async function convertEpubFile(file, progressCallback) {
       logImage(imgName, meta.origW, meta.origH, origFormat, meta.origSize, meta.finalW, meta.finalH, meta.finalSize, meta.wasSplit, meta.splitCount || 0, parts, meta.imageState || 0);
 
       if (parts.length === 1 && parts[0].suffix === '') {
-        const newPath = renamed[path] || path.replace(/\.[^.]+$/, newExt);
+        const newPath = path.replace(/\.[^.]+$/, newExt);
+        renamed[path] = newPath;
         out.file(newPath, parts[0].data, { compression: 'STORE', createFolders: false });
       } else {
         // Store with full path for collision prevention, but also keep original filename
