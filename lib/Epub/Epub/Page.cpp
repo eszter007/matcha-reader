@@ -4,11 +4,35 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <cstdlib>
 #include <new>
 
 #include "css/CssStyle.h"
 
 namespace {
+
+void drawPatternedLine(GfxRenderer& renderer, const int x1, const int y1, const int x2, const int y2,
+                       const uint8_t borderSpec) {
+  const uint8_t thickness = CssStyle::lineWidthOf(borderSpec);
+  const CssBorderLineStyle style = CssStyle::lineStyleOf(borderSpec);
+  if (style == CssBorderLineStyle::Solid || style == CssBorderLineStyle::Double) {
+    renderer.drawLine(x1, y1, x2, y2, style == CssBorderLineStyle::Double ? 1 : thickness, true);
+    return;
+  }
+
+  const bool horizontal = y1 == y2;
+  const int length = horizontal ? std::abs(x2 - x1) + 1 : std::abs(y2 - y1) + 1;
+  const int on = style == CssBorderLineStyle::Dotted ? thickness : thickness * 3;
+  const int gap = style == CssBorderLineStyle::Dotted ? thickness : thickness * 2;
+  for (int offset = 0; offset < length; offset += on + gap) {
+    const int end = std::min(length - 1, offset + on - 1);
+    if (horizontal) {
+      renderer.drawLine(x1 + offset, y1, x1 + end, y1, thickness, true);
+    } else {
+      renderer.drawLine(x1, y1 + offset, x1, y1 + end, thickness, true);
+    }
+  }
+}
 
 template <typename Predicate>
 void renderFilteredPageElements(const std::vector<std::shared_ptr<PageElement>>& elements, GfxRenderer& renderer,
@@ -41,12 +65,26 @@ std::unique_ptr<PageLine> PageLine::deserialize(HalFile& file) {
   serialization::readPod(file, yPos);
 
   auto tb = TextBlock::deserialize(file);
-  return std::unique_ptr<PageLine>(new PageLine(std::move(tb), xPos, yPos));
+  if (!tb) {
+    LOG_ERR("PGE", "Deserialization failed: null TextBlock");
+    return nullptr;
+  }
+
+  auto* line = new (std::nothrow) PageLine(std::move(tb), xPos, yPos);
+  if (!line) {
+    LOG_ERR("PGE", "Deserialization failed: could not allocate PageLine");
+    return nullptr;
+  }
+  return std::unique_ptr<PageLine>(line);
 }
 
 void PageImage::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
   // Images don't use fontId or text rendering
   imageBlock->render(renderer, xPos + xOffset, yPos + yOffset);
+}
+
+void PageImage::renderPlaceholder(GfxRenderer& renderer, const int xOffset, const int yOffset) const {
+  imageBlock->renderPlaceholder(renderer, xPos + xOffset, yPos + yOffset);
 }
 
 bool PageImage::serialize(HalFile& file) {
@@ -81,10 +119,29 @@ void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset,
   if (width <= 0 || height <= 0) return;
   const int x = xPos + xOffset;
   const int y = yPos + yOffset;
-  if (edges & CssStyle::BORDER_TOP) renderer.drawLine(x, y, x + width, y, true);
-  if (edges & CssStyle::BORDER_BOTTOM) renderer.drawLine(x, y + height, x + width, y + height, true);
-  if (edges & CssStyle::BORDER_LEFT) renderer.drawLine(x, y, x, y + height, true);
-  if (edges & CssStyle::BORDER_RIGHT) renderer.drawLine(x + width, y, x + width, y + height, true);
+  // Fill first: any border edges are drawn over it, and the block's text is drawn over both
+  // because the page renders its elements in insertion order.
+  if (filled) renderer.fillRect(x, y, width, height, true);
+  const uint8_t edges = CssStyle::edgeMaskOf(borderSpec);
+  if (edges & CssStyle::BORDER_TOP) drawPatternedLine(renderer, x, y, x + width, y, borderSpec);
+  if (edges & CssStyle::BORDER_BOTTOM) {
+    drawPatternedLine(renderer, x, y + height, x + width, y + height, borderSpec);
+  }
+  if (edges & CssStyle::BORDER_LEFT) drawPatternedLine(renderer, x, y, x, y + height, borderSpec);
+  if (edges & CssStyle::BORDER_RIGHT) {
+    drawPatternedLine(renderer, x + width, y, x + width, y + height, borderSpec);
+  }
+  if (CssStyle::lineStyleOf(borderSpec) == CssBorderLineStyle::Double) {
+    constexpr int inset = 2;
+    if (edges & CssStyle::BORDER_TOP) drawPatternedLine(renderer, x, y + inset, x + width, y + inset, borderSpec);
+    if (edges & CssStyle::BORDER_BOTTOM) {
+      drawPatternedLine(renderer, x, y + height - inset, x + width, y + height - inset, borderSpec);
+    }
+    if (edges & CssStyle::BORDER_LEFT) drawPatternedLine(renderer, x + inset, y, x + inset, y + height, borderSpec);
+    if (edges & CssStyle::BORDER_RIGHT) {
+      drawPatternedLine(renderer, x + width - inset, y, x + width - inset, y + height, borderSpec);
+    }
+  }
 }
 
 bool PageBox::serialize(HalFile& file) {
@@ -92,7 +149,8 @@ bool PageBox::serialize(HalFile& file) {
   serialization::writePod(file, yPos);
   serialization::writePod(file, width);
   serialization::writePod(file, height);
-  serialization::writePod(file, edges);
+  serialization::writePod(file, borderSpec);
+  serialization::writePod(file, filled);
   return true;
 }
 
@@ -101,17 +159,19 @@ std::unique_ptr<PageBox> PageBox::deserialize(HalFile& file) {
   int16_t yPos = 0;
   int16_t width = 0;
   int16_t height = 0;
-  uint8_t edges = 0;
+  uint8_t borderSpec = 0;
+  bool filled = false;
   serialization::readPod(file, xPos);
   serialization::readPod(file, yPos);
   serialization::readPod(file, width);
   serialization::readPod(file, height);
-  serialization::readPod(file, edges);
+  serialization::readPod(file, borderSpec);
+  serialization::readPod(file, filled);
   if (width <= 0 || height <= 0) {
     LOG_ERR("PGE", "Deserialization failed: invalid box metadata (w=%d h=%d)", width, height);
     return nullptr;
   }
-  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, edges, xPos, yPos));
+  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, borderSpec, xPos, yPos, filled));
 }
 
 bool PageHorizontalRule::serialize(HalFile& file) {
@@ -163,6 +223,17 @@ void Page::renderImages(GfxRenderer& renderer, const int fontId, const int xOffs
                              [](const PageElement& element) { return element.getTag() == TAG_PageImage; });
 }
 
+void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, const int xOffset,
+                                       const int yOffset) const {
+  for (const auto& element : elements) {
+    if (element->getTag() == TAG_PageImage) {
+      static_cast<const PageImage&>(*element).renderPlaceholder(renderer, xOffset, yOffset);
+    } else {
+      element->render(renderer, fontId, xOffset, yOffset);
+    }
+  }
+}
+
 bool Page::serialize(HalFile& file) const {
   const uint16_t count = elements.size();
   serialization::writePod(file, count);
@@ -197,15 +268,31 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
   uint16_t count;
   serialization::readPod(file, count);
 
+  // Reserve up front so a page load costs one allocation for the element vector
+  // instead of a grow-copy-free cycle every doubling. `count` is untrusted (it
+  // comes straight off the SD cache), so clamp it: a real page holds a few dozen
+  // elements, while a corrupt header could ask for 65535 * sizeof(shared_ptr) and
+  // abort() on the failed allocation (vector's operator new is throwing, and this
+  // firmware builds with -fno-exceptions). Under-reserving is harmless -- the
+  // push_back path below still grows normally.
+  static constexpr uint16_t RESERVE_CAP = 256;
+  page->elements.reserve(std::min(count, RESERVE_CAP));
+
   for (uint16_t i = 0; i < count; i++) {
     uint8_t tag;
     serialization::readPod(file, tag);
 
     if (tag == TAG_PageLine) {
       auto pl = PageLine::deserialize(file);
+      if (!pl) {
+        return nullptr;
+      }
       page->elements.push_back(std::move(pl));
     } else if (tag == TAG_PageImage) {
       auto pi = PageImage::deserialize(file);
+      if (!pi) {
+        return nullptr;
+      }
       page->elements.push_back(std::move(pi));
     } else if (tag == TAG_PageHorizontalRule) {
       auto rule = PageHorizontalRule::deserialize(file);

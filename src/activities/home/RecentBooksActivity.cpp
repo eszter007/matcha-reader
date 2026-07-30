@@ -13,13 +13,13 @@
 #include <MangaPanel.h>
 #include <Memory.h>
 #include <PngToBmpConverter.h>
+#include <Xtc.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <memory>
 
 #include "EpubProgressUtil.h"
-#include "JsonSettingsIO.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "XtcProgressUtil.h"
@@ -34,6 +34,7 @@ constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
 constexpr int SHELF_THUMB_WIDTH = 36;
 constexpr int SHELF_THUMB_HEIGHT = 54;
+constexpr uint32_t THUMB_IDLE_MS = 2000;
 
 // Diagnostic artifact written by HalSystem::checkPanic() to the SD root -- a .txt file the
 // library walk would otherwise list as a book.
@@ -119,9 +120,8 @@ bool RecentBooksActivity::thumbGenShouldCancel(void* ctx) {
   // completion swallows every click made during it, and the poll above only catches a button
   // that is down at that instant -- not a short press that came and went. Cap a slice while the
   // reader is navigating; once they have been idle for a few seconds, let it run to the end.
-  constexpr uint32_t IDLE_AFTER_MS = 5000;
   const uint32_t now = millis();
-  if (now - self->lastInputMs > IDLE_AFTER_MS) return false;
+  if (now - self->lastInputMs > THUMB_IDLE_MS) return false;
   return self->thumbGenStartedMs != 0 && now - self->thumbGenStartedMs > self->thumbGenBudgetMs;
 }
 
@@ -154,14 +154,19 @@ void RecentBooksActivity::loadRecentBooks() {
   // startLibraryScan) refreshes and re-persists the list afterwards.
   recentBooks = RECENT_BOOKS.getBooks();
 
-  const String cacheJson = Storage.readFile(LIBRARY_CACHE_JSON);
-  if (cacheJson.length() > 0) {
+  {
     RecentBooksStore cache;
-    if (JsonSettingsIO::loadRecentBooks(cache, cacheJson.c_str())) {
+    if (cache.loadFromPath(LIBRARY_CACHE_JSON)) {
       for (const auto& b : cache.getBooks()) {
-        const bool known =
-            std::any_of(recentBooks.begin(), recentBooks.end(), [&b](const auto& r) { return r.path == b.path; });
-        if (!known) recentBooks.push_back(b);
+        const auto known =
+            std::find_if(recentBooks.begin(), recentBooks.end(), [&b](const auto& r) { return r.path == b.path; });
+        if (known == recentBooks.end()) {
+          recentBooks.push_back(b);
+        } else {
+          if (known->title.empty()) known->title = b.title;
+          if (known->author.empty()) known->author = b.author;
+          if (known->coverBmpPath.empty()) known->coverBmpPath = b.coverBmpPath;
+        }
       }
     }
   }
@@ -170,7 +175,7 @@ void RecentBooksActivity::loadRecentBooks() {
 namespace {
 constexpr char LIBRARY_INDEX_PATH[] = "/.crosspoint/library.idx";
 constexpr uint32_t LIBRARY_INDEX_MAGIC = 0x4C494258;  // "LIBX"
-constexpr uint8_t LIBRARY_INDEX_VERSION = 1;
+constexpr uint8_t LIBRARY_INDEX_VERSION = 3;
 constexpr size_t LIBRARY_INDEX_MAX_ENTRIES = 2048;  // guards a corrupt count against the heap
 }  // namespace
 
@@ -267,7 +272,7 @@ bool RecentBooksActivity::stepLibraryScan() {
     return false;
   }
 
-  // Epub cover-thumb pass, one book per slice.
+  // EPUB/XTC cover-thumb pass, one book per slice.
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int thumbH =
       gridCoverHeight_ > 0 ? gridCoverHeight_ : (metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120);
@@ -334,11 +339,14 @@ bool RecentBooksActivity::stepLibraryScan() {
       scan_.thumbIndex++;
       return false;  // heavy step: one per slice
     }
-    if ((!book.coverBmpPath.empty() && !coverIsTemplate) || !FsHelpers::hasEpubExtension(book.path)) {
+    const bool isEpub = FsHelpers::hasEpubExtension(book.path);
+    const bool isXtc = FsHelpers::hasXtcExtension(book.path);
+    if ((!book.coverBmpPath.empty() && !coverIsTemplate) || (!isEpub && !isXtc)) {
       scan_.thumbIndex++;
       continue;
     }
-    std::string cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(book.path));
+    std::string cachePath = std::string("/.crosspoint/") + (isEpub ? "epub_" : "xtc_") +
+                            std::to_string(std::hash<std::string>{}(book.path));
     std::string thumbPath = cachePath + "/thumb_" + std::to_string(thumbH) + ".bmp";
 
     // Index shortcut: a record whose size, modification stamp and cover height all still match
@@ -380,14 +388,23 @@ bool RecentBooksActivity::stepLibraryScan() {
     // streaked, half-black thumbnail (user report). Fonts reload lazily afterwards. Same step
     // the home screen already takes before generating XTC thumbs.
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+    Storage.remove(thumbPath.c_str());  // validated stale above; generators otherwise return early
     thumbGenStartedMs = millis();
-    Epub epub(book.path, "/.crosspoint");
-    const bool generated = epub.load(true, true) && epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
+    bool generated = false;
+    std::string title;
+    if (isEpub) {
+      Epub epub(book.path, "/.crosspoint");
+      generated = epub.load(true, true) && epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
+      title = epub.getTitle();
+    } else {
+      Xtc xtc(book.path, "/.crosspoint");
+      generated = xtc.load() && xtc.generateThumbBmp(thumbH);
+      title = xtc.getTitle();
+    }
     thumbGenBudgetMs = generated ? 400 : std::min<uint32_t>(thumbGenBudgetMs * 2, 3000);
     recordIndexEntry(book.path, bookSize, bookStamp, thumbH, generated);
     if (generated) {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
-      const auto& title = epub.getTitle();
       if (!title.empty()) book.title = title;
       // Surface the new cover immediately (the list was already applied after the walk).
       {
@@ -543,7 +560,7 @@ void RecentBooksActivity::applyLibraryScan() {
       RenderLock lock;  // the render task reads these lists concurrently
       recentBooks = std::move(fresh);
       markAllProgressPending();
-      loadShelves();
+      if (shelvesLoaded) loadShelves();
       lastRendered.valid = false;
       LOG_DBG("RBA", "Library scan applied: %u books", static_cast<unsigned>(recentBooks.size()));
     }
@@ -557,7 +574,7 @@ void RecentBooksActivity::finishLibraryScan() {
   saveLibraryIndex();
   RecentBooksStore cache;
   cache.setBooks(scan_.results);
-  JsonSettingsIO::saveRecentBooks(cache, LIBRARY_CACHE_JSON);
+  cache.saveToPath(LIBRARY_CACHE_JSON);
   scan_.results.clear();
   scan_.results.shrink_to_fit();
 }
@@ -594,6 +611,7 @@ bool RecentBooksActivity::fillPendingProgress(const int maxCount) {
 }
 
 void RecentBooksActivity::loadShelves() {
+  shelvesLoaded = true;
   shelves.clear();
 
   for (const auto& book : recentBooks) {
@@ -822,6 +840,7 @@ int RecentBooksActivity::readProgressPercent(const std::string& bookPath) const 
 
 void RecentBooksActivity::onEnter() {
   Activity::onEnter();
+  lastInputMs = millis();
 
   if (RECENT_BOOKS.pruneMissing()) {
     RECENT_BOOKS.saveToFile();
@@ -829,7 +848,7 @@ void RecentBooksActivity::onEnter() {
 
   loadRecentBooks();
   loadBookProgress();
-  loadShelves();
+  shelvesLoaded = false;
   startLibraryScan();
 
   selectedTab = 0;
@@ -849,6 +868,12 @@ void RecentBooksActivity::onExit() {
 }
 
 void RecentBooksActivity::loop() {
+  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight =
+      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+
   if (openShelfIndex >= 0) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       openShelfIndex = -1;
@@ -886,6 +911,7 @@ void RecentBooksActivity::loop() {
     if (contentIndex == 0) {
       selectedTab = (selectedTab + 1) % TAB_COUNT;
       hasChangedTab = true;
+      if (selectedTab == 1 && !shelvesLoaded) loadShelves();
       requestUpdate();
     } else {
       const int itemIdx = contentIndex - 1;
@@ -926,6 +952,21 @@ void RecentBooksActivity::loop() {
     }
   }
 
+  // Upstream's flat recents list (selectorIndex + handleListTouch) doesn't exist here: this
+  // screen is a tabbed cover GRID addressed by contentIndex/scrollRow. Swipes move one grid
+  // row; Back stays with the tab/shelf-aware handler below rather than always going home.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+    const int totalItems = getContentItemCount() + 1;
+    const int delta = (swipe == MappedInputManager::SwipeDir::Up) ? GRID_COLS : -GRID_COLS;
+    const int moved = std::clamp(contentIndex + delta, 0, std::max(0, totalItems - 1));
+    if (moved != contentIndex) {
+      contentIndex = moved;
+      requestUpdate();
+    }
+    return;
+  }
+
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     if (contentIndex > 0) {
       contentIndex = 0;
@@ -964,6 +1005,7 @@ void RecentBooksActivity::loop() {
   if (hasChangedTab) {
     contentIndex = (contentIndex == 0) ? 0 : 1;
     scrollRow = 0;
+    if (selectedTab == 1 && !shelvesLoaded) loadShelves();
   }
 
   // Background work, one slice per tick: re-scan the card (stale-while-revalidate) and fill
@@ -978,7 +1020,8 @@ void RecentBooksActivity::loop() {
     // but a manga folder holds hundreds of page files and listing one costs seconds on SD
     // (measured: a 2220ms loop gap) -- a click landing inside that window is never even sampled
     // as a press, so the Library felt completely dead while it scanned.
-    if (millis() - lastInputMs > 700 && !RenderLock::peek()) {
+    const uint32_t idleBeforeWorkMs = scan_.walkDone ? THUMB_IDLE_MS : 700;
+    if (millis() - lastInputMs > idleBeforeWorkMs && !RenderLock::peek()) {
       const bool wasWalking = !scan_.walkDone;
       const bool done = stepLibraryScan();
       if (wasWalking && scan_.walkDone) applyLibraryScan();  // books show up now; covers follow
@@ -1002,7 +1045,7 @@ void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::s
       LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
       loadRecentBooks();
       loadBookProgress();
-      loadShelves();
+      if (shelvesLoaded) loadShelves();
       if (recentBooks.empty()) {
         contentIndex = 0;
       } else if (contentIndex - 1 >= static_cast<int>(recentBooks.size())) {
@@ -1061,7 +1104,7 @@ void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const i
   renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
 
   if (!hasCover) {
-    renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32, 32);
+    renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32);
     auto titleLines = renderer.wrappedText(SMALL_FONT_ID, title.c_str(), coverWidth - 8, 3);
     int textY = coverY + (coverHeight - 32) / 2 + 36;
     for (const auto& line : titleLines) {
@@ -1169,14 +1212,14 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   fillPageProgressNow(bookProgress, &recentBooks, nullptr, firstIdx, lastIdx);
 
   // Prewarm titles for the full rows only (the peek row's titles are never drawn).
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
     for (int idx = firstIdx; idx <= titledLastIdx; idx++) {
       prewarmBuf += recentBooks[idx].title;
       prewarmBuf += ' ';
     }
-    fcm->prewarmCache(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
+    renderer.prewarmText(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
 
   for (int idx = firstIdx; idx <= lastIdx; idx++) {
@@ -1304,14 +1347,14 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
   // unconditionally on every render (unlike cover-fallback titles below), so without this, non-Latin
   // names (e.g. Japanese folders) hit FontDecompressor's slow single-slot fallback on every navigation
   // step -- one full ~64KB group decompression per name that lands in a different glyph group.
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
     for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
       prewarmBuf += shelves[i].folderName;
       prewarmBuf += ' ';
     }
-    fcm->prewarmCache(UI_10_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::BOLD);
+    renderer.prewarmText(UI_10_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::BOLD);
   }
 
   for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
@@ -1362,14 +1405,14 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
 
   fillPageProgressNow(shelfBookProgress, nullptr, &shelfBooks, firstIdx, lastIdx);
 
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (renderer.getFontCacheManager()) {
     std::string prewarmBuf;
     prewarmBuf.reserve(256);
     for (int idx = firstIdx; idx <= titledLastIdx; idx++) {
       prewarmBuf += shelfBooks[idx].title;
       prewarmBuf += ' ';
     }
-    fcm->prewarmCache(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
+    renderer.prewarmText(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
 
   for (int idx = firstIdx; idx <= lastIdx; idx++) {
@@ -1474,8 +1517,8 @@ bool RecentBooksActivity::tryPartialSelectionRedraw() {
   const int scrollOffset = scrollOffsetFor(newIdx - 1);
 
   if (fcm) {
-    fcm->prewarmCache(UI_10_FONT_ID, (shelves[oldIdx - 1].folderName + ' ' + shelves[newIdx - 1].folderName).c_str(),
-                      1 << EpdFontFamily::BOLD);
+    renderer.prewarmText(UI_10_FONT_ID, (shelves[oldIdx - 1].folderName + ' ' + shelves[newIdx - 1].folderName).c_str(),
+                         1 << EpdFontFamily::BOLD);
   }
   for (const int idx : {oldIdx - 1, newIdx - 1}) {
     const int itemY = contentTop + (idx - scrollOffset) * rowHeight;

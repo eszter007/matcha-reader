@@ -89,8 +89,19 @@ void FontDecompressor::freeHotGroup() {
   hotGroupCapacity = 0;
   hotGroupFont = nullptr;
   hotGroupIndex = UINT16_MAX;
-  hotGlyphBuf.clear();
-  hotGlyphBuf.shrink_to_fit();
+  free(hotGlyphBuf);
+  hotGlyphBuf = nullptr;
+  hotGlyphBufCapacity = 0;
+}
+
+bool FontDecompressor::ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed) {
+  if (capacity >= needed) return true;
+  // Grow-only, free-then-malloc: every caller fully rewrites the buffer after a grow, so the
+  // old contents are dead -- freeing first gives the allocator its best shot on a tight heap.
+  free(buf);
+  buf = static_cast<uint8_t*>(malloc(needed));  // owned by FontDecompressor, freed in freeHotGroup()
+  capacity = buf ? needed : 0;
+  return buf != nullptr;
 }
 
 uint16_t FontDecompressor::getGroupIndex(const EpdFontData* fontData, uint32_t glyphIndex) {
@@ -233,15 +244,11 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     stats.cacheMisses++;
     const EpdFontGroup& group = fontData->groups[groupIndex];
 
-    if (hotGroupCapacity < group.uncompressedSize) {
-      free(hotGroup);
-      hotGroup = static_cast<uint8_t*>(malloc(group.uncompressedSize));
-      hotGroupCapacity = hotGroup ? group.uncompressedSize : 0;
-    }
-    if (!hotGroup) {
+    // ensureCapacity may free the buffer, so the cached-group identity dies with it either way.
+    hotGroupFont = nullptr;
+    hotGroupIndex = UINT16_MAX;
+    if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
       LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u", group.uncompressedSize, groupIndex);
-      hotGroupFont = nullptr;
-      hotGroupIndex = UINT16_MAX;
       stats.getBitmapTimeUs += micros() - tStart;
       return nullptr;
     }
@@ -264,23 +271,21 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
   }
 
   // Compact just the requested glyph from byte-aligned data into scratch buffer
-  if (glyph->dataLength > hotGlyphBuf.size()) {
-    hotGlyphBuf.resize(glyph->dataLength);
-  }
-  if (hotGlyphBuf.empty()) {
+  if (!ensureCapacity(hotGlyphBuf, hotGlyphBufCapacity, glyph->dataLength)) {
+    LOG_ERR("FDC", "Failed to allocate %u bytes for glyph scratch", (unsigned)glyph->dataLength);
     stats.getBitmapTimeUs += micros() - tStart;
     return nullptr;
   }
 
   uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
-  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf.data(), glyph->width, glyph->height);
+  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf, glyph->width, glyph->height);
   stats.getBitmapTimeUs += micros() - tStart;
   // Remember the compacted glyph so the NEXT render of this label costs a RAM lookup instead of
   // a group decompression. Falls back to the scratch buffer if the slab can't take it.
-  if (const uint8_t* cached = slabInsert(fontData, glyphIndex, hotGlyphBuf.data(), glyph->dataLength)) {
+  if (const uint8_t* cached = slabInsert(fontData, glyphIndex, hotGlyphBuf, glyph->dataLength)) {
     return cached;
   }
-  return hotGlyphBuf.data();
+  return hotGlyphBuf;
 }
 
 // --- Prewarm: pre-decompress glyph bitmaps for a page of text ---

@@ -37,7 +37,14 @@ Usage:
 Output (in --output-dir):
     page_0000.jpg, page_0001.jpg, ...   canonical, trivially-sortable page
                                          images (device scans these directly)
-    p<page>_<panel>.jpg                 cropped panel images for panel-zoom
+    panels/p<page>_<panel>.jpg          cropped panel images for panel-zoom, in their own
+                                         subfolder so the book folder holds only page images:
+                                         the device walks every entry of the book folder when
+                                         opening a book, and a crop per panel dominated that
+                                         scan (measured 6499ms for 2396 entries, of which 219
+                                         were pages and 974 were crops). The firmware still
+                                         reads the older flat layout, so books converted before
+                                         this keep working -- re-convert to get the faster open.
     panels.idx / panels.dat             panel layout data
     meta.bin                            book title + author (auto-extracted
                                          from source, or set via --title/--author)
@@ -93,6 +100,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 FORMAT_VERSION = 2  # v2 adds a per-panel translation string after the panel header
+
+# Panel crops go in this subfolder of --output-dir. Must match MangaReaderActivity's
+# PANEL_CROP_SUBDIR; see the Output section above for why they are not loose in the book folder.
+PANEL_CROP_SUBDIR = "panels"
 
 IDX_HEADER = "<II"  # version(4) + pageCount(4) = 8 bytes
 IDX_RECORD = "<IIHH"  # dataOffset(4) + dataLength(4) + imgWidth(2) + imgHeight(2) = 12 bytes
@@ -1288,11 +1299,13 @@ def main():
                     # firmware zooms a panel to fill the display, so this is the size it is
                     # actually shown at -- and the one it should be dithered at.
                     cropped = fit_to_device(cropped, device_target)
+                    panel_dir = os.path.join(args.output_dir, PANEL_CROP_SUBDIR)
+                    os.makedirs(panel_dir, exist_ok=True)
                     if args.mono:
-                        panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.bmp")
+                        panel_path = os.path.join(panel_dir, f"p{page_idx}_{panel_idx}.bmp")
                         cropped.convert("L").convert("1").save(panel_path, "BMP")
                     else:
-                        panel_path = os.path.join(args.output_dir, f"p{page_idx}_{panel_idx}.jpg")
+                        panel_path = os.path.join(panel_dir, f"p{page_idx}_{panel_idx}.jpg")
                         cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
                 panel_paths.append(panel_path)
                 panel_rects.append((mx1, my1, mx2, my2))

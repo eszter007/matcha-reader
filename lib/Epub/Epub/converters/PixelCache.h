@@ -19,9 +19,47 @@ namespace PixelCacheIO {
 // Replaces imagePath's extension with .pxc (pixel cache).
 std::string pathFor(const std::string& imagePath);
 
-// Renders from an existing cache file written by a prior PixelCache-backed decode. Returns false
-// (nothing drawn) if the cache doesn't exist or its dimensions don't match expectedWidth/Height
-// (within 1px, for rounding) -- the caller should then fall back to a full decode.
+// Bytes of .2bp header: uint16 width, uint16 height. The pixel body starts here.
+constexpr size_t HEADER_BYTES = 4;
+
+// Holds one cache file open across every pass that renders it.
+//
+// Opening a .2bp measured ~85ms on device -- SdFat walks a FAT directory linearly and a manga
+// chapter's cache holds hundreds of entries, so the open costs more than the read it precedes.
+// A full-page turn renders the same cache three times (BW + the two grayscale planes), which
+// under an open-per-pass API spent ~255ms in open() alone, more than any single pass. Holding
+// the handle also makes reading the header free: the geometry the caller derives from it comes
+// from the same open the passes go on to reuse, instead of a fourth one of its own.
+class Reader {
+ public:
+  Reader() = default;
+  Reader(const Reader&) = delete;
+  Reader& operator=(const Reader&) = delete;
+
+  // Opens the cache and reads its header. False (and left closed) if the file is missing or too
+  // short to hold one.
+  bool open(const std::string& cachePath);
+  void close();
+  bool isOpen() const { return file.isOpen(); }
+
+  // The size the image was decoded at. Zero unless open() succeeded.
+  int width() const { return width_; }
+  int height() const { return height_; }
+
+  // Renders the body at (x, y), rewinding first so it can be called once per pass. Returns false
+  // (nothing drawn) if not open, if the cached size disagrees with expectedWidth/Height by more
+  // than 1px (rounding), or if a read fails -- the caller should then fall back to a full decode.
+  bool render(GfxRenderer& renderer, int x, int y, int expectedWidth, int expectedHeight);
+
+ private:
+  HalFile file;
+  int width_ = 0;
+  int height_ = 0;
+};
+
+// One-shot open-render-close, for callers that render a given cache once per call site.
+// Equivalent to a Reader used for a single pass, and pays a fresh open every time -- prefer a
+// Reader wherever the same cache is rendered more than once.
 bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
                      int expectedHeight);
 }  // namespace PixelCacheIO

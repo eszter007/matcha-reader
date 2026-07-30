@@ -103,6 +103,16 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
 // and every caller already guards against an out-of-range cursor while it refills, so the user's
 // position resumes naturally once the rescan passes it again.
 bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
+  // Definition rendering leaves compressed-font groups resident. Reclaim before the next scan
+  // slice needs to grow a vector; waiting until that growth fails discards progress and rescans
+  // the whole page. This is the same recovery used below, just before damage instead of after it.
+  if (ESP.getMaxAllocHeap() < 20 * 1024) {
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("WLA", "Reclaimed fonts before scan: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+  }
   const bool done = scan.step(budgetMs);
   if (scan.wasTruncated() && !scanHealAttempted && !scan.allGlyphs.empty()) {
     scanHealAttempted = true;
@@ -367,7 +377,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     // For short hiragana-only matches (≤3 chars), check if the grammar dict
     // has a better entry and promote it to the main result. Functional words
     // like こと, もの, よう get unhelpful JMdict hits ("ancient capital").
-    if (chars <= 3 && Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
+    if (chars <= 3 && Storage.exists(DictIndex::grammarIdxPath())) {
       bool allHiragana = true;
       for (size_t b = 0; b < result.matchLength && b < text.size();) {
         auto c = static_cast<unsigned char>(text[b]);
@@ -391,7 +401,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
         }
@@ -411,7 +421,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   // ~30-byte string allocation failing in this block. Show the plain result instead of crashing.
   if (ESP.getMaxAllocHeap() < 16 * 1024) {
     LOG_ERR("WLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
+  } else if (Storage.exists(DictIndex::grammarIdxPath())) {
     const size_t allStart = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
     const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
 
@@ -452,7 +462,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         }
         std::string window = gramText.substr(0, byteEnd);
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(window.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
             bestGramLen = wLen;
@@ -521,7 +531,9 @@ void EpubReaderWordLookupActivity::loop() {
   // slice never swallows a button press). Everything here runs on the main task -- the render
   // task only ever reads counter sizes -- so no lock is needed and, unlike the abandoned
   // reader-idle precompute, nothing can starve another activity's rendering.
-  if (!scan.isDone()) {
+  // The render task's font decompressor can temporarily consume nearly the entire largest block.
+  // Do not overlap that transient allocation with dictionary reads/vector growth.
+  if (!scan.isDone() && !RenderLock::peek()) {
     const bool done = stepScan(40);
     // The open can show "No match" if the initial burst found nothing yet -- promote the first
     // word as soon as the background scan discovers it.
@@ -568,10 +580,10 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
         while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
         const char saved = resultDefinition[cut];
         resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
-        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
         resultDefinition[cut] = saved;
       } else {
-        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
       }
     }
   }
@@ -664,4 +676,8 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     }
   }
+
+  // The framebuffer owns the finished pixels; keeping the decompressed glyph slab until the
+  // next keypress only fragments the heap while the dictionary caches are resident.
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
 }

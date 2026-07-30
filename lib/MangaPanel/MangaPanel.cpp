@@ -1,5 +1,6 @@
 #include "MangaPanel.h"
 
+#include <Arduino.h>
 #include <BmpToBmpConverter.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -223,8 +224,52 @@ bool MangaBook::loadIndex() {
   return true;
 }
 
+// Derives the page list from panels.idx's page count and the converter's canonical
+// page_NNNN.<ext> naming, instead of discovering it by walking the directory.
+//
+// The walk is what made opening a book slow, and its cost is per *directory entry*, not per page
+// image -- so anything else sharing the folder is charged for. On the test card that was 974
+// panel crops (since moved to panels/) and 1198 macOS AppleDouble ._* sidecars, one per file, put
+// there by Finder copying onto FAT and invisible to every filter this scan applies. Deriving the
+// names sidesteps all of it: two Storage.exists() probes regardless of how much junk is present.
+//
+// Only claims the list when both the first and last page resolve, so a folder that is not in the
+// canonical layout (hand-assembled image folders, mixed extensions) falls through to the walk
+// rather than producing paths that would fail to load later.
+bool MangaBook::buildCanonicalPageList() {
+  if (pageCount == 0) return false;  // load() calls loadIndex() first, so this is populated
+
+  std::string dirPath = folderPath;
+  if (dirPath.empty() || dirPath.back() != '/') dirPath += '/';
+
+  static constexpr const char* kExts[] = {".jpg", ".bmp", ".png"};
+  char name[32];
+  for (const char* ext : kExts) {
+    snprintf(name, sizeof(name), "page_%04u%s", 0u, ext);
+    if (!Storage.exists((dirPath + name).c_str())) continue;
+    snprintf(name, sizeof(name), "page_%04u%s", static_cast<unsigned>(pageCount - 1), ext);
+    if (!Storage.exists((dirPath + name).c_str())) continue;
+
+    imageFiles.clear();
+    imageFiles.reserve(pageCount);
+    for (uint32_t i = 0; i < pageCount; i++) {
+      snprintf(name, sizeof(name), "page_%04u%s", static_cast<unsigned>(i), ext);
+      imageFiles.emplace_back(name);
+    }
+    return true;  // already in page order -- no sort needed
+  }
+  return false;
+}
+
 bool MangaBook::scanImages() {
   imageFiles.clear();
+
+  const unsigned long canonStart = millis();
+  if (buildCanonicalPageList()) {
+    LOG_DBG("MNG", "Canonical page list: %u pages in %ums (directory not walked)", (unsigned)imageFiles.size(),
+            (unsigned)(millis() - canonStart));
+    return true;
+  }
 
   std::string dirPath = folderPath;
   auto dir = Storage.open(dirPath.c_str());
@@ -234,8 +279,16 @@ bool MangaBook::scanImages() {
     return false;
   }
 
+  // This scan dominates opening a manga (6017ms of an 8225ms first loop iteration, measured on
+  // device). The per-entry cost is the same slow-directory behaviour that makes a single file open
+  // ~85ms, so what decides the fix is how many entries there are versus how many are page images:
+  // a converted book carries a p<page>_<panel> crop per panel in the same folder, which would put
+  // most of the cost in entries this loop only skips. Counted rather than assumed.
   char name[200];
+  uint32_t entriesSeen = 0, cropsSkipped = 0;
+  const unsigned long scanStart = millis();
   for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    entriesSeen++;
     if (!file.isDirectory()) {
       file.getName(name, sizeof(name));
       if (name[0] != '.' && !isPanelCropFile(name)) {
@@ -243,14 +296,19 @@ bool MangaBook::scanImages() {
         if (FsHelpers::hasBmpExtension(sv) || FsHelpers::hasJpgExtension(sv) || FsHelpers::hasPngExtension(sv)) {
           imageFiles.emplace_back(name);
         }
+      } else if (isPanelCropFile(name)) {
+        cropsSkipped++;
       }
     }
     file.close();
   }
   dir.close();
+  const unsigned long scanMs = millis() - scanStart;
 
   sortPageFileList(imageFiles);
-  LOG_DBG("MNG", "Found %u page images in %s", (unsigned)imageFiles.size(), dirPath.c_str());
+  LOG_DBG("MNG", "Found %u page images in %s (%ums, %u dir entries, %u panel crops skipped)",
+          (unsigned)imageFiles.size(), dirPath.c_str(), (unsigned)scanMs, (unsigned)entriesSeen,
+          (unsigned)cropsSkipped);
   return true;
 }
 

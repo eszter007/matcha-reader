@@ -5,6 +5,8 @@
 #include <JPEGDEC.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <cstdio>
 #include <cstring>
@@ -169,11 +171,22 @@ constexpr uint32_t FP_ONE = 1UL << 16;
 // Static file pointer for JPEGDEC open callback.
 // Safe in single-threaded embedded context; never accessed concurrently.
 static HalFile* s_jpegFile = nullptr;
+static uint8_t s_jpegIoSinceYield = 0;
+
+static void yieldToIdle() { vTaskDelay(1); }
+
+static void yieldDuringJpegIo() {
+  if (++s_jpegIoSinceYield < 4) return;
+  s_jpegIoSinceYield = 0;
+  yieldToIdle();
+}
 
 void* bmpJpegOpen(const char* /*filename*/, int32_t* size) {
   if (!s_jpegFile || !*s_jpegFile) return nullptr;
+  s_jpegIoSinceYield = 0;
   s_jpegFile->seek(0);
   *size = static_cast<int32_t>(s_jpegFile->size());
+  yieldDuringJpegIo();
   return s_jpegFile;
 }
 
@@ -187,6 +200,7 @@ int32_t bmpJpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
   int32_t n = f->read(pBuf, len);
   if (n < 0) n = 0;
   pFile->iPos += n;
+  yieldDuringJpegIo();
   return n;
 }
 
@@ -194,6 +208,7 @@ int32_t bmpJpegSeek(JPEGFILE* pFile, int32_t pos) {
   auto* f = reinterpret_cast<HalFile*>(pFile->fHandle);
   if (!f || !f->seek(pos)) return -1;
   pFile->iPos = pos;
+  yieldDuringJpegIo();
   return pos;
 }
 
@@ -243,8 +258,22 @@ struct BmpConvertCtx {
   std::unique_ptr<FloydSteinbergDitherer> fsDitherer;
   std::unique_ptr<Atkinson1BitDitherer> atkinson1BitDitherer;
 
+  uint8_t rowsSinceYield;
+  uint8_t blocksSinceYield;
   bool error;
 };
+
+static void yieldDuringDecode(BmpConvertCtx* ctx) {
+  if (++ctx->rowsSinceYield < 8) return;
+  ctx->rowsSinceYield = 0;
+  yieldToIdle();
+}
+
+static void yieldDuringDecodeBlock(BmpConvertCtx* ctx) {
+  if (++ctx->blocksSinceYield < 16) return;
+  ctx->blocksSinceYield = 0;
+  yieldToIdle();
+}
 
 // Write a fully-assembled output row (grayscale bytes, length outWidth) to BMP
 static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) {
@@ -282,6 +311,7 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
 
   ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
   ctx->rowsWritten++;
+  yieldDuringDecode(ctx);
 }
 
 // Matches the progressive-JPEG smoothing used by JpegToFramebufferConverter, but stays
@@ -405,6 +435,7 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
   ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
   ctx->rowsWritten++;
   ctx->currentOutY++;
+  yieldDuringDecode(ctx);
 }
 
 // JPEGDEC draw callback — receives one MCU-width × MCU-height block at a time,
@@ -414,6 +445,7 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
 int bmpDrawCallback(JPEGDRAW* pDraw) {
   auto* ctx = reinterpret_cast<BmpConvertCtx*>(pDraw->pUser);
   if (!ctx || ctx->error) return 0;
+  yieldDuringDecodeBlock(ctx);
 
   // Cooperative cancel, polled once per MCU block: a thumbnail conversion takes seconds and
   // runs on the UI task, so without this a button press waits for the whole image.
@@ -524,15 +556,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   const int srcWidth = jpeg->getWidth();
   const int srcHeight = jpeg->getHeight();
   const bool progressiveDecode = (jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE);
-  // JPEGDEC forces progressive streams to JPEG_SCALE_EIGHTH in DecodeJPEG,
-  // so callback coordinates and MCU buffering must use the reduced decode grid.
-  const int decodedSrcWidth = progressiveDecode ? ((srcWidth + 7) >> 3) : srcWidth;
-  const int decodedSrcHeight = progressiveDecode ? ((srcHeight + 7) >> 3) : srcHeight;
 
   LOG_DBG("JPG", "JPEG dimensions: %dx%d", srcWidth, srcHeight);
-  if (progressiveDecode) {
-    LOG_DBG("JPG", "Progressive JPEG decode uses 1/8 source: %dx%d", decodedSrcWidth, decodedSrcHeight);
-  }
 
   constexpr int MAX_IMAGE_WIDTH = 2048;
   constexpr int MAX_IMAGE_HEIGHT = 3072;
@@ -548,16 +573,11 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   int outHeight = srcHeight;
   if (targetWidth <= 0 || targetHeight <= 0) {
     // Without an explicit target, keep decoder-native dimensions.
-    outWidth = decodedSrcWidth;
-    outHeight = decodedSrcHeight;
+    if (progressiveDecode) {
+      outWidth = (srcWidth + 7) >> 3;
+      outHeight = (srcHeight + 7) >> 3;
+    }
   }
-
-  const int scaleSrcWidth = decodedSrcWidth;
-  const int scaleSrcHeight = decodedSrcHeight;
-
-  uint32_t scaleX_fp = 65536;  // 1.0 in 16.16 fixed point
-  uint32_t scaleY_fp = 65536;
-  bool needsScaling = false;
 
   if (targetWidth > 0 && targetHeight > 0 && (srcWidth != targetWidth || srcHeight != targetHeight)) {
     const float scaleToFitWidth = static_cast<float>(targetWidth) / srcWidth;
@@ -573,11 +593,33 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     outHeight = static_cast<int>(srcHeight * scale);
     if (outWidth < 1) outWidth = 1;
     if (outHeight < 1) outHeight = 1;
+  }
 
+  // Decode thumbnails at the largest native JPEG reduction that still covers the scaled output.
+  // This avoids expanding millions of pixels only to average them back down to a few thousand.
+  int decodeScale = progressiveDecode ? 8 : 1;
+  if (!progressiveDecode && targetWidth > 0 && targetHeight > 0) {
+    constexpr int candidates[] = {8, 4, 2};
+    for (const int candidate : candidates) {
+      if ((srcWidth + candidate - 1) / candidate >= outWidth && (srcHeight + candidate - 1) / candidate >= outHeight) {
+        decodeScale = candidate;
+        break;
+      }
+    }
+  }
+  const int scaleSrcWidth = (srcWidth + decodeScale - 1) / decodeScale;
+  const int scaleSrcHeight = (srcHeight + decodeScale - 1) / decodeScale;
+  if (decodeScale > 1) {
+    LOG_DBG("JPG", "Native 1/%d decode grid: %dx%d", decodeScale, scaleSrcWidth, scaleSrcHeight);
+  }
+  if (targetWidth > 0 && targetHeight > 0) {
     LOG_DBG("JPG", "Scaling source %dx%d (decode grid %dx%d) -> %dx%d (target %dx%d)", srcWidth, srcHeight,
             scaleSrcWidth, scaleSrcHeight, outWidth, outHeight, targetWidth, targetHeight);
   }
 
+  uint32_t scaleX_fp = 65536;  // 1.0 in 16.16 fixed point
+  uint32_t scaleY_fp = 65536;
+  bool needsScaling = false;
   if (scaleSrcWidth != outWidth || scaleSrcHeight != outHeight) {
     scaleX_fp = (static_cast<uint32_t>(scaleSrcWidth) << 16) / outWidth;
     scaleY_fp = (static_cast<uint32_t>(scaleSrcHeight) << 16) / outHeight;
@@ -627,6 +669,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.smoothScaleY_fp = interpolationStep(ctx.srcHeight, outHeight);
   ctx.smoothNextOutY = 0;
   ctx.smoothPrevY = -1;
+  ctx.rowsSinceYield = 0;
+  ctx.blocksSinceYield = 0;
   ctx.error = false;
   ctx.shouldCancel = shouldCancel;
   ctx.cancelCtx = cancelCtx;
@@ -693,7 +737,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   jpeg->setPixelType(EIGHT_BIT_GRAYSCALE);
   jpeg->setUserPointer(&ctx);
 
-  rc = jpeg->decode(0, 0, 0);
+  rc = jpeg->decode(0, 0, progressiveDecode || decodeScale == 1 ? 0 : decodeScale);
 
   if (rc == 1 && ctx.smoothUpscale && !ctx.error) {
     finishSmoothUpscale(&ctx);

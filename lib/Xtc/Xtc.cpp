@@ -11,8 +11,19 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
+#include <algorithm>
 #include <cstring>
+
+namespace {
+void yieldDuringThumbnail(uint8_t& rowsSinceYield) {
+  if (++rowsSinceYield < 8) return;
+  rowsSinceYield = 0;
+  vTaskDelay(1);
+}
+}  // namespace
 
 bool Xtc::load() {
   LOG_DBG("XTC", "Loading XTC: %s", filepath.c_str());
@@ -295,8 +306,8 @@ bool Xtc::generateThumbBmp(int height) const {
   // Get bit depth
   const uint8_t bitDepth = parser->getBitDepth();
 
-  // Calculate target dimensions for thumbnail (fit within 240x400 Continue Reading card)
-  int THUMB_TARGET_WIDTH = height * 0.6;
+  // Match the shared 2:3 cover box used by Home and Library.
+  int THUMB_TARGET_WIDTH = (height * 2) / 3;
   int THUMB_TARGET_HEIGHT = height;
 
   // Calculate scale factor
@@ -325,8 +336,12 @@ bool Xtc::generateThumbBmp(int height) const {
     return false;
   }
 
-  uint16_t thumbWidth = static_cast<uint16_t>(pageInfo.width * scale);
-  uint16_t thumbHeight = static_cast<uint16_t>(pageInfo.height * scale);
+  const uint16_t thumbWidth = static_cast<uint16_t>(THUMB_TARGET_WIDTH);
+  const uint16_t thumbHeight = static_cast<uint16_t>(THUMB_TARGET_HEIGHT);
+  const uint16_t cropX =
+      static_cast<uint16_t>(std::max(0, (static_cast<int>(pageInfo.width * scale) - THUMB_TARGET_WIDTH) / 2));
+  const uint16_t cropY =
+      static_cast<uint16_t>(std::max(0, (static_cast<int>(pageInfo.height * scale) - THUMB_TARGET_HEIGHT) / 2));
 
   LOG_DBG("XTC", "Generating thumb BMP: %dx%d -> %dx%d (scale: %.3f)", pageInfo.width, pageInfo.height, thumbWidth,
           thumbHeight, scale);
@@ -391,13 +406,14 @@ bool Xtc::generateThumbBmp(int height) const {
   const uint8_t* plane2 = (bitDepth == 2) ? pageBuffer + planeSize : nullptr;
   const size_t colBytes = (bitDepth == 2) ? ((pageInfo.height + 7) / 8) : 0;
   const size_t srcRowBytes = (bitDepth == 1) ? ((pageInfo.width + 7) / 8) : 0;
+  uint8_t rowsSinceYield = 0;
 
   for (uint16_t dstY = 0; dstY < thumbHeight; dstY++) {
     memset(rowBuffer, 0xFF, rowSize);  // Start with all white (bit 1)
 
     // Calculate source Y range with bounds checking
-    uint32_t srcYStart = (static_cast<uint32_t>(dstY) * scaleInv_fp) >> 16;
-    uint32_t srcYEnd = (static_cast<uint32_t>(dstY + 1) * scaleInv_fp) >> 16;
+    uint32_t srcYStart = (static_cast<uint32_t>(dstY + cropY) * scaleInv_fp) >> 16;
+    uint32_t srcYEnd = (static_cast<uint32_t>(dstY + cropY + 1) * scaleInv_fp) >> 16;
     if (srcYStart >= pageInfo.height) srcYStart = pageInfo.height - 1;
     if (srcYEnd > pageInfo.height) srcYEnd = pageInfo.height;
     if (srcYEnd <= srcYStart) srcYEnd = srcYStart + 1;
@@ -405,8 +421,8 @@ bool Xtc::generateThumbBmp(int height) const {
 
     for (uint16_t dstX = 0; dstX < thumbWidth; dstX++) {
       // Calculate source X range with bounds checking
-      uint32_t srcXStart = (static_cast<uint32_t>(dstX) * scaleInv_fp) >> 16;
-      uint32_t srcXEnd = (static_cast<uint32_t>(dstX + 1) * scaleInv_fp) >> 16;
+      uint32_t srcXStart = (static_cast<uint32_t>(dstX + cropX) * scaleInv_fp) >> 16;
+      uint32_t srcXEnd = (static_cast<uint32_t>(dstX + cropX + 1) * scaleInv_fp) >> 16;
       if (srcXStart >= pageInfo.width) srcXStart = pageInfo.width - 1;
       if (srcXEnd > pageInfo.width) srcXEnd = pageInfo.width;
       if (srcXEnd <= srcXStart) srcXEnd = srcXStart + 1;
@@ -482,6 +498,7 @@ bool Xtc::generateThumbBmp(int height) const {
 
     // Write row (already padded to 4-byte boundary by rowSize)
     thumbBmp.write(rowBuffer, rowSize);
+    yieldDuringThumbnail(rowsSinceYield);
   }
 
   free(rowBuffer);
@@ -504,6 +521,8 @@ bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, ui
   const size_t planeSize = (static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8;
   const uint32_t rowSize = (static_cast<uint32_t>(thumbWidth) + 31) / 32 * 4;
   const uint32_t scaleInv_fp = static_cast<uint32_t>(65536.0f / scale);
+  const int cropX = std::max(0, (static_cast<int>(pageInfo.width * scale) - thumbWidth) / 2);
+  const int cropY = std::max(0, (static_cast<int>(pageInfo.height * scale) - thumbHeight) / 2);
 
   auto thumb = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(rowSize) * thumbHeight);
   auto colBuf = makeUniqueNoThrow<uint8_t[]>(colBytes);
@@ -527,12 +546,15 @@ bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, ui
           colFill = 0;
           // Column colIndex holds source x = width-1-colIndex (XTH scans right-to-left).
           const uint32_t srcX = pageInfo.width - 1 - colIndex;
-          uint32_t dstX = (srcX * static_cast<uint32_t>(thumbWidth)) / pageInfo.width;
-          if (dstX >= thumbWidth) dstX = thumbWidth - 1;
+          const int dstX = static_cast<int>(srcX * scale) - cropX;
+          if (dstX < 0 || dstX >= thumbWidth) {
+            colIndex++;
+            continue;
+          }
           const size_t dstByte = dstX / 8;
           const uint8_t dstMask = static_cast<uint8_t>(1 << (7 - (dstX % 8)));
           for (uint16_t dstY = 0; dstY < thumbHeight; dstY++) {
-            uint32_t srcY = (static_cast<uint32_t>(dstY) * scaleInv_fp) >> 16;
+            uint32_t srcY = (static_cast<uint32_t>(dstY + cropY) * scaleInv_fp) >> 16;
             if (srcY >= pageInfo.height) srcY = pageInfo.height - 1;
             const uint8_t bit1 = (colBuf[srcY / 8] >> (7 - (srcY % 8))) & 1;
             uint8_t* cell = &thumb[static_cast<size_t>(dstY) * rowSize + dstByte];

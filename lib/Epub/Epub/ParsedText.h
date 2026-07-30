@@ -15,10 +15,10 @@ class GfxRenderer;
 class ParsedText {
   std::vector<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
-  std::vector<std::string> wordRuby;    // ruby annotation text (empty = no ruby)
   std::vector<bool> wordContinues;      // true = word attaches to previous with no break
   std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
   std::vector<bool> wordIsFocusSuffix;  // true = token is the regular tail of a focus bold-prefix split
+  std::vector<std::string> rubyTexts;
   BlockStyle blockStyle;
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
@@ -60,19 +60,35 @@ class ParsedText {
         hasRtlWord(false) {}
   ~ParsedText() = default;
 
-  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
-               const std::string& ruby = {});
+  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false);
+  void setRubyForWordAt(size_t index, const std::string& ruby);
+  void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
+  EpdFontFamily::Style getWordStyleAt(size_t index) const {
+    return index < wordStyles.size() ? wordStyles[index] : EpdFontFamily::REGULAR;
+  }
+  // Caller must check !isEmpty() first (used by the furigana-glossary harvest to pair a
+  // just-closed <rt> reading with its base word).
+  const std::string& lastWord() const { return words.back(); }
+  // Base text behind a ruby group, for the same harvest (a group ruby spans several words).
+  const std::string& wordAt(size_t index) const { return words[index]; }
+  // Delegates so the sizing rule lives in ONE place: ensureRubyCapacity() only reserve()s, it
+  // does not resize, so writing rubyTexts.back() while the vector is still empty (no ruby seen
+  // in this block yet) wrote past the end -- device crash: Store access fault inside
+  // std::string::operator= during an incremental horizontal build, reached from the
+  // text-emphasis (bouten) path in flushPartWordBuffer.
+  void setLastWordRuby(const std::string& ruby) {
+    if (words.empty()) return;
+    setRubyForWordAt(words.size() - 1, ruby);
+  }
+  std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
+  void ensureRubyCapacity();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
-  // Caller must check !isEmpty() first (used by the furigana-glossary harvest to pair a
-  // just-closed <rt> reading with its base word).
-  const std::string& lastWord() const { return words.back(); }
-  void setLastWordRuby(const std::string& ruby) {
-    if (!wordRuby.empty()) wordRuby.back() = ruby;
-  }
-  void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
+  // baseFontId is the reader's font; a block with a CSS font-size lays out (and later draws)
+  // with BlockStyle::resolveFontId(baseFontId) instead.
+  void layoutAndExtractLines(const GfxRenderer& renderer, int baseFontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                              bool includeLastLine = true);
 };

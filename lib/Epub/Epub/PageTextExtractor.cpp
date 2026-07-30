@@ -72,10 +72,10 @@ std::string PageTextExtractor::fromHorizontalPage(const Page& page) {
     if (el->getTag() != TAG_PageLine) continue;
     const auto& line = static_cast<const PageLine&>(*el);
     if (!line.getBlock()) continue;
-    const auto& words = line.getBlock()->getWords();
-    for (const auto& w : words) {
+    const auto& block = line.getBlock();
+    for (uint16_t i = 0; i < block->wordCount(); i++) {
       if (!text.empty()) text += " ";
-      text += w;
+      text += block->wordText(i);
     }
   }
   return text;

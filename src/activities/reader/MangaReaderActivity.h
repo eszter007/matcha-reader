@@ -14,6 +14,10 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
+namespace PixelCacheIO {
+class Reader;
+}
+
 class MangaReaderActivity final : public Activity {
  public:
   explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -86,6 +90,14 @@ class MangaReaderActivity final : public Activity {
   // Touches NO renderer state: rotation is just a screen-dim swap here, which matches what
   // setOrientation((o+3)%4) does to getScreenWidth/Height. savedOrientation is left at 0.
   static FullPageGeom computeFullPageGeom(int imgWidth, int imgHeight, int screenW, int screenH);
+  // Stamps savedOrientation and applies the rotation, so a geometry obtained any way (from the
+  // source dimensions or recovered from a warm pixel cache) enters the render path identically.
+  FullPageGeom adoptFullPageGeom(FullPageGeom g);
+  // Recovers the full-page geometry from an open cache's header alone, so a page whose pixels are
+  // already cached never opens the source image just to read its dimensions. Returns false when
+  // the cached size cannot be proven to be this screen's fit -- the caller must then probe the
+  // source. See the definition for what "proven" means.
+  bool fullPageGeomFromCache(const PixelCacheIO::Reader& cache, FullPageGeom& out);
 
   void prefetchNextPageCache();
 
@@ -128,6 +140,12 @@ class MangaReaderActivity final : public Activity {
   // Panel crop format for this book (uniform per book): the converter writes p<page>_<panel>.jpg
   // normally, or .bmp with --mono. panelCropPath() picks the extension from this.
   bool panelCropIsBmp = false;
+  // Panel crop location for this book. Conversions since the directory-scan fix put crops in a
+  // subfolder, so the book folder holds only page images and opening it does not walk a crop per
+  // panel; books converted before that have them loose alongside the pages. Detected once in
+  // onEnter() -- both layouts stay readable.
+  static constexpr const char* PANEL_CROP_SUBDIR = "panels";
+  bool panelCropsInSubdir = false;
   // True when this page's panel crops are 1-bit monochrome BMP -> renderPanelZoom takes the same
   // single-BW-wave fast path as a mono full page. Detected once per page in loadCurrentPagePanels.
   bool panelsBwOnly = false;

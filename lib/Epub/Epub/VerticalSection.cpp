@@ -39,7 +39,18 @@ namespace {
 // the transient per-page staging buffer now prevents those drops on rebuild. (The
 // early-first-render / mid-build page-turn work layered on top changes no on-disk format, so
 // it needs no further bump -- a v80 cache built by this firmware is byte-identical.)
-constexpr uint8_t VSECTION_FILE_VERSION = 98;
+// v99: merge of upstream 1.5.0. Not a format change -- an invalidation. Upstream reworked the
+// measurement stack the vertical layout is built on (SD kern classes + ligatures, the advance-table
+// fast path, fallback-resolved text font ids), so a v98 cache's stored glyph positions no longer
+// match the cell VerticalTextBlock::computeCellPx re-derives at DRAW time from the new metrics --
+// the exact "cell flapping" mismatch that path exists to prevent. The horizontal pipeline
+// invalidates for the same reason (SECTION_FILE_VERSION 51); this one must not be forgotten.
+// v100: image pages carry their source href.
+// v101: image pages built while extraction was failing stored the VIEWPORT box as the image size
+// (the displayW/displayH fallback when getDimensions fails). config.useExactDimensions stretches
+// the decode to exactly that box, so those pages rendered visibly distorted once the image finally
+// became available. Extraction is reliable now (dee87656), so a rebuild records true dimensions.
+constexpr uint8_t VSECTION_FILE_VERSION = 101;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -549,6 +560,7 @@ bool writePage(Sink& file, const VerticalPage& page) {
   serialization::writePod(file, isImg);
   if (isImg) {
     serialization::writeString(file, page.imagePath);
+    serialization::writeString(file, page.imageSrcPath);
     serialization::writePod(file, page.imageWidth);
     serialization::writePod(file, page.imageHeight);
     serialization::writePod(file, page.imageRotated);
@@ -610,11 +622,13 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
   page.glyphs.clear();
   page.boxes.clear();
   page.imagePath.clear();
+  page.imageSrcPath.clear();
 
   bool isImg = false;
   serialization::readPod(file, isImg);
   if (isImg) {
     serialization::readString(file, page.imagePath);
+    serialization::readString(file, page.imageSrcPath);
     serialization::readPod(file, page.imageWidth);
     serialization::readPod(file, page.imageHeight);
     serialization::readPod(file, page.imageRotated);
@@ -780,14 +794,8 @@ struct LayoutPageSink final : ParagraphSink {
   std::atomic<int>* pageRequest = nullptr;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
 
-  // Reusable read-back slot for mid-build page turns. Reserved ONCE at build start (the
-  // healthiest heap moment): with the capacity in place, readPage's reserve is a no-op and
-  // the ruby strings are short enough for SSO, so serving a backward turn needs NO
-  // allocation at all -- previously the transient ~10.4KB page vector had to find a hole at
-  // exactly the layout's low-heap moments, and backward turns starved for up to 10s in
-  // dense stretches. If even this reserve fails, the slot stays empty and read-backs fall
-  // back to the gated on-demand allocation.
-  static constexpr size_t kServeSlotGlyphs = 160;  // full page (~147 cells) + margin
+  // Reusable read-back slot for mid-build backward turns. It grows through readPage's guarded
+  // on-demand reserve; preallocating a second full page here starved the actual layout page.
   VerticalPage servePage_;
 
   LayoutPageSink(VerticalParsedText& layout, HalFile& out, std::vector<uint32_t>& pageOffsets, Epub& epub,
@@ -801,11 +809,7 @@ struct LayoutPageSink final : ParagraphSink {
         chapterDir(chapterDir),
         imageBasePath(imageBasePath),
         viewportWidth(viewportWidth),
-        viewportHeight(viewportHeight) {
-    if (ESP.getMaxAllocHeap() >= kServeSlotGlyphs * sizeof(VerticalGlyph) + 16 * 1024) {
-      servePage_.glyphs.reserve(kServeSlotGlyphs);
-    }
-  }
+        viewportHeight(viewportHeight) {}
 
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
     if (failed) return;
@@ -982,11 +986,9 @@ struct LayoutPageSink final : ParagraphSink {
     // -fno-exceptions an OOM there ABORTS (observed on device: __terminate during a
     // mid-build page turn). The deep guards are in place (readPage refuses reads its glyph
     // reserve can't afford; renderVerticalPageBody skips the prewarm when tight), so this
-    // outer gate only needs to cover the render's own working set. With the pre-reserved
-    // serve slot the read-back itself allocates nothing, so 8K (render transients: small
-    // utf8 buffers, glyph decompression) is enough -- higher gates repeatedly starved
-    // backward turns for whole dense stretches. A skipped serve stays pending and retries
-    // after the next page.
+    // outer gate only needs to cover the render's own working set. readPage() applies its own
+    // allocation gate; 8K here covers the remaining render transients. A skipped serve stays
+    // pending and retries after the next page.
     constexpr uint32_t SERVE_MIN_ALLOC = 8 * 1024;
     if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) return;
     if (req == lastBuilt) {
@@ -1061,7 +1063,25 @@ struct LayoutPageSink final : ParagraphSink {
       }
       HalFile cachedFile;
       if (Storage.openFileForWrite("VSC", cachedPath, cachedFile)) {
-        const bool extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
+        bool extracted = false;
+        {
+          // ...and the reason freeing was not enough: the heap is FRAGMENTED, not full. Measured
+          // at the moment of failure: 89992 bytes free but a largest block of 30708, against the
+          // 32768 the window needs. Releasing more bytes cannot help when they come back in
+          // pieces -- font reclaim moved maxAlloc by 0, and so did suspending the section build.
+          //
+          // InflateStream::init() already has the answer: it claims the lent framebuffer via
+          // buildscratch (state ~11KB + window 32KB fit in 48KB) instead of the heap. That is why
+          // the blocking full build's extractions succeed -- it holds a loan for its whole
+          // duration -- while this path, which never took one, fails on the same book.
+          //
+          // Scoped to the extraction call alone: nothing may draw or display while the bytes are
+          // lent, and the early-render hook only fires at page boundaries, never inside this call.
+          // Restore hands back a white framebuffer, which the next page render repaints anyway;
+          // the panel keeps showing its last refreshed image throughout (e-ink is persistent).
+          GfxRenderer::FrameBufferLoan loan(renderer);
+          extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
+        }
         cachedFile.flush();
         cachedFile.close();
         if (!extracted) {
@@ -1090,6 +1110,9 @@ struct LayoutPageSink final : ParagraphSink {
 
     VerticalPage page;
     page.imagePath = cachedPath;
+    // Recorded even when the extraction above succeeded: a cache can record that an artifact was
+    // produced, never that it still exists. Costs one short string on image pages only.
+    page.imageSrcPath = resolvedSrc;
     page.imageWidth = static_cast<int16_t>(displayW);
     page.imageHeight = static_cast<int16_t>(displayH);
     page.imageRotated = rotated;

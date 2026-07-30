@@ -73,9 +73,15 @@ Reading streak, weekly minutes, books finished, total time, and a monthly calend
 - **Per-book reader settings** — font, size, spacing, margins, orientation and more are remembered per book; the global settings page holds the defaults for books you haven't opened yet
 - **CJK fallback font** — a non-Japanese book with the odd kanji renders it from a built-in font covering kana, the 2,136 Jōyō and 863 Jinmeiyō kanji
 - **Chapter splitting** — Japanese novels shipped as one giant XHTML file get real chapters (and a working ToC) when uploaded with **Optimize EPUB**
+- **Device-ready EPUB images** — **Optimize EPUB** fits images to the X3/X4 screen and writes dithered 1-bit BMPs using the manga pipeline's Atkinson diffusion
 - **Instant image page turns** — the next page's image decodes in the background, so illustrated novels don't stall on it
 - **Transparent sleep screen** — a wallpaper overlaid on the page you were reading, so the book shows through
 - **Book side margins** — ignore the book's own CSS side margins by default, so the text column follows your margin setting
+- **Headings look like headings** — the book's CSS `font-size` is honoured, scaled from *your* reading size and snapped to the built-in sizes around it, so `h1`/`h2` no longer render at body size (built-in fonts only; an SD card font is loaded at one size)
+- **No more invisible chapter titles** — a heading the book styles as light text on a coloured panel is drawn as white text on a black bar instead of vanishing into the page; every other colour combination is simply read as normal black text
+- **Sections start where the book says they do** — the book's CSS `page-break-before`/`-after`/`-inside` (and the `break-*` spellings) are honoured, so a chapter opens on a fresh page and a heading is no longer left alone at the bottom of one
+- **The book's line spacing is honoured** — CSS `line-height` (`1.4`, `1.3em`, `120%`, `18px`, `14pt`) now sets a block's leading, measured from *its own* font size, so tightly-set headings and airy pull-quotes read as typeset; your Line Spacing setting still governs, and the book can only move the leading between 0.8x and 2x of it
+- **Styling that lives in a container reaches the text inside it** — CSS rules written as `.callout p` or `blockquote > p` now match, instead of being dropped; books that hang their whole design off a wrapper class finally get their fonts, spacing and page breaks (two levels; `.a .b p` is still ignored)
 - **File browser** shows every file on the card, unsupported ones greyed out rather than hidden; opening a folder with `panels.idx` starts the manga reader
 - **Your font choice sticks** — nothing auto-overrides the font you picked in Settings, in any book
 - **Fully localized** — every string this fork adds goes through the same i18n system as the rest of CrossPoint, translated in all 27 languages. Dictionary definitions and translations stay English, since that's the content, not the interface
@@ -95,9 +101,9 @@ Reading streak, weekly minutes, books finished, total time, and a monthly calend
 
 | Dictionary | Source | Output |
 | --- | --- | --- |
-| Vocabulary (required) | [Jitendex](https://github.com/stephenmk/Jitendex), Yomitan format | `dict/vocab.*` |
-| Names (recommended) | [JMnedict](https://github.com/JMdictProject), Yomitan format | `dict/names.*` |
-| Grammar (optional) | e.g. "Dictionary of Japanese Grammar", Yomitan format | `dict/grammar.*` |
+| Vocabulary (required) | [Jitendex](https://github.com/stephenmk/Jitendex), Yomitan format | `dictionaries/jp/vocab.*` |
+| Names (recommended) | [JMnedict](https://github.com/JMdictProject), Yomitan format | `dictionaries/jp/names.*` |
+| Grammar (optional) | e.g. "Dictionary of Japanese Grammar", Yomitan format | `dictionaries/jp/grammar.*` |
 
 Use the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the script:
 
@@ -107,7 +113,9 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dict/          # add --name names / --name grammar for the other two
 ```
 
-Any Yomitan dictionary, jmdict-simplified JSON, or MDict `.mdx` works as input. Cards set up before the rename keep working — the firmware falls back to the legacy `jmdict.*` / `jmnedict.*` names.
+Any Yomitan dictionary, jmdict-simplified JSON, or MDict `.mdx` works as input. Cards set up before the move keep working — the firmware also checks the legacy `/dict/` layout.
+
+For regular StarDict dictionaries, use `/dictionaries/<language>/<dictionary>/` (for example `/dictionaries/en/oxford/`). Tagged EPUBs select the first matching language folder automatically; the Reader setting is only used for EPUBs without a language tag. Japanese (`ja`) always uses the Yomitan files in `/dictionaries/jp/`.
 
 **3. Install Japanese fonts** (optional). The built-in Noto Serif/Sans handle Japanese fine; a dedicated font looks better. Convert any TTF/OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and place the result in `/.fonts/<Family>/regular.cpfont`. UDDigiKyokasho is picked as the default when present.
 
@@ -154,8 +162,10 @@ The result is a folder of page images, panel crops, and three small binaries (`p
 ## Building from Source
 
 ```bash
-git clone https://github.com/eszter007/matcha-reader.git
+git clone --recursive https://github.com/eszter007/matcha-reader.git
 cd matcha-reader
+# already cloned without --recursive? the SDK lives in a submodule:
+git submodule update --init --recursive
 pio run              # build
 pio run -t upload    # flash
 ```

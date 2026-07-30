@@ -95,6 +95,10 @@ class MangaBook {
 
   bool loadIndex();
   bool scanImages();
+  // Fast path for scanImages(): derives page filenames from pageCount + the converter's canonical
+  // page_NNNN.<ext> naming, so opening a book costs two probes instead of a directory walk whose
+  // price scales with everything else in the folder. False when the layout is not canonical.
+  bool buildCanonicalPageList();
   void loadToc();
   void loadMeta();
 };
