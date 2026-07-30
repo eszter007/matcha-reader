@@ -794,14 +794,8 @@ struct LayoutPageSink final : ParagraphSink {
   std::atomic<int>* pageRequest = nullptr;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
 
-  // Reusable read-back slot for mid-build page turns. Reserved ONCE at build start (the
-  // healthiest heap moment): with the capacity in place, readPage's reserve is a no-op and
-  // the ruby strings are short enough for SSO, so serving a backward turn needs NO
-  // allocation at all -- previously the transient ~10.4KB page vector had to find a hole at
-  // exactly the layout's low-heap moments, and backward turns starved for up to 10s in
-  // dense stretches. If even this reserve fails, the slot stays empty and read-backs fall
-  // back to the gated on-demand allocation.
-  static constexpr size_t kServeSlotGlyphs = 160;  // full page (~147 cells) + margin
+  // Reusable read-back slot for mid-build backward turns. It grows through readPage's guarded
+  // on-demand reserve; preallocating a second full page here starved the actual layout page.
   VerticalPage servePage_;
 
   LayoutPageSink(VerticalParsedText& layout, HalFile& out, std::vector<uint32_t>& pageOffsets, Epub& epub,
@@ -815,11 +809,7 @@ struct LayoutPageSink final : ParagraphSink {
         chapterDir(chapterDir),
         imageBasePath(imageBasePath),
         viewportWidth(viewportWidth),
-        viewportHeight(viewportHeight) {
-    if (ESP.getMaxAllocHeap() >= kServeSlotGlyphs * sizeof(VerticalGlyph) + 16 * 1024) {
-      servePage_.glyphs.reserve(kServeSlotGlyphs);
-    }
-  }
+        viewportHeight(viewportHeight) {}
 
   void onParagraph(std::vector<RubyRun>& runs, const bool continuesPrevious) override {
     if (failed) return;
@@ -996,11 +986,9 @@ struct LayoutPageSink final : ParagraphSink {
     // -fno-exceptions an OOM there ABORTS (observed on device: __terminate during a
     // mid-build page turn). The deep guards are in place (readPage refuses reads its glyph
     // reserve can't afford; renderVerticalPageBody skips the prewarm when tight), so this
-    // outer gate only needs to cover the render's own working set. With the pre-reserved
-    // serve slot the read-back itself allocates nothing, so 8K (render transients: small
-    // utf8 buffers, glyph decompression) is enough -- higher gates repeatedly starved
-    // backward turns for whole dense stretches. A skipped serve stays pending and retries
-    // after the next page.
+    // outer gate only needs to cover the render's own working set. readPage() applies its own
+    // allocation gate; 8K here covers the remaining render transients. A skipped serve stays
+    // pending and retries after the next page.
     constexpr uint32_t SERVE_MIN_ALLOC = 8 * 1024;
     if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) return;
     if (req == lastBuilt) {

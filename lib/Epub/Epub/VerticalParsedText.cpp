@@ -23,9 +23,9 @@ namespace {
 // worse (a measured ~22KB net loss) than the single bulk reserve it was "protecting" against.
 // The getMaxAllocHeap() check already guarantees the reserve() itself succeeds; this constant is
 // only cushion for OTHER allocations during the build, and while a chapter build runs the rest of
-// the app is quiescent (largest concurrent needs: SD write buffers and log lines, low KBs). 8KB
-// matches SMALL_ALLOC_MARGIN, the equivalent cushion used for per-push growth in this file.
-constexpr uint32_t MIN_FREE_HEAP_FOR_RESERVE = 8 * 1024;
+// the app is quiescent (largest concurrent needs: SD write buffers and log lines, low KBs). 4KB
+// lets the real page buffer win over fragmenting incremental growth.
+constexpr uint32_t MIN_FREE_HEAP_FOR_RESERVE = 4 * 1024;
 }  // namespace
 
 namespace {
