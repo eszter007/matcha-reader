@@ -13,6 +13,25 @@
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
 
+namespace {
+class CancellablePrint final : public Print {
+ public:
+  CancellablePrint(Print& output, BmpConvertCancelFn shouldCancel, void* cancelCtx)
+      : output(output), shouldCancel(shouldCancel), cancelCtx(cancelCtx) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* buffer, size_t size) override {
+    if (shouldCancel && shouldCancel(cancelCtx)) return 0;
+    return output.write(buffer, size);
+  }
+
+ private:
+  Print& output;
+  BmpConvertCancelFn shouldCancel;
+  void* cancelCtx;
+};
+}  // namespace
+
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   const auto containerPath = "META-INF/container.xml";
   size_t containerSize;
@@ -718,7 +737,12 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverJpg, 1024);
+    CancellablePrint cancellableCover(coverJpg, shouldCancel, cancelCtx);
+    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+      coverJpg.close();
+      Storage.remove(coverJpgTempPath.c_str());
+      return false;
+    }
     // Explicitly close() file before reopening for reading
     coverJpg.close();
 
@@ -757,7 +781,12 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverPng, 1024);
+    CancellablePrint cancellableCover(coverPng, shouldCancel, cancelCtx);
+    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+      coverPng.close();
+      Storage.remove(coverPngTempPath.c_str());
+      return false;
+    }
     // Explicitly close() file before reopening for reading
     coverPng.close();
 

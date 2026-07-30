@@ -37,6 +37,7 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   bool loadFromPath(const char* path);
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
+  bool fromJson(JsonVariantConst doc, size_t maxBooks);
 
   // Add a book to the recent list (moves to front if already exists)
   void addBook(const std::string& path, const std::string& title, const std::string& author,

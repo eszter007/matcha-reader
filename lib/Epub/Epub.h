@@ -69,8 +69,8 @@ class Epub {
   // nothing to render" apart from a generateThumbBmp() that merely failed this time -- the two
   // deserve opposite handling, and conflating them costs a cover forever.
   bool hasCoverImage() const;
-  // shouldCancel is polled during the cover decode; on cancel nothing is written and the call
-  // returns false, so a long thumbnail generation can give way to a button press.
+  // shouldCancel is polled during cover extraction and decode; on cancel partial files are
+  // removed and the call returns false, so a long thumbnail generation can give way to input.
   bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;

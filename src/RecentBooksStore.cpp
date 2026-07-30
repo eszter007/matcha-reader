@@ -9,6 +9,10 @@
 #include <algorithm>
 #include <iterator>
 
+namespace {
+constexpr size_t LIBRARY_CACHE_MAX_BOOKS = 2048;
+}
+
 void RecentBooksStore::toJson(JsonDocument& doc) const {
   JsonArray arr = doc["books"].to<JsonArray>();
   for (const auto& book : recentBooks) {
@@ -21,13 +25,17 @@ void RecentBooksStore::toJson(JsonDocument& doc) const {
 }
 
 bool RecentBooksStore::fromJson(JsonVariantConst doc) {
+  return fromJson(doc, MAX_RECENT_BOOKS);
+}
+
+bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
   // Tolerate a missing/invalid 'books' key (treat as empty list); only a
   // JSON parse error is fatal. A null JsonArray iterates zero times.
   recentBooks.clear();
   JsonArrayConst arr = doc["books"].as<JsonArrayConst>();
-  recentBooks.reserve(std::min(arr.size(), static_cast<size_t>(MAX_RECENT_BOOKS)));
+  recentBooks.reserve(std::min(arr.size(), maxBooks));
   for (JsonObjectConst obj : arr) {
-    if (getCount() >= MAX_RECENT_BOOKS) break;
+    if (recentBooks.size() >= maxBooks) break;
     RecentBook book;
     book.path = obj["path"] | "";
     book.title = obj["title"] | "";
@@ -148,5 +156,5 @@ bool RecentBooksStore::saveToPath(const char* path) const {
 bool RecentBooksStore::loadFromPath(const char* path) {
   JsonDocument doc;
   if (!readDocFromFile(path, doc)) return false;
-  return fromJson(doc.as<JsonVariantConst>());
+  return fromJson(doc.as<JsonVariantConst>(), LIBRARY_CACHE_MAX_BOOKS);
 }

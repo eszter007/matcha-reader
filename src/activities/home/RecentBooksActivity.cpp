@@ -33,6 +33,7 @@ constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
 constexpr int SHELF_THUMB_WIDTH = 36;
 constexpr int SHELF_THUMB_HEIGHT = 54;
+constexpr uint32_t THUMB_IDLE_MS = 5000;
 
 // Diagnostic artifact written by HalSystem::checkPanic() to the SD root -- a .txt file the
 // library walk would otherwise list as a book.
@@ -118,9 +119,8 @@ bool RecentBooksActivity::thumbGenShouldCancel(void* ctx) {
   // completion swallows every click made during it, and the poll above only catches a button
   // that is down at that instant -- not a short press that came and went. Cap a slice while the
   // reader is navigating; once they have been idle for a few seconds, let it run to the end.
-  constexpr uint32_t IDLE_AFTER_MS = 5000;
   const uint32_t now = millis();
-  if (now - self->lastInputMs > IDLE_AFTER_MS) return false;
+  if (now - self->lastInputMs > THUMB_IDLE_MS) return false;
   return self->thumbGenStartedMs != 0 && now - self->thumbGenStartedMs > self->thumbGenBudgetMs;
 }
 
@@ -157,9 +157,15 @@ void RecentBooksActivity::loadRecentBooks() {
     RecentBooksStore cache;
     if (cache.loadFromPath(LIBRARY_CACHE_JSON)) {
       for (const auto& b : cache.getBooks()) {
-        const bool known =
-            std::any_of(recentBooks.begin(), recentBooks.end(), [&b](const auto& r) { return r.path == b.path; });
-        if (!known) recentBooks.push_back(b);
+        const auto known =
+            std::find_if(recentBooks.begin(), recentBooks.end(), [&b](const auto& r) { return r.path == b.path; });
+        if (known == recentBooks.end()) {
+          recentBooks.push_back(b);
+        } else {
+          if (known->title.empty()) known->title = b.title;
+          if (known->author.empty()) known->author = b.author;
+          if (known->coverBmpPath.empty()) known->coverBmpPath = b.coverBmpPath;
+        }
       }
     }
   }
@@ -820,6 +826,7 @@ int RecentBooksActivity::readProgressPercent(const std::string& bookPath) const 
 
 void RecentBooksActivity::onEnter() {
   Activity::onEnter();
+  lastInputMs = millis();
 
   if (RECENT_BOOKS.pruneMissing()) {
     RECENT_BOOKS.saveToFile();
@@ -997,7 +1004,8 @@ void RecentBooksActivity::loop() {
     // but a manga folder holds hundreds of page files and listing one costs seconds on SD
     // (measured: a 2220ms loop gap) -- a click landing inside that window is never even sampled
     // as a press, so the Library felt completely dead while it scanned.
-    if (millis() - lastInputMs > 700 && !RenderLock::peek()) {
+    const uint32_t idleBeforeWorkMs = scan_.walkDone ? THUMB_IDLE_MS : 700;
+    if (millis() - lastInputMs > idleBeforeWorkMs && !RenderLock::peek()) {
       const bool wasWalking = !scan_.walkDone;
       const bool done = stepLibraryScan();
       if (wasWalking && scan_.walkDone) applyLibraryScan();  // books show up now; covers follow
