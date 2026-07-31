@@ -97,8 +97,7 @@ void collect(std::vector<Pair>& pairs, const std::string& base, const std::strin
     return;
   }
   if (pairs.size() == pairs.capacity()) {
-    const size_t nextCapacity =
-        pairs.empty() ? 32 : std::min(MAX_PAIRS_PER_SECTION, pairs.capacity() * 2);
+    const size_t nextCapacity = pairs.empty() ? 32 : std::min(MAX_PAIRS_PER_SECTION, pairs.capacity() * 2);
     const size_t requestBytes = nextCapacity * sizeof(Pair);
     // Growing 64 -> 128 pairs requests a contiguous 6KB block; this exact
     // allocation aborted a low-heap X3 build. Glossary entries are best-effort.
