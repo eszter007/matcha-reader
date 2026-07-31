@@ -793,6 +793,7 @@ struct LayoutPageSink final : ParagraphSink {
   void* earlyRenderCtx = nullptr;
   std::atomic<int>* pageRequest = nullptr;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
+  int fontReleasedForReq_ = -1;        // one font-cache release per starved request; see servePageRequest()
 
   // Reusable read-back slot for mid-build backward turns. It grows through readPage's guarded
   // on-demand reserve; preallocating a second full page here starved the actual layout page.
@@ -990,7 +991,20 @@ struct LayoutPageSink final : ParagraphSink {
     // allocation gate; 8K here covers the remaining render transients. A skipped serve stays
     // pending and retries after the next page.
     constexpr uint32_t SERVE_MIN_ALLOC = 8 * 1024;
-    if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) return;
+    if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) {
+      // The pending request is the page the reader is looking AT (initial early render or a
+      // mid-build turn). Fonts reload lazily, so trade the font caches for the serve -- once
+      // per request -- rather than leave it starved: a request whose direct-serve moment is
+      // missed can only be satisfied by read-back, which needs MORE contiguous heap, so one
+      // missed gate check starved the early render for an entire 32s build (observed: the
+      // first page appeared when the build finished instead of ~2-3s in). Same trade
+      // makeImagePage() below already makes mid-build.
+      if (req != fontReleasedForReq_) {
+        fontReleasedForReq_ = req;
+        if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+      }
+      if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) return;
+    }
     if (req == lastBuilt) {
       pageRequest->store(-1, std::memory_order_relaxed);
       if (!justWritten.isImagePage()) earlyRenderFn(earlyRenderCtx, justWritten, req);
@@ -1023,6 +1037,13 @@ struct LayoutPageSink final : ParagraphSink {
       return;
     }
     if (okRead != ReadResult::Ok) {  // heap-refused or corrupt: request stays pending, retried on heap change
+      if (okRead == ReadResult::HeapRefused && req != fontReleasedForReq_) {
+        // First heap refusal for this request: free the font caches and leave the dedup key
+        // unset so the very next page write retries against the roomier heap.
+        fontReleasedForReq_ = req;
+        if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+        return;
+      }
       lastRefusedAttemptKey = attemptKey;
       return;
     }
