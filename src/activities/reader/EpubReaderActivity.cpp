@@ -242,9 +242,9 @@ void EpubReaderActivity::saveBookPrefs(const ReaderPrefs& prefs) const {
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
 
-  // Swallow the Confirm release that opened this book from the library,
-  // so it doesn't immediately trigger the reader menu.
-  ignoreNextConfirmRelease = true;
+  // Some entry screens open on Confirm press, others on release. Swallow only
+  // a release that is still pending; otherwise the first real reader click vanished.
+  ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   readingSessionStartMs = millis();
 
   if (!epub) {
@@ -1660,6 +1660,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           verticalSection->setEarlyRenderHook(this, &EpubReaderActivity::earlyRenderVerticalPageThunk, earlyTarget);
         }
 
+        earlyPageActuallyDisplayed_ = false;
         earlyDisplayedPage_.store(earlyTarget, std::memory_order_relaxed);
         verticalBuildInProgress_.store(true, std::memory_order_relaxed);
         const bool built = verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight);
@@ -1723,6 +1724,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
       pendingPercentJump = false;
     }
+
+    if (earlyPageActuallyDisplayed_ &&
+        earlyDisplayedPage_.exchange(-1, std::memory_order_relaxed) == verticalSection->currentPage) {
+      earlyPageActuallyDisplayed_ = false;
+      lastRenderedVPage_ = verticalSection->currentPage;
+      saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
+                   furiganaOverride);
+      LOG_DBG("ERS", "Keeping early-rendered page %d; skipping duplicate refresh", verticalSection->currentPage);
+      showPendingSyncSaveError();
+      return;
+    }
+    earlyPageActuallyDisplayed_ = false;
+    earlyDisplayedPage_.store(-1, std::memory_order_relaxed);
 
     renderer.clearScreen();
 
@@ -2940,7 +2954,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   // bar -- stalls for as long as the build holds the card (reported on device: buttons feel
   // unresponsive during indexing). Keep the previous numbers until the build is done; they are
   // recomputed on the next call, and page counts are transient during a build anyway.
-  if (verticalBuildInProgress_.load(std::memory_order_relaxed)) return;
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed) || (section && section->isBuilding())) return;
 
   const int livePages = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
   const bool vertical = useVerticalText();
@@ -3127,9 +3141,10 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
   renderer.clearScreen();
   renderVerticalPageBody(page);
-  // No status bar here: it derives page counts from a section that is still mid-build. The
-  // normal post-build render adds it on top of the identical page content.
+  // No status bar here: it derives page counts from a section that is still mid-build. It
+  // appears with the next real page refresh; redrawing this page only for the bar is slower.
   renderer.displayBuffer();
+  earlyPageActuallyDisplayed_ = true;
   // The build resumes the moment this returns and needs its headroom back: the prewarm above
   // re-claimed font page slots and the decompressor glyph slab that the build path explicitly
   // released before starting. Deliberately NOT releaseAllFontMemory(): that would also drop

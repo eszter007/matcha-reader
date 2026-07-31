@@ -5,6 +5,7 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Memory.h>
 #include <WiFi.h>
 
 #include <cstddef>
@@ -31,15 +32,14 @@ constexpr int QR_CODE_WIDTH = 198;
 constexpr int QR_CODE_HEIGHT = 198;
 
 // DNS server for captive portal (redirects all DNS queries to our IP)
-DNSServer* dnsServer = nullptr;
+std::unique_ptr<DNSServer> dnsServer;
 constexpr uint16_t DNS_PORT = 53;
 
 void stopDnsServer() {
   if (!dnsServer) return;
 
   dnsServer->stop();
-  delete dnsServer;
-  dnsServer = nullptr;
+  dnsServer.reset();
 }
 
 void restartMdns(const char* hostname, const char* tag) {
@@ -95,14 +95,23 @@ void CrossPointWebServerActivity::onEnter() {
 
   // Launch network mode selection subactivity
   LOG_DBG("WEBACT", "Launching NetworkModeSelectionActivity...");
-  startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
-                         [this](const ActivityResult& result) {
-                           if (result.isCancelled) {
-                             onGoHome();
-                           } else {
-                             onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
-                           }
-                         });
+  showNetworkModeSelection();
+}
+
+void CrossPointWebServerActivity::showNetworkModeSelection() {
+  auto activity = makeUniqueNoThrow<NetworkModeSelectionActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("WEBACT", "Not enough memory for network mode selection");
+    onGoHome();
+    return;
+  }
+  startActivityForResult(std::move(activity), [this](const ActivityResult& result) {
+    if (result.isCancelled) {
+      onGoHome();
+    } else {
+      onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
+    }
+  });
 }
 
 void CrossPointWebServerActivity::onExit() {
@@ -141,19 +150,16 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   isApMode = (mode == NetworkMode::CREATE_HOTSPOT);
 
   if (mode == NetworkMode::CONNECT_CALIBRE) {
-    startActivityForResult(
-        std::make_unique<CalibreConnectActivity>(renderer, mappedInput), [this](const ActivityResult& result) {
-          state = WebServerActivityState::MODE_SELECTION;
-
-          startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
-                                 [this](const ActivityResult& result) {
-                                   if (result.isCancelled) {
-                                     onGoHome();
-                                   } else {
-                                     onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
-                                   }
-                                 });
-        });
+    auto activity = makeUniqueNoThrow<CalibreConnectActivity>(renderer, mappedInput);
+    if (!activity) {
+      LOG_ERR("WEBACT", "Not enough memory for Calibre connection");
+      onGoHome();
+      return;
+    }
+    startActivityForResult(std::move(activity), [this](const ActivityResult&) {
+      state = WebServerActivityState::MODE_SELECTION;
+      showNetworkModeSelection();
+    });
     return;
   }
 
@@ -164,15 +170,20 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
 
     state = WebServerActivityState::WIFI_SELECTION;
     LOG_DBG("WEBACT", "Launching WifiSelectionActivity...");
-    startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
-                           [this](const ActivityResult& result) {
-                             if (!result.isCancelled) {
-                               const auto& wifi = std::get<WifiResult>(result.data);
-                               connectedIP = wifi.ip;
-                               connectedSSID = wifi.ssid;
-                             }
-                             onWifiSelectionComplete(!result.isCancelled);
-                           });
+    auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput);
+    if (!activity) {
+      LOG_ERR("WEBACT", "Not enough memory for Wi-Fi selection");
+      onGoHome();
+      return;
+    }
+    startActivityForResult(std::move(activity), [this](const ActivityResult& result) {
+      if (!result.isCancelled) {
+        const auto& wifi = std::get<WifiResult>(result.data);
+        connectedIP = wifi.ip;
+        connectedSSID = wifi.ssid;
+      }
+      onWifiSelectionComplete(!result.isCancelled);
+    });
   } else {
     // AP mode - start access point
     state = WebServerActivityState::AP_STARTING;
@@ -197,14 +208,7 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
     // User cancelled - go back to mode selection
     state = WebServerActivityState::MODE_SELECTION;
 
-    startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
-                           [this](const ActivityResult& result) {
-                             if (result.isCancelled) {
-                               onGoHome();
-                             } else {
-                               onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
-                             }
-                           });
+    showNetworkModeSelection();
   }
 }
 
@@ -250,10 +254,14 @@ void CrossPointWebServerActivity::startAccessPoint() {
   // Start DNS server for captive portal behavior
   // This redirects all DNS queries to our IP, making any domain typed resolve to us
   stopDnsServer();
-  dnsServer = new DNSServer();
-  dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServer->start(DNS_PORT, "*", apIP);
-  LOG_DBG("WEBACT", "DNS server started for captive portal");
+  dnsServer = makeUniqueNoThrow<DNSServer>();
+  if (dnsServer) {
+    dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
+    dnsServer->start(DNS_PORT, "*", apIP);
+    LOG_DBG("WEBACT", "DNS server started for captive portal");
+  } else {
+    LOG_ERR("WEBACT", "Not enough memory for captive-portal DNS; continuing without it");
+  }
 
   LOG_DBG("WEBACT", "Free heap after AP start: %d bytes", ESP.getFreeHeap());
 
@@ -265,7 +273,12 @@ void CrossPointWebServerActivity::startWebServer() {
   LOG_DBG("WEBACT", "Starting web server...");
 
   // Create the web server instance
-  webServer.reset(new CrossPointWebServer());
+  webServer = makeUniqueNoThrow<CrossPointWebServer>();
+  if (!webServer) {
+    LOG_ERR("WEBACT", "Not enough memory to start File Transfer server");
+    onGoHome();
+    return;
+  }
   webServer->begin();
 
   if (webServer->isRunning()) {

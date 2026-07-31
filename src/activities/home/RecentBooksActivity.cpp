@@ -394,7 +394,8 @@ bool RecentBooksActivity::stepLibraryScan() {
     std::string title;
     if (isEpub) {
       Epub epub(book.path, "/.crosspoint");
-      generated = epub.load(true, true) && epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
+      generated = epub.load(true, SETTINGS.embeddedStyle == 0) &&
+                  epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
       title = epub.getTitle();
     } else {
       Xtc xtc(book.path, "/.crosspoint");
