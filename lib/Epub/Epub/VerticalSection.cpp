@@ -1013,8 +1013,12 @@ struct LayoutPageSink final : ParagraphSink {
     // A refused read-back under an UNCHANGED heap state will be refused again -- don't
     // repeat the seek+read+log for every subsequent page (observed: one starved backward
     // turn produced a ~50Hz refusal stream for the rest of the build). Retry only when the
-    // request or the largest free block changed.
-    const uint64_t attemptKey = (static_cast<uint64_t>(req) << 32) | ESP.getMaxAllocHeap();
+    // request changed or the largest free block moved by a 4KB step: keying on the exact
+    // maxAlloc defeated the dedup, because build-time maxAlloc jitters between a handful of
+    // nearby values every page (measured: 8.7-12.3KB), and each "retry" is a flush+seek+
+    // header-read against the SD card mid-build -- one held backward turn hammered the card
+    // for the whole build and stretched it from 18.5s to 36.4s while re-degrading pagination.
+    const uint64_t attemptKey = (static_cast<uint64_t>(req) << 32) | (ESP.getMaxAllocHeap() >> 12);
     if (attemptKey == lastRefusedAttemptKey) return;
     const size_t endPos = out.position();
     // Commit pending writes before reading earlier records through the same handle: without
