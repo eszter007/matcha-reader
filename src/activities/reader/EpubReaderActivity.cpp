@@ -2410,6 +2410,11 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     const int nextSpineIndex = currentSpineIndex + 1;
     if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
 
+    // A skip below set a backoff: retrying every tick releases the font caches each time
+    // (cold glyphs on the next turn) while the heap plateau that caused the skip rarely
+    // moves within a second. One attempt per backoff window is plenty.
+    if (silentIndexBackoffUntilMs_ != 0 && millis() < silentIndexBackoffUntilMs_) return;
+
     VerticalSection nextVSection(epub, nextSpineIndex, renderer);
     const int fontId = effectiveReaderFontId();
     if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight)) return;
@@ -2437,8 +2442,10 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 64 * 1024;
     if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
       LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
+      silentIndexBackoffUntilMs_ = millis() + 5000;
       return;
     }
+    silentIndexBackoffUntilMs_ = 0;
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
     if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight)) {
