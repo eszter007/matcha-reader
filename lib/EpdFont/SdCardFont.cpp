@@ -154,6 +154,14 @@ void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
   delete[] s.ligaturePairs;
   s.ligaturePairs = nullptr;
   s.kernLigLoaded = false;
+  // Both font-data views alias ligaturePairs directly (the stub always, retained miniData
+  // when the hysteresis kept it), so clear the mirrors with the array or they dangle. They
+  // are re-pointed by the next loadStyleKernLigatureData / applyKernLigaturePointers; until
+  // then renders simply see no ligatures.
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
+  s.miniData.ligaturePairs = nullptr;
+  s.miniData.ligaturePairCount = 0;
 }
 
 void SdCardFont::freeStyleMiniKern(PerStyle& s) {
@@ -1184,6 +1192,28 @@ void SdCardFont::clearPersistentCache() {
     advanceTable_[i] = nullptr;
     advanceTableSize_[i] = 0;
   }
+  // The kern/ligature class maps are the same kind of persistent measurement cache (~3KB per
+  // loaded style) and reload from SD with one seek+read on the next ensure. Critically, they
+  // load lazily DURING reading, which plants them in the middle of the region the font pages
+  // and glyph slab occupy -- a later emergency release then frees around them and the two
+  // freed halves cannot coalesce. Measured on device: the same releaseAllFontMemory that
+  // lifts maxAlloc 61428 -> 102388 at book-open time (kern not yet loaded) moves it by ZERO
+  // mid-read with kern resident. Every use site null-checks or re-ensures, so freeing here
+  // is safe at any point outside an in-flight measurement.
+  //
+  // The mini arenas must go too: clearCache() routes through resetStyleMiniData(), whose
+  // retention bet keeps the bitmap/glyph arenas whenever TOTAL free heap is comfortable --
+  // but the emergency caller's problem is CONTIGUITY, not total free. Measured on device:
+  // free=103768 with maxAlloc pinned at 47092 while the retained arenas (high-water sized by
+  // the densest page) sat mid-region. The retention bet stays for the per-page reset path;
+  // the emergency path forfeits it.
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    freeStyleKernLigatureData(styles_[i]);
+    if (styles_[i].present) {
+      freeStyleMiniData(styles_[i]);
+      applyGlyphMissCallback(i);
+    }
+  }
 }
 
 bool SdCardFont::advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const {
@@ -1400,19 +1430,30 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
 
   // +2 reserved slots for space and hyphen injected after the main scan.
   static constexpr uint32_t MAX_UNIQUE_CODEPOINTS = 4096;
-  uint32_t* codepoints = new (std::nothrow) uint32_t[MAX_UNIQUE_CODEPOINTS + 2];
+  // A per-paragraph layout call carries a few hundred unique codepoints at most; only the
+  // one-time Latin seed below benefits from the full-size buffer. During a vertical build the
+  // largest free block sits at ~10-18KB, so the 16KB request failed on EVERY paragraph and
+  // advances fell back to per-glyph SD fetches for the rest of the chapter (measured: ~2x
+  // total indexing time). A 2KB fallback keeps the bulk path alive under that pressure.
+  static constexpr uint32_t FALLBACK_UNIQUE_CODEPOINTS = 512;
+  uint32_t cpCap = MAX_UNIQUE_CODEPOINTS;
+  uint32_t* codepoints = new (std::nothrow) uint32_t[cpCap + 2];
   if (!codepoints) {
-    LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)", MAX_UNIQUE_CODEPOINTS * 4);
+    cpCap = FALLBACK_UNIQUE_CODEPOINTS;
+    codepoints = new (std::nothrow) uint32_t[cpCap + 2];
+  }
+  if (!codepoints) {
+    LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)", cpCap * 4);
     return -1;
   }
   uint32_t cpCount = 0;
   bool hitCap = false;
 
   for (auto it = begin; it != end && !hitCap; ++it) {
-    hitCap = collectUniqueCodepoints(asCStr(*it), codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
+    hitCap = collectUniqueCodepoints(asCStr(*it), codepoints, cpCount, cpCap);
   }
   if (extraText && !hitCap) {
-    hitCap = collectUniqueCodepoints(extraText, codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
+    hitCap = collectUniqueCodepoints(extraText, codepoints, cpCount, cpCap);
   }
 
   if (includeSpace && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == ' '; }))
@@ -1421,8 +1462,7 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
     codepoints[cpCount++] = '-';
 
   if (hitCap) {
-    LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate",
-            MAX_UNIQUE_CODEPOINTS);
+    LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate", cpCap);
   }
 
   // One-time Latin seed: layout calls this per paragraph with that paragraph's handful of new
@@ -1442,7 +1482,7 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
         {0xFF01, 0xFF5E},  // fullwidth forms (！？ etc.)
     };
     for (const auto& r : kSeedRanges) {
-      for (uint32_t cp = r.first; cp <= r.last && cpCount < MAX_UNIQUE_CODEPOINTS; cp++) {
+      for (uint32_t cp = r.first; cp <= r.last && cpCount < cpCap; cp++) {
         if (coversCodepoint(cp, 0)) codepoints[cpCount++] = cp;
       }
     }

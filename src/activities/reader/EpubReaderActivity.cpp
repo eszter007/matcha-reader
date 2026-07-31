@@ -7,6 +7,7 @@
 #include <Epub/blocks/ImageBlock.h>
 #include <Epub/blocks/TextBlock.h>
 #include <Epub/blocks/VerticalTextBlock.h>
+#include <Epub/converters/BmpToFramebufferConverter.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
@@ -1842,7 +1843,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // while dwelling on a page still refines all the way to 4-level grayscale.
         imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
 
-        if (renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
+        // A 1-bit BMP has no gray tones for the planes to lift, and the BMP decoder writes no
+        // .pxc cache, so each strip pass below would be a full SD re-decode of an image the BW
+        // pass already displayed completely -- measured 1587ms per turn (3 decodes) plus the
+        // ~1.7s gray waveform for zero visual change. Converter-produced books ship exactly
+        // these mono BMPs. One header read decides it.
+        const bool monoBmp = FsHelpers::hasBmpExtension(vpage->imagePath) &&
+                             BmpToFramebufferConverter::isMonochromeStatic(vpage->imagePath);
+
+        if (!monoBmp && renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
           const int gh = renderer.getDisplayHeight();
           const int gwBytes = renderer.getDisplayWidthBytes();
           // Each grayscale strip re-reads the WHOLE pixel cache (the .pxc is row-major in logical
@@ -1896,8 +1905,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             renderer.cleanupGrayscaleWithFrameBuffer();
           }
         }
-        // Gray charge in the image region needs the HALF ghost-cleanup on the next page.
-        pagesUntilFullRefresh = 1;
+        // Gray charge in the image region needs the HALF ghost-cleanup on the next page. A mono
+        // BMP skipped the gray pass entirely, so it left no charge -- normal refresh cadence.
+        if (!monoBmp) pagesUntilFullRefresh = 1;
         imagePageDisplayed = true;
       } else {
         renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/prewarmedVPage_ == verticalSection->currentPage);
@@ -2400,6 +2410,11 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     const int nextSpineIndex = currentSpineIndex + 1;
     if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
 
+    // A skip below set a backoff: retrying every tick releases the font caches each time
+    // (cold glyphs on the next turn) while the heap plateau that caused the skip rarely
+    // moves within a second. One attempt per backoff window is plenty.
+    if (silentIndexBackoffUntilMs_ != 0 && millis() < silentIndexBackoffUntilMs_) return;
+
     VerticalSection nextVSection(epub, nextSpineIndex, renderer);
     const int fontId = effectiveReaderFontId();
     if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight)) return;
@@ -2417,6 +2432,20 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
       prewarmedVPage_ = -1;
       prewarmedHPage_ = -1;
     }
+
+    // Post-release gate: if the largest block is STILL small, this build would run the whole
+    // gauntlet degraded -- observed at maxAlloc=63476: styled blocks skipped, glyphs dropped,
+    // and the section stamped stale THE MOMENT it was written. That is throwaway work that
+    // also leaves short pages on screen if the reader pages into it this session. Leave the
+    // section unbuilt instead: a roomier later tick retries, and the foreground open path
+    // (which frees more up front and early-renders) builds it properly on arrival.
+    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 64 * 1024;
+    if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
+      LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
+      silentIndexBackoffUntilMs_ = millis() + 5000;
+      return;
+    }
+    silentIndexBackoffUntilMs_ = 0;
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
     if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight)) {

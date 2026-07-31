@@ -394,8 +394,11 @@ bool RecentBooksActivity::stepLibraryScan() {
     std::string title;
     if (isEpub) {
       Epub epub(book.path, "/.crosspoint");
-      generated = epub.load(true, SETTINGS.embeddedStyle == 0) &&
-                  epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
+      // Always skip CSS here: a cover thumbnail never depends on styles, and parsing a
+      // publisher stylesheet set costs tens of seconds on an uncached book (observed: 65s
+      // loop block on a 6-file Kodansha EPUB). Warming the CSS cache for the reader must
+      // not ride on this pass.
+      generated = epub.load(true, true) && epub.generateThumbBmp(thumbH, &thumbGenShouldCancel, this);
       title = epub.getTitle();
     } else {
       Xtc xtc(book.path, "/.crosspoint");

@@ -793,6 +793,7 @@ struct LayoutPageSink final : ParagraphSink {
   void* earlyRenderCtx = nullptr;
   std::atomic<int>* pageRequest = nullptr;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
+  int fontReleasedForReq_ = -1;        // one font-cache release per starved request; see servePageRequest()
 
   // Reusable read-back slot for mid-build backward turns. It grows through readPage's guarded
   // on-demand reserve; preallocating a second full page here starved the actual layout page.
@@ -990,7 +991,20 @@ struct LayoutPageSink final : ParagraphSink {
     // allocation gate; 8K here covers the remaining render transients. A skipped serve stays
     // pending and retries after the next page.
     constexpr uint32_t SERVE_MIN_ALLOC = 8 * 1024;
-    if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) return;
+    if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) {
+      // The pending request is the page the reader is looking AT (initial early render or a
+      // mid-build turn). Fonts reload lazily, so trade the font caches for the serve -- once
+      // per request -- rather than leave it starved: a request whose direct-serve moment is
+      // missed can only be satisfied by read-back, which needs MORE contiguous heap, so one
+      // missed gate check starved the early render for an entire 32s build (observed: the
+      // first page appeared when the build finished instead of ~2-3s in). Same trade
+      // makeImagePage() below already makes mid-build.
+      if (req != fontReleasedForReq_) {
+        fontReleasedForReq_ = req;
+        if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+      }
+      if (ESP.getMaxAllocHeap() < SERVE_MIN_ALLOC) return;
+    }
     if (req == lastBuilt) {
       pageRequest->store(-1, std::memory_order_relaxed);
       if (!justWritten.isImagePage()) earlyRenderFn(earlyRenderCtx, justWritten, req);
@@ -999,8 +1013,12 @@ struct LayoutPageSink final : ParagraphSink {
     // A refused read-back under an UNCHANGED heap state will be refused again -- don't
     // repeat the seek+read+log for every subsequent page (observed: one starved backward
     // turn produced a ~50Hz refusal stream for the rest of the build). Retry only when the
-    // request or the largest free block changed.
-    const uint64_t attemptKey = (static_cast<uint64_t>(req) << 32) | ESP.getMaxAllocHeap();
+    // request changed or the largest free block moved by a 4KB step: keying on the exact
+    // maxAlloc defeated the dedup, because build-time maxAlloc jitters between a handful of
+    // nearby values every page (measured: 8.7-12.3KB), and each "retry" is a flush+seek+
+    // header-read against the SD card mid-build -- one held backward turn hammered the card
+    // for the whole build and stretched it from 18.5s to 36.4s while re-degrading pagination.
+    const uint64_t attemptKey = (static_cast<uint64_t>(req) << 32) | (ESP.getMaxAllocHeap() >> 12);
     if (attemptKey == lastRefusedAttemptKey) return;
     const size_t endPos = out.position();
     // Commit pending writes before reading earlier records through the same handle: without
@@ -1023,6 +1041,13 @@ struct LayoutPageSink final : ParagraphSink {
       return;
     }
     if (okRead != ReadResult::Ok) {  // heap-refused or corrupt: request stays pending, retried on heap change
+      if (okRead == ReadResult::HeapRefused && req != fontReleasedForReq_) {
+        // First heap refusal for this request: free the font caches and leave the dedup key
+        // unset so the very next page write retries against the roomier heap.
+        fontReleasedForReq_ = req;
+        if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+        return;
+      }
       lastRefusedAttemptKey = attemptKey;
       return;
     }

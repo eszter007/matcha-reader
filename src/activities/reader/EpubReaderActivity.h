@@ -217,6 +217,11 @@ class EpubReaderActivity final : public Activity {
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
   // instead of paying the ~500-700ms per-page SD bulk load at button time.
   int prewarmedVPage_ = -1;
+  // Backoff for the silent next-chapter index when the heap is too tight to build clean:
+  // without it the attempt re-fires every tick while the reader sits on a chapter's last two
+  // pages, and each attempt releases the font caches (cold glyphs on the next turn) for
+  // nothing -- observed on device firing at 1Hz+ with maxAlloc pinned at the same value.
+  uint32_t silentIndexBackoffUntilMs_ = 0;
   // Page index the last vertical render actually drew. The idle warm evicts it (the mini font
   // cache holds exactly one page), so running that warm again after a re-render of the SAME
   // page -- status bar tick, closed menu, bookmark toast -- costs two bulk SD loads and buys
