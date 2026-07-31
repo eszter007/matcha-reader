@@ -2428,6 +2428,18 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
       prewarmedHPage_ = -1;
     }
 
+    // Post-release gate: if the largest block is STILL small, this build would run the whole
+    // gauntlet degraded -- observed at maxAlloc=63476: styled blocks skipped, glyphs dropped,
+    // and the section stamped stale THE MOMENT it was written. That is throwaway work that
+    // also leaves short pages on screen if the reader pages into it this session. Leave the
+    // section unbuilt instead: a roomier later tick retries, and the foreground open path
+    // (which frees more up front and early-renders) builds it properly on arrival.
+    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 64 * 1024;
+    if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
+      LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
+      return;
+    }
+
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
     if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight)) {
       LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
