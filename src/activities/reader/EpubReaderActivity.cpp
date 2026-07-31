@@ -7,6 +7,7 @@
 #include <Epub/blocks/ImageBlock.h>
 #include <Epub/blocks/TextBlock.h>
 #include <Epub/blocks/VerticalTextBlock.h>
+#include <Epub/converters/BmpToFramebufferConverter.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
@@ -1842,7 +1843,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // while dwelling on a page still refines all the way to 4-level grayscale.
         imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
 
-        if (renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
+        // A 1-bit BMP has no gray tones for the planes to lift, and the BMP decoder writes no
+        // .pxc cache, so each strip pass below would be a full SD re-decode of an image the BW
+        // pass already displayed completely -- measured 1587ms per turn (3 decodes) plus the
+        // ~1.7s gray waveform for zero visual change. Converter-produced books ship exactly
+        // these mono BMPs. One header read decides it.
+        const bool monoBmp = FsHelpers::hasBmpExtension(vpage->imagePath) &&
+                             BmpToFramebufferConverter::isMonochromeStatic(vpage->imagePath);
+
+        if (!monoBmp && renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
           const int gh = renderer.getDisplayHeight();
           const int gwBytes = renderer.getDisplayWidthBytes();
           // Each grayscale strip re-reads the WHOLE pixel cache (the .pxc is row-major in logical
@@ -1896,8 +1905,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             renderer.cleanupGrayscaleWithFrameBuffer();
           }
         }
-        // Gray charge in the image region needs the HALF ghost-cleanup on the next page.
-        pagesUntilFullRefresh = 1;
+        // Gray charge in the image region needs the HALF ghost-cleanup on the next page. A mono
+        // BMP skipped the gray pass entirely, so it left no charge -- normal refresh cadence.
+        if (!monoBmp) pagesUntilFullRefresh = 1;
         imagePageDisplayed = true;
       } else {
         renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/prewarmedVPage_ == verticalSection->currentPage);
