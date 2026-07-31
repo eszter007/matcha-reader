@@ -154,6 +154,14 @@ void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
   delete[] s.ligaturePairs;
   s.ligaturePairs = nullptr;
   s.kernLigLoaded = false;
+  // Both font-data views alias ligaturePairs directly (the stub always, retained miniData
+  // when the hysteresis kept it), so clear the mirrors with the array or they dangle. They
+  // are re-pointed by the next loadStyleKernLigatureData / applyKernLigaturePointers; until
+  // then renders simply see no ligatures.
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
+  s.miniData.ligaturePairs = nullptr;
+  s.miniData.ligaturePairCount = 0;
 }
 
 void SdCardFont::freeStyleMiniKern(PerStyle& s) {
@@ -1183,6 +1191,17 @@ void SdCardFont::clearPersistentCache() {
     delete[] advanceTable_[i];
     advanceTable_[i] = nullptr;
     advanceTableSize_[i] = 0;
+  }
+  // The kern/ligature class maps are the same kind of persistent measurement cache (~3KB per
+  // loaded style) and reload from SD with one seek+read on the next ensure. Critically, they
+  // load lazily DURING reading, which plants them in the middle of the region the font pages
+  // and glyph slab occupy -- a later emergency release then frees around them and the two
+  // freed halves cannot coalesce. Measured on device: the same releaseAllFontMemory that
+  // lifts maxAlloc 61428 -> 102388 at book-open time (kern not yet loaded) moves it by ZERO
+  // mid-read with kern resident. Every use site null-checks or re-ensures, so freeing here
+  // is safe at any point outside an in-flight measurement.
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    freeStyleKernLigatureData(styles_[i]);
   }
 }
 
