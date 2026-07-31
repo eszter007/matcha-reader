@@ -575,7 +575,17 @@ bool Section::buildSomeMore(const int maxPages) {
     const auto status = build_->parser->parseStep();
     if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
       LOG_ERR("SCT", "Parse error during incremental build");
+      // A cached extraction that does not parse is poison, not truth: a chapter HTML write
+      // cut short leaves a file that "exists" and is then reused on every open, failing at
+      // line 1 forever. Delete it so the next attempt re-extracts from the EPUB. Fresh
+      // extractions parse from tmpHtmlPath and stay abandonBuild's to clean.
+      const bool parsedCachedHtml = build_->parsePath == build_->htmlPath;
+      const std::string poisoned = build_->htmlPath;
       abandonBuild();
+      if (parsedCachedHtml && Storage.exists(poisoned.c_str())) {
+        LOG_ERR("SCT", "Deleting unparseable cached HTML %s", poisoned.c_str());
+        Storage.remove(poisoned.c_str());
+      }
       return false;
     }
     if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
