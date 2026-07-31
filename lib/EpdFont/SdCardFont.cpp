@@ -1200,8 +1200,19 @@ void SdCardFont::clearPersistentCache() {
   // lifts maxAlloc 61428 -> 102388 at book-open time (kern not yet loaded) moves it by ZERO
   // mid-read with kern resident. Every use site null-checks or re-ensures, so freeing here
   // is safe at any point outside an in-flight measurement.
+  //
+  // The mini arenas must go too: clearCache() routes through resetStyleMiniData(), whose
+  // retention bet keeps the bitmap/glyph arenas whenever TOTAL free heap is comfortable --
+  // but the emergency caller's problem is CONTIGUITY, not total free. Measured on device:
+  // free=103768 with maxAlloc pinned at 47092 while the retained arenas (high-water sized by
+  // the densest page) sat mid-region. The retention bet stays for the per-page reset path;
+  // the emergency path forfeits it.
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     freeStyleKernLigatureData(styles_[i]);
+    if (styles_[i].present) {
+      freeStyleMiniData(styles_[i]);
+      applyGlyphMissCallback(i);
+    }
   }
 }
 
