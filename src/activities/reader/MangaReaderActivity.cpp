@@ -64,9 +64,8 @@ constexpr uint32_t PREFETCH_TASK_STACK = 8192;
 void MangaReaderActivity::onEnter() {
   Activity::onEnter();
 
-  // Swallow the Confirm release that opened this book from the library,
-  // so it doesn't immediately trigger the reader menu.
-  ignoreNextConfirmRelease = true;
+  // Press-driven entry leaves a release pending; release/touch-driven entry does not.
+  ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
   if (!book) return;
 

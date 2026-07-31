@@ -237,9 +237,10 @@ class EpubReaderActivity final : public Activity {
   // would misread every press as "past the last page" and jump to the next spine (observed:
   // a press during the build teleported the reader to the end of the book).
   std::atomic<bool> verticalBuildInProgress_{false};
-  // Page index currently on screen from the early-render path; -1 until it first fires.
+  // Early target/currently shown page; seeded before the hook so build-time turns work.
   // Written on the render task, read by pageTurn() on the loop() task.
   std::atomic<int> earlyDisplayedPage_{-1};
+  bool earlyPageActuallyDisplayed_ = false;
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   bool saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride, int8_t furiOverride);
   // Pages laid out per incremental-build pump: on the render path (catching up to the page
@@ -288,7 +289,7 @@ class EpubReaderActivity final : public Activity {
   // the reader is within this many pages of the watermark: at ~30s per page read and ~100-300ms
   // per page rebuilt, this margin gives the rebuild ample runway to catch up (and finalize)
   // before the reader arrives.
-  static constexpr int PARTIAL_REBUILD_START_MARGIN = 15;
+  static constexpr int PARTIAL_REBUILD_START_MARGIN = BUILD_WINDOW_AHEAD;
   // Show the indexing popup when an initial build must lay out more than this many pages up front
   // (a deep resume/jump into a not-yet-built section), so it isn't a silent wait. Kept independent
   // of the small look-ahead window so ordinary landings stay popup-free.

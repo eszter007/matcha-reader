@@ -114,10 +114,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
-          // Build the metadata cache if missing so the cover can be generated on
-          // the first home visit (e.g. right after the book was added to recents
-          // but before book.bin exists). Skip CSS — only metadata is needed here.
-          epub.load(true, true);
+          // Build the CSS cache alongside the first cover while the loading UI is already
+          // active, so the later book click does not synchronously parse every stylesheet.
+          epub.load(true, SETTINGS.embeddedStyle == 0);
 
           // Try to generate thumbnail image for Continue Reading card
           if (!showingLoading) {
@@ -472,7 +471,7 @@ void HomeActivity::render(RenderLock&&) {
   renderer.displayBuffer();
 }
 
-void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
+void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path, true); }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 

@@ -34,6 +34,8 @@
 void XtcReaderActivity::onEnter() {
   Activity::onEnter();
 
+  // Press-driven entry leaves a release pending; release/touch-driven entry does not.
+  ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   readingSessionStartMs = millis();
 
   if (!xtc) {

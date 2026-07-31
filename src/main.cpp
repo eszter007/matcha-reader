@@ -579,7 +579,10 @@ void loop() {
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
-  renderer.setFadingFix(SETTINGS.fadingFix);
+  // The sunlight workaround was designed for X4. On X3, powering the panel off after
+  // every update forces the stronger wake waveform on the next refresh and causes severe
+  // grain/ghosting.
+  renderer.setFadingFix(SETTINGS.fadingFix && gpio.deviceIsX4());
 
   if (Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),

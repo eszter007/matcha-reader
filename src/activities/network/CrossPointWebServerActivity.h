@@ -57,12 +57,13 @@ class CrossPointWebServerActivity final : public Activity {
 
   void onNetworkModeSelected(NetworkMode mode);
   void onWifiSelectionComplete(bool connected);
+  void showNetworkModeSelection();
   void startAccessPoint();
   void startWebServer();
 
  public:
   explicit CrossPointWebServerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("CrossPointWebServer", renderer, mappedInput) {}
+      : Activity("FileTransfer", renderer, mappedInput) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
