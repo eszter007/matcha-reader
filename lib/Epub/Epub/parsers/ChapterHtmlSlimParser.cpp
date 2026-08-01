@@ -48,8 +48,8 @@ constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 // HTML5 sectioning/grouping tags (aside, section, ...) are block-level in every browser and
 // publishers hang block CSS on them (e.g. <aside class="box"> with border+padding for call-out
 // boxes). Treating them as inline dropped their margins, borders and text-align entirely.
-constexpr const char* BLOCK_TAGS[] = {"p",     "li",      "div",     "br",     "blockquote",
-                                      "aside", "section", "article", "figure", "figcaption"};
+constexpr const char* BLOCK_TAGS[] = {"p",  "li",    "div",     "br",      "blockquote", "ol",
+                                      "ul", "aside", "section", "article", "figure",     "figcaption"};
 
 // UTF-8 mark glyph for a text-emphasis style (JP bouten), nullptr for none.
 const char* emphasisMarkUtf8(const CssTextEmphasis e) {
@@ -240,6 +240,7 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveEmphasis = currentCssStyle.hasTextEmphasis() ? currentCssStyle.textEmphasis : CssTextEmphasis::None;
   effectiveSmallCaps = currentCssStyle.hasFontVariant() && currentCssStyle.fontVariant == CssFontVariant::SmallCaps;
   effectiveTextTransform = currentTextBlock ? currentTextBlock->getBlockStyle().textTransform : CssTextTransform::None;
+  effectiveWordFontId = 0;
 
   // Apply inline style stack in order
   for (const auto& entry : inlineStyleStack) {
@@ -274,6 +275,9 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     }
     if (entry.hasTextTransform) {
       effectiveTextTransform = entry.textTransform;
+    }
+    if (entry.hasFontId) {
+      effectiveWordFontId = entry.fontIdOverride;
     }
   }
 
@@ -338,7 +342,14 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   if (effectiveSmallCaps) {
     smallCapsTransform(partWordBuffer);
   }
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+  // Per-word font from an inline font-size. Sup/sub already draw at 50% scale, so a size on
+  // the same run would shrink twice -- the vertical shift wins. An override equal to the
+  // line's own font is stored as 0 to keep the block on the no-override fast path.
+  int32_t wordFontId = (effectiveSup || effectiveSub) ? 0 : effectiveWordFontId;
+  if (wordFontId != 0 && wordFontId == currentTextBlock->getBlockStyle().resolveFontId(fontId)) {
+    wordFontId = 0;
+  }
+  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, wordFontId);
   if (effectiveEmphasis != CssTextEmphasis::None) {
     if (const char* mark = emphasisMarkUtf8(effectiveEmphasis)) {
       // Synthetic per-glyph ruby: one mark per codepoint, each followed by an ideographic space.
@@ -537,9 +548,10 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
       if (text->wordCount() > 0) {
         // x positions already encode every earlier word's advance. Measure only the final
         // visual word instead of walking the whole heading through the small SD-font cache.
+        const int32_t wf = text->wordFont(rightmostWord);
         const int wordWidth =
-            renderer.getTextAdvanceX(lineFontId, text->wordText(rightmostWord), text->wordStyle(rightmostWord),
-                                     text->getBlockStyle().letterSpacing);
+            renderer.getTextAdvanceX(wf != 0 ? wf : lineFontId, text->wordText(rightmostWord),
+                                     text->wordStyle(rightmostWord), text->getBlockStyle().letterSpacing);
         contentRight = std::max(contentRight, rightmostX + wordWidth);
       }
     }
@@ -839,12 +851,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     self->tableColIndex += 1;
 
-    auto tableCellBlockStyle = BlockStyle();
-    tableCellBlockStyle.textAlignDefined = true;
-    const auto align = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
-                           ? CssTextAlign::Justify
-                           : static_cast<CssTextAlign>(self->paragraphAlignment);
-    tableCellBlockStyle.alignment = align;
+    // Cells are flattened into per-cell paragraphs, so their block CSS (font-size, vertical
+    // margins, text-align under the usual user-wins policy, ink mode) can flow through
+    // fromCssStyle like any paragraph instead of being dropped on a default-constructed style.
+    // th defaults to bold like every browser stylesheet unless the book says otherwise.
+    if (name[1] == 'h' && !cssStyle.hasFontWeight()) {
+      cssStyle.fontWeight = CssFontWeight::Bold;
+      cssStyle.defined.fontWeight = 1;
+    }
+    const int cellFontId = cssBlockFontId(cssStyle, self->fontId);
+    const float cellEm =
+        static_cast<float>(self->renderer.getFontAscenderSize(cellFontId != 0 ? cellFontId : self->fontId));
+    auto tableCellBlockStyle =
+        BlockStyle::fromCssStyle(cssStyle, cellEm, static_cast<CssTextAlign>(self->paragraphAlignment),
+                                 self->viewportWidth, self->honorBookInsets, self->fontId);
+    self->currentCssStyle = cssStyle;  // cell-level bold/italic/decoration for the content
     self->startNewTextBlock(tableCellBlockStyle);
 
     const std::string headerText =
@@ -1500,6 +1521,23 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
       self->updateEffectiveInlineStyle();
 
+      if (strcmp(name, "ol") == 0 || strcmp(name, "ul") == 0) {
+        // Track list nesting for list-style-type markers: <ol> counts decimal by
+        // default, <ul> draws discs; the element's own list-style-type overrides.
+        // Lists sit in the block branch (not a bare side branch) so their block CSS --
+        // ul { margin-left: 2.5em } indents, vertical margins, page-breaks -- lays out
+        // through the same stack push/pop every other container gets.
+        if (self->listDepth < kMaxListDepth) {
+          ListCtx ctx;
+          ctx.counter = 0;
+          ctx.type = cssStyle.hasListStyleType()
+                         ? cssStyle.listStyleType
+                         : (name[0] == 'o' ? CssListStyleType::Decimal : CssListStyleType::Disc);
+          self->listStack[self->listDepth] = ctx;
+        }
+        self->listDepth++;
+      }
+
       if (strcmp(name, "li") == 0) {
         // Marker per list-style-type: the li's own value wins, else the
         // enclosing list's (bullet when the li sits outside any tracked list).
@@ -1600,25 +1638,26 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       entry.hasSub = true;
       entry.sub = true;
     }
+    // The tag's own CSS: `sup { font-style: italic }` etc. must survive like on any inline
+    // element. font-size is deliberately NOT forwarded -- sup/sub already render at 50% scale.
+    if (cssStyle.hasFontWeight()) {
+      entry.hasBold = true;
+      entry.bold = cssStyle.fontWeight == CssFontWeight::Bold;
+    }
+    if (cssStyle.hasFontStyle()) {
+      entry.hasItalic = true;
+      entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
+    }
+    applyTextDecorationToEntry(entry, cssStyle);
+    applyDirectionToEntry(entry, cssStyle);
     applyTextTransformToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
-  } else if (strcmp(name, "ol") == 0 || strcmp(name, "ul") == 0) {
-    // Track list nesting for list-style-type markers: <ol> counts decimal by
-    // default, <ul> draws discs; the element's own list-style-type overrides.
-    if (self->listDepth < kMaxListDepth) {
-      ListCtx ctx;
-      ctx.counter = 0;
-      ctx.type = cssStyle.hasListStyleType() ? cssStyle.listStyleType
-                                             : (name[0] == 'o' ? CssListStyleType::Decimal : CssListStyleType::Disc);
-      self->listStack[self->listDepth] = ctx;
-    }
-    self->listDepth++;
   } else if (strcmp(name, "span") == 0 || !isHeaderOrBlock(name)) {
     // Handle span and other inline elements for CSS styling
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
         cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || cssStyle.hasTextEmphasis() ||
-        cssStyle.hasFontVariant() || cssStyle.hasTextTransform()) {
+        cssStyle.hasFontVariant() || cssStyle.hasTextTransform() || cssStyle.hasFontSize()) {
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -1653,6 +1692,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       if (cssStyle.hasFontVariant()) {
         entry.hasSmallCaps = true;
         entry.smallCaps = cssStyle.fontVariant == CssFontVariant::SmallCaps;
+      }
+      if (cssStyle.hasFontSize()) {
+        entry.hasFontId = true;
+        // Body-relative, exactly like the block path (BlockStyle::fromCssStyle passes the
+        // reader's font as the em base): the ladder snaps to a resident 12/14/16/18pt size.
+        // 0 = no distinct size resident (or SD-card base font) -> the block font is kept.
+        entry.fontIdOverride = cssBlockFontId(cssStyle, self->fontId);
       }
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -2001,6 +2047,10 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
   if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
     self->nextWordContinues = false;
+    // The cell's CSS was made current at <td>/<th>; td/th are not block tags, so the generic
+    // block close below never resets it -- do it here or it leaks into the next cell's prefix.
+    self->currentCssStyle.reset();
+    self->updateEffectiveInlineStyle();
   }
 
   if (self->tableDepth == 1 && (strcmp(name, "tr") == 0)) {
@@ -2012,6 +2062,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->tableRowIndex = 0;
     self->tableColIndex = 0;
     self->nextWordContinues = false;
+    self->currentCssStyle.reset();
+    self->updateEffectiveInlineStyle();
   }
 
   // Leaving bold tag
@@ -2217,8 +2269,24 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   // is not part of the book's line box -- it is room the annotation needs above the ascender.
   const int lineFontId = line->getBlockStyle().resolveFontId(fontId);
   const int rubyExtra = line->getRubyShift(renderer.getFontAscenderSize(lineFontId));
+  // A word enlarged by an inline font-size (span) needs the line's advance to cover its taller
+  // glyphs, or it collides with the next line. Only lines that actually carry per-word fonts
+  // pay the scan; the base font for the leading stays the block's own.
+  int advanceFontId = lineFontId;
+  if (line->hasWordFonts()) {
+    int tallest = renderer.getLineHeight(lineFontId, lineCompression);
+    for (uint16_t w = 0; w < line->wordCount(); ++w) {
+      const int32_t wf = line->wordFont(w);
+      if (wf == 0 || wf == advanceFontId) continue;
+      const int h = renderer.getLineHeight(wf, lineCompression);
+      if (h > tallest) {
+        tallest = h;
+        advanceFontId = wf;
+      }
+    }
+  }
   const int leading =
-      applyCssLineHeight(renderer.getLineHeight(lineFontId, lineCompression), line->getBlockStyle().lineHeightPct);
+      applyCssLineHeight(renderer.getLineHeight(advanceFontId, lineCompression), line->getBlockStyle().lineHeightPct);
   const int lineHeight = leading + rubyExtra;
 
   // Keep-together buffering (page-break-inside/after: avoid): hold the line instead of placing

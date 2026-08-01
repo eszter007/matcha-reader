@@ -18,6 +18,11 @@ class ParsedText {
   std::vector<bool> wordContinues;      // true = word attaches to previous with no break
   std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
   std::vector<bool> wordIsFocusSuffix;  // true = token is the regular tail of a focus bold-prefix split
+  // Per-word font id from an inline font-size (span); 0 = the block's font. Lazily
+  // materialized like rubyTexts: empty means "no word in this block has one", so the
+  // common case (no sized spans) pays nothing. Once non-empty it is kept in lockstep
+  // with words[] through every push/insert/erase.
+  std::vector<int32_t> wordFonts;
   std::vector<std::string> rubyTexts;
   BlockStyle blockStyle;
   bool extraParagraphSpacing;
@@ -27,6 +32,7 @@ class ParsedText {
   bool hasRtlWord;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
+  std::vector<int32_t> reorderedFontsScratch;
   std::vector<uint16_t> reorderedWidthsScratch;
   std::vector<bool> reorderedContinuesScratch;
   std::vector<bool> reorderedNoSpaceBeforeScratch;
@@ -60,7 +66,13 @@ class ParsedText {
         hasRtlWord(false) {}
   ~ParsedText() = default;
 
-  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false);
+  // wordFontId: per-word font override from an inline font-size; 0 keeps the block's font.
+  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
+               int32_t wordFontId = 0);
+  // The font a word measures and draws with (block font unless an inline font-size overrode it).
+  int effectiveWordFont(size_t index, int blockFontId) const {
+    return (index < wordFonts.size() && wordFonts[index] != 0) ? wordFonts[index] : blockFontId;
+  }
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
