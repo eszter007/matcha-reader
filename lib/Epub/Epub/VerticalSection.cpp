@@ -50,7 +50,10 @@ namespace {
 // (the displayW/displayH fallback when getDimensions fails). config.useExactDimensions stretches
 // the decode to exactly that box, so those pages rendered visibly distorted once the image finally
 // became available. Extraction is reliable now (dee87656), so a rebuild records true dimensions.
-constexpr uint8_t VSECTION_FILE_VERSION = 101;
+// v102: aside/figure/figcaption joined isBlockTag (parity with the horizontal parser's
+// SECTION_FILE_VERSION 68 bump), so kakomi boxes and figure blocks on those tags now break
+// paragraphs and pick up styled-block params. A v101 cache flowed them as inline text.
+constexpr uint8_t VSECTION_FILE_VERSION = 102;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -223,8 +226,9 @@ struct TextExtractor {
   void flushParagraph() { emitRuns(true); }
 
   static bool isBlockTag(const char* name) {
-    static constexpr const char* blockTags[] = {"p",  "div", "h1", "h2",         "h3",      "h4",
-                                                "h5", "h6",  "li", "blockquote", "section", "article"};
+    static constexpr const char* blockTags[] = {"p",       "div",     "h1",    "h2",     "h3",
+                                                "h4",      "h5",      "h6",    "li",     "blockquote",
+                                                "section", "article", "aside", "figure", "figcaption"};
     for (const auto* tag : blockTags) {
       if (strcasecmp(name, tag) == 0) return true;
     }

@@ -45,7 +45,11 @@ constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS = 320;
 constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
-constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
+// HTML5 sectioning/grouping tags (aside, section, ...) are block-level in every browser and
+// publishers hang block CSS on them (e.g. <aside class="box"> with border+padding for call-out
+// boxes). Treating them as inline dropped their margins, borders and text-align entirely.
+constexpr const char* BLOCK_TAGS[] = {"p",     "li",      "div",     "br",     "blockquote",
+                                      "aside", "section", "article", "figure", "figcaption"};
 
 // UTF-8 mark glyph for a text-emphasis style (JP bouten), nullptr for none.
 const char* emphasisMarkUtf8(const CssTextEmphasis e) {
