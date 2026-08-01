@@ -64,6 +64,15 @@ class GfxRenderer {
   // as before, concentrated in a single pointer instead of four fields.
   mutable FontCacheManager* fontCacheManager_ = nullptr;
 
+  // Panel-residue hint for the sleep path: FAST refreshes and grayscale plane
+  // writes leave charge that ONE sleep-time HALF pass cannot fully scrub, and a
+  // sleep screen freezes that residue on the glass for hours (grain across an
+  // image page, the negative ghost of a popup). HALF/FULL passes reset it.
+  // Tracked here because the display methods are the one place every refresh
+  // funnels through; mutable for the same reason as the fields below (the
+  // display path is const).
+  mutable bool panelResidue_ = false;
+
   // Tiled grayscale strip target. When active, drawPixel()/clearScreen()
   // operate on a caller-owned scratch holding one horizontal band of physical
   // rows [_stripY0, _stripY0 + _stripRows) (panelWidthBytes wide) instead of
@@ -186,6 +195,10 @@ class GfxRenderer {
   int getScreenHeight() const;
   void tapToLogical(float nx, float ny, int& outX, int& outY) const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
+  // True when the panel may carry refresh residue (FAST turns, grayscale plane
+  // writes) that a static screen -- the sleep image -- would freeze in place.
+  // Cleared by any HALF or FULL pass. See panelResidue_.
+  [[nodiscard]] bool panelHasResidue() const { return panelResidue_; }
   // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
   // grayscale strip rendering) can overlap the panel's refresh time. The
   // framebuffer must stay untouched until waitRefreshComplete(). Falls back to

@@ -156,13 +156,29 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
 // renderer.waitRefreshComplete() and must rebuild the differential baseline
 // before the next page turn (the tiled grayscale cleanup does).
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
-  const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  const bool cleanup = pagesUntilFullRefresh <= 1;
+  const auto mode = cleanup ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
   if (async) {
     renderer.displayBufferAsync(mode);
   } else {
     renderer.displayBuffer(mode);
+    if (cleanup) {
+      // A long FAST run (10+ turns) accumulates more text ghost than ONE single-pass HALF can
+      // scrub -- photographed on device as the previous page crisply superimposed near the end
+      // of a 15-page run. A second HALF re-drives every pixel from an almost-clean state: the
+      // reinforcement the panel never otherwise gets, since the flashing GC waveform is never
+      // used in normal operation (see SleepActivity's stock-parity note). Short cadences (1/5)
+      // stay single-pass: their residue is light and the extra ~700ms would recur every few
+      // turns. Async callers skip this; they manage their own baseline (tiled image cleanup).
+      if (SETTINGS.getRefreshFrequency() >= 10) {
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      }
+      // Settle pass after the clean base -- the same recipe as XtcReaderActivity's periodic
+      // ghost cleanup. Fires the gentle reinforcement cells on X3; documented no-op on X4.
+      renderer.preconditionGrayscale();
+    }
   }
-  if (pagesUntilFullRefresh <= 1) {
+  if (cleanup) {
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else {
     pagesUntilFullRefresh--;
