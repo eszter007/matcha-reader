@@ -4383,8 +4383,9 @@ function applyGrayscale(ctx, width, height) {
   ctx.putImageData(imageData, 0, 0);
 }
 
-// Same 1-bit Atkinson diffusion used by the manga thumbnail pipeline. Images
-// have already been fitted to the device canvas before this runs.
+// Images are fitted to the selected device before a serpentine Floyd-Steinberg
+// pass. Alternating direction avoids the diagonal "woven" texture produced by
+// the old left-to-right Atkinson pass while keeping the compact 1-bit BMP output.
 async function canvasToDitheredBmp(canvas) {
   const { width, height } = canvas;
   const pixels = canvas.getContext('2d').getImageData(0, 0, width, height).data;
@@ -4396,17 +4397,29 @@ async function canvasToDitheredBmp(canvas) {
   view.setUint16(26, 1, true); view.setUint16(28, 1, true); view.setUint32(34, rowBytes * height, true);
   view.setUint32(38, 2835, true); view.setUint32(42, 2835, true); view.setUint32(46, 2, true); view.setUint32(50, 2, true);
   bytes.set([0, 0, 0, 0, 255, 255, 255, 0], 54);
-  let e0 = new Int16Array(width + 4), e1 = new Int16Array(width + 4), e2 = new Int16Array(width + 4);
+  let currentError = new Int16Array(width + 2);
+  let nextError = new Int16Array(width + 2);
   for (let y = 0; y < height; y++) {
     const dst = 62 + y * rowBytes;
-    for (let x = 0; x < width; x++) {
+    const reverse = (y & 1) !== 0;
+    for (let step = 0; step < width; step++) {
+      const x = reverse ? width - 1 - step : step;
       const i = (y * width + x) * 4, a = pixels[i + 3] / 255;
-      let gray = Math.max(0, Math.min(255, Math.round((pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114) * a + 255 * (1 - a)) + e0[x + 2]));
-      const white = gray >= 128, error = (gray - (white ? 255 : 0)) >> 3;
-      e0[x + 3] += error; e0[x + 4] += error; e1[x + 1] += error; e1[x + 2] += error; e1[x + 3] += error; e2[x + 2] += error;
+      const sourceGray = Math.round((pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114) * a + 255 * (1 - a));
+      const gray = Math.max(0, Math.min(255, sourceGray + currentError[x + 1]));
+      const white = gray >= 128;
+      const error = gray - (white ? 255 : 0);
+      const direction = reverse ? -1 : 1;
+      currentError[x + 1 + direction] += (error * 7) >> 4;
+      nextError[x + 1 - direction] += (error * 3) >> 4;
+      nextError[x + 1] += (error * 5) >> 4;
+      nextError[x + 1 + direction] += error >> 4;
       if (white) bytes[dst + (x >> 3)] |= 0x80 >> (x & 7);
     }
-    [e0, e1, e2] = [e1, e2, new Int16Array(width + 4)];
+    const oldError = currentError;
+    currentError = nextError;
+    nextError = oldError;
+    nextError.fill(0);
   }
   return new Blob([bytes], { type: 'image/bmp' });
 }
@@ -4875,7 +4888,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
         const fitsInScreen = sourceW <= MAX_WIDTH && sourceH <= MAX_HEIGHT;
 
         if (fitsInScreen && !sourceWasCropped) {
-          // Image already fits - just convert to JPEG with grayscale
+          // Image already fits - just convert to native grayscale BMP
           const c = document.createElement('canvas');
           c.width = sourceW;
           c.height = sourceH;
