@@ -1112,7 +1112,11 @@ struct LayoutPageSink final : ParagraphSink {
           // Restore hands back a white framebuffer, which the next page render repaints anyway;
           // the panel keeps showing its last refreshed image throughout (e-ink is persistent).
           GfxRenderer::FrameBufferLoan loan(renderer);
-          extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
+          // 16KB chunks when the heap allows (the loan just freed 48KB): SD write throughput
+          // is per-chunk-latency bound -- 4KB chunks measured ~100KB/s on an X3 (9.3s for one
+          // 928KB illustration). 4KB stays as the tight-heap fallback.
+          extracted =
+              epub.readItemContentsToStream(resolvedSrc, cachedFile, ESP.getMaxAllocHeap() >= 64 * 1024 ? 16384 : 4096);
         }
         cachedFile.flush();
         cachedFile.close();
@@ -1184,7 +1188,10 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     if (!Storage.openFileForWrite("VSC", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, PARSE_BUFFER_SIZE);
+    // Larger extraction chunks when the heap allows -- this is a fresh build with fonts
+    // released, and the ~600-800ms per-chapter inflate+write is chunk-latency bound.
+    success = epub->readItemContentsToStream(localPath, tmpHtml,
+                                             ESP.getMaxAllocHeap() >= 64 * 1024 ? 16384 : PARSE_BUFFER_SIZE);
     tmpHtml.close();
     if (!success && Storage.exists(tmpHtmlPath.c_str())) {
       Storage.remove(tmpHtmlPath.c_str());

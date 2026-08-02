@@ -1,5 +1,7 @@
 #pragma once
 
+#include <HalStorage.h>
+
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -329,6 +331,12 @@ class SdCardFont {
 
   // Global helpers
   void freeAll();
+  // Shared read handle for the per-glyph hot paths (overflow miss, mini kern matrix, tail
+  // glyph lookup). A fresh openFileForRead costs ~5-8ms of FAT walk per call -- the dominant
+  // cost of mid-build early renders, which miss on nearly every glyph. Opened lazily,
+  // closed in freeAll() and on any read failure (so an SD hiccup gets a clean reopen).
+  mutable HalFile fontFile_;
+  bool ensureFontFile() const;
   void clearOverflow();
   static void computeStyleFileOffsets(PerStyle& s, uint32_t baseOffset);
 
