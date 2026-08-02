@@ -1169,6 +1169,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     lineWordFonts.reserve(lineWordCount);
   }
 
+  bool lineHasFontOverride = false;
   for (size_t i = 0; i < lineWordCount; ++i) {
     std::string word = std::move(words[lastBreakAt + i]);
     if (containsSoftHyphen(word)) {
@@ -1177,8 +1178,16 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     lineWords.push_back(std::move(word));
     lineWordStyles.push_back(wordStyles[lastBreakAt + i]);
     if (!wordFonts.empty()) {
-      lineWordFonts.push_back(lastBreakAt + i < wordFonts.size() ? wordFonts[lastBreakAt + i] : 0);
+      const int32_t wf = lastBreakAt + i < wordFonts.size() ? wordFonts[lastBreakAt + i] : 0;
+      lineWordFonts.push_back(wf);
+      if (wf != 0) lineHasFontOverride = true;
     }
+  }
+  // A block-level wordFonts only means SOME word in the block is sized. THIS line's slice may
+  // still be all zero (the sized span sat on an earlier/later line); drop it so TextBlock keeps
+  // the no-fonts arena layout and addLineToPage skips its per-word scan for this line.
+  if (!lineHasFontOverride) {
+    lineWordFonts.clear();
   }
 
   // Calculate total word width for this line, count actual word gaps,
