@@ -2670,38 +2670,6 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   }
 }
 
-// DIAGNOSTIC ONLY -- no refresh-mode decision is made here. Logs how many of the PREVIOUS
-// page's lines have no line at (nearly) the same y on THIS page. If on-device double-text
-// correlates with a large orphan count on the turn where the layer forms, the ghost is a
-// line-grid phase shift the FAST waveform's weak erase leaves behind; if it forms while this
-// stays ~0, the cause is elsewhere (waveform selection, controller baseline, temperature) and
-// the SSD1677 probe log is the next witness. Remove once settled.
-void EpubReaderActivity::logLineGridTelemetry(const Page& page) {
-  uint16_t lineY[MAX_TRACKED_LINES];
-  uint8_t lineCount = 0;
-  for (const auto& el : page.elements) {
-    if (el->getTag() != TAG_PageLine) continue;
-    if (lineCount >= MAX_TRACKED_LINES) break;
-    lineY[lineCount++] = static_cast<uint16_t>(el->yPos);
-  }
-  int orphans = 0;
-  if (prevLineGridValid_) {
-    for (uint8_t p = 0; p < prevLineCount_; ++p) {
-      bool matched = false;
-      for (uint8_t n = 0; n < lineCount && !matched; ++n) {
-        const int d = static_cast<int>(prevLineY_[p]) - static_cast<int>(lineY[n]);
-        matched = d >= -2 && d <= 2;
-      }
-      if (!matched) orphans++;
-    }
-  }
-  LOG_INF("ERS", "GRIDDIAG page=%d lines=%u prevLines=%u orphans=%d countdown=%d", section ? section->currentPage : -1,
-          lineCount, prevLineCount_, orphans, pagesUntilFullRefresh);
-  memcpy(prevLineY_, lineY, sizeof(lineY[0]) * lineCount);
-  prevLineCount_ = lineCount;
-  prevLineGridValid_ = true;
-}
-
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride,
                                       int8_t furiOverride) {
   const uint8_t percent = static_cast<uint8_t>(pageBasedPercent(spineIndex, currentPage + 1));
@@ -2778,7 +2746,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (!grayscaleRefineOnly) {
     page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
     renderStatusBar();
-    logLineGridTelemetry(*page);  // diagnostic only; see the function comment
     tBwRender = millis();
   }
 

@@ -39,14 +39,6 @@ class EpubReaderActivity final : public Activity {
   // Image pages use a dedicated double-FAST refresh path, so retain a manual
   // refresh request until renderContents can issue its clean base pass.
   bool forcedRefreshPending = false;
-  // DIAGNOSTIC (log-only, no behavioral effect): line-grid delta between consecutive pages,
-  // logged per horizontal page render to correlate on-device double-text reports with grid
-  // alignment. Remove once the ghosting root cause is confirmed. See logLineGridTelemetry().
-  static constexpr size_t MAX_TRACKED_LINES = 96;
-  uint16_t prevLineY_[MAX_TRACKED_LINES] = {};
-  uint8_t prevLineCount_ = 0;
-  bool prevLineGridValid_ = false;
-  void logLineGridTelemetry(const Page& page);
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
 

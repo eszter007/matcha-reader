@@ -157,11 +157,6 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
 // before the next page turn (the tiled grayscale cleanup does).
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
   const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
-  // DIAGNOSTIC (ghosting hunt): which mode each page paint requests, and where in the cleanup
-  // cycle it sat. Pair with -DSSD1677_PROBE_DEBUG=1 (platformio.local.ini) for the waveform the
-  // driver actually ran. Remove once the on-device double-text root cause is confirmed.
-  LOG_INF("RDR", "refresh %s (countdown=%d async=%d)", mode == HalDisplay::HALF_REFRESH ? "HALF" : "FAST",
-          pagesUntilFullRefresh, async ? 1 : 0);
   if (async) {
     renderer.displayBufferAsync(mode);
   } else {
