@@ -50,7 +50,15 @@ namespace {
 // (the displayW/displayH fallback when getDimensions fails). config.useExactDimensions stretches
 // the decode to exactly that box, so those pages rendered visibly distorted once the image finally
 // became available. Extraction is reliable now (dee87656), so a rebuild records true dimensions.
-constexpr uint8_t VSECTION_FILE_VERSION = 101;
+// v102: aside/figure/figcaption joined isBlockTag (parity with the horizontal parser's
+// SECTION_FILE_VERSION 68 bump), so kakomi boxes and figure blocks on those tags now break
+// paragraphs and pick up styled-block params. A v101 cache flowed them as inline text.
+// v103: no format change -- bumped so every vertical cache re-paginates once with the
+// partial-reserve fix, replacing pages that older builds split at random fill levels
+// under X3 heap pressure (no manual .crosspoint deletion needed).
+// v104: glyph records are fixed-size (textId) with a per-page text pool appended after
+// the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
+constexpr uint8_t VSECTION_FILE_VERSION = 104;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -223,8 +231,9 @@ struct TextExtractor {
   void flushParagraph() { emitRuns(true); }
 
   static bool isBlockTag(const char* name) {
-    static constexpr const char* blockTags[] = {"p",  "div", "h1", "h2",         "h3",      "h4",
-                                                "h5", "h6",  "li", "blockquote", "section", "article"};
+    static constexpr const char* blockTags[] = {"p",       "div",     "h1",    "h2",     "h3",
+                                                "h4",      "h5",      "h6",    "li",     "blockquote",
+                                                "section", "article", "aside", "figure", "figcaption"};
     for (const auto* tag : blockTags) {
       if (strcasecmp(name, tag) == 0) return true;
     }
@@ -593,19 +602,19 @@ bool writePage(Sink& file, const VerticalPage& page) {
     serialization::writePod(file, g.renderKind);
     serialization::writePod(file, g.style);
     serialization::writePod(file, g.emphasis);
+    serialization::writePod(file, g.textId);
+  }
 
-    if (g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
-      const auto runLen = static_cast<uint16_t>(g.rotatedRunText.size());
-      serialization::writePod(file, runLen);
-      if (runLen > 0) {
-        file.write(reinterpret_cast<const uint8_t*>(g.rotatedRunText.data()), runLen);
-      }
-    }
-
-    const auto rubyLen = static_cast<uint16_t>(g.rubyText.size());
-    serialization::writePod(file, rubyLen);
-    if (rubyLen > 0) {
-      file.write(reinterpret_cast<const uint8_t*>(g.rubyText.data()), rubyLen);
+  // Per-page text pool (v104): ruby annotations and run strings, referenced by textId.
+  const auto textCount = static_cast<uint16_t>(page.texts.size());
+  serialization::writePod(file, textCount);
+  for (const auto& t : page.texts) {
+    // Clamp instead of wrapping: a >64KB entry is impossible today (runs are bounded by the
+    // 16KB paragraph cap), but a wrapped uint16_t would silently desync the record.
+    const auto len = static_cast<uint16_t>(std::min<size_t>(t.size(), 0xFFFF));
+    serialization::writePod(file, len);
+    if (len > 0) {
+      file.write(reinterpret_cast<const uint8_t*>(t.data()), len);
     }
   }
   return true;
@@ -621,6 +630,7 @@ enum class ReadResult { Ok, HeapRefused, Corrupt };
 ReadResult readPage(HalFile& file, VerticalPage& page) {
   page.glyphs.clear();
   page.boxes.clear();
+  page.texts.clear();
   page.imagePath.clear();
   page.imageSrcPath.clear();
 
@@ -692,23 +702,43 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
     serialization::readPod(file, g.renderKind);
     serialization::readPod(file, g.style);
     serialization::readPod(file, g.emphasis);
+    serialization::readPod(file, g.textId);
+    page.glyphs.push_back(g);
+  }
 
-    if (g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
-      uint16_t runLen;
-      serialization::readPod(file, runLen);
-      if (runLen > 0) {
-        g.rotatedRunText.resize(runLen);
-        file.read(reinterpret_cast<uint8_t*>(g.rotatedRunText.data()), runLen);
+  // Per-page text pool (v104). Out-of-range textIds render as "no text" (glyphText bounds-
+  // checks), so a short pool degrades visibly but safely.
+  uint16_t textCount = 0;
+  serialization::readPod(file, textCount);
+  if (textCount > MAX_GLYPHS_PER_PAGE) {
+    LOG_ERR("VSC", "Corrupt page record: %u pool texts", textCount);
+    return ReadResult::Corrupt;
+  }
+  // Same discipline as the glyph reserve above: reserve()/resize() abort under
+  // -fno-exceptions, and a valid on-disk record read on a momentarily tight heap must come
+  // back as HeapRefused (retry later), never a crash and never a cache invalidation.
+  const uint32_t textVecBytes = static_cast<uint32_t>(textCount) * sizeof(std::string);
+  if (page.texts.capacity() < textCount && ESP.getMaxAllocHeap() < textVecBytes + 2 * 1024) {
+    LOG_ERR("VSC", "Text pool needs %u bytes, maxAlloc=%u; refusing read", textVecBytes, ESP.getMaxAllocHeap());
+    return ReadResult::HeapRefused;
+  }
+  page.texts.reserve(textCount);
+  for (uint16_t ti = 0; ti < textCount; ti++) {
+    uint16_t len = 0;
+    serialization::readPod(file, len);
+    std::string t;
+    if (len > 0) {
+      if (ESP.getMaxAllocHeap() < static_cast<uint32_t>(len) + 2 * 1024) {
+        LOG_ERR("VSC", "Pool text %u needs %u bytes, maxAlloc=%u; refusing read", ti, len, ESP.getMaxAllocHeap());
+        return ReadResult::HeapRefused;
+      }
+      t.resize(len);
+      if (file.read(reinterpret_cast<uint8_t*>(t.data()), len) != static_cast<int>(len)) {
+        LOG_ERR("VSC", "Corrupt page record: truncated pool text %u", ti);
+        return ReadResult::Corrupt;
       }
     }
-
-    uint16_t rubyLen;
-    serialization::readPod(file, rubyLen);
-    if (rubyLen > 0) {
-      g.rubyText.resize(rubyLen);
-      file.read(reinterpret_cast<uint8_t*>(g.rubyText.data()), rubyLen);
-    }
-    page.glyphs.push_back(std::move(g));
+    page.texts.push_back(std::move(t));
   }
   return ReadResult::Ok;
 }
@@ -1105,7 +1135,11 @@ struct LayoutPageSink final : ParagraphSink {
           // Restore hands back a white framebuffer, which the next page render repaints anyway;
           // the panel keeps showing its last refreshed image throughout (e-ink is persistent).
           GfxRenderer::FrameBufferLoan loan(renderer);
-          extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, 4096);
+          // 16KB chunks when the heap allows (the loan just freed 48KB): SD write throughput
+          // is per-chunk-latency bound -- 4KB chunks measured ~100KB/s on an X3 (9.3s for one
+          // 928KB illustration). 4KB stays as the tight-heap fallback.
+          extracted =
+              epub.readItemContentsToStream(resolvedSrc, cachedFile, ESP.getMaxAllocHeap() >= 64 * 1024 ? 16384 : 4096);
         }
         cachedFile.flush();
         cachedFile.close();
@@ -1177,7 +1211,10 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     if (!Storage.openFileForWrite("VSC", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, PARSE_BUFFER_SIZE);
+    // Larger extraction chunks when the heap allows -- this is a fresh build with fonts
+    // released, and the ~600-800ms per-chapter inflate+write is chunk-latency bound.
+    success = epub->readItemContentsToStream(localPath, tmpHtml,
+                                             ESP.getMaxAllocHeap() >= 64 * 1024 ? 16384 : PARSE_BUFFER_SIZE);
     tmpHtml.close();
     if (!success && Storage.exists(tmpHtmlPath.c_str())) {
       Storage.remove(tmpHtmlPath.c_str());
@@ -1327,7 +1364,10 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   // OR, don't assign: the styled-block collect above may already have flagged this build
   // (unstyled fallback under heap pressure).
-  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap();
+  // Emergency page splits count as heap degradation too: no content is lost, but pages end at
+  // arbitrary fill levels, so the same usable-now/rebuild-next-open path applies (and the same
+  // rebuildingFromStale_ guard breaks the loop when a retry degrades again).
+  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap();
   // Persist harvested furigana pairs; runs after the parse buffers are freed, so the
   // transient merge buffer doesn't compete with layout's peak memory.
   RubyGlossary::merge(epub->getCachePath(), sink.rubyHarvest);

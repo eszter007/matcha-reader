@@ -17,9 +17,10 @@
 // vector-of-string layout cost ~250 throwing allocations per page load, which
 // was the primary driver of heap fragmentation on the ESP32-C3.
 //
-// Arena layout, in order (2-byte alignment holds by construction: all 16-bit
-// arrays come first and the arena base is allocator-aligned; RISC-V faults on
-// unaligned multi-byte access):
+// Arena layout, in order (alignment holds by construction: the 32-bit array
+// comes first -- the arena base is allocator-aligned and wordCount*4 keeps the
+// 16-bit arrays even; RISC-V faults on unaligned multi-byte access):
+//   int32_t  wordFont[wordCount]       present only when fontsPresent (inline font-size)
 //   uint16_t textOff[wordCount]        byte offset of word i's text in text[]
 //   int16_t  xpos[wordCount]
 //   uint16_t focusSuffixX[wordCount]   present only when focusPresent
@@ -43,12 +44,14 @@ class TextBlock final : public Block {
   uint16_t numWords = 0;
   uint16_t textBytes = 0;  // total size of the text region, including NULs
   bool focusPresent = false;
+  bool fontsPresent = false;  // per-word font ids from inline font-size (0 = block font)
   bool isValid = true;
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
   // instead of abort() (bare new is not nothrow with -fno-exceptions).
   std::unique_ptr<uint8_t[]> arena;
   // Typed views into the arena, bound once after the arena is filled. All
   // 16-bit bases sit at even offsets, so direct dereference is alignment-safe.
+  const int32_t* wordFontArr = nullptr;  // null when !fontsPresent
   const uint16_t* textOffArr = nullptr;
   const int16_t* xposArr = nullptr;
   const uint16_t* focusSuffixXArr = nullptr;  // null when !focusPresent
@@ -58,17 +61,19 @@ class TextBlock final : public Block {
   std::vector<std::string> rubyTexts;
 
   TextBlock() = default;  // deserialize() fills the fields directly
-  static size_t arenaSize(uint16_t wordCount, bool hasFocus, uint16_t textBytes);
+  static size_t arenaSize(uint16_t wordCount, bool hasFocus, bool hasFonts, uint16_t textBytes);
   void bindArenaPointers();
 
  public:
   // Flatten-on-construct: copies the layout-time vectors into the arena; the
   // vectors die with the caller. On arena OOM the block is empty and valid()
   // is false -- callers must check and fail the line instead of using it.
+  // wordFonts: per-word font ids from inline font-size (0 = block font); empty = none on
+  // this line (the common case -- no arena cost). When non-empty must match words.size().
   explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle = BlockStyle(),
-                     std::vector<std::string> rubyTexts = {});
+                     std::vector<std::string> rubyTexts = {}, const std::vector<int32_t>& wordFonts = {});
   ~TextBlock() override = default;
   TextBlock(const TextBlock&) = delete;
   TextBlock& operator=(const TextBlock&) = delete;
@@ -86,6 +91,9 @@ class TextBlock final : public Block {
   }
   int16_t wordXpos(const uint16_t i) const { return xposArr[i]; }
   EpdFontFamily::Style wordStyle(const uint16_t i) const { return static_cast<EpdFontFamily::Style>(stylesArr[i]); }
+  bool hasWordFonts() const { return fontsPresent; }
+  // Per-word font override; 0 = the block's font (also for blocks without the array).
+  int32_t wordFont(const uint16_t i) const { return fontsPresent ? wordFontArr[i] : 0; }
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSuffixX(const uint16_t i) const { return focusPresent ? focusSuffixXArr[i] : 0; }
   bool hasRuby() const;

@@ -21,7 +21,14 @@ jobs:
         with:
           egress-policy: audit
 
+      # Upstream-merge PRs ("Merge/upstream <ref>") are exempt via the step condition:
+      # their titles are not conventional commits. Do NOT try to express the exemption
+      # inside a custom headerPattern -- the parser maps capture groups to
+      # type/scope/subject, and an alternation cannot fill those groups for both title
+      # shapes, so the check ends up failing every title (see the 2026-08 incident where
+      # a two-group pattern made this check red on all PRs).
       - name: Check PR Title
+        if: ${{ !startsWith(github.event.pull_request.title, 'Merge/upstream ') }}
         uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

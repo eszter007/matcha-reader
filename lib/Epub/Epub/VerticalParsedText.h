@@ -37,19 +37,21 @@ struct VerticalGlyph {
   uint8_t renderKind = Upright;
   uint8_t style = 0;      // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
   bool emphasis = false;  // text-emphasis (sesame dots beside character)
-  // Populated for run render kinds (RotatedRun/UprightRun).
-  std::string rotatedRunText;
-  // Furigana/ruby annotation for this glyph (UTF-8). Rendered in a smaller
-  // font to the right of the base character in vertical layout.
-  std::string rubyText;
+  // Index into the owning VerticalPage's texts pool: the run string for
+  // RotatedRun/UprightRun glyphs, the furigana/ruby annotation (UTF-8) for
+  // every other kind. NO_TEXT = none. An id instead of inline std::strings
+  // keeps the glyph a ~28-byte POD -- two always-present strings cost ~48
+  // bytes per glyph even when empty, tripling every page buffer, reserve and
+  // grow-copy on the heap-tight X3. The id travels WITH the glyph through
+  // oikomi moves and drop paths, so there is no side table to desync.
+  static constexpr uint16_t NO_TEXT = 0xFFFF;
+  uint16_t textId = NO_TEXT;
 };
 
 // One screen's worth of vertically laid out text, ready to hand to
-// VerticalTextBlock::render(). Most fields are fixed-size and serialize
-// trivially; the only variable-length piece is VerticalGlyph::rotatedRunText
-// on entries where rotated == true, which needs a length-prefixed write/read
-// (see docs/vertical-text-design.md for the proposed vsections/*.bin layout)
-// rather than a flat memcpy of the vector.
+// VerticalTextBlock::render(). Glyph records are fixed-size; the variable-length
+// ruby/run strings live in the page's texts pool (length-prefixed on disk, after
+// the glyph array -- see VerticalSection's writePage/readPage).
 // Pixel-space border rectangle for a boxed (kakomi) block on this page, in the same logical
 // coordinate space as VerticalGlyph::x/y (the renderer adds its offsets identically).
 struct VerticalBoxRect {
@@ -85,6 +87,20 @@ struct VerticalBlockParams {
 struct VerticalPage {
   std::vector<VerticalGlyph> glyphs;
   std::vector<VerticalBoxRect> boxes;
+  // Variable-length glyph texts (ruby annotations, rotated/upright run strings), referenced
+  // by VerticalGlyph::textId. Pooled per page so the glyph array stays fixed-size POD.
+  std::vector<std::string> texts;
+  const char* glyphText(const VerticalGlyph& g) const { return g.textId < texts.size() ? texts[g.textId].c_str() : ""; }
+  const std::string& glyphTextStr(const VerticalGlyph& g) const {
+    static const std::string kEmpty;
+    return g.textId < texts.size() ? texts[g.textId] : kEmpty;
+  }
+  // Appends `s` to the pool and returns its id; NO_TEXT for an empty string or a full pool.
+  uint16_t internText(std::string s) {
+    if (s.empty() || texts.size() >= VerticalGlyph::NO_TEXT) return VerticalGlyph::NO_TEXT;
+    texts.push_back(std::move(s));
+    return static_cast<uint16_t>(texts.size() - 1);
+  }
   uint16_t columnCount = 0;
   uint16_t rowsPerColumn = 0;
   // If non-empty, this page is an image page — render the image instead of glyphs.
@@ -234,6 +250,10 @@ class VerticalParsedText {
   // that dropped content produced sparse pages and must not be persisted as a VALID cache --
   // that makes the truncation permanent. Fresh object per build, so no explicit clear needed.
   bool everDroppedForHeap() const { return everDroppedForHeap_; }
+  // True when any page was closed early by the emergency split (glyph vector could not grow on
+  // a heap dip). No content is lost, but the pagination is degraded -- pages end at arbitrary
+  // fill levels -- so the build path treats it like a drop: usable now, rebuilt next open.
+  bool everSplitForHeap() const { return everSplitForHeap_; }
   // Pin stream_'s backing store once at build start, while the heap is freshest. Mid-build
   // growth (alloc-copy-free every few dozen entries) interleaved with ruby-string churn walks
   // the buffer through the heap and shreds the largest contiguous block -- observed on a real
@@ -280,6 +300,7 @@ class VerticalParsedText {
   // canPushStreamChar()).
   bool oom_ = false;
   bool everDroppedForHeap_ = false;  // see everDroppedForHeap()
+  bool everSplitForHeap_ = false;    // see everSplitForHeap()
 
   // Boxed-block state. inBox_/boxStartCol_ persist across batches (a box can span many flushes);
   // the marker vectors are per-batch (cleared in reset(), with boundary carry flags above).

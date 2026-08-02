@@ -71,6 +71,7 @@ class DictionaryWordSelectActivity final : public Activity {
   bool dictOpenAttempted = false;
   bool dictOpenOk = false;
   std::string folderName;
+  bool dictNeedsIndex = false;
 
   Popup popup = Popup::None;
   StrId popupMsg = StrId::STR_DICT_NOT_FOUND;

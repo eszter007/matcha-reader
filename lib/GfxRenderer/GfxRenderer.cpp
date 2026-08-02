@@ -112,7 +112,7 @@ void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_
   }
 }
 
-void GfxRenderer::ensureSdCardFontReady(int fontId, const std::vector<std::string>& words, bool includeHyphen,
+void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string>& words, bool includeHyphen,
                                         uint8_t styleMask) const {
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
@@ -1667,10 +1667,12 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
     LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", millis() - start_ms);
     frameTimed = false;
   }
+  panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
   display.displayBuffer(refreshMode, fadingFix);
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
+  panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
   // The async path has no turn-off-screen hook, which the sunlight fading fix
   // relies on; keep those users on the blocking path.
   if (fadingFix) {
@@ -2527,6 +2529,9 @@ size_t GfxRenderer::getBufferSize() const { return frameBufferSize; }
 // void GfxRenderer::grayscaleRevert() const { display.grayscaleRevert(); }
 
 void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
+  // Grayscale pipeline in progress: the plane passes that follow leave gray
+  // charge no single HALF scrubs (see panelResidue_), whatever the fallback.
+  panelResidue_ = true;
   display.displayGrayscaleBase(fallback, fadingFix);
 }
 
@@ -2554,9 +2559,13 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
-void GfxRenderer::displayGrayBuffer() const { display.displayGrayBuffer(fadingFix); }
+void GfxRenderer::displayGrayBuffer() const {
+  panelResidue_ = true;  // gray plane drive: charge a HALF alone cannot scrub
+  display.displayGrayBuffer(fadingFix);
+}
 
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
+  panelResidue_ = true;  // tiled gray planes (X4 image pages): same charge as displayGrayBuffer
   // Guard the uint16_t casts below: a negative would wrap to a huge length.
   assert(yStart >= 0 && numRows > 0 && yStart <= static_cast<int>(panelHeight) - numRows);
   display.writeGrayscalePlaneStrip(lsbPlane, scratch, static_cast<uint16_t>(yStart), static_cast<uint16_t>(numRows));
