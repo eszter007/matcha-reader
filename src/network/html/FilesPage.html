@@ -4992,6 +4992,8 @@ async function splitEpubChapters(file) {
   const newFiles = {};
   const tocAdditions = [];   // {href (opf-relative), title}
   const spineChapters = [];
+  const tocOrder = new Map();
+  const spineOrder = new Map(spineIds.map((idref, index) => [idref, index]));
   const structuralKey = href => {
     const m = href.match(/^(.*?)(\d+)(\.(?:xhtml|html|htm))$/i);
     return m ? m[1] + '#' + m[3].toLowerCase() : null;
@@ -5015,6 +5017,7 @@ async function splitEpubChapters(file) {
       if (key && structuralCounts.get(key) >= 2) {
         const fallback = href.split('/').pop().replace(/\.[^.]+$/, '');
         spineChapters.push({ href, title: mrchFindChapterTitle(html, fallback) });
+        tocOrder.set(href, spineOrder.get(idref));
       }
       continue;
     }
@@ -5029,6 +5032,7 @@ async function splitEpubChapters(file) {
       const partId = i === 0 ? idref : idref + '-mr' + (i + 1);
       newFiles[opfDir + partHref] = parts[i];
       tocAdditions.push({ href: partHref, title: headings[i].title });
+      tocOrder.set(partHref, spineOrder.get(idref) + i / parts.length);
       if (i > 0) {
         opf = opf.replace('</manifest>',
           '<item id="' + partId + '" href="' + partHref + '" media-type="application/xhtml+xml"/>\n</manifest>');
@@ -5054,6 +5058,7 @@ async function splitEpubChapters(file) {
     chapterCount += spineChapters.length;
   }
   if (!anySplit && !recoverSpineToc) return null;
+  tocAdditions.sort((a, b) => tocOrder.get(a.href) - tocOrder.get(b.href));
 
   const splitNames = new Set(tocAdditions.map(t => baseName(t.href)));
 
