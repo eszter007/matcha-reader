@@ -432,8 +432,7 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
   }
 
   // Step 6: read the full matrix's rows for each used left class, keep only
-  // columns for used right classes. One SD seek + one read per used left class;
-  // a row is kernRightClassCount bytes (~200 for Literata).
+  // columns for used right classes.
   HalFile file;
   if (!Storage.openFileForRead("SDCF", filePath_, file)) {
     LOG_ERR("SDCF", "Failed to open .cpfont for mini kern: %s", filePath_);
@@ -441,30 +440,56 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
     return false;
   }
 
-  std::unique_ptr<int8_t[]> rowBuf(new (std::nothrow) int8_t[s.header.kernRightClassCount]);
-  if (!rowBuf) {
-    LOG_ERR("SDCF", "Failed to allocate row buffer (%u bytes)", s.header.kernRightClassCount);
-    freeStyleMiniKern(s);
-    return false;
+  // Fast path: pull the whole matrix in ONE seek+read and slice rows from RAM.
+  // The per-row loop below costs one HalFile round-trip (mutex + seek + ~200B
+  // read) per used left class -- measured on an X3 device log at ~150ms per
+  // page turn for a 26-row page, vs ~10ms for one contiguous read of the full
+  // 148x107 (~16KB) matrix. The buffer is transient (freed before return) and
+  // heap-gated: on a tight heap the row loop still works, so this is a pure
+  // speedup, never a new failure mode.
+  const uint32_t fullMatrixBytes = static_cast<uint32_t>(s.header.kernLeftClassCount) * s.header.kernRightClassCount;
+  constexpr uint32_t FULL_MATRIX_READ_CAP = 24 * 1024;
+  std::unique_ptr<int8_t[]> fullBuf;
+  if (fullMatrixBytes > 0 && fullMatrixBytes <= FULL_MATRIX_READ_CAP &&
+      ESP.getMaxAllocHeap() >= fullMatrixBytes + 8 * 1024) {
+    fullBuf.reset(new (std::nothrow) int8_t[fullMatrixBytes]);
   }
+  if (fullBuf && file.seekSet(s.kernMatrixFileOffset) &&
+      file.read(reinterpret_cast<uint8_t*>(fullBuf.get()), fullMatrixBytes) == static_cast<int>(fullMatrixBytes)) {
+    for (uint8_t newL = 1; newL <= numLeft; newL++) {
+      const int8_t* row = fullBuf.get() + (newToOldLeft[newL] - 1u) * s.header.kernRightClassCount;
+      int8_t* miniRow = s.miniKernMatrix + (newL - 1u) * numRight;
+      for (uint8_t newR = 1; newR <= numRight; newR++) {
+        miniRow[newR - 1] = row[newToOldRight[newR] - 1u];
+      }
+    }
+  } else {
+    fullBuf.reset();  // failed alloc/read: fall back to per-row round-trips
+    std::unique_ptr<int8_t[]> rowBuf(new (std::nothrow) int8_t[s.header.kernRightClassCount]);
+    if (!rowBuf) {
+      LOG_ERR("SDCF", "Failed to allocate row buffer (%u bytes)", s.header.kernRightClassCount);
+      freeStyleMiniKern(s);
+      return false;
+    }
 
-  for (uint8_t newL = 1; newL <= numLeft; newL++) {
-    const uint8_t oldL = newToOldLeft[newL];
-    const uint32_t rowFileOff = s.kernMatrixFileOffset + (oldL - 1u) * s.header.kernRightClassCount;
-    if (!file.seekSet(rowFileOff)) {
-      LOG_ERR("SDCF", "Failed to seek to kern row %u", oldL);
-      freeStyleMiniKern(s);
-      return false;
-    }
-    if (file.read(reinterpret_cast<uint8_t*>(rowBuf.get()), s.header.kernRightClassCount) !=
-        static_cast<int>(s.header.kernRightClassCount)) {
-      LOG_ERR("SDCF", "Failed to read kern row %u", oldL);
-      freeStyleMiniKern(s);
-      return false;
-    }
-    int8_t* miniRow = s.miniKernMatrix + (newL - 1u) * numRight;
-    for (uint8_t newR = 1; newR <= numRight; newR++) {
-      miniRow[newR - 1] = rowBuf[newToOldRight[newR] - 1u];
+    for (uint8_t newL = 1; newL <= numLeft; newL++) {
+      const uint8_t oldL = newToOldLeft[newL];
+      const uint32_t rowFileOff = s.kernMatrixFileOffset + (oldL - 1u) * s.header.kernRightClassCount;
+      if (!file.seekSet(rowFileOff)) {
+        LOG_ERR("SDCF", "Failed to seek to kern row %u", oldL);
+        freeStyleMiniKern(s);
+        return false;
+      }
+      if (file.read(reinterpret_cast<uint8_t*>(rowBuf.get()), s.header.kernRightClassCount) !=
+          static_cast<int>(s.header.kernRightClassCount)) {
+        LOG_ERR("SDCF", "Failed to read kern row %u", oldL);
+        freeStyleMiniKern(s);
+        return false;
+      }
+      int8_t* miniRow = s.miniKernMatrix + (newL - 1u) * numRight;
+      for (uint8_t newR = 1; newR <= numRight; newR++) {
+        miniRow[newR - 1] = rowBuf[newToOldRight[newR] - 1u];
+      }
     }
   }
 
