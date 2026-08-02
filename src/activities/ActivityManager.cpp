@@ -118,6 +118,14 @@ void ActivityManager::loop() {
           handler(pendingResult);
         }
 
+        // The child activity painted the panel over this activity's content. A mid-cycle FAST
+        // repaint erases that only with the weak DU black->white transition, so the child's UI
+        // ghosts under the restored screen until the next cleanup pass -- in the readers up to
+        // refreshFrequency page turns later (photographed on device: the reader-menu list riding
+        // under the page through subsequent turns). Ask the resumed activity to schedule a clean
+        // repaint; activities without the override return false and re-render exactly as before.
+        currentActivity->handleForcedRefresh();
+
         // Request an update to ensure the popped activity gets re-rendered
         if (pendingAction == PendingAction::None) {
           requestUpdate();
