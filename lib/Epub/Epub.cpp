@@ -707,12 +707,34 @@ bool Epub::generateCoverBmp(bool cropped) const {
 
   if (FsHelpers::hasBmpExtension(coverImageHref)) {
     LOG_DBG("EBP", "Using BMP cover image directly");
+    const std::string outPath = getCoverBmpPath(cropped);
+
     HalFile coverBmp;
-    if (!Storage.openFileForWrite("EBP", getCoverBmpPath(cropped), coverBmp)) return false;
-    const bool success = readItemContentsToStream(coverImageHref, coverBmp, 1024);
+    if (!Storage.openFileForWrite("EBP", outPath, coverBmp)) return false;
+    const bool copied = readItemContentsToStream(coverImageHref, coverBmp, 1024);
     coverBmp.close();
-    if (!success) Storage.remove(getCoverBmpPath(cropped).c_str());
-    return success;
+
+    if (!copied) {
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+
+    // Sanity-check header so we don't cache a non-BMP blob forever.
+    HalFile verify;
+    if (!Storage.openFileForRead("EBP", outPath, verify)) {
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+    uint8_t sig[2];
+    const bool ok = verify.read(sig, sizeof(sig)) == static_cast<int>(sizeof(sig)) && sig[0] == 'B' && sig[1] == 'M';
+    verify.close();
+    if (!ok) {
+      LOG_ERR("EBP", "Cover item has .bmp extension but is not a BMP, skipping");
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+
+    return true;
   }
 
   LOG_ERR("EBP", "Cover image is not a supported format, skipping");
