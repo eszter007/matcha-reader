@@ -286,8 +286,11 @@ void EpubReaderActivity::onEnter() {
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[8];
-    if (f.read(data, 8) == 8) {
+    // Fork layout: [0-5] spine/page/count, [6] vertical, [7] furigana, [8] percent,
+    // [9-12] optional visible-text offset (upstream #2805, appended after the fork bytes).
+    uint8_t data[13];
+    const int dataSize = f.read(data, sizeof(data));
+    if (dataSize >= 8) {
       currentSpineIndex = data[0] + (data[1] << 8);
       nextPageNumber = data[2] + (data[3] << 8);
       if (nextPageNumber == UINT16_MAX) {
@@ -307,6 +310,10 @@ void EpubReaderActivity::onEnter() {
         LOG_INF("ERS", "Clearing forced-vertical flag on a non-Japanese book");
         verticalOverride = -1;
       }
+      if (dataSize >= 13) {
+        cachedVisibleTextOffset = static_cast<uint32_t>(data[9]) | (static_cast<uint32_t>(data[10]) << 8) |
+                                  (static_cast<uint32_t>(data[11]) << 16) | (static_cast<uint32_t>(data[12]) << 24);
+      }
       LOG_DBG("ERS", "Loaded cache: spine=%d page=%d vertical=%d furigana=%d", currentSpineIndex, nextPageNumber,
               verticalOverride, furiganaOverride);
     }
@@ -317,6 +324,7 @@ void EpubReaderActivity::onEnter() {
     int textSpineIndex = epub->getSpineIndexForTextReference();
     if (textSpineIndex != 0) {
       currentSpineIndex = textSpineIndex;
+      cachedVisibleTextOffset.reset();
       LOG_DBG("ERS", "Opened for first time, navigating to text reference at index %d", textSpineIndex);
     }
   }
@@ -1041,6 +1049,26 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     loadCachedBookmarks();
     if (!result.isCancelled) {
       const auto& sync = std::get<ProgressChangeResult>(result.data);
+
+      // Preferred path: a bookmark carrying an exact content offset. It is immune to
+      // re-pagination, so resolve by content instead of trusting a page number saved under
+      // possibly-different settings.
+      if (sync.hasVisibleTextOffset && sync.spineIndex >= 0 && sync.spineIndex < epub->getSpineItemsCount()) {
+        RenderLock lock(*this);
+        if (section && currentSpineIndex == sync.spineIndex) {
+          // Already in this chapter and laid out: resolve straight away, no reload.
+          const auto page = section->getPageForVisibleTextOffset(sync.visibleTextOffset);
+          section->currentPage = page.value_or(std::max(0, sync.page));
+        } else {
+          // Different chapter: reload and let render() build to the offset before drawing.
+          currentSpineIndex = sync.spineIndex;
+          pendingOffsetJump = sync.visibleTextOffset;
+          nextPageNumber = std::max(0, sync.page);  // hint until the offset resolves
+          section.reset();
+        }
+        return;
+      }
+
       int targetSpineIndex = sync.spineIndex;
       int targetPage = sync.page;
       const int activeTotalPages = verticalSection ? verticalSection->pageCount
@@ -1334,6 +1362,7 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
       cachedChapterTotalPageCount = verticalSection->pageCount;
       nextPageNumber = verticalSection->currentPage;
     } else if (section) {
+      rememberCurrentContentOffset();
       cachedSpineIndex = currentSpineIndex;
       cachedChapterTotalPageCount = section->pageCount;
       nextPageNumber = section->currentPage;
@@ -1373,6 +1402,7 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
       cachedChapterTotalPageCount = verticalSection->pageCount;
       nextPageNumber = verticalSection->currentPage;
     } else if (section) {
+      rememberCurrentContentOffset();
       cachedSpineIndex = currentSpineIndex;
       cachedChapterTotalPageCount = section->pageCount;
       nextPageNumber = section->currentPage;
@@ -1563,6 +1593,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
       section.reset();
       verticalSection.reset();
+      // The relayout repaints THIS page with its lines shifted under whatever the panel
+      // already shows. A mid-cycle FAST erases the old glyphs with the weak DU transition
+      // only, leaving the previous layout crisply superimposed (photographed on device
+      // after a cache-version bump relaid the book out). Force the absolute HALF pass.
+      pagesUntilFullRefresh = 1;
     }
     sectionLayoutSig = currentSig;
   }
@@ -1629,6 +1664,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
         GUI.drawPopup(renderer, tr(STR_INDEXING));
+        // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
+        // rebuilt layout replaces it with shifted content -- HALF-clear or both ghost under the page.
+        pagesUntilFullRefresh = 1;
 
         // Building a chapter's vertical section is the single most memory-intensive step in the
         // reader (whole-chapter text extraction + XML parsing + layout, observed on a real device
@@ -2017,8 +2055,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       // saved while the section was still building (i.e. a watermark, not the real count)
       // would remap the resume page against the finalized count and teleport the reader.
       cachedChapterTotalPageCount = 0;
+      cachedVisibleTextOffset.reset();
     }
     const bool cacheComplete = cacheLoaded && !section->isPartial();
+    // Land this render by content offset when one applies. An explicit bookmark jump
+    // (pendingOffsetJump) always wins -- it is a deliberate navigation to a stored content anchor.
+    // Otherwise fall back to the settings-change reposition: read after the cache-hit reset above,
+    // a spec match means the saved page number still names the same content so there is nothing to
+    // reposition, while a page jump or fragment anchor is a deliberate navigation that outranks it.
+    const std::optional<uint32_t> offsetJump =
+        pendingOffsetJump.has_value() ? pendingOffsetJump
+        : (pendingPageJump.has_value() || !pendingAnchor.empty() || currentSpineIndex != cachedSpineIndex)
+            ? std::nullopt
+            : cachedVisibleTextOffset;
     if (!cacheComplete) {
       if (section->isPartial()) {
         LOG_DBG("ERS", "Partial cache found (%d pages), resuming build...", section->pageCount);
@@ -2137,9 +2186,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             return;
           }
           while (!section->isBuildComplete() &&
-                 (anchorJump ? !section->findAnchor(pendingAnchor) : static_cast<int>(section->pageCount) <= target)) {
+                 (anchorJump               ? !section->findAnchor(pendingAnchor)
+                  : offsetJump.has_value() ? !section->buildReachedVisibleTextOffset(*offsetJump)
+                                           : static_cast<int>(section->pageCount) <= target)) {
             // Anchor jump: build until the anchor's page is laid out (usually page 0), checking a
             // partial's on-disk anchor map too so an already-indexed anchor resolves immediately.
+            // Re-pagination: build until the content the reader was on has been laid out. Costs the
+            // same parse work as the old page target did -- it is the same content -- but it stops
+            // at the right place, so the landing page is known before anything is drawn.
             // Otherwise: build until the target page exists. loop() builds the rest behind it.
             if (buildPopupPending && millis() - buildStartMs >= BUILD_POPUP_DEADLINE_MS) {
               // The predictive gates guessed fast but the build blew the silent budget.
@@ -2185,6 +2239,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         section->currentPage = 0;
       }
     }
+
+    // The chapter re-paginated, so nextPageNumber above named the old pagination's page.
+    // The build loop stopped once this offset was laid out, so resolve it now, before the
+    // first draw. Leaving it to applyDeferredReposition() is what made the stale page paint
+    // first and then jump when the background build finished the chapter.
+    if (offsetJump.has_value()) {
+      if (const auto offsetPage = section->getPageForVisibleTextOffset(*offsetJump)) {
+        section->currentPage = *offsetPage;
+      }
+    }
+    pendingOffsetJump.reset();  // one-shot explicit jump: consumed on this render
 
     if (!pendingAnchor.empty()) {
       // Resolve from the pages laid out so far and/or the on-disk map (finalized or partial).
@@ -2319,6 +2384,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       return;
     }
     pageLoadRetryCount = 0;  // Reset the retry counter once a page loads cleanly
+
+    // Cache this page's content offset (read alongside the page, no extra file open) so
+    // saveProgress and addBookmark can use it without reopening section.bin.
+    currentPageVisibleOffset = p->visibleTextOffset;
 
     // Collect footnotes from the loaded page
     currentPageFootnotes = std::move(p->footnotes);
@@ -2493,16 +2562,25 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
 }
 
 bool EpubReaderActivity::applyDeferredReposition() {
-  if (cachedChapterTotalPageCount == 0 || !section || section->isBuilding()) {
+  if ((!cachedVisibleTextOffset.has_value() && cachedChapterTotalPageCount == 0) || !section || section->isBuilding()) {
     return false;
   }
   bool changed = false;
-  // Only remap when the chapter actually re-paginated (e.g. after a settings change). A plain
-  // resume has identical pagination, so section->pageCount == cachedChapterTotalPageCount and
-  // nothing moves.
-  if (currentSpineIndex == cachedSpineIndex && section->pageCount != cachedChapterTotalPageCount) {
-    const float progress = static_cast<float>(section->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
-    int newPage = static_cast<int>(progress * static_cast<float>(section->pageCount));
+  // Re-derive the page from the saved content offset after a settings reflow.
+  // Older 4/6-byte progress files retain the page-fraction fallback.
+  if (currentSpineIndex == cachedSpineIndex) {
+    int newPage = section->currentPage;
+    bool mappedOffset = false;
+    if (cachedVisibleTextOffset.has_value()) {
+      if (const auto offsetPage = section->getPageForVisibleTextOffset(*cachedVisibleTextOffset)) {
+        newPage = *offsetPage;
+        mappedOffset = true;
+      }
+    }
+    if (!mappedOffset && cachedChapterTotalPageCount > 0 && section->pageCount != cachedChapterTotalPageCount) {
+      const float progress = static_cast<float>(section->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
+      newPage = static_cast<int>(progress * static_cast<float>(section->pageCount));
+    }
     if (newPage < 0) newPage = 0;
     if (section->pageCount > 0 && newPage >= static_cast<int>(section->pageCount)) {
       newPage = section->pageCount - 1;
@@ -2511,8 +2589,13 @@ bool EpubReaderActivity::applyDeferredReposition() {
       section->currentPage = newPage;
       changed = true;
     }
+    // Repaginated: even an unmoved page NUMBER now holds shifted content, and the panel still
+    // shows the old layout. A mid-cycle FAST's weak DU erase leaves that old layout crisply
+    // superimposed under the new one (photographed on device); take the absolute HALF pass.
+    pagesUntilFullRefresh = 1;
   }
   cachedChapterTotalPageCount = 0;  // consumed; don't read cached progress again
+  cachedVisibleTextOffset.reset();
   return changed;
 }
 
@@ -2661,7 +2744,23 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride,
                                       int8_t furiOverride) {
   const uint8_t percent = static_cast<uint8_t>(pageBasedPercent(spineIndex, currentPage + 1));
-  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride, percent);
+  std::optional<uint32_t> offset;
+  if (section && spineIndex == currentSpineIndex && currentPage >= 0 && currentPage < section->pageCount) {
+    // The on-screen page's offset was captured at load; reuse it to avoid a fresh section-file
+    // open on every page turn. Any other page (rare) falls back to a direct lookup.
+    offset = (currentPage == section->currentPage && currentPageVisibleOffset.has_value())
+                 ? currentPageVisibleOffset
+                 : section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
+  }
+  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, vertOverride, furiOverride, percent,
+                                       offset);
+}
+
+void EpubReaderActivity::rememberCurrentContentOffset() {
+  cachedVisibleTextOffset.reset();
+  if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
+    cachedVisibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
+  }
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
@@ -3500,6 +3599,17 @@ void EpubReaderActivity::addBookmark() {
     entry.computedSpineIndex = currentSpineIndex;
     entry.computedChapterPageCount = pageCount;
     entry.computedChapterProgress = currentPage;
+    // Record the exact content offset so the bookmark lands correctly after any re-pagination.
+    // currentPageVisibleOffset was captured for this very page at its last render.
+    const std::optional<uint32_t> offset =
+        currentPageVisibleOffset.has_value() ? currentPageVisibleOffset
+        : (currentPage >= 0 && currentPage < section->pageCount)
+            ? section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage))
+            : std::nullopt;
+    if (offset.has_value()) {
+      entry.visibleTextOffset = *offset;
+      entry.hasVisibleTextOffset = true;
+    }
     cachedBookmarks.insert(cachedBookmarks.begin(), entry);
     bookmarkRemoved = false;
     currentPageBookmarked = true;
@@ -3573,6 +3683,12 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   }
 
   CrossPointPosition localPos = {currentSpineIndex, currentPage, totalPages};
+  if (section && currentPage >= 0 && currentPage < section->pageCount) {
+    if (const auto offset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage))) {
+      localPos.visibleTextOffset = *offset;
+      localPos.hasVisibleTextOffset = true;
+    }
+  }
   if (paragraphIndex.has_value()) {
     localPos.paragraphIndex = *paragraphIndex;
     localPos.hasParagraphIndex = true;
