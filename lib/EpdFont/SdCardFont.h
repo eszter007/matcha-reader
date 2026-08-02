@@ -1,5 +1,9 @@
 #pragma once
 
+#include <HalStorage.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -24,7 +28,7 @@ class SdCardFont {
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
   static constexpr uint8_t MAX_STYLES = 4;
 
-  SdCardFont() = default;
+  SdCardFont() : fontFileMutex_(xSemaphoreCreateMutex()) {}
   ~SdCardFont();
   // Owns raw buffers freed in dtor — no shallow-copy semantics. Make any
   // accidental pass-by-value or move a compile-time error.
@@ -329,6 +333,30 @@ class SdCardFont {
 
   // Global helpers
   void freeAll();
+  // Shared read handle for the per-glyph hot paths (overflow miss, mini kern matrix). A
+  // fresh openFileForRead costs ~5-8ms of FAT walk per call -- the dominant cost of
+  // mid-build early renders, which miss on nearly every glyph. Opened lazily, closed in
+  // freeAll() and on any read failure (so an SD hiccup gets a clean reopen).
+  //
+  // fontFileMutex_ makes each seek+read SEQUENCE atomic: HalFile's storage mutex only
+  // serializes individual calls, and while the RenderLock serializes the known callers
+  // today (render task draws; loop-task build ticks hold the RenderLock), that invariant
+  // is implicit -- a background path measuring text while the render task resolves a miss
+  // would interleave seeks and read the wrong offsets. Uncontended take is ~1us, nothing
+  // against the SD reads it guards. Lock order: fontFileMutex_ -> storage mutex (inside
+  // HalFile); nothing takes them in the other order.
+  mutable HalFile fontFile_;
+  mutable SemaphoreHandle_t fontFileMutex_ = nullptr;
+  bool ensureFontFile() const;
+  struct FontFileLock {
+    SemaphoreHandle_t m;
+    explicit FontFileLock(SemaphoreHandle_t mutex) : m(mutex) {
+      if (m) xSemaphoreTake(m, portMAX_DELAY);
+    }
+    ~FontFileLock() {
+      if (m) xSemaphoreGive(m);
+    }
+  };
   void clearOverflow();
   static void computeStyleFileOffsets(PerStyle& s, uint32_t baseOffset);
 

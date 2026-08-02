@@ -596,10 +596,27 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     const size_t requestBytes = glyphsPerPage * sizeof(VerticalGlyph);
     if (ESP.getMaxAllocHeap() >= requestBytes + MIN_FREE_HEAP_FOR_RESERVE) {
       p.glyphs.reserve(glyphsPerPage);
-    } else {
-      LOG_ERR("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
-              static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
+      return;
     }
+    // Partial fallback: reserve the largest fitting fraction of the page instead of nothing.
+    // Starting from capacity 0 makes the vector double 1-2-4-...-256, and every doubling's
+    // grow-copy (old + new buffer coexisting) is a fresh chance to land on a heap dip -- on
+    // the X3's tighter heap that fired the emergency page split constantly, which the reader
+    // sees as pages breaking at random fill levels. This runs right after the previous page
+    // was flushed and freed (the heap's local best), so one medium block now prevents most of
+    // the risky growth steps later at the dips.
+    for (size_t fraction = 2; fraction <= 8; fraction *= 2) {
+      const size_t partial = glyphsPerPage / fraction;
+      if (partial < 32) break;
+      if (ESP.getMaxAllocHeap() >= (partial * sizeof(VerticalGlyph)) + MIN_FREE_HEAP_FOR_RESERVE) {
+        p.glyphs.reserve(partial);
+        LOG_DBG("VPT", "Partial page glyphs reserve: %u/%u elements (maxAlloc=%u)", static_cast<unsigned>(partial),
+                static_cast<unsigned>(glyphsPerPage), ESP.getMaxAllocHeap());
+        return;
+      }
+    }
+    LOG_ERR("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
+            static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
   };
 
   // Skipping the reserve above is only safe if every individual push_back is ALSO guarded --
@@ -634,7 +651,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   int columnYShift = 0;
   uint16_t shiftColumn = UINT16_MAX;
 
-  auto pushGlyph = [this, &columnYShift, &shiftColumn](std::vector<VerticalGlyph>& glyphs, VerticalGlyph g) {
+  auto pushGlyph = [this, &columnYShift, &shiftColumn](VerticalPage& pg, VerticalGlyph g,
+                                                       const std::string& text = std::string()) {
+    std::vector<VerticalGlyph>& glyphs = pg.glyphs;
+    // Intern before the push: on a dropped glyph the orphaned pool entry is a few wasted
+    // bytes, while interning after would need the glyph's index to patch -- not worth it.
+    if (!text.empty()) g.textId = pg.internText(text);
     if (g.column != shiftColumn) {
       columnYShift = 0;
       shiftColumn = g.column;
@@ -778,8 +800,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       g.x = static_cast<uint16_t>(columnLeftX(col));
       g.y = static_cast<uint16_t>(rowIdx * cellPx);
       g.renderKind = VerticalGlyph::RotatedPunct;
-      g.rubyText = pc.rubyText;
-      pushGlyph(page.glyphs, g);
+      pushGlyph(page, g, pc.rubyText);
       return;
     }
 
@@ -790,8 +811,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       g.x = static_cast<uint16_t>(columnLeftX(col) + std::max(1, cellPx / 8));
       g.y = static_cast<uint16_t>(rowIdx * cellPx + ascender - std::max(1, cellPx / 8));
       g.renderKind = VerticalGlyph::Upright;
-      g.rubyText = pc.rubyText;
-      pushGlyph(page.glyphs, g);
+      pushGlyph(page, g, pc.rubyText);
       return;
     }
 
@@ -812,8 +832,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     g.x = static_cast<uint16_t>(gx);
     g.y = static_cast<uint16_t>(gy);
     g.renderKind = VerticalGlyph::Upright;
-    g.rubyText = pc.rubyText;
-    pushGlyph(page.glyphs, g);
+    pushGlyph(page, g, pc.rubyText);
   };
 
   auto placeUpright = [&](const PendingChar& pc) { placeUprightAt(pc, column, row); };
@@ -906,8 +925,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     g.byteOffset = stream_[i0].byteOffset;
     g.style = stream_[i0].style;
     g.renderKind = VerticalGlyph::UprightRun;
-    g.rotatedRunText = runUtf8;
-    pushGlyph(page.glyphs, g);
+    pushGlyph(page, g, runUtf8);
 
     row++;
     if (row >= rowsPerColumn) {
@@ -1065,6 +1083,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (column < columnsPerPage && !page.glyphs.empty() && !pageVectorCanTakeMore()) {
       LOG_INF("VPT", "Page glyph buffer cannot grow (%u glyphs, maxAlloc=%u); early page break",
               static_cast<unsigned>(page.glyphs.size()), ESP.getMaxAllocHeap());
+      everSplitForHeap_ = true;
       column = columnsPerPage;
       finalizePageIfNeeded();
       row = columnStartRow(false);
@@ -1231,8 +1250,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         g.byteOffset = pc.byteOffset;
         g.style = pc.style;
         g.renderKind = VerticalGlyph::RotatedRun;
-        g.rotatedRunText = runUtf8;
-        pushGlyph(page.glyphs, g);
+        pushGlyph(page, g, runUtf8);
 
         const uint16_t digitColumn = column;
         row = static_cast<uint16_t>(row + rowsNeeded);
@@ -1335,8 +1353,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.byteOffset = pc.byteOffset;
           g.style = pc.style;
           g.renderKind = VerticalGlyph::RotatedRun;
-          g.rotatedRunText = remaining;
-          pushGlyph(page.glyphs, g);
+          pushGlyph(page, g, remaining);
           row = static_cast<uint16_t>(row + remRows);
           takeUpRunSlack(startY, runInkWidth(remaining, remWidthPx, runStyle), row, g.column, nextInkOffset);
           if (row >= rowsPerColumn) {
@@ -1393,8 +1410,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
             g.byteOffset = pc.byteOffset;
             g.style = pc.style;
             g.renderKind = VerticalGlyph::RotatedRun;
-            g.rotatedRunText = remaining;
-            pushGlyph(page.glyphs, g);
+            pushGlyph(page, g, remaining);
             row = static_cast<uint16_t>(std::min<int>(row + remRows, rowsPerColumn));
             if (row >= rowsPerColumn) {
               column++;
@@ -1430,8 +1446,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         g.byteOffset = pc.byteOffset;
         g.style = pc.style;
         g.renderKind = VerticalGlyph::RotatedRun;
-        g.rotatedRunText = chunk;
-        pushGlyph(page.glyphs, g);
+        pushGlyph(page, g, chunk);
 
         row = static_cast<uint16_t>(row + chunkRows);
         if (row >= rowsPerColumn) {
@@ -1497,7 +1512,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           }
           g.paragraphIndex = pc.paragraphIndex;
           g.byteOffset = pc.byteOffset;
-          pushGlyph(prevPage.glyphs, g);
+          pushGlyph(prevPage, g, pc.rubyText);
           idx++;
           continue;
         }
