@@ -870,8 +870,8 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
       Storage.remove(sourcePath.c_str());
       return false;
     }
-    const bool success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(
-        sourceBmp, thumbBmp, (height * 2) / 3, height, shouldCancel, cancelCtx);
+    const bool success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(sourceBmp, thumbBmp, (height * 2) / 3,
+                                                                           height, shouldCancel, cancelCtx);
     sourceBmp.close();
     thumbBmp.close();
     Storage.remove(sourcePath.c_str());
