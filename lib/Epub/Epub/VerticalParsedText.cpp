@@ -596,10 +596,27 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     const size_t requestBytes = glyphsPerPage * sizeof(VerticalGlyph);
     if (ESP.getMaxAllocHeap() >= requestBytes + MIN_FREE_HEAP_FOR_RESERVE) {
       p.glyphs.reserve(glyphsPerPage);
-    } else {
-      LOG_ERR("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
-              static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
+      return;
     }
+    // Partial fallback: reserve the largest fitting fraction of the page instead of nothing.
+    // Starting from capacity 0 makes the vector double 1-2-4-...-256, and every doubling's
+    // grow-copy (old + new buffer coexisting) is a fresh chance to land on a heap dip -- on
+    // the X3's tighter heap that fired the emergency page split constantly, which the reader
+    // sees as pages breaking at random fill levels. This runs right after the previous page
+    // was flushed and freed (the heap's local best), so one medium block now prevents most of
+    // the risky growth steps later at the dips.
+    for (size_t fraction = 2; fraction <= 8; fraction *= 2) {
+      const size_t partial = glyphsPerPage / fraction;
+      if (partial < 32) break;
+      if (ESP.getMaxAllocHeap() >= (partial * sizeof(VerticalGlyph)) + MIN_FREE_HEAP_FOR_RESERVE) {
+        p.glyphs.reserve(partial);
+        LOG_DBG("VPT", "Partial page glyphs reserve: %u/%u elements (maxAlloc=%u)", static_cast<unsigned>(partial),
+                static_cast<unsigned>(glyphsPerPage), ESP.getMaxAllocHeap());
+        return;
+      }
+    }
+    LOG_ERR("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
+            static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
   };
 
   // Skipping the reserve above is only safe if every individual push_back is ALSO guarded --
