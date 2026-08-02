@@ -39,17 +39,6 @@ class EpubReaderActivity final : public Activity {
   // Image pages use a dedicated double-FAST refresh path, so retain a manual
   // refresh request until renderContents can issue its clean base pass.
   bool forcedRefreshPending = false;
-  // Panel-space ink masks of the previously displayed page (sized for the largest panel:
-  // 880 rows -> 110 bytes, 528 px columns -> 66 bytes). CSS block styling moves lines by
-  // fractions of a line, so consecutive pages no longer share a uniform grid; comparing
-  // masks detects that phase shift so the turn can spend the absolute HALF pass instead of
-  // a FAST whose weak erase leaves the old page superimposed. See maybeForceCleanForLayoutShift().
-  static constexpr size_t INK_ROW_MASK_BYTES = 128;
-  static constexpr size_t INK_COL_MASK_BYTES = 96;
-  uint8_t prevRowInkMask_[INK_ROW_MASK_BYTES] = {};
-  uint8_t prevColInkMask_[INK_COL_MASK_BYTES] = {};
-  bool prevInkMaskValid_ = false;
-  void maybeForceCleanForLayoutShift();
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
 
