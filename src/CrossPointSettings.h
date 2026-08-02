@@ -233,12 +233,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
-  // E-ink refresh frequency. Default 5 pages: at 15 the FAST-turn text ghost builds far
-  // enough that the previous page reads through (photographed on device); 5 keeps the
-  // cleanup HALF frequent enough that the single-pass scrub stays ahead of the residue.
-  // Existing installs keep their stored value; long cadences (>= 10 pages) get a deeper
-  // double-HALF cleanup instead -- see ReaderUtils::displayWithRefreshCycle.
-  uint8_t refreshFrequency = REFRESH_5;
+  // E-ink refresh frequency (default 15 pages)
+  uint8_t refreshFrequency = REFRESH_15;
   uint8_t hyphenationEnabled = 0;
 
   // Reader screen margin settings
