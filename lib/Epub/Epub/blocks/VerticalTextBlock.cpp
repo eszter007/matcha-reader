@@ -62,13 +62,13 @@ void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int
     int dy = g.y + offsetY + globalDownNudge;
 
     if (g.renderKind == VerticalGlyph::RotatedRun) {
-      renderer.drawTextRotated90CCW(fontId, dx, dy, g.rotatedRunText.c_str(), black,
+      renderer.drawTextRotated90CCW(fontId, dx, dy, page.glyphText(g), black,
                                     static_cast<EpdFontFamily::Style>(g.style));
       continue;
     }
 
     if (g.renderKind == VerticalGlyph::UprightRun) {
-      renderer.drawText(fontId, dx, dy, g.rotatedRunText.c_str(), black, static_cast<EpdFontFamily::Style>(g.style));
+      renderer.drawText(fontId, dx, dy, page.glyphText(g), black, static_cast<EpdFontFamily::Style>(g.style));
       continue;
     }
 
@@ -143,7 +143,8 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
   uint16_t prevRubyColumn = UINT16_MAX;
 
   for (const VerticalGlyph& g : page_.glyphs) {
-    if (g.rubyText.empty() || g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
+    const std::string& rubyText = page_.glyphTextStr(g);
+    if (rubyText.empty() || g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
       continue;
     }
 
@@ -152,8 +153,8 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     size_t rubyCharCount = 0;
     {
       size_t ri = 0;
-      while (ri < g.rubyText.size()) {
-        const auto c0 = static_cast<unsigned char>(g.rubyText[ri]);
+      while (ri < rubyText.size()) {
+        const auto c0 = static_cast<unsigned char>(rubyText[ri]);
         if (c0 < 0x80)
           ri += 1;
         else if ((c0 & 0xE0) == 0xC0)
@@ -180,8 +181,8 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     prevRubyColumn = g.column;
 
     size_t ri = 0;
-    while (ri < g.rubyText.size()) {
-      const auto c0 = static_cast<unsigned char>(g.rubyText[ri]);
+    while (ri < rubyText.size()) {
+      const auto c0 = static_cast<unsigned char>(rubyText[ri]);
       size_t charLen = 1;
       if (c0 >= 0xF0)
         charLen = 4;
@@ -190,10 +191,10 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
       else if (c0 >= 0xC0)
         charLen = 2;
 
-      if (ri + charLen > g.rubyText.size()) break;
+      if (ri + charLen > rubyText.size()) break;
 
       char buf[5];
-      std::memcpy(buf, g.rubyText.data() + ri, charLen);
+      std::memcpy(buf, rubyText.data() + ri, charLen);
       buf[charLen] = '\0';
 
       renderer.drawText(rubyFontId, rubyX, rubyY, buf, black, rubyStyle);

@@ -651,7 +651,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   int columnYShift = 0;
   uint16_t shiftColumn = UINT16_MAX;
 
-  auto pushGlyph = [this, &columnYShift, &shiftColumn](std::vector<VerticalGlyph>& glyphs, VerticalGlyph g) {
+  auto pushGlyph = [this, &columnYShift, &shiftColumn](VerticalPage& pg, VerticalGlyph g,
+                                                       const std::string& text = std::string()) {
+    std::vector<VerticalGlyph>& glyphs = pg.glyphs;
+    // Intern before the push: on a dropped glyph the orphaned pool entry is a few wasted
+    // bytes, while interning after would need the glyph's index to patch -- not worth it.
+    if (!text.empty()) g.textId = pg.internText(text);
     if (g.column != shiftColumn) {
       columnYShift = 0;
       shiftColumn = g.column;
@@ -795,8 +800,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       g.x = static_cast<uint16_t>(columnLeftX(col));
       g.y = static_cast<uint16_t>(rowIdx * cellPx);
       g.renderKind = VerticalGlyph::RotatedPunct;
-      g.rubyText = pc.rubyText;
-      pushGlyph(page.glyphs, g);
+      pushGlyph(page, g, pc.rubyText);
       return;
     }
 
@@ -807,8 +811,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       g.x = static_cast<uint16_t>(columnLeftX(col) + std::max(1, cellPx / 8));
       g.y = static_cast<uint16_t>(rowIdx * cellPx + ascender - std::max(1, cellPx / 8));
       g.renderKind = VerticalGlyph::Upright;
-      g.rubyText = pc.rubyText;
-      pushGlyph(page.glyphs, g);
+      pushGlyph(page, g, pc.rubyText);
       return;
     }
 
@@ -829,8 +832,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     g.x = static_cast<uint16_t>(gx);
     g.y = static_cast<uint16_t>(gy);
     g.renderKind = VerticalGlyph::Upright;
-    g.rubyText = pc.rubyText;
-    pushGlyph(page.glyphs, g);
+    pushGlyph(page, g, pc.rubyText);
   };
 
   auto placeUpright = [&](const PendingChar& pc) { placeUprightAt(pc, column, row); };
@@ -923,8 +925,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     g.byteOffset = stream_[i0].byteOffset;
     g.style = stream_[i0].style;
     g.renderKind = VerticalGlyph::UprightRun;
-    g.rotatedRunText = runUtf8;
-    pushGlyph(page.glyphs, g);
+    pushGlyph(page, g, runUtf8);
 
     row++;
     if (row >= rowsPerColumn) {
@@ -1249,8 +1250,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         g.byteOffset = pc.byteOffset;
         g.style = pc.style;
         g.renderKind = VerticalGlyph::RotatedRun;
-        g.rotatedRunText = runUtf8;
-        pushGlyph(page.glyphs, g);
+        pushGlyph(page, g, runUtf8);
 
         const uint16_t digitColumn = column;
         row = static_cast<uint16_t>(row + rowsNeeded);
@@ -1353,8 +1353,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.byteOffset = pc.byteOffset;
           g.style = pc.style;
           g.renderKind = VerticalGlyph::RotatedRun;
-          g.rotatedRunText = remaining;
-          pushGlyph(page.glyphs, g);
+          pushGlyph(page, g, remaining);
           row = static_cast<uint16_t>(row + remRows);
           takeUpRunSlack(startY, runInkWidth(remaining, remWidthPx, runStyle), row, g.column, nextInkOffset);
           if (row >= rowsPerColumn) {
@@ -1411,8 +1410,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
             g.byteOffset = pc.byteOffset;
             g.style = pc.style;
             g.renderKind = VerticalGlyph::RotatedRun;
-            g.rotatedRunText = remaining;
-            pushGlyph(page.glyphs, g);
+            pushGlyph(page, g, remaining);
             row = static_cast<uint16_t>(std::min<int>(row + remRows, rowsPerColumn));
             if (row >= rowsPerColumn) {
               column++;
@@ -1448,8 +1446,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         g.byteOffset = pc.byteOffset;
         g.style = pc.style;
         g.renderKind = VerticalGlyph::RotatedRun;
-        g.rotatedRunText = chunk;
-        pushGlyph(page.glyphs, g);
+        pushGlyph(page, g, chunk);
 
         row = static_cast<uint16_t>(row + chunkRows);
         if (row >= rowsPerColumn) {
@@ -1515,7 +1512,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           }
           g.paragraphIndex = pc.paragraphIndex;
           g.byteOffset = pc.byteOffset;
-          pushGlyph(prevPage.glyphs, g);
+          pushGlyph(prevPage, g, pc.rubyText);
           idx++;
           continue;
         }
