@@ -1623,6 +1623,28 @@ void GfxRenderer::clearScreen(const uint8_t color) const {
   display.clearScreen(color);
 }
 
+void GfxRenderer::computeInkMasks(uint8_t* rowMask, const size_t rowMaskBytes, uint8_t* colMask,
+                                  const size_t colMaskBytes) const {
+  if (rowMask) memset(rowMask, 0, rowMaskBytes);
+  if (colMask) memset(colMask, 0, colMaskBytes);
+  if (!frameBuffer) return;
+
+  for (uint16_t y = 0; y < panelHeight; ++y) {
+    const uint8_t* row = frameBuffer + static_cast<uint32_t>(y) * panelWidthBytes;
+    bool rowHasInk = false;
+    for (uint16_t xb = 0; xb < panelWidthBytes; ++xb) {
+      // White is 0xFF (bit set = white), so ink bits are the complement.
+      const uint8_t ink = static_cast<uint8_t>(~row[xb]);
+      if (ink == 0) continue;
+      rowHasInk = true;
+      if (colMask && xb < colMaskBytes) colMask[xb] |= ink;
+    }
+    if (rowHasInk && rowMask && (y >> 3) < rowMaskBytes) {
+      rowMask[y >> 3] |= static_cast<uint8_t>(1u << (y & 7));
+    }
+  }
+}
+
 void GfxRenderer::beginStripTarget(uint8_t* scratch, int stripY0, int stripRows) const {
   // Band is caller-guaranteed in-bounds (the reader's grayscale loop computes
   // it); assert catches future misuse in debug before it mis-renders or wraps

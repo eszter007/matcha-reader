@@ -1925,6 +1925,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
+      // Same grid-shift guard as the horizontal path: vertical pages with kakomi boxes or
+      // figure spacing shift their column grid, and a FAST turn would leave the previous
+      // page's columns readable in the gaps.
+      maybeForceCleanForLayoutShift();
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
     }
     // Kindle-class turns: load the neighbouring page's glyphs while the reader looks at this
@@ -2670,6 +2674,55 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   }
 }
 
+// CSS block styling (box padding, list margins, figure spacing) moves lines by fractions of a
+// line, so consecutive pages no longer share the uniform line grid stock layouts had. A FAST
+// turn between phase-shifted pages erases the old glyphs only with the weak DU transition:
+// wherever the old page had ink and the new page has none, the previous page stays crisply
+// readable (photographed on device, forming within a handful of turns in a box-heavy book and
+// then riding under every following FAST turn). Detect exactly that geometry -- rows/columns
+// that LOSE ink, counted as distinct bands -- and spend the absolute HALF pass on that one
+// turn. A phase shift orphans a band per text line (dozens); the benign cases stay well below
+// the threshold: a shorter last page orphans one band, extra paragraph spacing a handful.
+// Aligned body-text turns keep their FAST cadence untouched.
+void EpubReaderActivity::maybeForceCleanForLayoutShift() {
+  uint8_t rowMask[INK_ROW_MASK_BYTES];
+  uint8_t colMask[INK_COL_MASK_BYTES];
+  renderer.computeInkMasks(rowMask, sizeof(rowMask), colMask, sizeof(colMask));
+
+  if (prevInkMaskValid_ && pagesUntilFullRefresh > 1) {
+    // A band = a run of >= 3 consecutive orphaned bits (previous page had ink, this one has
+    // none): glyph-sized, ignoring single-row jitter. Column bits within a framebuffer byte
+    // are walked in storage order rather than strict pixel order; a real column band spans
+    // whole bytes, so the run detection is unaffected where it matters.
+    const auto orphanBands = [](const uint8_t* prev, const uint8_t* now, const size_t bytes) {
+      int bands = 0;
+      int run = 0;
+      for (size_t i = 0; i < bytes; ++i) {
+        const uint8_t orphan = static_cast<uint8_t>(prev[i] & ~now[i]);
+        for (uint8_t bit = 0; bit < 8; ++bit) {
+          if (orphan & (1u << bit)) {
+            if (++run == 3) bands++;
+          } else {
+            run = 0;
+          }
+        }
+      }
+      return bands;
+    };
+    constexpr int SHIFT_BANDS_FOR_CLEAN = 12;
+    const int bands =
+        orphanBands(prevRowInkMask_, rowMask, sizeof(rowMask)) + orphanBands(prevColInkMask_, colMask, sizeof(colMask));
+    if (bands >= SHIFT_BANDS_FOR_CLEAN) {
+      LOG_DBG("ERS", "Layout shift vs previous page (%d orphan bands); forcing HALF clean", bands);
+      pagesUntilFullRefresh = 1;
+    }
+  }
+
+  memcpy(prevRowInkMask_, rowMask, sizeof(prevRowInkMask_));
+  memcpy(prevColInkMask_, colMask, sizeof(prevColInkMask_));
+  prevInkMaskValid_ = true;
+}
+
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int8_t vertOverride,
                                       int8_t furiOverride) {
   const uint8_t percent = static_cast<uint8_t>(pageBasedPercent(spineIndex, currentPage + 1));
@@ -2746,6 +2799,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (!grayscaleRefineOnly) {
     page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
     renderStatusBar();
+    // BW frame complete: compare its ink geometry with the previous page's before choosing
+    // the refresh mode below (also keeps the masks current on image pages, whose own path
+    // already forces the HALF cleanup for the following page).
+    maybeForceCleanForLayoutShift();
     tBwRender = millis();
   }
 

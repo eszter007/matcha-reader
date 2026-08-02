@@ -199,6 +199,15 @@ class GfxRenderer {
   // writes) that a static screen -- the sleep image -- would freeze in place.
   // Cleared by any HALF or FULL pass. See panelResidue_.
   [[nodiscard]] bool panelHasResidue() const { return panelResidue_; }
+
+  // Ink coverage of the CURRENT framebuffer in PANEL space: bit y of rowMask is set when any
+  // pixel of physical row y is black; bit x of colMask when any pixel of physical column x is.
+  // One linear 48KB read (~sub-ms); no allocation. Buffers shorter than the panel needs are
+  // zero-filled and the excess ignored -- callers size for the largest panel and pass that.
+  // Used by the reader to detect a line-grid phase shift between consecutive pages (CSS
+  // margins/boxes move lines by fractions of a line), where a FAST turn's weak black->white
+  // erase would leave the previous page's text crisply visible in the new page's gaps.
+  void computeInkMasks(uint8_t* rowMask, size_t rowMaskBytes, uint8_t* colMask, size_t colMaskBytes) const;
   // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
   // grayscale strip rendering) can overlap the panel's refresh time. The
   // framebuffer must stay untouched until waitRefreshComplete(). Falls back to
