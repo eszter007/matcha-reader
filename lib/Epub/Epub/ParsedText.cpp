@@ -479,16 +479,12 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
 
   // Lambda helper to process and push individual sub-segments of the string
   // Use std::string_view to avoid heap allocations when slicing
-  auto processSegment = [&](std::string_view segment, bool isWord, bool attach, bool noSpaceBefore) {
+  // segmentOffset: visible-codepoint offset of the segment's first character, tracked
+  // incrementally by the tokenization loop below (a per-segment prefix rescan would be
+  // O(n^2) on highly punctuated words -- Copilot review, PR #24).
+  auto processSegment = [&](std::string_view segment, bool isWord, bool attach, bool noSpaceBefore,
+                            const uint32_t segmentOffset) {
     const auto pushSegmentFont = pushTokenFont;
-    const unsigned char* wordBegin = reinterpret_cast<const unsigned char*>(word.data());
-    const unsigned char* segmentBegin = reinterpret_cast<const unsigned char*>(segment.data());
-    uint32_t segmentOffset = visibleTextOffset;
-    const unsigned char* offsetPtr = wordBegin;
-    while (offsetPtr < segmentBegin) {
-      utf8NextCodepoint(&offsetPtr);
-      segmentOffset++;
-    }
     if (!isWord) {
       // Punctuation and Numbers stay regular
       words.emplace_back(segment);
@@ -559,6 +555,8 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   bool inWordSegment = isWordCharacter(firstCp);
 
   bool isFirstSegment = true;
+  uint32_t cpIndex = 1;              // codepoints consumed from the word so far
+  uint32_t segmentStartCpIndex = 0;  // codepoint index where the current segment starts
 
   while (ptr < end) {
     const unsigned char* currentCpStart = ptr;
@@ -573,20 +571,22 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       // Only the very first segment inherits the original attachToPrevious flag.
       // Every subsequent segment MUST attach=true so it glues seamlessly to the prefix.
       processSegment(segment, inWordSegment, isFirstSegment ? effectiveAttachToPrevious : true,
-                     isFirstSegment ? effectiveNoSpaceBefore : false);
+                     isFirstSegment ? effectiveNoSpaceBefore : false, visibleTextOffset + segmentStartCpIndex);
 
       // Setup for the next segment
       segmentStart = currentCpStart;
+      segmentStartCpIndex = cpIndex;
       inWordSegment = isWordChar;
       isFirstSegment = false;
     }
+    cpIndex++;
   }
 
   // Process the final remaining segment
   size_t segmentLen = end - segmentStart;
   std::string_view segment(reinterpret_cast<const char*>(segmentStart), segmentLen);
   processSegment(segment, inWordSegment, isFirstSegment ? effectiveAttachToPrevious : true,
-                 isFirstSegment ? effectiveNoSpaceBefore : false);
+                 isFirstSegment ? effectiveNoSpaceBefore : false, visibleTextOffset + segmentStartCpIndex);
   if (wordStartsRtl) {
     hasRtlWord = true;
   }

@@ -44,8 +44,10 @@ inline bool saveProgress(const Epub& epub, int spineIndex, int pageNumber, int p
   if (!ProgressFile::writeAtomic(epub.getCachePath(), data, dataSize)) {
     return false;
   }
-  LOG_DBG("ERS", "Progress saved: spine=%d page=%d vertical=%d furigana=%d offset=%u", spineIndex, pageNumber,
-          verticalOverride, furiganaOverride, visibleTextOffset.value_or(0));
+  // offsetKnown distinguishes "no offset available" from a real chapter-start offset of 0.
+  LOG_DBG("ERS", "Progress saved: spine=%d page=%d vertical=%d furigana=%d offsetKnown=%d offset=%u", spineIndex,
+          pageNumber, verticalOverride, furiganaOverride, visibleTextOffset.has_value() ? 1 : 0,
+          visibleTextOffset.value_or(0));
   return true;
 }
 
