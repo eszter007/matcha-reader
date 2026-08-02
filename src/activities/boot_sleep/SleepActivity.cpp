@@ -46,6 +46,19 @@ void SleepActivity::loop() {
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
+  // Whatever paints below freezes on the glass for the entire sleep. If the panel carries
+  // residue -- FAST-turn ghosts, gray charge from an image page, a popup's inverted remnant --
+  // the single sleep-time HALF pass cannot scrub it, and it stays visible for hours (grain
+  // across the page plus a negative ghost of the reader menu, photographed on device). Re-drive
+  // the current content with the clean single-pass waveform first, so the sleep frame lands on
+  // a scrubbed base. Still never the flashing GC waveform (see the stock-parity note above
+  // renderTransparentSleepScreen); preconditionGrayscale() settles the gray planes on X3 and is
+  // a documented no-op on X4. Costs one HALF (~1s) at sleep entry, and only when needed.
+  if (renderer.panelHasResidue()) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    renderer.preconditionGrayscale();
+  }
+
   const bool renderQuickResume =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&

@@ -139,6 +139,10 @@ class ChapterHtmlSlimParser {
     bool hasSmallCaps = false, smallCaps = false;
     bool hasTextTransform = false;
     CssTextTransform textTransform = CssTextTransform::None;
+    // Inline font-size (span): absolute font id resolved at push time via cssBlockFontId.
+    // 0 with hasFontId set means "explicitly the block's own font" (a nested reset).
+    bool hasFontId = false;
+    int32_t fontIdOverride = 0;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -155,6 +159,8 @@ class ChapterHtmlSlimParser {
   // font-variant: small-caps -- approximated by uppercasing (no per-word size support).
   bool effectiveSmallCaps = false;
   CssTextTransform effectiveTextTransform = CssTextTransform::None;
+  // Per-word font from an inline font-size (see StyleStackEntry::fontIdOverride); 0 = block font.
+  int32_t effectiveWordFontId = 0;
 
   // Ordered/unordered list nesting for list-style-type markers. Fixed-depth
   // stack: nesting past kMaxListDepth reuses the innermost tracked context.

@@ -1563,6 +1563,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
       section.reset();
       verticalSection.reset();
+      // The relayout repaints THIS page with its lines shifted under whatever the panel
+      // already shows. A mid-cycle FAST erases the old glyphs with the weak DU transition
+      // only, leaving the previous layout crisply superimposed (photographed on device
+      // after a cache-version bump relaid the book out). Force the absolute HALF pass.
+      pagesUntilFullRefresh = 1;
     }
     sectionLayoutSig = currentSig;
   }
@@ -1629,6 +1634,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
         GUI.drawPopup(renderer, tr(STR_INDEXING));
+        // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
+        // rebuilt layout replaces it with shifted content -- HALF-clear or both ghost under the page.
+        pagesUntilFullRefresh = 1;
 
         // Building a chapter's vertical section is the single most memory-intensive step in the
         // reader (whole-chapter text extraction + XML parsing + layout, observed on a real device
@@ -2511,6 +2519,10 @@ bool EpubReaderActivity::applyDeferredReposition() {
       section->currentPage = newPage;
       changed = true;
     }
+    // Repaginated: even an unmoved page NUMBER now holds shifted content, and the panel still
+    // shows the old layout. A mid-cycle FAST's weak DU erase leaves that old layout crisply
+    // superimposed under the new one (photographed on device); take the absolute HALF pass.
+    pagesUntilFullRefresh = 1;
   }
   cachedChapterTotalPageCount = 0;  // consumed; don't read cached progress again
   return changed;

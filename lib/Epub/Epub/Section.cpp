@@ -135,7 +135,15 @@ namespace {
 //      the scene-break gap, so cached pages laid out by older versions no longer
 //      match. Keeps <br>-per-paragraph books (common CJK formatting) from
 //      re-adding container spacing at every paragraph.
-constexpr uint8_t SECTION_FILE_VERSION = 67;
+// v68: aside/section/article/figure/figcaption became block tags, so their block CSS
+//      (margins, padding, text-align, borders -- e.g. <aside class="box"> call-out frames)
+//      now lays out. Byte layout unchanged; a v67 section was built without those boxes
+//      and would keep rendering unframed forever.
+// v69: TextBlock gained an optional per-word font array (inline font-size on spans) -- the
+//      arena layout and its flags byte changed, so a v68 arena mis-parses under v69 framing.
+//      ol/ul and td/th also route their block CSS through fromCssStyle now, and sup/sub
+//      forward their tags' own font-style/weight, all of which move cached word positions.
+constexpr uint8_t SECTION_FILE_VERSION = 69;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
