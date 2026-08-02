@@ -28,7 +28,7 @@ class ChapterHtmlSlimParser {
   std::shared_ptr<Epub> epub;
   const std::string& filepath;
   GfxRenderer& renderer;
-  std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t)> completePageFn;
+  std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)> completePageFn;
   std::function<void()> popupFn;  // Popup callback
   bool imagePopupFired = false;   // popupFn fired for the first image probe (single-shot)
   int depth = 0;
@@ -89,7 +89,9 @@ class ChapterHtmlSlimParser {
   bool keepingBlockTogether = false;
   int16_t keepBufferHeight = 0;     // sum of the buffered lines' heights
   int16_t keepWithNextReserve = 0;  // room to leave after the block for `after: avoid`
-  std::vector<std::shared_ptr<TextBlock>> keepBuffer;
+  // Buffered (line, first-word visible offset) pairs; the offset replays through
+  // addLineToPage so content positions survive the keep-together delay.
+  std::vector<std::pair<std::shared_ptr<TextBlock>, uint32_t>> keepBuffer;
   void breakPage();
   void beginKeepTogether(const BlockStyle& blockStyle);
   void finishKeepTogether();
@@ -186,6 +188,16 @@ class ChapterHtmlSlimParser {
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
+  // Canonical reading-position counter: zero-based Unicode codepoints in visible
+  // <body> text. Token offsets flow through line breaking so every completed page
+  // records the first source character it renders.
+  uint32_t visibleTextOffset = 0;
+  uint32_t partWordVisibleOffset = 0;
+  uint32_t currentPageVisibleOffset = 0;
+  bool currentPageVisibleOffsetSet = false;
+  bool insideBody = false;
+  bool syntheticCharacterData = false;
+  uint16_t nonVisibleTextDepth = 0;
 
   // Whole-<ruby>-element accumulation for the glossary: mono-ruby elements
   // (小<rt>こ</rt>林<rt>ばやし</rt>) also record 小林 -> こばやし so whole-word
@@ -223,6 +235,7 @@ class ChapterHtmlSlimParser {
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPendingAnchor();
   void flushPartWordBuffer();
+  void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
@@ -237,17 +250,16 @@ class ChapterHtmlSlimParser {
   static void XMLCALL endElement(void* userData, const XML_Char* name);
 
  public:
-  explicit ChapterHtmlSlimParser(std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer,
-                                 const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                 const uint16_t viewportHeight, const bool hyphenationEnabled,
-                                 const bool focusReadingEnabled,
-                                 const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t)>& completePageFn,
-                                 const bool embeddedStyle, const std::string& contentBase,
-                                 const std::string& imageBasePath, const uint8_t imageRendering = 0,
-                                 std::vector<std::string> tocAnchors = {},
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
-                                 const bool honorBookInsets = false)
+  explicit ChapterHtmlSlimParser(
+      std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
+      const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+      const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
+      const bool focusReadingEnabled,
+      const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
+      const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
+      const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
+      const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
+      const bool honorBookInsets = false)
 
       : epub(epub),
         filepath(filepath),
@@ -286,7 +298,7 @@ class ChapterHtmlSlimParser {
   bool finishParse();  // flush the trailing page and tear down; returns true
   void abortParse();   // tear down without flushing (error / abandon)
 
-  void addLineToPage(std::shared_ptr<TextBlock> line);
+  void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleOffset);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
   // Every footnote reference in the section with the page it appears on (same page counter as
   // getAnchors), for the section-wide footnote table -- see Section::loadSectionFootnotes().
