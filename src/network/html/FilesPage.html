@@ -1597,7 +1597,7 @@
 
           <div class="convert-settings" id="convertSettings" style="display:block;">
             <span>⚫ True-Grayscale</span>
-          <span id="convertSizeSummary">📏 Max 480×800px</span>
+          <span id="convertSizeSummary">📏 Max 464×764px</span>
           <span>📦 85% JPEG</span>
           <span>🔧 Fix SVG</span>
         </div>
@@ -3287,10 +3287,10 @@ const WS_CHUNK_SIZE = 4096; // 4KB chunks - smaller for ESP32 stability
 // EPUB Image Conversion Functions (from Baseline JPEG Converter)
 // ============================================================================
 
-// Device profiles (short edge × long edge in portrait orientation)
+// Default reader viewport: panel size minus viewable-area and 5px reader margins.
 const DEVICE_PROFILES = {
-  X4: { width: 480, height: 800, label: 'X4' },
-  X3: { width: 528, height: 792, label: 'X3' },
+  X4: { width: 464, height: 764, label: 'X4' },
+  X3: { width: 512, height: 756, label: 'X3' },
 };
 
 // Default conversion settings
@@ -4605,14 +4605,14 @@ async function processImage(data, imageState = 0, imagePath = '') {
       // imageState: 0=Normal, 1=H-Split (CW/CCW), 2=V-Split, 3=Rotate & Fit
       // ========================================================================
       // STATE 1: H-Split (Rotate + Split) - EXACT COPY FROM index.html
-      // Step 1: Scale WIDTH to 800px (keep aspect ratio)
+      // Step 1: Scale WIDTH to the viewport's long edge (keep aspect ratio)
       // Step 2: Rotate 90° CW or CCW based on HANDEDNESS
-      // Step 3: If WIDTH > 480, split vertically with overlap
+      // Step 3: If WIDTH exceeds the viewport, split vertically with overlap
       // ========================================================================
       if (imageState === 1) {
-        // Step 1: Scale WIDTH to 800 (this is the key difference!)
-        const scale = MAX_HEIGHT / sourceW;  // 800 / sourceW
-        const scaledW = MAX_HEIGHT;  // 800
+        // Step 1: Scale WIDTH to the viewport's long edge (this is the key difference!)
+        const scale = MAX_HEIGHT / sourceW;
+        const scaledW = MAX_HEIGHT;
         const scaledH = Math.round(sourceH * scale);
 
         const scaledCanvas = document.createElement('canvas');
@@ -4627,7 +4627,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
 
         // Step 2: Rotate 90° CW or CCW
         const rotW = scaledH;
-        const rotH = scaledW;  // 800
+        const rotH = scaledW;
 
         const rotCanvas = document.createElement('canvas');
         rotCanvas.width = rotW;
@@ -4650,7 +4650,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
         rotCtx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
         applyGrayscale(rotCtx, rotW, rotH);
 
-        // Step 3: If WIDTH > 480, split vertically
+        // Step 3: If WIDTH exceeds the viewport, split vertically
         if (rotW <= MAX_WIDTH) {
           const blob = await canvasToDitheredBmp(rotCanvas);
           const arrBuf = await blob.arrayBuffer();
@@ -4661,7 +4661,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
         } else {
           // Split by WIDTH (vertical cuts) - from RIGHT to LEFT for CW, LEFT to RIGHT for CCW
           const parts = [];
-          const maxW = MAX_WIDTH;  // 480
+          const maxW = MAX_WIDTH;
           
           // Centered distribution: calculate numParts first, then distribute evenly
           let overlapPx, step, numParts;
@@ -4731,14 +4731,14 @@ async function processImage(data, imageState = 0, imagePath = '') {
       }
       // ========================================================================
       // STATE 2: V-Split (Vertical Split, no rotation)
-      // Step 1: Scale HEIGHT to 800px (up or down)
-      // Step 2: If WIDTH > 480, split vertically with overlap
+      // Step 1: Scale HEIGHT to the viewport's long edge (up or down)
+      // Step 2: If WIDTH exceeds the viewport, split vertically with overlap
       // ========================================================================
       else if (imageState === 2) {
-        // ALWAYS scale height to 800 (up or down)
-        const scale = MAX_HEIGHT / sourceH;  // 800 / sourceH
+        // Always scale height to the viewport's long edge (up or down)
+        const scale = MAX_HEIGHT / sourceH;
         const scaledW = Math.round(sourceW * scale);
-        const scaledH = MAX_HEIGHT;  // Always 800
+        const scaledH = MAX_HEIGHT;
 
         const scaledCanvas = document.createElement('canvas');
         scaledCanvas.width = scaledW;
@@ -4818,7 +4818,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
         }
       }
       // ========================================================================
-      // STATE 3: Rotate & Fit (Rotate 90°, then scale to fit 480x800, no split)
+      // STATE 3: Rotate & Fit (Rotate 90°, then scale to fit the reader viewport, no split)
       // ========================================================================
       else if (imageState === 3) {
         // Step 1: Rotate 90° based on handedness
@@ -4843,7 +4843,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
         rotCtx.drawImage(sourceCanvas, 0, 0);
         rotCtx.setTransform(1, 0, 0, 1, 0, 0);
 
-        // Step 2: Scale to fit 480x800 (if needed)
+        // Step 2: Scale to fit the reader viewport (if needed)
         const fitsInScreen = rotW <= MAX_WIDTH && rotH <= MAX_HEIGHT;
         
         if (fitsInScreen && !sourceWasCropped) {
@@ -4856,7 +4856,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
             meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: rotW, finalH: rotH, finalSize: arrBuf.byteLength, imageState: 3 }
           });
         } else {
-          // Scale to fit 480x800
+          // Scale to fit the reader viewport
           const scale = Math.min(MAX_WIDTH / rotW, MAX_HEIGHT / rotH);
           const newW = Math.round(rotW * scale);
           const newH = Math.round(rotH * scale);
@@ -4905,7 +4905,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
             meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: sourceW, finalH: sourceH, finalSize: arrBuf.byteLength, imageState: 0 }
           });
         } else {
-          // Scale to fit 480x800
+          // Scale to fit the reader viewport
           const scale = Math.min(MAX_WIDTH / sourceW, MAX_HEIGHT / sourceH);
           const newW = Math.round(sourceW * scale);
           const newH = Math.round(sourceH * scale);
