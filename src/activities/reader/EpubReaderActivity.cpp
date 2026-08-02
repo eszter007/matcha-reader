@@ -22,7 +22,6 @@
 #include <freertos/task.h>
 
 #include <algorithm>
-#include <cstdarg>
 #include <ctime>
 #include <functional>
 #include <iterator>
@@ -333,31 +332,12 @@ void EpubReaderActivity::onEnter() {
 
   loadCachedBookmarks();
 
-  // DIAGNOSTIC (ghosting hunt): open the SD session log and record the layout context the
-  // session runs under. One line per page paint follows via ghostDiagLog(); closed in onExit.
-  if (Storage.openFileForWrite("ERS", "/ghostdiag.txt", ghostDiagFile_)) {
-    ghostDiagLog("=== ghost diag session ===");
-    ghostDiagLog("book=%s", epub->getTitle().c_str());
-    ghostDiagLog("refreshFreq=%d antiAliasing=%d extraParaSpacing=%d viewport=%dx%d vertical=%d",
-                 SETTINGS.getRefreshFrequency(), static_cast<int>(SETTINGS.textAntiAliasing),
-                 static_cast<int>(SETTINGS.extraParagraphSpacing), renderer.getScreenWidth(),
-                 renderer.getScreenHeight(), useVerticalText() ? 1 : 0);
-  } else {
-    LOG_ERR("ERS", "ghostdiag: could not open /ghostdiag.txt for write");
-  }
-
   // Trigger first update
   requestUpdate();
 }
 
 void EpubReaderActivity::onExit() {
   Activity::onExit();
-
-  // Member HalFile: close at the release point (locals auto-close, members don't).
-  if (ghostDiagFile_) {
-    ghostDiagLog("=== session end ===");
-    ghostDiagFile_.close();
-  }
 
   // Record the sub-interval tail of the session; whole minutes were already flushed
   // periodically from loop() (see ReaderUtils::flushReadingStats).
@@ -2690,25 +2670,6 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   }
 }
 
-// DIAGNOSTIC ONLY -- appends one timestamped line to /ghostdiag.txt on the SD card, so a
-// ghosting session can be captured on a phone (File Transfer web UI) without a serial hookup.
-// Flushed per line: a crash or battery pull mid-session still leaves everything up to the
-// last page turn on the card. No-op when the file failed to open. Remove once settled.
-void EpubReaderActivity::ghostDiagLog(const char* fmt, ...) {
-  if (!ghostDiagFile_) return;
-  char line[192];
-  const int prefixLen = snprintf(line, sizeof(line), "[%8lu] ", millis());
-  va_list args;
-  va_start(args, fmt);
-  int bodyLen = vsnprintf(line + prefixLen, sizeof(line) - prefixLen - 1, fmt, args);
-  va_end(args);
-  if (bodyLen < 0) return;
-  bodyLen = std::min(bodyLen, static_cast<int>(sizeof(line) - prefixLen - 1));
-  line[prefixLen + bodyLen] = '\n';
-  ghostDiagFile_.write(line, prefixLen + bodyLen + 1);
-  ghostDiagFile_.flush();
-}
-
 // DIAGNOSTIC ONLY -- no refresh-mode decision is made here. Logs how many of the PREVIOUS
 // page's lines have no line at (nearly) the same y on THIS page. If on-device double-text
 // correlates with a large orphan count on the turn where the layer forms, the ghost is a
@@ -2736,12 +2697,6 @@ void EpubReaderActivity::logLineGridTelemetry(const Page& page) {
   }
   LOG_INF("ERS", "GRIDDIAG page=%d lines=%u prevLines=%u orphans=%d countdown=%d", section ? section->currentPage : -1,
           lineCount, prevLineCount_, orphans, pagesUntilFullRefresh);
-  // countdown is pre-decrement: <=1 means THIS paint goes out as HALF (see
-  // ReaderUtils::displayWithRefreshCycle); image pages override that, logged separately.
-  ghostDiagLog("page=%d lines=%u prevLines=%u orphans=%d countdown=%d mode=%s heap=%u maxAlloc=%u",
-               section ? section->currentPage : -1, lineCount, prevLineCount_, orphans, pagesUntilFullRefresh,
-               pagesUntilFullRefresh <= 1 ? "HALF" : "FAST", static_cast<unsigned>(ESP.getFreeHeap()),
-               static_cast<unsigned>(ESP.getMaxAllocHeap()));
   memcpy(prevLineY_, lineY, sizeof(lineY[0]) * lineCount);
   prevLineCount_ = lineCount;
   prevLineGridValid_ = true;
@@ -2828,7 +2783,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
 
   if (!grayscaleRefineOnly && pageHasImages) {
-    ghostDiagLog("img page=%d cleanBase=%d", section ? section->currentPage : -1, cleanImageBasePending ? 1 : 0);
     // Put the final image on the panel in one pass. The old selective-blank
     // double refresh showed a white frame and delayed the picture; grayscale
     // now refines separately after the page stays idle.

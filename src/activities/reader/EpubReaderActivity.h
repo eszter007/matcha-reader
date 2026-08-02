@@ -3,7 +3,6 @@
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
-#include <HalStorage.h>
 
 #include <atomic>
 #include <optional>
@@ -48,11 +47,6 @@ class EpubReaderActivity final : public Activity {
   uint8_t prevLineCount_ = 0;
   bool prevLineGridValid_ = false;
   void logLineGridTelemetry(const Page& page);
-  // DIAGNOSTIC (ghosting hunt): session log on the SD card root (/ghostdiag.txt) so telemetry
-  // can be captured on a phone without a serial hookup. Opened in onEnter, one line per page
-  // paint, closed in onExit (member FsFile rule). Remove with the telemetry above once settled.
-  HalFile ghostDiagFile_;
-  void ghostDiagLog(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
 
