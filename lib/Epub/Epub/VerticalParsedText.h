@@ -234,6 +234,10 @@ class VerticalParsedText {
   // that dropped content produced sparse pages and must not be persisted as a VALID cache --
   // that makes the truncation permanent. Fresh object per build, so no explicit clear needed.
   bool everDroppedForHeap() const { return everDroppedForHeap_; }
+  // True when any page was closed early by the emergency split (glyph vector could not grow on
+  // a heap dip). No content is lost, but the pagination is degraded -- pages end at arbitrary
+  // fill levels -- so the build path treats it like a drop: usable now, rebuilt next open.
+  bool everSplitForHeap() const { return everSplitForHeap_; }
   // Pin stream_'s backing store once at build start, while the heap is freshest. Mid-build
   // growth (alloc-copy-free every few dozen entries) interleaved with ruby-string churn walks
   // the buffer through the heap and shreds the largest contiguous block -- observed on a real
@@ -280,6 +284,7 @@ class VerticalParsedText {
   // canPushStreamChar()).
   bool oom_ = false;
   bool everDroppedForHeap_ = false;  // see everDroppedForHeap()
+  bool everSplitForHeap_ = false;    // see everSplitForHeap()
 
   // Boxed-block state. inBox_/boxStartCol_ persist across batches (a box can span many flushes);
   // the marker vectors are per-batch (cleared in reset(), with boundary carry flags above).

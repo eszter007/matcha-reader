@@ -53,7 +53,10 @@ namespace {
 // v102: aside/figure/figcaption joined isBlockTag (parity with the horizontal parser's
 // SECTION_FILE_VERSION 68 bump), so kakomi boxes and figure blocks on those tags now break
 // paragraphs and pick up styled-block params. A v101 cache flowed them as inline text.
-constexpr uint8_t VSECTION_FILE_VERSION = 102;
+// v103: no format change -- bumped so every vertical cache re-paginates once with the
+// partial-reserve fix, replacing pages that older builds split at random fill levels
+// under X3 heap pressure (no manual .crosspoint deletion needed).
+constexpr uint8_t VSECTION_FILE_VERSION = 103;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -1331,7 +1334,10 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   // OR, don't assign: the styled-block collect above may already have flagged this build
   // (unstyled fallback under heap pressure).
-  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap();
+  // Emergency page splits count as heap degradation too: no content is lost, but pages end at
+  // arbitrary fill levels, so the same usable-now/rebuild-next-open path applies (and the same
+  // rebuildingFromStale_ guard breaks the loop when a retry degrades again).
+  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap();
   // Persist harvested furigana pairs; runs after the parse buffers are freed, so the
   // transient merge buffer doesn't compete with layout's peak memory.
   RubyGlossary::merge(epub->getCachePath(), sink.rubyHarvest);

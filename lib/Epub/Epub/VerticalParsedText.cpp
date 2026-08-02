@@ -1082,6 +1082,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (column < columnsPerPage && !page.glyphs.empty() && !pageVectorCanTakeMore()) {
       LOG_INF("VPT", "Page glyph buffer cannot grow (%u glyphs, maxAlloc=%u); early page break",
               static_cast<unsigned>(page.glyphs.size()), ESP.getMaxAllocHeap());
+      everSplitForHeap_ = true;
       column = columnsPerPage;
       finalizePageIfNeeded();
       row = columnStartRow(false);
