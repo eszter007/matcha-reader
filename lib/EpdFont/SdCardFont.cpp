@@ -205,7 +205,7 @@ bool SdCardFont::ensureFontFile() const {
 }
 
 void SdCardFont::freeAll() {
-  fontFile_.close();
+  if (fontFile_.isOpen()) fontFile_.close();
   clearOverflow();
   clearPersistentCache();
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
