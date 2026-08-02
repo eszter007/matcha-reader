@@ -205,7 +205,7 @@ def main():
     elif ncx_path and ncx_path in files:
         toc_source = files[ncx_path].decode("utf-8")
     existing_names = {Path(h.split("#", 1)[0]).name for h in re.findall(r'(?:href|src)="([^"]+)"', toc_source)}
-    recover_spine_toc = len(spine_chapters) >= 2 and any(
+    recover_spine_toc = bool(toc_source) and len(spine_chapters) >= 2 and any(
         Path(href).name not in existing_names for href, _ in spine_chapters
     )
     if recover_spine_toc:
@@ -302,7 +302,7 @@ def main():
                 continue
             zout.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
 
-    print(f"Wrote {dst} ({total_new_chapters} chapter files)")
+    print(f"Wrote {dst} ({total_new_chapters} sections prepared)")
 
 
 if __name__ == "__main__":

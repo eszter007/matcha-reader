@@ -1598,7 +1598,7 @@
           <div class="convert-settings" id="convertSettings" style="display:block;">
             <span>⚫ True-Grayscale</span>
           <span id="convertSizeSummary">📏 Max 464×764px</span>
-          <span>📦 85% JPEG</span>
+          <span>📦 1-bit BMP</span>
           <span>🔧 Fix SVG</span>
         </div>
         <!-- Advanced Settings Content -->
@@ -5047,7 +5047,7 @@ async function splitEpubChapters(file) {
   const tocRefRe = /(?:href|src)="([^"]+)"/g;
   let tocRef;
   while ((tocRef = tocRefRe.exec(nav || ncx || '')) !== null) existingNames.add(baseName(tocRef[1]));
-  const recoverSpineToc = spineChapters.length >= 2 &&
+  const recoverSpineToc = !!(nav || ncx) && spineChapters.length >= 2 &&
     spineChapters.some(t => !existingNames.has(baseName(t.href)));
   if (recoverSpineToc) {
     tocAdditions.push(...spineChapters);
