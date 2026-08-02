@@ -90,7 +90,10 @@ bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
 
 }  // namespace
 
-SdCardFont::~SdCardFont() { freeAll(); }
+SdCardFont::~SdCardFont() {
+  freeAll();
+  if (fontFileMutex_) vSemaphoreDelete(fontFileMutex_);
+}
 
 // --- Per-style free/cleanup ---
 
@@ -438,7 +441,9 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
   }
 
   // Step 6: read the full matrix's rows for each used left class, keep only
-  // columns for used right classes. Shared handle: this runs per page turn.
+  // columns for used right classes. Shared handle: this runs per page turn; the lock
+  // keeps its seek+read sequences atomic against any other task using the handle.
+  FontFileLock fontFileLock(fontFileMutex_);
   if (!ensureFontFile()) {
     LOG_ERR("SDCF", "Failed to open .cpfont for mini kern: %s", filePath_);
     freeStyleMiniKern(s);
@@ -483,12 +488,14 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
       const uint32_t rowFileOff = s.kernMatrixFileOffset + (oldL - 1u) * s.header.kernRightClassCount;
       if (!file.seekSet(rowFileOff)) {
         LOG_ERR("SDCF", "Failed to seek to kern row %u", oldL);
+        file.close();  // clean reopen after an SD hiccup (same policy as the miss path)
         freeStyleMiniKern(s);
         return false;
       }
       if (file.read(reinterpret_cast<uint8_t*>(rowBuf.get()), s.header.kernRightClassCount) !=
           static_cast<int>(s.header.kernRightClassCount)) {
         LOG_ERR("SDCF", "Failed to read kern row %u", oldL);
+        file.close();
         freeStyleMiniKern(s);
         return false;
       }
@@ -1615,7 +1622,9 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   bool wasAtCapacity = (self->overflowCount_ == OVERFLOW_CAPACITY);
 
   // Read glyph metadata into temporary. The shared handle skips the per-miss file open
-  // (~5-8ms of FAT walk) that dominated mid-build early renders.
+  // (~5-8ms of FAT walk) that dominated mid-build early renders. The lock keeps this
+  // seek+read sequence atomic against any other task using the handle.
+  FontFileLock fontFileLock(self->fontFileMutex_);
   if (!self->ensureFontFile()) {
     LOG_ERR("SDCF", "Overflow: failed to open .cpfont");
     return nullptr;

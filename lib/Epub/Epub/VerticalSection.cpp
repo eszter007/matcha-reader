@@ -609,7 +609,9 @@ bool writePage(Sink& file, const VerticalPage& page) {
   const auto textCount = static_cast<uint16_t>(page.texts.size());
   serialization::writePod(file, textCount);
   for (const auto& t : page.texts) {
-    const auto len = static_cast<uint16_t>(t.size());
+    // Clamp instead of wrapping: a >64KB entry is impossible today (runs are bounded by the
+    // 16KB paragraph cap), but a wrapped uint16_t would silently desync the record.
+    const auto len = static_cast<uint16_t>(std::min<size_t>(t.size(), 0xFFFF));
     serialization::writePod(file, len);
     if (len > 0) {
       file.write(reinterpret_cast<const uint8_t*>(t.data()), len);
@@ -712,12 +714,24 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
     LOG_ERR("VSC", "Corrupt page record: %u pool texts", textCount);
     return ReadResult::Corrupt;
   }
+  // Same discipline as the glyph reserve above: reserve()/resize() abort under
+  // -fno-exceptions, and a valid on-disk record read on a momentarily tight heap must come
+  // back as HeapRefused (retry later), never a crash and never a cache invalidation.
+  const uint32_t textVecBytes = static_cast<uint32_t>(textCount) * sizeof(std::string);
+  if (page.texts.capacity() < textCount && ESP.getMaxAllocHeap() < textVecBytes + 2 * 1024) {
+    LOG_ERR("VSC", "Text pool needs %u bytes, maxAlloc=%u; refusing read", textVecBytes, ESP.getMaxAllocHeap());
+    return ReadResult::HeapRefused;
+  }
   page.texts.reserve(textCount);
   for (uint16_t ti = 0; ti < textCount; ti++) {
     uint16_t len = 0;
     serialization::readPod(file, len);
     std::string t;
     if (len > 0) {
+      if (ESP.getMaxAllocHeap() < static_cast<uint32_t>(len) + 2 * 1024) {
+        LOG_ERR("VSC", "Pool text %u needs %u bytes, maxAlloc=%u; refusing read", ti, len, ESP.getMaxAllocHeap());
+        return ReadResult::HeapRefused;
+      }
       t.resize(len);
       if (file.read(reinterpret_cast<uint8_t*>(t.data()), len) != static_cast<int>(len)) {
         LOG_ERR("VSC", "Corrupt page record: truncated pool text %u", ti);
