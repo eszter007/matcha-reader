@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Split single-file EPUB novels into per-chapter files with real ToC entries.
+"""Repair EPUB chapter structure and ToC entries.
 
 Many Japanese EPUBs ship a whole novel as one or two huge XHTML files whose
 chapters exist only as visual number headings (a paragraph containing nothing
@@ -7,12 +7,9 @@ but 1 / ２ / 三 between empty paragraphs). E-readers then see a single giant
 "chapter": no ToC navigation, page counters spanning the whole book, and heavy
 memory pressure while paginating the file.
 
-This tool detects those number-only heading blocks, splits each spine file at
-the heading boundaries into separate XHTML files, rewrites the OPF manifest and
-spine, and appends matching entries to the EPUB3 nav document and the EPUB2
-NCX. The first part keeps the original filename so existing ToC hrefs and
-anchors stay valid. Content bytes are never modified -- only sliced -- so text,
-furigana, and styling are untouched.
+It also recovers missing ToC entries when the OPF spine already contains a
+numbered sequence of XHTML files. File structure decides what is a section;
+the first heading or paragraph is used only as its display label.
 
 Usage:
     python3 epub_split_chapters.py input.epub [output.epub]
@@ -47,6 +44,31 @@ def find_headings(html: str):
             continue
         out.append((m.start(), m.group(1)))
     return out
+
+
+def structural_key(href: str):
+    """Group numbered XHTML files by directory, prefix, and extension."""
+    match = re.match(r"^(.*?)(\d+)(\.(?:xhtml|html|htm))$", href, re.I)
+    return (match.group(1), match.group(3).lower()) if match else None
+
+
+def chapter_title(html: str, fallback: str):
+    """Use visible heading text only as a label; structure decides membership."""
+    body_match = re.search(r"<body\b[^>]*>(.*?)</body>", html, re.I | re.S)
+    body = body_match.group(1) if body_match else html
+
+    def text_of(markup):
+        markup = re.sub(r"<rt\b[^>]*>.*?</rt>", "", markup, flags=re.I | re.S)
+        return re.sub(r"<[^>]+>", "", markup).replace("&nbsp;", " ").replace("&#160;", " ").strip()
+
+    heading = re.search(r"<h[1-6]\b[^>]*>.*?</h[1-6]>", body[:5000], re.I | re.S)
+    if heading:
+        return text_of(heading.group(0)) or fallback
+    for paragraph in re.findall(r"<p\b[^>]*>.*?</p>", body, re.I | re.S)[:8]:
+        text = text_of(paragraph)
+        if text:
+            return text if len(text) <= 80 else fallback
+    return fallback
 
 
 def open_block_tags(html: str, upto: int):
@@ -129,8 +151,14 @@ def main():
 
     new_files = {}
     toc_additions = []  # (href_rel_to_opf, title)
+    spine_chapters = []
     spine_replacements = {}  # original idref -> [idrefs]
     manifest_additions = []  # (id, href)
+    structural_counts = {}
+    for idref in spine_ids:
+        key = structural_key(manifest.get(idref, ""))
+        if key:
+            structural_counts[key] = structural_counts.get(key, 0) + 1
 
     total_new_chapters = 0
     for idref in spine_ids:
@@ -144,6 +172,9 @@ def main():
         html = files[full].decode("utf-8")
         headings = find_headings(html)
         if len(headings) < MIN_HEADINGS_PER_FILE:
+            key = structural_key(href)
+            if key and structural_counts[key] >= 2:
+                spine_chapters.append((href, chapter_title(html, Path(href).stem)))
             continue
 
         offsets = [o for o, _ in headings]
@@ -168,8 +199,21 @@ def main():
         total_new_chapters += len(parts)
         print(f"{href}: {len(parts)} chapters ({', '.join(t for _, t in headings)})")
 
-    if not spine_replacements:
-        print("No splittable number-heading chapters found; nothing to do.")
+    toc_source = ""
+    if nav_path and nav_path in files:
+        toc_source = files[nav_path].decode("utf-8")
+    elif ncx_path and ncx_path in files:
+        toc_source = files[ncx_path].decode("utf-8")
+    existing_names = {Path(h.split("#", 1)[0]).name for h in re.findall(r'(?:href|src)="([^"]+)"', toc_source)}
+    recover_spine_toc = len(spine_chapters) >= 2 and any(
+        Path(href).name not in existing_names for href, _ in spine_chapters
+    )
+    if recover_spine_toc:
+        toc_additions.extend(spine_chapters)
+        total_new_chapters += len(spine_chapters)
+
+    if not spine_replacements and not recover_spine_toc:
+        print("No chapter structure repair needed; nothing to do.")
         sys.exit(0)
 
     # --- Rewrite OPF ---

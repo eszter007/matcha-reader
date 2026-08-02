@@ -4600,8 +4600,6 @@ async function processImage(data, imageState = 0, imagePath = '') {
       const sourceCanvas = source.canvas;
       const sourceW = source.width;
       const sourceH = source.height;
-      const sourceWasCropped = !!source.crop;
-
       // imageState: 0=Normal, 1=H-Split (CW/CCW), 2=V-Split, 3=Rotate & Fit
       // ========================================================================
       // STATE 1: H-Split (Rotate + Split) - EXACT COPY FROM index.html
@@ -4843,91 +4841,55 @@ async function processImage(data, imageState = 0, imagePath = '') {
         rotCtx.drawImage(sourceCanvas, 0, 0);
         rotCtx.setTransform(1, 0, 0, 1, 0, 0);
 
-        // Step 2: Scale to fit the reader viewport (if needed)
-        const fitsInScreen = rotW <= MAX_WIDTH && rotH <= MAX_HEIGHT;
-        
-        if (fitsInScreen && !sourceWasCropped) {
-          // Already fits after rotation - just apply grayscale
-          applyGrayscale(rotCtx, rotW, rotH);
-          const blob = await canvasToDitheredBmp(rotCanvas);
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: rotW, height: rotH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: rotW, finalH: rotH, finalSize: arrBuf.byteLength, imageState: 3 }
-          });
-        } else {
-          // Scale to fit the reader viewport
-          const scale = Math.min(MAX_WIDTH / rotW, MAX_HEIGHT / rotH);
-          const newW = Math.round(rotW * scale);
-          const newH = Math.round(rotH * scale);
+        // Step 2: Scale to fill one viewport dimension before dithering.
+        const scale = Math.min(MAX_WIDTH / rotW, MAX_HEIGHT / rotH);
+        const newW = Math.round(rotW * scale);
+        const newH = Math.round(rotH * scale);
 
-          const scaledCanvas = document.createElement('canvas');
-          scaledCanvas.width = newW;
-          scaledCanvas.height = newH;
-          const scaledCtx = scaledCanvas.getContext('2d');
-          scaledCtx.imageSmoothingEnabled = true;
-          scaledCtx.imageSmoothingQuality = 'high';
-          scaledCtx.fillStyle = '#FFF';
-          scaledCtx.fillRect(0, 0, newW, newH);
-          scaledCtx.drawImage(rotCanvas, 0, 0, newW, newH);
-          applyGrayscale(scaledCtx, newW, newH);
+        const scaledCanvas = document.createElement('canvas');
+        scaledCanvas.width = newW;
+        scaledCanvas.height = newH;
+        const scaledCtx = scaledCanvas.getContext('2d');
+        scaledCtx.imageSmoothingEnabled = true;
+        scaledCtx.imageSmoothingQuality = 'high';
+        scaledCtx.fillStyle = '#FFF';
+        scaledCtx.fillRect(0, 0, newW, newH);
+        scaledCtx.drawImage(rotCanvas, 0, 0, newW, newH);
+        applyGrayscale(scaledCtx, newW, newH);
 
-          const blob = await canvasToDitheredBmp(scaledCanvas);
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: newW, finalH: newH, finalSize: arrBuf.byteLength, imageState: 3 }
-          });
-        }
+        const blob = await canvasToDitheredBmp(scaledCanvas);
+        const arrBuf = await blob.arrayBuffer();
+        resolve({
+          parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
+          meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: newW, finalH: newH, finalSize: arrBuf.byteLength, imageState: 3 }
+        });
       }
       // ========================================================================
       // STATE 0: Normal processing (scale to fit, no split/rotation)
       // ========================================================================
       else {
-        // Normal processing: check if scaling is needed
-        const fitsInScreen = sourceW <= MAX_WIDTH && sourceH <= MAX_HEIGHT;
+        // Always fill one viewport dimension before dithering, including upscaling.
+        const scale = Math.min(MAX_WIDTH / sourceW, MAX_HEIGHT / sourceH);
+        const newW = Math.round(sourceW * scale);
+        const newH = Math.round(sourceH * scale);
 
-        if (fitsInScreen && !sourceWasCropped) {
-          // Image already fits - just convert to native grayscale BMP
-          const c = document.createElement('canvas');
-          c.width = sourceW;
-          c.height = sourceH;
-          const ctx = c.getContext('2d');
-          ctx.fillStyle = '#FFF';
-          ctx.fillRect(0, 0, sourceW, sourceH);
-          ctx.drawImage(sourceCanvas, 0, 0);
-          applyGrayscale(ctx, sourceW, sourceH);
+        const c = document.createElement('canvas');
+        c.width = newW;
+        c.height = newH;
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.fillStyle = '#FFF';
+        ctx.fillRect(0, 0, newW, newH);
+        ctx.drawImage(sourceCanvas, 0, 0, newW, newH);
+        applyGrayscale(ctx, newW, newH);
 
-          const blob = await canvasToDitheredBmp(c);
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: sourceW, height: sourceH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: sourceW, finalH: sourceH, finalSize: arrBuf.byteLength, imageState: 0 }
-          });
-        } else {
-          // Scale to fit the reader viewport
-          const scale = Math.min(MAX_WIDTH / sourceW, MAX_HEIGHT / sourceH);
-          const newW = Math.round(sourceW * scale);
-          const newH = Math.round(sourceH * scale);
-
-          const c = document.createElement('canvas');
-          c.width = newW;
-          c.height = newH;
-          const ctx = c.getContext('2d');
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.fillStyle = '#FFF';
-          ctx.fillRect(0, 0, newW, newH);
-          ctx.drawImage(sourceCanvas, 0, 0, newW, newH);
-          applyGrayscale(ctx, newW, newH);
-
-          const blob = await canvasToDitheredBmp(c);
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: newW, finalH: newH, finalSize: arrBuf.byteLength, imageState: 0 }
-          });
-        }
+        const blob = await canvasToDitheredBmp(c);
+        const arrBuf = await blob.arrayBuffer();
+        resolve({
+          parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
+          meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: newW, finalH: newH, finalSize: arrBuf.byteLength, imageState: 0 }
+        });
       }
     };
     img.onerror = () => {
@@ -4940,12 +4902,8 @@ async function processImage(data, imageState = 0, imagePath = '') {
 }
 
 // --- Chapter splitting for single-file novels -------------------------------------------
-// Many Japanese EPUBs ship the whole novel as one or two huge XHTML files whose chapters
-// exist only as visual number headings (a paragraph containing nothing but 1 / ２ / 三).
-// Detect those, split the file at each heading into its own XHTML (real ToC entries, per-
-// chapter page counters on the device, far less RAM pressure while paginating), rewrite
-// the OPF spine/manifest plus nav/NCX. Returns {blob, chapters} or null when there is
-// nothing to split. Mirror of tools/epub_split_chapters.py -- keep the two in sync.
+// Recover missing ToC entries from spine-file headings and split single-file novels at
+// number-only headings. Mirror of tools/epub_split_chapters.py -- keep the two in sync.
 const MRCH_NUM = '(?:[0-9]{1,3}|[０-９]{1,3}|[〇一二三四五六七八九十百]{1,4})';
 const MRCH_HEADING_RE = new RegExp(
   '(?:<div[^>]*>\\s*)?<p[^>]*>\\s*(?:<span[^>]*>\\s*)?(' + MRCH_NUM + ')\\s*(?:<\\/span>\\s*)?<\\/p>\\s*(?:<\\/div>)?', 'gs');
@@ -4960,6 +4918,17 @@ function mrchFindHeadings(html) {
     out.push({ offset: m.index, title: m[1] });
   }
   return out;
+}
+
+function mrchFindChapterTitle(html, fallback) {
+  const body = (html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i) || [])[1] || html;
+  const textOf = markup => markup.replace(/<rt\b[^>]*>[\s\S]*?<\/rt>/gi, '')
+    .replace(/<[^>]+>/g, '').replace(/&nbsp;|&#160;/gi, ' ').trim();
+  const semanticHeading = body.slice(0, 5000).match(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]>/i);
+  if (semanticHeading) return textOf(semanticHeading[0]) || fallback;
+  const firstText = (body.match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) || [])
+    .map(textOf).find(Boolean);
+  return firstText && firstText.length <= 80 ? firstText : fallback;
 }
 
 function mrchOpenBlocks(html, upto) {
@@ -5022,6 +4991,16 @@ async function splitEpubChapters(file) {
 
   const newFiles = {};
   const tocAdditions = [];   // {href (opf-relative), title}
+  const spineChapters = [];
+  const structuralKey = href => {
+    const m = href.match(/^(.*?)(\d+)(\.(?:xhtml|html|htm))$/i);
+    return m ? m[1] + '#' + m[3].toLowerCase() : null;
+  };
+  const structuralCounts = new Map();
+  for (const idref of spineIds) {
+    const key = structuralKey(manifest[idref] || '');
+    if (key) structuralCounts.set(key, (structuralCounts.get(key) || 0) + 1);
+  }
   let anySplit = false;
   let chapterCount = 0;
 
@@ -5031,7 +5010,14 @@ async function splitEpubChapters(file) {
     const html = await readText(opfDir + href);
     if (!html) continue;
     const headings = mrchFindHeadings(html);
-    if (headings.length < 2) continue;
+    if (headings.length < 2) {
+      const key = structuralKey(href);
+      if (key && structuralCounts.get(key) >= 2) {
+        const fallback = href.split('/').pop().replace(/\.[^.]+$/, '');
+        spineChapters.push({ href, title: mrchFindChapterTitle(html, fallback) });
+      }
+      continue;
+    }
 
     const parts = mrchSplitFile(html, headings.map(h => h.offset));
     const dot = href.lastIndexOf('.');
@@ -5054,16 +5040,25 @@ async function splitEpubChapters(file) {
     anySplit = true;
     chapterCount += parts.length;
   }
-  if (!anySplit) return null;
-
-  const splitNames = new Set(tocAdditions.map(t => t.href.split('/').pop()));
   const baseName = p => (p.split('#')[0]).split('/').pop();
+  let nav = navPath ? await readText(navPath) : null;
+  let ncx = ncxPath ? await readText(ncxPath) : null;
+  const existingNames = new Set();
+  const tocRefRe = /(?:href|src)="([^"]+)"/g;
+  let tocRef;
+  while ((tocRef = tocRefRe.exec(nav || ncx || '')) !== null) existingNames.add(baseName(tocRef[1]));
+  const recoverSpineToc = spineChapters.length >= 2 &&
+    spineChapters.some(t => !existingNames.has(baseName(t.href)));
+  if (recoverSpineToc) {
+    tocAdditions.push(...spineChapters);
+    chapterCount += spineChapters.length;
+  }
+  if (!anySplit && !recoverSpineToc) return null;
 
-  // Nav: numbered entries REPLACE any existing entries pointing into the split files (a
-  // whole-novel title entry would otherwise be listed as if it were a chapter).
-  if (navPath) {
-    let nav = await readText(navPath);
-    if (nav) {
+  const splitNames = new Set(tocAdditions.map(t => baseName(t.href)));
+
+  // Recovered entries replace any existing whole-book entry pointing at the same files.
+  if (navPath && nav) {
       const navDir = navPath.includes('/') ? navPath.slice(0, navPath.lastIndexOf('/') + 1) : '';
       const rel = h => {
         const target = opfDir + h;
@@ -5084,13 +5079,10 @@ async function splitEpubChapters(file) {
         if (mOl) insertAt = nav.indexOf(mOl[1], mOl.index);
       }
       if (insertAt >= 0) newFiles[navPath] = nav.slice(0, insertAt) + items + nav.slice(insertAt);
-    }
   }
 
   // NCX: same replacement semantics.
-  if (ncxPath) {
-    let ncx = await readText(ncxPath);
-    if (ncx) {
+  if (ncxPath && ncx) {
       const ncxDir = ncxPath.includes('/') ? ncxPath.slice(0, ncxPath.lastIndexOf('/') + 1) : '';
       const rel = h => {
         const target = opfDir + h;
@@ -5113,7 +5105,6 @@ async function splitEpubChapters(file) {
         ncx = ncx.replace('</navMap>', points + '</navMap>');
       }
       newFiles[ncxPath] = ncx;
-    }
   }
   newFiles[opfPath] = opf;
 
@@ -5854,12 +5845,11 @@ async function uploadFile() {
         // converted blob and makes file.size point at the optimised size.
         const origFileSize = file.size;
 
-        // Chapter splitting pre-pass: single-file novels whose chapters exist only as
-        // number headings get real per-chapter files + ToC entries (see splitEpubChapters).
+        // Repair chapter structure before image conversion (see splitEpubChapters).
         try {
           const split = await splitEpubChapters(file);
           if (split) {
-            log(`Chapter split: ${split.chapters} number-heading chapters extracted`, '', 'INFO');
+            log(`Chapter structure: ${split.chapters} sections prepared`, '', 'INFO');
             file = new File([split.blob], file.name, { type: 'application/epub+zip' });
           }
         } catch (splitError) {
