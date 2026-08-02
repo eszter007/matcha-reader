@@ -1,5 +1,6 @@
 #include "Epub.h"
 
+#include <BmpToBmpConverter.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -704,6 +705,38 @@ bool Epub::generateCoverBmp(bool cropped) const {
     return success;
   }
 
+  if (FsHelpers::hasBmpExtension(coverImageHref)) {
+    LOG_DBG("EBP", "Using BMP cover image directly");
+    const std::string outPath = getCoverBmpPath(cropped);
+
+    HalFile coverBmp;
+    if (!Storage.openFileForWrite("EBP", outPath, coverBmp)) return false;
+    const bool copied = readItemContentsToStream(coverImageHref, coverBmp, 1024);
+    coverBmp.close();
+
+    if (!copied) {
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+
+    // Sanity-check header so we don't cache a non-BMP blob forever.
+    HalFile verify;
+    if (!Storage.openFileForRead("EBP", outPath, verify)) {
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+    uint8_t sig[2];
+    const bool ok = verify.read(sig, sizeof(sig)) == static_cast<int>(sizeof(sig)) && sig[0] == 'B' && sig[1] == 'M';
+    verify.close();
+    if (!ok) {
+      LOG_ERR("EBP", "Cover item has .bmp extension but is not a BMP, skipping");
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+
+    return true;
+  }
+
   LOG_ERR("EBP", "Cover image is not a supported format, skipping");
   return false;
 }
@@ -812,6 +845,41 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from PNG cover image, success: %s", success ? "yes" : "no");
+    return success;
+  } else if (FsHelpers::hasBmpExtension(coverImageHref)) {
+    LOG_DBG("EBP", "Generating thumb BMP from BMP cover image");
+    const auto sourcePath = getCachePath() + "/.cover-source.bmp";
+
+    HalFile sourceBmp;
+    if (!Storage.openFileForWrite("EBP", sourcePath, sourceBmp)) return false;
+    CancellablePrint cancellableCover(sourceBmp, shouldCancel, cancelCtx);
+    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+      sourceBmp.close();
+      Storage.remove(sourcePath.c_str());
+      return false;
+    }
+    sourceBmp.close();
+
+    if (!Storage.openFileForRead("EBP", sourcePath, sourceBmp)) {
+      Storage.remove(sourcePath.c_str());
+      return false;
+    }
+    HalFile thumbBmp;
+    if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      sourceBmp.close();
+      Storage.remove(sourcePath.c_str());
+      return false;
+    }
+    const bool success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(sourceBmp, thumbBmp, (height * 2) / 3,
+                                                                           height, shouldCancel, cancelCtx);
+    sourceBmp.close();
+    thumbBmp.close();
+    Storage.remove(sourcePath.c_str());
+
+    if (!success) {
+      LOG_ERR("EBP", "Failed to generate thumb BMP from BMP cover image");
+      Storage.remove(getThumbBmpPath(height).c_str());
+    }
     return success;
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
