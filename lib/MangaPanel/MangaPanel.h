@@ -74,8 +74,9 @@ class MangaBook {
   bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
 
   // The folder's cover page: first page_NNNN, else the first non-panel-crop image. Empty when
-  // the folder holds no usable image. Costs a directory listing.
-  static std::string findCoverImage(const std::string& folderPath);
+  // the folder holds no usable image.
+  static std::string findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel = nullptr,
+                                    void* cancelCtx = nullptr);
 
   // Table of contents (toc.idx), optional -- empty when the manga folder
   // has no toc.idx (most don't; SELECT_CHAPTER falls back to percent jump).

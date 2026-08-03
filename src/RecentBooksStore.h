@@ -5,14 +5,7 @@
 #include <string>
 #include <vector>
 
-struct RecentBook {
-  std::string path;
-  std::string title;
-  std::string author;
-  std::string coverBmpPath;
-
-  bool operator==(const RecentBook& other) const { return path == other.path; }
-};
+#include "RecentBook.h"
 
 class RecentBooksStore : public PersistableStore<RecentBooksStore> {
  private:
@@ -21,9 +14,6 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   static constexpr int MAX_RECENT_BOOKS = 10;
 
  public:
-  // Populate directly (library scan cache reuses this store's JSON schema for a second file).
-  void setBooks(std::vector<RecentBook> books) { recentBooks = std::move(books); }
-
   RecentBooksStore() = default;
   ~RecentBooksStore() = default;
 
@@ -33,7 +23,7 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   static const char* getFilePath() { return "/.crosspoint/recent.json"; }
   // Same schema, different file: the library scan cache is a second store instance living at
   // its own path, so it can't use the singleton's fixed getFilePath().
-  bool saveToPath(const char* path) const;
+  static bool saveBooksToPath(const std::vector<RecentBook>& books, const char* path);
   bool loadFromPath(const char* path);
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
@@ -66,6 +56,7 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
 
   // Get the list of recent books (most recent first)
   const std::vector<RecentBook>& getBooks() const { return recentBooks; }
+  std::vector<RecentBook> takeBooks() { return std::move(recentBooks); }
 
   // Get the count of recent books
   int getCount() const { return static_cast<int>(recentBooks.size()); }

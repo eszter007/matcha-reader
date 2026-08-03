@@ -469,7 +469,7 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
 
 XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
                                       std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
-                                      size_t chunkSize) {
+                                      size_t chunkSize, bool (*shouldCancel)(void*), void* cancelCtx) {
   if (!m_isOpen) {
     return XtcError::FILE_NOT_FOUND;
   }
@@ -515,6 +515,7 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
   size_t totalRead = 0;
 
   while (totalRead < bitmapSize) {
+    if (shouldCancel && shouldCancel(cancelCtx)) return XtcError::READ_ERROR;
     size_t toRead = std::min(chunkSize, bitmapSize - totalRead);
     size_t bytesRead = m_file.read(chunk.data(), toRead);
 

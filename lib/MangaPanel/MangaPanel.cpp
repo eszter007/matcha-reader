@@ -83,13 +83,22 @@ std::string MangaBook::getTitle() const {
   return folderPath;
 }
 
-std::string MangaBook::findCoverImage(const std::string& folderPath) {
+std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel,
+                                      void* cancelCtx) {
+  static constexpr const char* kCanonicalCovers[] = {"/page_0000.jpg", "/page_0000.bmp", "/page_0000.png"};
+  for (const char* suffix : kCanonicalCovers) {
+    if (shouldCancel && shouldCancel(cancelCtx)) return "";
+    const std::string path = folderPath + suffix;
+    if (Storage.exists(path.c_str())) return path;
+  }
+
   auto dir = Storage.open(folderPath.c_str());
   if (!dir || !dir.isDirectory()) return "";
   dir.rewindDirectory();
   std::string firstPageImage;
   std::string firstAnyImage;
   for (auto mf = dir.openNextFile(); mf; mf = dir.openNextFile()) {
+    if (shouldCancel && shouldCancel(cancelCtx)) return "";
     char imgName[200];
     mf.getName(imgName, sizeof(imgName));
     if (imgName[0] == '.' || mf.isDirectory()) continue;
@@ -127,7 +136,7 @@ bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, vo
   const std::string thumbPath = getThumbBmpPath(height);
   if (Storage.exists(thumbPath.c_str())) return true;
 
-  const std::string cover = findCoverImage(folderPath);
+  const std::string cover = findCoverImage(folderPath, shouldCancel, cancelCtx);
   if (cover.empty()) return false;
   const bool isJpg = FsHelpers::hasJpgExtension(cover);
   const bool isPng = FsHelpers::hasPngExtension(cover);
