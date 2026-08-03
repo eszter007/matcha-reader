@@ -19,6 +19,14 @@ void write32(Print& out, const uint32_t v) {
   out.write(static_cast<uint8_t>((v >> 24) & 0xFF));
 }
 
+// A monochrome manga page is already spatially dithered. Box-filtering it back to gray and then
+// feeding that gray into Atkinson a second time otherwise biases small thumbnails toward black:
+// Atkinson intentionally propagates only 75% of the quantization error, so dark midtones lose
+// part of the error that would have restored their white-dot density. Apply a gentle, endpoint-
+// preserving midtone lift before the second dither. Pure line work (0) and paper (255) remain
+// byte-for-byte unchanged; the maximum lift is 32 at mid-gray.
+int restoreMonochromeMidtone(const int gray) { return gray + (gray * (255 - gray) + 255) / 510; }
+
 // `topDown` follows the SOURCE's row order: rows are emitted in the order they are read, so
 // letting the header describe that order is what avoids buffering the whole image just to flip
 // it (a 266x400 thumb would be ~14KB of it).
@@ -91,6 +99,7 @@ bool BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(HalFile& srcFile, Print& 
     return false;
   }
   Atkinson1BitDitherer dither(targetWidth);
+  const bool restoreTone = src.is1Bit();
 
   const bool topDown = src.isTopDown();
   writeBmpHeader1bit(bmpOut, targetWidth, targetHeight, topDown);
@@ -101,7 +110,8 @@ bool BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(HalFile& srcFile, Print& 
     memset(outRow.get(), 0, static_cast<size_t>(outRowBytes));
     for (int dx = 0; dx < targetWidth; dx++) {
       // No source pixel landed here (possible only at a rounding edge): treat as paper white.
-      const int gray = count[dx] ? static_cast<int>(sum[dx] / count[dx]) : 255;
+      int gray = count[dx] ? static_cast<int>(sum[dx] / count[dx]) : 255;
+      if (restoreTone) gray = restoreMonochromeMidtone(gray);
       if (dither.processPixel(gray, dx)) {
         outRow[dx / 8] |= static_cast<uint8_t>(0x80 >> (dx % 8));  // palette index 1 = white
       }

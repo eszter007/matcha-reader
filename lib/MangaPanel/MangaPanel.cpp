@@ -115,6 +115,10 @@ std::string MangaBook::findCoverImage(const std::string& folderPath) {
 std::string MangaBook::getThumbBmpPath() const { return getCachePath() + "/thumb_[HEIGHT].bmp"; }
 
 std::string MangaBook::getThumbBmpPath(int height) const {
+  // Keep this stable: users may remove legacy near-black BMP thumbnails manually, after which
+  // the corrected BmpToBmpConverter recreates them at this same path. Do not version the filename
+  // just to invalidate that historical output; doing so abandons otherwise-valid caches on every
+  // device and makes manga behave differently from EPUB/XTC.
   return getCachePath() + "/thumb_" + std::to_string(height) + ".bmp";
 }
 
