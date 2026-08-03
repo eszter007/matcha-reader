@@ -1,5 +1,6 @@
 #include "RecentBooksStore.h"
 
+#include <BufferedFile.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -7,11 +8,42 @@
 #include <Xtc.h>
 
 #include <algorithm>
-#include <iterator>
 
 namespace {
 constexpr size_t LIBRARY_CACHE_MAX_BOOKS = 2048;
-}
+
+class JsonFileReader {
+ public:
+  explicit JsonFileReader(HalFile& file) : input_(file, 512) {}
+
+  int read() {
+    uint8_t value = 0;
+    return input_.read(&value, 1) == 1 ? value : -1;
+  }
+
+  size_t readBytes(char* output, size_t length) { return input_.read(output, length); }
+
+ private:
+  serialization::BufferedFileReader input_;
+};
+
+class JsonFileWriter final : public Print {
+ public:
+  explicit JsonFileWriter(HalFile& file) : output_(file, 512) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+
+  size_t write(const uint8_t* input, size_t length) override {
+    output_.write(input, length);
+    return length;
+  }
+
+  bool finish() { return output_.flush(); }
+
+ private:
+  serialization::BufferedFileWriter output_;
+};
+}  // namespace
 
 void RecentBooksStore::toJson(JsonDocument& doc) const {
   JsonArray arr = doc["books"].to<JsonArray>();
@@ -39,7 +71,7 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
-    recentBooks.push_back(book);
+    recentBooks.push_back(std::move(book));
   }
 
   LOG_DBG("RBS", "Recent books loaded from file (%d entries)", getCount());
@@ -145,14 +177,74 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   return RecentBook{path, "", "", ""};
 }
 
-bool RecentBooksStore::saveToPath(const char* path) const {
-  JsonDocument doc;
-  toJson(doc);
-  return writeDocToFile(path, doc);
+bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, const char* path) {
+  Storage.mkdir("/.crosspoint");
+  const std::string tmpPath = std::string(path) + ".tmp";
+  bool written = false;
+  {
+    HalFile file;
+    if (!Storage.openFileForWrite("RBS", tmpPath, file)) return false;
+    JsonFileWriter output(file);
+
+    constexpr char PREFIX[] = "{\"books\":[";
+    output.write(reinterpret_cast<const uint8_t*>(PREFIX), sizeof(PREFIX) - 1);
+
+    JsonDocument record;
+    bool first = true;
+    for (const auto& book : books) {
+      if (!first) output.write(static_cast<uint8_t>(','));
+      first = false;
+      record.clear();
+      record["path"] = book.path;
+      record["title"] = book.title;
+      record["author"] = book.author;
+      record["coverBmpPath"] = book.coverBmpPath;
+      serializeJson(record, output);
+    }
+
+    constexpr char SUFFIX[] = "]}";
+    output.write(reinterpret_cast<const uint8_t*>(SUFFIX), sizeof(SUFFIX) - 1);
+    written = output.finish();
+  }
+  if (!written) {
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+
+  const std::string backupPath = std::string(path) + ".bak";
+  if (!Storage.exists(path) && Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
+    LOG_ERR("RBS", "Failed to restore %s before replacing it", path);
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  Storage.remove(backupPath.c_str());
+  if (Storage.exists(path) && !Storage.rename(path, backupPath.c_str())) {
+    LOG_ERR("RBS", "Failed to back up %s before replacing it", path);
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  if (!Storage.rename(tmpPath.c_str(), path)) {
+    LOG_ERR("RBS", "Failed to replace %s", path);
+    if (Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
+      LOG_ERR("RBS", "Previous cache remains at %s", backupPath.c_str());
+    }
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  Storage.remove(backupPath.c_str());
+  return true;
 }
 
 bool RecentBooksStore::loadFromPath(const char* path) {
+  if (!Storage.exists(path)) return false;
+  HalFile file;
+  if (!Storage.openFileForRead("RBS", path, file)) return false;
+  JsonFileReader input(file);
   JsonDocument doc;
-  if (!readDocFromFile(path, doc)) return false;
+  const DeserializationError error = deserializeJson(doc, input);
+  if (error) {
+    LOG_ERR("RBS", "JSON parse error in %s: %s", path, error.c_str());
+    return false;
+  }
   return fromJson(doc.as<JsonVariantConst>(), LIBRARY_CACHE_MAX_BOOKS);
 }

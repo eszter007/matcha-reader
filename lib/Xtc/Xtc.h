@@ -27,6 +27,8 @@ class Xtc {
   bool loaded;
 
  public:
+  using CancelFn = bool (*)(void*);
+
   explicit Xtc(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)), loaded(false) {
     // Create cache key based on filepath (same as Epub)
     cachePath = cacheDir + "/xtc_" + std::to_string(std::hash<std::string>{}(this->filepath));
@@ -66,11 +68,11 @@ class Xtc {
   // Thumbnail support (for Continue Reading card)
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
-  bool generateThumbBmp(int height) const;
+  bool generateThumbBmp(int height, CancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   // Low-memory streaming fallback for 2-bit cover thumbnails (used when the full page buffer
   // can't be allocated on a fragmented heap). Column-by-column, ~5KB peak.
   bool generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, uint16_t thumbWidth, uint16_t thumbHeight,
-                                float scale) const;
+                                float scale, CancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
 
   // Page access
   uint32_t getPageCount() const;
@@ -96,7 +98,8 @@ class Xtc {
    */
   xtc::XtcError loadPageStreaming(uint32_t pageIndex,
                                   std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
-                                  size_t chunkSize = 1024) const;
+                                  size_t chunkSize = 1024, CancelFn shouldCancel = nullptr,
+                                  void* cancelCtx = nullptr) const;
 
   // Progress calculation
   uint8_t calculateProgress(uint32_t currentPage) const;

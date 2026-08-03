@@ -277,9 +277,13 @@ bool Xtc::generateCoverBmp() const {
 std::string Xtc::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
 std::string Xtc::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
-bool Xtc::generateThumbBmp(int height) const {
+bool Xtc::generateThumbBmp(int height, CancelFn shouldCancel, void* cancelCtx) const {
+  const std::string thumbPath = getThumbBmpPath(height);
+  const auto cancelled = [shouldCancel, cancelCtx] { return shouldCancel && shouldCancel(cancelCtx); };
+  if (cancelled()) return false;
+
   // Already generated
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
+  if (Storage.exists(thumbPath.c_str())) {
     return true;
   }
 
@@ -319,19 +323,28 @@ bool Xtc::generateThumbBmp(int height) const {
   if (scale >= 1.0f) {
     // Page is already small enough, just use cover.bmp
     // Copy cover.bmp to thumb.bmp
-    if (generateCoverBmp()) {
+    if (generateCoverBmp() && !cancelled()) {
       HalFile src, dst;
       if (Storage.openFileForRead("XTC", getCoverBmpPath(), src)) {
-        if (Storage.openFileForWrite("XTC", getThumbBmpPath(height), dst)) {
+        if (Storage.openFileForWrite("XTC", thumbPath, dst)) {
           uint8_t buffer[512];
           while (src.available()) {
+            if (cancelled()) {
+              dst.close();
+              Storage.remove(thumbPath.c_str());
+              return false;
+            }
             size_t bytesRead = src.read(buffer, sizeof(buffer));
-            dst.write(buffer, bytesRead);
+            if (dst.write(buffer, bytesRead) != bytesRead) {
+              dst.close();
+              Storage.remove(thumbPath.c_str());
+              return false;
+            }
           }
         }
       }
       LOG_DBG("XTC", "Copied cover to thumb (no scaling needed)");
-      return Storage.exists(getThumbBmpPath(height).c_str());
+      return Storage.exists(thumbPath.c_str());
     }
     return false;
   }
@@ -361,23 +374,32 @@ bool Xtc::generateThumbBmp(int height) const {
     // are half the size and keep the simple path.
     if (bitDepth == 2) {
       LOG_INF("XTC", "Page buffer (%lu bytes) OOM; using streaming thumb generator", bitmapSize);
-      return generateThumbBmpStreamed(height, pageInfo, thumbWidth, thumbHeight, scale);
+      return generateThumbBmpStreamed(height, pageInfo, thumbWidth, thumbHeight, scale, shouldCancel, cancelCtx);
     }
     LOG_ERR("XTC", "Failed to allocate page buffer (%lu bytes)", bitmapSize);
     return false;
   }
 
-  // Load first page (cover)
-  size_t bytesRead = const_cast<xtc::XtcParser*>(parser.get())->loadPage(0, pageBuffer, bitmapSize);
-  if (bytesRead == 0) {
-    LOG_ERR("XTC", "Failed to load cover page for thumb");
+  // Read in bounded chunks so input/render cancellation is observed during the page load too.
+  size_t bytesRead = 0;
+  const xtc::XtcError readResult = const_cast<Xtc*>(this)->loadPageStreaming(
+      0,
+      [&](const uint8_t* data, const size_t size, const size_t offset) {
+        if (offset + size > bitmapSize) return;
+        std::memcpy(pageBuffer + offset, data, size);
+        bytesRead = offset + size;
+      },
+      4096, shouldCancel, cancelCtx);
+  const bool wasCancelled = readResult == xtc::XtcError::CANCELLED || cancelled();
+  if (readResult != xtc::XtcError::OK || bytesRead != bitmapSize || wasCancelled) {
+    if (!wasCancelled) LOG_ERR("XTC", "Failed to load cover page for thumb");
     free(pageBuffer);
     return false;
   }
 
   // Create thumbnail BMP file - use 1-bit format for fast home screen rendering (no gray passes)
   HalFile thumbBmp;
-  if (!Storage.openFileForWrite("XTC", getThumbBmpPath(height), thumbBmp)) {
+  if (!Storage.openFileForWrite("XTC", thumbPath, thumbBmp)) {
     LOG_DBG("XTC", "Failed to create thumb BMP file");
     free(pageBuffer);
     return false;
@@ -386,7 +408,12 @@ bool Xtc::generateThumbBmp(int height) const {
   // Write 1-bit BMP header (top-down row order)
   BmpHeader bmpHeader;
   createBmpHeader(&bmpHeader, thumbWidth, thumbHeight, BmpRowOrder::TopDown);
-  thumbBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(bmpHeader));
+  if (thumbBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(bmpHeader)) != sizeof(bmpHeader)) {
+    free(pageBuffer);
+    thumbBmp.close();
+    Storage.remove(thumbPath.c_str());
+    return false;
+  }
 
   const uint32_t rowSize = (thumbWidth + 31) / 32 * 4;
 
@@ -394,6 +421,8 @@ bool Xtc::generateThumbBmp(int height) const {
   uint8_t* rowBuffer = static_cast<uint8_t*>(malloc(rowSize));
   if (!rowBuffer) {
     free(pageBuffer);
+    thumbBmp.close();
+    Storage.remove(thumbPath.c_str());
     return false;
   }
 
@@ -409,6 +438,13 @@ bool Xtc::generateThumbBmp(int height) const {
   uint8_t rowsSinceYield = 0;
 
   for (uint16_t dstY = 0; dstY < thumbHeight; dstY++) {
+    if (cancelled()) {
+      free(rowBuffer);
+      free(pageBuffer);
+      thumbBmp.close();
+      Storage.remove(thumbPath.c_str());
+      return false;
+    }
     memset(rowBuffer, 0xFF, rowSize);  // Start with all white (bit 1)
 
     // Calculate source Y range with bounds checking
@@ -497,7 +533,13 @@ bool Xtc::generateThumbBmp(int height) const {
     }
 
     // Write row (already padded to 4-byte boundary by rowSize)
-    thumbBmp.write(rowBuffer, rowSize);
+    if (thumbBmp.write(rowBuffer, rowSize) != rowSize) {
+      free(rowBuffer);
+      free(pageBuffer);
+      thumbBmp.close();
+      Storage.remove(thumbPath.c_str());
+      return false;
+    }
     yieldDuringThumbnail(rowsSinceYield);
   }
 
@@ -514,8 +556,9 @@ bool Xtc::generateThumbBmp(int height) const {
 // Point-samples one source pixel per thumb pixel (last source column mapping to a thumb column
 // wins). Peak RAM: one source column (~100 B) + the packed 1-bit thumb (~4.5 KB).
 bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, uint16_t thumbWidth, uint16_t thumbHeight,
-                                   float scale) const {
+                                   float scale, CancelFn shouldCancel, void* cancelCtx) const {
   if (thumbWidth == 0 || thumbHeight == 0 || pageInfo.width == 0 || pageInfo.height == 0) return false;
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
   const size_t colBytes = (static_cast<size_t>(pageInfo.height) + 7) / 8;
   const size_t planeSize = (static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8;
@@ -535,7 +578,7 @@ bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, ui
 
   size_t colFill = 0;
   uint32_t colIndex = 0;
-  const_cast<Xtc*>(this)->loadPageStreaming(
+  const xtc::XtcError streamResult = const_cast<Xtc*>(this)->loadPageStreaming(
       0,
       [&](const uint8_t* data, size_t size, size_t offset) {
         for (size_t i = 0; i < size; i++) {
@@ -566,7 +609,8 @@ bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, ui
           colIndex++;
         }
       },
-      4096);
+      4096, shouldCancel, cancelCtx);
+  if (streamResult != xtc::XtcError::OK || (shouldCancel && shouldCancel(cancelCtx))) return false;
 
   HalFile thumbBmp;
   if (!Storage.openFileForWrite("XTC", getThumbBmpPath(height), thumbBmp)) {
@@ -575,8 +619,13 @@ bool Xtc::generateThumbBmpStreamed(int height, const xtc::PageInfo& pageInfo, ui
   }
   BmpHeader bmpHeader;
   createBmpHeader(&bmpHeader, thumbWidth, thumbHeight, BmpRowOrder::TopDown);
-  thumbBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(bmpHeader));
-  thumbBmp.write(thumb.get(), static_cast<size_t>(rowSize) * thumbHeight);
+  const size_t pixelsSize = static_cast<size_t>(rowSize) * thumbHeight;
+  if (thumbBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(bmpHeader)) != sizeof(bmpHeader) ||
+      thumbBmp.write(thumb.get(), pixelsSize) != pixelsSize) {
+    thumbBmp.close();
+    Storage.remove(getThumbBmpPath(height).c_str());
+    return false;
+  }
   LOG_DBG("XTC", "Generated streaming thumb BMP (%dx%d): %s", thumbWidth, thumbHeight, getThumbBmpPath(height).c_str());
   return true;
 }
@@ -618,11 +667,12 @@ size_t Xtc::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) con
 
 xtc::XtcError Xtc::loadPageStreaming(uint32_t pageIndex,
                                      std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
-                                     size_t chunkSize) const {
+                                     size_t chunkSize, CancelFn shouldCancel, void* cancelCtx) const {
   if (!loaded || !parser) {
     return xtc::XtcError::FILE_NOT_FOUND;
   }
-  return const_cast<xtc::XtcParser*>(parser.get())->loadPageStreaming(pageIndex, callback, chunkSize);
+  return const_cast<xtc::XtcParser*>(parser.get())
+      ->loadPageStreaming(pageIndex, callback, chunkSize, shouldCancel, cancelCtx);
 }
 
 uint8_t Xtc::calculateProgress(uint32_t currentPage) const {

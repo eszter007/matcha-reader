@@ -33,7 +33,7 @@ class CancellablePrint final : public Print {
 };
 }  // namespace
 
-bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
+bool Epub::findContentOpfFile(std::string* contentOpfFile, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   const auto containerPath = "META-INF/container.xml";
   size_t containerSize;
 
@@ -50,7 +50,7 @@ bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   }
 
   // Stream read (reusing your existing stream logic)
-  if (!readItemContentsToStream(containerPath, containerParser, 512)) {
+  if (!readItemContentsToStream(containerPath, containerParser, 512, false, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not read META-INF/container.xml");
     return false;
   }
@@ -65,9 +65,10 @@ bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   return true;
 }
 
-bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const bool writeSpineEntries) {
+bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const bool writeSpineEntries,
+                           BmpConvertCancelFn shouldCancel, void* cancelCtx) {
   std::string contentOpfFilePath;
-  if (!findContentOpfFile(&contentOpfFilePath)) {
+  if (!findContentOpfFile(&contentOpfFilePath, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not find content.opf in zip");
     return false;
   }
@@ -89,7 +90,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
     return false;
   }
 
-  if (!readItemContentsToStream(contentOpfFilePath, opfParser, 1024)) {
+  if (!readItemContentsToStream(contentOpfFilePath, opfParser, 1024, false, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not read content.opf");
     return false;
   }
@@ -104,6 +105,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   // Guide-based cover fallback: if no cover found via metadata/properties,
   // try extracting the image reference from the guide's cover page XHTML
   if (bookMetadata.coverItemHref.empty() && !opfParser.guideCoverPageHref.empty()) {
+    if (shouldCancel && shouldCancel(cancelCtx)) return false;
     LOG_DBG("EBP", "No cover from metadata, trying guide cover page: %s", opfParser.guideCoverPageHref.c_str());
     size_t coverPageSize;
     uint8_t* coverPageData = readItemContentsToBytes(opfParser.guideCoverPageHref, &coverPageSize, true);
@@ -164,7 +166,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   return true;
 }
 
-bool Epub::parseTocNcxFile() const {
+bool Epub::parseTocNcxFile(BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   // the ncx file should have been specified in the content.opf file
   if (tocNcxItem.empty()) {
     LOG_DBG("EBP", "No ncx file specified");
@@ -188,7 +190,7 @@ bool Epub::parseTocNcxFile() const {
 
   // Stream the decompressed NCX straight into the parser instead of round-tripping
   // through a temp file on the SD card (decompress -> write -> reopen -> reread -> delete).
-  if (!readItemContentsToStream(tocNcxItem, ncxParser, 1024)) {
+  if (!readItemContentsToStream(tocNcxItem, ncxParser, 1024, false, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not read toc ncx file");
     return false;
   }
@@ -197,7 +199,7 @@ bool Epub::parseTocNcxFile() const {
   return true;
 }
 
-bool Epub::parseTocNavFile() const {
+bool Epub::parseTocNavFile(BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   // the nav file should have been specified in the content.opf file (EPUB 3)
   if (tocNavItem.empty()) {
     LOG_DBG("EBP", "No nav file specified");
@@ -224,7 +226,7 @@ bool Epub::parseTocNavFile() const {
 
   // Stream the decompressed nav document straight into the parser instead of round-tripping
   // through a temp file on the SD card (decompress -> write -> reopen -> reread -> delete).
-  if (!readItemContentsToStream(tocNavItem, navParser, 1024)) {
+  if (!readItemContentsToStream(tocNavItem, navParser, 1024, false, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not read toc nav file");
     return false;
   }
@@ -399,8 +401,10 @@ void Epub::parseCssFiles() const {
 }
 
 // load in the meta data for the epub file
-bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
+bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvertCancelFn shouldCancel,
+                void* cancelCtx) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
   // Open the optional content accessor before any parsing. Ships as a no-op
   // here, so this always succeeds with a null handle and costs one call.
@@ -424,7 +428,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         cssParser->deleteCache();
 
         BookMetadataCache::BookMetadata cachedMetadata = bookMetadataCache->coreMetadata;
-        if (!parseContentOpf(cachedMetadata, /*writeSpineEntries=*/false)) {
+        if (!parseContentOpf(cachedMetadata, /*writeSpineEntries=*/false, shouldCancel, cancelCtx)) {
           LOG_ERR("EBP", "Could not parse content.opf from cached bookMetadata for CSS files");
           // continue anyway - book will work without CSS and we'll still load any inline style CSS
         } else {
@@ -461,6 +465,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   if (!buildIfMissing) {
     return false;
   }
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
   // Cache doesn't exist or is invalid, build it
   LOG_DBG("EBP", "Cache not found, building spine/TOC cache");
@@ -481,11 +486,11 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     LOG_ERR("EBP", "Could not begin writing content.opf pass");
     return false;
   }
-  if (!parseContentOpf(bookMetadata)) {
+  if (!parseContentOpf(bookMetadata, true, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not parse content.opf");
     return false;
   }
-  discoverCssFilesFromZip();
+  if (!skipLoadingCss) discoverCssFilesFromZip();
   if (!bookMetadataCache->endContentOpfPass()) {
     LOG_ERR("EBP", "Could not end writing content.opf pass");
     return false;
@@ -500,17 +505,18 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
 
   bool tocParsed = false;
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
   // Try EPUB 3 nav document first (preferred)
   if (!tocNavItem.empty()) {
     LOG_DBG("EBP", "Attempting to parse EPUB 3 nav document");
-    tocParsed = parseTocNavFile();
+    tocParsed = parseTocNavFile(shouldCancel, cancelCtx);
   }
 
   // Fall back to NCX if nav parsing failed or wasn't available
   if (!tocParsed && !tocNcxItem.empty()) {
     LOG_DBG("EBP", "Falling back to NCX TOC");
-    tocParsed = parseTocNcxFile();
+    tocParsed = parseTocNcxFile(shouldCancel, cancelCtx);
   }
 
   if (!tocParsed) {
@@ -522,6 +528,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     LOG_ERR("EBP", "Could not end writing toc pass");
     return false;
   }
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
   LOG_DBG("EBP", "TOC pass completed in %lu ms", millis() - tocStart);
 
   // Close the cache files
@@ -913,13 +920,21 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
 }
 
 bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize,
-                                    const bool allowEarlyStop) const {
+                                    const bool allowEarlyStop, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   if (itemHref.empty()) {
     LOG_DBG("EBP", "Failed to read item, empty href");
     return false;
   }
 
   const std::string path = FsHelpers::normalisePath(itemHref);
+
+  if (shouldCancel) {
+    CancellablePrint cancellable(out, shouldCancel, cancelCtx);
+    if (contentaccess::handles(itemSource, path)) {
+      return contentaccess::readToStream(itemSource, path, cancellable);
+    }
+    return ZipFile(filepath).readFileToStream(path.c_str(), cancellable, chunkSize, allowEarlyStop);
+  }
 
   if (contentaccess::handles(itemSource, path)) {
     return contentaccess::readToStream(itemSource, path, out);
