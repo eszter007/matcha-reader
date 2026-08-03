@@ -342,7 +342,6 @@ void RecentBooksActivity::recordIndexEntry(const std::string& path, const uint32
 
 void RecentBooksActivity::startLibraryScan() {
   loadLibraryIndex();
-  scan_.activeDir.close();
   scan_ = LibraryScanState{};
   scan_.active = true;
   scan_.dirStack.reserve(16);
@@ -783,7 +782,6 @@ void RecentBooksActivity::onExit() {
   // sees the held lock, drops any partial thumbnail and exits before activity state is cleared.
   stopCoverWorker();
   Activity::onExit();
-  scan_.activeDir.close();
   scan_ = LibraryScanState{};
   libraryIndex_.clear();
   recentBooks.clear();
