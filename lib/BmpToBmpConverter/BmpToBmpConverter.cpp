@@ -25,9 +25,7 @@ void write32(Print& out, const uint32_t v) {
 // part of the error that would have restored their white-dot density. Apply a gentle, endpoint-
 // preserving midtone lift before the second dither. Pure line work (0) and paper (255) remain
 // byte-for-byte unchanged; the maximum lift is 32 at mid-gray.
-int restoreMonochromeMidtone(const int gray) {
-  return gray + (gray * (255 - gray) + 255) / 510;
-}
+int restoreMonochromeMidtone(const int gray) { return gray + (gray * (255 - gray) + 255) / 510; }
 
 // `topDown` follows the SOURCE's row order: rows are emitted in the order they are read, so
 // letting the header describe that order is what avoids buffering the whole image just to flip
