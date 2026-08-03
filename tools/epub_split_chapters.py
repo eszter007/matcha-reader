@@ -152,6 +152,8 @@ def main():
     new_files = {}
     toc_additions = []  # (href_rel_to_opf, title)
     spine_chapters = []
+    toc_order = {}
+    spine_order = {idref: index for index, idref in enumerate(spine_ids)}
     spine_replacements = {}  # original idref -> [idrefs]
     manifest_additions = []  # (id, href)
     structural_counts = {}
@@ -175,6 +177,7 @@ def main():
             key = structural_key(href)
             if key and structural_counts[key] >= 2:
                 spine_chapters.append((href, chapter_title(html, Path(href).stem)))
+                toc_order[href] = spine_order[idref]
             continue
 
         offsets = [o for o, _ in headings]
@@ -195,6 +198,7 @@ def main():
             new_files[str(Path(opf_dir) / part_href)] = part.encode("utf-8")
             part_ids.append(part_id)
             toc_additions.append((part_href, headings[i][1]))
+            toc_order[part_href] = spine_order[idref] + i / len(parts)
         spine_replacements[idref] = part_ids
         total_new_chapters += len(parts)
         print(f"{href}: {len(parts)} chapters ({', '.join(t for _, t in headings)})")
@@ -215,6 +219,7 @@ def main():
     if not spine_replacements and not recover_spine_toc:
         print("No chapter structure repair needed; nothing to do.")
         sys.exit(0)
+    toc_additions.sort(key=lambda item: toc_order[item[0]])
 
     # --- Rewrite OPF ---
     for part_id, part_href in manifest_additions:

@@ -73,7 +73,7 @@ Reading streak, weekly minutes, books finished, total time, and a monthly calend
 - **Per-book reader settings** — font, size, spacing, margins, orientation and more are remembered per book; the global settings page holds the defaults for books you haven't opened yet
 - **CJK fallback font** — a non-Japanese book with the odd kanji renders it from a built-in font covering kana, the 2,136 Jōyō and 863 Jinmeiyō kanji
 - **Chapter splitting** — Japanese novels shipped as one giant XHTML file get real chapters (and a working ToC) when uploaded with **Optimize EPUB**
-- **Device-ready EPUB images** — **Optimize EPUB** fits images to the X3/X4 screen and writes dithered 1-bit BMPs using the manga pipeline's Atkinson diffusion
+- **Device-ready EPUB images** — **Optimize EPUB** fits images to the X3/X4 reader viewport and writes 1-bit BMPs using serpentine Floyd–Steinberg dithering
 - **Instant image page turns** — the next page's image decodes in the background, so illustrated novels don't stall on it
 - **Transparent sleep screen** — a wallpaper overlaid on the page you were reading, so the book shows through
 - **Book side margins** — ignore the book's own CSS side margins by default, so the text column follows your margin setting
