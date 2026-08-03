@@ -189,12 +189,17 @@ void MangaReaderActivity::loadCurrentPagePanels() {
   bool hasCrops = false;
   bool cropsBmp = false;
   bool panelsBw = false;
+  PanelCropDims firstPanelDims;
   if (!loadedPanels.empty() && book) {
     const std::string bmp0 = panelCropPathExt(0, ".bmp");
     if (Storage.exists(bmp0.c_str())) {
       hasCrops = true;
       cropsBmp = true;
-      panelsBw = BmpToFramebufferConverter::isMonochromeStatic(bmp0);
+      BmpToFramebufferConverter::Metadata metadata;
+      if (BmpToFramebufferConverter::getMetadataStatic(bmp0, metadata)) {
+        panelsBw = metadata.monochrome;
+        firstPanelDims = {metadata.dimensions.width, metadata.dimensions.height};
+      }
     } else if (Storage.exists(panelCropPathExt(0, ".jpg").c_str())) {
       hasCrops = true;
     }
@@ -203,10 +208,15 @@ void MangaReaderActivity::loadCurrentPagePanels() {
   // (cheap header read) so renderFullPage can pick the fast path. Only .bmp pages can be
   // monochrome -- jpg/png always go the grayscale route.
   bool bwOnly = false;
+  ImageDimensions bmpDims{0, 0};
   if (book) {
     const std::string pageImg = book->getPageImagePath(currentPage);
     if (FsHelpers::hasBmpExtension(pageImg)) {
-      bwOnly = BmpToFramebufferConverter::isMonochromeStatic(pageImg);
+      BmpToFramebufferConverter::Metadata metadata;
+      if (BmpToFramebufferConverter::getMetadataStatic(pageImg, metadata)) {
+        bwOnly = metadata.monochrome;
+        bmpDims = metadata.dimensions;
+      }
     }
   }
   // Arm the first-panel prefetch for this page only when panel-zoom has been used in this book
@@ -223,9 +233,12 @@ void MangaReaderActivity::loadCurrentPagePanels() {
     panelsLoaded = loaded;
     pageHasPanelCrops = hasCrops;
     currentPageBwOnly = bwOnly;
+    currentPageBmpWidth = bmpDims.width;
+    currentPageBmpHeight = bmpDims.height;
     panelCropIsBmp = cropsBmp;
     panelsBwOnly = panelsBw;
     panelDims.assign(panels.size(), {});
+    if (!panelDims.empty() && firstPanelDims.w > 0 && firstPanelDims.h > 0) panelDims[0] = firstPanelDims;
     firstPanelPrefetched = !armFirst;
     nextPanelPrefetched = true;
   }
@@ -633,8 +646,9 @@ void MangaReaderActivity::renderFullPage() {
   // to the probe whenever the cache can't prove its geometry (see fullPageGeomFromCache).
   FullPageGeom g;
   if (!fullPageGeomFromCache(cache, g)) {
-    ImageDimensions dims = {0, 0};
-    if (!decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0) {
+    ImageDimensions dims = {static_cast<int16_t>(currentPageBmpWidth), static_cast<int16_t>(currentPageBmpHeight)};
+    if ((dims.width <= 0 || dims.height <= 0) &&
+        (!decoder->getDimensions(imgPath, dims) || dims.width <= 0 || dims.height <= 0)) {
       renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true);
       renderer.displayBuffer();
       return;

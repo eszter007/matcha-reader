@@ -13,6 +13,16 @@
 // common case (1-bit line-art manga) renders BW-only in a single pass anyway.
 class BmpToFramebufferConverter final : public ImageToFramebufferDecoder {
  public:
+  struct Metadata {
+    ImageDimensions dimensions{0, 0};
+    bool monochrome = false;
+  };
+
+  // Reads all navigation-critical BMP header facts in one file open. Callers that need both
+  // dimensions and bit depth should use this instead of getDimensionsStatic() followed by
+  // isMonochromeStatic(): opening a file in a large FAT directory is substantially more costly
+  // than parsing its header on the target device.
+  static bool getMetadataStatic(const std::string& imagePath, Metadata& out);
   static bool getDimensionsStatic(const std::string& imagePath, ImageDimensions& out);
 
   bool decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer, const RenderConfig& config) override;

@@ -137,6 +137,10 @@ class MangaReaderActivity final : public Activity {
   // Computed once per page in loadCurrentPagePanels(). Read on the render task, written under
   // RenderLock (see panelDims note below).
   bool currentPageBwOnly = false;
+  // BMP dimensions come from the same header read that determines currentPageBwOnly. Keeping
+  // them here prevents renderFullPage() from reopening the page merely to ask its dimensions.
+  int currentPageBmpWidth = 0;
+  int currentPageBmpHeight = 0;
   // Panel crop format for this book (uniform per book): the converter writes p<page>_<panel>.jpg
   // normally, or .bmp with --mono. panelCropPath() picks the extension from this.
   bool panelCropIsBmp = false;
