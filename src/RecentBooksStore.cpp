@@ -7,84 +7,42 @@
 #include <Xtc.h>
 
 #include <algorithm>
-#include <array>
-#include <cstring>
+
+#include <BufferedFile.h>
 
 namespace {
 constexpr size_t LIBRARY_CACHE_MAX_BOOKS = 2048;
 
-class BufferedHalFileReader {
+class JsonFileReader {
  public:
-  explicit BufferedHalFileReader(HalFile& file) : file_(file) {}
+  explicit JsonFileReader(HalFile& file) : input_(file, 512) {}
 
   int read() {
-    if (position_ == size_ && !refill()) return -1;
-    return buffer_[position_++];
+    uint8_t value = 0;
+    return input_.read(&value, 1) == 1 ? value : -1;
   }
 
-  size_t readBytes(char* output, size_t length) {
-    size_t copied = 0;
-    while (copied < length) {
-      if (position_ == size_ && !refill()) break;
-      const size_t available = size_ - position_;
-      const size_t count = std::min(available, length - copied);
-      std::memcpy(output + copied, buffer_.data() + position_, count);
-      position_ += count;
-      copied += count;
-    }
-    return copied;
-  }
+  size_t readBytes(char* output, size_t length) { return input_.read(output, length); }
 
  private:
-  bool refill() {
-    const int count = file_.read(buffer_.data(), buffer_.size());
-    if (count <= 0) return false;
-    position_ = 0;
-    size_ = static_cast<size_t>(count);
-    return true;
-  }
-
-  HalFile& file_;
-  std::array<uint8_t, 512> buffer_{};
-  size_t position_ = 0;
-  size_t size_ = 0;
+  serialization::BufferedFileReader input_;
 };
 
-class BufferedHalFileWriter final : public Print {
+class JsonFileWriter final : public Print {
  public:
-  explicit BufferedHalFileWriter(HalFile& file) : file_(file) {}
+  explicit JsonFileWriter(HalFile& file) : output_(file, 512) {}
 
   size_t write(uint8_t value) override { return write(&value, 1); }
 
   size_t write(const uint8_t* input, size_t length) override {
-    size_t accepted = 0;
-    while (accepted < length && ok_) {
-      const size_t count = std::min(buffer_.size() - size_, length - accepted);
-      std::memcpy(buffer_.data() + size_, input + accepted, count);
-      size_ += count;
-      accepted += count;
-      if (size_ == buffer_.size()) flushBuffer();
-    }
-    return accepted;
+    output_.write(input, length);
+    return length;
   }
 
-  bool finish() {
-    flushBuffer();
-    if (ok_) file_.flush();
-    return ok_;
-  }
+  bool finish() { return output_.flush(); }
 
  private:
-  void flushBuffer() {
-    if (!ok_ || size_ == 0) return;
-    ok_ = file_.write(buffer_.data(), size_) == size_;
-    size_ = 0;
-  }
-
-  HalFile& file_;
-  std::array<uint8_t, 512> buffer_{};
-  size_t size_ = 0;
-  bool ok_ = true;
+  serialization::BufferedFileWriter output_;
 };
 }  // namespace
 
@@ -226,7 +184,7 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
   {
     HalFile file;
     if (!Storage.openFileForWrite("RBS", tmpPath, file)) return false;
-    BufferedHalFileWriter output(file);
+    JsonFileWriter output(file);
 
     constexpr char PREFIX[] = "{\"books\":[";
     if (output.write(reinterpret_cast<const uint8_t*>(PREFIX), sizeof(PREFIX) - 1) != sizeof(PREFIX) - 1) return false;
@@ -249,11 +207,24 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
     if (!output.finish()) return false;
   }
 
-  Storage.remove(path);
-  if (!Storage.rename(tmpPath.c_str(), path)) {
-    LOG_ERR("RBS", "Failed to replace %s", path);
+  const std::string backupPath = std::string(path) + ".bak";
+  if (!Storage.exists(path) && Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
+    LOG_ERR("RBS", "Failed to restore %s before replacing it", path);
     return false;
   }
+  Storage.remove(backupPath.c_str());
+  if (Storage.exists(path) && !Storage.rename(path, backupPath.c_str())) {
+    LOG_ERR("RBS", "Failed to back up %s before replacing it", path);
+    return false;
+  }
+  if (!Storage.rename(tmpPath.c_str(), path)) {
+    LOG_ERR("RBS", "Failed to replace %s", path);
+    if (Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
+      LOG_ERR("RBS", "Previous cache remains at %s", backupPath.c_str());
+    }
+    return false;
+  }
+  Storage.remove(backupPath.c_str());
   return true;
 }
 
@@ -261,7 +232,7 @@ bool RecentBooksStore::loadFromPath(const char* path) {
   if (!Storage.exists(path)) return false;
   HalFile file;
   if (!Storage.openFileForRead("RBS", path, file)) return false;
-  BufferedHalFileReader input(file);
+  JsonFileReader input(file);
   JsonDocument doc;
   const DeserializationError error = deserializeJson(doc, input);
   if (error) {
