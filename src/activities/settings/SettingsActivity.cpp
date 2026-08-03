@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
@@ -45,47 +46,73 @@ void SettingsActivity::rebuildSettingsLists() {
   std::vector<DictionaryEntry> dictionaries;
   DictionaryRegistry::discover(dictionaries);
 
-  for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
+  // Reader-launched settings lock the UI to one category while the book remains
+  // resident. Avoid materializing every web/device setting in that low-heap path.
+  const StrId categoryFilter = finishOnBack ? categoryNames[selectedCategoryIndex] : StrId::STR_NONE_OPT;
+  auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
+                                  /*includeTextSettingsEntries=*/!finishOnBack);
+  if (finishOnBack) {
+    switch (selectedCategoryIndex) {
+      case 0:
+        displaySettings.reserve(settings.size());
+        break;
+      case 1:
+        readerSettings.reserve(settings.size() + 2);
+        break;
+      case 2:
+        controlsSettings.reserve(settings.size() + 1);
+        break;
+      case 3:
+        systemSettings.reserve(settings.size() + 8);
+        break;
+    }
+  }
+
+  for (auto& setting : settings) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
-      displaySettings.push_back(setting);
+      displaySettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
       // (they stay in the shared list for the web settings API)
       if (setting.inTextSettings) continue;
-      readerSettings.push_back(setting);
+      readerSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
           SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
-      controlsSettings.push_back(setting);
+      controlsSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
-      systemSettings.push_back(setting);
+      systemSettings.push_back(std::move(setting));
     }
   }
 
   // Append device-only ACTION items
-  if (!BoardConfig::hasTouch()) {
+  if ((!finishOnBack || selectedCategoryIndex == 2) && !BoardConfig::hasTouch()) {
     controlsSettings.insert(controlsSettings.begin(),
                             SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   }
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
-  if (!BoardConfig::hasTouch()) {
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+  if (!finishOnBack || selectedCategoryIndex == 3) {
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
+    // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
+    if (!BoardConfig::hasTouch()) {
+      systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+    }
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   }
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  readerSettings.insert(readerSettings.begin(),
-                        SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
-  // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
-  // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
-  // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
-  readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  if (!finishOnBack || selectedCategoryIndex == 1) {
+    readerSettings.insert(readerSettings.begin(),
+                          SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+    // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
+    // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
+    // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
+    readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  }
 
   // Update currentSettings pointer and count for the active category
   switch (selectedCategoryIndex) {
