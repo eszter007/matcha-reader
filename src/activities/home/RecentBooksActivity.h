@@ -149,8 +149,9 @@ class RecentBooksActivity final : public Activity {
   std::vector<LibraryIndexEntry> libraryIndex_;
   bool libraryIndexDirty_ = false;
 
-  // One lower-priority cover job at a time. The worker owns the job while busy=true and hands
-  // the result back before clearing busy; the loop task is the only writer otherwise.
+  // One lower-priority cover job at a time. Release/acquire stores on busy publish the job to
+  // the worker and its result back to loop(), so the non-atomic structs are never accessed
+  // concurrently; the loop task is their only writer while busy=false.
   struct CoverJob {
     RecentBook book;
     int gridHeight = 0;

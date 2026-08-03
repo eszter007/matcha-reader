@@ -139,9 +139,10 @@ void RecentBooksActivity::coverWorkerLoop() {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     if (coverWorkerExitRequested_) break;
-    if (!coverWorkerBusy_) continue;
+    if (!coverWorkerBusy_.load(std::memory_order_acquire)) continue;
     runCoverJob();
-    coverWorkerBusy_ = false;
+    // Publishes coverResult_ to the loop task.
+    coverWorkerBusy_.store(false, std::memory_order_release);
   }
   coverWorkerExited_ = true;
   vTaskDelete(nullptr);
@@ -196,12 +197,13 @@ void RecentBooksActivity::runCoverJob() {
 }
 
 bool RecentBooksActivity::postCoverJob(CoverJob&& job) {
-  if (!coverWorkerTask_ || coverWorkerBusy_ || coverResult_.pending) return false;
+  if (!coverWorkerTask_ || coverWorkerBusy_.load(std::memory_order_acquire) || coverResult_.pending) return false;
   coverJob_ = std::move(job);
   coverResult_ = CoverResult{};
   coverWorkerCancelRequested_ = false;
   coverWorkerCancelSeen_ = false;
-  coverWorkerBusy_ = true;
+  // Publishes coverJob_ to the worker task.
+  coverWorkerBusy_.store(true, std::memory_order_release);
   xTaskNotifyGive(coverWorkerTask_);
   return true;
 }
@@ -209,7 +211,7 @@ bool RecentBooksActivity::postCoverJob(CoverJob&& job) {
 void RecentBooksActivity::startCoverWorker() {
   coverWorkerExitRequested_ = false;
   coverWorkerExited_ = false;
-  coverWorkerBusy_ = false;
+  coverWorkerBusy_.store(false, std::memory_order_relaxed);
   coverWorkerCancelRequested_ = false;
   coverWorkerCancelSeen_ = false;
   coverResult_ = CoverResult{};
@@ -404,7 +406,7 @@ bool RecentBooksActivity::stepLibraryScan() {
     // The worker publishes by releasing busy only after the result is complete, so the loop can
     // consume this single slot without another mutex. A cancelled job leaves the cursor in place
     // and is retried after the next idle period; completed failures advance instead of looping.
-    if (coverWorkerBusy_) return false;
+    if (coverWorkerBusy_.load(std::memory_order_acquire)) return false;
     if (coverResult_.pending) {
       const bool matches = coverResult_.book.path == book.path;
       if (matches && coverResult_.hasGridThumb) {

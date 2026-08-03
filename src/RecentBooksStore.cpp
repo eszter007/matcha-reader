@@ -186,23 +186,23 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
     JsonFileWriter output(file);
 
     constexpr char PREFIX[] = "{\"books\":[";
-    if (output.write(reinterpret_cast<const uint8_t*>(PREFIX), sizeof(PREFIX) - 1) != sizeof(PREFIX) - 1) return false;
+    output.write(reinterpret_cast<const uint8_t*>(PREFIX), sizeof(PREFIX) - 1);
 
     JsonDocument record;
     bool first = true;
     for (const auto& book : books) {
-      if (!first && output.write(static_cast<uint8_t>(',')) != 1) return false;
+      if (!first) output.write(static_cast<uint8_t>(','));
       first = false;
       record.clear();
       record["path"] = book.path;
       record["title"] = book.title;
       record["author"] = book.author;
       record["coverBmpPath"] = book.coverBmpPath;
-      if (serializeJson(record, output) != measureJson(record)) return false;
+      serializeJson(record, output);
     }
 
     constexpr char SUFFIX[] = "]}";
-    if (output.write(reinterpret_cast<const uint8_t*>(SUFFIX), sizeof(SUFFIX) - 1) != sizeof(SUFFIX) - 1) return false;
+    output.write(reinterpret_cast<const uint8_t*>(SUFFIX), sizeof(SUFFIX) - 1);
     if (!output.finish()) return false;
   }
 

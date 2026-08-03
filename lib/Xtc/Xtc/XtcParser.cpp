@@ -515,7 +515,7 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
   size_t totalRead = 0;
 
   while (totalRead < bitmapSize) {
-    if (shouldCancel && shouldCancel(cancelCtx)) return XtcError::READ_ERROR;
+    if (shouldCancel && shouldCancel(cancelCtx)) return XtcError::CANCELLED;
     size_t toRead = std::min(chunkSize, bitmapSize - totalRead);
     size_t bytesRead = m_file.read(chunk.data(), toRead);
 

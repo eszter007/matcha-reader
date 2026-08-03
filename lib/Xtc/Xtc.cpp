@@ -390,7 +390,7 @@ bool Xtc::generateThumbBmp(int height, CancelFn shouldCancel, void* cancelCtx) c
         bytesRead = offset + size;
       },
       4096, shouldCancel, cancelCtx);
-  const bool wasCancelled = cancelled();
+  const bool wasCancelled = readResult == xtc::XtcError::CANCELLED || cancelled();
   if (readResult != xtc::XtcError::OK || bytesRead != bitmapSize || wasCancelled) {
     if (!wasCancelled) LOG_ERR("XTC", "Failed to load cover page for thumb");
     free(pageBuffer);
