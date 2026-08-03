@@ -86,7 +86,7 @@ class BufferedHalFileWriter final : public Print {
   size_t size_ = 0;
   bool ok_ = true;
 };
-}
+}  // namespace
 
 void RecentBooksStore::toJson(JsonDocument& doc) const {
   JsonArray arr = doc["books"].to<JsonArray>();

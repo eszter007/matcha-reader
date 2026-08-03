@@ -18,8 +18,8 @@ struct RecentBook {
 // instead of allocating another full catalog just to preserve recent-first ordering.
 inline void mergeRecentBooks(std::vector<RecentBook>& catalog, std::vector<RecentBook> recents) {
   for (auto recent = recents.rbegin(); recent != recents.rend(); ++recent) {
-    const auto scanned = std::find_if(catalog.begin(), catalog.end(),
-                                      [&](const RecentBook& book) { return book.path == recent->path; });
+    const auto scanned =
+        std::find_if(catalog.begin(), catalog.end(), [&](const RecentBook& book) { return book.path == recent->path; });
     if (scanned == catalog.end()) {
       catalog.insert(catalog.begin(), std::move(*recent));
       continue;

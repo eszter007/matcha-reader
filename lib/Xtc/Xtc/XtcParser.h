@@ -68,8 +68,7 @@ class XtcParser {
    */
   XtcError loadPageStreaming(uint32_t pageIndex,
                              std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
-                             size_t chunkSize = 1024, bool (*shouldCancel)(void*) = nullptr,
-                             void* cancelCtx = nullptr);
+                             size_t chunkSize = 1024, bool (*shouldCancel)(void*) = nullptr, void* cancelCtx = nullptr);
 
   // Get title/author from metadata
   std::string getTitle() const { return m_title; }

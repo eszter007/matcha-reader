@@ -83,8 +83,7 @@ std::string MangaBook::getTitle() const {
   return folderPath;
 }
 
-std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel,
-                                      void* cancelCtx) {
+std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel, void* cancelCtx) {
   static constexpr const char* kCanonicalCovers[] = {"/page_0000.jpg", "/page_0000.bmp", "/page_0000.png"};
   for (const char* suffix : kCanonicalCovers) {
     if (shouldCancel && shouldCancel(cancelCtx)) return "";

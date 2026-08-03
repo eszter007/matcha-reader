@@ -157,8 +157,7 @@ void RecentBooksActivity::runCoverJob() {
   const bool isXtc = FsHelpers::hasXtcExtension(result.book.path);
   if (!isEpub && !isXtc) {
     const manga::MangaBook mangaBook(result.book.path);
-    ensureMangaCoverThumb(result.book.path, coverJob_.gridHeight, coverJob_.homeHeight, &coverWorkerShouldCancel,
-                          this);
+    ensureMangaCoverThumb(result.book.path, coverJob_.gridHeight, coverJob_.homeHeight, &coverWorkerShouldCancel, this);
     result.hasGridThumb = thumbHeightValid(mangaBook.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = mangaBook.getThumbBmpPath();
   } else if (isEpub) {
@@ -172,8 +171,7 @@ void RecentBooksActivity::runCoverJob() {
         !thumbHeightValid(epub.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
       epub.generateThumbBmp(SHELF_THUMB_HEIGHT, &coverWorkerShouldCancel, this);
     }
-    result.hasGridThumb =
-        loaded && thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
+    result.hasGridThumb = loaded && thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = epub.getThumbBmpPath();
     if (loaded && !epub.getTitle().empty()) result.book.title = epub.getTitle();
   } else {
@@ -187,8 +185,7 @@ void RecentBooksActivity::runCoverJob() {
         !thumbHeightValid(xtc.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
       xtc.generateThumbBmp(SHELF_THUMB_HEIGHT, &coverWorkerShouldCancel, this);
     }
-    result.hasGridThumb =
-        loaded && thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
+    result.hasGridThumb = loaded && thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = xtc.getThumbBmpPath();
     if (loaded && !xtc.getTitle().empty()) result.book.title = xtc.getTitle();
   }
@@ -416,8 +413,7 @@ bool RecentBooksActivity::stepLibraryScan() {
         RECENT_BOOKS.updateBook(coverResult_.book.path, coverResult_.book.title, coverResult_.book.author,
                                 coverResult_.book.coverBmpPath);
       }
-      if (matches &&
-          (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path))) {
+      if (matches && (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path))) {
         recordIndexEntry(book.path, coverResult_.fileSize, coverResult_.modifiedStamp, thumbH,
                          coverResult_.hasGridThumb);
       }

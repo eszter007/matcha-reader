@@ -1,12 +1,12 @@
 #pragma once
 #include <HalStorage.h>
 #include <I18n.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <array>
 #include <atomic>
 #include <functional>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 #include <string>
 #include <vector>
 

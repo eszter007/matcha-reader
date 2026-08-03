@@ -3,10 +3,8 @@
 #include "src/RecentBook.h"
 
 TEST(RecentBooksMerge, KeepsRecentsFirstWithoutDuplicatesOrLosingScannedCovers) {
-  std::vector<RecentBook> catalog{{"/a.epub", "Scanned A", "", "cover-a"},
-                                  {"/b.epub", "Scanned B", "", "cover-b"}};
-  std::vector<RecentBook> recents{{"/b.epub", "Recent B", "Author B", ""},
-                                  {"/new.epub", "New", "", "cover-new"}};
+  std::vector<RecentBook> catalog{{"/a.epub", "Scanned A", "", "cover-a"}, {"/b.epub", "Scanned B", "", "cover-b"}};
+  std::vector<RecentBook> recents{{"/b.epub", "Recent B", "Author B", ""}, {"/new.epub", "New", "", "cover-new"}};
 
   mergeRecentBooks(catalog, std::move(recents));
 
