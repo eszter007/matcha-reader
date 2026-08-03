@@ -31,6 +31,7 @@
 #include "ReaderUtils.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkFile.h"
@@ -115,8 +116,14 @@ void MangaReaderActivity::onEnter() {
   // tasks so it timeslices instead of starving either; stack mirrors the render task, which runs
   // these same decode paths. Creation failure (OOM) just disables prefetching -- postPrefetchJob
   // no-ops on a null handle and every render path decodes on demand exactly as before.
-  if (xTaskCreate(&prefetchTaskTrampoline, "MangaPrefetch", PREFETCH_TASK_STACK, this, 1, &prefetchTaskHandle) !=
-      pdPASS) {
+  // Do not spend an 8 KB task stack when that would push a foreground PNG decode below its
+  // 60 KB allocation floor. Prefetch is optional; page rendering always has an on-demand path.
+  constexpr uint32_t prefetchStartupFloor = PREFETCH_HEAP_FLOOR + PREFETCH_TASK_STACK + 8 * 1024;
+  if (ESP.getFreeHeap() < prefetchStartupFloor) {
+    prefetchTaskHandle = nullptr;
+    LOG_INF("MRA", "Low heap (%u); prefetch disabled to reserve image decoder memory", ESP.getFreeHeap());
+  } else if (xTaskCreate(&prefetchTaskTrampoline, "MangaPrefetch", PREFETCH_TASK_STACK, this, 1, &prefetchTaskHandle) !=
+             pdPASS) {
     prefetchTaskHandle = nullptr;
     LOG_ERR("MRA", "Failed to create prefetch worker; prefetch disabled");
   }
@@ -167,6 +174,11 @@ void MangaReaderActivity::onExit() {
   // reading orientation setting, or a page/panel that triggered the
   // fill-the-screen rotate) would otherwise leak into their layout.
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  // Home/Library and the next text reader need the user's selected font again. The manga entry
+  // released it only from RAM; ensureLoaded() restores the unchanged saved selection here.
+  sdFontSystem.setJpFallbackNeeded(renderer, false);
+  sdFontSystem.ensureLoaded(renderer);
 
   Activity::onExit();
 }
@@ -1409,10 +1421,15 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
     }
   }
   if (combined.empty()) return;
+  // Dictionary text needs the Japanese SD fallback. Restore it only for the child activity, then
+  // return its memory to the page decoder before the manga redraws.
+  sdFontSystem.ensureLoaded(renderer);
+  sdFontSystem.setJpFallbackNeeded(renderer, true);
   startActivityForResult(std::make_unique<MangaWordLookupActivity>(
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this, returnMode](const ActivityResult&) {
+                           sdFontSystem.releaseForImageDecode(renderer);
                            viewMode = returnMode;
                            requestUpdate();
                          });
@@ -1434,12 +1451,16 @@ void MangaReaderActivity::launchWordLookup() {
 
   if (combined.empty()) return;
 
+  sdFontSystem.ensureLoaded(renderer);
+  sdFontSystem.setJpFallbackNeeded(renderer, true);
+
   // Use the MangaWordLookup sub-activity with raw text. The scan cache makes a re-open of the
   // same panel/page text instant (validated by content hash, so the key is just a hint).
   startActivityForResult(std::make_unique<MangaWordLookupActivity>(
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this](const ActivityResult&) {
+                           sdFontSystem.releaseForImageDecode(renderer);
                            viewMode = ViewMode::PanelZoom;
                            requestUpdate();
                          });
