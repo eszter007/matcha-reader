@@ -1,5 +1,6 @@
 #include "RecentBooksStore.h"
 
+#include <BufferedFile.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -7,8 +8,6 @@
 #include <Xtc.h>
 
 #include <algorithm>
-
-#include <BufferedFile.h>
 
 namespace {
 constexpr size_t LIBRARY_CACHE_MAX_BOOKS = 2048;
