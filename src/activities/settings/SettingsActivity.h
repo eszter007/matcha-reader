@@ -178,6 +178,7 @@ class SettingsActivity final : public Activity {
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
   void rebuildSettingsLists();
+  void saveSettings();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
  public:

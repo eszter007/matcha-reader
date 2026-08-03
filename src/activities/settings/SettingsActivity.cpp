@@ -1,6 +1,7 @@
 #include "SettingsActivity.h"
 
 #include <BoardConfig.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 
@@ -30,6 +31,17 @@
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
+
+void SettingsActivity::saveSettings() {
+  // Reader Settings keeps the EPUB, laid-out page and SD fonts resident. A font
+  // preview can leave less contiguous heap than settings JSON needs, so reclaim
+  // renderer-owned font tables before serializing. The reader restores them when
+  // the settings activity returns.
+  if (finishOnBack) {
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
+  SETTINGS.saveToFile();
+}
 
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
@@ -200,7 +212,7 @@ void SettingsActivity::loop() {
   // the book -- the same stray-event trap the reader menu's ignoreNextConfirmRelease guards.
   if (finishOnBack) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      SETTINGS.saveToFile();
+      saveSettings();
       finish();
       return;
     }
@@ -209,7 +221,7 @@ void SettingsActivity::loop() {
       selectedSettingIndex = 0;
       requestUpdate();
     } else {
-      SETTINGS.saveToFile();
+      saveSettings();
       onGoHome();
     }
     return;
@@ -369,7 +381,7 @@ void SettingsActivity::toggleCurrentSetting() {
                        currentValue, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
                          SETTINGS.*valuePtr = idx;
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-                         SETTINGS.saveToFile();
+                         saveSettings();
                          rebuildSettingsLists();
                        });
       requestUpdate();
@@ -386,7 +398,7 @@ void SettingsActivity::toggleCurrentSetting() {
       auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
         valueSetter(idx);
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-        SETTINGS.saveToFile();
+        saveSettings();
         rebuildSettingsLists();
       };
       if (!setting.enumStringValues.empty()) {
@@ -407,7 +419,7 @@ void SettingsActivity::toggleCurrentSetting() {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
   } else if (setting.type == SettingType::ACTION) {
-    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
+    auto resultHandler = [this](const ActivityResult&) { saveSettings(); };
 
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
@@ -437,7 +449,7 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::DownloadFonts:
         startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
+                                 saveSettings();
                                  rebuildSettingsLists();
                                });
         break;
@@ -445,7 +457,7 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                       TextSettingsActivity::Tab::Family),
                                [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
+                                 saveSettings();
                                  rebuildSettingsLists();
                                });
         break;
@@ -462,7 +474,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-  SETTINGS.saveToFile();
+  saveSettings();
   rebuildSettingsLists();
   selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
 }
@@ -499,7 +511,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
+          saveSettings();
         }
         requestUpdate();
       });
