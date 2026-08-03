@@ -370,7 +370,6 @@ bool RecentBooksActivity::stepLibraryScan() {
     {
       RenderLock lock{RenderLock::Try{}};
       if (!lock.held()) return false;
-      if (scan_.thumbIndex >= recentBooks.size()) return false;
       book = recentBooks[scan_.thumbIndex];
     }
     const auto publishBook = [this](const RecentBook& book) {
@@ -660,7 +659,7 @@ void RecentBooksActivity::warmOnePendingProgress() {
   const int percent = readProgressPercent(path);
 
   RenderLock lock{RenderLock::Try{}};
-  if (!lock.held() || index >= bookProgress.size() || index >= recentBooks.size()) return;
+  if (!lock.held()) return;
   if (recentBooks[index].path == path && bookProgress[index].percent == PROGRESS_PENDING) {
     bookProgress[index].percent = percent;
   }
