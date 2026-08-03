@@ -180,6 +180,7 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
 bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, const char* path) {
   Storage.mkdir("/.crosspoint");
   const std::string tmpPath = std::string(path) + ".tmp";
+  bool written = false;
   {
     HalFile file;
     if (!Storage.openFileForWrite("RBS", tmpPath, file)) return false;
@@ -203,17 +204,23 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
 
     constexpr char SUFFIX[] = "]}";
     output.write(reinterpret_cast<const uint8_t*>(SUFFIX), sizeof(SUFFIX) - 1);
-    if (!output.finish()) return false;
+    written = output.finish();
+  }
+  if (!written) {
+    Storage.remove(tmpPath.c_str());
+    return false;
   }
 
   const std::string backupPath = std::string(path) + ".bak";
   if (!Storage.exists(path) && Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
     LOG_ERR("RBS", "Failed to restore %s before replacing it", path);
+    Storage.remove(tmpPath.c_str());
     return false;
   }
   Storage.remove(backupPath.c_str());
   if (Storage.exists(path) && !Storage.rename(path, backupPath.c_str())) {
     LOG_ERR("RBS", "Failed to back up %s before replacing it", path);
+    Storage.remove(tmpPath.c_str());
     return false;
   }
   if (!Storage.rename(tmpPath.c_str(), path)) {
@@ -221,6 +228,7 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
     if (Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
       LOG_ERR("RBS", "Previous cache remains at %s", backupPath.c_str());
     }
+    Storage.remove(tmpPath.c_str());
     return false;
   }
   Storage.remove(backupPath.c_str());

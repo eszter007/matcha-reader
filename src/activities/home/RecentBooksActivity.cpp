@@ -346,6 +346,7 @@ void RecentBooksActivity::startLibraryScan() {
   scan_ = LibraryScanState{};
   scan_.active = true;
   scan_.dirStack.reserve(16);
+  scan_.results.reserve(recentBooks.size());
   scan_.dirStack.push_back("/");
 }
 
