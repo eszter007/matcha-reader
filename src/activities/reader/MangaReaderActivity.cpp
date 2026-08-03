@@ -189,28 +189,41 @@ void MangaReaderActivity::loadCurrentPagePanels() {
   bool hasCrops = false;
   bool cropsBmp = false;
   bool panelsBw = false;
+  int firstCrop = -1;
   PanelCropDims firstPanelDims;
   if (!loadedPanels.empty() && book) {
-    const std::string bmp0 = panelCropPathExt(0, ".bmp");
-    if (Storage.exists(bmp0.c_str())) {
-      hasCrops = true;
-      cropsBmp = true;
-      BmpToFramebufferConverter::Metadata metadata;
-      if (BmpToFramebufferConverter::getMetadataStatic(bmp0, metadata)) {
-        panelsBw = metadata.monochrome;
-        firstPanelDims = {metadata.dimensions.width, metadata.dimensions.height};
+    // Do not assume panel 0 has a file. Older converters skipped a redundant crop when a
+    // detected panel covered the whole page, while later panels on that same page can still
+    // have real crops. Stop at the first hit so the normal case remains one/two exists calls.
+    for (size_t i = 0; i < loadedPanels.size(); i++) {
+      const std::string bmp = panelCropPathExt(static_cast<int>(i), ".bmp");
+      if (Storage.exists(bmp.c_str())) {
+        hasCrops = true;
+        cropsBmp = true;
+        firstCrop = static_cast<int>(i);
+        BmpToFramebufferConverter::Metadata metadata;
+        if (BmpToFramebufferConverter::getMetadataStatic(bmp, metadata)) {
+          panelsBw = metadata.monochrome;
+          firstPanelDims = {metadata.dimensions.width, metadata.dimensions.height};
+        }
+        break;
       }
-    } else if (Storage.exists(panelCropPathExt(0, ".jpg").c_str())) {
-      hasCrops = true;
+      if (Storage.exists(panelCropPathExt(static_cast<int>(i), ".jpg").c_str())) {
+        hasCrops = true;
+        firstCrop = static_cast<int>(i);
+        break;
+      }
     }
   }
   // A 1-bit BMP full page renders BW-only (single wave, no gray planes); probe it once here
   // (cheap header read) so renderFullPage can pick the fast path. Only .bmp pages can be
   // monochrome -- jpg/png always go the grayscale route.
   bool bwOnly = false;
+  bool hasPageImage = false;
   ImageDimensions bmpDims{0, 0};
   if (book) {
     const std::string pageImg = book->getPageImagePath(currentPage);
+    hasPageImage = !pageImg.empty();
     if (FsHelpers::hasBmpExtension(pageImg)) {
       BmpToFramebufferConverter::Metadata metadata;
       if (BmpToFramebufferConverter::getMetadataStatic(pageImg, metadata)) {
@@ -232,15 +245,26 @@ void MangaReaderActivity::loadCurrentPagePanels() {
     panels = std::move(loadedPanels);
     panelsLoaded = loaded;
     pageHasPanelCrops = hasCrops;
+    firstPanelWithCrop = firstCrop;
+    currentPageHasImage = hasPageImage;
     currentPageBwOnly = bwOnly;
     currentPageBmpWidth = bmpDims.width;
     currentPageBmpHeight = bmpDims.height;
     panelCropIsBmp = cropsBmp;
     panelsBwOnly = panelsBw;
     panelDims.assign(panels.size(), {});
-    if (!panelDims.empty() && firstPanelDims.w > 0 && firstPanelDims.h > 0) panelDims[0] = firstPanelDims;
+    if (firstPanelWithCrop >= 0 && firstPanelWithCrop < static_cast<int>(panelDims.size()) && firstPanelDims.w > 0 &&
+        firstPanelDims.h > 0) {
+      panelDims[firstPanelWithCrop] = firstPanelDims;
+    }
     firstPanelPrefetched = !armFirst;
     nextPanelPrefetched = true;
+    // A panels-only conversion has no full-page overview to render. Enter its first available
+    // crop automatically, including after restoring progress or changing pages.
+    if (!currentPageHasImage && firstPanelWithCrop >= 0) {
+      currentPanel = firstPanelWithCrop;
+      viewMode = ViewMode::PanelZoom;
+    }
   }
   updateBookmarkFlag();
 }
@@ -274,12 +298,14 @@ void MangaReaderActivity::nextPanel() {
   }
 
   if (currentPanel < 0) {
-    currentPanel = 0;
+    currentPanel = firstPanelWithCrop;
     viewMode = ViewMode::PanelZoom;
   } else if (currentPanel < static_cast<int>(panels.size()) - 1) {
     currentPanel++;
   } else {
-    nextPage();
+    // Once the reader has entered panel mode, keep moving through snippets instead of showing
+    // the full-page overview between every page.
+    nextPage(true);
     return;
   }
   requestUpdate();
@@ -290,10 +316,14 @@ void MangaReaderActivity::prevPanel() {
   panelGrayPending = false;
   panelGrayUpgrade = false;
 
-  if (currentPanel > 0) {
+  if (currentPanel > firstPanelWithCrop) {
     currentPanel--;
     requestUpdate();
-  } else if (currentPanel == 0) {
+  } else if (currentPanel == firstPanelWithCrop) {
+    if (!currentPageHasImage) {
+      prevPage();
+      return;
+    }
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     requestUpdate();
@@ -302,13 +332,17 @@ void MangaReaderActivity::prevPanel() {
   }
 }
 
-void MangaReaderActivity::nextPage() {
+void MangaReaderActivity::nextPage(const bool keepPanelMode) {
   if (!book) return;
   if (currentPage + 1 < book->getPageCount()) {
     currentPage++;
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     loadCurrentPagePanels();
+    if (keepPanelMode && pageHasPanelCrops) {
+      currentPanel = firstPanelWithCrop;
+      viewMode = ViewMode::PanelZoom;
+    }
     requestUpdate();
   }
 }
@@ -401,9 +435,13 @@ void MangaReaderActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     if (viewMode == ViewMode::PanelZoom) {
-      currentPanel = -1;
-      viewMode = ViewMode::FullPage;
-      requestUpdate();
+      if (currentPageHasImage) {
+        currentPanel = -1;
+        viewMode = ViewMode::FullPage;
+        requestUpdate();
+      } else {
+        onGoHome();
+      }
       return;
     }
     onGoHome();
@@ -429,7 +467,7 @@ void MangaReaderActivity::loop() {
     if (viewMode == ViewMode::FullPage) {
       const unsigned long dwell = millis() - fullPageRenderedMs;
       if (pageHasPanelCrops && !firstPanelPrefetched && dwell > FIRST_PANEL_PREFETCH_DWELL_MS) {
-        prefetchPanelCache(0);
+        prefetchPanelCache(firstPanelWithCrop);
       } else if (!nextPagePrefetched && dwell > PREFETCH_DWELL_MS) {
         prefetchNextPageCache();
       }
@@ -466,7 +504,7 @@ void MangaReaderActivity::loop() {
         // upgraded before its BW pass runs.
         panelGrayPending = false;
         panelGrayUpgrade = false;
-        currentPanel = 0;
+        currentPanel = firstPanelWithCrop;
         viewMode = ViewMode::PanelZoom;
         requestUpdate();
       } else {
@@ -807,13 +845,6 @@ void MangaReaderActivity::renderPanelZoom() {
   }
 
   const auto& panel = panels[currentPanel];
-
-  std::string imgPath = book->getPageImagePath(currentPage);
-  if (imgPath.empty()) {
-    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true);
-    renderer.displayBuffer();
-    return;
-  }
 
   // Crop known missing/invalid from an earlier probe: fall back without touching the SD.
   if (panelDims[currentPanel].w < 0) {

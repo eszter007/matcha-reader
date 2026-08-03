@@ -117,7 +117,17 @@ std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertC
   }
   dir.close();
   const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
-  return chosen.empty() ? "" : folderPath + "/" + chosen;
+  if (!chosen.empty()) return folderPath + "/" + chosen;
+
+  // Panels-only conversions intentionally omit root page images. Their converter guarantees
+  // p0_0 exists (even when it covers the full page), so use that first snippet as the cover and
+  // keep Library/Home thumbnail generation working without walking the large panels directory.
+  static constexpr const char* panelCoverNames[] = {"/panels/p0_0.jpg", "/panels/p0_0.bmp"};
+  for (const char* name : panelCoverNames) {
+    const std::string candidate = folderPath + name;
+    if (Storage.exists(candidate.c_str())) return candidate;
+  }
+  return "";
 }
 
 std::string MangaBook::getThumbBmpPath() const { return getCachePath() + "/thumb_[HEIGHT].bmp"; }

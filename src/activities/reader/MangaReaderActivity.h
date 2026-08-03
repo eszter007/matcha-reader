@@ -132,6 +132,12 @@ class MangaReaderActivity final : public Activity {
   // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
   // every entry. Both answers are static for a given page.
   bool pageHasPanelCrops = false;
+  // Index of the first crop that actually exists. Full-page cover/splash panels intentionally
+  // had no duplicate crop in older conversions, so crop 0 is not a reliable format probe.
+  int firstPanelWithCrop = -1;
+  // Some space-saving conversions contain only panel crops. Cache whether a full-page image is
+  // available so navigation never switches such a book into an unrenderable overview.
+  bool currentPageHasImage = false;
   // True when the current full-page image is a 1-bit monochrome BMP: it renders with a single BW
   // e-ink pass (no 4-level gray refresh), so renderFullPage skips the grayscale planes entirely.
   // Computed once per page in loadCurrentPagePanels(). Read on the render task, written under
@@ -267,7 +273,7 @@ class MangaReaderActivity final : public Activity {
 
   void nextPanel();
   void prevPanel();
-  void nextPage();
+  void nextPage(bool keepPanelMode = false);
   void prevPage();
 
   void saveProgress() const;
