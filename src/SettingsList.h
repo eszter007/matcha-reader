@@ -427,8 +427,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
   }();
 
   const auto shouldInclude = [categoryFilter, includeTextSettingsEntries](const SettingInfo& setting) {
-    const bool categoryMatches =
-        categoryFilter == StrId::STR_NONE_OPT || setting.category == categoryFilter;
+    const bool categoryMatches = categoryFilter == StrId::STR_NONE_OPT || setting.category == categoryFilter;
     return categoryMatches && (includeTextSettingsEntries || !setting.inTextSettings);
   };
 
