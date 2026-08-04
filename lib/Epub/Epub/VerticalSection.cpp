@@ -1142,8 +1142,7 @@ struct LayoutPageSink final : ParagraphSink {
           // is per-chunk-latency bound -- 4KB chunks measured ~100KB/s on an X3 (9.3s for one
           // 928KB illustration). 4KB stays as the tight-heap fallback.
           extracted = epub.readItemContentsToStream(
-              resolvedSrc, cachedFile,
-              canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024 ? 16384 : 4096);
+              resolvedSrc, cachedFile, canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024 ? 16384 : 4096);
         }
         cachedFile.flush();
         cachedFile.close();
@@ -1222,8 +1221,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
       const bool canLendFrameBuffer = renderer.hasFrameBuffer();
       GfxRenderer::FrameBufferLoan loan(renderer);
       success = epub->readItemContentsToStream(
-          localPath, tmpHtml,
-          canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024 ? 16384 : PARSE_BUFFER_SIZE);
+          localPath, tmpHtml, canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024 ? 16384 : PARSE_BUFFER_SIZE);
     }
     tmpHtml.close();
     if (!success && Storage.exists(tmpHtmlPath.c_str())) {
