@@ -544,6 +544,8 @@ void SettingsActivity::render(RenderLock&&) {
   }
 
   const auto& settings = *currentSettings;
+  const bool selectedSettingReadOnly = selectedSettingIndex > 0 && settings[selectedSettingIndex - 1].valueGetter &&
+                                       !settings[selectedSettingIndex - 1].valueSetter;
   GUI.drawList(
       renderer,
       Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
@@ -583,12 +585,9 @@ void SettingsActivity::render(RenderLock&&) {
         }
         return valueText;
       },
-      true);
+      !selectedSettingReadOnly);
 
   // Draw help text
-  const bool selectedSettingReadOnly = selectedSettingIndex > 0 &&
-                                       (*currentSettings)[selectedSettingIndex - 1].valueGetter &&
-                                       !(*currentSettings)[selectedSettingIndex - 1].valueSetter;
   const auto confirmLabel =
       (selectedSettingIndex == 0)
           ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
