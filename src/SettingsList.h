@@ -186,8 +186,12 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
 // the font-family entry is replaced in that copy with a registry-aware version.
 // The font-size entry is always rebuilt, since its options are point sizes read
 // from the active family rather than a fixed enum.
+// categoryFilter/includeTextSettingsEntries let embedded device screens copy only
+// entries they can display while the reader keeps its memory-heavy state alive.
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
-                                                const std::vector<DictionaryEntry>* dictionaries = nullptr) {
+                                                const std::vector<DictionaryEntry>* dictionaries = nullptr,
+                                                const StrId categoryFilter = StrId::STR_NONE_OPT,
+                                                const bool includeTextSettingsEntries = true) {
   static const std::vector<SettingInfo> baseList = [] {
     // Enum settings are persisted as numeric values. Assign these labels by enum
     // value so a reordered menu or enum cannot silently swap their behavior.
@@ -422,7 +426,24 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     return v;
   }();
 
-  std::vector<SettingInfo> v = baseList;
+  const auto shouldInclude = [categoryFilter, includeTextSettingsEntries](const SettingInfo& setting) {
+    const bool categoryMatches = categoryFilter == StrId::STR_NONE_OPT || setting.category == categoryFilter;
+    return categoryMatches && (includeTextSettingsEntries || !setting.inTextSettings);
+  };
+
+  std::vector<SettingInfo> v;
+  if (categoryFilter == StrId::STR_NONE_OPT && includeTextSettingsEntries) {
+    v = baseList;
+  } else {
+    // Embedded settings screens run while the reader still owns its page, EPUB and
+    // font caches. Copy only the visible category: copying the complete SettingInfo
+    // array needs one large contiguous allocation and aborts on a fragmented heap.
+    const auto count = static_cast<size_t>(std::count_if(baseList.begin(), baseList.end(), shouldInclude));
+    v.reserve(count);
+    for (const auto& setting : baseList) {
+      if (shouldInclude(setting)) v.push_back(setting);
+    }
+  }
   if (!BoardConfig::hasTouch()) {
     v.erase(std::remove_if(v.begin(), v.end(),
                            [](const SettingInfo& s) { return s.nameId == StrId::STR_TOUCH_READER_CONTROLS; }),

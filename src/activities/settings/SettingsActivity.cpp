@@ -1,12 +1,14 @@
 #include "SettingsActivity.h"
 
 #include <BoardConfig.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
@@ -30,6 +32,17 @@
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
 
+void SettingsActivity::saveSettings() {
+  // Reader Settings keeps the EPUB, laid-out page and SD fonts resident. A font
+  // preview can leave less contiguous heap than settings JSON needs, so reclaim
+  // renderer-owned font tables before serializing. The reader restores them when
+  // the settings activity returns.
+  if (finishOnBack) {
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
+  SETTINGS.saveToFile();
+}
+
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   readerSettings.clear();
@@ -43,49 +56,75 @@ void SettingsActivity::rebuildSettingsLists() {
   // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
   // picks up dictionaries copied to the SD card since the last visit.
   std::vector<DictionaryEntry> dictionaries;
-  DictionaryRegistry::discover(dictionaries);
+  if (!finishOnBack || selectedCategoryIndex == 1) DictionaryRegistry::discover(dictionaries);
 
-  for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
+  // Reader-launched settings lock the UI to one category while the book remains
+  // resident. Avoid materializing every web/device setting in that low-heap path.
+  const StrId categoryFilter = finishOnBack ? categoryNames[selectedCategoryIndex] : StrId::STR_NONE_OPT;
+  auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
+                                  /*includeTextSettingsEntries=*/!finishOnBack);
+  if (finishOnBack) {
+    switch (selectedCategoryIndex) {
+      case 0:
+        displaySettings.reserve(settings.size());
+        break;
+      case 1:
+        readerSettings.reserve(settings.size() + 2);
+        break;
+      case 2:
+        controlsSettings.reserve(settings.size() + 1);
+        break;
+      case 3:
+        systemSettings.reserve(settings.size() + 8);
+        break;
+    }
+  }
+
+  for (auto& setting : settings) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
-      displaySettings.push_back(setting);
+      displaySettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
       // (they stay in the shared list for the web settings API)
       if (setting.inTextSettings) continue;
-      readerSettings.push_back(setting);
+      readerSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
           SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
-      controlsSettings.push_back(setting);
+      controlsSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
-      systemSettings.push_back(setting);
+      systemSettings.push_back(std::move(setting));
     }
   }
 
   // Append device-only ACTION items
-  if (!BoardConfig::hasTouch()) {
+  if ((!finishOnBack || selectedCategoryIndex == 2) && !BoardConfig::hasTouch()) {
     controlsSettings.insert(controlsSettings.begin(),
                             SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   }
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
-  if (!BoardConfig::hasTouch()) {
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+  if (!finishOnBack || selectedCategoryIndex == 3) {
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
+    // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
+    if (!BoardConfig::hasTouch()) {
+      systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+    }
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   }
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  readerSettings.insert(readerSettings.begin(),
-                        SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
-  // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
-  // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
-  // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
-  readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  if (!finishOnBack || selectedCategoryIndex == 1) {
+    readerSettings.insert(readerSettings.begin(),
+                          SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+    // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
+    // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
+    // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
+    readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  }
 
   // Update currentSettings pointer and count for the active category
   switch (selectedCategoryIndex) {
@@ -109,7 +148,7 @@ void SettingsActivity::onEnter() {
   Activity::onEnter();
 
   // Start on the requested category (0 unless a caller like the reader menu asks otherwise)
-  selectedCategoryIndex = initialCategory;
+  selectedCategoryIndex = std::clamp(initialCategory, 0, categoryCount - 1);
   selectedSettingIndex = 0;
   if (finishOnBack) selectedSettingIndex = 1;  // category row is locked in embedded mode
   preserveQuickResumeTimeoutOn =
@@ -173,7 +212,7 @@ void SettingsActivity::loop() {
   // the book -- the same stray-event trap the reader menu's ignoreNextConfirmRelease guards.
   if (finishOnBack) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      SETTINGS.saveToFile();
+      saveSettings();
       finish();
       return;
     }
@@ -182,7 +221,7 @@ void SettingsActivity::loop() {
       selectedSettingIndex = 0;
       requestUpdate();
     } else {
-      SETTINGS.saveToFile();
+      saveSettings();
       onGoHome();
     }
     return;
@@ -342,7 +381,7 @@ void SettingsActivity::toggleCurrentSetting() {
                        currentValue, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
                          SETTINGS.*valuePtr = idx;
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-                         SETTINGS.saveToFile();
+                         saveSettings();
                          rebuildSettingsLists();
                        });
       requestUpdate();
@@ -359,7 +398,7 @@ void SettingsActivity::toggleCurrentSetting() {
       auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
         valueSetter(idx);
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-        SETTINGS.saveToFile();
+        saveSettings();
         rebuildSettingsLists();
       };
       if (!setting.enumStringValues.empty()) {
@@ -380,7 +419,7 @@ void SettingsActivity::toggleCurrentSetting() {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
   } else if (setting.type == SettingType::ACTION) {
-    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
+    auto resultHandler = [this](const ActivityResult&) { saveSettings(); };
 
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
@@ -410,7 +449,7 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::DownloadFonts:
         startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
+                                 saveSettings();
                                  rebuildSettingsLists();
                                });
         break;
@@ -418,7 +457,7 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                       TextSettingsActivity::Tab::Family),
                                [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
+                                 saveSettings();
                                  rebuildSettingsLists();
                                });
         break;
@@ -435,7 +474,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-  SETTINGS.saveToFile();
+  saveSettings();
   rebuildSettingsLists();
   selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
 }
@@ -472,7 +511,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
+          saveSettings();
         }
         requestUpdate();
       });
