@@ -148,7 +148,7 @@ void SettingsActivity::onEnter() {
   Activity::onEnter();
 
   // Start on the requested category (0 unless a caller like the reader menu asks otherwise)
-  selectedCategoryIndex = initialCategory;
+  selectedCategoryIndex = std::clamp(initialCategory, 0, categoryCount - 1);
   selectedSettingIndex = 0;
   if (finishOnBack) selectedSettingIndex = 1;  // category row is locked in embedded mode
   preserveQuickResumeTimeoutOn =
