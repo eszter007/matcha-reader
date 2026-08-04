@@ -222,6 +222,7 @@ class MangaReaderActivity final : public Activity {
     uint32_t gen = 0;       // pageGeneration at post time
     int screenW = 0;        // base (unrotated) screen dims captured at post time --
     int screenH = 0;        //   inputs to the pure geometry helpers
+    bool rotatePanels = true;  // setting captured with geometry inputs
     std::string imgPath;    // page image or panel crop
     std::string cachePath;  // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
   };
@@ -243,16 +244,18 @@ class MangaReaderActivity final : public Activity {
   void workerWarmNextPage();
   void workerWarmPanel();
 
-  // Geometry of a zoomed panel in the reader's configured orientation. Shared by
+  // Geometry of a zoomed panel on the configured or temporarily rotated screen. Shared by
   // renderPanelZoom() and prefetchPanelCache() so the prefetch-written pixel cache has exactly
-  // the dimensions the later render expects.
+  // the dimensions the later render expects. Same restore contract as applyFullPageGeometry.
   struct PanelGeom {
     int x = 0, y = 0;
     int fitW = 0, fitH = 0;
+    bool rotated = false;
+    int savedOrientation = 0;
   };
   PanelGeom applyPanelGeometry(int imgWidth, int imgHeight);
-  // Pure twin of applyPanelGeometry (no renderer access).
-  static PanelGeom computePanelGeom(int imgWidth, int imgHeight, int screenW, int screenH);
+  // Pure twin of applyPanelGeometry, same contract as computeFullPageGeom (no renderer access).
+  static PanelGeom computePanelGeom(int imgWidth, int imgHeight, int screenW, int screenH, bool rotatePanels);
 
   std::string panelCropPath(int panelIdx) const;                      // uses panelCropIsBmp for the extension
   std::string panelCropPathExt(int panelIdx, const char* ext) const;  // explicit extension (format detection)

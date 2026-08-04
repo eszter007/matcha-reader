@@ -850,6 +850,8 @@ void MangaReaderActivity::renderPanelZoom() {
   panelPrefetchArmed = true;
 
   const PanelGeom g = applyPanelGeometry(panelDims[currentPanel].w, panelDims[currentPanel].h);
+  const bool rotatePanel = g.rotated;
+  const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const int screenW = renderer.getScreenWidth();
   const int screenH = renderer.getScreenHeight();
   const int fitW = g.fitW, fitH = g.fitH;
@@ -959,6 +961,10 @@ void MangaReaderActivity::renderPanelZoom() {
     }
   }
 
+  if (rotatePanel) {
+    renderer.setOrientation(savedOrientation);
+  }
+
   // Arm the idle prefetch/upgrade dwell for the panel the user steps to next (see loop()) -- but
   // only from a fresh render. Re-arming on the deferred gray upgrade would restart the 400ms window
   // and needlessly delay the next-panel prefetch, which is gated on the same panelRenderedMs;
@@ -970,17 +976,22 @@ void MangaReaderActivity::renderPanelZoom() {
 }
 
 MangaReaderActivity::PanelGeom MangaReaderActivity::computePanelGeom(const int imgWidth, const int imgHeight,
-                                                                     int screenW, int screenH) {
+                                                                     int screenW, int screenH,
+                                                                     const bool rotatePanels) {
   PanelGeom g;
 
-  // Preserve the reader's configured orientation for every crop. Automatically rotating only
-  // wide panels made the physical device jump between portrait and landscape while stepping
-  // through snippets. A wide crop now fits within the portrait width instead; users who want a
-  // landscape reader can still select that orientation for the whole reading session.
-  //
-  // Unlike inline EPUB images (which deliberately never upscale), a panel crop should always be
-  // enlarged to use as much of the current screen as its aspect allows. Pass exact dimensions so
-  // the decoder skips its own upscale-disabled fit-or-shrink logic.
+  // With Rotate Panels enabled, rotate when the crop's aspect does not match the screen. This
+  // maximizes readable panel size on the small display; users rotate the physical device to read
+  // it. When disabled, fit every crop inside the reader's configured orientation.
+  const bool screenIsPortrait = screenH > screenW;
+  const bool panelIsLandscape = imgWidth > imgHeight;
+  g.rotated = rotatePanels && screenIsPortrait == panelIsLandscape;
+  if (g.rotated) {
+    std::swap(screenW, screenH);
+  }
+
+  // Panel crops always upscale to use as much of the available screen as their aspect allows.
+  // Exact dimensions make the decoder bypass its normal upscale-disabled fit-or-shrink logic.
   const float scale = std::min(static_cast<float>(screenW) / imgWidth, static_cast<float>(screenH) / imgHeight);
   g.fitW = std::max(1, static_cast<int>(imgWidth * scale + 0.5f));
   g.fitH = std::max(1, static_cast<int>(imgHeight * scale + 0.5f));
@@ -990,7 +1001,14 @@ MangaReaderActivity::PanelGeom MangaReaderActivity::computePanelGeom(const int i
 }
 
 MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
-  return computePanelGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight());
+  const int savedOrientation = renderer.getOrientation();
+  PanelGeom g = computePanelGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight(),
+                                 SETTINGS.rotateMangaPanels != 0);
+  g.savedOrientation = savedOrientation;
+  if (g.rotated) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4));
+  }
+  return g;
 }
 
 // Idle-time twin of renderPanelZoom's decode: warms the panel's .2bp pixel cache (and its
@@ -1067,6 +1085,7 @@ void MangaReaderActivity::postPrefetchJob(PrefetchJob&& job) {
   // render task's transient orientation change (see the header note on baseScreenW/baseScreenH).
   prefetchJob.screenW = baseScreenW;
   prefetchJob.screenH = baseScreenH;
+  prefetchJob.rotatePanels = SETTINGS.rotateMangaPanels != 0;
   prefetchResult = PrefetchResult{};
   prefetchBusy = true;
   xTaskNotifyGive(prefetchTaskHandle);
@@ -1216,7 +1235,8 @@ void MangaReaderActivity::workerWarmPanel() {
     return;
   }
   LOG_DBG("MRA", "Prefetch worker: warming panel cache %s", prefetchJob.cachePath.c_str());
-  const PanelGeom g = computePanelGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH);
+  const PanelGeom g = computePanelGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH,
+                                       prefetchJob.rotatePanels);
   RenderConfig config;
   config.x = g.x;
   config.y = g.y;
