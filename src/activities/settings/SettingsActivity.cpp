@@ -56,7 +56,7 @@ void SettingsActivity::rebuildSettingsLists() {
   // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
   // picks up dictionaries copied to the SD card since the last visit.
   std::vector<DictionaryEntry> dictionaries;
-  DictionaryRegistry::discover(dictionaries);
+  if (!finishOnBack || selectedCategoryIndex == 1) DictionaryRegistry::discover(dictionaries);
 
   // Reader-launched settings lock the UI to one category while the book remains
   // resident. Avoid materializing every web/device setting in that low-heap path.
