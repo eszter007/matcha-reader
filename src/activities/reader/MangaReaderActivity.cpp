@@ -340,7 +340,7 @@ void MangaReaderActivity::prevPanel() {
     requestUpdate();
   } else {
     // Panels Only must land on the previous page's LAST real crop, not its full-page overview or
-    // first crop. Pages with no crop are skipped by prevPage(true).
+    // first crop. prevPage(true) uses the full page only when that page has no crop at all.
     prevPage(true);
   }
 }
@@ -355,70 +355,37 @@ int MangaReaderActivity::findPanelWithCrop(const int start, const int step) cons
 
 void MangaReaderActivity::nextPage(const bool keepPanelMode) {
   if (!book) return;
-
-  const bool wantPanels = keepPanelMode || panelsOnlyMode;
-  const uint32_t oldPage = currentPage;
-  const int oldPanel = currentPanel;
-  const ViewMode oldViewMode = viewMode;
-  while (currentPage + 1 < book->getPageCount()) {
+  if (currentPage + 1 < book->getPageCount()) {
     currentPage++;
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     loadCurrentPagePanels();
-    if (!wantPanels || pageHasPanelCrops) {
-      if (wantPanels) {
-        currentPanel = firstPanelWithCrop;
-        viewMode = ViewMode::PanelZoom;
-      }
-      requestUpdate();
-      return;
+    if ((keepPanelMode || panelsOnlyMode) && pageHasPanelCrops) {
+      currentPanel = firstPanelWithCrop;
+      viewMode = ViewMode::PanelZoom;
     }
-  }
-
-  // No later page has a real crop. Restore the current page's metadata and keep its last panel on
-  // screen instead of leaking a crop-less full page into Panels Only at the end of the book.
-  if (currentPage != oldPage) {
-    currentPage = oldPage;
-    currentPanel = -1;
-    viewMode = ViewMode::FullPage;
-    loadCurrentPagePanels();
-    currentPanel = oldPanel;
-    viewMode = oldViewMode;
+    // In Panels Only a page with no detected crops still matters (cover, splash page, failed
+    // detection): leave FullPage selected as the fallback, then resume crops on the next page.
+    requestUpdate();
   }
 }
 
 void MangaReaderActivity::prevPage(const bool keepPanelMode) {
   if (!book) return;
-
-  const bool wantPanels = keepPanelMode || panelsOnlyMode;
-  const uint32_t oldPage = currentPage;
-  const int oldPanel = currentPanel;
-  const ViewMode oldViewMode = viewMode;
-  while (currentPage > 0) {
+  if (currentPage > 0) {
     currentPage--;
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     loadCurrentPagePanels();
-    if (!wantPanels || pageHasPanelCrops) {
-      if (wantPanels) {
-        const int lastCrop = findPanelWithCrop(static_cast<int>(panels.size()) - 1, -1);
-        if (lastCrop < 0) continue;
+    if ((keepPanelMode || panelsOnlyMode) && pageHasPanelCrops) {
+      const int lastCrop = findPanelWithCrop(static_cast<int>(panels.size()) - 1, -1);
+      if (lastCrop >= 0) {
         currentPanel = lastCrop;
         viewMode = ViewMode::PanelZoom;
       }
-      requestUpdate();
-      return;
     }
-  }
-
-  // Mirror nextPage(): remain on the current first panel when no earlier crop exists.
-  if (currentPage != oldPage || currentPanel != oldPanel || viewMode != oldViewMode) {
-    currentPage = oldPage;
-    currentPanel = -1;
-    viewMode = ViewMode::FullPage;
-    loadCurrentPagePanels();
-    currentPanel = oldPanel;
-    viewMode = oldViewMode;
+    // No crop: FullPage remains the intentional fallback in both navigation directions.
+    requestUpdate();
   }
 }
 

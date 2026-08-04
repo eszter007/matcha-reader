@@ -47,7 +47,7 @@ Translate the current page to English via Gemini 2.5 Flash. Works in any book, n
 
 Real panel detection, dictionary lookup, and translations extracted at conversion time so they appear instantly offline. Navigate panel by panel in reading order, each scaled to fill the screen; press Confirm on a panel to look up its text.
 
-For converted manga that contain both full pages and panel crops, open the reader menu and enable **Panels Only** to move continuously through snippets in either direction. With it off, each full-page overview appears before that page's panels. The choice is saved per book. Conversions that omit full-page images enter panel mode automatically.
+For converted manga that contain both full pages and panel crops, open the reader menu and enable **Panels Only** to move continuously through snippets in either direction. Pages with no detected panel crop still appear as full-page fallbacks. With the option off, every full-page overview appears before that page's panels. The choice is saved per book. Conversions that omit full-page images enter panel mode automatically.
 
 Page images render directly, JPG, PNG, and BMP are supported. To get started, convert your manga using the [web tool](https://eszter007.github.io/matcha-reader-tools/). For optimal results, check the X3 or X4 option as the target resolution.
 
