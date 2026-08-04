@@ -51,8 +51,11 @@ constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                           const SdCardFontRegistry* registry, Tab initialTab)
-    : Activity("TextSettings", renderer, mappedInput), registry_(registry), tab_(initialTab) {}
+                                           const SdCardFontRegistry* registry, Tab initialTab, const bool japaneseBook)
+    : Activity("TextSettings", renderer, mappedInput),
+      registry_(registry),
+      tab_(initialTab),
+      japaneseBook_(japaneseBook) {}
 
 void TextSettingsActivity::onEnter() {
   Activity::onEnter();
@@ -147,8 +150,8 @@ bool TextSettingsActivity::handleTouch() {
   // (similar to handleListTouch)
   auto buildTabs = [this]() {
     std::vector<TabInfo> tabs;
-    tabs.reserve(static_cast<int>(Tab::Count));
-    for (int t = 0; t < static_cast<int>(Tab::Count); t++) {
+    tabs.reserve(tabCount());
+    for (int t = 0; t < tabCount(); t++) {
       tabs.push_back({I18N.get(TAB_NAME_IDS[t]), tab_ == static_cast<Tab>(t)});
     }
     return tabs;
@@ -253,8 +256,8 @@ void TextSettingsActivity::render(RenderLock&&) {
 
   const bool onTabBar = selectedIndex() == 0;
   std::vector<TabInfo> tabs;
-  tabs.reserve(static_cast<int>(Tab::Count));
-  for (int t = 0; t < static_cast<int>(Tab::Count); t++) {
+  tabs.reserve(tabCount());
+  for (int t = 0; t < tabCount(); t++) {
     tabs.push_back({I18N.get(TAB_NAME_IDS[t]), tab_ == static_cast<Tab>(t)});
   }
   GUI.drawTabBar(renderer, Rect{0, geo.tabTop, pageWidth, metrics_.tabBarHeight}, tabs, onTabBar);
@@ -281,17 +284,16 @@ void TextSettingsActivity::render(RenderLock&&) {
       break;
 
     case Tab::Layout: {
-      constexpr int LAYOUT_ROWS = static_cast<int>(LayoutRow::Count);
-      static constexpr StrId ROW_NAME_IDS[LAYOUT_ROWS] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING,
-                                                          StrId::STR_ALIGNMENT, StrId::STR_SCREEN_MARGIN};
+      static constexpr StrId ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING, StrId::STR_ALIGNMENT,
+                                               StrId::STR_SCREEN_MARGIN};
       GUI.drawList(
-          renderer, listRect, LAYOUT_ROWS, selectedItem,
-          [](int index) { return std::string(I18N.get(ROW_NAME_IDS[index])); }, nullptr, nullptr,
-          [this](int index) { return layoutValueText(index); }, true);
+          renderer, listRect, currentListSize(), selectedItem,
+          [this](int index) { return std::string(I18N.get(ROW_NAME_IDS[static_cast<int>(layoutRowAt(index))])); },
+          nullptr, nullptr, [this](int index) { return layoutValueText(static_cast<int>(layoutRowAt(index))); }, true);
       if (onTabBar)
-        confirmLabel = tr(STR_STYLE);
+        confirmLabel = japaneseBook_ ? tr(STR_FONT) : tr(STR_STYLE);
       else  // Extra Paragraph Spacing toggles; the rest open a picker
-        confirmLabel = (selectedItem == static_cast<int>(LayoutRow::ParaSpacing)) ? tr(STR_TOGGLE) : tr(STR_SELECT);
+        confirmLabel = layoutRowAt(selectedItem) == LayoutRow::ParaSpacing ? tr(STR_TOGGLE) : tr(STR_SELECT);
       break;
     }
 
@@ -379,7 +381,7 @@ void TextSettingsActivity::activateRow(int row) {
       }
       break;
     case Tab::Layout:
-      confirmLayoutRow(row);
+      confirmLayoutRow(static_cast<int>(layoutRowAt(row)));
       break;
     case Tab::Style:
       confirmStyleRow(row);
@@ -499,10 +501,20 @@ bool TextSettingsActivity::focusedRowHasNoPreview() const {
 
 void TextSettingsActivity::switchTab(int direction) {
   const bool onTabBar = selectedIndex() == 0;
-  constexpr int tabCount = static_cast<int>(Tab::Count);
-  tab_ = static_cast<Tab>((static_cast<int>(tab_) + direction + tabCount) % tabCount);
+  const int count = tabCount();
+  tab_ = static_cast<Tab>((static_cast<int>(tab_) + direction + count) % count);
   if (onTabBar) selectedIndex() = 0;
   requestUpdate();
+}
+
+int TextSettingsActivity::tabCount() const {
+  return japaneseBook_ ? static_cast<int>(Tab::Style) : static_cast<int>(Tab::Count);
+}
+
+TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {
+  const int row =
+      japaneseBook_ && visibleIndex >= static_cast<int>(LayoutRow::Alignment) ? visibleIndex + 1 : visibleIndex;
+  return static_cast<LayoutRow>(row);
 }
 
 int TextSettingsActivity::currentListSize() const {
@@ -512,7 +524,7 @@ int TextSettingsActivity::currentListSize() const {
     case Tab::Size:
       return static_cast<int>(sizes_.size());
     case Tab::Layout:
-      return static_cast<int>(LayoutRow::Count);
+      return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 1 : 0);
     case Tab::Style:
       return static_cast<int>(StyleRow::Count);
 

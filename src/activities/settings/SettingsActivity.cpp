@@ -53,10 +53,9 @@ void SettingsActivity::rebuildSettingsLists() {
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
-  // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
-  // picks up dictionaries copied to the SD card since the last visit.
+  // Japanese books use their own dictionary flow, so omit the regular picker there.
   std::vector<DictionaryEntry> dictionaries;
-  if (!finishOnBack || selectedCategoryIndex == 1) DictionaryRegistry::discover(dictionaries);
+  if (!japaneseBook && (!finishOnBack || selectedCategoryIndex == 1)) DictionaryRegistry::discover(dictionaries);
 
   // Reader-launched settings lock the UI to one category while the book remains
   // resident. Avoid materializing every web/device setting in that low-heap path.
@@ -455,7 +454,7 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::TextSettings:
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                      TextSettingsActivity::Tab::Family),
+                                                                      TextSettingsActivity::Tab::Family, japaneseBook),
                                [this](const ActivityResult&) {
                                  saveSettings();
                                  rebuildSettingsLists();

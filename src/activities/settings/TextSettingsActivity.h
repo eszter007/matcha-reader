@@ -31,7 +31,7 @@ class TextSettingsActivity final : public Activity {
   };
 
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,
-                       Tab initialTab = Tab::Family);
+                       Tab initialTab = Tab::Family, bool japaneseBook = false);
 
   void onEnter() override;
   void onExit() override;
@@ -71,7 +71,9 @@ class TextSettingsActivity final : public Activity {
   // True when the focused list row is a setting the preview cannot reflect.
   bool focusedRowHasNoPreview() const;
   void switchTab(int direction = 1);
+  int tabCount() const;
   int currentListSize() const;
+  LayoutRow layoutRowAt(int visibleIndex) const;
   // Navigation ring position for the active tab: 0 = tab bar, 1..N = list item N-1.
   int& selectedIndex();
   int selectedIndex() const;
@@ -99,6 +101,7 @@ class TextSettingsActivity final : public Activity {
   textsettings::PreviewLayout previewLayout_;  // cached preview line layout; relaid only on setting/geometry change
 
   Tab tab_;
+  bool japaneseBook_ = false;
   int selectedIndex_[static_cast<int>(Tab::Count)] =
       {};  // per-Tab nav position (0 = tab bar, 1..N = row); set in onEnter
   int currentFamilyIndex_ = 0;
