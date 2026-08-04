@@ -2509,7 +2509,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // also leaves short pages on screen if the reader pages into it this session. Leave the
     // section unbuilt instead: a roomier later tick retries, and the foreground open path
     // (which frees more up front and early-renders) builds it properly on arrival.
-    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 64 * 1024;
+    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
     if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
       LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
       silentIndexBackoffUntilMs_ = millis() + 5000;
