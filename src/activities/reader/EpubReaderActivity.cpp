@@ -2767,6 +2767,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft, const bool glyphsAlreadyWarm,
                                         const bool grayscaleRefineOnly) {
   const auto t0 = millis();
+  // Reuse the image-warm input generation, which is bumped on every input/page turn.
   const uint32_t inputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
   const int fontId = effectiveReaderFontId();
 
@@ -2886,18 +2887,24 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     const int gh = renderer.getDisplayHeight();
     const int gwBytes = renderer.getDisplayWidthBytes();
     const size_t planeBytes = static_cast<size_t>(gwBytes) * gh;
+    const auto shouldCancel = [&] {
+      return pageHasImages ? imageWarmShouldCancel(this)
+                           : imageWarmInputStamp_.load(std::memory_order_relaxed) != inputStamp;
+    };
 
     // Render one plane band-by-band into a whole-plane buffer without touching
     // the controller, so it can run while the refresh is still in flight.
     auto renderPlaneToBuffer = [&](const bool lsbPlane, uint8_t* buf) {
       renderer.setRenderMode(lsbPlane ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
       for (int y = 0; y < gh; y += stripRows) {
+        if (shouldCancel()) return false;
         const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
         renderer.beginStripTarget(buf + static_cast<size_t>(y) * gwBytes, y, rows);
         renderer.clearScreen(0x00);
         renderGrayscalePass();
         renderer.endStripTarget();
       }
+      return true;
     };
 
     // Tiered on heap pressure: two plane buffers hide both plane renders
@@ -2924,24 +2931,33 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     auto msbPlaneBuf = (lsbPlaneBuf && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
 
     if (lsbPlaneBuf) {
-      renderPlaneToBuffer(true, lsbPlaneBuf.get());
-      if (msbPlaneBuf) renderPlaneToBuffer(false, msbPlaneBuf.get());
+      bool cancelled = !renderPlaneToBuffer(true, lsbPlaneBuf.get());
+      if (!cancelled && msbPlaneBuf) cancelled = !renderPlaneToBuffer(false, msbPlaneBuf.get());
       const auto tGrayRender = millis();
 
       renderer.waitRefreshComplete();
       const auto tWait = millis();
 
-      renderer.writeGrayscalePlaneStrip(true, lsbPlaneBuf.get(), 0, gh);
-      if (msbPlaneBuf) {
-        renderer.writeGrayscalePlaneStrip(false, msbPlaneBuf.get(), 0, gh);
-      } else {
-        renderPlaneToBuffer(false, lsbPlaneBuf.get());
-        renderer.writeGrayscalePlaneStrip(false, lsbPlaneBuf.get(), 0, gh);
+      if (!cancelled) cancelled = shouldCancel();
+      if (!cancelled) {
+        renderer.writeGrayscalePlaneStrip(true, lsbPlaneBuf.get(), 0, gh);
+        if (msbPlaneBuf) {
+          cancelled = shouldCancel();
+        } else {
+          cancelled = !renderPlaneToBuffer(false, lsbPlaneBuf.get());
+        }
+        if (!cancelled) {
+          renderer.writeGrayscalePlaneStrip(false, msbPlaneBuf ? msbPlaneBuf.get() : lsbPlaneBuf.get(), 0, gh);
+        }
       }
       const auto tGrayWrite = millis();
 
       renderer.setRenderMode(GfxRenderer::BW);
-      renderer.displayGrayBuffer();
+      if (!cancelled && !shouldCancel()) {
+        renderer.displayGrayBuffer();
+      } else {
+        cancelled = true;
+      }
       const auto tGrayDisplay = millis();
 
       // BW framebuffer is intact; re-sync controller RAM for the next
@@ -2951,9 +2967,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       LOG_DBG("ERS",
               "Page render (tiled async): prewarm=%lums bw_render=%lums display=%lums gray_render=%lums "
-              "wait=%lums gray_write=%lums gray_display=%lums cleanup=%lums total=%lums (planes buffered: %d)",
+              "wait=%lums gray_write=%lums gray_display=%lums cleanup=%lums total=%lums "
+              "(planes buffered: %d) cancelled=%d",
               tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayRender - tDisplay, tWait - tGrayRender,
-              tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1);
+              tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1,
+              cancelled);
     } else {
       // Per-strip scratch tier: blocking panels (X3) and the OOM fallback.
       // The strip writes below need the panel idle, so wait out any pending
@@ -2977,10 +2995,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         // Bands may be streamed in any order: X4 windows each via setRamArea,
         // X3 via PTL.
         bool cancelled = false;
-        const auto shouldCancel = [&] {
-          return pageHasImages ? imageWarmShouldCancel(this)
-                               : imageWarmInputStamp_.load(std::memory_order_relaxed) != inputStamp;
-        };
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
         for (int y = 0; y < gh && !cancelled; y += stripRows) {
           if (shouldCancel()) {
