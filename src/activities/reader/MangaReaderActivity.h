@@ -60,6 +60,9 @@ class MangaReaderActivity final : public Activity {
 
   enum class ViewMode { FullPage, PanelZoom, TextOverlay };
   ViewMode viewMode = ViewMode::FullPage;
+  // Per-book preference persisted as progress.bin byte 7. Books that physically omit page images
+  // still enter their crops regardless of this preference.
+  bool panelsOnlyMode = false;
 
   // Prefetch state flags below are written from the render task (renderFullPage/renderPanelZoom)
   // and read/updated from the loop task (loop/loadCurrentPagePanels). They're word-sized and only

@@ -273,7 +273,7 @@ void MangaReaderActivity::loadCurrentPagePanels() {
     nextPanelPrefetched = true;
     // A panels-only conversion has no full-page overview to render. Enter its first available
     // crop automatically, including after restoring progress or changing pages.
-    if (!currentPageHasImage && firstPanelWithCrop >= 0) {
+    if ((!currentPageHasImage || panelsOnlyMode) && firstPanelWithCrop >= 0) {
       currentPanel = firstPanelWithCrop;
       viewMode = ViewMode::PanelZoom;
     }
@@ -447,7 +447,7 @@ void MangaReaderActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     if (viewMode == ViewMode::PanelZoom) {
-      if (currentPageHasImage) {
+      if (currentPageHasImage && !panelsOnlyMode) {
         currentPanel = -1;
         viewMode = ViewMode::FullPage;
         requestUpdate();
@@ -1474,13 +1474,14 @@ void MangaReaderActivity::saveProgress() const {
     Storage.mkdir(cachePath.c_str());
   }
 
-  uint8_t data[6];
+  uint8_t data[7];
   data[0] = currentPage & 0xFF;
   data[1] = (currentPage >> 8) & 0xFF;
   data[2] = (currentPage >> 16) & 0xFF;
   data[3] = (currentPage >> 24) & 0xFF;
   int16_t panelVal = static_cast<int16_t>(currentPanel);
   memcpy(data + 4, &panelVal, 2);
+  data[6] = panelsOnlyMode ? 1 : 0;
 
   ProgressFile::writeAtomic(cachePath, data, sizeof(data));
 }
@@ -1491,12 +1492,15 @@ void MangaReaderActivity::loadProgress() {
 
   HalFile f;
   if (Storage.openFileForRead("MNG", cachePath + "/progress.bin", f)) {
-    uint8_t data[6];
-    if (f.read(data, 6) == 6) {
+    uint8_t data[7] = {};
+    const int bytesRead = f.read(data, sizeof(data));
+    if (bytesRead >= 6) {
       currentPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
       int16_t panelVal;
       memcpy(&panelVal, data + 4, 2);
       currentPanel = panelVal;
+      // Six-byte progress files predate this setting and default to normal full-page mode.
+      panelsOnlyMode = bytesRead >= 7 && data[6] != 0;
 
       if (currentPage >= book->getPageCount()) {
         currentPage = 0;
@@ -1603,12 +1607,14 @@ void MangaReaderActivity::launchMenu() {
 
   // hasFootnotes=false (no footnotes in manga), showVerticalToggle=false
   startActivityForResult(
-      std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, book->getTitle(), curPage, totalPages,
-                                               bookProgressPercent, SETTINGS.orientation,
-                                               /*hasFootnotes=*/false, /*hasBookmarks=*/!cachedBookmarks.empty(),
-                                               /*hasWordLookup=*/hasWordLookup, /*showVerticalToggle=*/false,
-                                               /*verticalEnabled=*/false, /*furiganaEnabled=*/true,
-                                               /*hasPageText=*/hasPageText),
+      std::make_unique<EpubReaderMenuActivity>(
+          renderer, mappedInput, book->getTitle(), curPage, totalPages, bookProgressPercent, SETTINGS.orientation,
+          /*hasFootnotes=*/false, /*hasBookmarks=*/!cachedBookmarks.empty(),
+          /*hasWordLookup=*/hasWordLookup, /*showVerticalToggle=*/false,
+          /*verticalEnabled=*/false, /*furiganaEnabled=*/true,
+          /*hasPageText=*/hasPageText, /*imageReaderMinimal=*/false,
+          /*showPanelsOnlyToggle=*/panelsOnlyMode || (currentPageHasImage && pageHasPanelCrops),
+          /*panelsOnlyEnabled=*/panelsOnlyMode),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         // Apply orientation change
@@ -1737,6 +1743,17 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
     }
     case EpubReaderMenuActivity::MenuAction::ROTATE_SCREEN:
       // Orientation already applied in the callback above
+      break;
+    case EpubReaderMenuActivity::MenuAction::TOGGLE_PANELS_ONLY:
+      panelsOnlyMode = !panelsOnlyMode;
+      if (panelsOnlyMode && pageHasPanelCrops) {
+        currentPanel = firstPanelWithCrop;
+        viewMode = ViewMode::PanelZoom;
+      } else if (!panelsOnlyMode && currentPageHasImage) {
+        currentPanel = -1;
+        viewMode = ViewMode::FullPage;
+      }
+      saveProgress();
       break;
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT:
       launchPercentJump();

@@ -13,22 +13,24 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
                                                const bool hasFootnotes, const bool hasBookmarks,
                                                const bool hasWordLookup, const bool showVerticalToggle,
                                                const bool verticalEnabled, const bool furiganaEnabled,
-                                               const bool hasPageText, const bool imageReaderMinimal)
+                                               const bool hasPageText, const bool imageReaderMinimal,
+                                               const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled)
     : Activity("EpubReaderMenu", renderer, mappedInput),
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, showVerticalToggle, verticalEnabled,
-                               furiganaEnabled, imageReaderMinimal)),
+                               furiganaEnabled, imageReaderMinimal, showPanelsOnlyToggle)),
       hasPageText(hasPageText),
       title(title),
       pendingOrientation(currentOrientation),
       pendingVerticalEnabled(verticalEnabled),
       pendingFuriganaEnabled(furiganaEnabled),
+      panelsOnlyEnabled(panelsOnlyEnabled),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool showVerticalToggle, bool verticalEnabled,
-    bool furiganaEnabled, bool imageReaderMinimal) {
+    bool furiganaEnabled, bool imageReaderMinimal, bool showPanelsOnlyToggle) {
   std::vector<MenuItem> items;
   items.reserve(16);
 
@@ -56,6 +58,9 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   if (showVerticalToggle) {
     items.push_back({MenuAction::TOGGLE_VERTICAL, StrId::STR_VERTICAL_TEXT_LABEL});
     items.push_back({MenuAction::TOGGLE_FURIGANA, StrId::STR_FURIGANA_LABEL});
+  }
+  if (showPanelsOnlyToggle) {
+    items.push_back({MenuAction::TOGGLE_PANELS_ONLY, StrId::STR_PANELS_ONLY});
   }
   items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
   if (hasBookmarks) {
@@ -252,6 +257,8 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
           return I18N.get(pendingVerticalEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
         } else if (value == MenuAction::TOGGLE_FURIGANA) {
           return I18N.get(pendingFuriganaEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
+        } else if (value == MenuAction::TOGGLE_PANELS_ONLY) {
+          return I18N.get(panelsOnlyEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
         } else {
           return "";
         }
