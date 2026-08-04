@@ -360,6 +360,8 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
+  // Applied dictionary rows in reader settings are informational: they have a getter but no setter.
+  if (setting.valueGetter && !setting.valueSetter) return;
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
 
@@ -584,12 +586,18 @@ void SettingsActivity::render(RenderLock&&) {
       true);
 
   // Draw help text
+  const bool selectedSettingReadOnly = selectedSettingIndex > 0 &&
+                                       (*currentSettings)[selectedSettingIndex - 1].valueGetter &&
+                                       !(*currentSettings)[selectedSettingIndex - 1].valueSetter;
   const auto confirmLabel =
       (selectedSettingIndex == 0)
           ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-          : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
-                 ? tr(STR_SELECT)
-                 : tr(STR_TOGGLE));
+          : (selectedSettingReadOnly
+                 ? tr(STR_READ_ONLY)
+                 : (selectedSettingIndex > 0 &&
+                            (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
+                        ? tr(STR_SELECT)
+                        : tr(STR_TOGGLE)));
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

@@ -154,9 +154,9 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
 
   if (showAppliedDictionary) {
     // Reader settings are informational: the book language wins over the global fallback.
-    s.valueGetter = [folderNames, bookLanguage]() -> uint8_t {
-      std::string appliedFolder;
-      DictionaryRegistry::folderForLanguageOrFallback(bookLanguage, SETTINGS.dictionaryName, appliedFolder);
+    std::string appliedFolder;
+    DictionaryRegistry::folderForLanguageOrFallback(bookLanguage, SETTINGS.dictionaryName, appliedFolder);
+    s.valueGetter = [folderNames, appliedFolder]() -> uint8_t {
       for (size_t i = 0; i < folderNames.size(); i++) {
         // The fallback is persisted in a bounded field, so match it the same way as the editor.
         if (strncmp(folderNames[i].c_str(), appliedFolder.c_str(), sizeof(SETTINGS.dictionaryName) - 1) == 0) {
