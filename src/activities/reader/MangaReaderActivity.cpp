@@ -312,15 +312,17 @@ void MangaReaderActivity::nextPanel() {
   if (currentPanel < 0) {
     currentPanel = firstPanelWithCrop;
     viewMode = ViewMode::PanelZoom;
+    requestUpdate();
+    return;
   } else if (currentPanel < static_cast<int>(panels.size()) - 1) {
     currentPanel++;
-  } else {
-    // Once the reader has entered panel mode, keep moving through snippets instead of showing
-    // the full-page overview between every page.
-    nextPage(true);
+    requestUpdate();
     return;
   }
-  requestUpdate();
+
+  // Normal mode shows every page overview before its crops. Panels Only (and conversions that
+  // physically omit full pages) stays in crops continuously across the page boundary.
+  nextPage(panelsOnlyMode || !currentPageHasImage);
 }
 
 void MangaReaderActivity::prevPanel() {
@@ -331,41 +333,92 @@ void MangaReaderActivity::prevPanel() {
   if (currentPanel > firstPanelWithCrop) {
     currentPanel--;
     requestUpdate();
-  } else if (currentPanel == firstPanelWithCrop) {
-    if (!currentPageHasImage) {
-      prevPage();
-      return;
-    }
+  } else if (!panelsOnlyMode && currentPageHasImage) {
+    // Reverse of normal mode's full-page -> panels sequence.
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     requestUpdate();
   } else {
-    prevPage();
+    // Panels Only must land on the previous page's LAST real crop, not its full-page overview or
+    // first crop. Pages with no crop are skipped by prevPage(true).
+    prevPage(true);
   }
+}
+
+int MangaReaderActivity::findPanelWithCrop(const int start, const int step) const {
+  if (step == 0 || panels.empty()) return -1;
+  for (int i = start; i >= 0 && i < static_cast<int>(panels.size()); i += step) {
+    if (Storage.exists(panelCropPath(i).c_str())) return i;
+  }
+  return -1;
 }
 
 void MangaReaderActivity::nextPage(const bool keepPanelMode) {
   if (!book) return;
-  if (currentPage + 1 < book->getPageCount()) {
+
+  const bool wantPanels = keepPanelMode || panelsOnlyMode;
+  const uint32_t oldPage = currentPage;
+  const int oldPanel = currentPanel;
+  const ViewMode oldViewMode = viewMode;
+  while (currentPage + 1 < book->getPageCount()) {
     currentPage++;
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     loadCurrentPagePanels();
-    if (keepPanelMode && pageHasPanelCrops) {
-      currentPanel = firstPanelWithCrop;
-      viewMode = ViewMode::PanelZoom;
+    if (!wantPanels || pageHasPanelCrops) {
+      if (wantPanels) {
+        currentPanel = firstPanelWithCrop;
+        viewMode = ViewMode::PanelZoom;
+      }
+      requestUpdate();
+      return;
     }
-    requestUpdate();
+  }
+
+  // No later page has a real crop. Restore the current page's metadata and keep its last panel on
+  // screen instead of leaking a crop-less full page into Panels Only at the end of the book.
+  if (currentPage != oldPage) {
+    currentPage = oldPage;
+    currentPanel = -1;
+    viewMode = ViewMode::FullPage;
+    loadCurrentPagePanels();
+    currentPanel = oldPanel;
+    viewMode = oldViewMode;
   }
 }
 
-void MangaReaderActivity::prevPage() {
-  if (currentPage > 0) {
+void MangaReaderActivity::prevPage(const bool keepPanelMode) {
+  if (!book) return;
+
+  const bool wantPanels = keepPanelMode || panelsOnlyMode;
+  const uint32_t oldPage = currentPage;
+  const int oldPanel = currentPanel;
+  const ViewMode oldViewMode = viewMode;
+  while (currentPage > 0) {
     currentPage--;
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     loadCurrentPagePanels();
-    requestUpdate();
+    if (!wantPanels || pageHasPanelCrops) {
+      if (wantPanels) {
+        const int lastCrop = findPanelWithCrop(static_cast<int>(panels.size()) - 1, -1);
+        if (lastCrop < 0) continue;
+        currentPanel = lastCrop;
+        viewMode = ViewMode::PanelZoom;
+      }
+      requestUpdate();
+      return;
+    }
+  }
+
+  // Mirror nextPage(): remain on the current first panel when no earlier crop exists.
+  if (currentPage != oldPage || currentPanel != oldPanel || viewMode != oldViewMode) {
+    currentPage = oldPage;
+    currentPanel = -1;
+    viewMode = ViewMode::FullPage;
+    loadCurrentPagePanels();
+    currentPanel = oldPanel;
+    viewMode = oldViewMode;
   }
 }
 

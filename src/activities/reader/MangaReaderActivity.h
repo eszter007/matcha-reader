@@ -277,7 +277,8 @@ class MangaReaderActivity final : public Activity {
   void nextPanel();
   void prevPanel();
   void nextPage(bool keepPanelMode = false);
-  void prevPage();
+  void prevPage(bool keepPanelMode = false);
+  int findPanelWithCrop(int start, int step) const;
 
   void saveProgress() const;
   void loadProgress();
