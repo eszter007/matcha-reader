@@ -850,8 +850,6 @@ void MangaReaderActivity::renderPanelZoom() {
   panelPrefetchArmed = true;
 
   const PanelGeom g = applyPanelGeometry(panelDims[currentPanel].w, panelDims[currentPanel].h);
-  const bool rotatePanel = g.rotated;
-  const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const int screenW = renderer.getScreenWidth();
   const int screenH = renderer.getScreenHeight();
   const int fitW = g.fitW, fitH = g.fitH;
@@ -961,10 +959,6 @@ void MangaReaderActivity::renderPanelZoom() {
     }
   }
 
-  if (rotatePanel) {
-    renderer.setOrientation(savedOrientation);
-  }
-
   // Arm the idle prefetch/upgrade dwell for the panel the user steps to next (see loop()) -- but
   // only from a fresh render. Re-arming on the deferred gray upgrade would restart the 400ms window
   // and needlessly delay the next-panel prefetch, which is gated on the same panelRenderedMs;
@@ -979,24 +973,14 @@ MangaReaderActivity::PanelGeom MangaReaderActivity::computePanelGeom(const int i
                                                                      int screenW, int screenH) {
   PanelGeom g;
 
-  // Rotate when the panel's aspect doesn't match the screen's, same as EPUB
-  // full-page images: this lets a wide (landscape) panel fill a portrait
-  // screen edge-to-edge instead of shrinking to fit within its width, and
-  // vice versa. The user tilts the device to view a rotated panel. Pure math
-  // (no renderer access) -- see computeFullPageGeom for the swap rationale.
-  const bool screenIsPortrait = screenH > screenW;
-  const bool panelIsLandscape = imgWidth > imgHeight;
-  g.rotated = screenIsPortrait == panelIsLandscape;
-  if (g.rotated) {
-    std::swap(screenW, screenH);
-  }
-
-  // Fit panel image to screen preserving aspect ratio. Unlike inline EPUB
-  // images (which deliberately never upscale), a panel crop should always
-  // be blown up to fill as much of the screen as possible -- that's the
-  // whole point of zooming into it. Compute the exact target size here and
-  // pass useExactDimensions so the decoder skips its own upscale-disabled
-  // fit-or-shrink logic.
+  // Preserve the reader's configured orientation for every crop. Automatically rotating only
+  // wide panels made the physical device jump between portrait and landscape while stepping
+  // through snippets. A wide crop now fits within the portrait width instead; users who want a
+  // landscape reader can still select that orientation for the whole reading session.
+  //
+  // Unlike inline EPUB images (which deliberately never upscale), a panel crop should always be
+  // enlarged to use as much of the current screen as its aspect allows. Pass exact dimensions so
+  // the decoder skips its own upscale-disabled fit-or-shrink logic.
   const float scale = std::min(static_cast<float>(screenW) / imgWidth, static_cast<float>(screenH) / imgHeight);
   g.fitW = std::max(1, static_cast<int>(imgWidth * scale + 0.5f));
   g.fitH = std::max(1, static_cast<int>(imgHeight * scale + 0.5f));
@@ -1006,13 +990,7 @@ MangaReaderActivity::PanelGeom MangaReaderActivity::computePanelGeom(const int i
 }
 
 MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
-  const int savedOrientation = renderer.getOrientation();
-  PanelGeom g = computePanelGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight());
-  g.savedOrientation = savedOrientation;
-  if (g.rotated) {
-    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4));
-  }
-  return g;
+  return computePanelGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight());
 }
 
 // Idle-time twin of renderPanelZoom's decode: warms the panel's .2bp pixel cache (and its
