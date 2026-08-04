@@ -39,7 +39,7 @@ Look up any word on the page, in vertical or horizontal mode. Conjugations resol
 
 ### Page Translation
 
-Translate the current page to English via Gemini 2.5 Flash. Works in any book, not just Japanese ones. Needs Wi-Fi and your own API key.
+Translate the current page to English via Gemini 3.6 Flash. Works in any book, not just Japanese ones. Needs Wi-Fi and your own API key.
 
 <p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="Translated page"></p>
 
