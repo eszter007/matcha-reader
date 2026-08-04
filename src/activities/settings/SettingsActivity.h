@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -155,6 +156,7 @@ class SettingsActivity final : public Activity {
   int initialCategory = 0;
   bool finishOnBack = false;
   bool japaneseBook = false;
+  std::string dictionaryLanguage;
 
   int selectedCategoryIndex = 0;  // Currently selected category
   int selectedSettingIndex = 0;
@@ -187,11 +189,13 @@ class SettingsActivity final : public Activity {
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
   // instead of replacing the stack with Home.
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
-                            const bool finishOnBack = false, const bool japaneseBook = false)
+                            const bool finishOnBack = false, const bool japaneseBook = false,
+                            std::string dictionaryLanguage = {})
       : Activity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),
-        japaneseBook(japaneseBook) {}
+        japaneseBook(japaneseBook),
+        dictionaryLanguage(std::move(dictionaryLanguage)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

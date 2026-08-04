@@ -444,11 +444,8 @@ void EpubReaderActivity::openDictionaryWordSelect() {
     return;
   }
   std::string dictionaryFolder;
-  if (epub && !epub->getLanguage().empty()) {
-    DictionaryRegistry::folderForLanguage(epub->getLanguage(), dictionaryFolder);
-  } else {
-    dictionaryFolder = SETTINGS.dictionaryName;
-  }
+  DictionaryRegistry::folderForLanguageOrFallback(epub ? epub->getLanguage() : std::string{}, SETTINGS.dictionaryName,
+                                                  dictionaryFolder);
   if (dictionaryFolder.empty()) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
@@ -1111,7 +1108,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // margin changes are picked up on return: the SD font system reloads to the new selection
       // and the next render's section-cache parameter check rebuilds the layout if needed.
       startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                                /*finishOnBack=*/true, isJapaneseBook()),
+                                                                /*finishOnBack=*/true, isJapaneseBook(),
+                                                                epub ? epub->getLanguage() : std::string{}),
                              [this](const ActivityResult&) {
                                sdFontSystem.ensureLoaded(renderer);
                                sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());

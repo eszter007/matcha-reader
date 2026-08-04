@@ -61,7 +61,7 @@ void SettingsActivity::rebuildSettingsLists() {
   // resident. Avoid materializing every web/device setting in that low-heap path.
   const StrId categoryFilter = finishOnBack ? categoryNames[selectedCategoryIndex] : StrId::STR_NONE_OPT;
   auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
-                                  /*includeTextSettingsEntries=*/!finishOnBack);
+                                  /*includeTextSettingsEntries=*/!finishOnBack, dictionaryLanguage, finishOnBack);
   if (finishOnBack) {
     switch (selectedCategoryIndex) {
       case 0:
