@@ -1661,7 +1661,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
       const int fontId = effectiveReaderFontId();
-      if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight)) {
+      if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
         GUI.drawPopup(renderer, tr(STR_INDEXING));
         // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
@@ -1702,7 +1702,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         earlyPageActuallyDisplayed_ = false;
         earlyDisplayedPage_.store(earlyTarget, std::memory_order_relaxed);
         verticalBuildInProgress_.store(true, std::memory_order_relaxed);
-        const bool built = verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight);
+        const bool built =
+            verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing);
         verticalBuildInProgress_.store(false, std::memory_order_relaxed);
         if (!built) {
           LOG_ERR("ERS", "Failed to build vertical section");
@@ -2486,7 +2487,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
 
     VerticalSection nextVSection(epub, nextSpineIndex, renderer);
     const int fontId = effectiveReaderFontId();
-    if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight)) return;
+    if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) return;
 
     // The vertical build is the most memory-intensive step in the reader, and this
     // silent path runs it at the worst heap moment: right after a page render, with
@@ -2517,7 +2518,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     silentIndexBackoffUntilMs_ = 0;
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
-    if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight)) {
+    if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) {
       LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
     }
     return;
@@ -2656,7 +2657,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
       // full-page illustration is its own one-page spine item, so this cross-boundary peek is
       // the common case -- silentIndexNextChapterIfNeeded has already built the section file.
       nextV.emplace(epub, currentSpineIndex + 1, renderer);
-      if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight) && nextV->pageCount > 0) {
+      if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing) && nextV->pageCount > 0) {
         vp = nextV->getPage(0);
       } else {
         LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", currentSpineIndex + 1);  // TEMP
@@ -3122,7 +3123,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
       bool probed = false;
       if (vertical) {
         VerticalSection sibling(epub, i, renderer);
-        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight)) {
+        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) {
           spinePagesReal[i] = sibling.pageCount;
           probed = true;
         }

@@ -10,6 +10,7 @@
 #include <XmlParserUtils.h>
 #include <expat.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -58,7 +59,8 @@ namespace {
 // under X3 heap pressure (no manual .crosspoint deletion needed).
 // v104: glyph records are fixed-size (textId) with a per-page text pool appended after
 // the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
-constexpr uint8_t VSECTION_FILE_VERSION = 104;
+// v105: the header includes the vertical column-spacing setting.
+constexpr uint8_t VSECTION_FILE_VERSION = 105;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -554,7 +556,7 @@ namespace {
 
 // ---- Page (de)serialization (cache format v37) -----------------------------------------------
 // File layout:
-//   header: u8 version, i32 fontId, u16 viewportWidth, u16 viewportHeight,
+//   header: u8 version, i32 fontId, u16 viewportWidth, u16 viewportHeight, u8 lineSpacing,
 //           u16 pageCount, u32 indexOffset          (pageCount/indexOffset patched post-stream)
 //   page records (variable length, written as pages are laid out)
 //   footer at indexOffset: pageCount x u32 file offset of each page record
@@ -1179,13 +1181,13 @@ struct LayoutPageSink final : ParagraphSink {
   }
 };
 
-// Byte offset of the pageCount field in the header: u8 version + i32 fontId + 2x u16 viewport.
-constexpr size_t HEADER_PAGECOUNT_OFFSET = 1 + sizeof(int) + 2 * sizeof(uint16_t);
+// Byte offset of the pageCount field in the header.
+constexpr size_t HEADER_PAGECOUNT_OFFSET = 1 + sizeof(int) + 2 * sizeof(uint16_t) + sizeof(uint8_t);
 
 }  // namespace
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
-                                           const uint16_t viewportHeight) {
+                                           const uint16_t viewportHeight, const uint8_t lineSpacing) {
   lastBuildDroppedForHeap_ = false;
   // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
   // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
@@ -1245,9 +1247,12 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
   layout.preallocateStream();
   const int lineH = renderer.getLineHeight(fontId);
-  layout.setColumnGapPx((lineH / 3) < 4 ? 4 : (lineH / 3));
+  // Tight/Normal/Wide use one, two, or four sixths of a line between columns.
+  const int clampedLineSpacing = std::clamp<int>(lineSpacing, 0, 2);
+  const int gapSixths = clampedLineSpacing == 2 ? 4 : clampedLineSpacing + 1;
+  layout.setColumnGapPx(std::max(4, lineH * gapSixths / 6));
   if (hasRuby) {
-    layout.setColumnGapPx(lineH * 2 / 3);
+    layout.setColumnGapPx(std::max(4, lineH * (gapSixths + 2) / 6));
     layout.setRightPaddingPx((lineH / 2) < 2 ? 2 : (lineH / 2));
   }
 
@@ -1377,7 +1382,8 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   return true;
 }
 
-bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight) {
+bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                        const uint8_t lineSpacing) {
   const auto vsectionsDir = epub->getCachePath() + "/vsections";
   Storage.mkdir(vsectionsDir.c_str());
 
@@ -1397,12 +1403,13 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   serialization::writePod(file, fontId);
   serialization::writePod(file, viewportWidth);
   serialization::writePod(file, viewportHeight);
+  serialization::writePod(file, lineSpacing);
   const uint16_t pageCountPlaceholder = 0;
   const uint32_t indexOffsetPlaceholder = 0;
   serialization::writePod(file, pageCountPlaceholder);
   serialization::writePod(file, indexOffsetPlaceholder);
 
-  if (!streamParseAndLayout(file, fontId, viewportWidth, viewportHeight)) {
+  if (!streamParseAndLayout(file, fontId, viewportWidth, viewportHeight, lineSpacing)) {
     file.close();
     Storage.remove(filePath.c_str());
     pageOffsets_.clear();
@@ -1446,7 +1453,8 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   return true;
 }
 
-bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight) {
+bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                      const uint8_t lineSpacing) {
   // A missing cache file is the NORMAL case here, not an error: the book-progress counter probes
   // every spine's section on each page turn, and unbuilt chapters simply don't have one yet.
   // openFileForRead would print "File does not exist" per spine per probe -- pure log spam.
@@ -1472,11 +1480,14 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
 
   int cachedFontId;
   uint16_t cachedWidth, cachedHeight;
+  uint8_t cachedLineSpacing;
   serialization::readPod(file, cachedFontId);
   serialization::readPod(file, cachedWidth);
   serialization::readPod(file, cachedHeight);
+  serialization::readPod(file, cachedLineSpacing);
 
-  if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight) {
+  if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight ||
+      cachedLineSpacing != lineSpacing) {
     file.close();
     LOG_DBG("VSC", "Parameter mismatch, clearing cache");
     clearCache();
