@@ -976,27 +976,22 @@ void MangaReaderActivity::renderPanelZoom() {
 }
 
 MangaReaderActivity::PanelGeom MangaReaderActivity::computePanelGeom(const int imgWidth, const int imgHeight,
-                                                                     int screenW, int screenH) {
+                                                                     int screenW, int screenH,
+                                                                     const bool rotatePanels) {
   PanelGeom g;
 
-  // Rotate when the panel's aspect doesn't match the screen's, same as EPUB
-  // full-page images: this lets a wide (landscape) panel fill a portrait
-  // screen edge-to-edge instead of shrinking to fit within its width, and
-  // vice versa. The user tilts the device to view a rotated panel. Pure math
-  // (no renderer access) -- see computeFullPageGeom for the swap rationale.
+  // With Rotate Panels enabled, rotate when the crop's aspect does not match the screen. This
+  // maximizes readable panel size on the small display; users rotate the physical device to read
+  // it. When disabled, fit every crop inside the reader's configured orientation.
   const bool screenIsPortrait = screenH > screenW;
   const bool panelIsLandscape = imgWidth > imgHeight;
-  g.rotated = screenIsPortrait == panelIsLandscape;
+  g.rotated = rotatePanels && screenIsPortrait == panelIsLandscape;
   if (g.rotated) {
     std::swap(screenW, screenH);
   }
 
-  // Fit panel image to screen preserving aspect ratio. Unlike inline EPUB
-  // images (which deliberately never upscale), a panel crop should always
-  // be blown up to fill as much of the screen as possible -- that's the
-  // whole point of zooming into it. Compute the exact target size here and
-  // pass useExactDimensions so the decoder skips its own upscale-disabled
-  // fit-or-shrink logic.
+  // Panel crops always upscale to use as much of the available screen as their aspect allows.
+  // Exact dimensions make the decoder bypass its normal upscale-disabled fit-or-shrink logic.
   const float scale = std::min(static_cast<float>(screenW) / imgWidth, static_cast<float>(screenH) / imgHeight);
   g.fitW = std::max(1, static_cast<int>(imgWidth * scale + 0.5f));
   g.fitH = std::max(1, static_cast<int>(imgHeight * scale + 0.5f));
@@ -1007,7 +1002,8 @@ MangaReaderActivity::PanelGeom MangaReaderActivity::computePanelGeom(const int i
 
 MangaReaderActivity::PanelGeom MangaReaderActivity::applyPanelGeometry(const int imgWidth, const int imgHeight) {
   const int savedOrientation = renderer.getOrientation();
-  PanelGeom g = computePanelGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight());
+  PanelGeom g = computePanelGeom(imgWidth, imgHeight, renderer.getScreenWidth(), renderer.getScreenHeight(),
+                                 SETTINGS.rotateMangaPanels != 0);
   g.savedOrientation = savedOrientation;
   if (g.rotated) {
     renderer.setOrientation(static_cast<GfxRenderer::Orientation>((savedOrientation + 3) % 4));
@@ -1089,6 +1085,7 @@ void MangaReaderActivity::postPrefetchJob(PrefetchJob&& job) {
   // render task's transient orientation change (see the header note on baseScreenW/baseScreenH).
   prefetchJob.screenW = baseScreenW;
   prefetchJob.screenH = baseScreenH;
+  prefetchJob.rotatePanels = SETTINGS.rotateMangaPanels != 0;
   prefetchResult = PrefetchResult{};
   prefetchBusy = true;
   xTaskNotifyGive(prefetchTaskHandle);
@@ -1238,7 +1235,8 @@ void MangaReaderActivity::workerWarmPanel() {
     return;
   }
   LOG_DBG("MRA", "Prefetch worker: warming panel cache %s", prefetchJob.cachePath.c_str());
-  const PanelGeom g = computePanelGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH);
+  const PanelGeom g =
+      computePanelGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH, prefetchJob.rotatePanels);
   RenderConfig config;
   config.x = g.x;
   config.y = g.y;
