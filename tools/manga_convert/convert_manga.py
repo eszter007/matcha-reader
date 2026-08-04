@@ -8,7 +8,7 @@ tool instead:
 
   1. Detects actual panel RECTANGLES geometrically (white-gutter grid
      detection -- no ML model required).
-  2. Crops each panel and sends it to Gemini (gemini-2.5-flash) asking what
+  2. Crops each panel and sends it to Gemini (gemini-3.6-flash) asking what
      text/dialogue appears in it, as JSON.
   3. Writes the same panels.idx/panels.dat binary format the device already
      reads, plus page images renamed to a canonical page_NNNN.<ext> sequence
@@ -116,7 +116,7 @@ TOC_ENTRY_HEADER = "<IH"  # pageIndex(4) + titleLen(2) = 6 bytes
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 PANEL_OCR_PROMPT = """This image is a single panel cropped from a Japanese manga page.
