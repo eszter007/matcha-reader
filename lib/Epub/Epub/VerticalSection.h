@@ -48,7 +48,8 @@ class VerticalSection {
   // a valid cache. See lastReadHeapRefused().
   mutable bool lastReadHeapRefused_ = false;
 
-  bool streamParseAndLayout(HalFile& out, int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
+  bool streamParseAndLayout(HalFile& out, int fontId, uint16_t viewportWidth, uint16_t viewportHeight,
+                            uint8_t lineSpacing);
 
   // Set by streamParseAndLayout when the layout dropped chars/glyphs on low heap. The pages that
   // made it to disk are readable (this session keeps working), but createSectionFile stamps the
@@ -99,8 +100,8 @@ class VerticalSection {
   // collapse to the final target.
   void requestPageDuringBuild(int pageIndex) { buildPageRequest_.store(pageIndex, std::memory_order_relaxed); }
 
-  bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
-  bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
+  bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing);
+  bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing);
   bool clearCache() const;
   const VerticalPage* getPage() const;
   const VerticalPage* getPage(int pageIndex) const;

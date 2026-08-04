@@ -154,6 +154,7 @@ class SettingsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
   int initialCategory = 0;
   bool finishOnBack = false;
+  bool japaneseBook = false;
 
   int selectedCategoryIndex = 0;  // Currently selected category
   int selectedSettingIndex = 0;
@@ -186,8 +187,11 @@ class SettingsActivity final : public Activity {
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
   // instead of replacing the stack with Home.
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
-                            const bool finishOnBack = false)
-      : Activity("Settings", renderer, mappedInput), initialCategory(initialCategory), finishOnBack(finishOnBack) {}
+                            const bool finishOnBack = false, const bool japaneseBook = false)
+      : Activity("Settings", renderer, mappedInput),
+        initialCategory(initialCategory),
+        finishOnBack(finishOnBack),
+        japaneseBook(japaneseBook) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
