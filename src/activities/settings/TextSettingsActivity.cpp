@@ -512,9 +512,8 @@ int TextSettingsActivity::tabCount() const {
 }
 
 TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {
-  const int row =
-      japaneseBook_ && visibleIndex >= static_cast<int>(LayoutRow::Alignment) ? visibleIndex + 1 : visibleIndex;
-  return static_cast<LayoutRow>(row);
+  if (japaneseBook_ && visibleIndex > 0) return LayoutRow::ScreenMargin;
+  return static_cast<LayoutRow>(visibleIndex);
 }
 
 int TextSettingsActivity::currentListSize() const {
@@ -524,7 +523,7 @@ int TextSettingsActivity::currentListSize() const {
     case Tab::Size:
       return static_cast<int>(sizes_.size());
     case Tab::Layout:
-      return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 1 : 0);
+      return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 2 : 0);
     case Tab::Style:
       return static_cast<int>(StyleRow::Count);
 
