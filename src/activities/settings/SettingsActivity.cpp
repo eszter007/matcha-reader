@@ -61,7 +61,7 @@ void SettingsActivity::rebuildSettingsLists() {
   // resident. Avoid materializing every web/device setting in that low-heap path.
   const StrId categoryFilter = finishOnBack ? categoryNames[selectedCategoryIndex] : StrId::STR_NONE_OPT;
   auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
-                                  /*includeTextSettingsEntries=*/!finishOnBack);
+                                  /*includeTextSettingsEntries=*/!finishOnBack, dictionaryLanguage, finishOnBack);
   if (finishOnBack) {
     switch (selectedCategoryIndex) {
       case 0:
@@ -360,6 +360,8 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
+  // Applied dictionary rows in reader settings are informational: they have a getter but no setter.
+  if (setting.valueGetter && !setting.valueSetter) return;
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
 
@@ -542,6 +544,8 @@ void SettingsActivity::render(RenderLock&&) {
   }
 
   const auto& settings = *currentSettings;
+  const bool selectedSettingReadOnly = selectedSettingIndex > 0 && settings[selectedSettingIndex - 1].valueGetter &&
+                                       !settings[selectedSettingIndex - 1].valueSetter;
   GUI.drawList(
       renderer,
       Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
@@ -581,15 +585,18 @@ void SettingsActivity::render(RenderLock&&) {
         }
         return valueText;
       },
-      true);
+      !selectedSettingReadOnly);
 
   // Draw help text
   const auto confirmLabel =
       (selectedSettingIndex == 0)
           ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-          : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
-                 ? tr(STR_SELECT)
-                 : tr(STR_TOGGLE));
+          : (selectedSettingReadOnly
+                 ? tr(STR_READ_ONLY)
+                 : (selectedSettingIndex > 0 &&
+                            (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
+                        ? tr(STR_SELECT)
+                        : tr(STR_TOGGLE)));
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

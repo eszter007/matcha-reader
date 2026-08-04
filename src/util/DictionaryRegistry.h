@@ -24,4 +24,8 @@ bool resolveBasePath(const char* folderName, std::string& basePathOut);
 
 bool folderForLanguage(const std::string& language, std::string& folderNameOut);
 
+// Prefer the dictionary matching the book language, falling back to the global
+// dictionary when no language-specific entry can be selected.
+bool folderForLanguageOrFallback(const std::string& language, const char* fallbackFolder, std::string& folderNameOut);
+
 }  // namespace DictionaryRegistry
