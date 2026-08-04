@@ -2767,6 +2767,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft, const bool glyphsAlreadyWarm,
                                         const bool grayscaleRefineOnly) {
   const auto t0 = millis();
+  const uint32_t inputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
   const int fontId = effectiveReaderFontId();
 
   // The image pixel-cache RAM slot lives for exactly one page render (it feeds
@@ -2976,9 +2977,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         // Bands may be streamed in any order: X4 windows each via setRamArea,
         // X3 via PTL.
         bool cancelled = false;
+        const auto shouldCancel = [&] {
+          return pageHasImages ? imageWarmShouldCancel(this)
+                               : imageWarmInputStamp_.load(std::memory_order_relaxed) != inputStamp;
+        };
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
         for (int y = 0; y < gh && !cancelled; y += stripRows) {
-          if (pageHasImages && imageWarmShouldCancel(this)) {
+          if (shouldCancel()) {
             cancelled = true;
             break;
           }
@@ -2994,7 +2999,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         // MSB plane.
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
         for (int y = 0; y < gh && !cancelled; y += stripRows) {
-          if (pageHasImages && imageWarmShouldCancel(this)) {
+          if (shouldCancel()) {
             cancelled = true;
             break;
           }
