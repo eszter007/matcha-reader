@@ -1235,8 +1235,8 @@ void MangaReaderActivity::workerWarmPanel() {
     return;
   }
   LOG_DBG("MRA", "Prefetch worker: warming panel cache %s", prefetchJob.cachePath.c_str());
-  const PanelGeom g = computePanelGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH,
-                                       prefetchJob.rotatePanels);
+  const PanelGeom g =
+      computePanelGeom(dims.width, dims.height, prefetchJob.screenW, prefetchJob.screenH, prefetchJob.rotatePanels);
   RenderConfig config;
   config.x = g.x;
   config.y = g.y;

@@ -219,12 +219,12 @@ class MangaReaderActivity final : public Activity {
     bool isPanel = false;
     bool isFirstPanel = false;  // which done-flag a panel job resolves
     int panelIdx = -1;
-    uint32_t gen = 0;       // pageGeneration at post time
-    int screenW = 0;        // base (unrotated) screen dims captured at post time --
-    int screenH = 0;        //   inputs to the pure geometry helpers
+    uint32_t gen = 0;          // pageGeneration at post time
+    int screenW = 0;           // base (unrotated) screen dims captured at post time --
+    int screenH = 0;           //   inputs to the pure geometry helpers
     bool rotatePanels = true;  // setting captured with geometry inputs
-    std::string imgPath;    // page image or panel crop
-    std::string cachePath;  // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
+    std::string imgPath;       // page image or panel crop
+    std::string cachePath;     // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
   };
   PrefetchJob prefetchJob;
 
