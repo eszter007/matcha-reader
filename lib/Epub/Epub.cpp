@@ -952,7 +952,7 @@ bool Epub::extractItemToFile(const std::string& itemHref, const std::string& des
   // per-chunk latency, so 4KB chunks measured ~100KB/s on an X3 device log (9.3s for one
   // 928KB illustration). 16KB chunks cut the round-trips 4x. readFileToStream allocates
   // 2x chunkSize transiently, so gate on the heap and keep 4KB as the tight-heap fallback.
-  const size_t chunkSize = ESP.getMaxAllocHeap() >= 64 * 1024 ? 16384 : 4096;
+  const size_t chunkSize = ESP.getMaxAllocHeap() >= 96 * 1024 ? 16384 : 4096;
   const bool ok = readItemContentsToStream(itemHref, out, chunkSize);
   out.flush();
   out.close();
