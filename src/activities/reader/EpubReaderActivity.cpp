@@ -987,12 +987,6 @@ void EpubReaderActivity::openReaderMenu() {
   // never show Word Lookup at all.
   const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
   const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
-  // Same reasoning as isJapaneseContent above, and for a worse failure: verticalOverride is
-  // persisted per book in progress.bin, so a book whose metadata isn't dc:language=ja but
-  // that has vertical forced on reopens in tategaki -- vertical columns, CJK breaking, no
-  // word spaces. Gating the toggle on isJapaneseBook() alone then HIDES the only control
-  // that turns it back off, leaving the book permanently unreadable.
-  const bool showVerticalToggle = isJapaneseBook() || verticalOverride == 1;
   bool hasPageText = false;
   if (verticalSection) {
     // getPage() faults the page into the section's SINGLE shared page slot -- the same slot the
@@ -1012,33 +1006,45 @@ void EpubReaderActivity::openReaderMenu() {
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !sectionFootnotes.empty() || !currentPageFootnotes.empty(), !cachedBookmarks.empty(), hasWordLookup,
-          showVerticalToggle, useVerticalText(), useFurigana(), hasPageText),
+          useVerticalText(), useFurigana(), hasPageText, /*imageReaderMinimal=*/false, /*mangaMode=*/false,
+          /*hideGenericLookup=*/isJapaneseBook()),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
         toggleAutoPageTurn(menu.pageTurnOption);
-        if (menu.verticalOverride >= 0 && menu.verticalOverride != (useVerticalText() ? 1 : 0)) {
-          verticalOverride = menu.verticalOverride;
-          {
-            // Every other section reset in this file takes the render lock: the render task can
-            // still be inside its (multi-second, section-touching) warm tail when the menu
-            // result lands, and freeing the section under it is a use-after-free.
-            RenderLock lock(*this);
-            section.reset();
-            verticalSection.reset();
-          }
-          // Forcing vertical text on a non-ja book is the same signal
-          // isJapaneseBook() covers at open: JP fallback follows it.
-          sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
-        }
-        if (menu.furiganaOverride >= 0 && menu.furiganaOverride != (useFurigana() ? 1 : 0)) {
-          furiganaOverride = menu.furiganaOverride;
-        }
+        applyVerticalFuriganaOverride(menu.verticalOverride, menu.furiganaOverride);
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }
         requestUpdate();
       });
+}
+
+// Shared by the reader menu's own result (menu.verticalOverride/furiganaOverride, always the
+// unchanged state it was opened with -- these toggles no longer live there, see
+// EpubReaderMenuActivity::buildMenuItems) and Reader Settings' result (where they DO change,
+// via SettingInfo::DynamicToggle). -1 means "unset/no book context for this toggle" and is a
+// no-op; each override only applies, and only resets the section, when it actually differs from
+// the book's current effective state.
+void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOverrideIn,
+                                                       const int8_t furiganaOverrideIn) {
+  if (verticalOverrideIn >= 0 && verticalOverrideIn != (useVerticalText() ? 1 : 0)) {
+    verticalOverride = verticalOverrideIn;
+    {
+      // Every other section reset in this file takes the render lock: the render task can
+      // still be inside its (multi-second, section-touching) warm tail when this result
+      // lands, and freeing the section under it is a use-after-free.
+      RenderLock lock(*this);
+      section.reset();
+      verticalSection.reset();
+    }
+    // Forcing vertical text on a non-ja book is the same signal isJapaneseBook() covers at
+    // open: JP fallback follows it.
+    sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+  }
+  if (furiganaOverrideIn >= 0 && furiganaOverrideIn != (useFurigana() ? 1 : 0)) {
+    furiganaOverride = furiganaOverrideIn;
+  }
 }
 
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
@@ -1107,12 +1113,25 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // Push settings opened on the Reader tab; Back pops straight back into the book. Font or
       // margin changes are picked up on return: the SD font system reloads to the new selection
       // and the next render's section-cache parameter check rebuilds the layout if needed.
+      // Vertical Text / Furigana (moved here from the reader's own quick menu -- see
+      // EpubReaderMenuActivity::buildMenuItems) come back the same way the quick menu used to
+      // carry them: a MenuResult, read via get_if since SettingsActivity only sets one when
+      // showVerticalToggle() was true here, so std::monostate elsewhere is expected.
       startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
                                                                 /*finishOnBack=*/true, isJapaneseBook(),
-                                                                epub ? epub->getLanguage() : std::string{}),
-                             [this](const ActivityResult&) {
+                                                                epub ? epub->getLanguage() : std::string{},
+                                                                showVerticalToggle(), useVerticalText(), useFurigana()),
+                             [this](const ActivityResult& result) {
+                               if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
+                                 applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
+                               }
                                sdFontSystem.ensureLoaded(renderer);
                                sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+                               // Reading Orientation now only changes via this screen (removed from the reader's
+                               // own quick menu, which used to apply it straight from the popup via
+                               // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
+                               // does, or it would silently wait for the book's next full open to take effect.
+                               ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
                                // Return to the reader MENU (where the user came from), not the page.
                                openReaderMenu();
                              });
@@ -3719,6 +3738,16 @@ bool EpubReaderActivity::isJapaneseBook() const {
   const auto& lang = epub->getLanguage();
   return lang.size() >= 2 && lang[0] == 'j' && lang[1] == 'a';
 }
+
+// Whether Vertical Text / Furigana are meaningful for this book at all -- shared by opening
+// Reader Settings (to decide whether to show the two toggles there) and this menu's own
+// MenuResult (kept in sync even though nothing here can change them anymore).
+//
+// verticalOverride is persisted per book in progress.bin, so a book whose metadata isn't
+// dc:language=ja but that has vertical forced on reopens in tategaki -- vertical columns, CJK
+// breaking, no word spaces. Gating on isJapaneseBook() alone would then hide the only control
+// that turns it back off, leaving the book permanently unreadable.
+bool EpubReaderActivity::showVerticalToggle() const { return isJapaneseBook() || verticalOverride == 1; }
 
 bool EpubReaderActivity::useVerticalText() const {
   // Vertical (tategaki) is a Japanese typesetting mode: it stacks characters in

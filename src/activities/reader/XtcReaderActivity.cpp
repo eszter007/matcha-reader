@@ -227,9 +227,8 @@ void XtcReaderActivity::launchMenu() {
       std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, xtc->getTitle(), curPage, totalPages,
                                                bookProgressPercent, SETTINGS.orientation, /*hasFootnotes=*/hasChapters,
                                                /*hasBookmarks=*/!cachedBookmarks.empty(), /*hasWordLookup=*/false,
-                                               /*showVerticalToggle=*/false, /*verticalEnabled=*/false,
-                                               /*furiganaEnabled=*/true, /*hasPageText=*/false,
-                                               /*imageReaderMinimal=*/true),
+                                               /*verticalEnabled=*/false, /*furiganaEnabled=*/true,
+                                               /*hasPageText=*/false, /*imageReaderMinimal=*/true),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           const auto& menu = std::get<MenuResult>(result.data);
