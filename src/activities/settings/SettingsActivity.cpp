@@ -87,6 +87,9 @@ void SettingsActivity::rebuildSettingsLists() {
       // Settings merged into "Text Settings"
       // (they stay in the shared list for the web settings API)
       if (setting.inTextSettings) continue;
+      // Manga pages ARE images -- the Display/Placeholder/Suppress image rendering mode has
+      // nothing to render for a manga book, so it's hidden along with Text Settings below.
+      if (mangaMode && setting.nameId == StrId::STR_IMAGES) continue;
       readerSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
@@ -117,14 +120,23 @@ void SettingsActivity::rebuildSettingsLists() {
     systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   }
   if (!finishOnBack || selectedCategoryIndex == 1) {
-    readerSettings.insert(readerSettings.begin(),
-                          SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+    // Text Settings (font/margin/line-layout) has nothing to apply to manga, whose pages are
+    // pre-rendered images -- hidden along with STR_IMAGES above, leaving Rotate Panels/Reading
+    // Orientation/Customise Status Bar as the manga Reader Settings screen.
+    if (!mangaMode) {
+      readerSettings.insert(readerSettings.begin(),
+                            SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+    }
     // Vertical Text / Furigana: per-book overrides that live on the reader activity that pushed
     // this screen, not in CrossPointSettings -- so they only make sense (and only get injected)
     // when there IS such a book (finishOnBack) and the book is one they apply to
     // (showReaderToggles, the same condition the reader's quick menu used before these moved
     // here). Opening Settings from Home never shows them: there is no book to apply them to.
-    if (finishOnBack && showReaderToggles) {
+    // Also never for manga (mangaMode implies !showReaderToggles in practice, but this makes the
+    // exclusivity explicit rather than relying on the caller never combining the two) -- manga
+    // has no Japanese-vertical-text concept, and the +1/+2 insert positions below assume Text
+    // Settings just landed at index 0, which mangaMode skips.
+    if (!mangaMode && finishOnBack && showReaderToggles) {
       readerSettings.insert(readerSettings.begin() + 1,
                             SettingInfo::DynamicToggle(
                                 StrId::STR_VERTICAL_TEXT_LABEL, [this] { return verticalTextState; },
@@ -227,11 +239,14 @@ void SettingsActivity::loop() {
   if (finishOnBack) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       saveSettings();
-      // MenuResult's other fields (action/orientation/pageTurnOption) go unused here -- the
-      // reader's READER_SETTINGS handler only reads verticalOverride/furiganaOverride, the same
-      // two fields the old in-menu toggles rode back on. Left at their -1 default when this
-      // screen never showed the toggles, so the reader's ">= 0" apply-if-changed check is a
-      // no-op rather than force-applying a state the user never touched.
+      // The reader's READER_SETTINGS handler only reads verticalOverride/furiganaOverride --
+      // the same two fields the old in-menu toggles rode back on -- via std::get_if<MenuResult>,
+      // so when this screen never showed the toggles (showReaderToggles false) it's fine to set
+      // no result at all: the ActivityResult stays std::monostate, get_if returns null, and the
+      // handler skips applying anything. When it IS set, action/orientation/pageTurnOption are
+      // explicitly -1/0/0 (unused by that handler) rather than MenuResult's own defaults
+      // (action=-1, but orientation/pageTurnOption default to 0 already -- see ActivityResult.h)
+      // -- spelled out here so a value doesn't get silently relied on either way.
       if (showReaderToggles) {
         setResult(MenuResult{-1, 0, 0, static_cast<int8_t>(verticalTextState ? 1 : 0),
                              static_cast<int8_t>(furiganaState ? 1 : 0)});
@@ -400,10 +415,13 @@ void SettingsActivity::toggleCurrentSetting() {
     SETTINGS.*(setting.valuePtr) = !currentValue;
   } else if (setting.type == SettingType::TOGGLE && setting.valueGetter && setting.valueSetter) {
     // Backed by state outside CrossPointSettings (SettingInfo::DynamicToggle) -- e.g. the
-    // per-book Vertical Text / Furigana overrides. No saveSettings(): that persists the
-    // CrossPointSettings singleton to file, which this state isn't part of; the caller reads
-    // it back from this screen's finish() result instead.
+    // per-book Vertical Text / Furigana overrides. Returns immediately instead of falling
+    // through to the shared tail below: that tail's saveSettings()/rebuildSettingsLists() is
+    // for CrossPointSettings changes, and this state isn't part of that singleton -- the
+    // caller reads it back from this screen's finish() result instead. Falling through would
+    // write the settings file on every toggle for no reason.
     setting.valueSetter(setting.valueGetter() == 0 ? 1 : 0);
+    return;
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (setting.enumValues.size() > 2) {

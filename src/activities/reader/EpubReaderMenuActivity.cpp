@@ -54,11 +54,11 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   // Vertical Text and Furigana moved into Reader Settings (SettingInfo::DynamicToggle, gated
   // there on the same condition this menu used to gate TOGGLE_VERTICAL/TOGGLE_FURIGANA) so they
   // sit with the rest of the reading-experience settings instead of this per-page action menu.
-  // Manga has no font/layout settings for this menu to apply -- MangaReaderActivity
-  // doesn't handle READER_SETTINGS at all, so showing it did nothing (issue #44).
-  if (!mangaMode) {
-    items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
-  }
+  // Reader Settings itself is shown for manga too (issue #44 fix: MangaReaderActivity now
+  // handles READER_SETTINGS -- see its onReaderMenuConfirm), just filtered down there to the
+  // items manga actually has: Rotate Panels, Reading Orientation, Customise Status Bar. Text
+  // Settings and the Images rendering mode are hidden (SettingsActivity's mangaMode).
+  items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
   if (hasBookmarks) {
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
@@ -68,15 +68,11 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   if (!mangaMode && !hideGenericLookup) {
     items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
   }
-  // Reading Orientation removed from this quick menu for EPUB, where it's already a proper
-  // setting under Settings > Reader (SettingsList.h, tied to CrossPointSettings::orientation
-  // directly) -- but NOT for manga, whose Reader Settings is hidden just above (issue #44), and
-  // whose orientation applies straight from this popup's result (see the resultHandler in
-  // MangaReaderActivity::openReaderMenu: `if (SETTINGS.orientation != menu.orientation) ...`).
-  // Without this item there, manga would have no way to rotate at all.
-  if (mangaMode) {
-    items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
-  }
+  // Reading Orientation removed from this quick menu entirely; it's a proper setting under
+  // Settings > Reader (SettingsList.h, tied to CrossPointSettings::orientation directly) for
+  // every reader type now that Reader Settings is reachable from manga too (see above) --
+  // ROTATE_SCREEN's handling below (the option popup, pendingOrientation) is unreachable but
+  // left in place rather than torn out along with it.
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
   items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});

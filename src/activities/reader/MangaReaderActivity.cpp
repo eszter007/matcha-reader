@@ -31,6 +31,7 @@
 #include "ReaderUtils.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
+#include "activities/settings/SettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkFile.h"
@@ -1547,7 +1548,9 @@ void MangaReaderActivity::launchMenu() {
     }
   }
 
-  // hasFootnotes=false (no footnotes in manga), showVerticalToggle=false
+  // hasFootnotes=false (no footnotes in manga); mangaMode=true hides Look Up (Word Lookup
+  // covers OCR'd text) and routes READER_SETTINGS below to a filtered Settings screen -- see
+  // its case and SettingsActivity's mangaMode.
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, book->getTitle(), curPage, totalPages,
                                                bookProgressPercent, SETTINGS.orientation,
@@ -1599,6 +1602,28 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
   };
 
   switch (action) {
+    case EpubReaderMenuActivity::MenuAction::READER_SETTINGS: {
+      // Filtered to what manga actually has: Rotate Panels, Reading Orientation, Customise
+      // Status Bar (SettingsActivity's mangaMode hides Text Settings and the image-rendering
+      // mode, neither of which applies to a book whose pages ARE images -- issue #44).
+      // japaneseBook=true reuses the existing "skip the folder-based dictionary picker" gate:
+      // manga has its own OCR-based Word Lookup, not the EPUB dictionary flow that configures.
+      startActivityForResult(
+          std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                             /*finishOnBack=*/true, /*japaneseBook=*/true,
+                                             /*dictionaryLanguage=*/std::string{}, /*showReaderToggles=*/false,
+                                             /*verticalTextEnabled=*/false, /*furiganaEnabled=*/false,
+                                             /*mangaMode=*/true),
+          [this](const ActivityResult&) {
+            // Reading Orientation only changes via this screen now (removed from the quick
+            // menu -- see EpubReaderMenuActivity::buildMenuItems): pick up a change the same
+            // way onEnter() does, or it would silently wait for the next full open to apply.
+            ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+            // Return to the reader MENU (where the user came from), not the page.
+            launchMenu();
+          });
+      break;
+    }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
       if (book && book->hasToc()) {
         startActivityForResult(

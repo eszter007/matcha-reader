@@ -182,6 +182,10 @@ class SettingsActivity final : public Activity {
   bool showReaderToggles = false;
   bool verticalTextState = false;
   bool furiganaState = false;
+  // Manga has no font/margin/text-layout settings (no Text Settings sub-screen) and no image
+  // rendering mode (manga pages ARE images) -- both are hidden from the Reader category for it.
+  // Rotate Panels, Reading Orientation and Customise Status Bar all still apply and stay.
+  bool mangaMode = false;
 
   int selectedCategoryIndex = 0;  // Currently selected category
   int selectedSettingIndex = 0;
@@ -214,10 +218,12 @@ class SettingsActivity final : public Activity {
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
   // instead of replacing the stack with Home.
   // showReaderToggles/verticalTextEnabled/furiganaEnabled: see the member comment above.
+  // mangaMode: see the member comment above.
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
                             const bool finishOnBack = false, const bool japaneseBook = false,
                             std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
-                            const bool verticalTextEnabled = false, const bool furiganaEnabled = false)
+                            const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
+                            const bool mangaMode = false)
       : Activity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),
@@ -225,7 +231,8 @@ class SettingsActivity final : public Activity {
         dictionaryLanguage(std::move(dictionaryLanguage)),
         showReaderToggles(showReaderToggles),
         verticalTextState(verticalTextEnabled),
-        furiganaState(furiganaEnabled) {}
+        furiganaState(furiganaEnabled),
+        mangaMode(mangaMode) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
