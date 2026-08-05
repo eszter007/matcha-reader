@@ -41,10 +41,12 @@ class EpubReaderMenuActivity final : public Activity {
   // shown, still navigable) rather than hidden, since that can change
   // page-to-page (e.g. manga panels without OCR'd dialogue, image-only
   // EPUB pages) and hiding/showing per-page would shift menu positions.
-  // mangaMode hides Reader Settings (issue #44: MangaReaderActivity has no font/layout
-  // settings to apply -- the item did nothing) and the generic Look Up dictionary entry
-  // (manga's Word Lookup already covers OCR'd text; unlike imageReaderMinimal, this keeps
-  // Word Lookup, Translate Page and Auto Page Turn, which manga does support).
+  // mangaMode hides the generic Look Up dictionary entry (manga's Word Lookup already covers
+  // OCR'd text; unlike imageReaderMinimal, this keeps Word Lookup, Translate Page and Auto Page
+  // Turn, which manga does support). Reader Settings itself is always shown -- issue #44's fix
+  // is on the other end: MangaReaderActivity now routes READER_SETTINGS to a Settings screen
+  // filtered to what manga actually has (SettingsActivity's own mangaMode), rather than hiding
+  // the menu item, which used to do nothing when tapped.
   // hideGenericLookup independently hides Look Up for a Japanese EPUB: free-form dictionary
   // lookup doesn't apply to unsegmented Japanese text, where Word Lookup is the only
   // sensible entry.
