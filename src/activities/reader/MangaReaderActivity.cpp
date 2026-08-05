@@ -82,6 +82,10 @@ void MangaReaderActivity::onEnter() {
     panelCropsInSubdir = Storage.exists(subdir.c_str());
     LOG_DBG("MRA", "Panel crops: %s layout", panelCropsInSubdir ? "subfolder" : "flat (legacy)");
   }
+  // Do not base this on the current page: cover/splash records normally have no crop because the
+  // full-page image is already the best presentation. panels.idx is in memory after MangaBook::load(),
+  // so this remains a one-time, no-SD-scan capability check for the whole book.
+  bookHasPanelCropCapability = book->hasPanelCropCapability();
 
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   // Base screen dims for the prefetch worker's geometry math -- captured here, the one moment
@@ -1627,14 +1631,14 @@ void MangaReaderActivity::launchMenu() {
 
   // hasFootnotes=false (no footnotes in manga), showVerticalToggle=false
   startActivityForResult(
-      std::make_unique<EpubReaderMenuActivity>(
-          renderer, mappedInput, book->getTitle(), curPage, totalPages, bookProgressPercent, SETTINGS.orientation,
-          /*hasFootnotes=*/false, /*hasBookmarks=*/!cachedBookmarks.empty(),
-          /*hasWordLookup=*/hasWordLookup, /*showVerticalToggle=*/false,
-          /*verticalEnabled=*/false, /*furiganaEnabled=*/true,
-          /*hasPageText=*/hasPageText, /*imageReaderMinimal=*/false,
-          /*showPanelsOnlyToggle=*/panelsOnlyMode || (currentPageHasImage && pageHasPanelCrops),
-          /*panelsOnlyEnabled=*/panelsOnlyMode),
+      std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, book->getTitle(), curPage, totalPages,
+                                               bookProgressPercent, SETTINGS.orientation,
+                                               /*hasFootnotes=*/false, /*hasBookmarks=*/!cachedBookmarks.empty(),
+                                               /*hasWordLookup=*/hasWordLookup, /*showVerticalToggle=*/false,
+                                               /*verticalEnabled=*/false, /*furiganaEnabled=*/true,
+                                               /*hasPageText=*/hasPageText, /*imageReaderMinimal=*/false,
+                                               /*showPanelsOnlyToggle=*/bookHasPanelCropCapability,
+                                               /*panelsOnlyEnabled=*/panelsOnlyMode),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         // Apply orientation change

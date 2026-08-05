@@ -135,6 +135,9 @@ class MangaReaderActivity final : public Activity {
   // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
   // every entry. Both answers are static for a given page.
   bool pageHasPanelCrops = false;
+  // Book-level capability derived once from panels.idx on entry. A cover/splash can deliberately
+  // omit its redundant crop, but the per-book Panels Only preference must still be configurable.
+  bool bookHasPanelCropCapability = false;
   // Index of the first crop that actually exists. Full-page cover/splash panels intentionally
   // had no duplicate crop in older conversions, so crop 0 is not a reliable format probe.
   int firstPanelWithCrop = -1;
