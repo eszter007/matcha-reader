@@ -7,16 +7,14 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                               const std::string& title, const int currentPage, const int totalPages,
-                                               const int bookProgressPercent, const uint8_t currentOrientation,
-                                               const bool hasFootnotes, const bool hasBookmarks,
-                                               const bool hasWordLookup, const bool showVerticalToggle,
-                                               const bool verticalEnabled, const bool furiganaEnabled,
-                                               const bool hasPageText, const bool imageReaderMinimal)
+EpubReaderMenuActivity::EpubReaderMenuActivity(
+    GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title, const int currentPage,
+    const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
+    const bool hasBookmarks, const bool hasWordLookup, const bool verticalEnabled, const bool furiganaEnabled,
+    const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup)
     : Activity("EpubReaderMenu", renderer, mappedInput),
-      menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, showVerticalToggle, verticalEnabled,
-                               furiganaEnabled, imageReaderMinimal)),
+      menuItems(
+          buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode, hideGenericLookup)),
       hasPageText(hasPageText),
       title(title),
       pendingOrientation(currentOrientation),
@@ -27,8 +25,8 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       bookProgressPercent(bookProgressPercent) {}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
-    bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool showVerticalToggle, bool verticalEnabled,
-    bool furiganaEnabled, bool imageReaderMinimal) {
+    bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
+    bool hideGenericLookup) {
   std::vector<MenuItem> items;
   items.reserve(16);
 
@@ -53,17 +51,32 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::WORD_LOOKUP, StrId::STR_WORD_LOOKUP});
   }
   items.push_back({MenuAction::TRANSLATE_PAGE, StrId::STR_TRANSLATE_PAGE});
-  if (showVerticalToggle) {
-    items.push_back({MenuAction::TOGGLE_VERTICAL, StrId::STR_VERTICAL_TEXT_LABEL});
-    items.push_back({MenuAction::TOGGLE_FURIGANA, StrId::STR_FURIGANA_LABEL});
+  // Vertical Text and Furigana moved into Reader Settings (SettingInfo::DynamicToggle, gated
+  // there on the same condition this menu used to gate TOGGLE_VERTICAL/TOGGLE_FURIGANA) so they
+  // sit with the rest of the reading-experience settings instead of this per-page action menu.
+  // Manga has no font/layout settings for this menu to apply -- MangaReaderActivity
+  // doesn't handle READER_SETTINGS at all, so showing it did nothing (issue #44).
+  if (!mangaMode) {
+    items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
   }
-  items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
   if (hasBookmarks) {
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
-  items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
-  items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
+  // Free-form dictionary lookup doesn't apply to manga (Word Lookup covers OCR'd text) or to
+  // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense.
+  if (!mangaMode && !hideGenericLookup) {
+    items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
+  }
+  // Reading Orientation removed from this quick menu for EPUB, where it's already a proper
+  // setting under Settings > Reader (SettingsList.h, tied to CrossPointSettings::orientation
+  // directly) -- but NOT for manga, whose Reader Settings is hidden just above (issue #44), and
+  // whose orientation applies straight from this popup's result (see the resultHandler in
+  // MangaReaderActivity::openReaderMenu: `if (SETTINGS.orientation != menu.orientation) ...`).
+  // Without this item there, manga would have no way to rotate at all.
+  if (mangaMode) {
+    items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
+  }
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
   items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});

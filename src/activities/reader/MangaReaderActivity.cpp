@@ -1552,9 +1552,9 @@ void MangaReaderActivity::launchMenu() {
       std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, book->getTitle(), curPage, totalPages,
                                                bookProgressPercent, SETTINGS.orientation,
                                                /*hasFootnotes=*/false, /*hasBookmarks=*/!cachedBookmarks.empty(),
-                                               /*hasWordLookup=*/hasWordLookup, /*showVerticalToggle=*/false,
-                                               /*verticalEnabled=*/false, /*furiganaEnabled=*/true,
-                                               /*hasPageText=*/hasPageText),
+                                               /*hasWordLookup=*/hasWordLookup, /*verticalEnabled=*/false,
+                                               /*furiganaEnabled=*/true, /*hasPageText=*/hasPageText,
+                                               /*imageReaderMinimal=*/false, /*mangaMode=*/true),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         // Apply orientation change

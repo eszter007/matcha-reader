@@ -68,7 +68,7 @@ void SettingsActivity::rebuildSettingsLists() {
         displaySettings.reserve(settings.size());
         break;
       case 1:
-        readerSettings.reserve(settings.size() + 2);
+        readerSettings.reserve(settings.size() + 4);
         break;
       case 2:
         controlsSettings.reserve(settings.size() + 1);
@@ -119,6 +119,21 @@ void SettingsActivity::rebuildSettingsLists() {
   if (!finishOnBack || selectedCategoryIndex == 1) {
     readerSettings.insert(readerSettings.begin(),
                           SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+    // Vertical Text / Furigana: per-book overrides that live on the reader activity that pushed
+    // this screen, not in CrossPointSettings -- so they only make sense (and only get injected)
+    // when there IS such a book (finishOnBack) and the book is one they apply to
+    // (showReaderToggles, the same condition the reader's quick menu used before these moved
+    // here). Opening Settings from Home never shows them: there is no book to apply them to.
+    if (finishOnBack && showReaderToggles) {
+      readerSettings.insert(readerSettings.begin() + 1,
+                            SettingInfo::DynamicToggle(
+                                StrId::STR_VERTICAL_TEXT_LABEL, [this] { return verticalTextState; },
+                                [this](const bool v) { verticalTextState = v; }, StrId::STR_CAT_READER));
+      readerSettings.insert(readerSettings.begin() + 2,
+                            SettingInfo::DynamicToggle(
+                                StrId::STR_FURIGANA_LABEL, [this] { return furiganaState; },
+                                [this](const bool v) { furiganaState = v; }, StrId::STR_CAT_READER));
+    }
     // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
     // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
     // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
@@ -212,6 +227,15 @@ void SettingsActivity::loop() {
   if (finishOnBack) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       saveSettings();
+      // MenuResult's other fields (action/orientation/pageTurnOption) go unused here -- the
+      // reader's READER_SETTINGS handler only reads verticalOverride/furiganaOverride, the same
+      // two fields the old in-menu toggles rode back on. Left at their -1 default when this
+      // screen never showed the toggles, so the reader's ">= 0" apply-if-changed check is a
+      // no-op rather than force-applying a state the user never touched.
+      if (showReaderToggles) {
+        setResult(MenuResult{-1, 0, 0, static_cast<int8_t>(verticalTextState ? 1 : 0),
+                             static_cast<int8_t>(furiganaState ? 1 : 0)});
+      }
       finish();
       return;
     }
@@ -374,6 +398,12 @@ void SettingsActivity::toggleCurrentSetting() {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
+  } else if (setting.type == SettingType::TOGGLE && setting.valueGetter && setting.valueSetter) {
+    // Backed by state outside CrossPointSettings (SettingInfo::DynamicToggle) -- e.g. the
+    // per-book Vertical Text / Furigana overrides. No saveSettings(): that persists the
+    // CrossPointSettings singleton to file, which this state isn't part of; the caller reads
+    // it back from this screen's finish() result instead.
+    setting.valueSetter(setting.valueGetter() == 0 ? 1 : 0);
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (setting.enumValues.size() > 2) {
@@ -559,6 +589,8 @@ void SettingsActivity::render(RenderLock&&) {
         if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
           const bool value = SETTINGS.*(setting.valuePtr);
           valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+        } else if (setting.type == SettingType::TOGGLE && setting.valueGetter) {
+          valueText = setting.valueGetter() != 0 ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
           const uint8_t value = SETTINGS.*(setting.valuePtr);
           valueText = I18N.get(setting.enumValues[value]);
