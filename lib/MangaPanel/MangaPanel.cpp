@@ -496,6 +496,7 @@ void MangaBook::loadToc() {
 void MangaBook::loadMeta() {
   metaTitle.clear();
   author.clear();
+  language.clear();
 
   std::string metaPath = folderPath;
   if (metaPath.back() != '/') metaPath += '/';
@@ -526,7 +527,22 @@ void MangaBook::loadMeta() {
     author.assign(buf.get(), authorLen);
   }
 
-  LOG_DBG("MNG", "Loaded meta.bin: title=%s author=%s", metaTitle.c_str(), author.c_str());
+  // Optional language trailer (uint16 languageLen + UTF-8 tag), appended after the author
+  // without a version bump -- see convert_manga.py's meta.bin format notes. A short read here
+  // just means the file predates the trailer, which is the common case; not an error.
+  uint8_t langHdr[2];
+  if (f.read(langHdr, 2) == 2) {
+    const uint16_t languageLen = readU16(langHdr);
+    // Language tags are a handful of bytes ("ja", "zh-Hant"); anything longer is a malformed
+    // or misaligned file, so ignore it rather than allocate on its say-so.
+    char langBuf[16];
+    if (languageLen > 0 && languageLen <= sizeof(langBuf) &&
+        f.read(reinterpret_cast<uint8_t*>(langBuf), languageLen) == languageLen) {
+      language.assign(langBuf, languageLen);
+    }
+  }
+
+  LOG_DBG("MNG", "Loaded meta.bin: title=%s author=%s lang=%s", metaTitle.c_str(), author.c_str(), language.c_str());
 }
 
 }  // namespace manga

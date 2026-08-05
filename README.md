@@ -152,6 +152,7 @@ Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-det
 | `--no-ocr` | Panel boxes only — no Gemini calls, no text or translations. |
 | `--max-pages N` | Convert the first N pages as a cheap test run. |
 | `--title` / `--author` | Override metadata. Auto-detected from EPUB/CBZ/PDF otherwise. |
+| `--language` | Book language tag (`ja`, `en`, …), used to split reading stats by language. Auto-detected from EPUB/CBZ; PDF carries none, so set it there. |
 
 `--help` lists the rest. The API key is never written into the output; pass it at runtime.
 

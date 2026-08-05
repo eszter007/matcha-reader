@@ -63,7 +63,7 @@ void XtcReaderActivity::onExit() {
   // Record the sub-interval tail of the session; whole minutes were already flushed
   // periodically from loop(). XTC books never counted toward the reading streak at all
   // before this -- reading an XTC book all day left the day unregistered.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, xtc ? xtc->getPath() : std::string());
 
   freePageBuffer();
   APP_STATE.readerActivityLoadCount = 0;
@@ -74,7 +74,7 @@ void XtcReaderActivity::onExit() {
 void XtcReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, xtc ? xtc->getPath() : std::string());
 
   // Auto-dismiss the bookmark toast.
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {

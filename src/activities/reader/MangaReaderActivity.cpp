@@ -144,7 +144,8 @@ void MangaReaderActivity::onExit() {
 
   // Record the sub-interval tail of the session; whole minutes were already flushed
   // periodically from loop() (see ReaderUtils::flushReadingStats).
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, book ? book->getFolder() : std::string(),
+                                 book ? book->getLanguage() : std::string());
 
   // On the last page (currentPage never advances past pageCount-1 -- see
   // nextPage()) regardless of how long this particular session lasted.
@@ -337,7 +338,8 @@ void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOptio
 void MangaReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, book ? book->getFolder() : std::string(),
+                                 book ? book->getLanguage() : std::string());
 
   // Publish any finished prefetch-worker result (panelDims slot + done flags) under the loop
   // task's normal locking rules. Runs before everything else so a completed warm is visible to

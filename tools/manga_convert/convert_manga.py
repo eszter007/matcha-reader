@@ -46,8 +46,8 @@ Output (in --output-dir):
                                          reads the older flat layout, so books converted before
                                          this keep working -- re-convert to get the faster open.
     panels.idx / panels.dat             panel layout data
-    meta.bin                            book title + author (auto-extracted
-                                         from source, or set via --title/--author)
+    meta.bin                            book title + author + language (auto-extracted
+                                         from source, or set via --title/--author/--language)
 
 Binary format (meta.bin):
     Header (8 bytes):
@@ -56,6 +56,15 @@ Binary format (meta.bin):
         uint16  authorLen       UTF-8 byte length of author
     char[]  title               UTF-8 title (titleLen bytes)
     char[]  author              UTF-8 author (authorLen bytes)
+    Optional trailer (only present when a language is known):
+        uint16  languageLen     UTF-8 byte length of language tag
+        char[]  language        UTF-8 BCP-47/ISO-639 tag, e.g. "ja", "en"
+
+    The trailer is appended WITHOUT bumping the version: firmware predating it reads
+    exactly the header + title + author and never looks further, so it ignores the extra
+    bytes rather than rejecting the file. Newer firmware detects the trailer by checking
+    whether any bytes remain after the author. Any future field must follow the same
+    rule -- append only, never reorder or resize what comes before.
 
 Binary format (panels.idx):
     Header:
@@ -868,26 +877,57 @@ def write_toc(output_dir: str, entries: list[tuple], add_cover: bool = True):
 
 META_FORMAT_VERSION = 1
 META_HEADER = "<IHH"  # version(4) + titleLen(2) + authorLen(2) = 8 bytes
+META_LANGUAGE_TRAILER = "<H"  # optional, appended after author: languageLen(2) + language bytes
 
 
-def write_meta(output_dir: str, title: str, author: str) -> None:
-    """Write meta.bin: book title and author for the CrossPoint library."""
-    if not title and not author:
+# Country codes commonly typed in place of the language code. The device normalises these too,
+# but correcting here keeps meta.bin itself honest and tells the user what was written.
+LANGUAGE_ALIASES = {"jp": "ja", "cn": "zh", "kr": "ko"}
+
+
+def normalize_language(language: str) -> str:
+    """Lowercase the tag and correct common country-code mistakes ('jp' -> 'ja').
+
+    Region/script subtags are preserved ('zh-Hant' stays intact): the device buckets stats by
+    primary subtag on its own, so there is no reason to throw that detail away on disk.
+    """
+    if not language:
+        return ""
+    tag = language.strip()
+    primary, sep, rest = tag.partition("-") if "-" in tag else tag.partition("_")
+    primary = primary.lower()  # only the language subtag is case-normalised; 'zh-Hant' keeps its script
+    corrected = LANGUAGE_ALIASES.get(primary, primary) + ("-" + rest if sep and rest else "")
+    if corrected != tag:
+        print(f"  Note: language {language!r} normalised to {corrected!r}")
+    return corrected
+
+
+def write_meta(output_dir: str, title: str, author: str, language: str = "") -> None:
+    """Write meta.bin: book title, author and (optionally) language for the CrossPoint library."""
+    if not title and not author and not language:
         return
+    language = normalize_language(language)
     title_bytes = title.encode("utf-8")[:0xFFFF]
     author_bytes = author.encode("utf-8")[:0xFFFF]
+    language_bytes = language.encode("utf-8")[:0xFFFF]
     meta_path = os.path.join(output_dir, "meta.bin")
     with open(meta_path, "wb") as f:
         f.write(struct.pack(META_HEADER, META_FORMAT_VERSION, len(title_bytes), len(author_bytes)))
         f.write(title_bytes)
         f.write(author_bytes)
-    print(f"  {meta_path}: title={title!r}, author={author!r}")
+        if language_bytes:
+            f.write(struct.pack(META_LANGUAGE_TRAILER, len(language_bytes)))
+            f.write(language_bytes)
+    print(f"  {meta_path}: title={title!r}, author={author!r}, language={language!r}")
 
 
-def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str]:
-    """Best-effort extraction of (title, author) from EPUB OPF, CBZ ComicInfo.xml, or PDF metadata."""
+def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
+    """Best-effort extraction of (title, author, language) from EPUB OPF, CBZ ComicInfo.xml, or PDF metadata.
+
+    PDF has no standard language field, so it yields an empty language -- use --language there.
+    """
     p = Path(input_path)
-    title, author = "", ""
+    title, author, language = "", "", ""
 
     if p.suffix.lower() == ".epub":
         try:
@@ -902,6 +942,9 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str]:
                     a = re.search(r'<dc:creator[^>]*>([^<]+)</dc:creator>', opf)
                     if a:
                         author = a.group(1).strip()
+                    lang = re.search(r'<dc:language[^>]*>([^<]+)</dc:language>', opf)
+                    if lang:
+                        language = lang.group(1).strip()
         except Exception:
             pass
 
@@ -917,6 +960,9 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str]:
                     a = re.search(r'<Writer>([^<]+)</Writer>', xml)
                     if a:
                         author = a.group(1).strip()
+                    lang = re.search(r'<LanguageISO>([^<]+)</LanguageISO>', xml)
+                    if lang:
+                        language = lang.group(1).strip()
         except Exception:
             pass
 
@@ -930,7 +976,7 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str]:
         except Exception:
             pass
 
-    return title, author
+    return title, author, language
 
 
 def parse_toc_file(toc_file: str) -> list[tuple]:
@@ -1141,6 +1187,12 @@ def main():
     parser.add_argument("--title", help="Book title written to meta.bin (overrides value auto-detected from source)")
     parser.add_argument("--author", help="Book author written to meta.bin (overrides value auto-detected from source)")
     parser.add_argument(
+        "--language",
+        help="Book language tag written to meta.bin, e.g. 'ja' or 'en' (overrides the value auto-detected from "
+             "an EPUB's <dc:language> or a CBZ's ComicInfo <LanguageISO>). Used to break reading stats down by "
+             "language; PDF sources carry no language field, so set it here for those.",
+    )
+    parser.add_argument(
         "--mono",
         action="store_true",
         help="Write pages and panel crops as 1-bit (black/white) Floyd-Steinberg-dithered BMP instead of JPEG. "
@@ -1208,12 +1260,13 @@ def main():
 
         os.makedirs(args.output_dir, exist_ok=True)
 
-        # Extract and write book metadata (title + author).
-        auto_title, auto_author = extract_metadata(args.input, work_dir)
+        # Extract and write book metadata (title + author + language).
+        auto_title, auto_author, auto_language = extract_metadata(args.input, work_dir)
         meta_title = args.title if args.title else auto_title
         meta_author = args.author if args.author else auto_author
-        if meta_title or meta_author:
-            write_meta(args.output_dir, meta_title, meta_author)
+        meta_language = args.language if args.language else auto_language
+        if meta_title or meta_author or meta_language:
+            write_meta(args.output_dir, meta_title, meta_author, meta_language)
 
         idx_records = []
         dat_chunks = []

@@ -53,6 +53,9 @@ class MangaBook {
   const std::string& getFolder() const { return folderPath; }
   std::string getTitle() const;
   const std::string& getAuthor() const { return author; }
+  // BCP-47/ISO-639 tag from meta.bin's optional trailer ("ja", "en", ...). Empty when the
+  // folder was converted before convert_manga.py wrote one, or the source carried no language.
+  const std::string& getLanguage() const { return language; }
 
   bool loadPagePanels(uint32_t pageIndex, std::vector<Panel>& panels) const;
   uint16_t getPageImgWidth(uint32_t pageIndex) const;
@@ -89,6 +92,7 @@ class MangaBook {
   std::string folderPath;
   std::string metaTitle;
   std::string author;
+  std::string language;
   uint32_t pageCount = 0;
   std::vector<PageInfo> pageIndex;
   std::vector<std::string> imageFiles;
