@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <numeric>
 
 ReadingStatsStore ReadingStatsStore::instance;
 
@@ -13,6 +14,10 @@ static constexpr const char* STATS_PATH = "/system/reading_stats.bin";
 // block after that. Each older reader stops where its own format ends and ignores what follows,
 // rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves.
 static constexpr uint8_t STATS_VERSION = 4;
+// Longest language tag a per-book entry stores, on disk and in memory. Enforced on BOTH sides:
+// the writer clamps to it, and the loader rejects anything longer rather than allocating on a
+// corrupt or misaligned file's say-so.
+static constexpr size_t MAX_STORED_LANGUAGE = 15;
 
 namespace {
 int daysSinceEpoch(uint16_t y, uint8_t m, uint8_t d) {
@@ -47,9 +52,10 @@ void subtractDays(uint16_t& y, uint8_t& m, uint8_t& d, int n) {
 
 // "ja-JP" / "JA" / "ja_jp" all bucket as "ja". Anything longer than 3 chars (no ISO-639 code is)
 // is truncated rather than rejected, so a malformed tag still lands in a stable bucket.
-void normalizeLanguage(const std::string& in, char out[4]) {
+void normalizeLanguage(const char* in, char out[4]) {
   size_t n = 0;
-  for (const char c : in) {
+  for (const char* p = in; p && *p; p++) {
+    const char c = *p;
     if (c == '-' || c == '_' || n == 3) break;
     out[n++] = static_cast<char>((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
   }
@@ -61,12 +67,9 @@ void normalizeLanguage(const std::string& in, char out[4]) {
     const char* from;
     const char* to;
   } ALIASES[] = {{"jp", "ja"}, {"cn", "zh"}, {"kr", "ko"}};
-  for (const auto& a : ALIASES) {
-    if (strcmp(out, a.from) == 0) {
-      strncpy(out, a.to, 4);
-      return;
-    }
-  }
+  const auto* alias =
+      std::find_if(std::begin(ALIASES), std::end(ALIASES), [&out](const auto& a) { return strcmp(out, a.from) == 0; });
+  if (alias != std::end(ALIASES)) strncpy(out, alias->to, 4);
 }
 
 int daysInMonth(uint16_t y, uint8_t m) {
@@ -90,13 +93,14 @@ void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, ui
   days[dayCount++] = {year, month, day, minutes};
 }
 
-void ReadingStatsStore::addBookMinutes(const std::string& bookPath, const std::string& language, const uint16_t minutes,
+void ReadingStatsStore::addBookMinutes(const char* bookPath, const char* language, const uint16_t minutes,
                                        const uint16_t year, const uint8_t month, const uint8_t day) {
-  if (bookPath.empty()) return;
+  if (!bookPath || !*bookPath) return;
   const int32_t today = daysSinceEpoch(year, month, day);
   // Clamped to the small-string-optimisation limit: real tags ("ja", "zh-Hant") fit easily, and
   // this keeps each entry's language free of a heap allocation and its on-disk length in a byte.
-  const std::string lang = language.substr(0, 15);
+  // MAX_STORED_LANGUAGE is the same bound the loader enforces on a language read back from disk.
+  const std::string lang(language ? language : "", language ? strnlen(language, MAX_STORED_LANGUAGE) : 0);
 
   for (auto& b : books) {
     if (b.path != bookPath) continue;
@@ -117,7 +121,7 @@ void ReadingStatsStore::addBookMinutes(const std::string& bookPath, const std::s
   books.push_back({bookPath, lang, minutes, today});
 }
 
-void ReadingStatsStore::addLanguageMinutes(const std::string& language, const uint16_t minutes, const uint16_t year,
+void ReadingStatsStore::addLanguageMinutes(const char* language, const uint16_t minutes, const uint16_t year,
                                            const uint8_t month, const uint8_t day) {
   char lang[4];
   normalizeLanguage(language, lang);
@@ -143,26 +147,23 @@ void ReadingStatsStore::addLanguageMinutes(const std::string& language, const ui
   languageDays.push_back(e);
 }
 
-uint16_t ReadingStatsStore::getMinutesForDay(const std::string& language, const uint16_t year, const uint8_t month,
+uint16_t ReadingStatsStore::getMinutesForDay(const char* language, const uint16_t year, const uint8_t month,
                                              const uint8_t day) const {
   char lang[4];
   normalizeLanguage(language, lang);
-  for (const auto& e : languageDays) {
-    if (e.year == year && e.month == month && e.day == day && memcmp(e.language, lang, sizeof(lang)) == 0) {
-      return e.minutesRead;
-    }
-  }
-  return 0;
+  const auto it = std::find_if(languageDays.begin(), languageDays.end(), [&](const LanguageDaily& e) {
+    return e.year == year && e.month == month && e.day == day && memcmp(e.language, lang, sizeof(lang)) == 0;
+  });
+  return it == languageDays.end() ? 0 : it->minutesRead;
 }
 
-uint32_t ReadingStatsStore::getTotalMinutes(const std::string& language) const {
+uint32_t ReadingStatsStore::getTotalMinutes(const char* language) const {
   char lang[4];
   normalizeLanguage(language, lang);
-  uint32_t total = 0;
-  for (const auto& e : languageDays) {
-    if (memcmp(e.language, lang, sizeof(lang)) == 0) total += e.minutesRead;
-  }
-  return total;
+  return std::accumulate(languageDays.begin(), languageDays.end(), uint32_t{0},
+                         [&lang](const uint32_t sum, const LanguageDaily& e) {
+                           return memcmp(e.language, lang, sizeof(lang)) == 0 ? sum + e.minutesRead : sum;
+                         });
 }
 
 void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
@@ -171,7 +172,9 @@ void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
     return;
   }
   finishedBookPaths.push_back(bookPath);
-  booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
+  // max(), not assignment: after a truncated load the path list can hold fewer entries than the
+  // count the file's header reported, and a finished-book tally must never count down.
+  booksFinished = std::max(booksFinished, static_cast<uint16_t>(finishedBookPaths.size()));
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {
@@ -373,7 +376,10 @@ bool ReadingStatsStore::loadFromFile() {
       }
       finishedBookPaths.push_back(std::move(p));
     }
-    booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
+    // Only trust the list's length once it read whole. On a truncated file the header's count is
+    // the better answer: leaving a non-zero booksFinished beside a partial list would let
+    // markBookFinished() overwrite the real total with the partial one on the next save.
+    if (pathsIntact) booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
   }
   // Per-book block (v3+). Only readable when the paths block above was consumed whole -- a short
   // read there leaves the file position mid-record, so anything after it is misaligned garbage.
@@ -390,7 +396,7 @@ bool ReadingStatsStore::loadFromFile() {
         b.path.assign(pathLen, '\0');
         if (pathLen && f.read(reinterpret_cast<uint8_t*>(&b.path[0]), pathLen) != pathLen) break;
         uint8_t langLen = 0;
-        if (f.read(&langLen, 1) != 1) break;
+        if (f.read(&langLen, 1) != 1 || langLen > MAX_STORED_LANGUAGE) break;
         b.language.assign(langLen, '\0');
         if (langLen && f.read(reinterpret_cast<uint8_t*>(&b.language[0]), langLen) != langLen) break;
         if (f.read(reinterpret_cast<uint8_t*>(&b.minutesRead), 4) != 4) break;

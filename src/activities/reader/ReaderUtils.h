@@ -40,12 +40,14 @@ constexpr unsigned long READING_STATS_FLUSH_MS = 5UL * 60UL * 1000UL;
 // never drop seconds.
 //
 // bookPath/language attribute the same minutes to one book, and to that day in that language,
-// as well as to the day overall (issue #38).
+// as well as to the day overall (issue #38). Both are const char* rather than std::string:
+// this runs on every loop() tick and returns early most of the time, so string parameters
+// would mean a heap allocation per tick for arguments almost always thrown away.
 // Both are optional: an empty bookPath records only the per-day total, and an empty language is
 // the normal case for books that declare none (TXT/XTC, manga converted before meta.bin carried
 // a language tag) -- it is filled in on a later flush if the book ever starts declaring one.
-inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = false, const std::string& bookPath = {},
-                              const std::string& language = {}) {
+inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = false, const char* bookPath = nullptr,
+                              const char* language = nullptr) {
   if (sessionStartMs == 0) return;
   const unsigned long elapsed = millis() - sessionStartMs;
   if (!force && elapsed < READING_STATS_FLUSH_MS) return;

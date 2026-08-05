@@ -57,20 +57,25 @@ class ReadingStatsStore {
   static ReadingStatsStore& getInstance() { return instance; }
 
   void addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
-  // Same minutes, attributed to one book. Called alongside addMinutes(); an empty bookPath is
-  // ignored. A non-empty language overwrites a previously unknown one (a book converted before
-  // meta.bin carried a language tag starts blank and fills in after a re-convert).
-  void addBookMinutes(const std::string& bookPath, const std::string& language, uint16_t minutes, uint16_t year,
-                      uint8_t month, uint8_t day);
+  // Same minutes, attributed to one book. Called alongside addMinutes(); a null or empty
+  // bookPath is ignored. A non-empty language overwrites a previously unknown one (a book
+  // converted before meta.bin carried a language tag starts blank and fills in after a
+  // re-convert).
+  //
+  // const char* rather than const std::string&: the readers call this via flushReadingStats()
+  // on every loop() tick, and a std::string parameter makes each of those ticks construct a
+  // temporary -- a heap allocation per tick, on the device least able to afford the churn.
+  void addBookMinutes(const char* bookPath, const char* language, uint16_t minutes, uint16_t year, uint8_t month,
+                      uint8_t day);
   const std::vector<BookReading>& getBooks() const { return books; }
   // Same minutes again, bucketed by day and language. Unlike addBookMinutes this DOES record an
   // empty language, as its own "unknown" bucket -- dropping it would make the per-language days
   // silently disagree with the overall ones for anyone reading TXT/XTC.
-  void addLanguageMinutes(const std::string& language, uint16_t minutes, uint16_t year, uint8_t month, uint8_t day);
+  void addLanguageMinutes(const char* language, uint16_t minutes, uint16_t year, uint8_t month, uint8_t day);
   const std::vector<LanguageDaily>& getLanguageDays() const { return languageDays; }
   // language is matched the way it is stored: primary subtag, lowercase ("ja"). Empty = unknown.
-  uint16_t getMinutesForDay(const std::string& language, uint16_t year, uint8_t month, uint8_t day) const;
-  uint32_t getTotalMinutes(const std::string& language) const;
+  uint16_t getMinutesForDay(const char* language, uint16_t year, uint8_t month, uint8_t day) const;
+  uint32_t getTotalMinutes(const char* language) const;
   void markBookFinished(const std::string& bookPath);
 
   int getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
