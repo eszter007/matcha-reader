@@ -1,6 +1,7 @@
 # Matcha Reader — Japanese Language Learning CrossPoint Fork
 > [!IMPORTANT]
 > If you have a XTEINK X3 that arrived after end of July, please flash this version as only this version has the support for the newer panels: https://github.com/eszter007/matcha-reader/releases/tag/1.5.0-rc-2-beta
+If you would rather build the firmware yourself, please do so from the develop branch only.
 
 A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for the Xteink X4 & X3, focused on **reading Japanese books** with built-in learning tools. Read native Japanese novels and texts with instant dictionary lookup, verb deinflection, grammar references, and AI-powered page translation.
 
