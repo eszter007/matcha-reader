@@ -1111,7 +1111,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // margin changes are picked up on return: the SD font system reloads to the new selection
       // and the next render's section-cache parameter check rebuilds the layout if needed.
       startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                                /*finishOnBack=*/true),
+                                                                /*finishOnBack=*/true,
+                                                                /*hideMangaOnlySettings=*/true),
                              [this](const ActivityResult&) {
                                sdFontSystem.ensureLoaded(renderer);
                                sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());

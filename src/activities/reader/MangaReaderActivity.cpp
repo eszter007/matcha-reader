@@ -1683,6 +1683,24 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
   };
 
   switch (action) {
+    case EpubReaderMenuActivity::MenuAction::READER_SETTINGS: {
+      // The image reader releases SD fonts to leave enough contiguous heap for JPEG/PNG decoders.
+      // Restore them while Settings/Text Settings is open, then lend the memory back before the
+      // manga redraws. Reapply orientation because Reader Settings can change it while this
+      // activity remains on the stack; refresh the worker's pure-geometry inputs at the same time.
+      sdFontSystem.ensureLoaded(renderer);
+      startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                                                /*finishOnBack=*/true,
+                                                                /*hideMangaOnlySettings=*/false),
+                             [this](const ActivityResult&) {
+                               ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+                               baseScreenW = renderer.getScreenWidth();
+                               baseScreenH = renderer.getScreenHeight();
+                               sdFontSystem.releaseForImageDecode(renderer);
+                               launchMenu();
+                             });
+      return;
+    }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
       if (book && book->hasToc()) {
         startActivityForResult(

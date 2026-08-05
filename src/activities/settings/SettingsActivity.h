@@ -168,6 +168,8 @@ class SettingsActivity final : public Activity {
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
+  // Home settings remain global. Reader-launched settings hide controls that only apply to manga.
+  bool hideMangaOnlySettings = false;
 
   OptionPopup optionPopup;
 
@@ -183,10 +185,14 @@ class SettingsActivity final : public Activity {
  public:
   // initialCategory: category tab to open on (0=Display, 1=Reader, 2=Controls, 3=System).
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
-  // instead of replacing the stack with Home.
+  // instead of replacing the stack with Home. hideMangaOnlySettings hides manga-only controls
+  // from non-manga reader settings while keeping them available from Home and manga.
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
-                            const bool finishOnBack = false)
-      : Activity("Settings", renderer, mappedInput), initialCategory(initialCategory), finishOnBack(finishOnBack) {}
+                            const bool finishOnBack = false, const bool hideMangaOnlySettings = false)
+      : Activity("Settings", renderer, mappedInput),
+        initialCategory(initialCategory),
+        finishOnBack(finishOnBack),
+        hideMangaOnlySettings(hideMangaOnlySettings) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
