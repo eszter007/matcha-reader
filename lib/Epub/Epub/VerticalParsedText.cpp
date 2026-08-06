@@ -551,26 +551,46 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Coordinate convention, uniform for every RenderKind: VerticalGlyph::y is the TOP of the
   // glyph's cell, never a baseline -- baselines belong to drawing, which converts per draw call
   // (see VerticalTextBlock::drawGlyphs). Ink offsets come from verticalCellBaselineOffset().
-  const int cellPx = std::max(1, verticalCellPx(renderer_, fontId_));
+  // Measured once per chapter, not per paragraph -- see the memo fields' comment.
+  bool metricOk = false;
+  int cellPxNow = cellPxMemo_;
+  if (cellPxNow <= 0) {
+    cellPxNow = verticalCellPx(renderer_, fontId_, &metricOk);
+    if (metricOk) cellPxMemo_ = cellPxNow;
+  }
+  const int cellPx = std::max(1, cellPxNow);
   const int columnAdvancePx = cellPx + columnGapPx_;
   // What a normal grid-adjacent pair leaves between its ink boxes; off-grid runs match it.
-  const int inkGapPx = verticalNominalInkGapPx(renderer_, fontId_, cellPx);
+  int inkGapNow = inkGapPxMemo_;
+  if (inkGapNow < 0) {
+    metricOk = false;
+    inkGapNow = verticalNominalInkGapPx(renderer_, fontId_, cellPx, &metricOk);
+    if (metricOk) inkGapPxMemo_ = inkGapNow;
+  }
+  const int inkGapPx = inkGapNow;
   const int ascender = renderer_.getFontAscenderSize(fontId_);
   // As many whole cells as the text area's height allows. The last row's ink hangs a few px past
   // its cell; that goes in the margin below (screenMargin + status bar), just as ruby goes in the
   // margin beside the text (JLREQ Fig 2.37). Reserving it here instead costs a whole character
   // per column whenever the height divides evenly.
-  const int baselineInCellPx = verticalCellBaselineOffset(renderer_, fontId_, cellPx);
+  int baselineNow = baselineInCellMemo_;
+  if (baselineNow < 0) {
+    metricOk = false;
+    baselineNow = verticalCellBaselineOffset(renderer_, fontId_, cellPx, &metricOk);
+    if (metricOk) baselineInCellMemo_ = baselineNow;
+  }
+  const int baselineInCellPx = baselineNow;
   const uint16_t rowsPerColumn = static_cast<uint16_t>(std::max(1, static_cast<int>(viewportHeight_) / cellPx));
   const int usableWidthPx = std::max(cellPx, static_cast<int>(viewportWidth_) - rightPaddingPx_);
   const uint16_t columnsPerPage = static_cast<uint16_t>(std::max(1, usableWidthPx / columnAdvancePx));
   // Columns are anchored to the right edge and march leftwards, so the width that does not divide
-  // evenly into columns would pile up as dead space on the LEFT. Spread it across the gaps: the
-  // leftmost column lands on the left margin and the columns stay evenly spaced.
-  // (x stays >= 0: (N-1) * (advance + leftover/(N-1)) <= usable - cell.)
+  // evenly into columns would pile up as dead space on the LEFT. Split it between the two margins
+  // instead of adding it to the gaps: the gap is 行間, set in quarter ems by the line-spacing
+  // setting (and by whether furigana needs room in it), so widening it here overrides the very
+  // rule that chose it -- measurably, a 21px gap became 25px against a 29px em.
+  // (x stays >= 0: the leftmost column sits at leftover - leftover/2.)
   const int leftoverPx = std::max(0, usableWidthPx - cellPx - (columnsPerPage - 1) * columnAdvancePx);
-  const int spreadColumnAdvancePx =
-      columnsPerPage > 1 ? columnAdvancePx + leftoverPx / (columnsPerPage - 1) : columnAdvancePx;
+  const int blockShiftPx = leftoverPx / 2;
 
   // Index into paragraphBreaksBeforeIndex_ of the *next* paragraph start,
   // so we know when we've crossed into a new paragraph and should force a
@@ -585,8 +605,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Snapshot the geometry for box-rect building: finalizePendingPage() runs OUTSIDE this
   // function and must still be able to close an open box on the final page.
   boxGeomCellPx_ = cellPx;
-  boxGeomColumnAdvancePx_ = spreadColumnAdvancePx;
-  boxGeomUsableWidthPx_ = usableWidthPx;
+  boxGeomColumnAdvancePx_ = columnAdvancePx;
+  // Fold the block shift in here: appendBoxRectToPage's colLeft is columnLeftX with the shift
+  // already applied, so the two must not drift apart.
+  boxGeomUsableWidthPx_ = usableWidthPx - blockShiftPx;
   boxGeomRowsPerColumn_ = rowsPerColumn;
 
   // Re-record box markers carried across a batch boundary (see reset()) at index 0.
@@ -734,7 +756,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   uint16_t& column = pendingColumn_;
   uint16_t& row = pendingRow_;
 
-  auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - col * spreadColumnAdvancePx; };
+  auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - blockShiftPx - col * columnAdvancePx; };
 
   // Row where a fresh column starts: 0 normally; inside a styled block, the block's start
   // offset (start-Xem), plus the hanging indent (h-indent-Xem) when the column continues a
