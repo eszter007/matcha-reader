@@ -392,6 +392,12 @@ class VerticalParsedText {
   // Codepoint-estimating, request-size-aware reserve for stream_ (see .cpp for the full story --
   // both the byte-count-as-slot-count over-request and the unchecked-request-size reserve have
   // crashed a real device).
+  // Mutable page-building state for one layoutPages() pass, with the placement rules that act on
+  // it. Defined in the .cpp -- it exists to give those rules a named home and an explicit set of
+  // state, instead of a dozen variables shared by reference between twenty lambdas. Nested so it
+  // can reach this class's private stream/box state directly.
+  struct LayoutCursor;
+
   void reserveStreamFor(size_t utf8Bytes);
 
   // Font metrics for this object's fontId, measured once and reused for every paragraph of the
