@@ -27,7 +27,6 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       bookProgressPercent(bookProgressPercent) {}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
-std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
     bool hideGenericLookup, bool showPanelsOnlyToggle) {
   std::vector<MenuItem> items;
@@ -91,8 +90,7 @@ void EpubReaderMenuActivity::onEnter() {
   requestUpdate();
 }
 
-void EpubReaderMenuActivity::onExit() {
-  Activity::onExit(); }
+void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 
 void EpubReaderMenuActivity::closeCancelled() {
   ActivityResult result;
