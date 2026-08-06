@@ -1,5 +1,6 @@
 #include "SdCardFontSystem.h"
 
+#include <Arduino.h>
 #include <EpdFontFamily.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -348,6 +349,25 @@ void SdCardFontSystem::setJpFallbackNeeded(GfxRenderer& renderer, const bool nee
   jpFallbackNeeded_ = needed;
   ensureJpFallback(renderer, SETTINGS.fontPointSize);
   updateGlobalFallback(renderer);
+}
+
+void SdCardFontSystem::releaseForImageDecode(GfxRenderer& renderer) {
+  const uint32_t freeBefore = ESP.getFreeHeap();
+  const uint32_t maxBefore = ESP.getMaxAllocHeap();
+
+  // Drop the companion first, then the selected family. manager_.unloadAll() also removes the
+  // size-matched UI fallback registrations before deleting their backing SdCardFont objects.
+  jpFallbackNeeded_ = false;
+  if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
+  if (!manager_.currentFamilyName().empty()) manager_.unloadAll(renderer);
+  updateGlobalFallback(renderer);
+
+  // Glyph slabs and hot groups are owned by FontCacheManager rather than either SD-font manager.
+  // Release them too so the decoder receives one coalesced block, not merely enough total bytes.
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+
+  LOG_INF("SDFS", "Image decode font release: free %u->%u, maxAlloc %u->%u", freeBefore, ESP.getFreeHeap(), maxBefore,
+          ESP.getMaxAllocHeap());
 }
 
 int SdCardFontSystem::companionFontId() const {

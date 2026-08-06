@@ -200,6 +200,8 @@ class SettingsActivity final : public Activity {
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
+  // Home settings remain global. Reader-launched settings hide controls that only apply to manga.
+  bool hideMangaOnlySettings = false;
 
   OptionPopup optionPopup;
 
@@ -218,12 +220,13 @@ class SettingsActivity final : public Activity {
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
   // instead of replacing the stack with Home.
   // showReaderToggles/verticalTextEnabled/furiganaEnabled: see the member comment above.
-  // mangaMode: see the member comment above.
+  // mangaMode hides settings that do not apply to image-based manga books.
+  // hideMangaOnlySettings hides Rotate Panels in non-manga embedded Reader Settings.
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
                             const bool finishOnBack = false, const bool japaneseBook = false,
                             std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
                             const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
-                            const bool mangaMode = false)
+                            const bool mangaMode = false, const bool hideMangaOnlySettings = false)
       : Activity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),
@@ -232,7 +235,8 @@ class SettingsActivity final : public Activity {
         showReaderToggles(showReaderToggles),
         verticalTextState(verticalTextEnabled),
         furiganaState(furiganaEnabled),
-        mangaMode(mangaMode) {}
+        mangaMode(mangaMode),
+        hideMangaOnlySettings(hideMangaOnlySettings) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

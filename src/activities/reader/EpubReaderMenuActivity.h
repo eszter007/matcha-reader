@@ -29,6 +29,7 @@ class EpubReaderMenuActivity final : public Activity {
     TRANSLATE_PAGE,
     TOGGLE_VERTICAL,
     TOGGLE_FURIGANA,
+    TOGGLE_PANELS_ONLY,
     READER_SETTINGS,
     DICTIONARY
   };
@@ -60,7 +61,8 @@ class EpubReaderMenuActivity final : public Activity {
                                   const bool hasBookmarks = false, const bool hasWordLookup = false,
                                   const bool verticalEnabled = false, const bool furiganaEnabled = true,
                                   const bool hasPageText = true, const bool imageReaderMinimal = false,
-                                  const bool mangaMode = false, const bool hideGenericLookup = false);
+                                  const bool mangaMode = false, const bool hideGenericLookup = false,
+                                  const bool showPanelsOnlyToggle = false, const bool panelsOnlyEnabled = false);
 
   void onEnter() override;
   void onExit() override;
@@ -75,7 +77,8 @@ class EpubReaderMenuActivity final : public Activity {
   };
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
-                                              bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup);
+                                              bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
+                                              bool showPanelsOnlyToggle);
   void closeCancelled();
 
   std::vector<MenuItem> menuItems;
@@ -93,6 +96,7 @@ class EpubReaderMenuActivity final : public Activity {
   uint8_t selectedPageTurnOption = 0;
   bool pendingVerticalEnabled = false;
   bool pendingFuriganaEnabled = true;
+  bool panelsOnlyEnabled = false;
   const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
                                                 StrId::STR_LANDSCAPE_CCW};
   const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};

@@ -80,6 +80,9 @@ void SettingsActivity::rebuildSettingsLists() {
   }
 
   for (auto& setting : settings) {
+    if (hideMangaOnlySettings && setting.valuePtr == &CrossPointSettings::rotateMangaPanels) {
+      continue;
+    }
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       displaySettings.push_back(std::move(setting));

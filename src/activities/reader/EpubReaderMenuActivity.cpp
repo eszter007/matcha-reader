@@ -11,22 +11,24 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title, const int currentPage,
     const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
     const bool hasBookmarks, const bool hasWordLookup, const bool verticalEnabled, const bool furiganaEnabled,
-    const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup)
+    const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup,
+    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled)
     : Activity("EpubReaderMenu", renderer, mappedInput),
-      menuItems(
-          buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode, hideGenericLookup)),
+      menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode,
+                               hideGenericLookup, showPanelsOnlyToggle)),
       hasPageText(hasPageText),
       title(title),
       pendingOrientation(currentOrientation),
       pendingVerticalEnabled(verticalEnabled),
       pendingFuriganaEnabled(furiganaEnabled),
+      panelsOnlyEnabled(panelsOnlyEnabled),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
-    bool hideGenericLookup) {
+    bool hideGenericLookup, bool showPanelsOnlyToggle) {
   std::vector<MenuItem> items;
   items.reserve(16);
 
@@ -54,10 +56,10 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   // Vertical Text and Furigana moved into Reader Settings (SettingInfo::DynamicToggle, gated
   // there on the same condition this menu used to gate TOGGLE_VERTICAL/TOGGLE_FURIGANA) so they
   // sit with the rest of the reading-experience settings instead of this per-page action menu.
-  // Reader Settings itself is shown for manga too (issue #44 fix: MangaReaderActivity now
-  // handles READER_SETTINGS -- see its onReaderMenuConfirm), just filtered down there to the
-  // items manga actually has: Rotate Panels, Reading Orientation, Customise Status Bar. Text
-  // Settings and the Images rendering mode are hidden (SettingsActivity's mangaMode).
+  // Reader Settings itself is shown for manga too, filtered down to the settings manga supports.
+  if (showPanelsOnlyToggle) {
+    items.push_back({MenuAction::TOGGLE_PANELS_ONLY, StrId::STR_PANELS_ONLY});
+  }
   items.push_back({MenuAction::READER_SETTINGS, StrId::STR_READER_SETTINGS});
   if (hasBookmarks) {
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
@@ -261,6 +263,8 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
           return I18N.get(pendingVerticalEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
         } else if (value == MenuAction::TOGGLE_FURIGANA) {
           return I18N.get(pendingFuriganaEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
+        } else if (value == MenuAction::TOGGLE_PANELS_ONLY) {
+          return I18N.get(panelsOnlyEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
         } else {
           return "";
         }

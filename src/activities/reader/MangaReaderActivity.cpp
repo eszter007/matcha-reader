@@ -31,6 +31,7 @@
 #include "ReaderUtils.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "activities/settings/SettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -82,6 +83,10 @@ void MangaReaderActivity::onEnter() {
     panelCropsInSubdir = Storage.exists(subdir.c_str());
     LOG_DBG("MRA", "Panel crops: %s layout", panelCropsInSubdir ? "subfolder" : "flat (legacy)");
   }
+  // Do not base this on the current page: cover/splash records normally have no crop because the
+  // full-page image is already the best presentation. panels.idx is in memory after MangaBook::load(),
+  // so this remains a one-time, no-SD-scan capability check for the whole book.
+  bookHasPanelCropCapability = book->hasPanelCropCapability();
 
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   // Base screen dims for the prefetch worker's geometry math -- captured here, the one moment
@@ -116,8 +121,14 @@ void MangaReaderActivity::onEnter() {
   // tasks so it timeslices instead of starving either; stack mirrors the render task, which runs
   // these same decode paths. Creation failure (OOM) just disables prefetching -- postPrefetchJob
   // no-ops on a null handle and every render path decodes on demand exactly as before.
-  if (xTaskCreate(&prefetchTaskTrampoline, "MangaPrefetch", PREFETCH_TASK_STACK, this, 1, &prefetchTaskHandle) !=
-      pdPASS) {
+  // Do not spend an 8 KB task stack when that would push a foreground PNG decode below its
+  // 60 KB allocation floor. Prefetch is optional; page rendering always has an on-demand path.
+  constexpr uint32_t prefetchStartupFloor = PREFETCH_HEAP_FLOOR + PREFETCH_TASK_STACK + 8 * 1024;
+  if (ESP.getFreeHeap() < prefetchStartupFloor) {
+    prefetchTaskHandle = nullptr;
+    LOG_INF("MRA", "Low heap (%u); prefetch disabled to reserve image decoder memory", ESP.getFreeHeap());
+  } else if (xTaskCreate(&prefetchTaskTrampoline, "MangaPrefetch", PREFETCH_TASK_STACK, this, 1, &prefetchTaskHandle) !=
+             pdPASS) {
     prefetchTaskHandle = nullptr;
     LOG_ERR("MRA", "Failed to create prefetch worker; prefetch disabled");
   }
@@ -169,6 +180,11 @@ void MangaReaderActivity::onExit() {
   // fill-the-screen rotate) would otherwise leak into their layout.
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
+  // Home/Library and the next text reader need the user's selected font again. The manga entry
+  // released it only from RAM; ensureLoaded() restores the unchanged saved selection here.
+  sdFontSystem.setJpFallbackNeeded(renderer, false);
+  sdFontSystem.ensureLoaded(renderer);
+
   Activity::onExit();
 }
 
@@ -190,28 +206,41 @@ void MangaReaderActivity::loadCurrentPagePanels() {
   bool hasCrops = false;
   bool cropsBmp = false;
   bool panelsBw = false;
+  int firstCrop = -1;
   PanelCropDims firstPanelDims;
   if (!loadedPanels.empty() && book) {
-    const std::string bmp0 = panelCropPathExt(0, ".bmp");
-    if (Storage.exists(bmp0.c_str())) {
-      hasCrops = true;
-      cropsBmp = true;
-      BmpToFramebufferConverter::Metadata metadata;
-      if (BmpToFramebufferConverter::getMetadataStatic(bmp0, metadata)) {
-        panelsBw = metadata.monochrome;
-        firstPanelDims = {metadata.dimensions.width, metadata.dimensions.height};
+    // Do not assume panel 0 has a file. Older converters skipped a redundant crop when a
+    // detected panel covered the whole page, while later panels on that same page can still
+    // have real crops. Stop at the first hit so the normal case remains one/two exists calls.
+    for (size_t i = 0; i < loadedPanels.size(); i++) {
+      const std::string bmp = panelCropPathExt(static_cast<int>(i), ".bmp");
+      if (Storage.exists(bmp.c_str())) {
+        hasCrops = true;
+        cropsBmp = true;
+        firstCrop = static_cast<int>(i);
+        BmpToFramebufferConverter::Metadata metadata;
+        if (BmpToFramebufferConverter::getMetadataStatic(bmp, metadata)) {
+          panelsBw = metadata.monochrome;
+          firstPanelDims = {metadata.dimensions.width, metadata.dimensions.height};
+        }
+        break;
       }
-    } else if (Storage.exists(panelCropPathExt(0, ".jpg").c_str())) {
-      hasCrops = true;
+      if (Storage.exists(panelCropPathExt(static_cast<int>(i), ".jpg").c_str())) {
+        hasCrops = true;
+        firstCrop = static_cast<int>(i);
+        break;
+      }
     }
   }
   // A 1-bit BMP full page renders BW-only (single wave, no gray planes); probe it once here
   // (cheap header read) so renderFullPage can pick the fast path. Only .bmp pages can be
   // monochrome -- jpg/png always go the grayscale route.
   bool bwOnly = false;
+  bool hasPageImage = false;
   ImageDimensions bmpDims{0, 0};
   if (book) {
     const std::string pageImg = book->getPageImagePath(currentPage);
+    hasPageImage = !pageImg.empty();
     if (FsHelpers::hasBmpExtension(pageImg)) {
       BmpToFramebufferConverter::Metadata metadata;
       if (BmpToFramebufferConverter::getMetadataStatic(pageImg, metadata)) {
@@ -233,15 +262,26 @@ void MangaReaderActivity::loadCurrentPagePanels() {
     panels = std::move(loadedPanels);
     panelsLoaded = loaded;
     pageHasPanelCrops = hasCrops;
+    firstPanelWithCrop = firstCrop;
+    currentPageHasImage = hasPageImage;
     currentPageBwOnly = bwOnly;
     currentPageBmpWidth = bmpDims.width;
     currentPageBmpHeight = bmpDims.height;
     panelCropIsBmp = cropsBmp;
     panelsBwOnly = panelsBw;
     panelDims.assign(panels.size(), {});
-    if (!panelDims.empty() && firstPanelDims.w > 0 && firstPanelDims.h > 0) panelDims[0] = firstPanelDims;
+    if (firstPanelWithCrop >= 0 && firstPanelWithCrop < static_cast<int>(panelDims.size()) && firstPanelDims.w > 0 &&
+        firstPanelDims.h > 0) {
+      panelDims[firstPanelWithCrop] = firstPanelDims;
+    }
     firstPanelPrefetched = !armFirst;
     nextPanelPrefetched = true;
+    // A panels-only conversion has no full-page overview to render. Enter its first available
+    // crop automatically, including after restoring progress or changing pages.
+    if ((!currentPageHasImage || panelsOnlyMode) && firstPanelWithCrop >= 0) {
+      currentPanel = firstPanelWithCrop;
+      viewMode = ViewMode::PanelZoom;
+    }
   }
   updateBookmarkFlag();
 }
@@ -275,15 +315,19 @@ void MangaReaderActivity::nextPanel() {
   }
 
   if (currentPanel < 0) {
-    currentPanel = 0;
+    currentPanel = firstPanelWithCrop;
     viewMode = ViewMode::PanelZoom;
+    requestUpdate();
+    return;
   } else if (currentPanel < static_cast<int>(panels.size()) - 1) {
     currentPanel++;
-  } else {
-    nextPage();
+    requestUpdate();
     return;
   }
-  requestUpdate();
+
+  // Normal mode shows every page overview before its crops. Panels Only (and conversions that
+  // physically omit full pages) stays in crops continuously across the page boundary.
+  nextPage(panelsOnlyMode || !currentPageHasImage);
 }
 
 void MangaReaderActivity::prevPanel() {
@@ -291,35 +335,61 @@ void MangaReaderActivity::prevPanel() {
   panelGrayPending = false;
   panelGrayUpgrade = false;
 
-  if (currentPanel > 0) {
+  if (currentPanel > firstPanelWithCrop) {
     currentPanel--;
     requestUpdate();
-  } else if (currentPanel == 0) {
+  } else if (!panelsOnlyMode && currentPageHasImage) {
+    // Reverse of normal mode's full-page -> panels sequence.
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     requestUpdate();
   } else {
-    prevPage();
+    // Panels Only must land on the previous page's LAST real crop, not its full-page overview or
+    // first crop. prevPage(true) uses the full page only when that page has no crop at all.
+    prevPage(true);
   }
 }
 
-void MangaReaderActivity::nextPage() {
+int MangaReaderActivity::findPanelWithCrop(const int start, const int step) const {
+  if (step == 0 || panels.empty()) return -1;
+  for (int i = start; i >= 0 && i < static_cast<int>(panels.size()); i += step) {
+    if (Storage.exists(panelCropPath(i).c_str())) return i;
+  }
+  return -1;
+}
+
+void MangaReaderActivity::nextPage(const bool keepPanelMode) {
   if (!book) return;
   if (currentPage + 1 < book->getPageCount()) {
     currentPage++;
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     loadCurrentPagePanels();
+    if ((keepPanelMode || panelsOnlyMode) && pageHasPanelCrops) {
+      currentPanel = firstPanelWithCrop;
+      viewMode = ViewMode::PanelZoom;
+    }
+    // In Panels Only a page with no detected crops still matters (cover, splash page, failed
+    // detection): leave FullPage selected as the fallback, then resume crops on the next page.
     requestUpdate();
   }
 }
 
-void MangaReaderActivity::prevPage() {
+void MangaReaderActivity::prevPage(const bool keepPanelMode) {
+  if (!book) return;
   if (currentPage > 0) {
     currentPage--;
     currentPanel = -1;
     viewMode = ViewMode::FullPage;
     loadCurrentPagePanels();
+    if ((keepPanelMode || panelsOnlyMode) && pageHasPanelCrops) {
+      const int lastCrop = findPanelWithCrop(static_cast<int>(panels.size()) - 1, -1);
+      if (lastCrop >= 0) {
+        currentPanel = lastCrop;
+        viewMode = ViewMode::PanelZoom;
+      }
+    }
+    // No crop: FullPage remains the intentional fallback in both navigation directions.
     requestUpdate();
   }
 }
@@ -402,9 +472,13 @@ void MangaReaderActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     if (viewMode == ViewMode::PanelZoom) {
-      currentPanel = -1;
-      viewMode = ViewMode::FullPage;
-      requestUpdate();
+      if (currentPageHasImage && !panelsOnlyMode) {
+        currentPanel = -1;
+        viewMode = ViewMode::FullPage;
+        requestUpdate();
+      } else {
+        onGoHome();
+      }
       return;
     }
     onGoHome();
@@ -430,7 +504,7 @@ void MangaReaderActivity::loop() {
     if (viewMode == ViewMode::FullPage) {
       const unsigned long dwell = millis() - fullPageRenderedMs;
       if (pageHasPanelCrops && !firstPanelPrefetched && dwell > FIRST_PANEL_PREFETCH_DWELL_MS) {
-        prefetchPanelCache(0);
+        prefetchPanelCache(firstPanelWithCrop);
       } else if (!nextPagePrefetched && dwell > PREFETCH_DWELL_MS) {
         prefetchNextPageCache();
       }
@@ -467,7 +541,7 @@ void MangaReaderActivity::loop() {
         // upgraded before its BW pass runs.
         panelGrayPending = false;
         panelGrayUpgrade = false;
-        currentPanel = 0;
+        currentPanel = firstPanelWithCrop;
         viewMode = ViewMode::PanelZoom;
         requestUpdate();
       } else {
@@ -808,13 +882,6 @@ void MangaReaderActivity::renderPanelZoom() {
   }
 
   const auto& panel = panels[currentPanel];
-
-  std::string imgPath = book->getPageImagePath(currentPage);
-  if (imgPath.empty()) {
-    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true);
-    renderer.displayBuffer();
-    return;
-  }
 
   // Crop known missing/invalid from an earlier probe: fall back without touching the SD.
   if (panelDims[currentPanel].w < 0) {
@@ -1377,10 +1444,15 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
     }
   }
   if (combined.empty()) return;
+  // Dictionary text needs the Japanese SD fallback. Restore it only for the child activity, then
+  // return its memory to the page decoder before the manga redraws.
+  sdFontSystem.ensureLoaded(renderer);
+  sdFontSystem.setJpFallbackNeeded(renderer, true);
   startActivityForResult(std::make_unique<MangaWordLookupActivity>(
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this, returnMode](const ActivityResult&) {
+                           sdFontSystem.releaseForImageDecode(renderer);
                            viewMode = returnMode;
                            requestUpdate();
                          });
@@ -1402,12 +1474,16 @@ void MangaReaderActivity::launchWordLookup() {
 
   if (combined.empty()) return;
 
+  sdFontSystem.ensureLoaded(renderer);
+  sdFontSystem.setJpFallbackNeeded(renderer, true);
+
   // Use the MangaWordLookup sub-activity with raw text. The scan cache makes a re-open of the
   // same panel/page text instant (validated by content hash, so the key is just a hint).
   startActivityForResult(std::make_unique<MangaWordLookupActivity>(
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this](const ActivityResult&) {
+                           sdFontSystem.releaseForImageDecode(renderer);
                            viewMode = ViewMode::PanelZoom;
                            requestUpdate();
                          });
@@ -1421,13 +1497,14 @@ void MangaReaderActivity::saveProgress() const {
     Storage.mkdir(cachePath.c_str());
   }
 
-  uint8_t data[6];
+  uint8_t data[7];
   data[0] = currentPage & 0xFF;
   data[1] = (currentPage >> 8) & 0xFF;
   data[2] = (currentPage >> 16) & 0xFF;
   data[3] = (currentPage >> 24) & 0xFF;
   int16_t panelVal = static_cast<int16_t>(currentPanel);
   memcpy(data + 4, &panelVal, 2);
+  data[6] = panelsOnlyMode ? 1 : 0;
 
   ProgressFile::writeAtomic(cachePath, data, sizeof(data));
 }
@@ -1438,12 +1515,15 @@ void MangaReaderActivity::loadProgress() {
 
   HalFile f;
   if (Storage.openFileForRead("MNG", cachePath + "/progress.bin", f)) {
-    uint8_t data[6];
-    if (f.read(data, 6) == 6) {
+    uint8_t data[7] = {};
+    const int bytesRead = f.read(data, sizeof(data));
+    if (bytesRead >= 6) {
       currentPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
       int16_t panelVal;
       memcpy(&panelVal, data + 4, 2);
       currentPanel = panelVal;
+      // Six-byte progress files predate this setting and default to normal full-page mode.
+      panelsOnlyMode = bytesRead >= 7 && data[6] != 0;
 
       if (currentPage >= book->getPageCount()) {
         currentPage = 0;
@@ -1557,7 +1637,10 @@ void MangaReaderActivity::launchMenu() {
                                                /*hasFootnotes=*/false, /*hasBookmarks=*/!cachedBookmarks.empty(),
                                                /*hasWordLookup=*/hasWordLookup, /*verticalEnabled=*/false,
                                                /*furiganaEnabled=*/true, /*hasPageText=*/hasPageText,
-                                               /*imageReaderMinimal=*/false, /*mangaMode=*/true),
+                                               /*imageReaderMinimal=*/false, /*mangaMode=*/true,
+                                               /*hideGenericLookup=*/false,
+                                               /*showPanelsOnlyToggle=*/bookHasPanelCropCapability,
+                                               /*panelsOnlyEnabled=*/panelsOnlyMode),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         // Apply orientation change
@@ -1603,26 +1686,26 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
 
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::READER_SETTINGS: {
-      // Filtered to what manga actually has: Rotate Panels, Reading Orientation, Customise
-      // Status Bar (SettingsActivity's mangaMode hides Text Settings and the image-rendering
-      // mode, neither of which applies to a book whose pages ARE images -- issue #44).
-      // japaneseBook=true reuses the existing "skip the folder-based dictionary picker" gate:
-      // manga has its own OCR-based Word Lookup, not the EPUB dictionary flow that configures.
-      startActivityForResult(
-          std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                             /*finishOnBack=*/true, /*japaneseBook=*/true,
-                                             /*dictionaryLanguage=*/std::string{}, /*showReaderToggles=*/false,
-                                             /*verticalTextEnabled=*/false, /*furiganaEnabled=*/false,
-                                             /*mangaMode=*/true),
-          [this](const ActivityResult&) {
-            // Reading Orientation only changes via this screen now (removed from the quick
-            // menu -- see EpubReaderMenuActivity::buildMenuItems): pick up a change the same
-            // way onEnter() does, or it would silently wait for the next full open to apply.
-            ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-            // Return to the reader MENU (where the user came from), not the page.
-            launchMenu();
-          });
-      break;
+      // Manga keeps Rotate Panels and the other applicable Reader settings, while hiding
+      // EPUB-only text and image-rendering settings through SettingsActivity's mangaMode.
+      // Restore SD fonts while Settings is open, then release that memory before manga redraws.
+      sdFontSystem.ensureLoaded(renderer);
+      startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                                                /*finishOnBack=*/true, /*japaneseBook=*/true,
+                                                                /*dictionaryLanguage=*/std::string{},
+                                                                /*showReaderToggles=*/false,
+                                                                /*verticalTextEnabled=*/false,
+                                                                /*furiganaEnabled=*/false,
+                                                                /*mangaMode=*/true,
+                                                                /*hideMangaOnlySettings=*/false),
+                             [this](const ActivityResult&) {
+                               ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+                               baseScreenW = renderer.getScreenWidth();
+                               baseScreenH = renderer.getScreenHeight();
+                               sdFontSystem.releaseForImageDecode(renderer);
+                               launchMenu();
+                             });
+      return;
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
       if (book && book->hasToc()) {
@@ -1708,6 +1791,17 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
     }
     case EpubReaderMenuActivity::MenuAction::ROTATE_SCREEN:
       // Orientation already applied in the callback above
+      break;
+    case EpubReaderMenuActivity::MenuAction::TOGGLE_PANELS_ONLY:
+      panelsOnlyMode = !panelsOnlyMode;
+      if (panelsOnlyMode && pageHasPanelCrops) {
+        currentPanel = firstPanelWithCrop;
+        viewMode = ViewMode::PanelZoom;
+      } else if (!panelsOnlyMode && currentPageHasImage) {
+        currentPanel = -1;
+        viewMode = ViewMode::FullPage;
+      }
+      saveProgress();
       break;
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT:
       launchPercentJump();

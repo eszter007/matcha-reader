@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -55,6 +56,11 @@ class MangaBook {
   const std::string& getAuthor() const { return author; }
 
   bool loadPagePanels(uint32_t pageIndex, std::vector<Panel>& panels) const;
+  // panels.idx is loaded once on open. Any non-empty record means this book has real panel
+  // data, even when its current page is a cover/splash that intentionally has no crop file.
+  bool hasPanelCropCapability() const {
+    return std::any_of(pageIndex.begin(), pageIndex.end(), [](const PageInfo& page) { return page.dataLength != 0; });
+  }
   uint16_t getPageImgWidth(uint32_t pageIndex) const;
   uint16_t getPageImgHeight(uint32_t pageIndex) const;
 

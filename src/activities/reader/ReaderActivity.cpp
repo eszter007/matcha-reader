@@ -201,10 +201,13 @@ void ReaderActivity::onEnter() {
 
   currentBookPath = initialBookPath;
   if (isMangaFolder(initialBookPath)) {
-    // Manga is Japanese content (OCR text overlays, lookup): needs the JP fallback font.
-    sdFontSystem.setJpFallbackNeeded(renderer, true);
+    // Manga page/panel pixels use no reader font. Keeping the selected SD family (including its
+    // UI fallback sizes) resident left only 25-29 KB in a device report, below the JPEG decoder's
+    // 36 KB and PNG decoder's 60 KB requirements. Preserve the setting but lend its RAM to images.
+    sdFontSystem.releaseForImageDecode(renderer);
     auto manga = loadManga(initialBookPath);
     if (!manga) {
+      sdFontSystem.ensureLoaded(renderer);
       onGoBack();
       return;
     }

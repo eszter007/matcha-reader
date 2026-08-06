@@ -60,6 +60,9 @@ class MangaReaderActivity final : public Activity {
 
   enum class ViewMode { FullPage, PanelZoom, TextOverlay };
   ViewMode viewMode = ViewMode::FullPage;
+  // Per-book preference persisted as progress.bin byte 7. Books that physically omit page images
+  // still enter their crops regardless of this preference.
+  bool panelsOnlyMode = false;
 
   // Prefetch state flags below are written from the render task (renderFullPage/renderPanelZoom)
   // and read/updated from the loop task (loop/loadCurrentPagePanels). They're word-sized and only
@@ -132,6 +135,15 @@ class MangaReaderActivity final : public Activity {
   // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
   // every entry. Both answers are static for a given page.
   bool pageHasPanelCrops = false;
+  // Book-level capability derived once from panels.idx on entry. A cover/splash can deliberately
+  // omit its redundant crop, but the per-book Panels Only preference must still be configurable.
+  bool bookHasPanelCropCapability = false;
+  // Index of the first crop that actually exists. Full-page cover/splash panels intentionally
+  // had no duplicate crop in older conversions, so crop 0 is not a reliable format probe.
+  int firstPanelWithCrop = -1;
+  // Some space-saving conversions contain only panel crops. Cache whether a full-page image is
+  // available so navigation never switches such a book into an unrenderable overview.
+  bool currentPageHasImage = false;
   // True when the current full-page image is a 1-bit monochrome BMP: it renders with a single BW
   // e-ink pass (no 4-level gray refresh), so renderFullPage skips the grayscale planes entirely.
   // Computed once per page in loadCurrentPagePanels(). Read on the render task, written under
@@ -268,8 +280,9 @@ class MangaReaderActivity final : public Activity {
 
   void nextPanel();
   void prevPanel();
-  void nextPage();
-  void prevPage();
+  void nextPage(bool keepPanelMode = false);
+  void prevPage(bool keepPanelMode = false);
+  int findPanelWithCrop(int start, int step) const;
 
   void saveProgress() const;
   void loadProgress();

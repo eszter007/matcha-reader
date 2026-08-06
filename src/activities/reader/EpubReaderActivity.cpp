@@ -1120,7 +1120,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
                                                                 /*finishOnBack=*/true, isJapaneseBook(),
                                                                 epub ? epub->getLanguage() : std::string{},
-                                                                showVerticalToggle(), useVerticalText(), useFurigana()),
+                                                                showVerticalToggle(), useVerticalText(), useFurigana(),
+                                                                /*mangaMode=*/false,
+                                                                /*hideMangaOnlySettings=*/true),
                              [this](const ActivityResult& result) {
                                if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
                                  applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
