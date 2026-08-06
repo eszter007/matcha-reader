@@ -91,7 +91,8 @@ void EpubReaderMenuActivity::onEnter() {
   requestUpdate();
 }
 
-void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
+void EpubReaderMenuActivity::onExit() {
+  Activity::onExit(); }
 
 void EpubReaderMenuActivity::closeCancelled() {
   ActivityResult result;

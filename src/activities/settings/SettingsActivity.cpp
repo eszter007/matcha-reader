@@ -59,11 +59,9 @@ void SettingsActivity::rebuildSettingsLists() {
 
   // Reader-launched settings lock the UI to one category while the book remains
   // resident. Avoid materializing every web/device setting in that low-heap path.
-  const StrId categoryFilter =
-      finishOnBack ? categoryNames[selectedCategoryIndex] : StrId::STR_NONE_OPT;
+  const StrId categoryFilter = finishOnBack ? categoryNames[selectedCategoryIndex] : StrId::STR_NONE_OPT;
   auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
-                                  /*includeTextSettingsEntries=*/!finishOnBack,
-                                  dictionaryLanguage, finishOnBack);
+                                  /*includeTextSettingsEntries=*/!finishOnBack, dictionaryLanguage, finishOnBack);
   if (finishOnBack) {
     switch (selectedCategoryIndex) {
       case 0:
@@ -82,8 +80,7 @@ void SettingsActivity::rebuildSettingsLists() {
   }
 
   for (auto& setting : settings) {
-    if (hideMangaOnlySettings &&
-        setting.valuePtr == &CrossPointSettings::rotateMangaPanels) {
+    if (hideMangaOnlySettings && setting.valuePtr == &CrossPointSettings::rotateMangaPanels) {
       continue;
     }
     if (setting.category == StrId::STR_NONE_OPT) continue;

@@ -62,8 +62,7 @@ class EpubReaderMenuActivity final : public Activity {
                                   const bool verticalEnabled = false, const bool furiganaEnabled = true,
                                   const bool hasPageText = true, const bool imageReaderMinimal = false,
                                   const bool mangaMode = false, const bool hideGenericLookup = false,
-                                  const bool showPanelsOnlyToggle = false,
-                                  const bool panelsOnlyEnabled = false);
+                                  const bool showPanelsOnlyToggle = false, const bool panelsOnlyEnabled = false);
 
   void onEnter() override;
   void onExit() override;
@@ -78,8 +77,8 @@ class EpubReaderMenuActivity final : public Activity {
   };
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
-                                              bool imageReaderMinimal, bool mangaMode,
-                                              bool hideGenericLookup, bool showPanelsOnlyToggle);
+                                              bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
+                                              bool showPanelsOnlyToggle);
   void closeCancelled();
 
   std::vector<MenuItem> menuItems;

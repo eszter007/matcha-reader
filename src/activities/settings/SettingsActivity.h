@@ -222,16 +222,11 @@ class SettingsActivity final : public Activity {
   // showReaderToggles/verticalTextEnabled/furiganaEnabled: see the member comment above.
   // mangaMode hides settings that do not apply to image-based manga books.
   // hideMangaOnlySettings hides Rotate Panels in non-manga embedded Reader Settings.
-  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                            const int initialCategory = 0,
-                            const bool finishOnBack = false,
-                            const bool japaneseBook = false,
-                            std::string dictionaryLanguage = {},
-                            const bool showReaderToggles = false,
-                            const bool verticalTextEnabled = false,
-                            const bool furiganaEnabled = false,
-                            const bool mangaMode = false,
-                            const bool hideMangaOnlySettings = false)
+  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
+                            const bool finishOnBack = false, const bool japaneseBook = false,
+                            std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
+                            const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
+                            const bool mangaMode = false, const bool hideMangaOnlySettings = false)
       : Activity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),

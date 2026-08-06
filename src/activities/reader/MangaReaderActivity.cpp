@@ -1690,22 +1690,21 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       // EPUB-only text and image-rendering settings through SettingsActivity's mangaMode.
       // Restore SD fonts while Settings is open, then release that memory before manga redraws.
       sdFontSystem.ensureLoaded(renderer);
-      startActivityForResult(
-          std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                             /*finishOnBack=*/true, /*japaneseBook=*/true,
-                                             /*dictionaryLanguage=*/std::string{},
-                                             /*showReaderToggles=*/false,
-                                             /*verticalTextEnabled=*/false,
-                                             /*furiganaEnabled=*/false,
-                                             /*mangaMode=*/true,
-                                             /*hideMangaOnlySettings=*/false),
-          [this](const ActivityResult&) {
-            ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-            baseScreenW = renderer.getScreenWidth();
-            baseScreenH = renderer.getScreenHeight();
-            sdFontSystem.releaseForImageDecode(renderer);
-            launchMenu();
-          });
+      startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                                                /*finishOnBack=*/true, /*japaneseBook=*/true,
+                                                                /*dictionaryLanguage=*/std::string{},
+                                                                /*showReaderToggles=*/false,
+                                                                /*verticalTextEnabled=*/false,
+                                                                /*furiganaEnabled=*/false,
+                                                                /*mangaMode=*/true,
+                                                                /*hideMangaOnlySettings=*/false),
+                             [this](const ActivityResult&) {
+                               ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+                               baseScreenW = renderer.getScreenWidth();
+                               baseScreenH = renderer.getScreenHeight();
+                               sdFontSystem.releaseForImageDecode(renderer);
+                               launchMenu();
+                             });
       return;
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
