@@ -60,7 +60,7 @@ namespace {
 // v104: glyph records are fixed-size (textId) with a per-page text pool appended after
 // the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
 // v105: the header includes the vertical column-spacing setting.
-constexpr uint8_t VSECTION_FILE_VERSION = 121;
+constexpr uint8_t VSECTION_FILE_VERSION = 123;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -1184,8 +1184,17 @@ struct LayoutPageSink final : ParagraphSink {
   }
 };
 
-// Byte offset of the pageCount field in the header.
-constexpr size_t HEADER_PAGECOUNT_OFFSET = 1 + sizeof(int) + 2 * sizeof(uint16_t) + sizeof(uint8_t);
+// Byte offset of the pageCount field: everything createSectionFile writes ahead of it. Keep this
+// in step with that write order -- it is a seek target, so a stale value silently OVERWRITES the
+// preceding field rather than failing. Adding the furigana flag without updating this wrote
+// pageCount over it, and a chapter whose page count happened to equal the flag passed the
+// parameter check and then read its page table from a shifted offset ("empty chapter").
+constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
+                                           + sizeof(int)       // fontId
+                                           + sizeof(uint16_t)  // viewportWidth
+                                           + sizeof(uint16_t)  // viewportHeight
+                                           + sizeof(uint8_t)   // lineSpacing
+                                           + sizeof(uint8_t);  // furiganaFlag
 
 }  // namespace
 
