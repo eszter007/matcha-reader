@@ -1556,11 +1556,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           idx++;
           continue;
         }
-        // JLREQ 3.1.4: 。/、 and a closing bracket after it SHARE one em -- the mark takes the
-        // first half, the bracket the second. The mark is already set tight (commaTighten), so
-        // the half it left free is exactly where the bracket belongs. No new cell is needed, and
-        // neither character has to leave the column its sentence ended in.
-        if (Kinsoku::verticalShiftType(prev.codepoint) == 1 && Kinsoku::verticalShiftType(pc.codepoint) == 2 &&
+        // JLREQ 3.1.4: two adjacent half-em marks SHARE one em -- the first takes the first half,
+        // the second the second. That covers 。」 and 、」 as well as 』」 and 」」, since a closing
+        // bracket is itself a half-em glyph set in the first half of its cell (and 。/、 are set
+        // tight for the same reason). The half the first mark left free is exactly where the
+        // second belongs: no new cell, and neither character leaves the column its sentence
+        // ended in. Only the FIRST of the pair may already be placed -- a full-em character
+        // before the bracket (？」) genuinely needs 1.5 em and falls through to oidashi.
+        const int prevHalfEm = Kinsoku::verticalShiftType(prev.codepoint);
+        if ((prevHalfEm == 1 || prevHalfEm == 2) && Kinsoku::verticalShiftType(pc.codepoint) == 2 &&
             Kinsoku::needsVerticalRotation(pc.codepoint)) {
           VerticalGlyph g;
           g.codepoint = pc.codepoint;
@@ -1575,6 +1579,17 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.style = pc.style;
           g.emphasis = pc.emphasis;
           pushGlyph(page, g, pc.rubyText);
+          idx++;
+          continue;
+        }
+
+        // Burasage (ぶら下げ): 。/、 hang past the end of a full column rather than evict the
+        // character before them. They are half-em marks whose ink sits in the top half of the
+        // cell, so the overhang is small and falls in the bottom margin -- the same margin ruby
+        // uses beside the text (JLREQ Fig 2.37). Without this, oidashi pulled the preceding
+        // character along and left a column holding just those two.
+        if (Kinsoku::verticalShiftType(pc.codepoint) == 1 && prev.row + 1 == rowsPerColumn) {
+          placeUprightAt(pc, prev.column, static_cast<uint16_t>(prev.row + 1));
           idx++;
           continue;
         }
