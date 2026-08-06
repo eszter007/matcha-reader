@@ -94,12 +94,6 @@ uint32_t decodeUtf8At(const std::string& s, size_t i, size_t* bytesConsumed) {
   return c0;
 }
 
-std::string encodeCp(uint32_t cp) {
-  std::string out;
-  utf8AppendCodepoint(cp, out);
-  return out;
-}
-
 uint32_t composeKanaDiacritic(uint32_t base, uint32_t mark) {
   // U+3099 COMBINING KATAKANA-HIRAGANA VOICED SOUND MARK
   if (mark == 0x3099) {
@@ -252,21 +246,50 @@ bool measureGlyphInk(const GfxRenderer& renderer, const int fontId, const uint32
   return true;
 }
 
-int verticalCellPx(const GfxRenderer& renderer, const int fontId) {
+// Ink boxes for the handful of codepoints placed by quadrant. A miss is NOT stored: a probe
+// against a not-yet-resident SD font fails transiently, and caching that would place every
+// later occurrence by the fallback for the rest of the chapter.
+struct InkMemo {
+  static constexpr int CAPACITY = 24;
+  uint32_t keys[CAPACITY] = {};  // codepoint | style << 24; 0 = free
+  GlyphInk inks[CAPACITY];
+  int count = 0;
+  static uint32_t keyOf(const uint32_t cp, const uint8_t style) { return cp | (static_cast<uint32_t>(style) << 24); }
+  bool lookup(const uint32_t cp, const uint8_t style, GlyphInk* out) const {
+    const uint32_t k = keyOf(cp, style);
+    for (int i = 0; i < count; i++) {
+      if (keys[i] == k) {
+        *out = inks[i];
+        return true;
+      }
+    }
+    return false;
+  }
+  void store(const uint32_t cp, const uint8_t style, const GlyphInk& ink) {
+    if (count >= CAPACITY) return;  // full: fall back to probing, never evict
+    keys[count] = keyOf(cp, style);
+    inks[count] = ink;
+    count++;
+  }
+};
+
+int verticalCellPx(const GfxRenderer& renderer, const int fontId, bool* measured) {
   // SD fonts measure through their advance table; make sure the reference glyph is in it. A cold
   // table measures 漢 as 0, and the getLineHeight fallback includes interline spacing -- cells
   // jump ~1em -> ~1.45em, and layout and draw disagree for that frame.
   renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
   const int cjkAdvance = renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));  // 漢
+  if (measured) *measured = cjkAdvance > 0;
   if (cjkAdvance > 0) return cjkAdvance;
   return renderer.getLineHeight(fontId);
 }
 
-int verticalNominalInkGapPx(const GfxRenderer& renderer, const int fontId, const int cellPx) {
+int verticalNominalInkGapPx(const GfxRenderer& renderer, const int fontId, const int cellPx, bool* measured) {
   renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
   GlyphInk ink;
-  if (!measureGlyphInk(renderer, fontId, 0x6F22 /* 漢 */, 0, &ink) || ink.height <= 0 || ink.height > cellPx) return 0;
-  return cellPx - ink.height;
+  const bool ok = measureGlyphInk(renderer, fontId, 0x6F22 /* 漢 */, 0, &ink) && ink.height > 0 && ink.height <= cellPx;
+  if (measured) *measured = ok;
+  return ok ? cellPx - ink.height : 0;
 }
 
 // Record a paragraph boundary before stream index `idx`, ignoring a repeat at the same index --
@@ -496,14 +519,15 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
   }
 }
 
-int verticalCellBaselineOffset(const GfxRenderer& renderer, const int fontId, const int cellPx) {
+int verticalCellBaselineOffset(const GfxRenderer& renderer, const int fontId, const int cellPx, bool* measured) {
   const int ascender = renderer.getFontAscenderSize(fontId);
   // String literal, no allocation -- this is called from the pagination path.
   renderer.ensureSdCardFontReady(fontId, "\xe4\xb8\xad", 0x01);
   GlyphInk ink;
-  if (!measureGlyphInk(renderer, fontId, 0x4E2D /* 中 */, 0, &ink) || ink.height <= 0 || ink.height > cellPx * 2) {
-    return ascender;
-  }
+  const bool ok =
+      measureGlyphInk(renderer, fontId, 0x4E2D /* 中 */, 0, &ink) && ink.height > 0 && ink.height <= cellPx * 2;
+  if (measured) *measured = ok;
+  if (!ok) return ascender;
   // getGlyphMetrics reports `top` as the ink top ABOVE the baseline, so centring the ink box in
   // the cell puts the baseline at (cell - inkHeight)/2 + top below the cell's top edge.
   return (cellPx - ink.height) / 2 + ink.top;
@@ -799,6 +823,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     shiftColumn = columnArg;
   };
 
+  InkMemo inkMemo;
+
   // Upper-RIGHT quadrant placement, from the glyph's own ink box: these marks are drawn with
   // their ink at the bottom-left of the em, so how far it must travel is font-specific. Returns
   // false when metrics are unavailable.
@@ -808,8 +834,16 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   //   small kana - letter face against the top edge of its box
   auto quadrantTopRight = [&](const uint32_t cp, const uint8_t style, const uint16_t col, const uint16_t rowIdx,
                               const bool centreInHalf, int* gxOut, int* gyOut, int* inkHeightOut = nullptr) -> bool {
+    // Only 。、 and the small kana reach here -- about fifteen codepoints per style for a whole
+    // chapter, each otherwise re-probed for every occurrence. A probe pages the glyph in from the
+    // SD font and evicts another from its small on-demand table, so the repeat cost is SD reads,
+    // not arithmetic.
     GlyphInk ink;
-    if (!measureGlyphInk(renderer_, fontId_, cp, style, &ink) || ink.width <= 0 || ink.height <= 0) return false;
+    if (!inkMemo.lookup(cp, style, &ink)) {
+      if (!measureGlyphInk(renderer_, fontId_, cp, style, &ink)) return false;
+      inkMemo.store(cp, style, ink);
+    }
+    if (ink.width <= 0 || ink.height <= 0) return false;
     // Draw resolves ink left as x + glyph->left, and ink top as (cellTop + baselineInCell) - top.
     const int inkTopInCell = centreInHalf ? std::max(0, (cellPx / 2 - ink.height) / 2) : 0;
     *gxOut = columnLeftX(col) + cellPx - ink.left - ink.width;
@@ -1075,8 +1109,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     } else {
       // Metrics for a glyph the SD font has not paged in yet come back empty, which silently
       // disabled the tail allowance; page the one character in first.
-      const std::string nextChar = encodeCp(next.codepoint);
-      renderer_.ensureSdCardFontReady(fontId_, nextChar.c_str(), static_cast<uint8_t>(1u << (next.style & 3)));
+      char nextChar[5] = {};
+      utf8EncodeCodepoint(next.codepoint, nextChar);
+      renderer_.ensureSdCardFontReady(fontId_, nextChar, static_cast<uint8_t>(1u << (next.style & 3)));
       GlyphInk ink;
       if (measureGlyphInk(renderer_, fontId_, next.codepoint, next.style, &ink) && ink.height > 0) {
         offset = baselineInCellPx - ink.top;
@@ -1359,7 +1394,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       std::string runUtf8;
       while (runEnd < boundaryLimit && Kinsoku::isRotatedRunCharacter(stream_[runEnd].codepoint) &&
              stream_[runEnd].paragraphIndex == pc.paragraphIndex) {
-        runUtf8 += encodeCp(stream_[runEnd].codepoint);
+        utf8AppendCodepoint(stream_[runEnd].codepoint, runUtf8);
         runEnd++;
         if (runEnd - idx > 64) break;
       }

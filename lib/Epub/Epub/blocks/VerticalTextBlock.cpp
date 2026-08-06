@@ -10,8 +10,12 @@
 namespace {
 constexpr int kNoStyle = 0;
 
-void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
+// Returns the cell size it drew with, so a caller needing the same geometry (ruby) reuses it
+// instead of re-deriving it -- every derivation probes the reference glyph out of the SD font.
+int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
   const int cellPx = verticalCellPx(renderer, fontId);
+  // Hoisted: this was measured per emphasised glyph, inside the loop below.
+  const int inkGapPx = verticalNominalInkGapPx(renderer, fontId, cellPx);
   // VerticalGlyph::y is the cell's TOP for every kind (see layoutPages); the draw calls disagree
   // about what they want, so each converts:
   //   drawText              - a TOP, and it adds the ascender itself, so hand it baseline-ascender
@@ -97,11 +101,12 @@ void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int
     if (g.emphasis) {
       // Sesame dot beside the character, clear of its cell by the same ink gap a normal pair of
       // characters leaves.
-      const int emX = dx + cellPx + verticalNominalInkGapPx(renderer, fontId, cellPx);
+      const int emX = dx + cellPx + inkGapPx;
       const int emY = dy;
       renderer.drawText(fontId, emX, emY, "\xef\xb9\x85", black, static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP));
     }
   }
+  return cellPx;
 }
 
 }  // namespace
@@ -112,12 +117,11 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int offsetX, i
 
 void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId, int offsetX, int offsetY,
                                bool black) const {
-  drawGlyphs(renderer, page_, fontId, offsetX, offsetY, black);
+  const int cellPxLocal = drawGlyphs(renderer, page_, fontId, offsetX, offsetY, black);
 
   const int rubyLineH = (renderer.getLineHeight(rubyFontId) + 1) / 2;
   const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
 
-  const int cellPxLocal = verticalCellPx(renderer, fontId);
   int prevRubyBottom = -9999;
   uint16_t prevRubyColumn = UINT16_MAX;
 

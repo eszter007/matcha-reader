@@ -28,19 +28,21 @@ bool measureGlyphInk(const GfxRenderer& renderer, int fontId, uint32_t cp, uint8
 // (advanceY would include interline spacing on Latin-oriented fonts). JLREQ sets solid, so the
 // cell IS the em -- inter-character air comes from the line-gap setting, never from padding here.
 // Falls back to the line height when the font has no such advance.
-int verticalCellPx(const GfxRenderer& renderer, int fontId);
+// `measured` (optional) reports whether the font answered: a caller that caches the result must
+// only cache a measured one, or a probe against a not-yet-resident SD font freezes its fallback in.
+int verticalCellPx(const GfxRenderer& renderer, int fontId, bool* measured = nullptr);
 
 // The gap a grid-adjacent pair of full-width characters leaves between their ink boxes, measured
 // as the reference glyph's unused cell height. Used wherever something off-grid (a rotated Latin
 // run, a bracket, an ellipsis) must clear the character after it: matching this keeps that
 // spacing indistinguishable from the surrounding text instead of inventing a fraction of a cell.
-int verticalNominalInkGapPx(const GfxRenderer& renderer, int fontId, int cellPx);
+int verticalNominalInkGapPx(const GfxRenderer& renderer, int fontId, int cellPx, bool* measured = nullptr);
 
 // Where a glyph's baseline sits inside its cell, measured down from the cell's top: the offset
 // that centres the reference CJK glyph's ink box (中 -- full-width, even bearings, the same
 // reference the tate-chu-yoko centring uses). Falls back to the font ascender when metrics are
 // unavailable, e.g. an SD font not yet resident.
-int verticalCellBaselineOffset(const GfxRenderer& renderer, int fontId, int cellPx);
+int verticalCellBaselineOffset(const GfxRenderer& renderer, int fontId, int cellPx, bool* measured = nullptr);
 
 // A single positioned glyph cell within a vertically-laid-out page.
 // `paragraphIndex` + `byteOffset` identify exactly where this character
@@ -391,6 +393,16 @@ class VerticalParsedText {
   // both the byte-count-as-slot-count over-request and the unchecked-request-size reserve have
   // crashed a real device).
   void reserveStreamFor(size_t utf8Bytes);
+
+  // Font metrics for this object's fontId, measured once and reused for every paragraph of the
+  // chapter. Each probe pages its reference glyph (漢/中) in from the SD font, and the font's
+  // on-demand slot table is small -- re-measuring per paragraph evicted real text glyphs and made
+  // the reference glyphs ~27% of all SD glyph loads during a chapter build.
+  // Only a SUCCESSFUL measurement is cached: a probe against a font that is not resident yet
+  // returns a fallback, and storing that would freeze the fallback in for the whole chapter.
+  int cellPxMemo_ = 0;
+  int inkGapPxMemo_ = -1;
+  int baselineInCellMemo_ = -1;
 
   void recordParagraphBreakAt(size_t idx);
 };
