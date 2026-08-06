@@ -2358,6 +2358,27 @@ void GfxRenderer::drawCharVerticalCornerTopRight(const int fontId, const int cel
 // needs the SAME numbers the drawer uses -- rotated punctuation is placed from its cell box with
 // several font-adaptive nudges, and a layout that guessed instead ran embedded Latin words into
 // the brackets around them (device photo, 「Furz」).
+// Round parens, angle brackets and braces are symmetric about the column axis, so they are drawn
+// ink-centred across it. The corner/lenticular/tortoise family is not: its ink hugs one side of
+// the em box, and it is flushed to the matching edge of the cell instead.
+static bool isSymmetricBracket(const uint32_t cp) {
+  switch (cp) {
+    case 0x0028:  // (
+    case 0x0029:  // )
+    case 0xFF08:  // （
+    case 0xFF09:  // ）
+    case 0x3008:  // 〈
+    case 0x3009:  // 〉
+    case 0x300A:  // 《
+    case 0x300B:  // 》
+    case 0xFF5B:  // ｛
+    case 0xFF5D:  // ｝
+      return true;
+    default:
+      return false;
+  }
+}
+
 void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cellLeftX, const int cellTopY,
                                                 const int cellSize, const uint32_t cp, const int shiftType,
                                                 const bool black, const EpdFontFamily::Style style, int* inkTopOut,
@@ -2370,19 +2391,10 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     const int dotSize = std::max(1, cellSize / 10);
     const int gap = std::max(1, cellSize / 10);
     const int totalH = dotCount * dotSize + (dotCount - 1) * gap;
-    // Font-adaptive nudge for ellipsis (same logic as brackets)
-    const auto fontIt2 = fontMap.find(fontId);
-    int ellipsisExtra = 0;
-    if (fontIt2 != fontMap.end()) {
-      const EpdFontData* fd = fontIt2->second.getData(style);
-      if (fd && cellSize > 0) {
-        const int pct = fd->ascender * 100 / cellSize;
-        if (pct > 100) ellipsisExtra = cellSize * (pct - 100) / 30;
-      }
-    }
-    int startY = cellTopY + std::max(1, cellSize / 3) + cellSize / 3 + ellipsisExtra;
-    const int maxStartY = cellTopY + std::max(1, cellSize - totalH - 1) + ellipsisExtra;
-    if (startY > maxStartY) startY = maxStartY;
+    // Centre the stack in its cell. The old placement (a third of a cell down, plus another
+    // third, plus an ascender-percentage "font-adaptive nudge") was chasing upright glyphs that
+    // were themselves drawn an ascender too low; they are centred now, so this is too.
+    const int startY = cellTopY + (cellSize - totalH) / 2;
     if (inkTopOut) {
       *inkTopOut = startY;
       *inkHeightOut = totalH;
@@ -2409,44 +2421,32 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   const int rotatedW = glyph->height;
   const int rotatedH = glyph->width;
 
-  // Font-adaptive nudge: compare the font's ascender to the cell size.
-  // Compact fonts (UDDigiKyokasho, ascender ~cell) need no extra nudge;
-  // taller fonts (Noto Serif/Sans, ascender > cell) need more push to avoid overlap.
-  const EpdFontData* fontData = font.getData(style);
-  const int ascender = fontData ? fontData->ascender : cellSize;
-  const int fontPct = (cellSize > 0) ? (ascender * 100 / cellSize) : 100;
-  const int extraNudge = (fontPct > 100) ? (cellSize * (fontPct - 100) / 30) : 0;
-  // How much lower this font's upright neighbors sit in their cells than a compact font's:
-  // upright glyphs hang from the baseline at `ascender`, and cellSize = em * 7/6, so any
-  // ascender beyond the em height pushes the surrounding ink down by that surplus. Rotated
-  // punctuation is placed by its own ink box and must follow, or it floats high relative to
-  // the column (NotoSansJP asc 34 / cell 33 vs UDDigiKyokasho asc 26 / cell 33).
-  const int baselineExcess = std::max(0, ascender - (cellSize * 6) / 7);
-
+  // Centre the rotated ink box in the cell -- the same rule upright glyphs follow, so
+  // punctuation lands on the column's axis by construction.
+  //
+  // This used to carry three font-adaptive nudges (an `ascender vs cell` percentage push, a
+  // `baselineExcess` term, and a flat cellSize/3 drop). They existed because upright glyphs were
+  // drawn a full ascender too low -- layout stored baselines and GfxRenderer::drawText adds the
+  // ascender itself -- so punctuation had to chase them down the cell. That bug is fixed at the
+  // source, and chasing it now pushes punctuation below the text it belongs to.
   int drawX = cellLeftX + (cellSize - rotatedW) / 2;
-  int drawY = cellTopY + (cellSize - rotatedH) / 2 + cellSize / 3 + extraNudge * 2;
-  if (shiftType == 4) {
-    // Dashes/chōonpu read slightly right of the column axis when purely ink-centered
-    // (device photo, kyokasho) -- bias them a touch left. Tall fonts (Noto) additionally
-    // need one more nudge unit down or the stroke floats high in its cell.
-    drawX -= std::max(1, cellSize / 10);
-    drawY += baselineExcess * 2;
-  }
+  int drawY = cellTopY + (cellSize - rotatedH) / 2;
 
   if (shiftType == 2) {  // closing bracket/quote
     // Corner/lenticular/tortoise brackets (」』】〕) have their rotated ink hugging the
     // right of the em box, so pull them left onto the column axis. Angle brackets 〉》 are
     // symmetric chevrons -- the same pull pushed them visibly LEFT of the column (device
     // photo, 〈夏〉); leave them ink-centered.
-    const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3011 || cp == 0x3015);
-    if (isSquareBracket) {
-      drawX = cellLeftX + (cellSize - rotatedW) / 2 - cellSize / 3;
-    }
-    // +cellSize/4: the closing bracket read high against the Japanese character it closes
-    // (device check, tuned in two steps). After an embedded Latin word the distance is set by
-    // the run layout instead, so that case is tuned separately in VerticalParsedText.
-    const int closingBias = std::max(1, cellSize / 6 + cellSize / 4 + extraNudge * 2);
-    drawY = cellTopY + cellSize - rotatedH + closingBias;
+    // JLREQ: a closing bracket is a half-em glyph occupying the FIRST half of its em box, with
+    // the full em still allocated on the grid. So its ink goes in the cell's leading half --
+    // adjacent to the character it closes, with the slack falling on the far side. Across the
+    // column it sits on the LEFT, mirroring the opening bracket on the right.
+    drawY = cellTopY + (cellSize / 2 - rotatedH) / 2;
+    // Corner/lenticular/tortoise shapes are asymmetric -- their ink hugs one side of the em, so
+    // flushing them to the column's left edge is what puts them on its axis. Round parens and
+    // angle brackets are symmetric chevrons/arcs: flushing those visibly pushes them off-axis, so
+    // they keep the plain ink centring.
+    if (!isSymmetricBracket(cp)) drawX = cellLeftX;
   } else if (shiftType == 3) {  // opening bracket/quote
     // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
     // deep, the bracket read as hanging low/left of the character it opens (device photos with
@@ -2454,28 +2454,18 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     // Round parens and angle brackets stay purely ink-centered: the corner-bracket right
     // shift pushed the paren arc -- and the symmetric 〈《 chevrons (device photo, 〈夏〉) --
     // off the column axis to the RIGHT.
-    const bool inkCentered = (cp == 0xFF08 || cp == 0x3008 || cp == 0x300A);
-    // baselineExcess: tall fonts (Noto) left the opening bracket hanging too high above the
-    // character it opens (kyokasho, baselineExcess 0, is unaffected).
-    // 1/2 -> 3/8 cell: the bracket still read low against the character it opens (device
-    // check). The vertical layout measures this through verticalPunctInkBox(), so the run
-    // and character spacing around it follows automatically.
-    const int openingBias = std::max(1, (cellSize * 3) / 8 + extraNudge + baselineExcess);
-    drawY = cellTopY + cellSize + openingBias;
-    if (!inkCentered) drawX += cellSize / 4;
+    // JLREQ: an opening bracket is a half-em glyph occupying the SECOND half of its em box, so
+    // it sits adjacent to the character it opens, and on the RIGHT of the column across it. The
+    // layout measures the result through verticalPunctInkBox(), so spacing follows automatically.
+    drawY = cellTopY + cellSize / 2 + (cellSize / 2 - rotatedH) / 2;
+    if (!isSymmetricBracket(cp)) drawX = cellLeftX + cellSize - rotatedW;
   }
 
   int minX = cellLeftX;
   int maxX = cellLeftX + cellSize - rotatedW;
-  int minY = cellTopY;
-  int maxY = cellTopY + cellSize * 2;
-  if (shiftType == 2) {
-    minX -= std::max(1, cellSize / 3);
-    minY -= cellSize / 2;
-  }
-  if (shiftType == 3) {
-    maxX += std::max(1, cellSize / 2);
-  }
+  const int minY = cellTopY;
+  // An opening bracket is placed into the following cell on purpose, so the box spans two.
+  const int maxY = cellTopY + cellSize * 2;
   drawX = std::clamp(drawX, minX, maxX);
   drawY = std::clamp(drawY, minY, maxY);
 
@@ -2491,15 +2481,6 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   // Solve for cursor so the rotated bbox starts at (drawX, drawY).
   const int cursorX = (drawX + rotatedW - 1) - glyph->top;
   const int cursorY = drawY - glyph->left;
-
-  // TEMP diagnostics for vertical punctuation tuning (strip with the other telemetry)
-  if (cp == 0x30FC || shiftType == 3) {
-    LOG_DBG("VROT",
-            "cp=%04X shift=%d cell=%d asc=%d pct=%d nudge=%d rotW=%d rotH=%d gTop=%d gLeft=%d cellTopY=%d drawX=%d "
-            "drawY=%d",
-            (unsigned)cp, shiftType, cellSize, ascender, fontPct, extraNudge, rotatedW, rotatedH, glyph->top,
-            glyph->left, cellTopY, drawX, drawY);
-  }
 
   renderCharImpl<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorX, cursorY, black, style);
 }

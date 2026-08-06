@@ -60,7 +60,7 @@ namespace {
 // v104: glyph records are fixed-size (textId) with a per-page text pool appended after
 // the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
 // v105: the header includes the vertical column-spacing setting.
-constexpr uint8_t VSECTION_FILE_VERSION = 105;
+constexpr uint8_t VSECTION_FILE_VERSION = 121;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -604,6 +604,7 @@ bool writePage(Sink& file, const VerticalPage& page) {
     serialization::writePod(file, g.renderKind);
     serialization::writePod(file, g.style);
     serialization::writePod(file, g.emphasis);
+    serialization::writePod(file, g.lineHeadFlush);
     serialization::writePod(file, g.textId);
   }
 
@@ -704,6 +705,7 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
     serialization::readPod(file, g.renderKind);
     serialization::readPod(file, g.style);
     serialization::readPod(file, g.emphasis);
+    serialization::readPod(file, g.lineHeadFlush);
     serialization::readPod(file, g.textId);
     page.glyphs.push_back(g);
   }
@@ -1188,7 +1190,8 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = 1 + sizeof(int) + 2 * sizeof(uint16_t
 }  // namespace
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
-                                           const uint16_t viewportHeight, const uint8_t lineSpacing) {
+                                           const uint16_t viewportHeight, const uint8_t lineSpacing,
+                                           const bool furiganaEnabled) {
   lastBuildDroppedForHeap_ = false;
   // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
   // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
@@ -1239,9 +1242,6 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // XML_ParserCreate's own setup.
   LOG_DBG("VSC", "after readItemContentsToStream: maxAlloc=%u", ESP.getMaxAllocHeap());
 
-  const bool hasRuby = fileContainsRubyTag(tmpHtmlPath);
-  LOG_DBG("VSC", "after fileContainsRubyTag: maxAlloc=%u", ESP.getMaxAllocHeap());
-
   // Resolve image paths relative to the chapter's directory in the EPUB.
   const auto& spineItem = epub->getSpineItem(spineIndex);
   std::string chapterDir;
@@ -1253,15 +1253,31 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
   layout.preallocateStream();
-  const int lineH = renderer.getLineHeight(fontId);
-  // Tight/Normal/Wide use one, two, or four sixths of a line between columns.
+  // Column gap (行間), measured in EMS rather than line heights.
+  //
+  // The em is what the constraint is expressed in: JLREQ 3.3.3 has ruby characters at half the
+  // size of their base, and in vertical writing ruby is drawn in this very gap, beside its base
+  // column. So a gap under 1/2 em guarantees ruby collides with the next column, whatever the
+  // font. Line height is the wrong yardstick for that -- it carries Latin ascent/descent leading
+  // (42px against a 28px em in NotoSansJP here), so the same setting drifted relative to the
+  // ruby it had to clear as soon as the font changed.
+  //
+  // Japanese body text conventionally runs between a half and a full em of line gap, so with
+  // furigana ON the three settings span exactly that range, Tight landing on the half-em minimum
+  // that still fits ruby. (This is why the old code widened every gap in a chapter as soon as it
+  // saw one <ruby> tag: Tight was a quarter em, and ruby never fitted.)
+  //
+  // With furigana OFF nothing is ever drawn in the gap, so the floor does not apply and every
+  // setting drops a quarter em: the columns tighten and more text fits on a page, which is rather
+  // the point of turning it off.
+  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);  // 漢
+  const int emPx = std::max(1, renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0)));
   const int clampedLineSpacing = std::clamp<int>(lineSpacing, 0, 2);
-  const int gapSixths = clampedLineSpacing == 2 ? 4 : clampedLineSpacing + 1;
-  layout.setColumnGapPx(std::max(4, lineH * gapSixths / 6));
-  if (hasRuby) {
-    layout.setColumnGapPx(std::max(4, lineH * (gapSixths + 2) / 6));
-    layout.setRightPaddingPx((lineH / 2) < 2 ? 2 : (lineH / 2));
-  }
+  static constexpr int kGapQuarterEmsWithRuby[] = {2, 3, 4};  // Tight 1/2, Normal 3/4, Wide 1 em
+  static constexpr int kGapQuarterEmsPlain[] = {1, 2, 3};     // Tight 1/4, Normal 1/2, Wide 3/4 em
+  const int gapQuarterEms =
+      furiganaEnabled ? kGapQuarterEmsWithRuby[clampedLineSpacing] : kGapQuarterEmsPlain[clampedLineSpacing];
+  layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
 
   LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
                       viewportHeight);
@@ -1390,7 +1406,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 }
 
 bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                        const uint8_t lineSpacing) {
+                                        const uint8_t lineSpacing, const bool furiganaEnabled) {
   const auto vsectionsDir = epub->getCachePath() + "/vsections";
   Storage.mkdir(vsectionsDir.c_str());
 
@@ -1411,12 +1427,14 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   serialization::writePod(file, viewportWidth);
   serialization::writePod(file, viewportHeight);
   serialization::writePod(file, lineSpacing);
+  const uint8_t furiganaFlag = furiganaEnabled ? 1 : 0;
+  serialization::writePod(file, furiganaFlag);
   const uint16_t pageCountPlaceholder = 0;
   const uint32_t indexOffsetPlaceholder = 0;
   serialization::writePod(file, pageCountPlaceholder);
   serialization::writePod(file, indexOffsetPlaceholder);
 
-  if (!streamParseAndLayout(file, fontId, viewportWidth, viewportHeight, lineSpacing)) {
+  if (!streamParseAndLayout(file, fontId, viewportWidth, viewportHeight, lineSpacing, furiganaEnabled)) {
     file.close();
     Storage.remove(filePath.c_str());
     pageOffsets_.clear();
@@ -1461,7 +1479,7 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
 }
 
 bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                      const uint8_t lineSpacing) {
+                                      const uint8_t lineSpacing, const bool furiganaEnabled) {
   // A missing cache file is the NORMAL case here, not an error: the book-progress counter probes
   // every spine's section on each page turn, and unbuilt chapters simply don't have one yet.
   // openFileForRead would print "File does not exist" per spine per probe -- pure log spam.
@@ -1488,13 +1506,15 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
   int cachedFontId;
   uint16_t cachedWidth, cachedHeight;
   uint8_t cachedLineSpacing;
+  uint8_t cachedFurigana;
   serialization::readPod(file, cachedFontId);
   serialization::readPod(file, cachedWidth);
   serialization::readPod(file, cachedHeight);
   serialization::readPod(file, cachedLineSpacing);
+  serialization::readPod(file, cachedFurigana);
 
   if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight ||
-      cachedLineSpacing != lineSpacing) {
+      cachedLineSpacing != lineSpacing || cachedFurigana != (furiganaEnabled ? 1 : 0)) {
     file.close();
     LOG_DBG("VSC", "Parameter mismatch, clearing cache");
     clearCache();

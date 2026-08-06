@@ -512,6 +512,21 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
   }
 }
 
+int verticalCellBaselineOffset(const GfxRenderer& renderer, const int fontId, const int cellPx) {
+  const int ascender = renderer.getFontAscenderSize(fontId);
+  // String literal, no allocation -- this is called from the pagination path.
+  renderer.ensureSdCardFontReady(fontId, "\xe4\xb8\xad", 0x01);
+  int left = 0, width = 0, top = 0, height = 0;
+  if (!renderer.getGlyphMetrics(fontId, 0x4E2D /* 中 */, static_cast<EpdFontFamily::Style>(0), &left, &width, &top,
+                                &height) ||
+      height <= 0 || height > cellPx * 2) {
+    return ascender;
+  }
+  // getGlyphMetrics reports `top` as the ink top ABOVE the baseline, so centring the ink box in
+  // the cell puts the baseline at (cell - inkHeight)/2 + top below the cell's top edge.
+  return (cellPx - height) / 2 + top;
+}
+
 std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCallback onPageReady, bool isFinalFlush) {
   std::vector<VerticalPage> pages;
   // A break recorded at exactly stream-end (a trailing '\n' in this batch's last run) can never
@@ -527,15 +542,41 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Nothing new to lay out AND nothing left over from a previous non-final call to finalize.
   if (stream_.empty() && !(isFinalFlush && pendingPageValid_)) return pages;
 
+  // Coordinate convention, uniform for every RenderKind: VerticalGlyph::y is the TOP of the
+  // glyph's cell, never a baseline. Baselines are a property of drawing, not of layout, and the
+  // two used to be mixed per kind -- upright glyphs stored cellTop + ascender while the rotated
+  // kinds stored cellTop. Since GfxRenderer::drawText takes a TOP and adds the ascender itself,
+  // the upright ones were drawn a full ascender low, and the constants that compensated for it
+  // (a 3/8-cell "down nudge", a two-cell bottom reserve, `2 * ascender - gt` here) then had to be
+  // tuned by eye against that error. With one convention the ink positions come out of measured
+  // metrics instead: see verticalCellBaselineOffset.
   const int cellPx = std::max(1, charAdvancePx());
   const int columnAdvancePx = cellPx + columnGapPx_;
   const int ascender = renderer_.getFontAscenderSize(fontId_);
-  const int globalDownNudge = std::max(1, (cellPx * 3) / 8);
-  const int bottomReservedPx = std::max(cellPx * 2, ascender + globalDownNudge + cellPx);
-  const int usableHeightPx = std::max(cellPx, static_cast<int>(viewportHeight_) - bottomReservedPx);
-  const uint16_t rowsPerColumn = static_cast<uint16_t>(std::max(1, usableHeightPx / cellPx));
+  // Rows come straight out of the text area's height: as many whole cells as fit.
+  //
+  // The last row's ink hangs a few px below its own cell (baselineInCell + descender exceeds the
+  // cell by ~2px at a 33px cell), and that overhang is left to the margin below the text area,
+  // exactly as ruby is left to the margin beside it (JLREQ Fig 2.37). Reserving it inside the
+  // text area instead used to cost a whole character per column whenever the height divided
+  // evenly: 759px of viewport at a 33px cell is exactly 23 rows, but subtracting a 2px reserve
+  // rounded that down to 22 and left ~31px of dead space at every column's foot.
+  //
+  // The margin below is the reader's screenMargin plus the status bar (see EpubReaderActivity),
+  // so there is room for a few px of ink; the previous formula's own reserve was smaller than
+  // that margin anyway.
+  const int baselineInCellPx = verticalCellBaselineOffset(renderer_, fontId_, cellPx);
+  const uint16_t rowsPerColumn = static_cast<uint16_t>(std::max(1, static_cast<int>(viewportHeight_) / cellPx));
   const int usableWidthPx = std::max(cellPx, static_cast<int>(viewportWidth_) - rightPaddingPx_);
   const uint16_t columnsPerPage = static_cast<uint16_t>(std::max(1, usableWidthPx / columnAdvancePx));
+  // Columns are anchored to the right edge and march leftwards, so whatever width does not divide
+  // evenly into columns piled up as dead space on the LEFT -- up to a full column plus a gap, and
+  // wider than the margin the reader actually set. Spread that remainder across the gaps instead:
+  // the leftmost column then lands on the left margin, both sides match the setting, and the
+  // columns stay evenly spaced. (x stays >= 0: (N-1) * (advance + leftover/(N-1)) <= usable - cell.)
+  const int leftoverPx = std::max(0, usableWidthPx - cellPx - (columnsPerPage - 1) * columnAdvancePx);
+  const int spreadColumnAdvancePx =
+      columnsPerPage > 1 ? columnAdvancePx + leftoverPx / (columnsPerPage - 1) : columnAdvancePx;
 
   // Index into paragraphBreaksBeforeIndex_ of the *next* paragraph start,
   // so we know when we've crossed into a new paragraph and should force a
@@ -550,7 +591,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Snapshot the geometry for box-rect building: finalizePendingPage() runs OUTSIDE this
   // function and must still be able to close an open box on the final page.
   boxGeomCellPx_ = cellPx;
-  boxGeomColumnAdvancePx_ = columnAdvancePx;
+  boxGeomColumnAdvancePx_ = spreadColumnAdvancePx;
   boxGeomUsableWidthPx_ = usableWidthPx;
   boxGeomRowsPerColumn_ = rowsPerColumn;
 
@@ -737,7 +778,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   uint16_t& column = pendingColumn_;
   uint16_t& row = pendingRow_;
 
-  auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - col * columnAdvancePx; };
+  auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - col * spreadColumnAdvancePx; };
 
   // Row where a fresh column starts: 0 normally; inside a styled block, the block's start
   // offset (start-Xem), plus the hanging indent (h-indent-Xem) when the column continues a
@@ -783,7 +824,87 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     }
   };
 
+  // JLREQ 3.1.4, consecutive brackets / commas / full stops / middle dots. Each of these marks
+  // is a half-em glyph occupying one half of its full-em cell, so which halves two neighbours use
+  // decides how much white ends up between their ink:
+  //
+  //   first half (top, in vertical)  - closing brackets, 、。，．
+  //   second half (bottom)           - opening brackets
+  //   centre                         - middle dot ・
+  //
+  // Set solid, a first-half mark followed by a second-half one leaves a WHOLE em of white (the
+  // first's empty tail plus the second's empty head), which the spec reduces to a half em. Every
+  // other combination already lands on its target when set solid, so this one test reproduces the
+  // whole table: 、「 and 」「 close up (figures 3, 4), 」・「 closes up on both sides of the dot
+  // (figure 7), while 。」, ）。, 「『 and ）」 are left alone (figures 1, 2, 5, 6).
+  auto punctEmHalf = [](const uint32_t cp) -> int {  // 0 none, 1 first half, 2 second half, 3 centre
+    if (cp == 0x30FB || cp == 0x00B7) return 3;      // ・
+    switch (Kinsoku::verticalShiftType(cp)) {
+      case 1:
+        return 1;  // 、。，．
+      case 2:
+        return 1;  // closing brackets
+      case 3:
+        return 2;  // opening brackets
+      default:
+        return 0;
+    }
+  };
+  auto applyPunctPairSpacing = [&](const uint32_t cp, const uint16_t columnArg) {
+    if (page.glyphs.empty()) return;
+    const VerticalGlyph& prev = page.glyphs.back();
+    if (prev.column != columnArg || prev.codepoint == 0) return;
+    const int prevHalf = punctEmHalf(prev.codepoint);
+    const int thisHalf = punctEmHalf(cp);
+    if (prevHalf == 0 || thisHalf == 0) return;
+
+    // Every pair in the figures closes up by a half em: 、「 and 」「 go from a full em of white
+    // down to a half (figures 3, 4); 。」, ）。, 「『 and ）」 go from a half em to solid (1, 2, 5,
+    // 6); and 」・「 goes from three quarters to a quarter on each side of the dot (7).
+    int reduction = cellPx / 2;
+
+    // 。and 、 are the exception, because they no longer occupy a whole cell: they end a half em
+    // after their own ink (see commaTighten), so that half em is already gone.
+    //   - an OPENING bracket after them wants exactly that half em -- leave it (figure 3);
+    //   - a CLOSING bracket or another 。/、 is set solid, so take it (figures 1, 2);
+    //   - a middle dot keeps a quarter, so take half of it.
+    if (Kinsoku::verticalShiftType(prev.codepoint) == 1) {
+      if (thisHalf == 2) return;
+      reduction = (thisHalf == 3) ? cellPx / 4 : cellPx / 2;
+    }
+    columnYShift += reduction;
+    shiftColumn = columnArg;
+  };
+
+  // 。and 、 occupy the upper-RIGHT quadrant of their cell in vertical writing. Place them by
+  // their own ink box -- flush to the cell's right edge and to its top -- rather than by shifting
+  // the glyph half a cell, which only approximated it and drifted with the font: these glyphs
+  // are drawn with their ink at the bottom-left of the em, so how far it has to travel depends
+  // entirely on that font's bearings. Returns false when metrics are unavailable.
+  //
+  // centreInHalf picks between the two shapes this is used for:
+  //   。、  - "character advance of full stops and commas is half-width, 1/2 em space after", so
+  //           the mark lives in a HALF-em box at the head of the cell and its ink is centred in
+  //           that box. Pinning the ink to the very top of a full cell instead left about 3/4 em
+  //           of white before the next character.
+  //   small kana - the reference figures put the letter face against the top edge of its box.
+  auto quadrantTopRight = [&](const uint32_t cp, const uint8_t style, const uint16_t col, const uint16_t rowIdx,
+                              const bool centreInHalf, int* gxOut, int* gyOut, int* inkHeightOut = nullptr) -> bool {
+    int gl = 0, gw = 0, gt = 0, gh = 0;
+    if (!renderer_.getGlyphMetrics(fontId_, cp, static_cast<EpdFontFamily::Style>(style), &gl, &gw, &gt, &gh) ||
+        gw <= 0 || gh <= 0) {
+      return false;
+    }
+    // Draw resolves ink left as x + glyph->left, and ink top as (cellTop + baselineInCell) - top.
+    const int inkTopInCell = centreInHalf ? std::max(0, (cellPx / 2 - gh) / 2) : 0;
+    *gxOut = columnLeftX(col) + cellPx - gl - gw;
+    *gyOut = std::max(0, rowIdx * cellPx + inkTopInCell + gt - baselineInCellPx);
+    if (inkHeightOut) *inkHeightOut = inkTopInCell + gh;
+    return true;
+  };
+
   auto placeUprightAt = [&](const PendingChar& pc, uint16_t col, uint16_t rowIdx) {
+    applyPunctPairSpacing(pc.codepoint, col);
     VerticalGlyph g;
     g.codepoint = pc.codepoint;
     g.column = col;
@@ -800,23 +921,48 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       g.x = static_cast<uint16_t>(columnLeftX(col));
       g.y = static_cast<uint16_t>(rowIdx * cellPx);
       g.renderKind = VerticalGlyph::RotatedPunct;
+      // JLREQ: an opening bracket at the LINE HEAD has the half em before it removed -- it is set
+      // flush to the head (tentsuki). Its ink normally occupies the second half of its em so it
+      // sits against the character it opens, which at a line head left a visible half-em hole
+      // above it and started every quoted line lower than its neighbours.
+      //
+      // "Line head" means the first glyph of THIS column, not row 0: a styled block (a CSS indent
+      // or hanging indent) opens its column further down, and dialogue paragraphs -- the ones that
+      // actually begin with 「 -- are typically indented, so a row-0 test missed every one of them.
+      // Checked BEFORE the glyph is pushed, since afterwards the bracket is itself the last glyph.
+      const bool atLineHead = page.glyphs.empty() || page.glyphs.back().column != col;
+      const bool flushOpeningBracket = atLineHead && Kinsoku::verticalShiftType(pc.codepoint) == 3;
+      if (flushOpeningBracket) g.lineHeadFlush = 1;
       pushGlyph(page, g, pc.rubyText);
+      if (flushOpeningBracket) {
+        // The half em it no longer needs comes off the rest of the column.
+        columnYShift += cellPx / 2;
+        shiftColumn = col;
+      }
       return;
     }
 
     if (Kinsoku::isSmallKana(pc.codepoint)) {
-      // Keep small kana in normal row flow to avoid overlap with neighboring
-      // glyphs on fonts where "small" forms still have tall ink boxes.
-      // Apply only a light rightward bias inside the cell.
-      g.x = static_cast<uint16_t>(columnLeftX(col) + std::max(1, cellPx / 8));
-      g.y = static_cast<uint16_t>(rowIdx * cellPx + ascender - std::max(1, cellPx / 8));
+      // Small kana (っゃゅょ, ィ ョ ...) sit in the upper-right of their cell in vertical writing --
+      // the reference figures show the letter face against the TOP edge of its box, not centred in
+      // it. Same measured placement as 。and 、: flush to the cell's right edge and to its top,
+      // from the glyph's own ink box rather than an eighth-of-a-cell bias, since how far the ink
+      // has to travel depends entirely on the font's bearings.
+      int qx = 0, qy = 0;
+      if (quadrantTopRight(pc.codepoint, pc.style, col, rowIdx, /*centreInHalf=*/false, &qx, &qy)) {
+        g.x = static_cast<uint16_t>(qx);
+        g.y = static_cast<uint16_t>(qy);
+      } else {
+        g.x = static_cast<uint16_t>(columnLeftX(col) + std::max(1, cellPx / 8));
+        g.y = static_cast<uint16_t>(rowIdx * cellPx);
+      }
       g.renderKind = VerticalGlyph::Upright;
       pushGlyph(page, g, pc.rubyText);
       return;
     }
 
     int gx = columnLeftX(col);
-    int gy = rowIdx * cellPx + ascender;
+    int gy = rowIdx * cellPx;
     if (pc.codepoint >= '0' && pc.codepoint <= '9') {
       int left = 0, width = 0, top = 0, height = 0;
       if (renderer_.getGlyphMetrics(fontId_, pc.codepoint, static_cast<EpdFontFamily::Style>(pc.style), &left, &width,
@@ -824,15 +970,30 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         gx = columnLeftX(col) + (cellPx - width) / 2 - left - 1;
       }
     }
+    int commaTighten = 0;
     if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
-      // Comma/period: bottom-left → upper-right of the cell.
-      gx += cellPx / 2;
-      gy -= cellPx / 2;
+      // Comma/period: bottom-left of the em -> upper-right of the cell.
+      int qx = 0, qy = 0, inkH = 0;
+      if (quadrantTopRight(pc.codepoint, pc.style, col, rowIdx, /*centreInHalf=*/true, &qx, &qy, &inkH)) {
+        gx = qx;
+        gy = qy;
+        // These marks do not deserve a whole square: they take the height of their own ink plus a
+        // half em of space, and the next character follows. Whatever is left of the cell after
+        // that comes off the rest of the column, so a comma no longer reads as a full blank cell.
+        commaTighten = std::max(0, cellPx - (inkH + cellPx / 2));
+      } else {
+        gx += cellPx / 2;
+        gy = std::max(0, gy - cellPx / 2);
+      }
     }
     g.x = static_cast<uint16_t>(gx);
     g.y = static_cast<uint16_t>(gy);
     g.renderKind = VerticalGlyph::Upright;
     pushGlyph(page, g, pc.rubyText);
+    if (commaTighten > 0) {
+      columnYShift += commaTighten;
+      shiftColumn = col;
+    }
   };
 
   auto placeUpright = [&](const PendingChar& pc) { placeUprightAt(pc, column, row); };
@@ -920,7 +1081,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     g.column = column;
     g.row = row;
     g.x = static_cast<uint16_t>(std::max(0, runX));
-    g.y = static_cast<uint16_t>(row * cellPx + ascender);
+    g.y = static_cast<uint16_t>(row * cellPx);
     g.paragraphIndex = stream_[i0].paragraphIndex;
     g.byteOffset = stream_[i0].byteOffset;
     g.style = stream_[i0].style;
@@ -963,7 +1124,11 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (page.glyphs.empty()) return topYArg;
     const VerticalGlyph& pg = page.glyphs.back();
     if (pg.column != columnArg) return topYArg;
-    int startY = topYArg + std::max(5, cellPx / 4);
+    // Start on the grid; the only reason to push further is a predecessor whose ink actually
+    // reaches into this cell, and that is measured below. The old unconditional quarter-cell
+    // (min 5px) gap was tuned when upright ink was drawn an ascender low, and now just leaves a
+    // visible hole before an embedded Latin word.
+    int startY = topYArg;
     if (pg.renderKind == VerticalGlyph::RotatedPunct) {
       // Brackets are placed from their cell box and hang roughly a full cell lower than that
       // box (「 opens the character in the NEXT cell), so a run that only stepped one cell
@@ -982,7 +1147,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // pg.y already carries this column's slide-up; startY is computed on the raw grid and
         // gets the same slide applied at push time, so compare in raw space.
         const int pgRawY = static_cast<int>(pg.y) + ((pg.column == shiftColumn) ? columnYShift : 0);
-        startY = std::max(startY, pgRawY + ascender - gt + gh);
+        startY = std::max(startY, pgRawY + baselineInCellPx - gt + gh);
       }
     }
     return startY;
@@ -1025,7 +1190,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       const std::string nextChar = encodeCp(next.codepoint);
       renderer_.ensureSdCardFontReady(fontId_, nextChar.c_str(), static_cast<uint8_t>(1u << (next.style & 3)));
       if (renderer_.getGlyphMetrics(fontId_, next.codepoint, nextStyle, &gl, &gw, &gt, &gh) && gh > 0) {
-        offset = 2 * ascender - gt;
+        offset = baselineInCellPx - gt;
       }
     }
     // A miss is worth caching too -- it is the expensive case, and a glyph the font lacks
@@ -1474,13 +1639,31 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     const bool startingNewColumn = page.glyphs.empty() || page.glyphs.back().column < column;
     if (startingNewColumn && !paraBreakJustFired && Kinsoku::isLineStartProhibited(pc.codepoint)) {
       if (!page.glyphs.empty()) {
-        // Oikomi (追い込み): pull this character back into the previous
-        // column as an extra row.
         const VerticalGlyph& prev = page.glyphs.back();
-        placeUprightAt(pc, prev.column, static_cast<uint16_t>(prev.row + 1));
-        idx++;
-        continue;
-      } else if (!pages.empty()) {
+        // Oikomi (追い込み) only while the previous column still has a row spare. Nothing used to
+        // check that, so a small kana or 。 arriving at a FULL column was written one row past the
+        // bottom -- printing over the status bar (device photo: 「…とっく」's small っ).
+        if (prev.row + 1 < rowsPerColumn) {
+          placeUprightAt(pc, prev.column, static_cast<uint16_t>(prev.row + 1));
+          idx++;
+          continue;
+        }
+        // Oidashi (追い出し): no room to pull it back, so send the character BEFORE it forward
+        // instead and let the pair start this column together. Rewinding one step re-places that
+        // character here through the normal path; this character then follows it and no longer
+        // starts a column, so the rule is satisfied without overrunning the grid.
+        //
+        // Only safe when the previous glyph is this batch's previous stream entry -- with
+        // streamed layout the page can carry glyphs from an earlier batch, and those are not
+        // ours to re-place. Falls back to leaving the character where it is otherwise.
+        if (idx > 0 && prev.byteOffset == stream_[idx - 1].byteOffset &&
+            prev.paragraphIndex == stream_[idx - 1].paragraphIndex) {
+          page.glyphs.pop_back();
+          idx--;
+          continue;
+        }
+      }
+      if (page.glyphs.empty() && !pages.empty()) {
         // Page just broke — pull back to the last column of the previous page.
         VerticalPage& prevPage = pages.back();
         // prevPage.glyphs was reserved for exactly one page's grid capacity when it was created;
@@ -1490,17 +1673,26 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // and heap is tight, skip the pull-back (the character starts the next page/column
         // normally instead) rather than risk it -- a minor formatting nicety, not correctness.
         const bool hasHeadroom = prevPage.glyphs.size() < prevPage.glyphs.capacity();
-        if (!prevPage.glyphs.empty() && (hasHeadroom || ESP.getMaxAllocHeap() >= MIN_FREE_HEAP_FOR_RESERVE)) {
+        // Same bound as the in-page pull-back: only while that column has a row spare, or the
+        // character lands past the bottom of the previous page and over its status bar.
+        const bool prevColumnHasRoom = !prevPage.glyphs.empty() && prevPage.glyphs.back().row + 1 < rowsPerColumn;
+        if (prevColumnHasRoom && (hasHeadroom || ESP.getMaxAllocHeap() >= MIN_FREE_HEAP_FOR_RESERVE)) {
           const VerticalGlyph& prev = prevPage.glyphs.back();
           VerticalGlyph g;
           g.codepoint = pc.codepoint;
           g.column = prev.column;
           g.row = static_cast<uint16_t>(prev.row + 1);
           int gx = columnLeftX(prev.column);
-          int gy = g.row * cellPx + ascender;
+          int gy = g.row * cellPx;
           if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
-            gx += cellPx / 2;
-            gy -= cellPx / 2;
+            int qx = 0, qy = 0;
+            if (quadrantTopRight(pc.codepoint, pc.style, prev.column, g.row, /*centreInHalf=*/true, &qx, &qy)) {
+              gx = qx;
+              gy = qy;
+            } else {
+              gx += cellPx / 2;
+              gy = std::max(0, gy - cellPx / 2);
+            }
           }
           g.x = static_cast<uint16_t>(gx);
           g.y = static_cast<uint16_t>(gy);
@@ -1590,9 +1782,8 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
   const int gap = boxGeomColumnAdvancePx_ - boxGeomCellPx_;
   const int padX = std::max(2, gap / 2);
   const int padTop = std::max(2, boxGeomCellPx_ / 6);
-  // The last row's glyph ink reaches ascender+descender past its cell top, plus the renderer's
-  // global down-nudge -- and the reference rendering (Apple Books) leaves roughly a full
-  // character of air below the last line. The bottom-reserved strip has the room.
+  // The reference rendering (Apple Books) leaves roughly a full character of air below a boxed
+  // block's last line, and the box may extend past the text area into the bottom margin.
   const int padBottom = std::max(6, (boxGeomCellPx_ * 5) / 4);
   auto colLeft = [&](const uint16_t c) -> int {
     return boxGeomUsableWidthPx_ - boxGeomCellPx_ - static_cast<int>(c) * boxGeomColumnAdvancePx_;
