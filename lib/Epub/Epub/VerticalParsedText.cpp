@@ -582,15 +582,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   const int baselineInCellPx = baselineNow;
   const uint16_t rowsPerColumn = static_cast<uint16_t>(std::max(1, static_cast<int>(viewportHeight_) / cellPx));
   const int usableWidthPx = std::max(cellPx, static_cast<int>(viewportWidth_) - rightPaddingPx_);
-  const uint16_t columnsPerPage = static_cast<uint16_t>(std::max(1, usableWidthPx / columnAdvancePx));
-  // Columns are anchored to the right edge and march leftwards, so the width that does not divide
-  // evenly into columns would pile up as dead space on the LEFT. Split it between the two margins
-  // instead of adding it to the gaps: the gap is 行間, set in quarter ems by the line-spacing
-  // setting (and by whether furigana needs room in it), so widening it here overrides the very
-  // rule that chose it -- measurably, a 21px gap became 25px against a 29px em.
-  // (x stays >= 0: the leftmost column sits at leftover - leftover/2.)
-  const int leftoverPx = std::max(0, usableWidthPx - cellPx - (columnsPerPage - 1) * columnAdvancePx);
-  const int blockShiftPx = leftoverPx / 2;
+  // N columns occupy N*advance - gap, not N*advance: the last one needs no trailing 行間, so
+  // dividing the width by the advance drops a column whenever the remainder is a cell or more.
+  const uint16_t columnsPerPage = static_cast<uint16_t>(std::max(1, (usableWidthPx + columnGapPx_) / columnAdvancePx));
+  // Whatever is still left over stays on the LEFT, where tategaki's margin belongs -- the text
+  // starts at the right edge. It must not be spread into the gaps: 行間 is set in quarter ems by
+  // the line-spacing setting (and by whether furigana needs room in it), so widening it here
+  // overrides the rule that chose it -- measurably, a 21px gap became 25px against a 29px em.
 
   // Index into paragraphBreaksBeforeIndex_ of the *next* paragraph start,
   // so we know when we've crossed into a new paragraph and should force a
@@ -606,9 +604,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // function and must still be able to close an open box on the final page.
   boxGeomCellPx_ = cellPx;
   boxGeomColumnAdvancePx_ = columnAdvancePx;
-  // Fold the block shift in here: appendBoxRectToPage's colLeft is columnLeftX with the shift
-  // already applied, so the two must not drift apart.
-  boxGeomUsableWidthPx_ = usableWidthPx - blockShiftPx;
+  boxGeomUsableWidthPx_ = usableWidthPx;
   boxGeomRowsPerColumn_ = rowsPerColumn;
 
   // Re-record box markers carried across a batch boundary (see reset()) at index 0.
@@ -756,7 +752,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   uint16_t& column = pendingColumn_;
   uint16_t& row = pendingRow_;
 
-  auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - blockShiftPx - col * columnAdvancePx; };
+  auto columnLeftX = [&](uint16_t col) -> int { return usableWidthPx - cellPx - col * columnAdvancePx; };
 
   // Row where a fresh column starts: 0 normally; inside a styled block, the block's start
   // offset (start-Xem), plus the hanging indent (h-indent-Xem) when the column continues a
