@@ -349,7 +349,8 @@ void EpubReaderActivity::onExit() {
 
   // Record the sub-interval tail of the session; whole minutes were already flushed
   // periodically from loop() (see ReaderUtils::flushReadingStats).
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, epub ? epub->getPath().c_str() : nullptr,
+                                 epub ? epub->getLanguage().c_str() : nullptr);
   // The extractor holds a raw pointer to this activity's epub; drop it before
   // the activity (and the shared_ptr) goes away.
   ImageBlock::setExtractor(nullptr, nullptr);
@@ -487,7 +488,8 @@ void EpubReaderActivity::loop() {
 
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, epub ? epub->getPath().c_str() : nullptr,
+                                 epub ? epub->getLanguage().c_str() : nullptr);
   // A horizontal image is shown immediately in BW; refine it only after the reader
   // leaves the page idle. The render lock keeps this behind the foreground render,
   // and any input above cancels the pending refinement before it can be queued.

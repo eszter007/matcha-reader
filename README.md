@@ -65,7 +65,9 @@ Every book on the card as a cover grid, at any folder depth — covers and title
 
 ### Insights
 
-Reading streak, weekly minutes, books finished, total time, and a monthly calendar of the days you read. Recorded automatically when you close a book; manga counts the same as EPUBs.
+Reading streak, weekly minutes, books finished, total time, and a monthly calendar of the days you read. Recorded automatically as you read — every few minutes, and again when you close a book, so a flat battery or a crash costs you at most the last few minutes rather than the whole session. Manga counts the same as EPUBs.
+
+Time is also recorded per book and per language, so reading can later be broken down by language (Japanese only, say). Nothing on the Insights screen shows that split yet — it is captured now so the history exists when the view lands. EPUBs supply their own language; manga takes it from `--language` at conversion time (see [Converting manga](#converting-manga)). TXT and XTC declare none and count as unknown. Days recorded before this shipped carry no language and can't be attributed retroactively.
 
 <p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights screen with reading streak, stat cards, and monthly calendar"></p>
 
@@ -140,8 +142,11 @@ export GEMINI_API_KEY=$(cat /path/to/gemini.key)
 python3 tools/manga_convert/convert_manga.py \
   --input /path/to/manga.cbz \
   --output-dir /path/to/sd/manga/MangaTitle/ \
+  --language ja \
   --x4
 ```
+
+**Set `--language` on every manga you convert.** It is what lets Insights break your reading time down by language, and most manga sources carry no language of their own — only EPUBs and the minority of CBZs that ship a `ComicInfo.xml` are detected automatically. A book converted without it counts as "unknown" forever: the tag is read at conversion time, so the only fix is to convert again. The [browser tool](https://eszter007.github.io/matcha-reader-tools/) does not write it yet.
 
 Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)); without `ultralytics` it falls back to a white-gutter heuristic. Gemini then reads each panel's text and translates it, both stored in the output so the device needs no network.
 
@@ -154,10 +159,11 @@ Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-det
 | `--no-ocr` | Panel boxes only — no Gemini calls, no text or translations. |
 | `--max-pages N` | Convert the first N pages as a cheap test run. |
 | `--title` / `--author` | Override metadata. Auto-detected from EPUB/CBZ/PDF otherwise. |
+| `--language` | Book language tag (`ja`, `en`, …) — splits your reading stats by language. Auto-detected only from an EPUB or a CBZ with `ComicInfo.xml`; set it by hand for everything else. See the note above. |
 
 `--help` lists the rest. The API key is never written into the output; pass it at runtime.
 
-The result is a folder of page images, panel crops, and three small binaries (`panels.idx`, `panels.dat`, `meta.bin`). Drop it anywhere on the card — the Library finds any folder containing `panels.idx`, at any depth.
+The result is a folder of page images, panel crops, and three small binaries (`panels.idx`, `panels.dat`, `meta.bin` — title, author and language). Drop it anywhere on the card — the Library finds any folder containing `panels.idx`, at any depth.
 
 ---
 

@@ -55,7 +55,7 @@ void TxtReaderActivity::onExit() {
   // Record the sub-interval tail of the session; whole minutes were already flushed
   // periodically from loop(). TXT books never counted toward the reading streak at all
   // before this.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, txt ? txt->getPath().c_str() : nullptr);
 
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -70,7 +70,7 @@ void TxtReaderActivity::onExit() {
 void TxtReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, txt ? txt->getPath().c_str() : nullptr);
 
   if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, txt ? txt->getPath().c_str() : "",
                                         {this, [](void* ctx) { static_cast<TxtReaderActivity*>(ctx)->onGoHome(); }})) {
