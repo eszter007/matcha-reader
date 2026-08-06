@@ -1199,7 +1199,24 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   };
 
   size_t idx = 0;
+  size_t suppressKinsokuUntilIdx = 0;  // watchdog escape hatch: place plainly up to here
+  // Kinsoku oidashi rewinds one character (idx--) so a prohibited pair starts a column together.
+  // Re-running the SAME rewind forever is possible when the re-placed character lands right back
+  // at a column end, and the alternating index defeats a naive "stuck on one index" check -- so
+  // this tracks how far the layout has ever got instead. A live-locked build holds the render
+  // lock and freezes the reader, so this must be a bound, not an assumption.
+  size_t highWaterIdx = 0;
+  int spinsSinceProgress = 0;
   while (idx < stream_.size()) {
+    if (idx > highWaterIdx) {
+      highWaterIdx = idx;
+      spinsSinceProgress = 0;
+    } else if (++spinsSinceProgress > 64) {
+      LOG_ERR("VPT", "Layout made no progress past idx=%u (cp=U+%04X col=%u row=%u rows/col=%u); skipping rule",
+              static_cast<unsigned>(idx), stream_[idx].codepoint, column, row, rowsPerColumn);
+      spinsSinceProgress = 0;
+      suppressKinsokuUntilIdx = highWaterIdx + 1;
+    }
     // Emergency page split: the page's glyph vector is effectively full and the heap has no
     // block for the grow-copy. Close the page at this character boundary and continue on a
     // fresh one (whose vector starts small and grows in fragment-sized steps) -- an early
@@ -1607,15 +1624,46 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           idx++;
           continue;
         }
-        // Oidashi (追い出し): send the character BEFORE it forward instead, so the pair starts
-        // this column together. Rewinding one step re-places it through the normal path.
-        // Only safe when that glyph is this batch's previous stream entry -- streamed layout can
-        // leave glyphs from an earlier batch on the page, which are not ours to re-place.
-        if (idx > 0 && prev.byteOffset == stream_[idx - 1].byteOffset &&
+        // JLREQ 3.1.4: 。/、 and a closing bracket after it SHARE one em -- the mark takes the
+        // first half, the bracket the second. The mark is already set tight (commaTighten), so
+        // the half it left free is exactly where the bracket belongs. No new cell is needed, and
+        // neither character has to leave the column its sentence ended in.
+        if (Kinsoku::verticalShiftType(prev.codepoint) == 1 && Kinsoku::verticalShiftType(pc.codepoint) == 2 &&
+            Kinsoku::needsVerticalRotation(pc.codepoint)) {
+          VerticalGlyph g;
+          g.codepoint = pc.codepoint;
+          g.column = prev.column;
+          g.row = prev.row;
+          g.x = static_cast<uint16_t>(columnLeftX(prev.column));
+          // Raw grid position: pushGlyph applies this column's slide, as every other path expects.
+          g.y = static_cast<uint16_t>(prev.row * cellPx + cellPx / 2);
+          g.renderKind = VerticalGlyph::RotatedPunct;
+          g.paragraphIndex = pc.paragraphIndex;
+          g.byteOffset = pc.byteOffset;
+          g.style = pc.style;
+          g.emphasis = pc.emphasis;
+          pushGlyph(page, g, pc.rubyText);
+          idx++;
+          continue;
+        }
+
+        // Oidashi (追い出し): move the character BEFORE this one forward, so the pair starts this
+        // column together (。」 must not be split across columns).
+        //
+        // Move it EXPLICITLY into this column. Popping it and rewinding idx does not work: the
+        // normal path re-places it in the very cell that was just freed, so the bracket is back at
+        // a column head and asks for the same rewind -- forever. That was a live-locked build
+        // holding the render lock, i.e. a frozen reader.
+        //
+        // Only safe when that glyph is this batch's previous stream entry: streamed layout can
+        // leave glyphs from an earlier batch on the page, which are not ours to re-place. And only
+        // when the pair actually fits, so a short column cannot strand the bracket instead.
+        if (idx > 0 && row + 1 < rowsPerColumn && prev.byteOffset == stream_[idx - 1].byteOffset &&
             prev.paragraphIndex == stream_[idx - 1].paragraphIndex) {
           page.glyphs.pop_back();
-          idx--;
-          continue;
+          placeUprightAt(stream_[idx - 1], column, row);
+          row++;
+          // Fall through: this character is placed normally, now one row below its partner.
         }
       }
       if (page.glyphs.empty() && !pages.empty()) {
