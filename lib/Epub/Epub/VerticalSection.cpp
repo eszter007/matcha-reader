@@ -43,7 +43,7 @@ namespace {
 // v99: merge of upstream 1.5.0. Not a format change -- an invalidation. Upstream reworked the
 // measurement stack the vertical layout is built on (SD kern classes + ligatures, the advance-table
 // fast path, fallback-resolved text font ids), so a v98 cache's stored glyph positions no longer
-// match the cell VerticalTextBlock::computeCellPx re-derives at DRAW time from the new metrics --
+// match the cell verticalCellPx() re-derives at DRAW time from the new metrics --
 // the exact "cell flapping" mismatch that path exists to prevent. The horizontal pipeline
 // invalidates for the same reason (SECTION_FILE_VERSION 51); this one must not be forgotten.
 // v100: image pages carry their source href.
@@ -563,6 +563,52 @@ namespace {
 // The footer lets loadSectionFile() open a chapter by reading only the header + 4 bytes/page,
 // and getPage() seek straight to one page -- pages are never all resident in RAM.
 
+// The glyph and box field lists below are visited by BOTH the writer and the reader, so their
+// order is defined exactly once. Writing and reading used to be two hand-maintained lists in
+// two functions: any divergence desyncs every record in the file, and because the bytes still
+// parse the version stamp gives no warning -- pages just come back scrambled.
+struct PodReadArchive {
+  HalFile& file;
+  template <typename T>
+  void operator()(T& v) {
+    serialization::readPod(file, v);
+  }
+};
+template <typename Sink>
+struct PodWriteArchive {
+  Sink& file;
+  template <typename T>
+  void operator()(const T& v) {
+    serialization::writePod(file, v);
+  }
+};
+
+// G is const on the write side, mutable on the read side.
+template <typename Ar, typename G>
+void visitGlyphFields(Ar& ar, G& g) {
+  ar(g.codepoint);
+  ar(g.column);
+  ar(g.row);
+  ar(g.x);
+  ar(g.y);
+  ar(g.paragraphIndex);
+  ar(g.byteOffset);
+  ar(g.renderKind);
+  ar(g.style);
+  ar(g.emphasis);
+  ar(g.lineHeadFlush);
+  ar(g.textId);
+}
+
+template <typename Ar, typename R>
+void visitBoxFields(Ar& ar, R& r) {
+  ar(r.x);
+  ar(r.y);
+  ar(r.w);
+  ar(r.h);
+  ar(r.edges);
+}
+
 // Sink is HalFile (direct, the historical path) or serialization::BufWriter
 // (whole page into RAM, flushed with one file.write) -- identical byte layout.
 template <typename Sink>
@@ -585,28 +631,10 @@ bool writePage(Sink& file, const VerticalPage& page) {
   // Boxed-block border rects (v63+). Bounded small (a page holds at most a handful of boxes).
   const auto boxCount = static_cast<uint8_t>(std::min<size_t>(page.boxes.size(), 8));
   serialization::writePod(file, boxCount);
-  for (uint8_t bi = 0; bi < boxCount; bi++) {
-    serialization::writePod(file, page.boxes[bi].x);
-    serialization::writePod(file, page.boxes[bi].y);
-    serialization::writePod(file, page.boxes[bi].w);
-    serialization::writePod(file, page.boxes[bi].h);
-    serialization::writePod(file, page.boxes[bi].edges);
-  }
+  PodWriteArchive<Sink> ar{file};
+  for (uint8_t bi = 0; bi < boxCount; bi++) visitBoxFields(ar, page.boxes[bi]);
 
-  for (const auto& g : page.glyphs) {
-    serialization::writePod(file, g.codepoint);
-    serialization::writePod(file, g.column);
-    serialization::writePod(file, g.row);
-    serialization::writePod(file, g.x);
-    serialization::writePod(file, g.y);
-    serialization::writePod(file, g.paragraphIndex);
-    serialization::writePod(file, g.byteOffset);
-    serialization::writePod(file, g.renderKind);
-    serialization::writePod(file, g.style);
-    serialization::writePod(file, g.emphasis);
-    serialization::writePod(file, g.lineHeadFlush);
-    serialization::writePod(file, g.textId);
-  }
+  for (const auto& g : page.glyphs) visitGlyphFields(ar, g);
 
   // Per-page text pool (v104): ruby annotations and run strings, referenced by textId.
   const auto textCount = static_cast<uint16_t>(page.texts.size());
@@ -660,13 +688,10 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
     return ReadResult::Corrupt;
   }
   page.boxes.reserve(boxCount);
+  PodReadArchive ar{file};
   for (uint8_t bi = 0; bi < boxCount; bi++) {
     VerticalBoxRect r;
-    serialization::readPod(file, r.x);
-    serialization::readPod(file, r.y);
-    serialization::readPod(file, r.w);
-    serialization::readPod(file, r.h);
-    serialization::readPod(file, r.edges);
+    visitBoxFields(ar, r);
     page.boxes.push_back(r);
   }
 
@@ -695,18 +720,7 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
 
   for (uint32_t gi = 0; gi < glyphCount; gi++) {
     VerticalGlyph g;
-    serialization::readPod(file, g.codepoint);
-    serialization::readPod(file, g.column);
-    serialization::readPod(file, g.row);
-    serialization::readPod(file, g.x);
-    serialization::readPod(file, g.y);
-    serialization::readPod(file, g.paragraphIndex);
-    serialization::readPod(file, g.byteOffset);
-    serialization::readPod(file, g.renderKind);
-    serialization::readPod(file, g.style);
-    serialization::readPod(file, g.emphasis);
-    serialization::readPod(file, g.lineHeadFlush);
-    serialization::readPod(file, g.textId);
+    visitGlyphFields(ar, g);
     page.glyphs.push_back(g);
   }
 

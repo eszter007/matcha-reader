@@ -1,5 +1,7 @@
 #include "VerticalTextBlock.h"
 
+#include <Utf8.h>
+
 #include <cstring>
 
 #include "GfxRenderer.h"
@@ -8,36 +10,8 @@
 namespace {
 constexpr int kNoStyle = 0;
 
-void encodeCodepoint(uint32_t cp, std::string& out) {
-  if (cp < 0x80) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp < 0x800) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp < 0x10000) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-int computeCellPx(GfxRenderer& renderer, int fontId) {
-  // A cold SD-font advance table measures 漢 as 0 and silently falls back to getLineHeight,
-  // so the draw-time cell no longer matches the layout-time cell and every rotated-punct
-  // nudge lands wrong for that frame (seen live: cell flapping 42 -> 33 on NotoSansJP).
-  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
-  const int cjkAdvance = renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));
-  if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 6;
-  return renderer.getLineHeight(fontId);
-}
-
 void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
-  const int cellPx = computeCellPx(renderer, fontId);
+  const int cellPx = verticalCellPx(renderer, fontId);
   // VerticalGlyph::y is the cell's TOP for every kind (see layoutPages); the draw calls disagree
   // about what they want, so each converts:
   //   drawText              - a TOP, and it adds the ascender itself, so hand it baseline-ascender
@@ -103,27 +77,27 @@ void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int
     }
 
     std::string utf8Char;
-    encodeCodepoint(g.codepoint, utf8Char);
+    utf8AppendCodepoint(g.codepoint, utf8Char);
     // For thin glyphs like 一 (height << ascender), the uniform nudge
     // over-shifts them because their ink sits near the em-box center, not
     // the top. Pull them back by the difference between their top and a
     // full glyph's top so the ink stays visually centered in the column.
     int uprightDy = dy;
     {
-      int gl = 0, gw = 0, gt = 0, gh = 0;
-      if (renderer.getGlyphMetrics(fontId, g.codepoint, static_cast<EpdFontFamily::Style>(g.style), &gl, &gw, &gt,
-                                   &gh) &&
-          gh > 0 && gh < gt) {
+      GlyphInk ink;
+      if (measureGlyphInk(renderer, fontId, g.codepoint, g.style, &ink) && ink.height > 0 && ink.height < ink.top) {
         // Thin glyph (一): ink sits near the middle of the em-box, not the top, so centre its
         // ink in the cell instead of using the common baseline. Same space conversion as
         // uprightTopFor: derive the cell's top, then hand drawText a TOP (it adds the ascender).
-        uprightDy = cellTop + cellPx / 2 + gt - gh / 2 - ascender;
+        uprightDy = cellTop + cellPx / 2 + ink.top - ink.height / 2 - ascender;
       }
     }
     renderer.drawText(fontId, dx, uprightDy, utf8Char.c_str(), black, static_cast<EpdFontFamily::Style>(g.style));
 
     if (g.emphasis) {
-      const int emX = dx + cellPx + std::max(1, cellPx / 12);
+      // Sesame dot beside the character, clear of its cell by the same ink gap a normal pair of
+      // characters leaves.
+      const int emX = dx + cellPx + verticalNominalInkGapPx(renderer, fontId, cellPx);
       const int emY = dy;
       renderer.drawText(fontId, emX, emY, "\xef\xb9\x85", black, static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP));
     }
@@ -143,7 +117,7 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
   const int rubyLineH = (renderer.getLineHeight(rubyFontId) + 1) / 2;
   const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
 
-  const int cellPxLocal = computeCellPx(renderer, fontId);
+  const int cellPxLocal = verticalCellPx(renderer, fontId);
   int prevRubyBottom = -9999;
   uint16_t prevRubyColumn = UINT16_MAX;
 
@@ -169,29 +143,15 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     size_t rubyCharCount = 0;
     int rubyInkRight = 0;
     {
-      size_t ri = 0;
-      while (ri < rubyText.size()) {
-        const auto c0 = static_cast<unsigned char>(rubyText[ri]);
-        size_t len = 1;
-        uint32_t cp = c0;
-        if (c0 >= 0xF0) {
-          len = 4;
-          cp = c0 & 0x07u;
-        } else if (c0 >= 0xE0) {
-          len = 3;
-          cp = c0 & 0x0Fu;
-        } else if (c0 >= 0xC0) {
-          len = 2;
-          cp = c0 & 0x1Fu;
-        }
-        if (ri + len > rubyText.size()) break;
-        for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(rubyText[ri + k]) & 0x3Fu);
-        int gl = 0, gw = 0, gt = 0, gh = 0;
-        if (renderer.getGlyphMetrics(rubyFontId, cp, rubyStyle, &gl, &gw, &gt, &gh) && gw > 0) {
+      const auto* p = reinterpret_cast<const unsigned char*>(rubyText.c_str());
+      while (*p) {
+        const uint32_t cp = utf8NextCodepoint(&p);
+        if (cp == 0) break;
+        GlyphInk ink;
+        if (measureGlyphInk(renderer, rubyFontId, cp, static_cast<uint8_t>(rubyStyle), &ink) && ink.width > 0) {
           // SUP draws the glyph at 50%, so its metrics halve too.
-          rubyInkRight = std::max(rubyInkRight, (gl + gw + 1) / 2);
+          rubyInkRight = std::max(rubyInkRight, (ink.left + ink.width + 1) / 2);
         }
-        ri += len;
         rubyCharCount++;
       }
     }

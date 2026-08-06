@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Logging.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,16 +27,47 @@ namespace {
 // the app is quiescent (largest concurrent needs: SD write buffers and log lines, low KBs). 4KB
 // lets the real page buffer win over fragmenting incremental growth.
 constexpr uint32_t MIN_FREE_HEAP_FOR_RESERVE = 4 * 1024;
+
+// Cushion left for the rest of the app when growing a vector one element at a time, as opposed
+// to MIN_FREE_HEAP_FOR_RESERVE's cushion for a bulk reserve.
+constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;
+
+// Every reserve() here is one contiguous allocation that ABORTS the process on failure under
+// -fno-exceptions, so nothing may be requested without first checking it fits. `margin` is what
+// the request must leave behind for everything else.
+inline bool heapCanAfford(const size_t bytes, const uint32_t margin) { return ESP.getMaxAllocHeap() >= bytes + margin; }
+
+// Make room for one more push_back. Tries a doubling first (amortised growth), then a small
+// linear step at each margin in turn, most protective first -- so a heap too tight for the
+// doubled request still gets a cheap retry instead of latching. Without that fallback one
+// refusal blocked every later element, since the doubled request never shrinks on its own:
+// confirmed on device as the real cause of "sparse" pages.
+// A margin of 0 is a deliberate last resort where the alternative is losing content outright.
+template <typename T, size_t N>
+bool growForOnePush(std::vector<T>& vec, const uint32_t (&margins)[N], const size_t linearStep) {
+  if (vec.size() < vec.capacity()) return true;  // no reallocation needed, cheap path
+  const size_t doubled = vec.capacity() == 0 ? 1 : vec.capacity() * 2;
+  if (heapCanAfford(doubled * sizeof(T), margins[0])) {
+    vec.reserve(doubled);
+    return true;
+  }
+  const size_t linear = vec.capacity() + linearStep;
+  for (size_t i = 0; i < N; i++) {
+    if (heapCanAfford(linear * sizeof(T), margins[i])) {
+      vec.reserve(linear);
+      return true;
+    }
+  }
+  return false;
+}
 }  // namespace
 
 namespace {
 
-// Minimal local UTF-8 decoder. Deliberately self-contained rather than
-// depending on the project's internal utf8NextCodepoint() (used inside
-// GfxRenderer.cpp) since that helper's visibility/signature wasn't
-// confirmed against the exact checkout this lands on -- swap this out for
-// the shared helper if/when it's exposed publicly, to avoid having two
-// implementations to keep in sync.
+// Index-based UTF-8 decode. The shared utf8NextCodepoint() walks a NUL-terminated buffer via a
+// pointer; this bounds every multi-byte sequence against the string's length instead, so a
+// truncated tail in EPUB markup yields one replacement char rather than reading past the end.
+// Encoding has no such difference and uses utf8AppendCodepoint() directly.
 uint32_t decodeUtf8At(const std::string& s, size_t i, size_t* bytesConsumed) {
   const unsigned char c0 = static_cast<unsigned char>(s[i]);
   if (c0 < 0x80) {
@@ -64,24 +96,7 @@ uint32_t decodeUtf8At(const std::string& s, size_t i, size_t* bytesConsumed) {
 
 std::string encodeCp(uint32_t cp) {
   std::string out;
-  if (cp < 0x80) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp < 0x800) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp < 0x10000) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    // Supplementary plane (4-byte). Reachable: rare CJK ideographs like U+23D40 (a Vita
-    // Sexualis gaiji) do occur in Aozora-derived EPUBs; the old 3-byte fallthrough emitted an
-    // invalid sequence for them (high bits truncated into a wrong lead byte).
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
+  utf8AppendCodepoint(cp, out);
   return out;
 }
 
@@ -227,21 +242,39 @@ VerticalParsedText::VerticalParsedText(const GfxRenderer& renderer, int fontId, 
                                        uint16_t viewportHeight)
     : renderer_(renderer), fontId_(fontId), viewportWidth_(viewportWidth), viewportHeight_(viewportHeight) {}
 
-int VerticalParsedText::charAdvancePx() const {
-  // Measure the advance width of a reference CJK character to get the
-  // true em-square size. For CJK fonts this matches advanceY; for
-  // Latin-oriented fonts (NotoSerif) where advanceY includes extra
-  // interline spacing, this gives the correct tighter cell size.
-  // SD fonts measure through their advance table; make sure the reference glyph is in it.
-  // Without this, a freshly loaded SD font (e.g. the JP companion serving as the effective
-  // reader font) measured 漢 as 0 and the cell size fell back to getLineHeight() -- for CJK
-  // fonts that includes interline spacing, blowing cells up from ~1em to ~1.45em (visibly
-  // "very wide" character spacing).
-  renderer_.ensureSdCardFontReady(fontId_, "\xe6\xbc\xa2", 0x01);
-  const int cjkAdvance =
-      renderer_.getTextAdvanceX(fontId_, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));  // 漢
-  if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 6;
-  return renderer_.getLineHeight(fontId_);
+bool measureGlyphInk(const GfxRenderer& renderer, const int fontId, const uint32_t cp, const uint8_t style,
+                     GlyphInk* out) {
+  int left = 0, width = 0, top = 0, height = 0;
+  if (!renderer.getGlyphMetrics(fontId, cp, static_cast<EpdFontFamily::Style>(style), &left, &width, &top, &height)) {
+    return false;
+  }
+  *out = GlyphInk{left, width, top, height};
+  return true;
+}
+
+int verticalCellPx(const GfxRenderer& renderer, const int fontId) {
+  // SD fonts measure through their advance table; make sure the reference glyph is in it. A cold
+  // table measures 漢 as 0, and the getLineHeight fallback includes interline spacing -- cells
+  // jump ~1em -> ~1.45em, and layout and draw disagree for that frame.
+  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
+  const int cjkAdvance = renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));  // 漢
+  if (cjkAdvance > 0) return cjkAdvance;
+  return renderer.getLineHeight(fontId);
+}
+
+int verticalNominalInkGapPx(const GfxRenderer& renderer, const int fontId, const int cellPx) {
+  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
+  GlyphInk ink;
+  if (!measureGlyphInk(renderer, fontId, 0x6F22 /* 漢 */, 0, &ink) || ink.height <= 0 || ink.height > cellPx) return 0;
+  return cellPx - ink.height;
+}
+
+// Record a paragraph boundary before stream index `idx`, ignoring a repeat at the same index --
+// several sources (a source newline, a run boundary, a carried-over trailing break) can each
+// report the same boundary, and a duplicate would open an extra empty column.
+void VerticalParsedText::recordParagraphBreakAt(const size_t idx) {
+  if (!paragraphBreaksBeforeIndex_.empty() && paragraphBreaksBeforeIndex_.back() == idx) return;
+  paragraphBreaksBeforeIndex_.push_back(idx);
 }
 
 void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
@@ -257,7 +290,7 @@ void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
   const size_t needed = stream_.size() + slots;
   if (needed <= stream_.capacity()) return;
   const size_t requestBytes = needed * sizeof(PendingChar);
-  if (ESP.getMaxAllocHeap() < requestBytes + MIN_FREE_HEAP_FOR_RESERVE) {
+  if (!heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
     LOG_ERR("VPT", "Reserve of %u bytes doesn't fit (free=%u); growing incrementally",
             static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
     return;
@@ -269,7 +302,7 @@ void VerticalParsedText::preallocateStream() {
   constexpr size_t STREAM_STABLE_ENTRIES = 512;
   const size_t bytes = STREAM_STABLE_ENTRIES * sizeof(PendingChar);
   if (stream_.capacity() >= STREAM_STABLE_ENTRIES) return;
-  if (ESP.getMaxAllocHeap() >= bytes + MIN_FREE_HEAP_FOR_RESERVE) {
+  if (heapCanAfford(bytes, MIN_FREE_HEAP_FOR_RESERVE)) {
     stream_.reserve(STREAM_STABLE_ENTRIES);
   } else {
     LOG_ERR("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
@@ -279,32 +312,10 @@ void VerticalParsedText::preallocateStream() {
 
 bool VerticalParsedText::canPushStreamChar() {
   if (oom_) return false;
-  if (stream_.size() < stream_.capacity()) return true;  // no reallocation needed, cheap path
-  // Same trap as pushGlyph() in layoutPages(): plain doubling means one failed growth attempt
-  // permanently blocks every later char in this batch (oom_ latches, and the doubled request
-  // never gets smaller on its own) -- confirmed on a real device as the actual cause of "sparse"
-  // pages surviving even after pushGlyph() was fixed, because the text never made it into the
-  // stream for layoutPages() to place in the first place. Fall back to a small linear growth step
-  // before giving up, so a later char (after some other allocation frees up) has a real chance.
-  constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;
+  static constexpr uint32_t MARGINS[] = {SMALL_ALLOC_MARGIN};
   constexpr size_t LINEAR_GROWTH_STEP = 64;  // PendingChar elements; keeps stalled retries cheap
-
-  const size_t doubledCapacity = stream_.capacity() == 0 ? 1 : stream_.capacity() * 2;
-  const size_t doubledBytes = doubledCapacity * sizeof(PendingChar);
-  if (ESP.getMaxAllocHeap() >= doubledBytes + SMALL_ALLOC_MARGIN) {
-    stream_.reserve(doubledCapacity);
-    return true;
-  }
-
-  const size_t linearCapacity = stream_.capacity() + LINEAR_GROWTH_STEP;
-  const size_t linearBytes = linearCapacity * sizeof(PendingChar);
-  if (ESP.getMaxAllocHeap() >= linearBytes + SMALL_ALLOC_MARGIN) {
-    stream_.reserve(linearCapacity);
-    return true;
-  }
-
-  LOG_ERR("VPT", "Low heap (%u bytes, need ~%u) while building vertical text stream; truncating batch",
-          ESP.getMaxAllocHeap(), static_cast<unsigned>(linearBytes));
+  if (growForOnePush(stream_, MARGINS, LINEAR_GROWTH_STEP)) return true;
+  LOG_ERR("VPT", "Low heap (%u bytes) while building vertical text stream; truncating batch", ESP.getMaxAllocHeap());
   oom_ = true;
   everDroppedForHeap_ = true;
   return false;
@@ -331,9 +342,7 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
     // Keep explicit source line breaks as hard vertical column breaks.
     // Tabs are still ignored.
     if (cp == '\n' || cp == '\r') {
-      if (paragraphBreaksBeforeIndex_.empty() || paragraphBreaksBeforeIndex_.back() != stream_.size()) {
-        paragraphBreaksBeforeIndex_.push_back(stream_.size());
-      }
+      recordParagraphBreakAt(stream_.size());
       i += consumed;
       continue;
     }
@@ -364,9 +373,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
   // This is DELIBERATELY independent of continuesPreviousParagraph: the flag comes from a
   // real newline in the source, not from the sink's memory-bound chunking.
   if (pendingTrailingBreak_) {
-    if (paragraphBreaksBeforeIndex_.empty() || paragraphBreaksBeforeIndex_.back() != stream_.size()) {
-      paragraphBreaksBeforeIndex_.push_back(stream_.size());
-    }
+    recordParagraphBreakAt(stream_.size());
     pendingTrailingBreak_ = false;
   }
 
@@ -441,10 +448,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     // into the current column.
     if (baseCps.empty()) {
       for (size_t relIdx : breakBeforeBaseIndex) {
-        const size_t absBreakIdx = stream_.size() + relIdx;  // relIdx is always 0 here
-        if (paragraphBreaksBeforeIndex_.empty() || paragraphBreaksBeforeIndex_.back() != absBreakIdx) {
-          paragraphBreaksBeforeIndex_.push_back(absBreakIdx);
-        }
+        recordParagraphBreakAt(stream_.size() + relIdx);  // relIdx is always 0 here
       }
       continue;
     }
@@ -479,24 +483,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         const size_t rubyStart = rubyCount * k / baseCount;
         const size_t rubyEnd = rubyCount * (k + 1) / baseCount;
         std::string slice;
-        for (size_t r = rubyStart; r < rubyEnd; r++) {
-          const uint32_t rcp = rubyCps[r];
-          if (rcp < 0x80) {
-            slice.push_back(static_cast<char>(rcp));
-          } else if (rcp < 0x800) {
-            slice.push_back(static_cast<char>(0xC0 | (rcp >> 6)));
-            slice.push_back(static_cast<char>(0x80 | (rcp & 0x3F)));
-          } else if (rcp < 0x10000) {
-            slice.push_back(static_cast<char>(0xE0 | (rcp >> 12)));
-            slice.push_back(static_cast<char>(0x80 | ((rcp >> 6) & 0x3F)));
-            slice.push_back(static_cast<char>(0x80 | (rcp & 0x3F)));
-          } else {
-            slice.push_back(static_cast<char>(0xF0 | (rcp >> 18)));
-            slice.push_back(static_cast<char>(0x80 | ((rcp >> 12) & 0x3F)));
-            slice.push_back(static_cast<char>(0x80 | ((rcp >> 6) & 0x3F)));
-            slice.push_back(static_cast<char>(0x80 | (rcp & 0x3F)));
-          }
-        }
+        for (size_t r = rubyStart; r < rubyEnd; r++) utf8AppendCodepoint(rubyCps[r], slice);
         if (!canPushStreamChar()) return;
         stream_.push_back(PendingChar{baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style,
                                       run.emphasis, std::move(slice)});
@@ -504,10 +491,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     }
 
     for (size_t relIdx : breakBeforeBaseIndex) {
-      const size_t absBreakIdx = runStartStreamIndex + relIdx;
-      if (paragraphBreaksBeforeIndex_.empty() || paragraphBreaksBeforeIndex_.back() != absBreakIdx) {
-        paragraphBreaksBeforeIndex_.push_back(absBreakIdx);
-      }
+      recordParagraphBreakAt(runStartStreamIndex + relIdx);
     }
   }
 }
@@ -516,15 +500,13 @@ int verticalCellBaselineOffset(const GfxRenderer& renderer, const int fontId, co
   const int ascender = renderer.getFontAscenderSize(fontId);
   // String literal, no allocation -- this is called from the pagination path.
   renderer.ensureSdCardFontReady(fontId, "\xe4\xb8\xad", 0x01);
-  int left = 0, width = 0, top = 0, height = 0;
-  if (!renderer.getGlyphMetrics(fontId, 0x4E2D /* 中 */, static_cast<EpdFontFamily::Style>(0), &left, &width, &top,
-                                &height) ||
-      height <= 0 || height > cellPx * 2) {
+  GlyphInk ink;
+  if (!measureGlyphInk(renderer, fontId, 0x4E2D /* 中 */, 0, &ink) || ink.height <= 0 || ink.height > cellPx * 2) {
     return ascender;
   }
   // getGlyphMetrics reports `top` as the ink top ABOVE the baseline, so centring the ink box in
   // the cell puts the baseline at (cell - inkHeight)/2 + top below the cell's top edge.
-  return (cellPx - height) / 2 + top;
+  return (cellPx - ink.height) / 2 + ink.top;
 }
 
 std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCallback onPageReady, bool isFinalFlush) {
@@ -545,8 +527,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Coordinate convention, uniform for every RenderKind: VerticalGlyph::y is the TOP of the
   // glyph's cell, never a baseline -- baselines belong to drawing, which converts per draw call
   // (see VerticalTextBlock::drawGlyphs). Ink offsets come from verticalCellBaselineOffset().
-  const int cellPx = std::max(1, charAdvancePx());
+  const int cellPx = std::max(1, verticalCellPx(renderer_, fontId_));
   const int columnAdvancePx = cellPx + columnGapPx_;
+  // What a normal grid-adjacent pair leaves between its ink boxes; off-grid runs match it.
+  const int inkGapPx = verticalNominalInkGapPx(renderer_, fontId_, cellPx);
   const int ascender = renderer_.getFontAscenderSize(fontId_);
   // As many whole cells as the text area's height allows. The last row's ink hangs a few px past
   // its cell; that goes in the margin below (screenMargin + status bar), just as ruby goes in the
@@ -607,7 +591,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   {
     const size_t worstCasePages = stream_.size() / std::max<size_t>(1, columnsPerPage) + 2;
     const size_t requestBytes = worstCasePages * sizeof(VerticalPage);
-    if (ESP.getMaxAllocHeap() >= requestBytes + MIN_FREE_HEAP_FOR_RESERVE) {
+    if (heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
       pages.reserve(worstCasePages);
     } else {
       LOG_ERR("VPT", "Skipping pages reserve (%u bytes doesn't fit, free=%u); growing incrementally",
@@ -621,7 +605,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // memory use during its own relocation). Check the request against free heap every time.
   auto reservePageGlyphs = [&](VerticalPage& p) {
     const size_t requestBytes = glyphsPerPage * sizeof(VerticalGlyph);
-    if (ESP.getMaxAllocHeap() >= requestBytes + MIN_FREE_HEAP_FOR_RESERVE) {
+    if (heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
       p.glyphs.reserve(glyphsPerPage);
       return;
     }
@@ -635,7 +619,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     for (size_t fraction = 2; fraction <= 8; fraction *= 2) {
       const size_t partial = glyphsPerPage / fraction;
       if (partial < 32) break;
-      if (ESP.getMaxAllocHeap() >= (partial * sizeof(VerticalGlyph)) + MIN_FREE_HEAP_FOR_RESERVE) {
+      if (heapCanAfford(partial * sizeof(VerticalGlyph), MIN_FREE_HEAP_FOR_RESERVE)) {
         p.glyphs.reserve(partial);
         LOG_DBG("VPT", "Partial page glyphs reserve: %u/%u elements (maxAlloc=%u)", static_cast<unsigned>(partial),
                 static_cast<unsigned>(glyphsPerPage), ESP.getMaxAllocHeap());
@@ -692,57 +676,19 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       // slides it down (ink that leaves its own cell, e.g. the low ellipsis dot stack).
       g.y = static_cast<uint16_t>(std::max(0, static_cast<int>(g.y) - columnYShift));
     }
-    if (glyphs.size() < glyphs.capacity()) {
+    // Tiers, most protective first. The 4K tier: device evidence (450+ page chapter) showed
+    // maxAlloc dips bottoming at 14324 while the linear request sat at ~9216 -- the 8K margin
+    // missed by 12 bytes, dropped glyphs, and the stale mark re-indexed the chapter on every
+    // open. The 0 tier: at that point the margin protects only allocations that fail gracefully
+    // and retry (font advance tables, staging buffers, the next page's reserve), while a dropped
+    // glyph is a character permanently missing from the page.
+    static constexpr uint32_t MARGINS[] = {SMALL_ALLOC_MARGIN, 4 * 1024, 0};
+    constexpr size_t LINEAR_GROWTH_STEP = 16;  // elements; keeps a stalled page's retries cheap
+    if (growForOnePush(glyphs, MARGINS, LINEAR_GROWTH_STEP)) {
       glyphs.push_back(g);
       return true;
     }
-    constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;  // headroom for the rest of the app, not the reserve() margin
-    constexpr size_t LINEAR_GROWTH_STEP = 16;          // elements; keeps a stalled page's retries cheap
-
-    const size_t doubledCapacity = glyphs.capacity() == 0 ? 1 : glyphs.capacity() * 2;
-    const size_t doubledBytes = doubledCapacity * sizeof(VerticalGlyph);
-    if (ESP.getMaxAllocHeap() >= doubledBytes + SMALL_ALLOC_MARGIN) {
-      glyphs.reserve(doubledCapacity);
-      glyphs.push_back(g);
-      return true;
-    }
-
-    const size_t linearCapacity = glyphs.capacity() + LINEAR_GROWTH_STEP;
-    const size_t linearBytes = linearCapacity * sizeof(VerticalGlyph);
-    if (ESP.getMaxAllocHeap() >= linearBytes + SMALL_ALLOC_MARGIN) {
-      glyphs.reserve(linearCapacity);
-      glyphs.push_back(g);
-      return true;
-    }
-
-    // Last resort before CONTENT LOSS: accept half the margin. Device evidence (whole-book
-    // chapter, 450+ pages): maxAlloc dips bottomed at 14324/17396 while linearBytes sat at
-    // ~9216 -- the 8K margin missed by 12 bytes, dropped glyphs, and the stale-mark then
-    // re-indexed the chapter on every open. 4K clears every observed dip; briefly dipping
-    // into the safety margin for a block that the page flush frees moments later is strictly
-    // better than losing content and looping the rebuild.
-    constexpr uint32_t LINEAR_LAST_RESORT_MARGIN = 4 * 1024;
-    if (ESP.getMaxAllocHeap() >= linearBytes + LINEAR_LAST_RESORT_MARGIN) {
-      glyphs.reserve(linearCapacity);
-      glyphs.push_back(g);
-      return true;
-    }
-
-    // Final zero-margin attempt before CONTENT LOSS. At this point the margin no longer
-    // shields anything that outranks the text itself: the allocations it protects (font
-    // advance tables, staging buffers, the next page's reserve) all fail gracefully and
-    // retry later, while a dropped glyph is a character permanently missing from the page.
-    // Device evidence across three instrumented whole-book builds: every observed drop
-    // burst (need 8064 @ 11764 free, 10368 @ 10740 and even 14324, 11736 @ 12788) had the
-    // block itself available and died only on the margin check.
-    if (ESP.getMaxAllocHeap() >= linearBytes) {
-      glyphs.reserve(linearCapacity);
-      glyphs.push_back(g);
-      return true;
-    }
-
-    LOG_ERR("VPT", "Low heap (%u bytes, need ~%u); dropping glyph", ESP.getMaxAllocHeap(),
-            static_cast<unsigned>(linearBytes));
+    LOG_ERR("VPT", "Low heap (%u bytes); dropping glyph", ESP.getMaxAllocHeap());
     everDroppedForHeap_ = true;
     return false;
   };
@@ -862,16 +808,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   //   small kana - letter face against the top edge of its box
   auto quadrantTopRight = [&](const uint32_t cp, const uint8_t style, const uint16_t col, const uint16_t rowIdx,
                               const bool centreInHalf, int* gxOut, int* gyOut, int* inkHeightOut = nullptr) -> bool {
-    int gl = 0, gw = 0, gt = 0, gh = 0;
-    if (!renderer_.getGlyphMetrics(fontId_, cp, static_cast<EpdFontFamily::Style>(style), &gl, &gw, &gt, &gh) ||
-        gw <= 0 || gh <= 0) {
-      return false;
-    }
+    GlyphInk ink;
+    if (!measureGlyphInk(renderer_, fontId_, cp, style, &ink) || ink.width <= 0 || ink.height <= 0) return false;
     // Draw resolves ink left as x + glyph->left, and ink top as (cellTop + baselineInCell) - top.
-    const int inkTopInCell = centreInHalf ? std::max(0, (cellPx / 2 - gh) / 2) : 0;
-    *gxOut = columnLeftX(col) + cellPx - gl - gw;
-    *gyOut = std::max(0, rowIdx * cellPx + inkTopInCell + gt - baselineInCellPx);
-    if (inkHeightOut) *inkHeightOut = inkTopInCell + gh;
+    const int inkTopInCell = centreInHalf ? std::max(0, (cellPx / 2 - ink.height) / 2) : 0;
+    *gxOut = columnLeftX(col) + cellPx - ink.left - ink.width;
+    *gyOut = std::max(0, rowIdx * cellPx + inkTopInCell + ink.top - baselineInCellPx);
+    if (inkHeightOut) *inkHeightOut = inkTopInCell + ink.height;
     return true;
   };
 
@@ -927,10 +870,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     int gx = columnLeftX(col);
     int gy = rowIdx * cellPx;
     if (pc.codepoint >= '0' && pc.codepoint <= '9') {
-      int left = 0, width = 0, top = 0, height = 0;
-      if (renderer_.getGlyphMetrics(fontId_, pc.codepoint, static_cast<EpdFontFamily::Style>(pc.style), &left, &width,
-                                    &top, &height)) {
-        gx = columnLeftX(col) + (cellPx - width) / 2 - left - 1;
+      GlyphInk ink;
+      if (measureGlyphInk(renderer_, fontId_, pc.codepoint, pc.style, &ink)) {
+        gx = columnLeftX(col) + (cellPx - ink.width) / 2 - ink.left;
       }
     }
     int commaTighten = 0;
@@ -969,27 +911,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Exclamation/question marks that books put in tate-chu-yoko pairs (!? / !!).
   // Halfwidth only: fullwidth ！？ already render upright as normal CJK cells.
   auto isBangOrQuestion = [](uint32_t cp) { return cp == '!' || cp == '?'; };
-  auto encodeDigitUtf8 = [](uint32_t cp, std::string& out) {
-    if (cp < 0x80) {
-      out.push_back(static_cast<char>(cp));
-    } else if (cp < 0x800) {
-      out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    } else if (cp < 0x10000) {
-      out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-      out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    }
-  };
-
   // Place a two-character tate-chu-yoko run (a 2-digit number like 26, or a
   // !?/!! pair) upright in a single cell, ink-centered on the column, and
   // advance row/column past it. Shared by the digit and punctuation-pair
   // branches in the loop below.
   auto placeTcyPairAt = [&](size_t i0) {
     std::string runUtf8;
-    encodeDigitUtf8(stream_[i0].codepoint, runUtf8);
-    encodeDigitUtf8(stream_[i0 + 1].codepoint, runUtf8);
+    utf8AppendCodepoint(stream_[i0].codepoint, runUtf8);
+    utf8AppendCodepoint(stream_[i0 + 1].codepoint, runUtf8);
     // Measure with the pair's ACTUAL style -- rendered with g.style, and bold digits are
     // wider, so an unstyled measurement mis-centers the pair in its cell.
     const auto tcyStyle = static_cast<EpdFontFamily::Style>(stream_[i0].style);
@@ -1009,7 +938,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       if (renderer_.getGlyphMetrics(fontId_, cpFirst, tcyStyle, &l1, &w1, &t1, &h1) &&
           renderer_.getGlyphMetrics(fontId_, cpLast, tcyStyle, &lN, &wN, &tN, &hN)) {
         std::string lastUtf8;
-        encodeDigitUtf8(cpLast, lastUtf8);
+        utf8AppendCodepoint(cpLast, lastUtf8);
         const int lastAdvance = renderer_.getRenderAdvanceX(fontId_, lastUtf8.c_str(), tcyStyle);
         // Ink spans pen+l1 .. pen+(runWidthPx-lastAdvance)+lN+wN.
         const int inkWidth = (runWidthPx - lastAdvance + lN + wN) - l1;
@@ -1020,8 +949,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           // -max(4, cellPx/4) was tuned on one photo/font (Kyokasho, 「築26年」) and
           // over-corrected elsewhere -- device photo: 「10年」 sat a quarter cell LEFT of the
           // column in Mincho. Measure the 中 reference glyph's ink center at this size/style
-          // and use its delta from the cell center, clamped so a metrics outlier can't fling
-          // the pair off-axis. Falls back to plain ink centering when metrics are unavailable.
+          // and use its delta from the cell center. A well-formed full-width glyph cannot be
+          // off-centre by more than its own side bearing, so that bounds the delta and a metrics
+          // outlier can't fling the pair off-axis.
+          // Falls back to plain ink centering when metrics are unavailable.
           int cjkDelta = 0;
           int kl = 0, kw = 0, kt = 0, kh = 0;
           // String literal, no allocation -- this sits in the pagination path (review finding:
@@ -1029,7 +960,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           renderer_.ensureSdCardFontReady(fontId_, "\xe4\xb8\xad", tcyStyleBit);
           if (renderer_.getGlyphMetrics(fontId_, 0x4E2D /* 中 */, tcyStyle, &kl, &kw, &kt, &kh) && kw > 0) {
             cjkDelta = (kl + kw / 2) - cellPx / 2;
-            const int clampPx = std::max(2, cellPx / 8);
+            const int clampPx = std::max(1, (cellPx - kw) / 2);
             if (cjkDelta > clampPx) cjkDelta = clampPx;
             if (cjkDelta < -clampPx) cjkDelta = -clampPx;
           }
@@ -1097,17 +1028,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       if (renderer_.verticalPunctInkBox(fontId_, pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style),
                                         static_cast<int>(pg.y), cellPx, Kinsoku::verticalShiftType(pg.codepoint),
                                         &inkTop, &inkHeight)) {
-        startY = std::max(startY, inkTop + inkHeight + std::max(3, cellPx / 8));
+        startY = std::max(startY, inkTop + inkHeight + inkGapPx);
       }
     } else if (pg.renderKind == VerticalGlyph::Upright && pg.codepoint != 0) {
-      int gl = 0, gw = 0, gt = 0, gh = 0;
-      if (renderer_.getGlyphMetrics(fontId_, pg.codepoint, static_cast<EpdFontFamily::Style>(pg.style), &gl, &gw, &gt,
-                                    &gh) &&
-          gh > 0) {
+      GlyphInk ink;
+      if (measureGlyphInk(renderer_, fontId_, pg.codepoint, pg.style, &ink) && ink.height > 0) {
         // pg.y already carries this column's slide-up; startY is computed on the raw grid and
         // gets the same slide applied at push time, so compare in raw space.
         const int pgRawY = static_cast<int>(pg.y) + ((pg.column == shiftColumn) ? columnYShift : 0);
-        startY = std::max(startY, pgRawY + baselineInCellPx - gt + gh);
+        startY = std::max(startY, pgRawY + baselineInCellPx - ink.top + ink.height);
       }
     }
     return startY;
@@ -1144,13 +1073,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         offset = inkTop;
       }
     } else {
-      int gl = 0, gw = 0, gt = 0, gh = 0;
       // Metrics for a glyph the SD font has not paged in yet come back empty, which silently
       // disabled the tail allowance; page the one character in first.
       const std::string nextChar = encodeCp(next.codepoint);
       renderer_.ensureSdCardFontReady(fontId_, nextChar.c_str(), static_cast<uint8_t>(1u << (next.style & 3)));
-      if (renderer_.getGlyphMetrics(fontId_, next.codepoint, nextStyle, &gl, &gw, &gt, &gh) && gh > 0) {
-        offset = baselineInCellPx - gt;
+      GlyphInk ink;
+      if (measureGlyphInk(renderer_, fontId_, next.codepoint, next.style, &ink) && ink.height > 0) {
+        offset = baselineInCellPx - ink.top;
       }
     }
     // A miss is worth caching too -- it is the expensive case, and a glyph the font lacks
@@ -1162,7 +1091,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // Rows the run occupies: enough that the next character's ink clears the run's, no more.
   auto rotatedRunRows = [&](const int startY, const int inkWidthPx, const uint16_t rowArg,
                             const int nextInkOffset) -> uint16_t {
-    const int intrusion = (nextInkOffset >= 0) ? std::max(0, nextInkOffset - 2) : 0;
+    const int intrusion = (nextInkOffset >= 0) ? nextInkOffset : 0;
     const int endRow = static_cast<int>(std::ceil(static_cast<double>(startY + inkWidthPx - intrusion) / cellPx));
     return static_cast<uint16_t>(std::max(1, endRow - static_cast<int>(rowArg)));
   };
@@ -1179,10 +1108,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (c0 >= 0xC0 && lastChar.size() >= 2) {
       lastCp = static_cast<uint32_t>(c0 & 0x1F) << 6 | (static_cast<unsigned char>(lastChar[1]) & 0x3F);
     }
-    int gl = 0, gw = 0, gt = 0, gh = 0;
-    if (!renderer_.getGlyphMetrics(fontId_, lastCp, style, &gl, &gw, &gt, &gh) || gw <= 0) return advanceWidth;
+    GlyphInk ink;
+    if (!measureGlyphInk(renderer_, fontId_, lastCp, static_cast<uint8_t>(style), &ink) || ink.width <= 0) {
+      return advanceWidth;
+    }
     const int lastAdvance = renderer_.getRenderAdvanceX(fontId_, lastChar.c_str(), style);
-    return advanceWidth - std::max(0, lastAdvance - (gl + gw));
+    return advanceWidth - std::max(0, lastAdvance - (ink.left + ink.width));
   };
 
   // Take up the cell-rounding leftover after a run: the rest of the column slides up by it, so
@@ -1191,7 +1122,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
                             const int nextInkOffset) {
     if (nextInkOffset < 0 || rowAfter >= rowsPerColumn) return;
     const int nextGridInkTop = rowAfter * cellPx + nextInkOffset;
-    const int slack = nextGridInkTop - (startY + inkWidthPx) - std::max(3, cellPx / 8);
+    const int slack = nextGridInkTop - (startY + inkWidthPx) - inkGapPx;
     if (slack > 0) {
       columnYShift += slack;
       shiftColumn = columnArg;
@@ -1354,7 +1285,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       if (digitCount > 2) {
         std::string runUtf8;
         for (size_t i = idx; i < digitEnd; i++) {
-          encodeDigitUtf8(stream_[i].codepoint, runUtf8);
+          utf8AppendCodepoint(stream_[i].codepoint, runUtf8);
         }
 
         // Render-truth measurement with the run's ACTUAL style: getRenderAdvanceX resolves
@@ -1614,7 +1545,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // order, so the last glyph sitting in an earlier column (or an empty page) means this
     // character would be the column's first.
     const bool startingNewColumn = page.glyphs.empty() || page.glyphs.back().column < column;
-    if (startingNewColumn && !paraBreakJustFired && Kinsoku::isLineStartProhibited(pc.codepoint)) {
+    if (startingNewColumn && !paraBreakJustFired && idx >= suppressKinsokuUntilIdx &&
+        Kinsoku::isLineStartProhibited(pc.codepoint)) {
       if (!page.glyphs.empty()) {
         const VerticalGlyph& prev = page.glyphs.back();
         // Oikomi (追い込み) only while the previous column has a row spare -- otherwise it writes
@@ -1742,9 +1674,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           renderer_.verticalPunctInkBox(fontId_, pc.codepoint, static_cast<EpdFontFamily::Style>(pc.style),
                                         placedRow * cellPx, cellPx, Kinsoku::verticalShiftType(pc.codepoint), &inkTop,
                                         &inkHeight)) {
-        // Half a cell of clearance, not the usual eighth: the dots sit low in their cell and
-        // still read tight against the next character at the nominal distance (device check).
-        const int deficit = (inkTop + inkHeight + std::max(3, cellPx / 2)) - (row * cellPx + nextInkOffset);
+        // The dots sit low in their cell, so close the resulting overlap down to the same ink
+        // gap a normal pair of characters leaves.
+        const int deficit = (inkTop + inkHeight + inkGapPx) - (row * cellPx + nextInkOffset);
         if (deficit > 0) {
           columnYShift -= deficit;
           shiftColumn = column;
@@ -1782,11 +1714,13 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
                                              const bool openLeft, const bool openRight) const {
   if (boxGeomCellPx_ <= 0 || activeBlock_.borderEdges == 0) return;
   const int gap = boxGeomColumnAdvancePx_ - boxGeomCellPx_;
+  // Sideways: the border sits on the column axis, i.e. halfway across the gap it runs in.
+  // Lengthwise: the same half-gap at the head, and a full character of air at the foot -- the
+  // reference rendering (Apple Books) sets the last line one character clear of the rule. The
+  // box may extend past the text area into the bottom margin.
   const int padX = std::max(2, gap / 2);
-  const int padTop = std::max(2, boxGeomCellPx_ / 6);
-  // The reference rendering (Apple Books) leaves roughly a full character of air below a boxed
-  // block's last line, and the box may extend past the text area into the bottom margin.
-  const int padBottom = std::max(6, (boxGeomCellPx_ * 5) / 4);
+  const int padTop = padX;
+  const int padBottom = boxGeomCellPx_;
   auto colLeft = [&](const uint16_t c) -> int {
     return boxGeomUsableWidthPx_ - boxGeomCellPx_ - static_cast<int>(c) * boxGeomColumnAdvancePx_;
   };

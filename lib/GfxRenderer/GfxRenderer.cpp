@@ -2387,9 +2387,12 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   // when rotated from proportional fonts. Render a centered vertical dot stack
   // directly in the cell to keep stable spacing and avoid overlaps.
   if (cp == 0x2026 || cp == 0x2025) {
+    // Three dots (two for U+2025) evenly spaced across the em, each filling half its slot --
+    // the pitch and the ink both follow from the em, with no separately chosen dot size.
     const int dotCount = (cp == 0x2026) ? 3 : 2;
-    const int dotSize = std::max(1, cellSize / 10);
-    const int gap = std::max(1, cellSize / 10);
+    const int pitch = std::max(2, cellSize / 3);
+    const int dotSize = std::max(1, pitch / 2);
+    const int gap = pitch - dotSize;
     const int totalH = dotCount * dotSize + (dotCount - 1) * gap;
     // Centred in its cell, like the upright glyphs around it.
     const int startY = cellTopY + (cellSize - totalH) / 2;

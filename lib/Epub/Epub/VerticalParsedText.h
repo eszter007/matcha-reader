@@ -6,13 +6,40 @@
 
 class GfxRenderer;
 
+// --- Shared cell metrics -------------------------------------------------------------------
+// Layout and drawing MUST agree on every one of these -- the layout paginates with them, the
+// draw positions ink with them -- or the mismatch accumulates down a column and the last row
+// lands on the status bar. They live here, not in either caller, so there is one definition.
+
+// A glyph's ink box relative to its origin, as GfxRenderer::getGlyphMetrics reports it: `top` is
+// the ink top ABOVE the baseline, `left` the left side bearing. Bundled because vertical layout
+// probes glyph ink constantly and four out-params per call buried the geometry in boilerplate.
+struct GlyphInk {
+  int left = 0;
+  int width = 0;
+  int top = 0;
+  int height = 0;
+};
+// False when the font has no such glyph (or it is blank), in which case `out` is untouched --
+// every caller has a metrics-free fallback, since an SD font may not be resident yet.
+bool measureGlyphInk(const GfxRenderer& renderer, int fontId, uint32_t cp, uint8_t style, GlyphInk* out);
+
+// The kihon-hanmen cell: one em, measured as the advance of the reference full-width glyph 漢
+// (advanceY would include interline spacing on Latin-oriented fonts). JLREQ sets solid, so the
+// cell IS the em -- inter-character air comes from the line-gap setting, never from padding here.
+// Falls back to the line height when the font has no such advance.
+int verticalCellPx(const GfxRenderer& renderer, int fontId);
+
+// The gap a grid-adjacent pair of full-width characters leaves between their ink boxes, measured
+// as the reference glyph's unused cell height. Used wherever something off-grid (a rotated Latin
+// run, a bracket, an ellipsis) must clear the character after it: matching this keeps that
+// spacing indistinguishable from the surrounding text instead of inventing a fraction of a cell.
+int verticalNominalInkGapPx(const GfxRenderer& renderer, int fontId, int cellPx);
+
 // Where a glyph's baseline sits inside its cell, measured down from the cell's top: the offset
 // that centres the reference CJK glyph's ink box (中 -- full-width, even bearings, the same
 // reference the tate-chu-yoko centring uses). Falls back to the font ascender when metrics are
 // unavailable, e.g. an SD font not yet resident.
-//
-// Layout and drawing MUST agree here -- the layout paginates with it, the draw positions ink with
-// it -- or the mismatch accumulates down a column and the last row lands on the status bar.
 int verticalCellBaselineOffset(const GfxRenderer& renderer, int fontId, int cellPx);
 
 // A single positioned glyph cell within a vertically-laid-out page.
@@ -365,5 +392,5 @@ class VerticalParsedText {
   // crashed a real device).
   void reserveStreamFor(size_t utf8Bytes);
 
-  int charAdvancePx() const;
+  void recordParagraphBreakAt(size_t idx);
 };
