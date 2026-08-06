@@ -1253,23 +1253,11 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
   layout.preallocateStream();
-  // Column gap (行間), measured in EMS rather than line heights.
-  //
-  // The em is what the constraint is expressed in: JLREQ 3.3.3 has ruby characters at half the
-  // size of their base, and in vertical writing ruby is drawn in this very gap, beside its base
-  // column. So a gap under 1/2 em guarantees ruby collides with the next column, whatever the
-  // font. Line height is the wrong yardstick for that -- it carries Latin ascent/descent leading
-  // (42px against a 28px em in NotoSansJP here), so the same setting drifted relative to the
-  // ruby it had to clear as soon as the font changed.
-  //
-  // Japanese body text conventionally runs between a half and a full em of line gap, so with
-  // furigana ON the three settings span exactly that range, Tight landing on the half-em minimum
-  // that still fits ruby. (This is why the old code widened every gap in a chapter as soon as it
-  // saw one <ruby> tag: Tight was a quarter em, and ruby never fitted.)
-  //
-  // With furigana OFF nothing is ever drawn in the gap, so the floor does not apply and every
-  // setting drops a quarter em: the columns tighten and more text fits on a page, which is rather
-  // the point of turning it off.
+  // Column gap (行間) in EMS -- the unit the constraint is stated in. Ruby is half an em (JLREQ
+  // 3.3.3) and is drawn in this gap beside its base column, so with furigana ON the floor is half
+  // an em, and the settings span the half-to-full em Japanese body text conventionally uses. With
+  // furigana OFF nothing is drawn there, so every setting tightens by a quarter em. (Line height
+  // would be the wrong yardstick: it carries Latin leading, 42px against a 28px em here.)
   renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);  // 漢
   const int emPx = std::max(1, renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0)));
   const int clampedLineSpacing = std::clamp<int>(lineSpacing, 0, 2);

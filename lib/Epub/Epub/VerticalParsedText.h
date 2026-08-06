@@ -6,21 +6,13 @@
 
 class GfxRenderer;
 
-// Where a glyph's baseline sits inside its cell, measured down from the cell's top.
+// Where a glyph's baseline sits inside its cell, measured down from the cell's top: the offset
+// that centres the reference CJK glyph's ink box (中 -- full-width, even bearings, the same
+// reference the tate-chu-yoko centring uses). Falls back to the font ascender when metrics are
+// unavailable, e.g. an SD font not yet resident.
 //
-// Replaces a hardcoded "global down nudge" of 3/8 of a cell that used to be added to every glyph
-// at draw time. Measured on device (33px cell, ascender 34, nudge 12) that constant put CJK ink at
-// cellTop+19..+47 -- most of a half-cell low, hanging 17px past its own cell. Harmless mid-column,
-// where rows overlap slightly by design, but it opened a gap at the top of every page and drove
-// the last row's ink into the status bar, and it could not respond to font or size.
-//
-// Instead of a fraction, measure: centre the reference CJK glyph's ink box in the cell. 中 is the
-// same reference the tate-chu-yoko centring already uses -- full-width with even bearings, so its
-// ink box represents the column. Falls back to the plain font ascender when metrics aren't
-// available (e.g. an SD font not yet resident), which is the placement this had before the nudge.
-//
-// Layout and drawing MUST agree here: the layout sizes the bottom reserve from it and the draw
-// positions ink with it, so a mismatch shows up as text creeping into the status bar.
+// Layout and drawing MUST agree here -- the layout paginates with it, the draw positions ink with
+// it -- or the mismatch accumulates down a column and the last row lands on the status bar.
 int verticalCellBaselineOffset(const GfxRenderer& renderer, int fontId, int cellPx);
 
 // A single positioned glyph cell within a vertically-laid-out page.
@@ -54,9 +46,8 @@ struct VerticalGlyph {
   uint8_t renderKind = Upright;
   uint8_t style = 0;      // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
   bool emphasis = false;  // text-emphasis (sesame dots beside character)
-  // An opening bracket that starts its column: JLREQ deletes the half em before it and sets it
-  // flush to the line head (tentsuki). Decided during layout -- which knows where columns start,
-  // including indented ones -- and applied when drawing.
+  // Opening bracket starting its column: set flush to the line head (tentsuki), the half em
+  // before it deleted. Decided in layout, which knows where columns start (indents included).
   uint8_t lineHeadFlush = 0;
   // Index into the owning VerticalPage's texts pool: the run string for
   // RotatedRun/UprightRun glyphs, the furigana/ruby annotation (UTF-8) for

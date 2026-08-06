@@ -1557,11 +1557,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
 
-  // The status bar is furniture, not margin: it occupies its own height AND the reader's margin
-  // still belongs between it and the text. max() made the two compete, so any screenMargin smaller
-  // than the bar (the default 5 vs a 19px bar) was discarded and the last line ended up flush
-  // against it -- measured on device at a 1px gap. Top gets bezel + screenMargin, so with max()
-  // the same setting was honoured at the top of the page and ignored at the bottom.
+  // The status bar is furniture, not margin: it takes its own height AND the reader's margin
+  // still belongs between it and the text, so these add rather than compete.
   // reserves space for automatic page turn indicator when no status bar or progress bar only
   if (automaticPageTurnActive &&
       (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight())) {

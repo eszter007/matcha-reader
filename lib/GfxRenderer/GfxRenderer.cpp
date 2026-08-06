@@ -2391,9 +2391,7 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     const int dotSize = std::max(1, cellSize / 10);
     const int gap = std::max(1, cellSize / 10);
     const int totalH = dotCount * dotSize + (dotCount - 1) * gap;
-    // Centre the stack in its cell. The old placement (a third of a cell down, plus another
-    // third, plus an ascender-percentage "font-adaptive nudge") was chasing upright glyphs that
-    // were themselves drawn an ascender too low; they are centred now, so this is too.
+    // Centred in its cell, like the upright glyphs around it.
     const int startY = cellTopY + (cellSize - totalH) / 2;
     if (inkTopOut) {
       *inkTopOut = startY;
@@ -2421,14 +2419,8 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   const int rotatedW = glyph->height;
   const int rotatedH = glyph->width;
 
-  // Centre the rotated ink box in the cell -- the same rule upright glyphs follow, so
-  // punctuation lands on the column's axis by construction.
-  //
-  // This used to carry three font-adaptive nudges (an `ascender vs cell` percentage push, a
-  // `baselineExcess` term, and a flat cellSize/3 drop). They existed because upright glyphs were
-  // drawn a full ascender too low -- layout stored baselines and GfxRenderer::drawText adds the
-  // ascender itself -- so punctuation had to chase them down the cell. That bug is fixed at the
-  // source, and chasing it now pushes punctuation below the text it belongs to.
+  // Centre the rotated ink box in the cell -- the same rule the upright glyphs follow, so
+  // punctuation lands on the column's axis by construction. Brackets override this below.
   int drawX = cellLeftX + (cellSize - rotatedW) / 2;
   int drawY = cellTopY + (cellSize - rotatedH) / 2;
 
@@ -2437,15 +2429,11 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     // right of the em box, so pull them left onto the column axis. Angle brackets 〉》 are
     // symmetric chevrons -- the same pull pushed them visibly LEFT of the column (device
     // photo, 〈夏〉); leave them ink-centered.
-    // JLREQ: a closing bracket is a half-em glyph occupying the FIRST half of its em box, with
-    // the full em still allocated on the grid. So its ink goes in the cell's leading half --
-    // adjacent to the character it closes, with the slack falling on the far side. Across the
-    // column it sits on the LEFT, mirroring the opening bracket on the right.
+    // JLREQ: a closing bracket is a half-em glyph in the FIRST half of its em, adjacent to the
+    // character it closes, and on the LEFT across the column.
     drawY = cellTopY + (cellSize / 2 - rotatedH) / 2;
-    // Corner/lenticular/tortoise shapes are asymmetric -- their ink hugs one side of the em, so
-    // flushing them to the column's left edge is what puts them on its axis. Round parens and
-    // angle brackets are symmetric chevrons/arcs: flushing those visibly pushes them off-axis, so
-    // they keep the plain ink centring.
+    // Only the asymmetric shapes flush: their ink hugs one side of the em, so the flush is what
+    // puts them on the column axis. Symmetric ones would be pushed off it.
     if (!isSymmetricBracket(cp)) drawX = cellLeftX;
   } else if (shiftType == 3) {  // opening bracket/quote
     // Bias reduced from 2/3 to 1/2 cell and shifted a bit right: dead-centered and pushed too
@@ -2454,9 +2442,9 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     // Round parens and angle brackets stay purely ink-centered: the corner-bracket right
     // shift pushed the paren arc -- and the symmetric 〈《 chevrons (device photo, 〈夏〉) --
     // off the column axis to the RIGHT.
-    // JLREQ: an opening bracket is a half-em glyph occupying the SECOND half of its em box, so
-    // it sits adjacent to the character it opens, and on the RIGHT of the column across it. The
-    // layout measures the result through verticalPunctInkBox(), so spacing follows automatically.
+    // JLREQ: an opening bracket is a half-em glyph in the SECOND half of its em, adjacent to the
+    // character it opens, and on the RIGHT across the column. The layout reads the result back
+    // through verticalPunctInkBox(), so the spacing around it follows.
     drawY = cellTopY + cellSize / 2 + (cellSize / 2 - rotatedH) / 2;
     if (!isSymmetricBracket(cp)) drawX = cellLeftX + cellSize - rotatedW;
   }

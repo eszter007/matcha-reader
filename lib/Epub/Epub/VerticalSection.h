@@ -100,9 +100,8 @@ class VerticalSection {
   // collapse to the final target.
   void requestPageDuringBuild(int pageIndex) { buildPageRequest_.store(pageIndex, std::memory_order_relaxed); }
 
-  // furiganaEnabled is part of the layout, and so part of the cache key: the column gap has to
-  // clear ruby only when ruby is actually drawn (see the gap table in streamParseAndLayout), so
-  // turning furigana off legitimately tightens the columns and the chapter must be re-laid out.
+  // furiganaEnabled is part of the cache key: the column gap only has to clear ruby when ruby is
+  // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.
   bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
                        bool furiganaEnabled);
   bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
