@@ -32,7 +32,7 @@ int computeCellPx(GfxRenderer& renderer, int fontId) {
   // nudge lands wrong for that frame (seen live: cell flapping 42 -> 33 on NotoSansJP).
   renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
   const int cjkAdvance = renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));
-  if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 6;
+  if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 10;
   return renderer.getLineHeight(fontId);
 }
 
@@ -79,9 +79,8 @@ void drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int
         // check, book 2). Keep in sync with GfxRenderer::verticalPunctInkBox().
         dy += std::max(1, (cellPx * 7) / 8);
       } else if (shiftType == 4) {
-        // Dashes/chōonpu sat visibly low in their cell (device photo, kyokasho) -- a
-        // quarter cell less down-shift than the ellipsis dot stack.
-        dy += std::max(1, (cellPx * 3) / 8);
+        // Dashes/chōonpu: reduced down-shift to match tighter cell spacing.
+          dy -= std::max(1, cellPx / 22);
       }
       renderer.drawCharVerticalRotatedInCell(fontId, dx, dy, cellPx, g.codepoint, shiftType, black,
                                              static_cast<EpdFontFamily::Style>(g.style));

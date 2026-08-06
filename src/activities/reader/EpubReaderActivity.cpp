@@ -3267,6 +3267,9 @@ void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const
   renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
   marginTop += SETTINGS.screenMargin;
   marginLeft += SETTINGS.screenMargin;
+  // Vertical mode uses tighter margins than horizontal: reduce top and left.
+  marginTop -= 35;
+  marginLeft -= 18;
   VerticalTextBlock block(vpage);
   if (useFurigana()) {
     block.render(renderer, effectiveReaderFontId(), SETTINGS.getRubyFontId(), marginLeft, marginTop, true);

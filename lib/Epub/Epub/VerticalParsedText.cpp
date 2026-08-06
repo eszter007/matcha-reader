@@ -240,7 +240,7 @@ int VerticalParsedText::charAdvancePx() const {
   renderer_.ensureSdCardFontReady(fontId_, "\xe6\xbc\xa2", 0x01);
   const int cjkAdvance =
       renderer_.getTextAdvanceX(fontId_, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0));  // 漢
-  if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 6;
+  if (cjkAdvance > 0) return cjkAdvance + cjkAdvance / 10;
   return renderer_.getLineHeight(fontId_);
 }
 
@@ -531,7 +531,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   const int columnAdvancePx = cellPx + columnGapPx_;
   const int ascender = renderer_.getFontAscenderSize(fontId_);
   const int globalDownNudge = std::max(1, (cellPx * 3) / 8);
-  const int bottomReservedPx = std::max(cellPx * 2, ascender + globalDownNudge + cellPx);
+  const int bottomReservedPx = std::max(cellPx, ascender + globalDownNudge + cellPx / 2);  // reduced: *2 and full cellPx left excessive bottom margin
   const int usableHeightPx = std::max(cellPx, static_cast<int>(viewportHeight_) - bottomReservedPx);
   const uint16_t rowsPerColumn = static_cast<uint16_t>(std::max(1, usableHeightPx / cellPx));
   const int usableWidthPx = std::max(cellPx, static_cast<int>(viewportWidth_) - rightPaddingPx_);

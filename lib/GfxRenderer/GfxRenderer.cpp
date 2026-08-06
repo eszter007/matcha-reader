@@ -2438,9 +2438,12 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     // right of the em box, so pull them left onto the column axis. Angle brackets 〉》 are
     // symmetric chevrons -- the same pull pushed them visibly LEFT of the column (device
     // photo, 〈夏〉); leave them ink-centered.
-    const bool isSquareBracket = (cp == 0x300D || cp == 0x300F || cp == 0x3011 || cp == 0x3015);
-    if (isSquareBracket) {
-      drawX = cellLeftX + (cellSize - rotatedW) / 2 - cellSize / 3;
+    const bool isTortoiseBracket = (cp == 0x3011 || cp == 0x3015);
+    const bool isCornerBracket = (cp == 0x300D || cp == 0x300F);
+    if (isTortoiseBracket) {
+      drawX = cellLeftX + (cellSize - rotatedW) / 2;
+    } else if (isCornerBracket) {
+      drawX = cellLeftX + (cellSize - rotatedW) / 2 - cellSize / 4;
     }
     // +cellSize/4: the closing bracket read high against the Japanese character it closes
     // (device check, tuned in two steps). After an embedded Latin word the distance is set by
@@ -2462,7 +2465,11 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     // and character spacing around it follows automatically.
     const int openingBias = std::max(1, (cellSize * 3) / 8 + extraNudge + baselineExcess);
     drawY = cellTopY + cellSize + openingBias;
-    if (!inkCentered) drawX += cellSize / 4;
+    if (cp == 0x300C || cp == 0x300E) {
+      drawX += cellSize / 4;
+    } else if (!inkCentered) {
+      drawX += 0;
+    }
   }
 
   int minX = cellLeftX;

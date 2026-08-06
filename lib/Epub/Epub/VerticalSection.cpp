@@ -1254,13 +1254,14 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
   layout.preallocateStream();
   const int lineH = renderer.getLineHeight(fontId);
-  // Tight/Normal/Wide use one, two, or four sixths of a line between columns.
+  // Tight/Normal/Wide column gap. /12 gives tighter spacing matching printed books;
+  // ruby adds one extra twelfth for the annotation column.
   const int clampedLineSpacing = std::clamp<int>(lineSpacing, 0, 2);
-  const int gapSixths = clampedLineSpacing == 2 ? 4 : clampedLineSpacing + 1;
-  layout.setColumnGapPx(std::max(4, lineH * gapSixths / 6));
+  const int gapTwelfths = clampedLineSpacing == 2 ? 4 : clampedLineSpacing + 1;
+  layout.setColumnGapPx(std::max(2, lineH * gapTwelfths / 12 + 4));
   if (hasRuby) {
-    layout.setColumnGapPx(std::max(4, lineH * (gapSixths + 2) / 6));
-    layout.setRightPaddingPx((lineH / 2) < 2 ? 2 : (lineH / 2));
+    layout.setColumnGapPx(std::max(2, lineH * (gapTwelfths + 1) / 12 + 4));
+    layout.setRightPaddingPx((lineH / 4) < 2 ? 2 : (lineH / 4));  // reduced: /2 was ~2x the furigana area size
   }
 
   LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
