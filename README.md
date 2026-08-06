@@ -39,7 +39,7 @@ Look up any word on the page, in vertical or horizontal mode. Conjugations resol
 
 ### Page Translation
 
-Translate the current page to English via Gemini 2.5 Flash. Works in any book, not just Japanese ones. Needs Wi-Fi and your own API key.
+Translate the current page to English via Gemini 3.6 Flash. Works in any book, not just Japanese ones. Needs Wi-Fi and your own API key.
 
 <p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="Translated page"></p>
 
@@ -117,7 +117,7 @@ python3 tools/dict_convert/convert_jmdict.py \
 
 Any Yomitan dictionary, jmdict-simplified JSON, or MDict `.mdx` works as input. Cards set up before the move keep working — the firmware also checks the legacy `/dict/` layout.
 
-For regular StarDict dictionaries, use `/dictionaries/<language>/<dictionary>/` (for example `/dictionaries/en/oxford/`). Tagged EPUBs select the first matching language folder automatically; the Reader setting is only used for EPUBs without a language tag. Japanese (`ja`) always uses the Yomitan files in `/dictionaries/jp/`.
+For regular StarDict dictionaries, use `/dictionaries/<language>/<dictionary>/` (for example `/dictionaries/en/oxford/`), or keep a legacy flat dictionary directly under `/dictionaries/`. Tagged EPUBs automatically use the first matching language folder. The global **Fallback dictionary** is used when no language-specific dictionary can be selected, including flat layouts and books without a language tag; Reader Settings shows the dictionary actually applied and is read-only. Japanese (`ja`) always uses the Yomitan files in `/dictionaries/jp/`.
 
 **3. Install Japanese fonts** (optional). The built-in Noto Serif/Sans handle Japanese fine; a dedicated font looks better. Convert any TTF/OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and place the result in `/.fonts/<Family>/regular.cpfont`. UDDigiKyokasho is picked as the default when present.
 

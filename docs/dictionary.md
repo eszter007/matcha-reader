@@ -17,10 +17,10 @@ Not supported: `.syn` synonym files (ignored), dictionaries with 64-bit index of
 ## Setting Up a Dictionary
 
 1. Copy your dictionary folder(s) to `/dictionaries/` on the SD card — one dictionary per folder, e.g. `/dictionaries/webster/webster.idx` + `webster.dict.dz`. A hidden `/.dictionaries/` folder (dot-prefixed) works the same way, for keeping it out of the file browser.
-2. Open **Settings → Reader → Dictionary** on the device.
-3. Select a dictionary from the list, or **None** to disable lookups.
+2. Open **Settings → Reader → Fallback dictionary** on the device.
+3. Select the dictionary to use when a book's language has no matching dictionary, or **None** to disable fallback lookups. For a tagged EPUB with a matching language folder, the language-specific dictionary is selected automatically; the Reader Settings **Dictionary** row shows that applied dictionary and is read-only.
 
-The Dictionary setting only appears when at least one usable dictionary folder exists. Folders containing more than one dictionary (multiple `.idx` stems) are skipped as ambiguous.
+The Fallback dictionary row only appears when at least one usable dictionary folder exists. Folders containing more than one dictionary (multiple `.idx` stems) are skipped as ambiguous.
 
 ## Looking Up a Word
 

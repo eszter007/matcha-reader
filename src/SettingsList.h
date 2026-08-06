@@ -135,43 +135,57 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
   return s;
 }
 
-// Build the dictionary selection setting dynamically from the folders discovered
-// under /dictionaries. "None" plus one option per dictionary; the selected folder
-// name persists in SETTINGS.dictionaryName (saved/loaded manually in
-// CrossPointSettings::toJson/fromJson — the generic loop skips dynamic entries).
-inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& dictionaries) {
+// Build the dictionary setting dynamically from the folders discovered under /dictionaries.
+// Global settings edit the fallback; reader settings show the language-selected dictionary.
+inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& dictionaries,
+                                          const std::string& bookLanguage, const bool showAppliedDictionary) {
   std::vector<std::string> folderNames;
   folderNames.reserve(dictionaries.size());
   std::transform(dictionaries.begin(), dictionaries.end(), std::back_inserter(folderNames),
                  [](const DictionaryEntry& d) { return d.name; });
 
   SettingInfo s;
-  s.nameId = StrId::STR_DICTIONARY;
+  s.nameId = showAppliedDictionary ? StrId::STR_DICTIONARY : StrId::STR_FALLBACK_DICTIONARY;
   s.type = SettingType::ENUM;
   s.enumStringValues.reserve(folderNames.size() + 1);
   s.enumStringValues.push_back(I18N.get(StrId::STR_NONE_OPT));
   s.enumStringValues.insert(s.enumStringValues.end(), folderNames.begin(), folderNames.end());
   s.category = StrId::STR_CAT_READER;
 
-  s.valueGetter = [folderNames]() -> uint8_t {
-    for (size_t i = 0; i < folderNames.size(); i++) {
-      // Compare within the settings field capacity: an over-long folder name is
-      // stored truncated, and must still match its list entry.
-      if (strncmp(folderNames[i].c_str(), SETTINGS.dictionaryName, sizeof(SETTINGS.dictionaryName) - 1) == 0) {
-        return static_cast<uint8_t>(i + 1);
+  if (showAppliedDictionary) {
+    // Reader settings are informational: the book language wins over the global fallback.
+    std::string appliedFolder;
+    DictionaryRegistry::folderForLanguageOrFallback(bookLanguage, SETTINGS.dictionaryName, appliedFolder);
+    s.valueGetter = [folderNames, appliedFolder]() -> uint8_t {
+      for (size_t i = 0; i < folderNames.size(); i++) {
+        // The fallback is persisted in a bounded field, so match it the same way as the editor.
+        if (strncmp(folderNames[i].c_str(), appliedFolder.c_str(), sizeof(SETTINGS.dictionaryName) - 1) == 0) {
+          return static_cast<uint8_t>(i + 1);
+        }
       }
-    }
-    return 0;  // "None", also when the stored folder no longer exists
-  };
+      return 0;  // "None", also when the selected folder no longer exists
+    };
+  } else {
+    s.valueGetter = [folderNames]() -> uint8_t {
+      for (size_t i = 0; i < folderNames.size(); i++) {
+        // Compare within the settings field capacity: an over-long folder name is
+        // stored truncated, and must still match its list entry.
+        if (strncmp(folderNames[i].c_str(), SETTINGS.dictionaryName, sizeof(SETTINGS.dictionaryName) - 1) == 0) {
+          return static_cast<uint8_t>(i + 1);
+        }
+      }
+      return 0;  // "None", also when the stored folder no longer exists
+    };
 
-  s.valueSetter = [folderNames](uint8_t v) {
-    if (v == 0 || v > folderNames.size()) {
-      SETTINGS.dictionaryName[0] = '\0';
-      return;
-    }
-    strncpy(SETTINGS.dictionaryName, folderNames[v - 1].c_str(), sizeof(SETTINGS.dictionaryName) - 1);
-    SETTINGS.dictionaryName[sizeof(SETTINGS.dictionaryName) - 1] = '\0';
-  };
+    s.valueSetter = [folderNames](uint8_t v) {
+      if (v == 0 || v > folderNames.size()) {
+        SETTINGS.dictionaryName[0] = '\0';
+        return;
+      }
+      strncpy(SETTINGS.dictionaryName, folderNames[v - 1].c_str(), sizeof(SETTINGS.dictionaryName) - 1);
+      SETTINGS.dictionaryName[sizeof(SETTINGS.dictionaryName) - 1] = '\0';
+    };
+  }
 
   return s;
 }
@@ -186,8 +200,14 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
 // the font-family entry is replaced in that copy with a registry-aware version.
 // The font-size entry is always rebuilt, since its options are point sizes read
 // from the active family rather than a fixed enum.
+// categoryFilter/includeTextSettingsEntries let embedded device screens copy only
+// entries they can display while the reader keeps its memory-heavy state alive.
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
-                                                const std::vector<DictionaryEntry>* dictionaries = nullptr) {
+                                                const std::vector<DictionaryEntry>* dictionaries = nullptr,
+                                                const StrId categoryFilter = StrId::STR_NONE_OPT,
+                                                const bool includeTextSettingsEntries = true,
+                                                const std::string& bookLanguage = {},
+                                                const bool showAppliedDictionary = false) {
   static const std::vector<SettingInfo> baseList = [] {
     // Enum settings are persisted as numeric values. Assign these labels by enum
     // value so a reordered menu or enum cannot silently swap their behavior.
@@ -273,6 +293,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
             StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
             {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW},
             "orientation", StrId::STR_CAT_READER),
+        SettingInfo::Toggle(StrId::STR_ROTATE_MANGA_PANELS, &CrossPointSettings::rotateMangaPanels, "rotateMangaPanels",
+                            StrId::STR_CAT_READER),
         SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
                             "extraParagraphSpacing", StrId::STR_CAT_READER)
             .withTextSettings(),
@@ -422,7 +444,24 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     return v;
   }();
 
-  std::vector<SettingInfo> v = baseList;
+  const auto shouldInclude = [categoryFilter, includeTextSettingsEntries](const SettingInfo& setting) {
+    const bool categoryMatches = categoryFilter == StrId::STR_NONE_OPT || setting.category == categoryFilter;
+    return categoryMatches && (includeTextSettingsEntries || !setting.inTextSettings);
+  };
+
+  std::vector<SettingInfo> v;
+  if (categoryFilter == StrId::STR_NONE_OPT && includeTextSettingsEntries) {
+    v = baseList;
+  } else {
+    // Embedded settings screens run while the reader still owns its page, EPUB and
+    // font caches. Copy only the visible category: copying the complete SettingInfo
+    // array needs one large contiguous allocation and aborts on a fragmented heap.
+    const auto count = static_cast<size_t>(std::count_if(baseList.begin(), baseList.end(), shouldInclude));
+    v.reserve(count);
+    for (const auto& setting : baseList) {
+      if (shouldInclude(setting)) v.push_back(setting);
+    }
+  }
   if (!BoardConfig::hasTouch()) {
     v.erase(std::remove_if(v.begin(), v.end(),
                            [](const SettingInfo& s) { return s.nameId == StrId::STR_TOUCH_READER_CONTROLS; }),
@@ -454,7 +493,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     // Insert at the end of the Reader category (just before the first Controls entry).
     auto it =
         std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
-    v.insert(it, buildDictionarySetting(*dictionaries));
+    v.insert(it, buildDictionarySetting(*dictionaries, bookLanguage, showAppliedDictionary));
   }
   return v;
 }

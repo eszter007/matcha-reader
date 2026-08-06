@@ -444,11 +444,8 @@ void EpubReaderActivity::openDictionaryWordSelect() {
     return;
   }
   std::string dictionaryFolder;
-  if (epub && !epub->getLanguage().empty()) {
-    DictionaryRegistry::folderForLanguage(epub->getLanguage(), dictionaryFolder);
-  } else {
-    dictionaryFolder = SETTINGS.dictionaryName;
-  }
+  DictionaryRegistry::folderForLanguageOrFallback(epub ? epub->getLanguage() : std::string{}, SETTINGS.dictionaryName,
+                                                  dictionaryFolder);
   if (dictionaryFolder.empty()) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
@@ -990,12 +987,6 @@ void EpubReaderActivity::openReaderMenu() {
   // never show Word Lookup at all.
   const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
   const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
-  // Same reasoning as isJapaneseContent above, and for a worse failure: verticalOverride is
-  // persisted per book in progress.bin, so a book whose metadata isn't dc:language=ja but
-  // that has vertical forced on reopens in tategaki -- vertical columns, CJK breaking, no
-  // word spaces. Gating the toggle on isJapaneseBook() alone then HIDES the only control
-  // that turns it back off, leaving the book permanently unreadable.
-  const bool showVerticalToggle = isJapaneseBook() || verticalOverride == 1;
   bool hasPageText = false;
   if (verticalSection) {
     // getPage() faults the page into the section's SINGLE shared page slot -- the same slot the
@@ -1015,33 +1006,45 @@ void EpubReaderActivity::openReaderMenu() {
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !sectionFootnotes.empty() || !currentPageFootnotes.empty(), !cachedBookmarks.empty(), hasWordLookup,
-          showVerticalToggle, useVerticalText(), useFurigana(), hasPageText),
+          useVerticalText(), useFurigana(), hasPageText, /*imageReaderMinimal=*/false, /*mangaMode=*/false,
+          /*hideGenericLookup=*/isJapaneseBook()),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
         toggleAutoPageTurn(menu.pageTurnOption);
-        if (menu.verticalOverride >= 0 && menu.verticalOverride != (useVerticalText() ? 1 : 0)) {
-          verticalOverride = menu.verticalOverride;
-          {
-            // Every other section reset in this file takes the render lock: the render task can
-            // still be inside its (multi-second, section-touching) warm tail when the menu
-            // result lands, and freeing the section under it is a use-after-free.
-            RenderLock lock(*this);
-            section.reset();
-            verticalSection.reset();
-          }
-          // Forcing vertical text on a non-ja book is the same signal
-          // isJapaneseBook() covers at open: JP fallback follows it.
-          sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
-        }
-        if (menu.furiganaOverride >= 0 && menu.furiganaOverride != (useFurigana() ? 1 : 0)) {
-          furiganaOverride = menu.furiganaOverride;
-        }
+        applyVerticalFuriganaOverride(menu.verticalOverride, menu.furiganaOverride);
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }
         requestUpdate();
       });
+}
+
+// Shared by the reader menu's own result (menu.verticalOverride/furiganaOverride, always the
+// unchanged state it was opened with -- these toggles no longer live there, see
+// EpubReaderMenuActivity::buildMenuItems) and Reader Settings' result (where they DO change,
+// via SettingInfo::DynamicToggle). -1 means "unset/no book context for this toggle" and is a
+// no-op; each override only applies, and only resets the section, when it actually differs from
+// the book's current effective state.
+void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOverrideIn,
+                                                       const int8_t furiganaOverrideIn) {
+  if (verticalOverrideIn >= 0 && verticalOverrideIn != (useVerticalText() ? 1 : 0)) {
+    verticalOverride = verticalOverrideIn;
+    {
+      // Every other section reset in this file takes the render lock: the render task can
+      // still be inside its (multi-second, section-touching) warm tail when this result
+      // lands, and freeing the section under it is a use-after-free.
+      RenderLock lock(*this);
+      section.reset();
+      verticalSection.reset();
+    }
+    // Forcing vertical text on a non-ja book is the same signal isJapaneseBook() covers at
+    // open: JP fallback follows it.
+    sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+  }
+  if (furiganaOverrideIn >= 0 && furiganaOverrideIn != (useFurigana() ? 1 : 0)) {
+    furiganaOverride = furiganaOverrideIn;
+  }
 }
 
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
@@ -1110,12 +1113,27 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // Push settings opened on the Reader tab; Back pops straight back into the book. Font or
       // margin changes are picked up on return: the SD font system reloads to the new selection
       // and the next render's section-cache parameter check rebuilds the layout if needed.
+      // Vertical Text / Furigana (moved here from the reader's own quick menu -- see
+      // EpubReaderMenuActivity::buildMenuItems) come back the same way the quick menu used to
+      // carry them: a MenuResult, read via get_if since SettingsActivity only sets one when
+      // showVerticalToggle() was true here, so std::monostate elsewhere is expected.
       startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                                /*finishOnBack=*/true,
+                                                                /*finishOnBack=*/true, isJapaneseBook(),
+                                                                epub ? epub->getLanguage() : std::string{},
+                                                                showVerticalToggle(), useVerticalText(), useFurigana(),
+                                                                /*mangaMode=*/false,
                                                                 /*hideMangaOnlySettings=*/true),
-                             [this](const ActivityResult&) {
+                             [this](const ActivityResult& result) {
+                               if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
+                                 applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
+                               }
                                sdFontSystem.ensureLoaded(renderer);
                                sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+                               // Reading Orientation now only changes via this screen (removed from the reader's
+                               // own quick menu, which used to apply it straight from the popup via
+                               // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
+                               // does, or it would silently wait for the book's next full open to take effect.
+                               ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
                                // Return to the reader MENU (where the user came from), not the page.
                                openReaderMenu();
                              });
@@ -1662,7 +1680,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
       const int fontId = effectiveReaderFontId();
-      if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight)) {
+      if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
         GUI.drawPopup(renderer, tr(STR_INDEXING));
         // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
@@ -1703,7 +1721,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         earlyPageActuallyDisplayed_ = false;
         earlyDisplayedPage_.store(earlyTarget, std::memory_order_relaxed);
         verticalBuildInProgress_.store(true, std::memory_order_relaxed);
-        const bool built = verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight);
+        const bool built =
+            verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing);
         verticalBuildInProgress_.store(false, std::memory_order_relaxed);
         if (!built) {
           LOG_ERR("ERS", "Failed to build vertical section");
@@ -2487,7 +2506,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
 
     VerticalSection nextVSection(epub, nextSpineIndex, renderer);
     const int fontId = effectiveReaderFontId();
-    if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight)) return;
+    if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) return;
 
     // The vertical build is the most memory-intensive step in the reader, and this
     // silent path runs it at the worst heap moment: right after a page render, with
@@ -2509,7 +2528,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // also leaves short pages on screen if the reader pages into it this session. Leave the
     // section unbuilt instead: a roomier later tick retries, and the foreground open path
     // (which frees more up front and early-renders) builds it properly on arrival.
-    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 64 * 1024;
+    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
     if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
       LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
       silentIndexBackoffUntilMs_ = millis() + 5000;
@@ -2518,7 +2537,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     silentIndexBackoffUntilMs_ = 0;
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
-    if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight)) {
+    if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) {
       LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
     }
     return;
@@ -2657,7 +2676,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
       // full-page illustration is its own one-page spine item, so this cross-boundary peek is
       // the common case -- silentIndexNextChapterIfNeeded has already built the section file.
       nextV.emplace(epub, currentSpineIndex + 1, renderer);
-      if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight) && nextV->pageCount > 0) {
+      if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing) && nextV->pageCount > 0) {
         vp = nextV->getPage(0);
       } else {
         LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", currentSpineIndex + 1);  // TEMP
@@ -2768,6 +2787,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft, const bool glyphsAlreadyWarm,
                                         const bool grayscaleRefineOnly) {
   const auto t0 = millis();
+  // Reuse the image-warm input generation, which is bumped on every input/page turn.
+  const uint32_t inputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
   const int fontId = effectiveReaderFontId();
 
   // The image pixel-cache RAM slot lives for exactly one page render (it feeds
@@ -2886,18 +2907,24 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     const int gh = renderer.getDisplayHeight();
     const int gwBytes = renderer.getDisplayWidthBytes();
     const size_t planeBytes = static_cast<size_t>(gwBytes) * gh;
+    const auto shouldCancel = [&] {
+      return pageHasImages ? imageWarmShouldCancel(this)
+                           : imageWarmInputStamp_.load(std::memory_order_relaxed) != inputStamp;
+    };
 
     // Render one plane band-by-band into a whole-plane buffer without touching
     // the controller, so it can run while the refresh is still in flight.
     auto renderPlaneToBuffer = [&](const bool lsbPlane, uint8_t* buf) {
       renderer.setRenderMode(lsbPlane ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
       for (int y = 0; y < gh; y += stripRows) {
+        if (shouldCancel()) return false;
         const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
         renderer.beginStripTarget(buf + static_cast<size_t>(y) * gwBytes, y, rows);
         renderer.clearScreen(0x00);
         renderGrayscalePass();
         renderer.endStripTarget();
       }
+      return true;
     };
 
     // Tiered on heap pressure: two plane buffers hide both plane renders
@@ -2924,24 +2951,33 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     auto msbPlaneBuf = (lsbPlaneBuf && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
 
     if (lsbPlaneBuf) {
-      renderPlaneToBuffer(true, lsbPlaneBuf.get());
-      if (msbPlaneBuf) renderPlaneToBuffer(false, msbPlaneBuf.get());
+      bool cancelled = !renderPlaneToBuffer(true, lsbPlaneBuf.get());
+      if (!cancelled && msbPlaneBuf) cancelled = !renderPlaneToBuffer(false, msbPlaneBuf.get());
       const auto tGrayRender = millis();
 
       renderer.waitRefreshComplete();
       const auto tWait = millis();
 
-      renderer.writeGrayscalePlaneStrip(true, lsbPlaneBuf.get(), 0, gh);
-      if (msbPlaneBuf) {
-        renderer.writeGrayscalePlaneStrip(false, msbPlaneBuf.get(), 0, gh);
-      } else {
-        renderPlaneToBuffer(false, lsbPlaneBuf.get());
-        renderer.writeGrayscalePlaneStrip(false, lsbPlaneBuf.get(), 0, gh);
+      if (!cancelled) cancelled = shouldCancel();
+      if (!cancelled) {
+        renderer.writeGrayscalePlaneStrip(true, lsbPlaneBuf.get(), 0, gh);
+        if (msbPlaneBuf) {
+          cancelled = shouldCancel();
+        } else {
+          cancelled = !renderPlaneToBuffer(false, lsbPlaneBuf.get());
+        }
+        if (!cancelled) {
+          renderer.writeGrayscalePlaneStrip(false, msbPlaneBuf ? msbPlaneBuf.get() : lsbPlaneBuf.get(), 0, gh);
+        }
       }
       const auto tGrayWrite = millis();
 
       renderer.setRenderMode(GfxRenderer::BW);
-      renderer.displayGrayBuffer();
+      if (!cancelled && !shouldCancel()) {
+        renderer.displayGrayBuffer();
+      } else {
+        cancelled = true;
+      }
       const auto tGrayDisplay = millis();
 
       // BW framebuffer is intact; re-sync controller RAM for the next
@@ -2951,9 +2987,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       LOG_DBG("ERS",
               "Page render (tiled async): prewarm=%lums bw_render=%lums display=%lums gray_render=%lums "
-              "wait=%lums gray_write=%lums gray_display=%lums cleanup=%lums total=%lums (planes buffered: %d)",
+              "wait=%lums gray_write=%lums gray_display=%lums cleanup=%lums total=%lums "
+              "(planes buffered: %d) cancelled=%d",
               tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayRender - tDisplay, tWait - tGrayRender,
-              tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1);
+              tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1,
+              cancelled);
     } else {
       // Per-strip scratch tier: blocking panels (X3) and the OOM fallback.
       // The strip writes below need the panel idle, so wait out any pending
@@ -2979,7 +3017,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         bool cancelled = false;
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
         for (int y = 0; y < gh && !cancelled; y += stripRows) {
-          if (pageHasImages && imageWarmShouldCancel(this)) {
+          if (shouldCancel()) {
             cancelled = true;
             break;
           }
@@ -2995,7 +3033,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         // MSB plane.
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
         for (int y = 0; y < gh && !cancelled; y += stripRows) {
-          if (pageHasImages && imageWarmShouldCancel(this)) {
+          if (shouldCancel()) {
             cancelled = true;
             break;
           }
@@ -3123,7 +3161,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
       bool probed = false;
       if (vertical) {
         VerticalSection sibling(epub, i, renderer);
-        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight)) {
+        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing)) {
           spinePagesReal[i] = sibling.pageCount;
           probed = true;
         }
@@ -3702,6 +3740,16 @@ bool EpubReaderActivity::isJapaneseBook() const {
   const auto& lang = epub->getLanguage();
   return lang.size() >= 2 && lang[0] == 'j' && lang[1] == 'a';
 }
+
+// Whether Vertical Text / Furigana are meaningful for this book at all -- shared by opening
+// Reader Settings (to decide whether to show the two toggles there) and this menu's own
+// MenuResult (kept in sync even though nothing here can change them anymore).
+//
+// verticalOverride is persisted per book in progress.bin, so a book whose metadata isn't
+// dc:language=ja but that has vertical forced on reopens in tategaki -- vertical columns, CJK
+// breaking, no word spaces. Gating on isJapaneseBook() alone would then hide the only control
+// that turns it back off, leaving the book permanently unreadable.
+bool EpubReaderActivity::showVerticalToggle() const { return isJapaneseBook() || verticalOverride == 1; }
 
 bool EpubReaderActivity::useVerticalText() const {
   // Vertical (tategaki) is a Japanese typesetting mode: it stacks characters in

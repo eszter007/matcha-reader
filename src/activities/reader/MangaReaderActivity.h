@@ -231,11 +231,12 @@ class MangaReaderActivity final : public Activity {
     bool isPanel = false;
     bool isFirstPanel = false;  // which done-flag a panel job resolves
     int panelIdx = -1;
-    uint32_t gen = 0;       // pageGeneration at post time
-    int screenW = 0;        // base (unrotated) screen dims captured at post time --
-    int screenH = 0;        //   inputs to the pure geometry helpers
-    std::string imgPath;    // page image or panel crop
-    std::string cachePath;  // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
+    uint32_t gen = 0;          // pageGeneration at post time
+    int screenW = 0;           // base (unrotated) screen dims captured at post time --
+    int screenH = 0;           //   inputs to the pure geometry helpers
+    bool rotatePanels = true;  // setting captured with geometry inputs
+    std::string imgPath;       // page image or panel crop
+    std::string cachePath;     // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
   };
   PrefetchJob prefetchJob;
 
@@ -255,7 +256,7 @@ class MangaReaderActivity final : public Activity {
   void workerWarmNextPage();
   void workerWarmPanel();
 
-  // Geometry of a zoomed panel on the (possibly temporarily rotated) screen. Shared by
+  // Geometry of a zoomed panel on the configured or temporarily rotated screen. Shared by
   // renderPanelZoom() and prefetchPanelCache() so the prefetch-written pixel cache has exactly
   // the dimensions the later render expects. Same restore contract as applyFullPageGeometry.
   struct PanelGeom {
@@ -266,7 +267,7 @@ class MangaReaderActivity final : public Activity {
   };
   PanelGeom applyPanelGeometry(int imgWidth, int imgHeight);
   // Pure twin of applyPanelGeometry, same contract as computeFullPageGeom (no renderer access).
-  static PanelGeom computePanelGeom(int imgWidth, int imgHeight, int screenW, int screenH);
+  static PanelGeom computePanelGeom(int imgWidth, int imgHeight, int screenW, int screenH, bool rotatePanels);
 
   std::string panelCropPath(int panelIdx) const;                      // uses panelCropIsBmp for the extension
   std::string panelCropPathExt(int panelIdx, const char* ext) const;  // explicit extension (format detection)

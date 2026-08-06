@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -148,12 +149,43 @@ struct SettingInfo {
     s.category = category;
     return s;
   }
+
+  // For a toggle backed by state outside CrossPointSettings (e.g. a per-book override that
+  // lives on the reader activity, not the settings singleton). Reuses the existing uint8_t
+  // valueGetter/valueSetter fields -- no struct layout change -- so the TOGGLE branches in
+  // SettingsActivity that already check valueGetter/valueSetter (mirroring the DynamicEnum
+  // path) work unmodified.
+  static SettingInfo DynamicToggle(StrId nameId, std::function<bool()> getter, std::function<void(bool)> setter,
+                                   StrId category = StrId::STR_NONE_OPT) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::TOGGLE;
+    s.valueGetter = [g = std::move(getter)]() -> uint8_t { return g() ? 1 : 0; };
+    s.valueSetter = [st = std::move(setter)](const uint8_t v) { st(v != 0); };
+    s.category = category;
+    return s;
+  }
 };
 
 class SettingsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
   int initialCategory = 0;
   bool finishOnBack = false;
+  bool japaneseBook = false;
+  std::string dictionaryLanguage;
+  // Vertical Text / Furigana: per-book overrides that live on the pushing reader activity, not
+  // in CrossPointSettings. showReaderToggles gates whether they appear at all (mirrors the
+  // condition the reader menu used before these moved here: isJapaneseBook() || forced on).
+  // Mutated in place by their DynamicToggle setters; read back on finish() via a MenuResult (see
+  // ActivityResult.h) so the caller can apply them the same way it already applies font/margin
+  // changes made in this screen.
+  bool showReaderToggles = false;
+  bool verticalTextState = false;
+  bool furiganaState = false;
+  // Manga has no font/margin/text-layout settings (no Text Settings sub-screen) and no image
+  // rendering mode (manga pages ARE images) -- both are hidden from the Reader category for it.
+  // Rotate Panels, Reading Orientation and Customise Status Bar all still apply and stay.
+  bool mangaMode = false;
 
   int selectedCategoryIndex = 0;  // Currently selected category
   int selectedSettingIndex = 0;
@@ -180,18 +212,35 @@ class SettingsActivity final : public Activity {
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
   void rebuildSettingsLists();
+  void saveSettings();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
  public:
   // initialCategory: category tab to open on (0=Display, 1=Reader, 2=Controls, 3=System).
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
-  // instead of replacing the stack with Home. hideMangaOnlySettings hides manga-only controls
-  // from non-manga reader settings while keeping them available from Home and manga.
-  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
-                            const bool finishOnBack = false, const bool hideMangaOnlySettings = false)
+  // instead of replacing the stack with Home.
+  // showReaderToggles/verticalTextEnabled/furiganaEnabled: see the member comment above.
+  // mangaMode hides settings that do not apply to image-based manga books.
+  // hideMangaOnlySettings hides Rotate Panels in non-manga embedded Reader Settings.
+  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                            const int initialCategory = 0,
+                            const bool finishOnBack = false,
+                            const bool japaneseBook = false,
+                            std::string dictionaryLanguage = {},
+                            const bool showReaderToggles = false,
+                            const bool verticalTextEnabled = false,
+                            const bool furiganaEnabled = false,
+                            const bool mangaMode = false,
+                            const bool hideMangaOnlySettings = false)
       : Activity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),
+        japaneseBook(japaneseBook),
+        dictionaryLanguage(std::move(dictionaryLanguage)),
+        showReaderToggles(showReaderToggles),
+        verticalTextState(verticalTextEnabled),
+        furiganaState(furiganaEnabled),
+        mangaMode(mangaMode),
         hideMangaOnlySettings(hideMangaOnlySettings) {}
   void onEnter() override;
   void onExit() override;

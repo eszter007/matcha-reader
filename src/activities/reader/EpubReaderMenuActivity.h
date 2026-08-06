@@ -42,13 +42,27 @@ class EpubReaderMenuActivity final : public Activity {
   // shown, still navigable) rather than hidden, since that can change
   // page-to-page (e.g. manga panels without OCR'd dialogue, image-only
   // EPUB pages) and hiding/showing per-page would shift menu positions.
+  // mangaMode hides the generic Look Up dictionary entry (manga's Word Lookup already covers
+  // OCR'd text; unlike imageReaderMinimal, this keeps Word Lookup, Translate Page and Auto Page
+  // Turn, which manga does support). Reader Settings itself is always shown -- issue #44's fix
+  // is on the other end: MangaReaderActivity now routes READER_SETTINGS to a Settings screen
+  // filtered to what manga actually has (SettingsActivity's own mangaMode), rather than hiding
+  // the menu item, which used to do nothing when tapped.
+  // hideGenericLookup independently hides Look Up for a Japanese EPUB: free-form dictionary
+  // lookup doesn't apply to unsegmented Japanese text, where Word Lookup is the only
+  // sensible entry.
+  // verticalEnabled/furiganaEnabled seed this menu's own MenuResult (still read by the reader's
+  // apply-if-changed check) but no longer have an in-menu control to change them -- Vertical
+  // Text and Furigana moved into Reader Settings, gated there on the same condition
+  // (isJapaneseBook() || forced on) this menu used to gate its own now-removed toggle items.
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
                                   const uint8_t currentOrientation, const bool hasFootnotes,
                                   const bool hasBookmarks = false, const bool hasWordLookup = false,
-                                  const bool showVerticalToggle = false, const bool verticalEnabled = false,
-                                  const bool furiganaEnabled = true, const bool hasPageText = true,
-                                  const bool imageReaderMinimal = false, const bool showPanelsOnlyToggle = false,
+                                  const bool verticalEnabled = false, const bool furiganaEnabled = true,
+                                  const bool hasPageText = true, const bool imageReaderMinimal = false,
+                                  const bool mangaMode = false, const bool hideGenericLookup = false,
+                                  const bool showPanelsOnlyToggle = false,
                                   const bool panelsOnlyEnabled = false);
 
   void onEnter() override;
@@ -64,8 +78,8 @@ class EpubReaderMenuActivity final : public Activity {
   };
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
-                                              bool showVerticalToggle, bool verticalEnabled, bool furiganaEnabled,
-                                              bool imageReaderMinimal, bool showPanelsOnlyToggle);
+                                              bool imageReaderMinimal, bool mangaMode,
+                                              bool hideGenericLookup, bool showPanelsOnlyToggle);
   void closeCancelled();
 
   std::vector<MenuItem> menuItems;

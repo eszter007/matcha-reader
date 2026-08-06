@@ -381,6 +381,8 @@ class EpubReaderActivity final : public Activity {
   bool useVerticalText() const;
   bool useFurigana() const;
   bool isJapaneseBook() const;
+  bool showVerticalToggle() const;
+  void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,

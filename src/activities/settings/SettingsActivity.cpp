@@ -1,12 +1,14 @@
 #include "SettingsActivity.h"
 
 #include <BoardConfig.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
@@ -30,6 +32,17 @@
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
 
+void SettingsActivity::saveSettings() {
+  // Reader Settings keeps the EPUB, laid-out page and SD fonts resident. A font
+  // preview can leave less contiguous heap than settings JSON needs, so reclaim
+  // renderer-owned font tables before serializing. The reader restores them when
+  // the settings activity returns.
+  if (finishOnBack) {
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
+  SETTINGS.saveToFile();
+}
+
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   readerSettings.clear();
@@ -40,53 +53,110 @@ void SettingsActivity::rebuildSettingsLists() {
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
-  // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
-  // picks up dictionaries copied to the SD card since the last visit.
+  // Japanese books use their own dictionary flow, so omit the regular picker there.
   std::vector<DictionaryEntry> dictionaries;
-  DictionaryRegistry::discover(dictionaries);
+  if (!japaneseBook && (!finishOnBack || selectedCategoryIndex == 1)) DictionaryRegistry::discover(dictionaries);
 
-  for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
-    if (hideMangaOnlySettings && setting.valuePtr == &CrossPointSettings::rotateMangaPanels) continue;
+  // Reader-launched settings lock the UI to one category while the book remains
+  // resident. Avoid materializing every web/device setting in that low-heap path.
+  const StrId categoryFilter =
+      finishOnBack ? categoryNames[selectedCategoryIndex] : StrId::STR_NONE_OPT;
+  auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries, categoryFilter,
+                                  /*includeTextSettingsEntries=*/!finishOnBack,
+                                  dictionaryLanguage, finishOnBack);
+  if (finishOnBack) {
+    switch (selectedCategoryIndex) {
+      case 0:
+        displaySettings.reserve(settings.size());
+        break;
+      case 1:
+        readerSettings.reserve(settings.size() + 4);
+        break;
+      case 2:
+        controlsSettings.reserve(settings.size() + 1);
+        break;
+      case 3:
+        systemSettings.reserve(settings.size() + 8);
+        break;
+    }
+  }
+
+  for (auto& setting : settings) {
+    if (hideMangaOnlySettings &&
+        setting.valuePtr == &CrossPointSettings::rotateMangaPanels) {
+      continue;
+    }
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
-      displaySettings.push_back(setting);
+      displaySettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
       // (they stay in the shared list for the web settings API)
       if (setting.inTextSettings) continue;
-      readerSettings.push_back(setting);
+      // Manga pages ARE images -- the Display/Placeholder/Suppress image rendering mode has
+      // nothing to render for a manga book, so it's hidden along with Text Settings below.
+      if (mangaMode && setting.nameId == StrId::STR_IMAGES) continue;
+      readerSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
           SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
-      controlsSettings.push_back(setting);
+      controlsSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
-      systemSettings.push_back(setting);
+      systemSettings.push_back(std::move(setting));
     }
   }
 
   // Append device-only ACTION items
-  if (!BoardConfig::hasTouch()) {
+  if ((!finishOnBack || selectedCategoryIndex == 2) && !BoardConfig::hasTouch()) {
     controlsSettings.insert(controlsSettings.begin(),
                             SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   }
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
-  if (!BoardConfig::hasTouch()) {
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+  if (!finishOnBack || selectedCategoryIndex == 3) {
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
+    // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
+    if (!BoardConfig::hasTouch()) {
+      systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+    }
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   }
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  readerSettings.insert(readerSettings.begin(),
-                        SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
-  // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
-  // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
-  // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
-  readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  if (!finishOnBack || selectedCategoryIndex == 1) {
+    // Text Settings (font/margin/line-layout) has nothing to apply to manga, whose pages are
+    // pre-rendered images -- hidden along with STR_IMAGES above, leaving Rotate Panels/Reading
+    // Orientation/Customise Status Bar as the manga Reader Settings screen.
+    if (!mangaMode) {
+      readerSettings.insert(readerSettings.begin(),
+                            SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+    }
+    // Vertical Text / Furigana: per-book overrides that live on the reader activity that pushed
+    // this screen, not in CrossPointSettings -- so they only make sense (and only get injected)
+    // when there IS such a book (finishOnBack) and the book is one they apply to
+    // (showReaderToggles, the same condition the reader's quick menu used before these moved
+    // here). Opening Settings from Home never shows them: there is no book to apply them to.
+    // Also never for manga (mangaMode implies !showReaderToggles in practice, but this makes the
+    // exclusivity explicit rather than relying on the caller never combining the two) -- manga
+    // has no Japanese-vertical-text concept, and the +1/+2 insert positions below assume Text
+    // Settings just landed at index 0, which mangaMode skips.
+    if (!mangaMode && finishOnBack && showReaderToggles) {
+      readerSettings.insert(readerSettings.begin() + 1,
+                            SettingInfo::DynamicToggle(
+                                StrId::STR_VERTICAL_TEXT_LABEL, [this] { return verticalTextState; },
+                                [this](const bool v) { verticalTextState = v; }, StrId::STR_CAT_READER));
+      readerSettings.insert(readerSettings.begin() + 2,
+                            SettingInfo::DynamicToggle(
+                                StrId::STR_FURIGANA_LABEL, [this] { return furiganaState; },
+                                [this](const bool v) { furiganaState = v; }, StrId::STR_CAT_READER));
+    }
+    // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
+    // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
+    // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
+    readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  }
 
   // Update currentSettings pointer and count for the active category
   switch (selectedCategoryIndex) {
@@ -110,7 +180,7 @@ void SettingsActivity::onEnter() {
   Activity::onEnter();
 
   // Start on the requested category (0 unless a caller like the reader menu asks otherwise)
-  selectedCategoryIndex = initialCategory;
+  selectedCategoryIndex = std::clamp(initialCategory, 0, categoryCount - 1);
   selectedSettingIndex = 0;
   if (finishOnBack) selectedSettingIndex = 1;  // category row is locked in embedded mode
   preserveQuickResumeTimeoutOn =
@@ -174,7 +244,19 @@ void SettingsActivity::loop() {
   // the book -- the same stray-event trap the reader menu's ignoreNextConfirmRelease guards.
   if (finishOnBack) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      SETTINGS.saveToFile();
+      saveSettings();
+      // The reader's READER_SETTINGS handler only reads verticalOverride/furiganaOverride --
+      // the same two fields the old in-menu toggles rode back on -- via std::get_if<MenuResult>,
+      // so when this screen never showed the toggles (showReaderToggles false) it's fine to set
+      // no result at all: the ActivityResult stays std::monostate, get_if returns null, and the
+      // handler skips applying anything. When it IS set, action/orientation/pageTurnOption are
+      // explicitly -1/0/0 (unused by that handler) rather than MenuResult's own defaults
+      // (action=-1, but orientation/pageTurnOption default to 0 already -- see ActivityResult.h)
+      // -- spelled out here so a value doesn't get silently relied on either way.
+      if (showReaderToggles) {
+        setResult(MenuResult{-1, 0, 0, static_cast<int8_t>(verticalTextState ? 1 : 0),
+                             static_cast<int8_t>(furiganaState ? 1 : 0)});
+      }
       finish();
       return;
     }
@@ -183,7 +265,7 @@ void SettingsActivity::loop() {
       selectedSettingIndex = 0;
       requestUpdate();
     } else {
-      SETTINGS.saveToFile();
+      saveSettings();
       onGoHome();
     }
     return;
@@ -323,6 +405,8 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
+  // Applied dictionary rows in reader settings are informational: they have a getter but no setter.
+  if (setting.valueGetter && !setting.valueSetter) return;
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
 
@@ -335,6 +419,15 @@ void SettingsActivity::toggleCurrentSetting() {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
+  } else if (setting.type == SettingType::TOGGLE && setting.valueGetter && setting.valueSetter) {
+    // Backed by state outside CrossPointSettings (SettingInfo::DynamicToggle) -- e.g. the
+    // per-book Vertical Text / Furigana overrides. Returns immediately instead of falling
+    // through to the shared tail below: that tail's saveSettings()/rebuildSettingsLists() is
+    // for CrossPointSettings changes, and this state isn't part of that singleton -- the
+    // caller reads it back from this screen's finish() result instead. Falling through would
+    // write the settings file on every toggle for no reason.
+    setting.valueSetter(setting.valueGetter() == 0 ? 1 : 0);
+    return;
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (setting.enumValues.size() > 2) {
@@ -343,7 +436,7 @@ void SettingsActivity::toggleCurrentSetting() {
                        currentValue, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
                          SETTINGS.*valuePtr = idx;
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-                         SETTINGS.saveToFile();
+                         saveSettings();
                          rebuildSettingsLists();
                        });
       requestUpdate();
@@ -360,7 +453,7 @@ void SettingsActivity::toggleCurrentSetting() {
       auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
         valueSetter(idx);
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-        SETTINGS.saveToFile();
+        saveSettings();
         rebuildSettingsLists();
       };
       if (!setting.enumStringValues.empty()) {
@@ -381,7 +474,7 @@ void SettingsActivity::toggleCurrentSetting() {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
   } else if (setting.type == SettingType::ACTION) {
-    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
+    auto resultHandler = [this](const ActivityResult&) { saveSettings(); };
 
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
@@ -411,15 +504,15 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::DownloadFonts:
         startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
+                                 saveSettings();
                                  rebuildSettingsLists();
                                });
         break;
       case SettingAction::TextSettings:
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                      TextSettingsActivity::Tab::Family),
+                                                                      TextSettingsActivity::Tab::Family, japaneseBook),
                                [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
+                                 saveSettings();
                                  rebuildSettingsLists();
                                });
         break;
@@ -436,7 +529,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-  SETTINGS.saveToFile();
+  saveSettings();
   rebuildSettingsLists();
   selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
 }
@@ -473,7 +566,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
+          saveSettings();
         }
         requestUpdate();
       });
@@ -505,6 +598,8 @@ void SettingsActivity::render(RenderLock&&) {
   }
 
   const auto& settings = *currentSettings;
+  const bool selectedSettingReadOnly = selectedSettingIndex > 0 && settings[selectedSettingIndex - 1].valueGetter &&
+                                       !settings[selectedSettingIndex - 1].valueSetter;
   GUI.drawList(
       renderer,
       Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
@@ -518,6 +613,8 @@ void SettingsActivity::render(RenderLock&&) {
         if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
           const bool value = SETTINGS.*(setting.valuePtr);
           valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+        } else if (setting.type == SettingType::TOGGLE && setting.valueGetter) {
+          valueText = setting.valueGetter() != 0 ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
           const uint8_t value = SETTINGS.*(setting.valuePtr);
           valueText = I18N.get(setting.enumValues[value]);
@@ -544,15 +641,18 @@ void SettingsActivity::render(RenderLock&&) {
         }
         return valueText;
       },
-      true);
+      !selectedSettingReadOnly);
 
   // Draw help text
   const auto confirmLabel =
       (selectedSettingIndex == 0)
           ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-          : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
-                 ? tr(STR_SELECT)
-                 : tr(STR_TOGGLE));
+          : (selectedSettingReadOnly
+                 ? tr(STR_READ_ONLY)
+                 : (selectedSettingIndex > 0 &&
+                            (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
+                        ? tr(STR_SELECT)
+                        : tr(STR_TOGGLE)));
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

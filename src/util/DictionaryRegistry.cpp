@@ -138,4 +138,14 @@ bool folderForLanguage(const std::string& language, std::string& folderNameOut) 
   return true;
 }
 
+bool folderForLanguageOrFallback(const std::string& language, const char* fallbackFolder, std::string& folderNameOut) {
+  if (!language.empty() && folderForLanguage(language, folderNameOut)) return true;
+  if (!fallbackFolder || fallbackFolder[0] == '\0') {
+    folderNameOut.clear();
+    return false;
+  }
+  folderNameOut = fallbackFolder;
+  return true;
+}
+
 }  // namespace DictionaryRegistry
