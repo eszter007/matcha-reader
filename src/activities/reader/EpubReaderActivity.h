@@ -231,6 +231,15 @@ class EpubReaderActivity final : public Activity {
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
   // instead of paying the ~500-700ms per-page SD bulk load at button time.
   int prewarmedVPage_ = -1;
+  // Evidence for the pre-render font release (see RESUME_HEAP_FLOOR in render()). The release
+  // costs a full font-cache rebuild -- kern classes, mini kern, advance table, glyph groups --
+  // on the following render. It was written for the resume-into-book path, on the assumption
+  // that normal reading stays above the floor; a vertical book sits at maxAlloc 12-32K, so it
+  // tripped on 6 of 9 measured page turns and taxed each one ~400ms. These two track whether
+  // the previous render actually ran short of glyph memory, which is direct evidence that the
+  // heap at this level is inadequate -- a clean render is evidence that it is not.
+  uint32_t starvedGlyphsAtLastRender_ = 0;
+  bool forceFontReleaseCheck_ = true;  // armed on entry: the resume path this was written for
   // Backoff for the silent next-chapter index when the heap is too tight to build clean:
   // without it the attempt re-fires every tick while the reader sits on a chapter's last two
   // pages, and each attempt releases the font caches (cold glyphs on the next turn) for

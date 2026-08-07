@@ -1628,7 +1628,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // log) is untouched; fonts reload lazily on the next prewarm.
   if (auto* fcm = renderer.getFontCacheManager()) {
     const uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    if (maxAlloc < RESUME_HEAP_FLOOR) {
+    // Only pay the rebuild when the heap has been shown to be inadequate, not merely low. A
+    // render that served every glyph is proof this level works; releasing anyway just buys the
+    // next render a cold font cache. forceFontReleaseCheck_ keeps the original resume-path
+    // behaviour for the first render after entering the activity, which is the case the floor
+    // was added for (X3: fragmented boot heap -> missing glyph chunks mid-render).
+    bool starvedSinceLastRender = forceFontReleaseCheck_;
+    if (auto* fd = fcm->getDecompressor()) {
+      const uint32_t starvedNow = fd->getStarvedGlyphCount();
+      starvedSinceLastRender = starvedSinceLastRender || starvedNow != starvedGlyphsAtLastRender_;
+      starvedGlyphsAtLastRender_ = starvedNow;
+    }
+    forceFontReleaseCheck_ = false;
+    if (maxAlloc < RESUME_HEAP_FLOOR && starvedSinceLastRender) {
       LOG_INF("ERS", "Low heap before render (maxAlloc=%u < %u); releasing font memory", maxAlloc, RESUME_HEAP_FLOOR);
       fcm->releaseAllFontMemory();
       prewarmedVPage_ = -1;  // the release just emptied the mini-font cache (vertical)

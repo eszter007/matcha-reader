@@ -50,6 +50,12 @@ class FontDecompressor {
   void resetStats();
   const Stats& getStats() const { return stats; }
 
+  // Monotonic count of glyphs that could not be served because the heap had no room for their
+  // group. Sampled either side of a long build so the caller can tell that its measurements ran
+  // blind -- see VerticalSection's stale-stamp path. Never reset by clearCache(), so a sample
+  // pair is always comparable.
+  uint32_t getStarvedGlyphCount() const { return starvedGlyphs; }
+
  private:
   Stats stats;
   InflateReader inflateReader;
@@ -90,6 +96,17 @@ class FontDecompressor {
   // Valid until the next getBitmap() call. Same ownership/OOM contract as hotGroup.
   uint8_t* hotGlyphBuf = nullptr;
   uint32_t hotGlyphBufCapacity = 0;
+
+  // Back-off latch for a failed hot-group allocation. Without it, a heap too tight for one group
+  // is re-probed once per glyph: a device log of a vertical chapter build showed 203 consecutive
+  // "Failed to allocate 16357 bytes" over 6.8 seconds, each one a free()+malloc()+LOG_ERR that
+  // could not have succeeded. The state is RAM-only and self-clearing -- a retry is allowed the
+  // moment the largest block grows past what was available when we failed, or a smaller group is
+  // asked for -- so a transient shortage is never recorded as a permanent "this font is
+  // unavailable". Cleared outright whenever the buffers are released.
+  uint32_t hotGroupFailNeeded = 0;    // size that failed; 0 = no latch
+  uint32_t hotGroupFailMaxAlloc = 0;  // largest block at the time of that failure
+  uint32_t starvedGlyphs = 0;         // glyphs returned as nullptr for want of a group buffer
 
   // Grow (never shrink) an owned buffer to at least `needed` bytes; false on OOM, buffer freed.
   static bool ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed);

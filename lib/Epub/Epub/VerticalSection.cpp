@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -1255,6 +1256,16 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   const uint32_t buildStartMs = millis();
   LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(),
           ESP.getMaxAllocHeap());
+  // Vertical placement measures each glyph's real ink extents (burasage, half-em pairing, the
+  // 3.8 squeeze deficits). Those measurements go through the font decompressor, so a heap too
+  // tight for a glyph group makes them silently fall back to nominal metrics -- and the result
+  // is written to the section cache, where nothing would ever re-examine it. Sample the starved
+  // count across the build and treat any increase as heap degradation, which the stale-stamp
+  // below turns into a rebuild on next open.
+  uint32_t starvedGlyphsAtStart = 0;
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) starvedGlyphsAtStart = fd->getStarvedGlyphCount();
+  }
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_v" + std::to_string(spineIndex) + ".html";
 
@@ -1437,6 +1448,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // arbitrary fill levels, so the same usable-now/rebuild-next-open path applies (and the same
   // rebuildingFromStale_ guard breaks the loop when a retry degrades again).
   lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) {
+      const uint32_t starved = fd->getStarvedGlyphCount() - starvedGlyphsAtStart;
+      if (starved > 0) {
+        LOG_ERR("VSC", "%u glyph(s) measured without ink data on low heap; layout is approximate", starved);
+        lastBuildDroppedForHeap_ = true;
+      }
+    }
+  }
   // Persist harvested furigana pairs; runs after the parse buffers are freed, so the
   // transient merge buffer doesn't compete with layout's peak memory.
   RubyGlossary::merge(epub->getCachePath(), sink.rubyHarvest);
