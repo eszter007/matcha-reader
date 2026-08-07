@@ -3303,8 +3303,13 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
   renderer.clearScreen();
   renderVerticalPageBody(page);
-  // No status bar here: it derives page counts from a section that is still mid-build. It
-  // appears with the next real page refresh; redrawing this page only for the bar is slower.
+  // The bar goes into the SAME buffer as the page, before the one displayBuffer() below, so it
+  // costs no extra refresh -- the earlier objection was to redrawing the page for the bar's sake.
+  // Mid-build counts are no longer a reason to skip it either: renderStatusBar() reads
+  // estimatedTotalPages() and marks an estimate with "~". Without this the bar was simply absent
+  // for the first pages of every vertical chapter, until the build finished and ordinary renders
+  // took over (device: reappeared after 3-4 page turns; horizontal has no early-render path).
+  renderStatusBar();
   renderer.displayBuffer();
   earlyPageActuallyDisplayed_ = true;
   // The build resumes the moment this returns and needs its headroom back: the prewarm above
