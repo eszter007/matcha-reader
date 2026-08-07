@@ -203,9 +203,25 @@ struct TextExtractor {
   static constexpr size_t SOFT_FLUSH_RUNS = 48;
   bool midParagraph = false;
 
+  static bool isAsciiWordByte(const unsigned char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+  }
+
   // paragraphEnds=false streams a partial paragraph: the sink lays it out with no break
   // recorded, and the next emit continues it seamlessly (continuesPrevious=true).
   void emitRuns(const bool paragraphEnds) {
+    // A soft flush is a cadence, not a deadline. If the text so far ends inside a Latin word,
+    // skip this one and let the next take it: the vertical layout gathers a rotated run only
+    // within one batch, so cutting here renders "authority" as "au", a blank cell, then
+    // "thority". Deferring is bounded -- the paragraph's own end always flushes -- and the
+    // triggers retry on the next character or the next run.
+    // The tail lives in currentText, or, when the run-COUNT trigger fires from the </ruby>
+    // handler, in the last run already pushed.
+    if (!paragraphEnds) {
+      const std::string& tail =
+          !currentText.empty() ? currentText : (currentRuns.empty() ? currentText : currentRuns.back().baseText);
+      if (!tail.empty() && isAsciiWordByte(static_cast<unsigned char>(tail.back()))) return;
+    }
     flushCurrentText();
     if (!currentRuns.empty()) {
       if (sink) {
