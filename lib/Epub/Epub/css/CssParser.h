@@ -58,7 +58,7 @@ class CssParser {
   //      (82 -> 88 fixed), so a v17 record cannot be read with the v18 framing.
   // v19: the existing border byte now also packs line style + 1..4px width, and display retains
   //      inline-block so close-time heading rules can shrink to their text. Framing is unchanged.
-  static constexpr uint8_t CSS_CACHE_VERSION = 19;
+  static constexpr uint8_t CSS_CACHE_VERSION = 20;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
