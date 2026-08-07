@@ -1998,8 +1998,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       renderStatusBar();
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
     }
+    // Pre-build the next chapter's cache while this page is on screen. This call was
+    // missing from the vertical path (lost in a refactor -- silentIndexNextChapterIfNeeded
+    // has had a vertical branch all along), so in tategaki books every chapter transition
+    // showed the Indexing popup. JP books make it worse: each full-page illustration is its
+    // own one-page spine item, so a text->image->text sequence popped Indexing twice. Now
+    // the image chapter builds while the last text pages are read, and the next text
+    // chapter builds while the reader looks at the illustration.
+    silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
+
     // Warm the neighbouring page's glyphs while the reader looks at this one, so the next turn
     // renders from a warm cache instead of paying the per-page SD bulk load at button time.
+    // Must stay AFTER the silent index above, which releases all font memory before building and
+    // would discard this warm.
     // getPage(target) also leaves that page in the section's single-page read cache, so the turn
     // skips the SD page read as well.
     //
@@ -2021,14 +2032,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
       }
     }
-    // Pre-build the next chapter's cache while this page is on screen. This call was
-    // missing from the vertical path (lost in a refactor -- silentIndexNextChapterIfNeeded
-    // has had a vertical branch all along), so in tategaki books every chapter transition
-    // showed the Indexing popup. JP books make it worse: each full-page illustration is its
-    // own one-page spine item, so a text->image->text sequence popped Indexing twice. Now
-    // the image chapter builds while the last text pages are read, and the next text
-    // chapter builds while the reader looks at the illustration.
-    silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
     saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
                  furiganaOverride);
 
@@ -2533,11 +2536,23 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana()))
       return;
 
+    // Cheap pre-gate, before paying anything. releaseAllFontMemory() below cannot produce a block
+    // larger than the total free heap, so if free is already under the build's floor the release
+    // is guaranteed not to clear the gate -- and it would still cost the next render a full
+    // font-cache rebuild (~250ms). Skip the whole attempt instead.
+    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
+    if (ESP.getFreeHeap() < SILENT_VBUILD_MIN_ALLOC) {
+      LOG_DBG("ERS", "Silent vertical index skipped, free heap below floor (free=%u)", ESP.getFreeHeap());
+      silentIndexBackoffUntilMs_ = millis() + 5000;
+      return;
+    }
+
     // The vertical build is the most memory-intensive step in the reader, and this
     // silent path runs it at the worst heap moment: right after a page render, with
     // the glyph slab fully warmed AND the current chapter still resident. Hand the
-    // build the font memory first, like the mainline vertical build does. Costs
-    // nothing here: every vertical page render clearCache()s and re-prewarms anyway.
+    // build the font memory first, like the mainline vertical build does. This is why the call
+    // runs BEFORE the idle glyph warm: the release empties the mini-font cache, so warming first
+    // would throw that work away and leave the next turn cold.
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->releaseAllFontMemory();
       // The release just emptied the mini-font cache, so the idle warm's page is no longer
@@ -2553,7 +2568,6 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // also leaves short pages on screen if the reader pages into it this session. Leave the
     // section unbuilt instead: a roomier later tick retries, and the foreground open path
     // (which frees more up front and early-renders) builds it properly on arrival.
-    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
     if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
       LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
       silentIndexBackoffUntilMs_ = millis() + 5000;
