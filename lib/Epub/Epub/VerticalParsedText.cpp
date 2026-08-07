@@ -402,9 +402,13 @@ int verticalCellPx(const GfxRenderer& renderer, const int fontId, bool* measured
 int verticalNominalInkGapPx(const GfxRenderer& renderer, const int fontId, const int cellPx, bool* measured) {
   renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);
   GlyphInk ink;
-  const bool ok = measureGlyphInk(renderer, fontId, 0x6F22 /* 漢 */, 0, &ink) && ink.height > 0 && ink.height <= cellPx;
+  const bool ok = measureGlyphInk(renderer, fontId, 0x6F22 /* 漢 */, 0, &ink) && ink.height > 0;
   if (measured) *measured = ok;
-  return ok ? cellPx - ink.height : 0;
+  // A face whose ink is TALLER than its own em leaves no white at all -- that is a measurement,
+  // not a failure, so clamp it to zero and let it be cached. Treating it as unmeasured (NotoSerif
+  // JP: 30px of ink in a 29px em) re-probed 漢 on every batch for the whole chapter, which is the
+  // SD-glyph eviction the memo exists to prevent.
+  return ok ? std::max(0, cellPx - ink.height) : 0;
 }
 
 // Record a paragraph boundary before stream index `idx`, ignoring a repeat at the same index --
