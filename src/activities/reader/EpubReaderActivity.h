@@ -235,6 +235,10 @@ class EpubReaderActivity final : public Activity {
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
   // instead of paying the ~500-700ms per-page SD bulk load at button time.
   int prewarmedVPage_ = -1;
+  // The vertical page index actually drawn by the last render, captured BEFORE the draw.
+  // verticalSection->currentPage can advance mid-render (a button press during a 100-700ms
+  // render), so the post-render warm must not re-read it -- see the warm block in render().
+  int renderedVPage_ = -1;
   // Evidence for the pre-render font release (see RESUME_HEAP_FLOOR in render()). The release
   // costs a full font-cache rebuild -- kern classes, mini kern, advance table, glyph groups --
   // on the following render. It was written for the resume-into-book path, on the assumption

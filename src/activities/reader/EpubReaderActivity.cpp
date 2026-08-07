@@ -1986,6 +1986,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!monoBmp) pagesUntilFullRefresh = 1;
         imagePageDisplayed = true;
       } else {
+        renderedVPage_ = verticalSection->currentPage;  // see the post-render warm block below
         const bool vGlyphsWarm = prewarmedVPage_ == verticalSection->currentPage;
         renderVerticalPageBody(*vpage, vGlyphsWarm);
         // Re-assert the claim for the page the body just prewarmed (it cleared it above).
@@ -2008,10 +2009,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // Only after a real page change. A re-render of the same page still has its glyphs in the
     // mini cache; warming the neighbour would evict them and make the next re-render pay a full
     // bulk load again, for a neighbour that was already warmed after the first render.
-    const bool pageChanged = verticalSection->currentPage != lastRenderedVPage_;
-    lastRenderedVPage_ = verticalSection->currentPage;
-    const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? verticalSection->currentPage + 1
-                                                                            : verticalSection->currentPage - 1;
+    // Use the page that was just DRAWN, not currentPage. The render takes 100-700ms and a button
+    // press during it advances currentPage, so reading it here overshot the warm target by one:
+    // the warm then loaded a page the reader was not going to next AND evicted the one they were
+    // (the mini-font cache holds one page per style). Measured: "render page=7" followed by "idle
+    // warm target=9", and the turn onto 8 paid a full on-demand page.
+    const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
+    lastRenderedVPage_ = renderedVPage_;
+    const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? renderedVPage_ + 1 : renderedVPage_ - 1;
     if (pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
       prewarmedVPage_ = -1;
       if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
