@@ -1721,9 +1721,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
   // A chapter-filtered load keeps only a small subset of a book-wide cache. Reserving the
   // book's full rule count here defeats that filter and can consume the last contiguous block
   // before the first record is even inspected.
-  // The cache may hold more rules than the RAM cap allows. An UNFILTERED load is the one path
-  // that would materialise them all, so it reserves -- and below, keeps -- no more than the
-  // resident cap, exactly as it did when the two limits were a single number.
+  // The cache may hold more rules than the RAM cap allows, so the map is bounded by MAX_RULES on
+  // every path (see the loop below). A filtered load keeps only a small subset anyway; an
+  // unfiltered one would materialise the lot, so it also reserves no more than that cap.
   if (usedClasses == nullptr) rulesBySelector_.reserve(std::min<size_t>(ruleCount, MAX_RULES));
 
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
@@ -1744,7 +1744,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
-    if (usedClasses == nullptr && rulesBySelector_.size() >= MAX_RULES) break;
+    // The RAM bound applies to EVERY load, filtered or not: a chapter touching enough classes
+    // could otherwise pull more than MAX_RULES out of a cache file that may now hold 4000.
+    if (rulesBySelector_.size() >= MAX_RULES) break;
     // Read selector string
     uint16_t selectorLen = 0;
     if (!hasRemainingBytes(sizeof(selectorLen))) {

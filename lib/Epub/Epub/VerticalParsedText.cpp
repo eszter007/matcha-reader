@@ -366,11 +366,11 @@ int runInkWidth(const GfxRenderer& renderer, const int fontId, const std::string
   size_t lastStart = s.size() - 1;
   while (lastStart > 0 && (static_cast<unsigned char>(s[lastStart]) & 0xC0) == 0x80) lastStart--;
   const std::string lastChar = s.substr(lastStart);
-  const auto c0 = static_cast<unsigned char>(lastChar[0]);
-  uint32_t lastCp = c0;
-  if (c0 >= 0xC0 && lastChar.size() >= 2) {
-    lastCp = static_cast<uint32_t>(c0 & 0x1F) << 6 | (static_cast<unsigned char>(lastChar[1]) & 0x3F);
-  }
+  // Full decode, not a 2-byte shortcut: a rotated run may end in a 3-byte codepoint (U+2122 (TM)
+  // is in Kinsoku::isRotatedRunCharacter), and mis-decoding it measured the wrong glyph's ink,
+  // fell back to the advance, and reserved an extra row.
+  const auto* lastPtr = reinterpret_cast<const unsigned char*>(lastChar.c_str());
+  const uint32_t lastCp = utf8NextCodepoint(&lastPtr);
   GlyphInk ink;
   if (!measureGlyphInk(renderer, fontId, lastCp, static_cast<uint8_t>(style), &ink) || ink.width <= 0) {
     return advanceWidth;
