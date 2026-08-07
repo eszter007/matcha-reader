@@ -222,6 +222,10 @@ class EpubReaderActivity final : public Activity {
   // false when the heap was too tight to prewarm -- rendering still works via the slower
   // per-glyph on-demand path.
   bool prewarmVerticalPageGlyphs(const VerticalPage& vpage);
+  // True only while a mid-build early render is running (the build is paused mid-layout and
+  // resumes the moment it returns). Selects the conservative prewarm heap floor there, and the
+  // reading floor everywhere else -- see prewarmVerticalPageGlyphs().
+  bool duringEarlyBuildRender_ = false;
   // Draws one vertical TEXT page into the framebuffer; shared by the normal render path and
   // the early-first-render hook. Does not touch the display. glyphsAlreadyWarm skips the
   // prewarm when the page's glyphs were pre-loaded during idle (see prewarmedVPage_).

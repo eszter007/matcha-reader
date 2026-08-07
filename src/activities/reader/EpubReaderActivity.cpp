@@ -64,6 +64,10 @@ constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 // render()). Chosen above the word-lookup self-heal floor (28K) so the reader hands off a
 // coalesced heap BEFORE the dictionary activity opens on top of it.
 constexpr uint32_t RESUME_HEAP_FLOOR = 40 * 1024;
+// Largest-block floor below which the per-page bulk glyph prewarm gives up (see
+// prewarmVerticalPageGlyphs). Also the point at which reclaiming font memory becomes worth its
+// rebuild cost: below this, every page falls back to 40-70 individual on-demand SD glyph loads.
+constexpr uint32_t PREWARM_MIN_ALLOC_READ = 12 * 1024;
 constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 // Bump when ReaderPrefs gains/changes fields; stale files fall back to globals.
@@ -1640,7 +1644,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       starvedGlyphsAtLastRender_ = starvedNow;
     }
     forceFontReleaseCheck_ = false;
-    if (maxAlloc < RESUME_HEAP_FLOOR && starvedSinceLastRender) {
+    // ...and reclaim once the heap has decayed past the point where the bulk prewarm can run.
+    // Measured on device: maxAlloc decays monotonically while reading (20468 -> 11252 over a
+    // dozen turns) and never recovers on its own -- the release is the only thing that coalesces
+    // it. Gating on starvation alone let it decay forever, and every page then paid ~40 on-demand
+    // SD glyph loads (~300ms) instead of prewarming once (~90-150ms). One rebuild buys many warm
+    // turns, so this is the threshold worth paying at -- unlike the bare 40K floor, which fired
+    // on nearly every turn for no gain.
+    const bool cannotPrewarm = maxAlloc < PREWARM_MIN_ALLOC_READ;
+    if (maxAlloc < RESUME_HEAP_FLOOR && (starvedSinceLastRender || cannotPrewarm)) {
       LOG_INF("ERS", "Low heap before render (maxAlloc=%u < %u); releasing font memory", maxAlloc, RESUME_HEAP_FLOOR);
       fcm->releaseAllFontMemory();
       prewarmedVPage_ = -1;  // the release just emptied the mini-font cache (vertical)
@@ -1974,7 +1986,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!monoBmp) pagesUntilFullRefresh = 1;
         imagePageDisplayed = true;
       } else {
-        renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/prewarmedVPage_ == verticalSection->currentPage);
+        const bool vGlyphsWarm = prewarmedVPage_ == verticalSection->currentPage;
+        renderVerticalPageBody(*vpage, vGlyphsWarm);
+        // Re-assert the claim for the page the body just prewarmed (it cleared it above).
+        if (!vGlyphsWarm) prewarmedVPage_ = verticalSection->currentPage;
       }
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
     }
@@ -3273,9 +3288,26 @@ bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
   // page's layout dip and the build dropped glyphs (need 11736 @ 9716 free) -> stale cache.
   // Build-phase serves rendering on-demand (~2s) is a drop-free, one-time-per-book cost;
   // content integrity outranks shaving that.
-  constexpr uint32_t PREWARM_MIN_ALLOC = 20 * 1024;
+  // ...but that reasoning is about a build. Once the chapter is built there is no layout to
+  // starve, and the alternative to prewarming is strictly worse for the heap as well as the
+  // clock: 40-74 individual on-demand glyph loads per page through an 8-slot ring, each one an
+  // SD round-trip at ~7ms. Measured on device: ordinary vertical reading sits at maxAlloc
+  // 12-32K, so a flat 20K floor rejected EVERY idle warm (probe: "idle warm ok=0" on all 13
+  // turns) and every page paid the full on-demand path. Keep 20K for the mid-build serve,
+  // where content integrity outranks speed; use the lower floor for reading, where a failed
+  // prewarm costs nothing that isn't already being paid.
+  constexpr uint32_t PREWARM_MIN_ALLOC_BUILD = 20 * 1024;
+  const uint32_t floorBytes = duringEarlyBuildRender_ ? PREWARM_MIN_ALLOC_BUILD : PREWARM_MIN_ALLOC_READ;
   auto* fcm = renderer.getFontCacheManager();
-  if (!fcm || ESP.getMaxAllocHeap() < PREWARM_MIN_ALLOC) return false;
+  if (!fcm || ESP.getMaxAllocHeap() < floorBytes) return false;
+  // The mini-font cache holds exactly one page per style and clearCache() below empties it, so
+  // any page it previously held is gone. Retract the claim BEFORE destroying the evidence for
+  // it: leaving prewarmedVPage_ pointing at a page this call is about to evict made the next
+  // render trust a cache that no longer had it and pay a full on-demand page (device probe:
+  // "render page=9 prewarmed=9" followed by 44 on-demand loads, right after a re-render of
+  // page 10 had prewarmed itself over the idle warm of 11). Callers that know which page they
+  // just warmed re-assert it on success.
+  prewarmedVPage_ = -1;
   fcm->clearCache();
   uint8_t styleMask =
       std::accumulate(vpage.glyphs.begin(), vpage.glyphs.end(), uint8_t{0},
@@ -3314,7 +3346,9 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   // (observed on device as the same page rendering twice back-to-back).
   earlyDisplayedPage_.store(pageIndex, std::memory_order_relaxed);
   renderer.clearScreen();
+  duringEarlyBuildRender_ = true;  // the build is paused mid-layout; prewarm keeps its high floor
   renderVerticalPageBody(page);
+  duringEarlyBuildRender_ = false;
   // The bar goes into the SAME buffer as the page, before the one displayBuffer() below, so it
   // costs no extra refresh -- the earlier objection was to redrawing the page for the bar's sake.
   // Mid-build counts are no longer a reason to skip it either: renderStatusBar() reads
