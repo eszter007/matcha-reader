@@ -1555,18 +1555,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   orientedMarginLeft += SETTINGS.screenMargin;
   orientedMarginRight += SETTINGS.screenMargin;
 
-  const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
-
-  // The status bar is furniture, not margin: it takes its own height AND the reader's margin
-  // still belongs between it and the text, so these add rather than compete.
-  // reserves space for automatic page turn indicator when no status bar or progress bar only
-  if (automaticPageTurnActive &&
-      (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight())) {
-    orientedMarginBottom +=
-        statusBarHeight + UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
-  } else {
-    orientedMarginBottom += statusBarHeight + SETTINGS.screenMargin;
-  }
+  orientedMarginBottom += readerBottomReserve(useVerticalText());
 
   const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
@@ -1851,8 +1840,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       currentPageFootnotes.clear();
       const auto start = millis();
       if (vpage->isImagePage()) {
-        const int reserve = UITheme::getInstance().getStatusBarHeight() +
-                            UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
+        const int reserve = readerBottomReserve(/*verticalMode=*/false);
         // Release ImageBlock's pixel-cache RAM slot on every exit from this branch. renderContents()
         // (the horizontal path) has always had this guard; vertical never did, so any time the slot
         // DID engage here its 6x16KB stayed resident for good. Observed on device: the heap fell
@@ -2697,8 +2685,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     const auto warmVerticalPage = [&](const VerticalPage& page) -> bool {
       if (!page.isImagePage()) return true;  // keep scanning
       if (page.imageRotated) {
-        const int reserve = UITheme::getInstance().getStatusBarHeight() +
-                            UITheme::getInstance().getMetrics().statusBarVerticalMargin + SETTINGS.screenMargin;
+        const int reserve = readerBottomReserve(/*verticalMode=*/false);
         ImageBlock block(page.imagePath, page.imageSrcPath, page.imageWidth, page.imageHeight);
         block.setRotated(true, static_cast<int16_t>(reserve));
         return warmBlock(block);
@@ -3767,6 +3754,20 @@ bool EpubReaderActivity::useVerticalText() const {
   if (verticalOverride == 0) return false;
   if (verticalOverride == 1) return true;
   return true;  // auto: isJapaneseBook() is true here
+}
+
+uint8_t EpubReaderActivity::readerBottomReserve(const bool verticalMode) const {
+  const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
+  // reserves space for automatic page turn indicator when no status bar or progress bar only
+  const bool needsPageTurnLane =
+      automaticPageTurnActive &&
+      (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight());
+  // Everything actually drawn at the bottom of the screen: the status bar, plus a text lane for
+  // the page-turn indicator when nothing else is using one.
+  const auto drawnHeight = static_cast<uint8_t>(
+      statusBarHeight + (needsPageTurnLane ? UITheme::getInstance().getMetrics().statusBarVerticalMargin : 0));
+  return verticalMode ? static_cast<uint8_t>(drawnHeight + SETTINGS.screenMargin)
+                      : std::max(SETTINGS.screenMargin, drawnHeight);
 }
 
 bool EpubReaderActivity::useFurigana() const {

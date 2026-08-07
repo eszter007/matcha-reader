@@ -379,6 +379,15 @@ class EpubReaderActivity final : public Activity {
   int effectiveReaderFontId() const;
   void restoreSavedPosition();
   bool useVerticalText() const;
+  // Space kept clear below the text, in addition to the panel's own bezel.
+  //
+  // Horizontal follows upstream: the status bar and the reader's margin describe the same strip,
+  // so the larger of the two wins. Vertical ADDS them, because tategaki puts ink past its last
+  // row by design -- the row's own ink hang, and 。/、 set past the line end (burasage). Measured
+  // at 6px on a 29px cell, against a default margin that max() collapses to nothing whenever the
+  // status bar is taller (~24px with a clock), which would drop that ink onto the clock.
+  uint8_t readerBottomReserve(bool verticalMode) const;
+
   bool useFurigana() const;
   bool isJapaneseBook() const;
   bool showVerticalToggle() const;
