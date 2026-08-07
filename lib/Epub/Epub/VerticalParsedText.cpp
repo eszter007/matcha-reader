@@ -460,6 +460,20 @@ bool VerticalParsedText::canPushStreamChar() {
 }
 
 void VerticalParsedText::addParagraph(const std::string& utf8Text) {
+  // Characters held back from the previous batch (a rotated run that ran to its end). They belong
+  // to the paragraph that was in flight then, so they go in BEFORE this batch records its own
+  // break -- the rest of the word is about to follow them and the two must gather as one run.
+  if (!carriedRunTail_.empty()) {
+    const uint32_t carryIndex =
+        paragraphBreaksBeforeIndex_.empty() ? 0 : static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size() - 1);
+    for (auto& carried : carriedRunTail_) {
+      if (!canPushStreamChar()) break;
+      carried.paragraphIndex = carryIndex;
+      stream_.push_back(std::move(carried));
+    }
+    carriedRunTail_.clear();
+  }
+
   const uint32_t paragraphIndex = static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size());
   paragraphBreaksBeforeIndex_.push_back(stream_.size());
 
@@ -513,6 +527,20 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
   if (pendingTrailingBreak_) {
     recordParagraphBreakAt(stream_.size());
     pendingTrailingBreak_ = false;
+  }
+
+  // Characters held back from the previous batch (a rotated run that ran to its end). They belong
+  // to the paragraph that was in flight then, so they go in BEFORE this batch records its own
+  // break -- the rest of the word is about to follow them and the two must gather as one run.
+  if (!carriedRunTail_.empty()) {
+    const uint32_t carryIndex =
+        paragraphBreaksBeforeIndex_.empty() ? 0 : static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size() - 1);
+    for (auto& carried : carriedRunTail_) {
+      if (!canPushStreamChar()) break;
+      carried.paragraphIndex = carryIndex;
+      stream_.push_back(std::move(carried));
+    }
+    carriedRunTail_.clear();
   }
 
   // A continuation chunk belongs to the paragraph already in flight: no break is recorded and
@@ -1155,6 +1183,16 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       !stream_.empty()) {
     pendingTrailingBreak_ = true;
   }
+  // A carry with no following batch (the sink finalizes without adding more text) would be lost.
+  // The stream is empty here, so there are no recorded break indices to shift.
+  if (!carriedRunTail_.empty() && stream_.empty()) {
+    for (auto& carried : carriedRunTail_) {
+      if (!canPushStreamChar()) break;
+      stream_.push_back(std::move(carried));
+    }
+    carriedRunTail_.clear();
+  }
+
   // Nothing new to lay out AND nothing left over from a previous non-final call to finalize.
   if (stream_.empty() && !(isFinalFlush && pendingPageValid_)) return pages;
 
@@ -1586,6 +1624,18 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         utf8AppendCodepoint(stream_[runEnd].codepoint, runUtf8);
         runEnd++;
         if (runEnd - idx > 64) break;
+      }
+
+      // A run that reaches the END of a non-final batch is not this batch's to place: the rest of
+      // the word is in the next one, and the gatherer only ever looks within one batch, so placing
+      // it now renders "authority" as "au", a blank cell, then "thority". Hold its characters back
+      // instead -- the next batch prepends them and gathers the whole word. isFinalFlush means
+      // nothing follows, so there the run really is complete.
+      if (!isFinalFlush && runEnd == stream_.size()) {
+        carriedRunTail_.assign(std::make_move_iterator(stream_.begin() + static_cast<long>(idx)),
+                               std::make_move_iterator(stream_.end()));
+        idx = runEnd;
+        continue;
       }
 
       // Split the run into chunks that fit in columns, breaking at spaces.

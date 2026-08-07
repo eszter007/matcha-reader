@@ -371,6 +371,11 @@ class VerticalParsedText {
   VerticalPage pendingPage_;
   // A paragraph break recorded at exactly the end of a batch's stream (trailing newline) --
   // carried across reset() and re-recorded at the start of the next batch. See layoutPages().
+  // A rotated Latin run that reaches the end of a non-final batch is NOT placed: the layout
+  // gathers a run only within one batch, so placing it would render "authority" as "au", a blank
+  // cell, then "thority". Its characters are held here and prepended to the next batch, where the
+  // rest of the word joins them. Survives reset(), which clears the stream itself.
+  std::vector<PendingChar> carriedRunTail_;
   bool pendingTrailingBreak_ = false;
   uint16_t pendingColumn_ = 0;
   uint16_t pendingRow_ = 0;
