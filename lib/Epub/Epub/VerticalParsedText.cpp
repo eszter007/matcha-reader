@@ -330,16 +330,18 @@ struct ColumnGeometry {
   int columnLeftX(const uint16_t col) const { return usableWidthPx - cellPx - static_cast<int>(col) * columnAdvancePx; }
 };
 
-// Upper-RIGHT quadrant placement, from the glyph's own ink box: 。、 are drawn with their ink at
-// the bottom-left of the em, so how far it must travel is font-specific. False when metrics are
-// unavailable, which every caller has a fallback for.
-//
-// centreInHalf distinguishes the two users:
-//   。、        - ink centred in a half-em box at the cell's head
-//   small kana - letter face against the TOP edge of its box
-bool quadrantTopRight(const GfxRenderer& renderer, const int fontId, InkMemo& memo, const ColumnGeometry& geom,
-                      const uint32_t cp, const uint8_t style, const uint16_t col, const uint16_t rowIdx,
-                      const bool centreInHalf, int* gxOut, int* gyOut, int* inkHeightOut = nullptr) {
+// Where a right-aligned mark's ink sits along the column.
+enum class InkVAlign : uint8_t {
+  HalfEmHead,  // 。、 -- centred in the FIRST half em, so the second half is free (JLREQ 3.1.4)
+  Centre,      // small kana -- centred in the full em (JLREQ A.11)
+};
+
+// Places a mark's letter face against the RIGHT edge of its cell, from the glyph's own ink box:
+// these characters are drawn toward the bottom-left of the em, so how far the face must travel is
+// font-specific. False when metrics are unavailable, which every caller has a fallback for.
+bool rightAlignedInk(const GfxRenderer& renderer, const int fontId, InkMemo& memo, const ColumnGeometry& geom,
+                     const uint32_t cp, const uint8_t style, const uint16_t col, const uint16_t rowIdx,
+                     const InkVAlign vAlign, int* gxOut, int* gyOut, int* inkHeightOut = nullptr) {
   GlyphInk ink;
   if (!memo.lookup(cp, style, &ink)) {
     if (!measureGlyphInk(renderer, fontId, cp, style, &ink)) return false;
@@ -347,7 +349,8 @@ bool quadrantTopRight(const GfxRenderer& renderer, const int fontId, InkMemo& me
   }
   if (ink.width <= 0 || ink.height <= 0) return false;
   // Draw resolves ink left as x + glyph->left, and ink top as (cellTop + baselineInCell) - top.
-  const int inkTopInCell = centreInHalf ? std::max(0, (geom.cellPx / 2 - ink.height) / 2) : 0;
+  const int inkTopInCell = vAlign == InkVAlign::HalfEmHead ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
+                                                           : std::max(0, (geom.cellPx - ink.height) / 2);
   *gxOut = geom.columnLeftX(col) + geom.cellPx - ink.left - ink.width;
   *gyOut = std::max(0, rowIdx * geom.cellPx + inkTopInCell + ink.top - geom.baselineInCellPx);
   if (inkHeightOut) *inkHeightOut = inkTopInCell + ink.height;
@@ -916,10 +919,12 @@ struct VerticalParsedText::LayoutCursor {
     }
 
     if (Kinsoku::isSmallKana(pc.codepoint)) {
-      // Small kana (っゃゅょ ィ ョ) sit upper-right, letter face against the TOP edge of the box.
+      // JLREQ A.11: in vertical writing the letter face of a small kana (cl-11: ぁぃぅ ァィゥ っゃゅょ)
+      // is centred VERTICALLY in the frame and set right of its horizontal centre -- not against
+      // the frame's top edge, which is where the horizontal-mode intuition puts it.
       int qx = 0, qy = 0;
-      if (quadrantTopRight(o.renderer_, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, col, rowIdx,
-                           /*centreInHalf=*/false, &qx, &qy)) {
+      if (rightAlignedInk(o.renderer_, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, col, rowIdx, InkVAlign::Centre,
+                          &qx, &qy)) {
         g.x = static_cast<uint16_t>(qx);
         g.y = static_cast<uint16_t>(qy);
       } else {
@@ -943,8 +948,8 @@ struct VerticalParsedText::LayoutCursor {
     if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
       // Comma/period: bottom-left of the em -> upper-right of the cell.
       int qx = 0, qy = 0, inkH = 0;
-      if (quadrantTopRight(o.renderer_, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, col, rowIdx,
-                           /*centreInHalf=*/true, &qx, &qy, &inkH)) {
+      if (rightAlignedInk(o.renderer_, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, col, rowIdx,
+                          InkVAlign::HalfEmHead, &qx, &qy, &inkH)) {
         gx = qx;
         gy = qy;
         // Not a whole square: the mark takes its own ink height plus a half em, then the next
@@ -1766,8 +1771,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           int gy = g.row * cellPx;
           if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
             int qx = 0, qy = 0;
-            if (quadrantTopRight(renderer_, fontId_, inkMemo, geom, pc.codepoint, pc.style, prev.column, g.row,
-                                 /*centreInHalf=*/true, &qx, &qy)) {
+            if (rightAlignedInk(renderer_, fontId_, inkMemo, geom, pc.codepoint, pc.style, prev.column, g.row,
+                                InkVAlign::HalfEmHead, &qx, &qy)) {
               gx = qx;
               gy = qy;
             } else {
