@@ -14,7 +14,7 @@ constexpr int kNoStyle = 0;
 // instead of re-deriving it -- every derivation probes the reference glyph out of the SD font.
 int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
   const int cellPx = verticalCellPx(renderer, fontId);
-  // Hoisted: this was measured per emphasised glyph, inside the loop below.
+  // Measured once for the whole loop: each derivation probes the reference glyph out of the SD font.
   const int inkGapPx = verticalNominalInkGapPx(renderer, fontId, cellPx);
   // VerticalGlyph::y is the cell's TOP for every kind (see layoutPages); the draw calls disagree
   // about what they want, so each converts:
@@ -62,12 +62,11 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
 
     if (g.renderKind == VerticalGlyph::RotatedPunct) {
       const int shiftType = Kinsoku::verticalShiftType(g.codepoint);
-      // No per-shape dy nudges here any more: drawCharVerticalRotatedInCell places each shape
-      // from its own measured ink box within the cell it is given. The one exception is JLREQ's
-      // line-head rule: an opening bracket starting a column is set flush to the head, so hand
-      // the renderer a cell half an em higher and its second-half placement lands on the line
-      // head. The layout flags which brackets those are (it knows where columns start, indents
-      // and all) and removes the same half em from the rest of the column.
+      // No per-shape dy nudges: drawCharVerticalRotatedInCell places each shape from its own measured ink
+      // box within the cell it is given. The one exception is JLREQ's line-head rule -- an opening bracket
+      // starting a column is set flush to the head, so it is handed a cell half an em higher and its
+      // second-half placement lands on the line head. The layout flags which brackets those are (it knows
+      // where columns start, indents included) and removes the same half em from the rest of the column.
       if (g.lineHeadFlush) dy -= cellPx / 2;
       renderer.drawCharVerticalRotatedInCell(fontId, dx, dy, cellPx, g.codepoint, shiftType, black,
                                              static_cast<EpdFontFamily::Style>(g.style));

@@ -1632,11 +1632,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // log) is untouched; fonts reload lazily on the next prewarm.
   if (auto* fcm = renderer.getFontCacheManager()) {
     const uint32_t maxAlloc = ESP.getMaxAllocHeap();
-    // Only pay the rebuild when the heap has been shown to be inadequate, not merely low. A
-    // render that served every glyph is proof this level works; releasing anyway just buys the
-    // next render a cold font cache. forceFontReleaseCheck_ keeps the original resume-path
-    // behaviour for the first render after entering the activity, which is the case the floor
-    // was added for (X3: fragmented boot heap -> missing glyph chunks mid-render).
+    // Release only on evidence that the heap is inadequate, not merely low: a render that served
+    // every glyph proves this level works, and releasing anyway hands the next render a cold font
+    // cache. forceFontReleaseCheck_ keeps the unconditional release for the first render after
+    // entering the activity -- the resume path the floor exists for, where a fragmented boot heap
+    // otherwise loses glyph chunks mid-render.
+    //
+    // ...or once the heap has decayed past the point where the bulk prewarm can run. maxAlloc decays
+    // monotonically while reading and never recovers on its own; this release is the only thing that
+    // coalesces it. Below the prewarm floor every page costs ~40 on-demand SD glyph loads (~300ms)
+    // instead of one prewarm (~90-150ms), so one rebuild buys many warm turns. Do not widen this back
+    // to a bare 40K floor: that fires on nearly every turn for no gain.
     bool starvedSinceLastRender = forceFontReleaseCheck_;
     if (auto* fd = fcm->getDecompressor()) {
       const uint32_t starvedNow = fd->getStarvedGlyphCount();
@@ -1644,13 +1650,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       starvedGlyphsAtLastRender_ = starvedNow;
     }
     forceFontReleaseCheck_ = false;
-    // ...and reclaim once the heap has decayed past the point where the bulk prewarm can run.
-    // Measured on device: maxAlloc decays monotonically while reading (20468 -> 11252 over a
-    // dozen turns) and never recovers on its own -- the release is the only thing that coalesces
-    // it. Gating on starvation alone let it decay forever, and every page then paid ~40 on-demand
-    // SD glyph loads (~300ms) instead of prewarming once (~90-150ms). One rebuild buys many warm
-    // turns, so this is the threshold worth paying at -- unlike the bare 40K floor, which fired
-    // on nearly every turn for no gain.
     const bool cannotPrewarm = maxAlloc < PREWARM_MIN_ALLOC_READ;
     if (maxAlloc < RESUME_HEAP_FLOOR && (starvedSinceLastRender || cannotPrewarm)) {
       LOG_INF("ERS", "Low heap before render (maxAlloc=%u < %u); releasing font memory", maxAlloc, RESUME_HEAP_FLOOR);
@@ -1999,21 +1998,20 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       renderStatusBar();
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
     }
-    // Kindle-class turns: load the neighbouring page's glyphs while the reader looks at this
-    // one, so the next turn renders from a warm cache instead of paying the full per-page SD
-    // bulk load at button time. Direction-adaptive: warm the NEXT page after a forward turn,
-    // the PREVIOUS page after a backward turn, so sustained paging in either direction stays
-    // warm -- only the single turn right after a direction reversal is cold (the mini-font
-    // cache holds exactly one page per style). getPage(target) also leaves that page in the
-    // section's single-page read cache, so the turn skips the SD page read too.
-    // Only after a real page change. A re-render of the same page still has its glyphs in the
-    // mini cache; warming the neighbour would evict them and make the next re-render pay a full
-    // bulk load again, for a neighbour that was already warmed after the first render.
-    // Use the page that was just DRAWN, not currentPage. The render takes 100-700ms and a button
-    // press during it advances currentPage, so reading it here overshot the warm target by one:
-    // the warm then loaded a page the reader was not going to next AND evicted the one they were
-    // (the mini-font cache holds one page per style). Measured: "render page=7" followed by "idle
-    // warm target=9", and the turn onto 8 paid a full on-demand page.
+    // Warm the neighbouring page's glyphs while the reader looks at this one, so the next turn
+    // renders from a warm cache instead of paying the per-page SD bulk load at button time.
+    // getPage(target) also leaves that page in the section's single-page read cache, so the turn
+    // skips the SD page read as well.
+    //
+    // Direction-adaptive: the NEXT page after a forward turn, the PREVIOUS after a backward one, so
+    // sustained paging either way stays warm. The mini-font cache holds one page per style, so only
+    // the single turn after a direction reversal is cold -- and for the same reason this runs only
+    // after a REAL page change: warming the neighbour of a re-rendered page evicts glyphs that page
+    // still needs.
+    //
+    // Use renderedVPage_, never currentPage. A render takes 100-700ms and a button press during it
+    // advances currentPage, which overshoots the target by one: that both loads a page the reader
+    // is not going to next and evicts the one they are.
     const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
     lastRenderedVPage_ = renderedVPage_;
     const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? renderedVPage_ + 1 : renderedVPage_ - 1;
@@ -3263,55 +3261,38 @@ int EpubReaderActivity::pageBasedPercent(const int spineIndex, const int section
 }
 
 bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
-  // Bulk-load every glyph this page needs before drawing a single one. Without this, each
-  // draw call for a codepoint that isn't already cached falls through to the on-demand
-  // fallback path (for SD-card fonts: a fresh SD file open + two seeks + two reads per
-  // miss, into an 8-slot ring buffer) -- for a page with hundreds of distinct kanji, that's
-  // hundreds of individual SD round-trips. Confirmed on a real device: this was the entire
-  // cause of vertical page turns taking 1.5-2+ seconds of pure render time with an SD font.
+  // Bulk-load every glyph this page needs before drawing any of them. Otherwise each uncached
+  // codepoint falls through to the on-demand path -- for an SD font, a file open plus two seeks and
+  // two reads per miss into an 8-slot ring -- which for a page of hundreds of distinct kanji means
+  // hundreds of SD round-trips, and 1.5-2s of render time.
   //
-  // clearCache() first is required, not optional: FontDecompressor's prewarmCache() claims
-  // one of only MAX_PAGE_SLOTS (4) page-buffer slots per call and never self-evicts --
-  // "the caller must call freePageBuffer/clearCache to reset" (FontDecompressor.h). Without
-  // this, every page turn permanently claims more slots; confirmed on a real device that
-  // after ~1 page's worth of prewarm calls, all 4 slots were stuck full, "cannot prewarm"
-  // fired for every subsequent page, and glyphs stopped resolving at all (blank pages).
+  // Three constraints, each one a page-blanking bug if broken:
   //
-  // styleMask must reflect only the styles ACTUALLY present on this page, not a blanket "all
-  // 4" request: FontCacheManager::prewarmCache() claims one slot per requested style, PLUS
-  // another slot per style for the family's fallback font if it has one -- up to 8 slot
-  // claims against only 4 slots total. Confirmed on a real device: even right after
-  // clearCache(), a single page still hit "all 4 slots full" because the blanket request
-  // needed more slots than exist, wasting them on styles the page doesn't even use.
-  // Prewarm gated on heap: its page-text string and cache-slot claims are bare allocations,
-  // and this body also runs mid-build (early first render / build-time page turns) where an
-  // OOM aborts under -fno-exceptions. Without prewarm the page still renders correctly via
-  // the per-glyph on-demand path -- slower, but never fatal.
-  // 20K: normal post-build reading always clears this (heap 30K+), so warm turns are
-  // unaffected. The gate only bites during a mid-build serve, and there it MUST stay high:
-  // dropping it to 14K let the prewarm's resident footprint coincide with a dense ruby
-  // page's layout dip and the build dropped glyphs (need 11736 @ 9716 free) -> stale cache.
-  // Build-phase serves rendering on-demand (~2s) is a drop-free, one-time-per-book cost;
-  // content integrity outranks shaving that.
-  // ...but that reasoning is about a build. Once the chapter is built there is no layout to
-  // starve, and the alternative to prewarming is strictly worse for the heap as well as the
-  // clock: 40-74 individual on-demand glyph loads per page through an 8-slot ring, each one an
-  // SD round-trip at ~7ms. Measured on device: ordinary vertical reading sits at maxAlloc
-  // 12-32K, so a flat 20K floor rejected EVERY idle warm (probe: "idle warm ok=0" on all 13
-  // turns) and every page paid the full on-demand path. Keep 20K for the mid-build serve,
-  // where content integrity outranks speed; use the lower floor for reading, where a failed
-  // prewarm costs nothing that isn't already being paid.
+  //   clearCache() first is REQUIRED. FontDecompressor::prewarmCache() claims one of only
+  //   MAX_PAGE_SLOTS (4) page-buffer slots per call and never self-evicts ("the caller must call
+  //   freePageBuffer/clearCache to reset", FontDecompressor.h). Without it every page turn claims
+  //   another slot until all 4 are stuck and no glyph resolves.
+  //
+  //   styleMask must list only the styles PRESENT on this page. FontCacheManager::prewarmCache()
+  //   claims a slot per requested style plus one per style for the family's fallback font -- a
+  //   blanket "all 4" asks for up to 8 slots against the 4 that exist.
+  //
+  //   The heap floor differs by caller. The page-text string and slot claims are bare allocations,
+  //   and this also runs mid-build, where an OOM aborts under -fno-exceptions. Keep 20K there: at
+  //   14K the prewarm's footprint coincided with a dense ruby page's layout dip and the build
+  //   dropped glyphs (needed 11736, 9716 free), staling the cache. Rendering a build-phase page
+  //   on-demand costs ~2s once per book; content integrity outranks that. Reading uses the lower
+  //   floor -- there is no layout left to starve, and the fallback is worse for the heap as well
+  //   as the clock (40-74 on-demand loads per page at ~7ms each, against maxAlloc that sits at
+  //   12-32K, so a 20K floor rejects every prewarm).
   constexpr uint32_t PREWARM_MIN_ALLOC_BUILD = 20 * 1024;
   const uint32_t floorBytes = duringEarlyBuildRender_ ? PREWARM_MIN_ALLOC_BUILD : PREWARM_MIN_ALLOC_READ;
   auto* fcm = renderer.getFontCacheManager();
   if (!fcm || ESP.getMaxAllocHeap() < floorBytes) return false;
-  // The mini-font cache holds exactly one page per style and clearCache() below empties it, so
-  // any page it previously held is gone. Retract the claim BEFORE destroying the evidence for
-  // it: leaving prewarmedVPage_ pointing at a page this call is about to evict made the next
-  // render trust a cache that no longer had it and pay a full on-demand page (device probe:
-  // "render page=9 prewarmed=9" followed by 44 on-demand loads, right after a re-render of
-  // page 10 had prewarmed itself over the idle warm of 11). Callers that know which page they
-  // just warmed re-assert it on success.
+  // The mini-font cache holds one page per style and clearCache() below empties it. Retract the
+  // claim BEFORE destroying what backs it: a prewarmedVPage_ still naming a page this call evicts
+  // makes the next render trust a cache that no longer holds it and pay a full on-demand page.
+  // Callers that know which page they warmed re-assert it on success.
   prewarmedVPage_ = -1;
   fcm->clearCache();
   uint8_t styleMask =
@@ -3354,12 +3335,10 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   duringEarlyBuildRender_ = true;  // the build is paused mid-layout; prewarm keeps its high floor
   renderVerticalPageBody(page);
   duringEarlyBuildRender_ = false;
-  // The bar goes into the SAME buffer as the page, before the one displayBuffer() below, so it
-  // costs no extra refresh -- the earlier objection was to redrawing the page for the bar's sake.
-  // Mid-build counts are no longer a reason to skip it either: renderStatusBar() reads
-  // estimatedTotalPages() and marks an estimate with "~". Without this the bar was simply absent
-  // for the first pages of every vertical chapter, until the build finished and ordinary renders
-  // took over (device: reappeared after 3-4 page turns; horizontal has no early-render path).
+  // Into the SAME buffer as the page and before the single displayBuffer() below, so it costs no extra
+  // refresh. Safe mid-build: renderStatusBar() reads estimatedTotalPages() and marks an estimate with
+  // "~". Without it the bar is absent for a vertical chapter's first pages, until the build ends and
+  // ordinary renders take over (horizontal has no early-render path).
   renderStatusBar();
   renderer.displayBuffer();
   earlyPageActuallyDisplayed_ = true;

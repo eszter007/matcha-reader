@@ -11,21 +11,15 @@
 #include "Kinsoku.h"
 
 namespace {
-// A reserve() big enough to satisfy this margin should always succeed even under pressure --
-// below it, skip reserving and let the vector grow incrementally (smaller, more-likely-to-succeed
-// allocations) rather than attempt one large upfront allocation that's more likely to fail outright.
+// Headroom required ON TOP of a reserve() before it is attempted. Below it, skip the reserve and
+// let the vector grow incrementally: many small allocations are likelier to succeed than one large
+// one.
 //
-// Was 32KB, then 16KB -- both confirmed on a real device to be actively counterproductive for
-// large legitimate requests. At 32KB: a furigana-dense paragraph's bulk stream_ reserve needed
-// 38600 bytes with 65524 available (comfortably enough) but was skipped because 38600+32768
-// exceeded 65524. At 16KB: the per-page glyphs reserve (13824 bytes) was refused with 29684 free
-// because 13824+16384 overshot by 524 bytes. Each refusal forces incremental doubling growth --
-// hundreds to 1000+ separate reallocations for the same data -- which fragments the heap far
-// worse (a measured ~22KB net loss) than the single bulk reserve it was "protecting" against.
-// The getMaxAllocHeap() check already guarantees the reserve() itself succeeds; this constant is
-// only cushion for OTHER allocations during the build, and while a chapter build runs the rest of
-// the app is quiescent (largest concurrent needs: SD write buffers and log lines, low KBs). 4KB
-// lets the real page buffer win over fragmenting incremental growth.
+// Keep this small. The margin is cushion for OTHER allocations during a build (SD write buffers,
+// log lines -- low KBs; the rest of the app is quiescent), not for the reserve itself, which the
+// getMaxAllocHeap() check already guarantees. A margin large enough to refuse a legitimate bulk
+// reserve is worse than none: incremental doubling then costs hundreds of reallocations for the
+// same data and fragments the heap ~22KB beyond the single allocation it withheld.
 constexpr uint32_t MIN_FREE_HEAP_FOR_RESERVE = 4 * 1024;
 
 // Cushion left for the rest of the app when growing a vector one element at a time, as opposed
@@ -421,14 +415,11 @@ void VerticalParsedText::recordParagraphBreakAt(const size_t idx) {
 }
 
 void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
-  // CJK prose is ~3 UTF-8 bytes per codepoint, so bytes/3 (+ slack for embedded ASCII) closely
-  // estimates the PendingChar slots this text needs. An earlier version of this reserve used the
-  // raw byte count as the slot count -- a 3x over-request at 32 bytes per slot (~96 bytes reserved
-  // per actual character), which crashed a real device. The affordability check below is on the
-  // REQUEST size, not just current free heap: reserve() is one contiguous allocation that aborts
-  // the process on failure under -fno-exceptions, so a request that doesn't comfortably fit is
-  // skipped entirely -- incremental push_back growth (guarded by canPushStreamChar) is the
-  // lower-risk path once memory is tight.
+  // CJK prose is ~3 UTF-8 bytes per codepoint, so bytes/3 (+ slack for embedded ASCII) sizes the
+  // PendingChar slots. Not the raw byte count: at 32 bytes per slot that over-requests 3x.
+  // The affordability check is on the REQUEST size, not free heap. reserve() is one contiguous
+  // allocation and aborts under -fno-exceptions, so a request that does not comfortably fit is
+  // skipped in favour of incremental growth (guarded by canPushStreamChar).
   const size_t slots = utf8Bytes / 3 + 8;
   const size_t needed = stream_.size() + slots;
   if (needed <= stream_.capacity()) return;
@@ -503,14 +494,9 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
       i += consumed;
       continue;
     }
-    // Note: a plain space is deliberately NOT skipped here even though CJK prose
-    // itself never uses inter-word spaces, because Kinsoku::
-    // isRotatedRunCharacter() now treats ' ' as part of a Latin run --
-    // dropping it here would merge multi-word embedded English phrases
-    // ("CrossPoint Reader") into one unreadable token
-    // ("CrossPointReader"). A stray space between two CJK characters
-    // (rare, but it happens in some EPUB markup) just renders as a
-    // harmless near-invisible 1-character rotated "run".
+    // Keep plain spaces. Kinsoku::isRotatedRunCharacter() counts ' ' as part of a Latin run, so
+    // dropping it here merges embedded English into one token ("CrossPointReader"). A stray space
+    // between two CJK characters renders as a near-invisible 1-character rotated run.
     if (cp == '\t') {
       i += consumed;
       continue;
@@ -749,12 +735,13 @@ struct VerticalParsedText::LayoutCursor {
       // slides it down (ink that leaves its own cell, e.g. the low ellipsis dot stack).
       g.y = static_cast<uint16_t>(std::max(0, static_cast<int>(g.y) - columnYShift));
     }
-    // Tiers, most protective first. The 4K tier: device evidence (450+ page chapter) showed
-    // maxAlloc dips bottoming at 14324 while the linear request sat at ~9216 -- the 8K margin
-    // missed by 12 bytes, dropped glyphs, and the stale mark re-indexed the chapter on every
-    // open. The 0 tier: at that point the margin protects only allocations that fail gracefully
-    // and retry (font advance tables, staging buffers, the next page's reserve), while a dropped
-    // glyph is a character permanently missing from the page.
+    // Tiers, most protective first.
+    //   4K: a ~9216-byte linear request must still pass when maxAlloc dips to ~14324, as it does
+    //       on a 450+ page chapter. An 8K margin misses, drops glyphs, and marks the section
+    //       stale so it re-indexes on every open.
+    //   0:  below this the margin protects only allocations that fail gracefully and retry (font
+    //       advance tables, staging buffers, the next page's reserve), whereas a dropped glyph is
+    //       content permanently missing from the page.
     static constexpr uint32_t MARGINS[] = {SMALL_ALLOC_MARGIN, 4 * 1024, 0};
     constexpr size_t LINEAR_GROWTH_STEP = 16;  // elements; keeps a stalled page's retries cheap
     if (growForOnePush(glyphs, MARGINS, LINEAR_GROWTH_STEP)) {
@@ -902,20 +889,19 @@ struct VerticalParsedText::LayoutCursor {
     return static_cast<uint16_t>(std::clamp(rows, 1, static_cast<int>(UINT16_MAX)));
   }
 
-  // JLREQ 3.8, the other half of line adjustment: spreading. A column that reclaimed slack inside
-  // itself -- a rotated run's cell rounding, the slide that keeps the low ellipsis stack out of the
-  // next character -- ends short of the text area's foot by LESS than one cell. Measured on this
-  // book: 17px of a 29px cell, on nearly half of all columns, which is what made the column feet
-  // look ragged. Nothing can be pulled in to fill it (oikomi already ran, and the next character is
-  // an ordinary full-em one needing a whole cell), so the space goes back to the column's own
-  // inter-character gaps and the column ends flush.
+  // JLREQ 3.8 spreading, the counterpart to oikomi below. A column that reclaimed slack inside
+  // itself (a rotated run's cell rounding; the slide that keeps a low ellipsis stack clear of the
+  // next character) ends short of the text area's foot by LESS than one cell. Nothing can be
+  // pulled in to fill it -- oikomi has already run and the next character needs a whole em -- so
+  // the leftover is returned to the column's own inter-character gaps and the column ends flush.
   //
-  // Progressive, like the squeeze: each row moves by its share, so the gaps grow by leftover/lastRow
-  // -- under a pixel each here -- and the reclaimed correction inside the column survives.
+  // Progressive, like the squeeze: each row moves by its share (leftover/lastRow), so corrections
+  // already applied inside the column survive.
   //
-  // Left alone: a column that ends where its PARAGRAPH ended (shortfall of a cell or more -- not a
-  // fitting problem, and stretching it would space a two-character line down the whole page), and
-  // one whose last glyph HANGS past the foot (burasage, negative leftover).
+  // Two cases are deliberately left ragged:
+  //   - the column ends where its PARAGRAPH ended (shortfall >= one cell). Not a fitting problem;
+  //     stretching it would space a two-character line down the whole page.
+  //   - the last glyph HANGS past the foot (burasage), i.e. leftover is negative.
   void spreadColumnToFoot(VerticalPage& pg, const uint16_t col) {
     int lastRow = -1;
     int lastY = 0;
@@ -1421,35 +1407,27 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // exact reserve, immediately after the *previous* page was pushed (which can itself burst
   // memory use during its own relocation). Check the request against free heap every time.
 
-  // Skipping the reserve above is only safe if every individual push_back is ALSO guarded --
-  // "grows incrementally" isn't automatically safe on a heap this tight, and a real device crash
-  // confirmed exactly that: the skipped-reserve fallback still aborted inside the first
-  // push_back's own reallocation. Only checks free heap when a reallocation is actually imminent
-  // (size == capacity), so this is cheap in the (now common, thanks to reservePageGlyphs) case
-  // where headroom already covers the push. Drops the glyph (visually a rare missing character in
-  // an extreme low-memory tail case) rather than crash the whole device.
+  // Guards one push_back when the bulk reserve was skipped. Skipping the reserve is only safe if
+  // each push is guarded too: incremental growth still reallocates, and that reallocation aborts
+  // under -fno-exceptions. Dropping one glyph is preferable to killing the firmware.
   //
-  // The check must be against the ACTUAL next allocation size, not a flat margin: vector growth
-  // roughly doubles capacity each time, so the very first push from empty needs ~1 element
-  // (~50 bytes) while a push near a nearly-full page needs nearly as much as the original bulk
-  // reserve. A real device crash confirmed the failure mode of getting this wrong: using
-  // MIN_FREE_HEAP_FOR_RESERVE (32KB) as a flat per-glyph margin meant that once free heap sat
-  // anywhere below 32KB -- which is otherwise completely survivable for a ~50-byte push -- every
-  // single glyph was dropped, silently blanking entire pages.
-  // Exponential (x2) growth here is a trap once the heap is tight: if one doubling attempt fails,
-  // capacity stays put, so *every* subsequent push_back needs that exact same (large, ever-doubling)
-  // contiguous block and fails identically -- silently dropping every remaining glyph on the page,
-  // not just the one that triggered it. This is what produced the "sparse page" bug reports: a
-  // single transient dip below the doubled-capacity requirement blanked the rest of the page.
-  // Falling back to a small LINEAR growth step once doubling would be too big keeps each retry's
-  // request small and roughly constant, so a later push (after some other allocation frees up) has
-  // a real chance to succeed instead of being permanently walled off behind the same big ask.
-  // An embedded Latin word reserves whole cells, so the leftover of that rounding (up to a
-  // full cell) landed as dead space before the next character. Instead of moving that one
-  // character -- which only pushes the hole one position further along (device photo:
-  // "Lombroso なんぞ", gap between な and ん) -- the whole rest of the column slides up by
-  // the same amount. Spacing stays even, nothing collides, and only this column's tail sits
-  // slightly higher than its neighbours.
+  // Three rules, each load-bearing:
+  //
+  //   1. Check only when a reallocation is imminent (size == capacity). Otherwise free.
+  //
+  //   2. Test the ACTUAL next allocation size, never a flat margin. Growth roughly doubles, so a
+  //      push from empty needs ~50 bytes while a push near a full page needs nearly the whole bulk
+  //      reserve. A flat 32KB margin drops every glyph whenever free heap is below 32KB -- easily
+  //      survivable for a 50-byte push -- and silently blanks whole pages.
+  //
+  //   3. Fall back to LINEAR growth once doubling would be too large. With x2 growth a single
+  //      failed doubling leaves capacity unchanged, so every later push requests the same large
+  //      block and fails identically, dropping the rest of the page after one transient dip. A
+  //      small constant step keeps each retry cheap enough to succeed once memory frees up.
+  // An embedded Latin run reserves whole cells, leaving up to a cell of dead space after it.
+  // The whole remainder of the column slides up by that amount, not just the next character --
+  // moving one character only relocates the gap. Spacing stays even and this column's tail sits
+  // slightly higher than its neighbours'.
   int columnYShift = 0;
   uint16_t shiftColumn = UINT16_MAX;
 
@@ -1485,15 +1463,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // advance row/column past it. Shared by the digit and punctuation-pair
   // branches in the loop below.
 
-  // Whether the current page's glyph vector can take one more PendingChar's worth of glyphs
-  // without an impossible copy-and-grow (old and new buffer must coexist during a vector
-  // reallocation -- on the observed dense-ruby pages that is a 10-12KB block at exactly the
-  // layout's low-heap dip). HEADROOM covers the worst single-character expansion: a sliced
-  // rotated Latin run plus ruby.
-  // Mirrors pushGlyph's LAST growth fallback exactly (+16 elements, zero margin) so the
-  // early break fires only when the very next growth attempt would otherwise start
-  // dropping -- not sooner. A bigger headroom here inflated the page count with premature
-  // breaks (device evidence: breaks at 81-148 glyphs against dips the +16 step survived).
+  // Whether this page's glyph vector can take one more PendingChar without a copy-and-grow it
+  // cannot afford (both buffers coexist during a reallocation: 10-12KB on dense-ruby pages, at the
+  // layout's low-heap dip). HEADROOM covers the worst single-character expansion, a sliced rotated
+  // Latin run plus ruby.
+  //
+  // Must mirror pushGlyph's LAST growth fallback exactly (+16 elements, zero margin), so the page
+  // breaks early only when the next growth attempt would genuinely drop glyphs. A larger headroom
+  // breaks pages that would have survived and inflates the page count.
 
   // Shared placement geometry for every sideways run -- embedded Latin words AND multi-digit
   // numbers. drawText() takes the em-box TOP, so an upright glyph's ink starts (ascender -
@@ -1542,12 +1519,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // Force a fresh column at the start of every paragraph after the
     // first, the same way horizontal layout starts a new line per
     // paragraph.
-    // Tracks whether a forced paragraph break just fired for THIS position, so the kinsoku
-    // line-start pull-back below can be suppressed: a paragraph the author starts with
-    // prohibited punctuation (……でも) must keep its fresh column -- oikomi would otherwise
-    // drag its opening characters back into the previous paragraph's column, visually merging
-    // the two (confirmed with the full-pipeline host repro). Kinsoku governs WRAPPED line
-    // starts, not author-intended paragraph openings.
+    // Suppresses the kinsoku pull-back below when a paragraph break just fired at this position.
+    // Kinsoku governs WRAPPED line starts, not author-intended paragraph openings: a paragraph
+    // beginning with prohibited punctuation (……でも) must keep its fresh column, or oikomi drags
+    // its opening characters back into the previous paragraph's column and merges the two.
     // Box END before the paragraph break: the box's content ended with the previous glyph, so
     // its rect closes at the CURRENT column -- the break below then advances to a fresh one.
     while (nextBoxEndIdx < boxEndsBeforeIndex_.size() && idx == boxEndsBeforeIndex_[nextBoxEndIdx]) {
@@ -1829,16 +1804,15 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         }
 
         if (breakAt == std::string::npos) {
-          // No space-break fits. Retry from a fresh column ONLY when the current position is
-          // deeper than where a fresh column would start; otherwise force-place. The comparison
-          // MUST be against cur.columnStartRow(false), not 0: inside a styled block (start-Xem, e.g.
-          // Aozora/EBPAJ div.mtN margins, defined up to 22em+) fresh columns begin at a non-zero
-          // row, and comparing against 0 made this branch loop forever -- every retry re-seeded
-          // row = startRows != 0, the force-place arm below was unreachable, and the layout
-          // marched through columns/pages without consuming a single byte ("Indexing" never
-          // finished; host-reproduced with a mtN block whose start offset left fewer rows than a
-          // short embedded Latin word needs). After one retry row == cur.columnStartRow(false), so
-          // the force-place arm is guaranteed on the next pass -- termination is structural.
+          // No space-break fits. Retry from a fresh column only if the current row is deeper than
+          // where a fresh column starts; otherwise force-place.
+          //
+          // Compare against cur.columnStartRow(false), NEVER 0. Inside a styled block (start-Xem
+          // margins such as Aozora/EBPAJ div.mtN, seen up to 22em) fresh columns begin at a
+          // non-zero row, so comparing with 0 makes every retry re-seed the same row, leaves the
+          // force-place arm unreachable, and loops forever without consuming input. With the
+          // correct comparison, one retry leaves row == columnStartRow(false) and force-place is
+          // guaranteed on the next pass: termination is structural.
           if (row > cur.columnStartRow(false)) {
             column++;
             row = 0;

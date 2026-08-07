@@ -60,9 +60,9 @@ class EpubReaderActivity final : public Activity {
     uint8_t imageRendering = 0;
     bool focusReadingEnabled = false;
     bool bookCssMargins = false;
-    // Vertical-only inputs. They key the vertical cache FILE, so leaving them out here meant an
-    // in-memory section built with the old values kept being served: changing line spacing mid-book
-    // left the columns at their previous 行間 until the book was reopened.
+    // Vertical-only inputs. These key the vertical cache FILE, so they must be here too -- otherwise a
+    // resident section built with the old values keeps being served and a mid-book line-spacing change
+    // does not take effect until the book is reopened.
     uint8_t lineSpacing = 0;
     bool furigana = false;
     bool operator==(const LayoutSig& o) const {
@@ -239,13 +239,11 @@ class EpubReaderActivity final : public Activity {
   // verticalSection->currentPage can advance mid-render (a button press during a 100-700ms
   // render), so the post-render warm must not re-read it -- see the warm block in render().
   int renderedVPage_ = -1;
-  // Evidence for the pre-render font release (see RESUME_HEAP_FLOOR in render()). The release
-  // costs a full font-cache rebuild -- kern classes, mini kern, advance table, glyph groups --
-  // on the following render. It was written for the resume-into-book path, on the assumption
-  // that normal reading stays above the floor; a vertical book sits at maxAlloc 12-32K, so it
-  // tripped on 6 of 9 measured page turns and taxed each one ~400ms. These two track whether
-  // the previous render actually ran short of glyph memory, which is direct evidence that the
-  // heap at this level is inadequate -- a clean render is evidence that it is not.
+  // Evidence gate for the pre-render font release (see RESUME_HEAP_FLOOR in render()), which costs a
+  // full font-cache rebuild on the next render -- kern classes, mini kern, advance table, glyph
+  // groups, ~400ms. These track whether the PREVIOUS render ran short of glyph memory: a clean render
+  // means the heap is adequate at this level, so do not release. Needed because vertical reading sits
+  // at maxAlloc 12-32K, where a bare floor test is true almost always.
   uint32_t starvedGlyphsAtLastRender_ = 0;
   bool forceFontReleaseCheck_ = true;  // armed on entry: the resume path this was written for
   // Backoff for the silent next-chapter index when the heap is too tight to build clean:

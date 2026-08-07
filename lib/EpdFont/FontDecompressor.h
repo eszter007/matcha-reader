@@ -97,13 +97,13 @@ class FontDecompressor {
   uint8_t* hotGlyphBuf = nullptr;
   uint32_t hotGlyphBufCapacity = 0;
 
-  // Back-off latch for a failed hot-group allocation. Without it, a heap too tight for one group
-  // is re-probed once per glyph: a device log of a vertical chapter build showed 203 consecutive
-  // "Failed to allocate 16357 bytes" over 6.8 seconds, each one a free()+malloc()+LOG_ERR that
-  // could not have succeeded. The state is RAM-only and self-clearing -- a retry is allowed the
-  // moment the largest block grows past what was available when we failed, or a smaller group is
-  // asked for -- so a transient shortage is never recorded as a permanent "this font is
-  // unavailable". Cleared outright whenever the buffers are released.
+  // Back-off latch for a failed hot-group allocation. Without it a heap too tight for one group is
+  // re-probed once per glyph -- each probe a free()+malloc()+LOG_ERR that cannot succeed, measured at
+  // 203 consecutive failures over 6.8s during one chapter build.
+  //
+  // RAM-only and self-clearing: a retry is allowed as soon as the largest block exceeds what was
+  // available at the failure, or a smaller group is requested, and freeHotGroup() clears it outright.
+  // A transient shortage must never be recorded as a permanent "font unavailable".
   uint32_t hotGroupFailNeeded = 0;    // size that failed; 0 = no latch
   uint32_t hotGroupFailMaxAlloc = 0;  // largest block at the time of that failure
   uint32_t starvedGlyphs = 0;         // glyphs returned as nullptr for want of a group buffer

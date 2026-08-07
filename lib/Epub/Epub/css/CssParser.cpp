@@ -42,13 +42,12 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Maximum number of CSS rules to store in the selector map
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
-// Rules the CACHE FILE may hold. Deliberately larger than MAX_RULES: that one bounds the rule map
-// held in RAM, while the cache lives on the SD card and is read back FILTERED -- loadFromCache()
-// keeps only the selectors a chapter's classes actually use, and collectVerticalStyles() streams
-// the file for vertical-block rules. Capping the FILE at the RAM figure truncated in file order,
-// so whether a book's styling survived depended on where it sat in its stylesheet: the EBPAJ
-// template runs past 1500 rules, and everything after that point was silently absent from every
-// book built on it (measured on 変な家２: 1500 of ~1700 rules cached).
+// Rules the CACHE FILE may hold. Deliberately larger than MAX_RULES, which bounds the rule map held
+// in RAM: the cache lives on the SD card and is read back FILTERED -- loadFromCache() keeps only the
+// selectors a chapter's classes use, and collectVerticalStyles() streams the file for vertical-block
+// rules. Capping the FILE at the RAM figure truncates in file order, so whether a book's styling
+// survives depends on where it sits in its stylesheet: the EBPAJ template runs past 1500 rules, and
+// everything after that point was absent from every book built on it.
 constexpr size_t MAX_CACHED_RULES = 4000;
 
 // Headroom for one selector-map insertion. Cache loads are streamed, so requiring enough

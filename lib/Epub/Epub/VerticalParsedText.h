@@ -394,23 +394,20 @@ class VerticalParsedText {
   // would be needed and heap is too tight to risk it; the caller should skip this element.
   bool canPushStreamChar();
 
-  // Codepoint-estimating, request-size-aware reserve for stream_ (see .cpp for the full story --
-  // both the byte-count-as-slot-count over-request and the unchecked-request-size reserve have
-  // crashed a real device).
-  // Mutable page-building state for one layoutPages() pass, with the placement rules that act on
-  // it. Defined in the .cpp -- it exists to give those rules a named home and an explicit set of
-  // state, instead of a dozen variables shared by reference between twenty lambdas. Nested so it
-  // can reach this class's private stream/box state directly.
+  // Mutable page-building state for one layoutPages() pass, with the placement rules that act on it.
+  // Defined in the .cpp: it exists to give those rules a named home and an explicit set of state.
+  // Nested so it can reach this class's private stream/box state directly.
   struct LayoutCursor;
 
   void reserveStreamFor(size_t utf8Bytes);
 
-  // Font metrics for this object's fontId, measured once and reused for every paragraph of the
-  // chapter. Each probe pages its reference glyph (漢/中) in from the SD font, and the font's
-  // on-demand slot table is small -- re-measuring per paragraph evicted real text glyphs and made
-  // the reference glyphs ~27% of all SD glyph loads during a chapter build.
-  // Only a SUCCESSFUL measurement is cached: a probe against a font that is not resident yet
-  // returns a fallback, and storing that would freeze the fallback in for the whole chapter.
+  // Font metrics for this object's fontId, measured once and reused for every paragraph of the chapter.
+  // Each probe pages its reference glyph (漢/中) in from the SD font, whose on-demand slot table is
+  // small, so re-measuring per paragraph evicts real text glyphs -- it accounted for ~27% of all SD
+  // glyph loads during a chapter build.
+  //
+  // Cache only a SUCCESSFUL measurement: a probe against a font that is not resident yet returns a
+  // fallback, and storing that freezes the fallback in for the whole chapter.
   int cellPxMemo_ = 0;
   int inkGapPxMemo_ = -1;
   int baselineInCellMemo_ = -1;

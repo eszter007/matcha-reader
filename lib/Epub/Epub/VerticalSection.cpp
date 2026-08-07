@@ -208,11 +208,11 @@ struct TextExtractor {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
   }
 
-  // Whether `s` ends in the middle of something the layout must see whole. Byte-level is not
-  // enough: Japanese books write years in FULLWIDTH digits (１９３８), and U+FF10-U+FF19 encode as
-  // EF BC 90..99, whose tail byte is no ASCII word byte. Cutting there handed the layout two
-  // 2-digit batches, and it set each as its own tate-chu-yoko pair -- 19 stacked over 38 instead
-  // of one rotated run (変な家２, 日時：１９３８年).
+  // Whether `s` ends mid-token, i.e. inside something the layout must see whole. Byte-level testing is
+  // not enough: Japanese books write years in FULLWIDTH digits (１９３８), and U+FF10-U+FF19 encode as
+  // EF BC 90..99, whose tail byte is not an ASCII word byte. Cutting there hands the layout two
+  // 2-digit batches and each is set as its own tate-chu-yoko pair -- 19 stacked over 38 rather than one
+  // rotated run.
   static bool endsMidToken(const std::string& s) {
     if (s.empty()) return false;
     const auto last = static_cast<unsigned char>(s.back());
@@ -224,14 +224,14 @@ struct TextExtractor {
   // paragraphEnds=false streams a partial paragraph: the sink lays it out with no break
   // recorded, and the next emit continues it seamlessly (continuesPrevious=true).
   void emitRuns(const bool paragraphEnds) {
-    // A soft flush is a cadence, not a deadline. If the text so far ends inside a Latin word or a
-    // number,
-    // skip this one and let the next take it: the vertical layout gathers a rotated run only
-    // within one batch, so cutting here renders "authority" as "au", a blank cell, then
-    // "thority". Deferring is bounded -- the paragraph's own end always flushes -- and the
-    // triggers retry on the next character or the next run.
-    // The tail lives in currentText, or, when the run-COUNT trigger fires from the </ruby>
-    // handler, in the last run already pushed.
+    // A soft flush is a cadence, not a deadline. If the text so far ends inside a Latin word or a number,
+    // skip this one and let the next take it: the vertical layout gathers a rotated run only within one
+    // batch, so cutting here renders "authority" as "au", a blank cell, then "thority". Deferring is
+    // bounded -- the paragraph's own end always flushes -- and the triggers retry on the next character
+    // or run.
+    //
+    // The tail is in currentText, or, when the run-COUNT trigger fires from the </ruby> handler, in the
+    // last run already pushed.
     if (!paragraphEnds) {
       const std::string& tail =
           !currentText.empty() ? currentText : (currentRuns.empty() ? currentText : currentRuns.back().baseText);
@@ -594,10 +594,10 @@ namespace {
 // The footer lets loadSectionFile() open a chapter by reading only the header + 4 bytes/page,
 // and getPage() seek straight to one page -- pages are never all resident in RAM.
 
-// The glyph and box field lists below are visited by BOTH the writer and the reader, so their
-// order is defined exactly once. Writing and reading used to be two hand-maintained lists in
-// two functions: any divergence desyncs every record in the file, and because the bytes still
-// parse the version stamp gives no warning -- pages just come back scrambled.
+// The glyph and box field lists below are visited by BOTH the writer and the reader, so their order
+// is defined exactly once. Two hand-maintained lists desync every record in the file on any
+// divergence, and the bytes still parse, so the version stamp gives no warning -- pages simply come
+// back scrambled. G is const on the write side, mutable on the read side.
 struct PodReadArchive {
   HalFile& file;
   template <typename T>
@@ -1229,11 +1229,11 @@ struct LayoutPageSink final : ParagraphSink {
   }
 };
 
-// Byte offset of the pageCount field: everything createSectionFile writes ahead of it. Keep this
-// in step with that write order -- it is a seek target, so a stale value silently OVERWRITES the
-// preceding field rather than failing. Adding the furigana flag without updating this wrote
-// pageCount over it, and a chapter whose page count happened to equal the flag passed the
-// parameter check and then read its page table from a shifted offset ("empty chapter").
+// Byte offset of the pageCount field: everything createSectionFile writes ahead of it. Keep in step
+// with that write order. This is a SEEK target, so a stale value silently overwrites the preceding
+// field instead of failing -- adding the furigana flag without updating it wrote pageCount over the
+// flag, and a chapter whose page count happened to equal the flag passed the parameter check and
+// then read its page table from a shifted offset ("empty chapter").
 constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
                                            + sizeof(int)       // fontId
                                            + sizeof(uint16_t)  // viewportWidth
@@ -1256,12 +1256,11 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   const uint32_t buildStartMs = millis();
   LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(),
           ESP.getMaxAllocHeap());
-  // Vertical placement measures each glyph's real ink extents (burasage, half-em pairing, the
-  // 3.8 squeeze deficits). Those measurements go through the font decompressor, so a heap too
-  // tight for a glyph group makes them silently fall back to nominal metrics -- and the result
-  // is written to the section cache, where nothing would ever re-examine it. Sample the starved
-  // count across the build and treat any increase as heap degradation, which the stale-stamp
-  // below turns into a rebuild on next open.
+  // Vertical placement measures each glyph's real ink extents (burasage, half-em pairing, the 3.8
+  // squeeze deficits), and those measurements go through the font decompressor. A heap too tight for a
+  // glyph group makes them fall back to nominal metrics silently, and the result is written to the
+  // section cache where nothing re-examines it. Sample the starved count across the build and treat any
+  // increase as heap degradation, which the stale stamp below turns into a rebuild on next open.
   uint32_t starvedGlyphsAtStart = 0;
   if (auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) starvedGlyphsAtStart = fd->getStarvedGlyphCount();
