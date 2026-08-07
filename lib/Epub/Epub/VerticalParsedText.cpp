@@ -913,10 +913,19 @@ struct VerticalParsedText::LayoutCursor {
   // still reads as an indent, and it is very often the only thing a short column has to offer.
   static bool isReducible(const uint32_t cp) { return Kinsoku::verticalShiftType(cp) != 0 || cp == 0x3000; }
 
-  bool squeezeColumnForOneMore(const uint16_t col) {
+  // How much room a character actually needs at the end of a column. A half-em mark (a closing
+  // bracket, 。、) is set in one half of its em and the other half is white, so half a cell is
+  // enough for it -- demanding a whole one is what kept a lone 」 off the column it belongs to.
+  int spaceNeededFor(const uint32_t cp) const {
+    return Kinsoku::verticalShiftType(cp) != 0 ? (geom.cellPx + 1) / 2 : geom.cellPx;
+  }
+
+  // Returns the pixels actually recovered (0 when the column has nothing to give). The caller
+  // places its character `applied` px above the grid row, since the tail moved up by that much.
+  int squeezeColumnForOneMore(const uint16_t col, const int neededPx) {
     size_t first = page.glyphs.size();
     while (first > 0 && page.glyphs[first - 1].column == col) first--;
-    if (first == page.glyphs.size()) return false;
+    if (first == page.glyphs.size()) return 0;
 
     // The LAST glyph's trailing space is what the new character will occupy, so it is not itself
     // reducible.
@@ -924,18 +933,19 @@ struct VerticalParsedText::LayoutCursor {
     for (size_t i = first; i + 1 < page.glyphs.size(); i++) {
       if (isReducible(page.glyphs[i].codepoint)) marks++;
     }
-    if (marks == 0) return false;
+    if (marks == 0) return 0;
 
     // A mark may give up to the half em it carries. Round that cap UP: on an odd cell, two floored
     // halves sum to one pixel less than the whole (14 + 14 against a 29px cell), which made every
     // two-mark column miss by a pixel and fail.
     const int maxPerMark = (geom.cellPx + 1) / 2;
-    if (marks * maxPerMark < geom.cellPx) return false;
+    if (marks * maxPerMark < neededPx) return 0;
 
-    // Spread the cell being recovered across the marks rather than taking a fixed step from each:
-    // it lands on exactly one cell, and with four or more marks nobody gives more than the quarter
-    // em 3.8 prefers. The share is rounded up so the remainder shrinks to zero on the last mark.
-    int needed = geom.cellPx;
+    // Spread the space being recovered across the marks rather than taking a fixed step from each:
+    // it lands on exactly what is needed, and with four or more marks nobody gives more than the
+    // quarter em 3.8 prefers. The share is rounded up so the remainder shrinks to zero on the last
+    // mark.
+    int needed = neededPx;
     int remainingMarks = marks;
     int applied = 0;
     for (size_t i = first; i < page.glyphs.size(); i++) {
@@ -949,6 +959,45 @@ struct VerticalParsedText::LayoutCursor {
         remainingMarks--;
       }
     }
+    return applied;
+  }
+
+  // Place a character in a cell the squeeze just freed: placeUprightAt works off the grid, so it
+  // has to come up by the same amount the column's tail did.
+  void placeAfterSqueeze(const PendingChar& pc, const uint16_t col, const uint16_t rowIdx, const int applied) {
+    placeUprightAt(pc, col, rowIdx);
+    if (page.glyphs.empty()) return;
+    VerticalGlyph& placed = page.glyphs.back();
+    placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) - applied));
+  }
+
+  // JLREQ 3.1.4: two adjacent half-em marks SHARE one em -- the first takes the first half, the
+  // second the second. Covers 。」 and 、」 as well as 』」 and 」」, since a closing bracket is
+  // itself a half-em glyph set in the first half of its cell. The half the first mark left free
+  // is exactly where the second belongs: no new cell, and neither character leaves the column its
+  // sentence ended in. A FULL-em character before the bracket (？」) genuinely needs 1.5 em, so
+  // this declines and the caller falls back.
+  bool placeHalfEmPair(const PendingChar& pc) {
+    if (page.glyphs.empty()) return false;
+    const VerticalGlyph& prev = page.glyphs.back();
+    const int prevHalfEm = Kinsoku::verticalShiftType(prev.codepoint);
+    if ((prevHalfEm != 1 && prevHalfEm != 2) || Kinsoku::verticalShiftType(pc.codepoint) != 2 ||
+        !Kinsoku::needsVerticalRotation(pc.codepoint)) {
+      return false;
+    }
+    VerticalGlyph g;
+    g.codepoint = pc.codepoint;
+    g.column = prev.column;
+    g.row = prev.row;
+    g.x = static_cast<uint16_t>(geom.columnLeftX(prev.column));
+    // Raw grid position: pushGlyph applies this column's slide, as every other path expects.
+    g.y = static_cast<uint16_t>(prev.row * geom.cellPx + geom.cellPx / 2);
+    g.renderKind = VerticalGlyph::RotatedPunct;
+    g.paragraphIndex = pc.paragraphIndex;
+    g.byteOffset = pc.byteOffset;
+    g.style = pc.style;
+    g.emphasis = pc.emphasis;
+    pushGlyph(page, g, pc.rubyText);
     return true;
   }
 
@@ -999,6 +1048,33 @@ struct VerticalParsedText::LayoutCursor {
       column = 0;
       row = 0;
     }
+  }
+
+  // Kinsoku at a PAGE boundary, decided before the page is handed over. A character that may not
+  // start a line cannot be pulled back once this page is emitted -- the in-page rules all need the
+  // previous glyph, and a fresh page has none -- so it ends up stranded at the top of the next
+  // page, or alone on a page of its own. Resolve it here, while the closing column is still in
+  // hand, in the same order the in-page rules use. `row` is the row just past the column's last
+  // glyph. Returns true when the character was absorbed, and advances `idx` past it.
+  bool absorbIntoClosingColumn(size_t& idx) {
+    if (idx >= o.stream_.size() || page.glyphs.empty() || column == 0) return false;
+    const PendingChar& next = o.stream_[idx];
+    if (next.paragraphIndex != page.glyphs.back().paragraphIndex) return false;
+    if (!Kinsoku::isLineStartProhibited(next.codepoint)) return false;
+    const uint16_t prevColumn = static_cast<uint16_t>(column - 1);
+    if (Kinsoku::verticalShiftType(next.codepoint) == 1) {
+      // 。/、 hang past the column end (JLREQ 3.1.9). Only these may.
+      placeUprightAt(next, prevColumn, row);
+    } else if (placeHalfEmPair(next)) {
+      // A closing bracket after a half-em mark shares its cell -- no room needed at all.
+    } else if (const int applied = squeezeColumnForOneMore(prevColumn, spaceNeededFor(next.codepoint))) {
+      // 3.8 line adjustment freed room in the closing column.
+      placeAfterSqueeze(next, prevColumn, row, applied);
+    } else {
+      return false;
+    }
+    idx++;
+    return true;
   }
 
   // Place one upright character in a given cell, applying the JLREQ quadrant/half-em rules.
@@ -1823,43 +1899,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           idx++;
           continue;
         }
-        if (cur.squeezeColumnForOneMore(prev.column)) {
-          // The squeeze pulled the column's tail up by a cell, so the freed cell is the one the
-          // last glyph used to end in. placeUprightAt works off the grid, so move the new glyph
-          // by the same amount the tail moved.
-          const int prevBottomBefore = (prev.row + 1) * cellPx;
-          cur.placeUprightAt(pc, prev.column, static_cast<uint16_t>(prev.row + 1));
-          if (!page.glyphs.empty()) {
-            VerticalGlyph& placed = page.glyphs.back();
-            const int delta = prevBottomBefore - (static_cast<int>(page.glyphs[page.glyphs.size() - 2].y) + cellPx);
-            placed.y = static_cast<uint16_t>(std::max(0, static_cast<int>(placed.y) - delta));
-          }
+        const uint16_t oikomiCol = prev.column;
+        const uint16_t oikomiRow = static_cast<uint16_t>(prev.row + 1);
+        if (const int applied = cur.squeezeColumnForOneMore(oikomiCol, cur.spaceNeededFor(pc.codepoint))) {
+          cur.placeAfterSqueeze(pc, oikomiCol, oikomiRow, applied);
           idx++;
           continue;
         }
-        // JLREQ 3.1.4: two adjacent half-em marks SHARE one em -- the first takes the first half,
-        // the second the second. That covers 。」 and 、」 as well as 』」 and 」」, since a closing
-        // bracket is itself a half-em glyph set in the first half of its cell (and 。/、 are set
-        // tight for the same reason). The half the first mark left free is exactly where the
-        // second belongs: no new cell, and neither character leaves the column its sentence
-        // ended in. Only the FIRST of the pair may already be placed -- a full-em character
-        // before the bracket (？」) genuinely needs 1.5 em and falls through to oidashi.
-        const int prevHalfEm = Kinsoku::verticalShiftType(prev.codepoint);
-        if ((prevHalfEm == 1 || prevHalfEm == 2) && Kinsoku::verticalShiftType(pc.codepoint) == 2 &&
-            Kinsoku::needsVerticalRotation(pc.codepoint)) {
-          VerticalGlyph g;
-          g.codepoint = pc.codepoint;
-          g.column = prev.column;
-          g.row = prev.row;
-          g.x = static_cast<uint16_t>(geom.columnLeftX(prev.column));
-          // Raw grid position: pushGlyph applies this column's slide, as every other path expects.
-          g.y = static_cast<uint16_t>(prev.row * cellPx + cellPx / 2);
-          g.renderKind = VerticalGlyph::RotatedPunct;
-          g.paragraphIndex = pc.paragraphIndex;
-          g.byteOffset = pc.byteOffset;
-          g.style = pc.style;
-          g.emphasis = pc.emphasis;
-          cur.pushGlyph(page, g, pc.rubyText);
+        if (cur.placeHalfEmPair(pc)) {
           idx++;
           continue;
         }
@@ -1982,6 +2029,12 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     }
     if (row >= cur.rowsAvailable()) {
       column++;
+      if (column >= columnsPerPage) {
+        size_t nextIdx = idx + 1;
+        if (cur.absorbIntoClosingColumn(nextIdx)) {
+          idx = nextIdx - 1;  // the loop's own idx++ steps past the absorbed character
+        }
+      }
       row = 0;
       cur.finalizePageIfNeeded();
       row = cur.columnStartRow(false);
