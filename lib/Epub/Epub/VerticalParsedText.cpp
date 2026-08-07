@@ -901,6 +901,38 @@ struct VerticalParsedText::LayoutCursor {
     return static_cast<uint16_t>(std::clamp(rows, 1, static_cast<int>(UINT16_MAX)));
   }
 
+  // JLREQ 3.8, the other half of line adjustment: spreading. A column that reclaimed slack inside
+  // itself -- a rotated run's cell rounding, the slide that keeps the low ellipsis stack out of the
+  // next character -- ends short of the text area's foot by LESS than one cell. Measured on this
+  // book: 17px of a 29px cell, on nearly half of all columns, which is what made the column feet
+  // look ragged. Nothing can be pulled in to fill it (oikomi already ran, and the next character is
+  // an ordinary full-em one needing a whole cell), so the space goes back to the column's own
+  // inter-character gaps and the column ends flush.
+  //
+  // Progressive, like the squeeze: each row moves by its share, so the gaps grow by leftover/lastRow
+  // -- under a pixel each here -- and the reclaimed correction inside the column survives.
+  //
+  // Left alone: a column that ends where its PARAGRAPH ended (shortfall of a cell or more -- not a
+  // fitting problem, and stretching it would space a two-character line down the whole page), and
+  // one whose last glyph HANGS past the foot (burasage, negative leftover).
+  void spreadColumnToFoot(VerticalPage& pg, const uint16_t col) {
+    int lastRow = -1;
+    int lastY = 0;
+    for (const auto& g : pg.glyphs) {
+      if (g.column == col && g.row > lastRow) {
+        lastRow = g.row;
+        lastY = g.y;
+      }
+    }
+    if (lastRow < 1) return;  // nothing to spread across
+    const int leftover = static_cast<int>(o.viewportHeight_) - (lastY + geom.cellPx);
+    if (leftover <= 0 || leftover >= geom.cellPx) return;
+    for (auto& g : pg.glyphs) {
+      if (g.column != col) continue;
+      g.y = static_cast<uint16_t>(static_cast<int>(g.y) + leftover * static_cast<int>(g.row) / lastRow);
+    }
+  }
+
   // JLREQ 3.8 line adjustment, 追い込み (oikomi): recover one cell in column `col` so a character
   // that may not start a line can join it instead of being pushed to the next column.
   //
@@ -1033,6 +1065,7 @@ struct VerticalParsedText::LayoutCursor {
         o.boxStartCol_ = 0;
         o.boxContinuedFromPrevPage_ = true;
       }
+      for (uint16_t c = 0; c < geom.columnsPerPage; c++) spreadColumnToFoot(page, c);
       pages.push_back(std::move(page));
       o.anyPageEverProduced_ = true;
       // Stream out everything except the single most-recently-completed page: the oikomi
@@ -2047,6 +2080,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   }
 
   if (isFinalFlush) {
+    for (uint16_t c = 0; c < columnsPerPage; c++) cur.spreadColumnToFoot(page, c);
     if (!page.glyphs.empty() || !anyPageEverProduced_) {
       pages.push_back(std::move(page));
       anyPageEverProduced_ = true;

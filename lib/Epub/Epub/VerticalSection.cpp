@@ -60,7 +60,7 @@ namespace {
 // v104: glyph records are fixed-size (textId) with a per-page text pool appended after
 // the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
 // v105: the header includes the vertical column-spacing setting.
-constexpr uint8_t VSECTION_FILE_VERSION = 123;
+constexpr uint8_t VSECTION_FILE_VERSION = 124;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
