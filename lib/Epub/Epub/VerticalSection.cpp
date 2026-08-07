@@ -60,7 +60,7 @@ namespace {
 // v104: glyph records are fixed-size (textId) with a per-page text pool appended after
 // the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
 // v105: the header includes the vertical column-spacing setting.
-constexpr uint8_t VSECTION_FILE_VERSION = 124;
+constexpr uint8_t VSECTION_FILE_VERSION = 126;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -207,10 +207,24 @@ struct TextExtractor {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
   }
 
+  // Whether `s` ends in the middle of something the layout must see whole. Byte-level is not
+  // enough: Japanese books write years in FULLWIDTH digits (１９３８), and U+FF10-U+FF19 encode as
+  // EF BC 90..99, whose tail byte is no ASCII word byte. Cutting there handed the layout two
+  // 2-digit batches, and it set each as its own tate-chu-yoko pair -- 19 stacked over 38 instead
+  // of one rotated run (変な家２, 日時：１９３８年).
+  static bool endsMidToken(const std::string& s) {
+    if (s.empty()) return false;
+    const auto last = static_cast<unsigned char>(s.back());
+    if (isAsciiWordByte(last)) return true;
+    return s.size() >= 3 && static_cast<unsigned char>(s[s.size() - 3]) == 0xEF &&
+           static_cast<unsigned char>(s[s.size() - 2]) == 0xBC && last >= 0x90 && last <= 0x99;
+  }
+
   // paragraphEnds=false streams a partial paragraph: the sink lays it out with no break
   // recorded, and the next emit continues it seamlessly (continuesPrevious=true).
   void emitRuns(const bool paragraphEnds) {
-    // A soft flush is a cadence, not a deadline. If the text so far ends inside a Latin word,
+    // A soft flush is a cadence, not a deadline. If the text so far ends inside a Latin word or a
+    // number,
     // skip this one and let the next take it: the vertical layout gathers a rotated run only
     // within one batch, so cutting here renders "authority" as "au", a blank cell, then
     // "thority". Deferring is bounded -- the paragraph's own end always flushes -- and the
@@ -220,7 +234,7 @@ struct TextExtractor {
     if (!paragraphEnds) {
       const std::string& tail =
           !currentText.empty() ? currentText : (currentRuns.empty() ? currentText : currentRuns.back().baseText);
-      if (!tail.empty() && isAsciiWordByte(static_cast<unsigned char>(tail.back()))) return;
+      if (endsMidToken(tail)) return;
     }
     flushCurrentText();
     if (!currentRuns.empty()) {

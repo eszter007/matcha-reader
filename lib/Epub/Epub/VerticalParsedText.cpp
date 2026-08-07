@@ -291,10 +291,11 @@ int punctEmHalf(const uint32_t cp) {
   }
 }
 
-bool isAsciiDigit(const uint32_t cp) {
-  return (cp >= '0' && cp <= '9') ||      // ASCII digits: U+0030-U+0039
-         (cp >= 0xFF10 && cp <= 0xFF19);  // Fullwidth digits: U+FF10-U+FF19
-}
+// Digits that are set SIDEWAYS in vertical text -- as a tate-chu-yoko pair, or as a rotated run.
+// Halfwidth ASCII only. Fullwidth digits (U+FF10-U+FF19) are East Asian Wide: they are ideographic
+// -width characters and stand upright in tategaki, one per cell, exactly like kanji. Gathering them
+// into a rotated run laid １９３８年 on its side across four cells.
+bool isAsciiDigit(const uint32_t cp) { return cp >= '0' && cp <= '9'; }
 
 bool isAsciiAlnum(const uint32_t cp) {
   return (cp >= '0' && cp <= '9') || (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
