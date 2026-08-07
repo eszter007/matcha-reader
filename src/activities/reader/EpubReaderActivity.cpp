@@ -1590,7 +1590,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                                static_cast<bool>(SETTINGS.embeddedStyle),
                                SETTINGS.imageRendering,
                                static_cast<bool>(SETTINGS.focusReadingEnabled),
-                               static_cast<bool>(SETTINGS.bookCssMargins)};
+                               static_cast<bool>(SETTINGS.bookCssMargins),
+                               SETTINGS.lineSpacing,
+                               useFurigana()};
     if ((section || verticalSection) && currentSig != sectionLayoutSig) {
       LOG_DBG("ERS", "Layout params changed; reflowing section in place");
       if (verticalSection) {

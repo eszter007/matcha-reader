@@ -60,12 +60,18 @@ class EpubReaderActivity final : public Activity {
     uint8_t imageRendering = 0;
     bool focusReadingEnabled = false;
     bool bookCssMargins = false;
+    // Vertical-only inputs. They key the vertical cache FILE, so leaving them out here meant an
+    // in-memory section built with the old values kept being served: changing line spacing mid-book
+    // left the columns at their previous 行間 until the book was reopened.
+    uint8_t lineSpacing = 0;
+    bool furigana = false;
     bool operator==(const LayoutSig& o) const {
       return fontId == o.fontId && viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight &&
              lineCompression == o.lineCompression && paragraphAlignment == o.paragraphAlignment &&
              extraParagraphSpacing == o.extraParagraphSpacing && hyphenationEnabled == o.hyphenationEnabled &&
              embeddedStyle == o.embeddedStyle && imageRendering == o.imageRendering &&
-             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins;
+             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins &&
+             lineSpacing == o.lineSpacing && furigana == o.furigana;
     }
     bool operator!=(const LayoutSig& o) const { return !(*this == o); }
   };
