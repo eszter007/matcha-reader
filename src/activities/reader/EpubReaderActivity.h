@@ -409,6 +409,9 @@ class EpubReaderActivity final : public Activity {
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
   mutable bool chapterSpanVertical = false;
+  // Part of the memo key: a span computed while a build held the card skipped the per-spine
+  // probes, so it must be recomputed once the build releases it, even if nothing else changed.
+  mutable bool chapterSpanBuildActive = false;
   mutable int chapterPagesBefore = 0;
   mutable int chapterPagesTotal = 0;
   mutable std::vector<uint16_t> spinePagesReal;       // 0 = not indexed yet
@@ -455,7 +458,15 @@ class EpubReaderActivity final : public Activity {
   // it from page 0. Reverts to normal power behavior the moment the build finishes,
   // and while the build is heap-paused (no work is happening, so spinning at full
   // speed would only burn battery; the paused gate still retries every loop pass).
-  bool skipLoopDelay() override { return section && section->isBuilding() && !buildHeapPaused; }
+  // Full CPU only while the build is still near or behind the reader, where the wait is in front
+  // of the user. Once it is BUILD_WINDOW_AHEAD pages clear it keeps going (the chapter has to
+  // finalize, or the page total stays an estimate forever) but at the ordinary loop cadence, so
+  // the CPU can drop back to power saving. Pinning it for the whole chapter would cost battery
+  // for work nobody is waiting on.
+  bool skipLoopDelay() override {
+    return section && section->isBuilding() && !buildHeapPaused &&
+           static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD;
+  }
   bool isReaderActivity() const override { return true; }
   bool handleForcedRefresh() override {
     {

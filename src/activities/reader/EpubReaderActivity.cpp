@@ -589,9 +589,15 @@ void EpubReaderActivity::loop() {
   // partial's watermark until the build catches up, so the window check would wrongly read
   // "far enough ahead" and stall the build at 0 pages -- then the first turn past the
   // watermark re-parses the whole chapter synchronously. Keep ticking until it finalizes.
-  if (section && section->isBuilding() && !RenderLock::peek() &&
-      (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD) &&
-      buildTickHeapGate()) {
+  //
+  // No window condition any more. Stopping once the build was BUILD_WINDOW_AHEAD pages past the
+  // reader left isBuilding() true for the rest of the session, so the chapter never finalized:
+  // the total stayed an estimate and the status bar kept its "~" forever. Vertical has always
+  // built the whole chapter and shown an exact count, so horizontal was the odd one out.
+  // Finishing the chapter is what partials already did ("Keep ticking until it finalizes"), and
+  // it stays cheap: two pages per loop tick, only when the render lock is free and the heap gate
+  // is open.
+  if (section && section->isBuilding() && !RenderLock::peek() && buildTickHeapGate()) {
     RenderLock lock;
     // Re-check under the lock: render() (which also holds the RenderLock) may have finalized the
     // build between the outer isBuilding() check and acquiring the lock here, in which case
@@ -2425,6 +2431,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
     pageLoadRetryCount = 0;  // Reset the retry counter once a page loads cleanly
 
+    // TEMPORARY (blank-page investigation): a page that loads without error but draws nothing
+    // is indistinguishable from a render fault on screen. Say which it is.
+    if (p->elements.empty()) {
+      LOG_ERR("ERS", "BLANK: page %d of %u loaded with 0 elements (building=%d partial=%d complete=%d offset=%u)",
+              section->currentPage, static_cast<unsigned>(section->pageCount), section->isBuilding() ? 1 : 0,
+              section->isPartial() ? 1 : 0, section->isBuildComplete() ? 1 : 0, p->visibleTextOffset);
+    } else {
+      LOG_DBG("ERS", "page %d of %u: %u elements (building=%d partial=%d)", section->currentPage,
+              static_cast<unsigned>(section->pageCount), static_cast<unsigned>(p->elements.size()),
+              section->isBuilding() ? 1 : 0, section->isPartial() ? 1 : 0);
+    }
+
     // Cache this page's content offset (read alongside the page, no extra file open) so
     // saveProgress and addBookmark can use it without reopening section.bin.
     currentPageVisibleOffset = p->visibleTextOffset;
@@ -3212,19 +3230,27 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   // building, every one of those opens queues behind the build's own SD traffic on the shared
   // storage mutex, so anything that calls this -- opening the reader menu, drawing the status
   // bar -- stalls for as long as the build holds the card (reported on device: buttons feel
-  // unresponsive during indexing). Keep the previous numbers until the build is done; they are
-  // recomputed on the next call, and page counts are transient during a build anyway.
-  if (verticalBuildInProgress_.load(std::memory_order_relaxed) || (section && section->isBuilding())) return;
+  // unresponsive during indexing).
+  //
+  // Only the probes are expensive, so only they are skipped. Bailing out of the whole function
+  // used to leave the numbers at the per-section fallback for as long as the build ran, which
+  // after a mode switch is the entire rebuild: the status bar showed "203/203" where the other
+  // mode showed "228/258". The live chapter's own count costs nothing, and the byte-share
+  // estimate for the rest is arithmetic, so the chapter-wide numbers are available immediately.
+  const bool buildActive =
+      verticalBuildInProgress_.load(std::memory_order_relaxed) || (section && section->isBuilding());
 
   const int livePages = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
   const bool vertical = useVerticalText();
-  if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical) {
+  if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical &&
+      chapterSpanBuildActive == buildActive) {
     return;
   }
   const bool spanModeChanged = chapterSpanVertical != vertical;
   chapterSpanSpine = currentSpineIndex;
   chapterSpanLivePages = livePages;
   chapterSpanVertical = vertical;
+  chapterSpanBuildActive = buildActive;
   chapterPagesBefore = 0;
   chapterPagesTotal = std::max(1, livePages);
   bookPagesBefore = 0;
@@ -3247,10 +3273,12 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   for (int i = 0; i < spineCount; i++) {
     if (i == currentSpineIndex && livePages > 0) {
       spinePagesReal[i] = static_cast<uint16_t>(std::min(livePages, 0xFFFF));
-    } else if (spinePagesReal[i] == 0) {
+    } else if (spinePagesReal[i] == 0 && !buildActive) {
       // A failed probe is remembered for the session (kSpineProbeFailed): without this, every
       // menu open / status-bar refresh after a cache-version bump re-opened (and re-discarded)
       // all N stale section files -- a visible seconds-long delay on a 39-spine book.
+      // Skipped entirely while a build holds the card; those spines fall to the byte estimate
+      // and are probed for real once the build finishes.
       bool probed = false;
       if (vertical) {
         VerticalSection sibling(epub, i, renderer);
@@ -3469,7 +3497,13 @@ void EpubReaderActivity::renderStatusBar() const {
   if (bookPagesTotal > 0) {
     bookProgress = 100.0f * static_cast<float>(bookPagesBefore + sectionPage) / static_cast<float>(bookPagesTotal);
   } else {
-    const float sectionChapterProg = (rawPageCount > 0) ? (static_cast<float>(sectionPage) / sectionPageCount) : 0.0f;
+    // sectionPage is 1-based, so the fraction is of the pages BEHIND you: page 1 of 10 is 0.0
+    // through the chapter, not 0.1. Using it raw also read 100% through the chapter in the one
+    // case this branch exists for, a chapter with no pages laid out yet, where the span falls
+    // back to {1, 1}. Switching a book to vertical then reported 99% of the book, since spine 1
+    // of 3 ends there. The reader menu has always computed it this way.
+    const float sectionChapterProg =
+        (rawPageCount > 0) ? (static_cast<float>(sectionPage - 1) / sectionPageCount) : 0.0f;
     bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
   }
 
