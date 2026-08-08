@@ -127,7 +127,7 @@ python3 tools/dict_convert/convert_jmdict.py \
 
 **3. Install a Japanese font** (optional). The built-in Noto handles Japanese, but a dedicated font looks better. Convert any TTF or OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/regular.cpfont`. An SD card Japanese font also fills in rare kanji elsewhere, such as dictionary entries and book titles.
 
-**4. Set up translation** (optional). Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and save it as `system/gemini.key` on the card.
+**4. Set up translation** (optional). Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and save it as `/system/gemini.key` on the card.
 
 Using all of it: [§6 of the User Guide](USER_GUIDE.md#6-japanese-reading-features).
 
