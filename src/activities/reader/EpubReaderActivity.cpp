@@ -971,8 +971,9 @@ void EpubReaderActivity::jumpToPercent(int percent) {
 }
 
 void EpubReaderActivity::openReaderMenu() {
-  const int sectionPage = verticalSection ? verticalSection->currentPage + 1 : section ? section->currentPage + 1 : 0;
-  const int sectionPageCount = verticalSection ? verticalSection->pageCount : section ? section->pageCount : 0;
+  const auto span = sectionPageSpan();
+  const int sectionPage = span.page;
+  const int sectionPageCount = span.count;
   // The menu header shows the same ToC-chapter-wide numbering and page-based book
   // progress as the status bar.
   updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
@@ -3300,6 +3301,22 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   chapterPagesTotal = std::max(1, total);
 }
 
+EpubReaderActivity::SectionPageSpan EpubReaderActivity::sectionPageSpan() const {
+  const int rawPage = verticalSection ? verticalSection->currentPage : section ? section->currentPage : 0;
+  // estimatedTotalPages() rather than pageCount: while a giant spine builds, pageCount is only
+  // the watermark reached so far, so "page X of Y" would count against a total that keeps moving.
+  const int rawCount = verticalSection ? verticalSection->pageCount : section ? section->estimatedTotalPages() : 0;
+  if (rawCount <= 0) return {1, 1};  // empty chapter: one skippable page beats 65536/0
+
+  // Loud rather than silently clamped. An out-of-range page here is a real bug somewhere in the
+  // positioning path, and the clamp below is what hides it from the screen.
+  if (rawPage < 0 || rawPage >= rawCount) {
+    LOG_ERR("ERS", "section page out of range: %d of %d (spine %d, %s)", rawPage, rawCount, currentSpineIndex,
+            verticalSection ? "vertical" : "horizontal");
+  }
+  return {std::clamp(rawPage + 1, 1, rawCount), rawCount};
+}
+
 int EpubReaderActivity::pageBasedPercent(const int spineIndex, const int sectionPage) const {
   if (bookPagesTotal <= 0 || spinePagesEffective.empty()) {
     // Model unavailable (e.g. no section loaded yet) -- fall back to byte weighting.
@@ -3412,15 +3429,10 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
 
 void EpubReaderActivity::renderStatusBar() const {
   // Calculate progress in book
-  const int rawCurrentPage = verticalSection ? verticalSection->currentPage : section ? section->currentPage : 0;
-  // The estimated total while a giant spine is still building, so "page X of Y" and the
-  // progress bar don't read off the small build watermark.
-  const int rawPageCount = verticalSection ? verticalSection->pageCount : section ? section->estimatedTotalPages() : 0;
-
-  // Keep status bar sane on empty chapters: show a single skippable page (1/1)
-  // instead of sentinel/underflow values like 65536/0.
-  const int sectionPage = (rawPageCount > 0) ? std::clamp(rawCurrentPage + 1, 1, rawPageCount) : 1;
-  const int sectionPageCount = (rawPageCount > 0) ? rawPageCount : 1;
+  const auto span = sectionPageSpan();
+  const int rawPageCount = span.count;
+  const int sectionPage = span.page;
+  const int sectionPageCount = span.count;
 
   // Display page numbering spans the ToC chapter, not just this spine file; book progress is
   // page-based (pages read / total pages) with byte weighting only as a bootstrap fallback.
