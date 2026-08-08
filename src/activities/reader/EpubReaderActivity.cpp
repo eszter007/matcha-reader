@@ -2477,16 +2477,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
     pageLoadRetryCount = 0;  // Reset the retry counter once a page loads cleanly
 
-    // TEMPORARY (blank-page investigation): a page that loads without error but draws nothing
-    // is indistinguishable from a render fault on screen. Say which it is.
+    // A page that loads without error but draws nothing is indistinguishable from a render
+    // fault on screen, so name it. Only the fault is logged -- this runs on every page turn.
     if (p->elements.empty()) {
-      LOG_ERR("ERS", "BLANK: page %d of %u loaded with 0 elements (building=%d partial=%d complete=%d offset=%u)",
-              section->currentPage, static_cast<unsigned>(section->pageCount), section->isBuilding() ? 1 : 0,
-              section->isPartial() ? 1 : 0, section->isBuildComplete() ? 1 : 0, p->visibleTextOffset);
-    } else {
-      LOG_DBG("ERS", "page %d of %u: %u elements (building=%d partial=%d)", section->currentPage,
-              static_cast<unsigned>(section->pageCount), static_cast<unsigned>(p->elements.size()),
-              section->isBuilding() ? 1 : 0, section->isPartial() ? 1 : 0);
+      LOG_ERR("ERS", "Page %d of %u loaded with 0 elements (building=%d partial=%d complete=%d)", section->currentPage,
+              static_cast<unsigned>(section->pageCount), section->isBuilding() ? 1 : 0, section->isPartial() ? 1 : 0,
+              section->isBuildComplete() ? 1 : 0);
     }
 
     // Cache this page's content offset (read alongside the page, no extra file open) so

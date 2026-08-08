@@ -475,6 +475,10 @@ struct TextExtractor {
       if (self->skipDepth == 0) self->skipDepth = -1;
       return;
     }
+    // Mirrors the set in startElement, and ChapterHtmlSlimParser's own reset. Anything after
+    // </body> occupies no visible position, and the two counters only mean the same thing while
+    // they agree on where the body ends.
+    if (strcasecmp(name, "body") == 0) self->insideBody = false;
     if (self->boxOpenedAtDepth >= 0 && self->elementDepth == self->boxOpenedAtDepth - 1) {
       self->flushParagraph();
       if (self->sink) self->sink->onBlockStyleEnd();
