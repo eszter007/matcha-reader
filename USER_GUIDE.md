@@ -3,7 +3,7 @@
 Welcome to the **CrossPoint** firmware. This guide outlines the hardware controls, navigation, and reading features of the device.
 
 > [!TIP]
-> Dictionaries, fonts and manga all need converting before the device can read them.
+> Japanese dictionaries, fonts and manga all need converting before the device can read them.
 > [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) does all three in your browser and
 > gives you a zip laid out for the SD card, with no Python to install. Files stay on your machine, except manga
 > OCR, which sends panels to Gemini under your own API key.
@@ -744,7 +744,7 @@ Reaching the last page marks the manga finished in your reading stats, the same 
 
 Which dictionary a book uses is decided by the book's own language tag, so you can keep several and never pick one
 by hand. Each dictionary lives in a folder named after its language: `de` for German, `en` for English, `fr` for
-French, and so on.
+French, and so on. Within the folder, put another folder with the name of your dictionary.
 
 ```
 dictionaries/
