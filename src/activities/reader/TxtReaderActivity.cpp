@@ -44,6 +44,7 @@ void TxtReaderActivity::onEnter() {
   APP_STATE.openEpubPath = filePath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(filePath, fileName, "", "");
+  BookStats::recordOpen(filePath.c_str());
 
   // Trigger first update
   requestUpdate();

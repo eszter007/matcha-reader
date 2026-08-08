@@ -71,6 +71,14 @@ Time is also recorded per book and per language, so reading can later be broken 
 
 <p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights screen with reading streak, stat cards, and monthly calendar"></p>
 
+### Per-book stats
+
+**Long-press a book in the Library** to see its own numbers: sessions, total time, average session, days read, and a calendar of the days you read *that* book. A session is one opening of the book. Opening the reader menu or the settings mid-chapter does not count again, and an open too short to bank a whole minute still counts as a session even though it adds no reading time. Waking the device back into a book **does** count as a new session, so a long read broken up by sleep shows as several — and because reading time is only counted in whole minutes, the average session runs a little short of the truth.
+
+This history starts the day you install this version — books you read before it show "No reading recorded yet" until you next open them. The overall Insights numbers are unaffected; they go back as far as they always did.
+
+Long-press used to remove a book from Recents. That is gone, replaced by this.
+
 ### Also in this fork
 
 - **Furigana** above (horizontal) or beside (vertical) kanji, per-book toggle, positioned so dense readings don't collide

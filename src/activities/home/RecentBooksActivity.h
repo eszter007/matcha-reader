@@ -201,7 +201,8 @@ class RecentBooksActivity final : public Activity {
   void markAllProgressPending();
   void warmOnePendingProgress();
 
-  void promptRemoveBook(const std::string& path, const std::string& title);
+  // Long-press on a book opens its reading stats.
+  void showBookStats(const std::string& path, const std::string& title);
 
  public:
   explicit RecentBooksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

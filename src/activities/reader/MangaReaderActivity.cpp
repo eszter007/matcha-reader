@@ -114,6 +114,7 @@ void MangaReaderActivity::onEnter() {
   // (device report: Loading on every return from a manga). Drawing it also meant scaling a
   // full-size page into the card instead of blitting the cached one.
   RECENT_BOOKS.addBook(book->getFolder(), book->getTitle(), bookAuthor, book->getThumbBmpPath());
+  BookStats::recordOpen(book->getFolder().c_str());
 
   readingSessionStartMs = millis();
 

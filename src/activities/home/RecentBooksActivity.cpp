@@ -17,11 +17,11 @@
 #include <cstdio>
 #include <memory>
 
+#include "BookStatsActivity.h"
 #include "EpubProgressUtil.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "XtcProgressUtil.h"
-#include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
@@ -814,8 +814,25 @@ void RecentBooksActivity::loop() {
       return;
     }
 
-    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      if (shelfContentIndex < static_cast<int>(shelfBooks.size())) {
+    // The latch must be handled inside this block too: everything here returns before reaching
+    // the copy further down, so without it the release ending a long press would fall through
+    // and open the book as well.
+    if (longPressFired) {
+      if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
+        longPressFired = false;
+      }
+      return;
+    }
+
+    if (shelfContentIndex < static_cast<int>(shelfBooks.size())) {
+      // Same gesture as the Recents grid. Shelves are where manga folders are browsed, so
+      // without this a manga read from its shelf had no way to reach its stats.
+      if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
+        longPressFired = true;
+        showBookStats(shelfBooks[shelfContentIndex].path, shelfBooks[shelfContentIndex].title);
+        return;
+      }
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() < LONG_PRESS_MS) {
         LOG_DBG("RBA", "Selected shelf book: %s", shelfBooks[shelfContentIndex].path.c_str());
         onSelectBook(shelfBooks[shelfContentIndex].path);
         return;
@@ -847,11 +864,12 @@ void RecentBooksActivity::loop() {
     } else {
       const int itemIdx = contentIndex - 1;
       if (selectedTab == 0) {
-        if (itemIdx < static_cast<int>(recentBooks.size())) {
-          LOG_DBG("RBA", "Selected recent book: %s", recentBooks[itemIdx].path.c_str());
-          onSelectBook(recentBooks[itemIdx].path);
-          return;
-        }
+        // Deliberately nothing here: a book on the Recents tab opens on RELEASE (below), not on
+        // the press edge. Opening on press returns from loop() immediately, so getHeldTime()
+        // could never reach LONG_PRESS_MS and the long-press gesture was unreachable -- which is
+        // how it stayed from 803fcf3c until this was noticed. Shelves and the tab toggle keep
+        // press-to-act: neither has a long-press to make room for.
+        (void)itemIdx;
       } else {
         if (itemIdx < static_cast<int>(shelves.size())) {
           LOG_DBG("RBA", "Opening shelf: %s", shelves[itemIdx].folderPath.c_str());
@@ -875,11 +893,21 @@ void RecentBooksActivity::loop() {
 
   if (selectedTab == 0 && contentIndex > 0) {
     const int itemIdx = contentIndex - 1;
-    if (itemIdx < static_cast<int>(recentBooks.size()) && mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
-        mappedInput.getHeldTime() >= LONG_PRESS_MS) {
-      longPressFired = true;
-      promptRemoveBook(recentBooks[itemIdx].path, recentBooks[itemIdx].title);
-      return;
+    if (itemIdx < static_cast<int>(recentBooks.size())) {
+      // Held past the threshold: stats. Fires while the button is still down, so the gesture
+      // completes without waiting for release.
+      if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
+        longPressFired = true;
+        showBookStats(recentBooks[itemIdx].path, recentBooks[itemIdx].title);
+        return;
+      }
+      // Released before the threshold: open the book. The longPressFired latch above swallows
+      // the release that ends a long press, so a stats gesture never also opens the book.
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() < LONG_PRESS_MS) {
+        LOG_DBG("RBA", "Selected recent book: %s", recentBooks[itemIdx].path.c_str());
+        onSelectBook(recentBooks[itemIdx].path);
+        return;
+      }
     }
   }
 
@@ -958,32 +986,14 @@ void RecentBooksActivity::loop() {
   }
 }
 
-void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::string& title) {
-  auto handler = [this, path](const ActivityResult& res) {
-    // The confirmation dialog painted over our frame (whether confirmed or cancelled), so the
-    // next render must be a full one -- a partial redraw would leave dialog remnants on screen.
+void RecentBooksActivity::showBookStats(const std::string& path, const std::string& title) {
+  auto handler = [this](const ActivityResult&) {
+    // The stats screen painted over our whole frame, so the next render must be a full one --
+    // a partial redraw would leave its cards on screen.
     lastRendered.valid = false;
-    if (res.isCancelled) {
-      LOG_DBG("RBA", "Remove from recents cancelled");
-      return;
-    }
-    if (RECENT_BOOKS.removeByPath(path)) {
-      LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
-      loadRecentBooks();
-      loadBookProgress();
-      if (shelvesLoaded) loadShelves();
-      if (recentBooks.empty()) {
-        contentIndex = 0;
-      } else if (contentIndex - 1 >= static_cast<int>(recentBooks.size())) {
-        contentIndex = static_cast<int>(recentBooks.size());
-      }
-      requestUpdate(true);
-    }
   };
 
-  startActivityForResult(
-      std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_REMOVE_FROM_RECENTS), title),
-      std::move(handler));
+  startActivityForResult(std::make_unique<BookStatsActivity>(renderer, mappedInput, path, title), std::move(handler));
 }
 
 void RecentBooksActivity::drawGridSelectionBorder(const int cellX, const int cellY, const int cellWidth,
