@@ -152,7 +152,10 @@ namespace {
 // v72: no format change -- CssPropertyFlags::anySet() omitted `border`, so every border-only
 //      rule was discarded before it was stored and no bordered block ever picked up its edges.
 //      Cached pages were laid out without those borders.
-constexpr uint8_t SECTION_FILE_VERSION = 72;
+// v73: the header records whether furigana is on, and a ruby-carrying line only reserves the
+//      leading its annotation needs when it is. With furigana off, pages now hold more lines,
+//      so the toggle re-lays the chapter out instead of only suppressing the annotations.
+constexpr uint8_t SECTION_FILE_VERSION = 73;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -172,8 +175,8 @@ constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
 constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 28);
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) +
+                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -221,8 +224,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
                                    sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
                                    sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
-                                   sizeof(spec.honorBookInsets) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
+                                   sizeof(spec.honorBookInsets) + sizeof(spec.furiganaEnabled) + sizeof(uint32_t) +
+                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
@@ -238,6 +241,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.imageRendering);
   serialization::writePod(file, spec.focusReadingEnabled);
   serialization::writePod(file, spec.honorBookInsets);
+  serialization::writePod(file, spec.furiganaEnabled);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -278,6 +282,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     uint8_t fileImageRendering;
     bool fileFocusReadingEnabled;
     bool fileHonorBookInsets;
+    bool fileFuriganaEnabled;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -289,13 +294,14 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileImageRendering);
     serialization::readPod(file, fileFocusReadingEnabled);
     serialization::readPod(file, fileHonorBookInsets);
+    serialization::readPod(file, fileFuriganaEnabled);
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
-        spec.honorBookInsets != fileHonorBookInsets) {
+        spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();
@@ -553,7 +559,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
       spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
-      spec.focusReadingEnabled,
+      spec.focusReadingEnabled, spec.furiganaEnabled,
       [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
                      const uint32_t visibleTextOffset) {
         // An empty page in the LUT reads back as a blank screen the reader can't skip past.

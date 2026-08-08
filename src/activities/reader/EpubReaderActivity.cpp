@@ -562,12 +562,7 @@ void EpubReaderActivity::loop() {
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
     // Reuse the last render's viewport so the extension paginates identically to the partial.
-    // readerRenderSpec() takes fontId straight from settings; the reader may be
-    // substituting a different font for this book (effectiveReaderFontId: a Latin book
-    // read with a CJK-only family). The LAYOUT must be measured with the font that will
-    // actually draw it, or word widths and spaces come from a font with no Latin glyphs.
-    ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
-    buildSpec.fontId = effectiveReaderFontId();
+    const ReaderRenderSpec buildSpec = readerSpec(buildViewportWidth, buildViewportHeight);
     if (!section->startBuild(buildSpec)) {
       // Not fatal: the partial keeps serving its pages; crossing the watermark falls back to
       // the blocking extension in render(). Don't retry every tick.
@@ -1601,12 +1596,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   buildViewportWidth = viewportWidth;
   buildViewportHeight = viewportHeight;
 
-  // readerRenderSpec() takes fontId straight from settings; the reader may be
-  // substituting a different font for this book (effectiveReaderFontId: a Latin book
-  // read with a CJK-only family). The LAYOUT must be measured with the font that will
-  // actually draw it, or word widths and spaces come from a font with no Latin glyphs.
-  ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
-  renderSpec.fontId = effectiveReaderFontId();
+  const ReaderRenderSpec renderSpec = readerSpec(viewportWidth, viewportHeight);
 
   // Reflow a resident section when a layout-affecting setting changed under it.
   // The reader menu is pushed on top of this activity, so editing e.g. screenMargin
@@ -2621,12 +2611,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     return;
   }
 
-  // readerRenderSpec() takes fontId straight from settings; the reader may be
-  // substituting a different font for this book (effectiveReaderFontId: a Latin book
-  // read with a CJK-only family). The LAYOUT must be measured with the font that will
-  // actually draw it, or word widths and spaces come from a font with no Latin glyphs.
-  ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
-  spec.fontId = effectiveReaderFontId();
+  const ReaderRenderSpec spec = readerSpec(viewportWidth, viewportHeight);
   Section nextSection(epub, nextSpineIndex, renderer);
   if (nextSection.loadSectionFile(spec) && !nextSection.isPartial()) {
     return;
@@ -2901,8 +2886,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   const int adjacentSpine = currentSpineIndex + direction;
   if (warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES && adjacentSpine >= 0 && adjacentSpine < epub->getSpineItemsCount()) {
     Section adjacentSection(epub, adjacentSpine, renderer);
-    if (adjacentSection.loadSectionFile(SETTINGS.readerRenderSpec(viewportWidth, viewportHeight)) &&
-        adjacentSection.pageCount > 0) {
+    if (adjacentSection.loadSectionFile(readerSpec(viewportWidth, viewportHeight)) && adjacentSection.pageCount > 0) {
       for (int pageIndex = forward ? 0 : adjacentSection.pageCount - 1;
            pageIndex >= 0 && pageIndex < adjacentSection.pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
            pageIndex += direction, warmedAhead++) {
@@ -3347,7 +3331,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
         }
       } else {
         Section sibling(epub, i, renderer);
-        if (sibling.loadSectionFile(SETTINGS.readerRenderSpec(viewportWidth, viewportHeight))) {
+        if (sibling.loadSectionFile(readerSpec(viewportWidth, viewportHeight))) {
           spinePagesReal[i] = sibling.pageCount;
           probed = true;
         }
@@ -3608,6 +3592,13 @@ void EpubReaderActivity::renderStatusBar() const {
   const bool building = section && section->isBuilding();
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
                     building);
+}
+
+ReaderRenderSpec EpubReaderActivity::readerSpec(const uint16_t viewportWidth, const uint16_t viewportHeight) const {
+  ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  spec.fontId = effectiveReaderFontId();
+  spec.furiganaEnabled = useFurigana();
+  return spec;
 }
 
 int EpubReaderActivity::effectiveReaderFontId() const {

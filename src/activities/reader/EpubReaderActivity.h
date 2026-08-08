@@ -426,6 +426,12 @@ class EpubReaderActivity final : public Activity {
   // measurement and the vertical engine's font-adaptive positioning all derive from one font
   // that really contains the glyphs -- per-glyph fallback stays only for rare stragglers.
   int effectiveReaderFontId() const;
+  // The horizontal layout spec for THIS book. SETTINGS.readerRenderSpec() knows only the
+  // global store; two fields are per-book and have to be applied on top of it -- the
+  // substituted font, and the furigana toggle's override. Both are cache-key fields, so a spec
+  // built without them silently fails every parameter check and rebuilds the chapter. Build
+  // every horizontal spec through here rather than repeating the fixups at each call site.
+  ReaderRenderSpec readerSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
   void restoreSavedPosition();
   bool useVerticalText() const;
   // Space kept clear below the text, in addition to the panel's own bezel.
