@@ -2005,10 +2005,31 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               ESP.getMaxAllocHeap(), ESP.getFreeHeap());
     }
 
+    // Start the waveform and return, so the post-render work below (next-chapter index, glyph
+    // warm, progress save) runs DURING the panel's ~500ms refresh instead of after it. Sustained
+    // paging was device-bound at ~1030ms per turn: 50ms draw + 502ms blocking refresh + ~430ms
+    // warm. None of the overlapped work touches the framebuffer -- the glyph warm renders in scan
+    // mode, which draws nothing. Everything that DOES touch it waits first; see below.
+    const bool overlapRefresh = !imagePageDisplayed && renderer.supportsAsyncRefresh();
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
-      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
     }
+    // Skimming: when a render is ALREADY queued (button held, or presses stacked up while this
+    // page drew), the reader is hunting for a position and will leave this page immediately.
+    // Every tail task below is speculative work for a page that is about to be replaced, and it
+    // runs on the render task, so it delays the very render the reader is waiting for -- measured
+    // at ~430ms per turn, most of it the mini-kern build for a neighbour never visited.
+    // The pending-notification read is the same signal imageWarmShouldCancel() uses (see the
+    // comment there on why ulTaskNotifyValueClear with no bits is the side-effect-free read), but
+    // spelled out rather than reusing that helper: its input-stamp comparison is only valid once
+    // warmNextPageImageCache() has taken its snapshot, which has not happened yet here.
+    // Nothing below is required for correctness: the warm is an optimisation, the silent index
+    // retries on the next settled page, and the progress save is repeated by whichever render
+    // finally settles.
+    const bool skimming = mappedInput.anyButtonDownRaw() || ulTaskNotifyValueClear(nullptr, 0) > 0;
+    if (skimming) LOG_DBG("VSKIM", "tail skipped: render already queued");  // TEMP (issue #54)
+
     // Pre-build the next chapter's cache while this page is on screen. This call was
     // missing from the vertical path (lost in a refactor -- silentIndexNextChapterIfNeeded
     // has had a vertical branch all along), so in tategaki books every chapter transition
@@ -2016,7 +2037,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // own one-page spine item, so a text->image->text sequence popped Indexing twice. Now
     // the image chapter builds while the last text pages are read, and the next text
     // chapter builds while the reader looks at the illustration.
-    silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
+    if (!skimming) silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
 
     // Warm the neighbouring page's glyphs while the reader looks at this one, so the next turn
     // renders from a warm cache instead of paying the per-page SD bulk load at button time.
@@ -2037,14 +2058,23 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
     lastRenderedVPage_ = renderedVPage_;
     const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? renderedVPage_ + 1 : renderedVPage_ - 1;
-    if (pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
+    if (!skimming && pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
       prewarmedVPage_ = -1;
       if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
         if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
       }
     }
-    saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
-                 furiganaOverride);
+    // Skipped while skimming: this is an SD write per page turn, and the render that settles
+    // saves the position the reader actually stops on. Progress durability is unaffected -- the
+    // only pages not persisted are ones passed through on the way somewhere else.
+    if (!skimming) {
+      saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
+                   furiganaOverride);
+    }
+
+    // End of the overlap window. Everything past this point may draw: the popups below, the
+    // screenshot's framebuffer read, and the image warm's cache decode.
+    if (overlapRefresh) renderer.waitRefreshComplete();
 
     showPendingSyncSaveError();
 
