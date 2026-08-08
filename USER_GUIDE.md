@@ -2,6 +2,13 @@
 
 Welcome to the **CrossPoint** firmware. This guide outlines the hardware controls, navigation, and reading features of the device.
 
+> [!TIP]
+> Japanese dictionaries, fonts and manga all need converting before the device can read them.
+> [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) does all three in your browser and
+> gives you a zip laid out for the SD card, with no Python to install. Files stay on your machine, except manga
+> OCR, which sends panels to Gemini under your own API key.
+> ([source](https://github.com/eszter007/matcha-reader-tools))
+
 - [CrossPoint User Guide](#crosspoint-user-guide)
   - [1. Hardware Overview](#1-hardware-overview)
     - [Button Layout](#button-layout)
@@ -35,6 +42,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [3.7 Sleep Screen](#37-sleep-screen)
       - [Cover settings](#cover-settings)
       - [Custom images](#custom-images)
+      - [Transparent sleep screen](#transparent-sleep-screen)
     - [3.8 Custom Fonts (SD Card)](#38-custom-fonts-sd-card)
   - [4. Reading Mode](#4-reading-mode)
     - [Page Turning](#page-turning)
@@ -52,8 +60,14 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [6.2 Word Lookup](#62-word-lookup)
     - [6.3 Page Translation](#63-page-translation)
     - [6.4 Reading Manga](#64-reading-manga)
-  - [7. Current Limitations & Roadmap](#7-current-limitations--roadmap)
-  - [8. Troubleshooting Issues & Escaping Bootloop](#8-troubleshooting-issues--escaping-bootloop)
+    - [6.5 Dictionary Files and Language Selection](#65-dictionary-files-and-language-selection)
+  - [7. Reading Stats](#7-reading-stats)
+    - [7.1 Insights](#71-insights)
+    - [7.2 Per-language Stats](#72-per-language-stats)
+    - [7.3 Per-book Stats](#73-per-book-stats)
+    - [7.4 What the Numbers Do Not Cover](#74-what-the-numbers-do-not-cover)
+  - [8. Current Limitations & Roadmap](#8-current-limitations--roadmap)
+  - [9. Troubleshooting Issues & Escaping Bootloop](#9-troubleshooting-issues--escaping-bootloop)
 
 ## 1. Hardware Overview
 
@@ -506,6 +520,7 @@ The **Sleep Screen** setting controls what is displayed when the device goes to 
 | **Custom**         | A custom image from the SD card (see below). Falls back to **Dark** if no custom image is found.                             |
 | **Cover**          | The cover of the currently open book. Falls back to **Dark** if no book is open.                                             |
 | **Cover + Custom** | The cover of the currently open book, shown only while actively reading. Falls back to **Custom** behavior when not reading. |
+| **Transparent**    | A custom image laid over the page you were reading, so the text stays visible behind it (see below).                         |
 | **None**           | A blank screen.                                                                                                              |
 
 #### Cover settings
@@ -532,11 +547,24 @@ To use custom sleep images, set the sleep screen mode to **Custom** or **Cover +
 > [!TIP]
 > You can set an image as the sleep screen cover directly from the BMP image viewer in the **[Browse Files](#33-browse-files-screen)** screen.
 
+#### Transparent sleep screen
+
+**Transparent** does not replace the page, it draws over it. White pixels in the image let the page through, black
+ones paint on top, so you get the wallpaper and the paragraph you stopped at in the same picture.
+
+It uses the same images as **Custom**: put 480x800 BMPs (X4) or 528x792 (X3) in `.sleep/transparent` on the card. Images with a lot of white space work best, since anything solid hides the text under it.
+Artwork along one edge, as below, keeps most of the page readable.
+
+<p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper drawn over the page, with the text still readable behind it"></p>
+
 ---
 
 ### 3.8 Custom Fonts (SD Card)
 
 CrossPoint supports loading additional fonts from the SD card, extending beyond the two built-in families (Noto Serif, Noto Sans). Custom fonts can include extended Unicode coverage, enabling CJK (Chinese, Japanese, Korean) and other scripts.
+
+Convert any TTF or OTF with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and put the
+result in `.fonts/<Family>/regular.cpfont`.
 
 There are three ways to install fonts:
 
@@ -607,6 +635,8 @@ What is not supported with built-in reader fonts: Chinese, Japanese, Korean, Ara
 
 ## 5. Reader Menu
 
+<p align="center"><img src="docs/images/screenshots/reader-menu.png" width="260" alt="The reader menu"></p>
+
 Press **Confirm** while reading to open the Reader Menu. From here you can access reading utilities and navigation options without leaving the book.
 
 Available options include:
@@ -653,10 +683,16 @@ up the dictionaries, fonts, and API key they need.
 ### 6.1 Reading a Japanese Book
 
 Copy a Japanese EPUB to the SD card and open it from the Library. Vertical text activates on its own when the
-book declares `<dc:language>ja</dc:language>` — no setting to find.
+book declares `<dc:language>ja</dc:language>`, with no setting to find.
 
 The reader menu (**Confirm**) gains **Vertical Text: ON/OFF** and **Furigana: ON/OFF** for Japanese books. Both
 toggle in place without leaving the menu, and both are remembered per book.
+
+<p align="center">
+  <img src="docs/images/screenshots/reader-settings.png" width="260" alt="Reader settings showing the vertical text and furigana toggles">
+  <img src="docs/images/screenshots/vertical-text-furigana.png" width="260" alt="Vertical text with furigana beside the kanji">
+</p>
+<p align="center"><em>The toggles, and furigana set beside the kanji where the book provides it</em></p>
 
 ### 6.2 Word Lookup
 
@@ -681,8 +717,10 @@ Gemini API key in `/system/gemini.key`.
 
 ### 6.4 Reading Manga
 
-Copy a converted manga folder anywhere on the SD card — any depth, any folder name. It appears in the Library
-grid, on shelves, and in Continue Reading with its cover, title, author, and progress.
+Convert your manga with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/), picking the X3 or
+X4 target so pages are scaled for the screen. Then copy the folder anywhere on the SD card, at any depth and under
+any folder name. It appears in the
+Library grid, on shelves, and in Continue Reading with its cover, title, author and progress.
 
 | Button | Full-page view | Panel zoom |
 | --- | --- | --- |
@@ -691,9 +729,103 @@ grid, on shelves, and in Continue Reading with its cover, title, author, and pro
 | Back | Leave the book | Back to full-page view |
 | Hold Back | Jump to the file browser | Jump to the file browser |
 
-Reaching the last page marks the manga finished in Insights, the same as an EPUB.
+Two options change how panels are shown. Both are per book and are remembered.
 
-## 7. Current Limitations & Roadmap
+| Option | Where | Effect |
+| --- | --- | --- |
+| **Rotate Panels** | Settings → Reader | On by default. A panel whose shape does not match the screen is turned, so a wide panel fills the display and you rotate the device to read it. Switch it off and every panel is fitted upright inside the current orientation, smaller but never sideways. |
+| **Panels Only** | Reader menu | Skips the full page overviews and moves straight between panels. With it off, each page's overview comes first, then its panels. A page with no detected panel still shows as a full page either way. |
+
+Manga converted without full page images enters panel mode on its own.
+
+Reaching the last page marks the manga finished in your reading stats, the same as an EPUB.
+
+### 6.5 Dictionary Files and Language Selection
+
+Which dictionary a book uses is decided by the book's own language tag, so you can keep several and never pick one
+by hand. Each dictionary lives in a folder named after its language: `de` for German, `en` for English, `fr` for
+French, and so on. Within the folder, put another folder with the name of your dictionary.
+
+```
+dictionaries/
+  en/your_dictionary_name/     # English, StarDict files
+  fr/your_dictionary_name/     # French, StarDict files
+  jp/                          # Japanese, converted Yomitan files
+    vocab.idx    vocab.dat    vocab.spx      # vocabulary (required)
+    names.idx    names.dat    names.spx      # names (recommended)
+    grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
+```
+
+Japanese works differently from the rest. It always uses the converted files in `dictionaries/jp/`, split into
+vocabulary, names and grammar, because lookup needs the readings and deinflection that a plain StarDict file does
+not carry. Convert them from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject)
+or any other Yomitan dictionary with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/),
+which also handles jmdict-simplified JSON and MDict `.mdx` input. Every other language uses ordinary StarDict, one
+folder per dictionary, with no conversion needed.
+
+The dictionary you choose in **Settings → Reader → Dictionary** is the fallback. It is used when the book carries
+no language, or when nothing under `dictionaries/` matches the one it carries. Reader Settings shows the
+dictionary a book actually ended up with, which is the quickest way to check a tag is being read.
+
+A flat pile of dictionary files directly under `dictionaries/`, and the older `dict/` folder, both still work.
+
+## 7. Reading Stats
+
+Reading time is recorded as you go, every few minutes and again when you close a book, so a flat battery or a
+crash costs you the last few minutes rather than the whole session. Manga counts the same as EPUBs.
+
+### 7.1 Insights
+
+Home → **Insights**. Your current streak, minutes this week, books finished, days read, total time, longest
+streak, and a calendar of the days you read.
+
+| Button | Action |
+| --- | --- |
+| Left / Right | Previous or next month. The button hints name the month they move to. |
+| Up / Down | Scroll |
+| Confirm | Open the per-language view |
+| Back | Back one screen. Hold it to go home. |
+
+<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, stat cards and calendar"></p>
+
+### 7.2 Per-language Stats
+
+Press **Details** on Insights. The same figures again, split by the language of what you read, with one tab per
+language and **Switch** to move between them. Each tab has its own streak, calendar and totals, so a Japanese
+streak survives an evening spent with an English book.
+
+Tabs are named where the firmware has a translation for the language, so `ja` shows as 日本語. A language it has
+no translation for keeps its tag, `ZH` for instance, rather than being given the wrong name. Books that declare no
+language at all, which means TXT, XTC and manga converted without `--language`, collect in an **Unknown** tab.
+
+<p align="center"><img src="docs/images/screenshots/language-stats.png" width="260" alt="Per-language stats with a tab for each language"></p>
+
+### 7.3 Per-book Stats
+
+Long press a book in the Library. Sessions, total time, average session, days read, and a calendar of the days you
+read that book.
+
+A session is one opening of the book. Opening the reader menu or settings partway through does not start another
+one. Waking the device back into a book does count as a new session, so an evening broken up by sleep shows as
+several.
+
+This history starts when you install the version that added it. A book you read before that says "No reading
+recorded yet" until you next open it. Your overall Insights numbers go back as far as they always did.
+
+<p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book stats for one book"></p>
+
+### 7.4 What the Numbers Do Not Cover
+
+Worth knowing before you read too much into them.
+
+- Reading time counts whole minutes, so a short sitting adds nothing and the average session runs slightly short.
+- Books finished per language can undercount. A book's language is kept in a list of the 150 most recently read
+  books, and a book finished long before that has lost its tag.
+- Days recorded before per-language tracking existed carry no language and cannot be assigned one now.
+- The device keeps roughly a decade of overall history and a few years of per-language history in memory. Older
+  days drop off the end. This is a limit of a device with 380KB of RAM, not a choice about what is interesting.
+
+## 8. Current Limitations & Roadmap
 
 Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
 
@@ -704,7 +836,7 @@ Please note that this firmware is currently in active development. The following
 
 ---
 
-## 8. Troubleshooting Issues & Escaping Bootloop
+## 9. Troubleshooting Issues & Escaping Bootloop
 
 If an issue or crash is encountered while using Crosspoint, feel free to raise an issue ticket and attach the logs.
 
