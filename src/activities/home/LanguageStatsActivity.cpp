@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #include "MappedInputManager.h"
@@ -31,9 +32,7 @@ const char* LanguageStatsActivity::selectedCode() const {
   return languages[selectedTab].code;
 }
 
-const char* LanguageStatsActivity::tabLabel(const int index) const {
-  if (index < 0 || index >= static_cast<int>(languages.size())) return "";
-  const char* code = languages[index].code;
+std::string LanguageStatsActivity::makeTabLabel(const char* code) {
   if (!code[0]) return tr(STR_LANGUAGE_UNKNOWN);
 
   // Endonym from the UI-language list; those strings are in flash already, so this costs no
@@ -41,21 +40,19 @@ const char* LanguageStatsActivity::tabLabel(const int index) const {
   if (const char* name = I18n::languageNameForCode(code)) return name;
 
   // No UI for this language (say "zh"): show the bare tag rather than mislabel it.
-  static char bufs[4][4];
-  static int next = 0;
-  char* out = bufs[next];
-  next = (next + 1) % 4;
-  for (int i = 0; i < 3; i++) {
-    const char c = code[i];
-    out[i] = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
+  std::string out(code);
+  for (char& c : out) {
+    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
   }
-  out[3] = '\0';
   return out;
 }
 
 void LanguageStatsActivity::onEnter() {
   Activity::onEnter();
   READING_STATS_STORE.getLanguages(languages);
+  labels.clear();
+  labels.reserve(languages.size());
+  for (const auto& l : languages) labels.push_back(makeTabLabel(l.code));
   const StatsWidgets::Today today = StatsWidgets::getToday();
   calYear = today.year;
   calMonth = today.month;
@@ -183,7 +180,7 @@ void LanguageStatsActivity::render(RenderLock&&) {
     std::vector<TabInfo> tabs;
     tabs.reserve(languages.size());
     for (int i = 0; i < static_cast<int>(languages.size()); i++) {
-      tabs.push_back({tabLabel(i), i == selectedTab});
+      tabs.push_back({labels[i].c_str(), i == selectedTab});
     }
     // Same component Library and Settings use. Always drawn focused: Confirm acts only on tabs.
     GUI.drawTabBar(renderer, Rect{0, tabBarY, screen.width, metrics.tabBarHeight}, tabs, true);

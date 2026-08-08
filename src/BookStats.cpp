@@ -8,6 +8,7 @@
 #include <cstring>
 #include <functional>
 #include <numeric>
+#include <tuple>
 
 namespace {
 constexpr const char* STATS_DIR = "/system/bookstats";
@@ -34,6 +35,11 @@ uint32_t getU32(const uint8_t* p) {
   uint32_t v;
   memcpy(&v, p, 4);
   return v;
+}
+
+// Chronological order; the tuple compare is equivalent for valid dates.
+bool byDate(const BookDay& a, const BookDay& b) {
+  return std::tie(a.year, a.month, a.day) < std::tie(b.year, b.month, b.day);
 }
 
 int daysInMonthOf(const uint16_t y, const uint8_t m) {
@@ -102,6 +108,9 @@ bool BookStats::load(const char* path) {
     if (d.year < 2020) continue;  // recorded before the clock was set; misdated
     days.push_back(d);
   }
+  // save() trims by keeping the tail, so the order has to hold for a file we did not write.
+  // Normally one comparison pass.
+  if (!std::is_sorted(days.begin(), days.end(), byDate)) std::sort(days.begin(), days.end(), byDate);
   return true;
 }
 
@@ -117,8 +126,8 @@ bool BookStats::save() const {
   }
 
   const auto pathLen = static_cast<uint16_t>(bookPath.size() > MAX_PATH_LEN ? MAX_PATH_LEN : bookPath.size());
-  // Never write what load() would reject. days is sorted, so an over-long history keeps its
-  // most recent entries.
+  // Never write what load() would reject. days is sorted (recordMinutes and load both keep it
+  // so), hence trimming the head keeps the most recent entries.
   const size_t dayCount = std::min<size_t>(days.size(), MAX_DAYS_SANE);
   const size_t firstDay = days.size() - dayCount;
 
@@ -150,14 +159,21 @@ bool BookStats::save() const {
 void BookStats::recordMinutes(const uint16_t year, const uint8_t month, const uint8_t day, const uint16_t minutes) {
   if (year < 2020) return;  // clock not set; would misdate the calendar
 
-  for (auto& d : days) {
-    if (d.year != year || d.month != month || d.day != day) continue;
-    // Saturating: a wrap would display a small plausible number instead of an obvious fault.
-    const uint32_t sum = static_cast<uint32_t>(d.minutes) + minutes;
-    d.minutes = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
-    return;
+  // Sorted insert, so save() can trim to the most recent entries. Almost always appends; only
+  // a backwards clock jump lands elsewhere.
+  for (auto it = days.rbegin(); it != days.rend(); ++it) {
+    if (it->year == year && it->month == month && it->day == day) {
+      // Saturating: a wrap would display a small plausible number instead of an obvious fault.
+      const uint32_t sum = static_cast<uint32_t>(it->minutes) + minutes;
+      it->minutes = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
+      return;
+    }
+    if (byDate(*it, BookDay{year, month, day, 0})) {
+      days.insert(it.base(), {year, month, day, minutes});
+      return;
+    }
   }
-  days.push_back({year, month, day, minutes});
+  days.insert(days.begin(), {year, month, day, minutes});
 }
 
 bool BookStats::recordOpen(const char* path) {

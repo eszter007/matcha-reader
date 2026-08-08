@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 #include <vector>
 
 #include "ReadingStatsStore.h"
@@ -11,6 +12,9 @@ class LanguageStatsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
   // Snapshotted in onEnter: deriving it walks the whole history, and render() runs per scroll.
   std::vector<ReadingStatsStore::LanguageSummary> languages;
+  // Owned strings, not a rotating buffer: render() collects every label into a TabInfo vector
+  // (which holds const char*) before any is drawn, so all of them must stay alive at once.
+  std::vector<std::string> labels;
   int selectedTab = 0;
   // Swallows the release ending a long Back press, so going home does not also finish().
   bool backLongPressFired = false;
@@ -20,7 +24,7 @@ class LanguageStatsActivity final : public Activity {
   uint8_t calMonth = 1;
 
   // Language endonym, or the bare tag when the firmware ships no UI for it.
-  const char* tabLabel(int index) const;
+  static std::string makeTabLabel(const char* code);
   const char* selectedCode() const;
 
  public:

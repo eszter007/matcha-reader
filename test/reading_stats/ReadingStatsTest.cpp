@@ -265,6 +265,25 @@ TEST_F(StatsTest, OldFormatFileIsTreatedAsNoHistory) {
   EXPECT_EQ(b.getSessions(), 0u);
 }
 
+// save() trims by keeping the tail, so the order must hold even after a backwards clock jump.
+TEST_F(StatsTest, BookDaysStaySortedWhenRecordedOutOfOrder) {
+  const char* path = "/Japanese/order.epub";
+  BookStats b;
+  ASSERT_TRUE(b.load(path));
+  b.recordMinutes(Y, M, 8, 10);
+  b.recordMinutes(Y, M, 3, 10);  // clock jumped back
+  b.recordMinutes(Y, M, 5, 10);
+  ASSERT_TRUE(b.save());
+  ASSERT_TRUE(b.load(path));
+
+  const auto& days = b.getDays();
+  ASSERT_EQ(days.size(), 3u);
+  EXPECT_EQ(days[0].day, 3);
+  EXPECT_EQ(days[1].day, 5);
+  EXPECT_EQ(days[2].day, 8);
+  EXPECT_EQ(b.getTotalMinutes(), 30u);
+}
+
 TEST_F(StatsTest, MonthViewMarksOnlyDaysRead) {
   BookStats b;
   ASSERT_TRUE(b.load("/Japanese/cal.epub"));
