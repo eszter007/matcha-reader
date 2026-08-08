@@ -1483,8 +1483,15 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
     const int shown = earlyDisplayedPage_.load(std::memory_order_relaxed);
     if (shown >= 0 && verticalSection) {
-      const int target = isForwardTurn ? shown + 1 : (shown > 0 ? shown - 1 : 0);
-      verticalSection->requestPageDuringBuild(target);
+      if (isForwardTurn) {
+        // Ahead of the build frontier, so it costs nothing: the page is served straight from
+        // RAM as it is laid out. Reading forward through a building chapter works normally.
+        verticalSection->requestPageDuringBuild(shown + 1);
+      } else {
+        // Backward needs a page already written, which means a cache read-back the build's own
+        // working set cannot fund. Say so instead of ignoring the press.
+        verticalSection->noteBackTurnDuringBuild();
+      }
     }
     lastPageTurnTime = millis();
     return;
@@ -1763,6 +1770,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!pendingPercentJump) {
           earlyTarget = pendingPageJump.has_value() ? *pendingPageJump : (nextPageNumber > 0 ? nextPageNumber : 0);
           verticalSection->setEarlyRenderHook(this, &EpubReaderActivity::earlyRenderVerticalPageThunk, earlyTarget);
+          verticalSection->setBuildNoticeHook(this, &EpubReaderActivity::buildNoticeThunk);
         }
 
         earlyPageActuallyDisplayed_ = false;
@@ -3498,6 +3506,18 @@ void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const
   } else {
     block.render(renderer, effectiveReaderFontId(), marginLeft, marginTop, true);
   }
+}
+
+void EpubReaderActivity::buildNoticeThunk(void* ctx) {
+  auto* self = static_cast<EpubReaderActivity*>(ctx);
+  // The framebuffer is lent away for the duration of the chapter extraction; drawing then would
+  // scribble on the bytes the inflate is using. Skipping simply drops the notice -- the press it
+  // answers is already lost either way.
+  if (!self->renderer.hasFrameBuffer()) return;
+  GUI.drawPopup(self->renderer, tr(STR_INDEXING));
+  // The page render that follows repaints the whole screen over this, and a plain FAST leaves
+  // the popup's glyphs ghosting underneath; take the absolute pass.
+  self->pagesUntilFullRefresh = 1;
 }
 
 void EpubReaderActivity::earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, const int pageIndex) {

@@ -70,6 +70,11 @@ class VerticalSection {
   // See requestPageDuringBuild(). Written by the loop() task, read by the build on the
   // render task; -1 = no pending request.
   std::atomic<int> buildPageRequest_{-1};
+  // See noteBackTurnDuringBuild(). Set by loop(), consumed on the render task between pages so
+  // the notice is drawn by the same task that draws pages -- the framebuffer has one owner.
+  std::atomic<bool> backTurnDuringBuild_{false};
+  void (*buildNoticeFn_)(void*) = nullptr;
+  void* buildNoticeCtx_ = nullptr;
 
  public:
   uint16_t pageCount = 0;
@@ -100,6 +105,20 @@ class VerticalSection {
   // written, otherwise the moment it is laid out). Latest request wins -- rapid presses
   // collapse to the final target.
   void requestPageDuringBuild(int pageIndex) { buildPageRequest_.store(pageIndex, std::memory_order_relaxed); }
+
+  // A BACKWARD turn while the build runs. Unlike a forward one it cannot be served: the page is
+  // already behind the build frontier, so showing it needs a cache read-back, and read-back wants
+  // ~10KB contiguous that the layout's own working set does not leave (measured on device:
+  // maxAlloc bottoms near 6KB mid-build). Rather than refuse silently, tell the reader the
+  // chapter is still indexing. Drawn via setBuildNoticeHook() on the render task.
+  void noteBackTurnDuringBuild() { backTurnDuringBuild_.store(true, std::memory_order_relaxed); }
+
+  // Draws the "still indexing" notice; invoked between pages on the render task. See
+  // noteBackTurnDuringBuild().
+  void setBuildNoticeHook(void* ctx, void (*fn)(void*)) {
+    buildNoticeCtx_ = ctx;
+    buildNoticeFn_ = fn;
+  }
 
   // furiganaEnabled is part of the cache key: the column gap only has to clear ruby when ruby is
   // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.
