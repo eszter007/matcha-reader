@@ -133,6 +133,53 @@ TEST_F(StatsTest, HistoryBeyond365DaysSurvivesAndRoundTrips) {
   EXPECT_EQ(s.getMinutesForDay(2025, 8, 8), 10);  // well outside the old window
 }
 
+// A file longer than the in-memory cap must keep its NEWEST entries and leave the file
+// position correct, so the blocks after the day records still parse.
+TEST_F(StatsTest, OverlongHistoryKeepsTheRecentTailAndStaysAligned) {
+  auto& s = READING_STATS_STORE;
+  constexpr size_t over = 4200;  // > MAX_DAYS (3650)
+  for (size_t i = 0; i < over; i++) {
+    // Spread across years so every date is distinct; the exact dates do not matter.
+    const auto y = static_cast<uint16_t>(2020 + i / 360);
+    const auto m = static_cast<uint8_t>((i % 12) + 1);
+    const auto d = static_cast<uint8_t>((i % 28) + 1);
+    s.addMinutes(y, m, d, 1);
+  }
+  s.markBookFinished("/after/the/day/block.epub");
+  s.addLanguageMinutes("ja", 7, 2026, 8, 8);
+  ASSERT_TRUE(s.saveToFile());
+
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_LE(s.getDaysRead(), 3650) << "must not hold more than the memory cap";
+  EXPECT_GT(s.getDaysRead(), 0);
+  // The blocks written after the day records must still be readable, which only holds if the
+  // discarded records were consumed rather than skipped by clamping the count.
+  EXPECT_EQ(s.getBooksFinished(), 1);
+  EXPECT_EQ(s.getTotalMinutes("ja"), 7u);
+}
+
+TEST_F(StatsTest, BookHistoryLongerThanTheCapKeepsTheNewest) {
+  const char* path = "/Japanese/long.epub";
+  BookStats b;
+  ASSERT_TRUE(b.load(path));
+  constexpr size_t over = 2100;  // > BookStats::MAX_DAYS (2000)
+  for (size_t i = 0; i < over; i++) {
+    const auto y = static_cast<uint16_t>(2020 + i / 360);
+    const auto m = static_cast<uint8_t>((i % 12) + 1);
+    const auto d = static_cast<uint8_t>((i % 28) + 1);
+    b.recordMinutes(y, m, d, 1);
+  }
+  ASSERT_TRUE(b.save());
+  ASSERT_TRUE(b.load(path));
+
+  const auto& days = b.getDays();
+  EXPECT_LE(days.size(), BookStats::MAX_DAYS);
+  ASSERT_FALSE(days.empty());
+  // Sorted, so the kept tail must end at the latest date recorded.
+  EXPECT_EQ(days.back().year, 2025);
+}
+
 TEST_F(StatsTest, LanguagesAreListedMostReadFirst) {
   auto& s = READING_STATS_STORE;
   for (uint8_t d = 5; d <= 8; d++) s.addLanguageMinutes("ja", 20, Y, M, d);

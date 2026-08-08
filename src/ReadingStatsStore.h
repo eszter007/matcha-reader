@@ -37,11 +37,14 @@ struct LanguageDaily {
 class ReadingStatsStore {
   static ReadingStatsStore instance;
 
-  // Day history is unbounded: the calendar pages back through it, and the old 365-entry ring
-  // silently forgot the year before last. Costs 6 bytes/day read, ~2.2KB per year of daily
-  // reading -- the fixed array it replaced cost 2.19KB from boot regardless. If it ever matters,
-  // page it off SD rather than capping again.
-  static constexpr size_t MAX_DAYS_SANE = 40000;  // ~110 years; guards a corrupt length only
+  // Day history the calendar pages back through; the old 365-entry ring silently forgot the
+  // year before last. 6 bytes/day, ~2.2KB per year of daily reading.
+  //
+  // Bounded by MEMORY, not by a corruption guard: std::vector allocates with new, and this
+  // firmware builds -fno-exceptions, so a failed reserve() aborts rather than returning null.
+  // 3650 days is a decade of reading every day for 22KB. A file holding more keeps its most
+  // recent 3650 (see loadFromFile, which consumes the rest to stay aligned).
+  static constexpr size_t MAX_DAYS = 3650;
   // Bounded because each entry heap-allocates its path (~40-80 bytes) and the store is a
   // long-lived singleton. When full, the least recently read book is dropped -- its minutes
   // stay counted in the per-day totals, which are the numbers the UI shows today.
@@ -50,10 +53,11 @@ class ReadingStatsStore {
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
   std::vector<BookReading> books;
-  // Also unbounded, for the same reason: the old 512-entry ring held barely a year for one
-  // language. 10 bytes per (day, language), ~3.6KB per year per language; dearer than `days`
-  // because each record carries its tag. Shrink with a language table, not a cap.
-  // No sanity bound: the on-disk count is a uint16, so the format caps a load by itself.
+  // Same, for the per-language calendar; the old 512-entry ring held barely a year for one
+  // language. 10 bytes per (day, language) -- dearer than `days` because each record carries
+  // its tag -- so a smaller cap buys the same 25KB. Shrink the record with a language table
+  // before raising this.
+  static constexpr size_t MAX_LANG_DAYS = 2500;
   std::vector<LanguageDaily> languageDays;  // sorted ascending by date
 
  public:

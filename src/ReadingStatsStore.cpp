@@ -414,9 +414,8 @@ bool ReadingStatsStore::saveToFile() const {
   HalFile f;
   if (!Storage.openFileForWrite("STAT", STATS_PATH, f)) return false;
   f.write(&STATS_VERSION, 1);
-  // Bounded by BOTH the 16-bit count field and what loadFromFile will accept -- writing more
-  // than MAX_DAYS_SANE would leave the loader mid-record and misalign every block after it.
-  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), MAX_DAYS_SANE));
+  // days never exceeds MAX_DAYS in memory, so this only guards the 16-bit field.
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), UINT16_MAX));
   f.write(reinterpret_cast<const uint8_t*>(&count), 2);
   f.write(reinterpret_cast<const uint8_t*>(&booksFinished), 2);
   for (uint16_t i = 0; i < count; i++) {
@@ -481,10 +480,16 @@ bool ReadingStatsStore::loadFromFile() {
       return false;
     }
   }
-  if (count > MAX_DAYS_SANE) count = MAX_DAYS_SANE;
+  // Keep the most recent MAX_DAYS and CONSUME the rest: skipping them by clamping `count`
+  // would leave the file positioned mid-block and misalign everything after it.
   days.clear();
-  days.reserve(count);
-  for (int i = 0; i < count; i++) {
+  const size_t keepDays = std::min<size_t>(count, MAX_DAYS);
+  for (size_t i = 0; i + keepDays < count; i++) {
+    DailyReading discard;
+    if (f.read(reinterpret_cast<uint8_t*>(&discard), sizeof(DailyReading)) != sizeof(DailyReading)) break;
+  }
+  days.reserve(keepDays);
+  for (size_t i = 0; i < keepDays; i++) {
     DailyReading dr;
     if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
     // Drop entries recorded while the system clock was unset (RTC-less devices booted at the
@@ -557,11 +562,16 @@ bool ReadingStatsStore::loadFromFile() {
   languageDays.clear();
   if (version >= 4 && booksIntact) {
     uint16_t langDayCount = 0;
-    // No bound check: a uint16 cannot exceed what reserve() can take, and records are
-    // fixed-size and validated as read.
     if (f.read(reinterpret_cast<uint8_t*>(&langDayCount), 2) == 2) {
-      languageDays.reserve(langDayCount);
-      for (int i = 0; i < langDayCount; i++) {
+      // Same bounded-tail read as the day block above: a uint16 count is 640KB of records at
+      // worst, and reserve() aborts under -fno-exceptions rather than failing.
+      const size_t keepLang = std::min<size_t>(langDayCount, MAX_LANG_DAYS);
+      for (size_t i = 0; i + keepLang < langDayCount; i++) {
+        uint8_t discard[10];
+        if (f.read(discard, sizeof(discard)) != sizeof(discard)) break;
+      }
+      languageDays.reserve(keepLang);
+      for (size_t i = 0; i < keepLang; i++) {
         LanguageDaily e{};
         if (f.read(reinterpret_cast<uint8_t*>(&e.year), 2) != 2) break;
         if (f.read(&e.month, 1) != 1) break;

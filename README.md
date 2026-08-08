@@ -77,7 +77,7 @@ Press **Details** on Insights for the same numbers split by the language of what
 
 Tabs are named where the firmware knows the language ("ja" shows as 日本語) and fall back to the bare tag otherwise, so a book in a language CrossPoint has no translation for still gets its own tab rather than being mislabelled. Books that declare no language — TXT, XTC, manga converted without `--language` — collect in an "Unknown" tab rather than being dropped.
 
-Two limits worth knowing: "books finished" per language can undercount, because a book's language lives in a list that keeps only the 150 most recent books; and days recorded before this shipped carry no language and can't be attributed retroactively.
+Three limits worth knowing: "books finished" per language can undercount, because a book's language lives in a list that keeps only the 150 most recent books; days recorded before this shipped carry no language and can't be attributed retroactively; and the history the device keeps in memory is bounded by what a 380KB device can hold — a decade of daily reading overall, and rather less split by language — after which the oldest days fall off.
 
 ### Per-book stats
 

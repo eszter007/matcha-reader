@@ -21,6 +21,11 @@ struct BookDay {
 // documented fix for rendering faults and must not erase reading history.
 class BookStats {
  public:
+  // Bounded by MEMORY: std::vector allocates with new and this firmware builds -fno-exceptions,
+  // so a failed reserve() aborts rather than returning null. 2000 days is five and a half years
+  // of reading one book every day, for 12KB; a longer file keeps its most recent 2000.
+  static constexpr size_t MAX_DAYS = 2000;
+
   // Loads this book's history. Returns false only on a read error; a book with no history yet
   // loads clean and empty, which is the normal first-open case.
   bool load(const char* bookPath);

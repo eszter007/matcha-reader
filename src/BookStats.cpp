@@ -18,9 +18,7 @@ constexpr uint8_t BOOKSTATS_VERSION = 2;
 // magic(4) + version(1) + sessions(4) + dayCount(4) + pathLen(2)
 constexpr size_t HEADER_BYTES = 15;
 constexpr size_t DAY_RECORD_BYTES = 6;
-// Both guard reserve() against a corrupt length field, nothing more.
-constexpr uint16_t MAX_PATH_LEN = 500;
-constexpr uint32_t MAX_DAYS_SANE = 20000;  // ~55 years
+constexpr uint16_t MAX_PATH_LEN = 500;  // guards reserve() against a corrupt length field
 
 // Packed through a byte buffer, not a struct cast: ESP32-C3 faults on unaligned multi-byte
 // loads and a record at an arbitrary file offset has no alignment guarantee.
@@ -81,7 +79,7 @@ bool BookStats::load(const char* path) {
   const uint32_t storedSessions = getU32(head + 5);
   const uint32_t dayCount = getU32(head + 9);
   const uint16_t pathLen = getU16(head + 13);
-  if (pathLen > MAX_PATH_LEN || dayCount > MAX_DAYS_SANE) {
+  if (pathLen > MAX_PATH_LEN) {
     LOG_ERR("BSTAT", "implausible header in %s", file.c_str());
     return false;
   }
@@ -95,8 +93,15 @@ bool BookStats::load(const char* path) {
   }
 
   sessions = storedSessions;
-  days.reserve(dayCount);
-  for (uint32_t i = 0; i < dayCount; i++) {
+  // Keep the most recent MAX_DAYS. Nothing follows the day records in this format, so the
+  // skipped ones need not be consumed -- but they are, so a future block could be added safely.
+  const size_t keep = std::min<size_t>(dayCount, MAX_DAYS);
+  for (size_t i = 0; i + keep < dayCount; i++) {
+    uint8_t discard[DAY_RECORD_BYTES];
+    if (f.read(discard, DAY_RECORD_BYTES) != DAY_RECORD_BYTES) break;
+  }
+  days.reserve(keep);
+  for (size_t i = 0; i < keep; i++) {
     uint8_t rec[DAY_RECORD_BYTES];
     // Truncated mid-write: keep what parsed; the next save rewrites the file whole.
     if (f.read(rec, DAY_RECORD_BYTES) != DAY_RECORD_BYTES) break;
@@ -126,9 +131,9 @@ bool BookStats::save() const {
   }
 
   const auto pathLen = static_cast<uint16_t>(bookPath.size() > MAX_PATH_LEN ? MAX_PATH_LEN : bookPath.size());
-  // Never write what load() would reject. days is sorted (recordMinutes and load both keep it
-  // so), hence trimming the head keeps the most recent entries.
-  const size_t dayCount = std::min<size_t>(days.size(), MAX_DAYS_SANE);
+  // days never exceeds MAX_DAYS in memory; sorted (recordMinutes and load both keep it so), so
+  // trimming the head would keep the most recent entries.
+  const size_t dayCount = std::min<size_t>(days.size(), MAX_DAYS);
   const size_t firstDay = days.size() - dayCount;
 
   uint8_t head[HEADER_BYTES];
