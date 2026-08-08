@@ -71,6 +71,14 @@ Time is also recorded per book and per language, so reading can later be broken 
 
 <p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights screen with reading streak, stat cards, and monthly calendar"></p>
 
+### Per-language stats
+
+Press **Details** on Insights for the same numbers split by the language of what you read — one tab per language, each with its own streak, books finished, days read, total time, longest streak and calendar. **Switch** moves between languages; Left/Right step the calendar a month at a time (the button hints name the months they land on). A tap on Back returns to the overall view, holding it goes straight home.
+
+Tabs are named where the firmware knows the language ("ja" shows as 日本語) and fall back to the bare tag otherwise, so a book in a language CrossPoint has no translation for still gets its own tab rather than being mislabelled. Books that declare no language — TXT, XTC, manga converted without `--language` — collect in an "Unknown" tab rather than being dropped.
+
+Two limits worth knowing: "books finished" per language can undercount, because a book's language lives in a list that keeps only the 150 most recent books; and days recorded before this shipped carry no language and can't be attributed retroactively.
+
 ### Per-book stats
 
 **Long-press a book in the Library** to see its own numbers: sessions, total time, average session, days read, and a calendar of the days you read *that* book. A session is one opening of the book. Opening the reader menu or the settings mid-chapter does not count again, and an open too short to bank a whole minute still counts as a session even though it adds no reading time. Waking the device back into a book **does** count as a new session, so a long read broken up by sleep shows as several — and because reading time is only counted in whole minutes, the average session runs a little short of the truth.

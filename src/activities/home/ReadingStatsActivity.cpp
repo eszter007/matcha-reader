@@ -7,8 +7,10 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <memory>
 
 #include "CrossPointSettings.h"
+#include "LanguageStatsActivity.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "components/StatsWidgets.h"
@@ -44,25 +46,37 @@ void ReadingStatsActivity::onEnter() {
 void ReadingStatsActivity::onExit() { Activity::onExit(); }
 
 void ReadingStatsActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  // Back: a tap leaves Insights, a hold goes straight home -- the same gesture the language
+  // screen behind it uses, so it means one thing across both.
+  if (backLongPressFired) {
+    if (!mappedInput.isPressed(MappedInputManager::Button::Back)) backLongPressFired = false;
+    return;
+  }
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() >= StatsWidgets::HOME_HOLD_MS) {
+    backLongPressFired = true;
+    onGoHome();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() < StatsWidgets::HOME_HOLD_MS) {
     finish();
+    return;
+  }
+  // Confirm opens the per-language breakdown. startActivityForResult rather than replace, so
+  // this screen keeps its scroll position and calendar month while that one is on top.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    startActivityForResult(std::make_unique<LanguageStatsActivity>(renderer, mappedInput),
+                           [](const ActivityResult&) {});
     return;
   }
   // Left/Right to navigate calendar months
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    if (calMonth == 1) {
-      calMonth = 12;
-      calYear--;
-    } else
-      calMonth--;
+    StatsWidgets::stepMonth(calYear, calMonth, -1);
     requestUpdate();
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    if (calMonth == 12) {
-      calMonth = 1;
-      calYear++;
-    } else
-      calMonth++;
+    StatsWidgets::stepMonth(calYear, calMonth, +1);
     requestUpdate();
   }
   // Up/Down to scroll
@@ -111,58 +125,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
   int y = contentTop + 8;
 
   // ==================== STREAK WIDGET ====================
-  const int iconSize = 32;
-  const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
-  const int circleSize = 24;
-  const int streakH = cardPad + iconSize + 4 + smallLH + 16 + smallLH + 8 + circleSize + cardPad;
-
-  renderer.drawRoundedRect(cardX, y, cardW, streakH, 2, cardRadius, true);
-
-  // Flame + streak
-  char streakBuf[32];
-  snprintf(streakBuf, sizeof(streakBuf), tr(STR_STREAK_FORMAT), streak);
-  const int streakTextW = renderer.getTextWidth(UI_12_FONT_ID, streakBuf, EpdFontFamily::BOLD);
-  const int row1TotalW = iconSize + 8 + streakTextW;
-  const int row1X = cardX + (cardW - row1TotalW) / 2;
-  const int row1Y = y + cardPad;
-  renderer.drawIcon(FlameIcon, row1X, row1Y, iconSize);
-  renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8, row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
-                    streakBuf, true, EpdFontFamily::BOLD);
-
-  // Minutes this week
-  char weekBuf[48];
-  snprintf(weekBuf, sizeof(weekBuf), tr(STR_WEEK_MINUTES_READ_FORMAT), weekMinutes,
-           weekMinutes == 1 ? tr(STR_MINUTE) : tr(STR_MINUTES));
-  const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
-  const int row2Y = row1Y + iconSize + 4;
-  renderer.drawText(SMALL_FONT_ID, cardX + (cardW - weekTextW) / 2, row2Y, weekBuf, true);
-
-  // Separator
-  const int sepY = row2Y + smallLH + 8;
-  renderer.drawLine(cardX + cardPad, sepY, cardX + cardW - cardPad, sepY, true);
-
-  // Day labels + circles (Mon-Sun)
-  const int daySpacing = (cardW - 2 * cardPad) / 7;
-  const int labelsY = sepY + 12;
-  const int circlesY = labelsY + smallLH + 6;
-
-  for (int i = 0; i < 7; i++) {
-    const int cx = cardX + cardPad + daySpacing / 2 + i * daySpacing;
-    const bool isToday = (i == today.dow);
-    const char* label = dayLabel(i);
-    const int labelW =
-        renderer.getTextWidth(SMALL_FONT_ID, label, isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-    renderer.drawText(SMALL_FONT_ID, cx - labelW / 2, labelsY, label, true,
-                      isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-    const int ix = cx - circleSize / 2;
-    if (weekDays[i]) {
-      renderer.drawIcon(CircleCheckIcon, ix, circlesY, circleSize);
-    } else {
-      renderer.drawIcon(CircleEmptyIcon, ix, circlesY, circleSize);
-    }
-  }
-
-  y += streakH + 16;
+  y += StatsWidgets::drawStreakCard(renderer, cardX, y, cardW, streak, weekMinutes, weekDays, today.dow) + 16;
 
   // ==================== 4 STAT CARDS (2x2) ====================
   const int booksFinished = READING_STATS_STORE.getBooksFinished();
@@ -204,7 +167,15 @@ void ReadingStatsActivity::render(RenderLock&&) {
                  tr(STR_STATS));
 
   // Button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  // Left/Right step the calendar, so the hints name the months they land on.
+  char prevBuf[16], nextBuf[16];
+  uint16_t py = calYear, ny = calYear;
+  uint8_t pm = calMonth, nm = calMonth;
+  StatsWidgets::stepMonth(py, pm, -1);
+  StatsWidgets::stepMonth(ny, nm, +1);
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), tr(STR_DETAILS), StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
+                            StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

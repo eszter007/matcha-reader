@@ -4,9 +4,12 @@
 #include <I18n.h>
 
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 #include "CrossPointSettings.h"
+#include "components/icons/flame.h"
+#include "components/icons/stats_icons.h"
 #include "fontIds.h"
 
 namespace StatsWidgets {
@@ -48,6 +51,82 @@ const char* dayLabel(const int dow) {
   static constexpr StrId ids[] = {StrId::STR_DAY_MON, StrId::STR_DAY_TUE, StrId::STR_DAY_WED, StrId::STR_DAY_THU,
                                   StrId::STR_DAY_FRI, StrId::STR_DAY_SAT, StrId::STR_DAY_SUN};
   return I18n::getInstance().get(ids[dow]);
+}
+
+const char* monthAbbrev(const int month, char* out, const size_t outSize) {
+  const char* full = monthName(month);
+  const auto* u = reinterpret_cast<const unsigned char*>(full);
+  size_t bytes = 0, chars = 0;
+  while (u[bytes] && chars < 3) {
+    // Skip continuation bytes (10xxxxxx); every other byte starts a code point. Read through an
+    // unsigned char*: `char` is signed on this toolchain, and masking a sign-extended negative
+    // byte only gives the right answer by accident.
+    bytes++;
+    while ((u[bytes] & 0xC0) == 0x80) bytes++;
+    chars++;
+  }
+  if (bytes >= outSize) bytes = outSize - 1;
+  memcpy(out, full, bytes);
+  out[bytes] = '\0';
+  return out;
+}
+
+void stepMonth(uint16_t& year, uint8_t& month, const int delta) {
+  int m = static_cast<int>(month) + delta;
+  while (m < 1) {
+    m += 12;
+    year--;
+  }
+  while (m > 12) {
+    m -= 12;
+    year++;
+  }
+  month = static_cast<uint8_t>(m);
+}
+
+int drawStreakCard(GfxRenderer& renderer, const int x, const int y, const int w, const int streak,
+                   const uint16_t weekMinutes, const bool weekDays[7], const int todayDow) {
+  const int iconSize = 32;
+  const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
+  const int circleSize = 24;
+  const int streakH = CARD_PAD + iconSize + 4 + smallLH + 16 + smallLH + 8 + circleSize + CARD_PAD;
+
+  renderer.drawRoundedRect(x, y, w, streakH, 2, CARD_RADIUS, true);
+
+  char streakBuf[32];
+  snprintf(streakBuf, sizeof(streakBuf), tr(STR_STREAK_FORMAT), streak);
+  const int streakTextW = renderer.getTextWidth(UI_12_FONT_ID, streakBuf, EpdFontFamily::BOLD);
+  const int row1TotalW = iconSize + 8 + streakTextW;
+  const int row1X = x + (w - row1TotalW) / 2;
+  const int row1Y = y + CARD_PAD;
+  renderer.drawIcon(FlameIcon, row1X, row1Y, iconSize);
+  renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8, row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
+                    streakBuf, true, EpdFontFamily::BOLD);
+
+  char weekBuf[48];
+  snprintf(weekBuf, sizeof(weekBuf), tr(STR_WEEK_MINUTES_READ_FORMAT), weekMinutes,
+           weekMinutes == 1 ? tr(STR_MINUTE) : tr(STR_MINUTES));
+  const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
+  const int row2Y = row1Y + iconSize + 4;
+  renderer.drawText(SMALL_FONT_ID, x + (w - weekTextW) / 2, row2Y, weekBuf, true);
+
+  const int sepY = row2Y + smallLH + 8;
+  renderer.drawLine(x + CARD_PAD, sepY, x + w - CARD_PAD, sepY, true);
+
+  const int daySpacing = (w - 2 * CARD_PAD) / 7;
+  const int labelsY = sepY + 12;
+  const int circlesY = labelsY + smallLH + 6;
+  for (int i = 0; i < 7; i++) {
+    const int cx = x + CARD_PAD + daySpacing / 2 + i * daySpacing;
+    const bool isToday = (i == todayDow);
+    const char* label = dayLabel(i);
+    const int labelW =
+        renderer.getTextWidth(SMALL_FONT_ID, label, isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.drawText(SMALL_FONT_ID, cx - labelW / 2, labelsY, label, true,
+                      isToday ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.drawIcon(weekDays[i] ? CircleCheckIcon : CircleEmptyIcon, cx - circleSize / 2, circlesY, circleSize);
+  }
+  return streakH;
 }
 
 int drawTileGrid(GfxRenderer& renderer, const int x, const int y, const int w, const Tile tiles[4]) {

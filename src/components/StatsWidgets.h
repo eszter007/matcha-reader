@@ -15,6 +15,9 @@ constexpr int CARD_PAD = 16;
 constexpr int CARD_RADIUS = 12;
 constexpr int CARD_GAP = 10;
 constexpr int TILE_HEIGHT = 80;
+// Hold Back this long on any stats screen to go straight home rather than one step back.
+// Matches ReaderUtils::GO_HOME_MS so the gesture feels the same everywhere.
+constexpr unsigned long HOME_HOLD_MS = 1000;
 
 struct Today {
   uint16_t year;
@@ -31,6 +34,22 @@ int firstDowOfMonth(uint16_t y, uint8_t m);
 // tr() reads from the I18N singleton, so both resolve at call time rather than at static init.
 const char* monthName(int month);
 const char* dayLabel(int dow);
+
+// Month name shortened to at most 3 CHARACTERS for a button hint ("January" -> "Jan").
+// Counts UTF-8 code points, not bytes: a byte-wise cut would split Cyrillic or Japanese mid
+// character and render as garbage. Names already shorter (Japanese "1月") are returned intact.
+// Runtime abbreviation rather than 12 more strings per language -- three characters is the
+// near-universal convention for exactly this, and 384 translations is a poor trade for it.
+// month is 1-12; the result is written into out and returned for convenient inline use.
+const char* monthAbbrev(int month, char* out, size_t outSize);
+
+// The month before / after the given one, wrapping across the year boundary.
+void stepMonth(uint16_t& year, uint8_t& month, int delta);
+
+// Draws the streak card: flame + streak, minutes this week, and the Mon-Sun read/not-read row.
+// Returns the height consumed. Shared so the per-language screen matches Insights exactly.
+int drawStreakCard(GfxRenderer& renderer, int x, int y, int w, int streak, uint16_t weekMinutes, const bool weekDays[7],
+                   int todayDow);
 
 struct Tile {
   const char* value;
