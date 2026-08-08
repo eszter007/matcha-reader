@@ -77,7 +77,7 @@ Manga counts the same as EPUBs. Language comes from the book, so set `--language
 
 ### Transparent sleep screen
 
-A wallpaper laid over the page you were reading, so the book shows through instead of being covered. Set **Sleep Screen** to **Transparent** and drop 480x800 BMPs into `.sleep/` on the card. See [§3.7](USER_GUIDE.md#37-sleep-screen).
+A wallpaper laid over the page you were reading, so the book shows through instead of being covered. Set **Sleep Screen** to **Transparent** and drop 480x800 BMPs into `.sleep/transparent/` on the card. Images with plenty of white space work best, since anything solid hides the text under it. See [§3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper over the page text, which stays readable behind it"></p>
 
