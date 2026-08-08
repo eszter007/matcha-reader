@@ -558,27 +558,46 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     }
   }
 
-  // Step 4: For each unique group, decompress to temp buffer and extract needed glyphs
+  // Step 4: For each unique group, decompress to temp buffer and extract needed glyphs.
+  //
+  // ONE buffer, sized to the largest needed group, serves every group. Do not go back to a
+  // per-group malloc/free: a reading page needs up to 128 groups, so that churned ~16KB blocks
+  // 128x per page turn (a measurable fragmentation source), and on a tight heap it failed once
+  // per group rather than once per page.
+  //
+  // A failed allocation ends the loop instead of continuing: every group needs its own full
+  // uncompressedSize, so there is nothing smaller left to try. Unextracted glyphs keep
+  // bufferOffset == UINT32_MAX and fall through to the hot-group path in getBitmap().
   uint32_t writeOffset = 0;
   int missed = 0;
+
+  uint32_t maxGroupBytes = 0;
+  for (uint8_t g = 0; g < groupCount; g++) {
+    const uint32_t sz = fontData->groups[neededGroups[g]].uncompressedSize;
+    if (sz > maxGroupBytes) maxGroupBytes = sz;
+  }
+
+  auto* tempBuf = static_cast<uint8_t*>(malloc(maxGroupBytes));
+  if (!tempBuf) {
+    LOG_ERR("FDC", "Failed to allocate temp buffer (%u bytes) for %u groups", maxGroupBytes, groupCount);
+    return glyphCount;
+  }
+  if (maxGroupBytes > stats.peakTempBytes) {
+    stats.peakTempBytes = maxGroupBytes;
+  }
 
   for (uint8_t g = 0; g < groupCount; g++) {
     uint16_t groupIdx = neededGroups[g];
     const EpdFontGroup& group = fontData->groups[groupIdx];
 
-    auto* tempBuf = static_cast<uint8_t*>(malloc(group.uncompressedSize));
-    if (!tempBuf) {
-      LOG_ERR("FDC", "Failed to allocate temp buffer (%u bytes) for group %u", group.uncompressedSize, groupIdx);
-      missed++;
-      continue;
-    }
-    if (group.uncompressedSize > stats.peakTempBytes) {
-      stats.peakTempBytes = group.uncompressedSize;
-    }
-
     if (!decompressGroup(fontData, groupIdx, tempBuf, group.uncompressedSize)) {
-      free(tempBuf);
-      missed++;
+      // The return value is a GLYPH count (see the header), so charge every glyph this group
+      // owed, not 1 for the group. Those glyphs keep bufferOffset == UINT32_MAX and fall through
+      // to the hot-group path in getBitmap().
+      for (uint16_t i = 0; i < slot.glyphCount; i++) {
+        if (slot.glyphs[i].bufferOffset == UINT32_MAX && getGroupIndex(fontData, slot.glyphs[i].glyphIndex) == groupIdx)
+          missed++;
+      }
       continue;
     }
 
@@ -601,9 +620,9 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
       }
       writeOffset += glyph.dataLength;
     }
-
-    free(tempBuf);
   }
+
+  free(tempBuf);
 
   LOG_DBG("FDC", "Prewarm: %u glyphs in %u bytes from %u groups (%d missed)", glyphCount, writeOffset, groupCount,
           missed);

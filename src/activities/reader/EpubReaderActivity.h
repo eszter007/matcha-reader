@@ -195,6 +195,22 @@ class EpubReaderActivity final : public Activity {
   std::atomic<uint32_t> requestedHorizontalImageRefine_{NO_IMAGE_REFINE};
   void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
   static bool imageWarmShouldCancel(const void* ctx);
+  // True when the next turn has already been requested: a button is physically down, or a render
+  // is queued on this task. Call from the render task only.
+  //
+  // Gate SPECULATIVE tail work on this -- work whose only value is to make the NEXT render
+  // faster. It runs on the render task, so it delays the render it is preparing for; when the
+  // reader is paging rapidly the page it prepared is skipped past anyway.
+  //
+  // Do NOT gate work whose absence has a cost of its own. Two that must stay unconditional, both
+  // learned the hard way: silentIndexNextChapterIfNeeded() (skipping defers a chapter build into
+  // the reader's path, seconds with an Indexing popup) and saveProgress() (the record is restored
+  // from by the progress-sync path, so a stale one snaps the reader backwards mid-skim).
+  bool nextTurnAlreadyRequested() const;
+  // Shared tail of both render paths: next-chapter index, neighbour-page glyph warm, progress
+  // save. `vertical` selects the section type; the margins are used by the horizontal warm only.
+  // Safe to call inside an async refresh window -- nothing here touches the framebuffer.
+  void runPostRenderTail(uint16_t viewportWidth, uint16_t viewportHeight, bool vertical, int marginLeft, int marginTop);
   // Viewport of the last render(), captured so loop()'s lazy partial-extension start
   // builds with IDENTICAL layout parameters to the pages already rendered (a mismatch
   // would paginate differently than the partial being extended). 0 = no render yet.

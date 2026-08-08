@@ -1994,46 +1994,22 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
     }
 
+    // Async: start the waveform and return, so runPostRenderTail() below runs DURING the panel's
+    // ~500ms refresh rather than after it. Worth ~450ms per turn.
+    //
+    // Contract: nothing between here and waitRefreshComplete() may touch the framebuffer. The tail
+    // is safe (its glyph warm renders in scan mode, which draws nothing); popups, screenshots and
+    // the image warm are not, and run after the wait.
+    const bool overlapRefresh = !imagePageDisplayed && renderer.supportsAsyncRefresh();
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
-      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
     }
-    // Pre-build the next chapter's cache while this page is on screen. This call was
-    // missing from the vertical path (lost in a refactor -- silentIndexNextChapterIfNeeded
-    // has had a vertical branch all along), so in tategaki books every chapter transition
-    // showed the Indexing popup. JP books make it worse: each full-page illustration is its
-    // own one-page spine item, so a text->image->text sequence popped Indexing twice. Now
-    // the image chapter builds while the last text pages are read, and the next text
-    // chapter builds while the reader looks at the illustration.
-    silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
+    runPostRenderTail(viewportWidth, viewportHeight, /*vertical=*/true, 0, 0);
 
-    // Warm the neighbouring page's glyphs while the reader looks at this one, so the next turn
-    // renders from a warm cache instead of paying the per-page SD bulk load at button time.
-    // Must stay AFTER the silent index above, which releases all font memory before building and
-    // would discard this warm.
-    // getPage(target) also leaves that page in the section's single-page read cache, so the turn
-    // skips the SD page read as well.
-    //
-    // Direction-adaptive: the NEXT page after a forward turn, the PREVIOUS after a backward one, so
-    // sustained paging either way stays warm. The mini-font cache holds one page per style, so only
-    // the single turn after a direction reversal is cold -- and for the same reason this runs only
-    // after a REAL page change: warming the neighbour of a re-rendered page evicts glyphs that page
-    // still needs.
-    //
-    // Use renderedVPage_, never currentPage. A render takes 100-700ms and a button press during it
-    // advances currentPage, which overshoots the target by one: that both loads a page the reader
-    // is not going to next and evicts the one they are.
-    const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
-    lastRenderedVPage_ = renderedVPage_;
-    const int warmTarget = lastTurnForward_.load(std::memory_order_relaxed) ? renderedVPage_ + 1 : renderedVPage_ - 1;
-    if (pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
-      prewarmedVPage_ = -1;
-      if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
-        if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
-      }
-    }
-    saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
-                 furiganaOverride);
+    // End of the overlap window. Everything past this point may draw: the popups below, the
+    // screenshot's framebuffer read, and the image warm's cache decode.
+    if (overlapRefresh) renderer.waitRefreshComplete();
 
     showPendingSyncSaveError();
 
@@ -2453,47 +2429,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
   }
-  // Only persist when the position actually changed. render() also runs on menu,
-  // bookmark and screenshot re-renders, and writeAtomic is several FAT ops for 6 bytes.
-  // Every real page turn changes currentPage, so progress durability is unaffected.
-  if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
-      section->pageCount != lastSavedPageCount) {
-    if (saveProgress(currentSpineIndex, section->currentPage, section->estimatedTotalPages(), verticalOverride,
-                     furiganaOverride)) {
-      lastSavedSpineIndex = currentSpineIndex;
-      lastSavedPage = section->currentPage;
-      lastSavedPageCount = section->estimatedTotalPages();
-    }
-  }
-
-  // Idle next-page prewarm (Kindle-class turns): while the reader looks at this page, scan the
-  // page they'll turn to next (direction-adaptive) and warm its glyphs into the font cache, so
-  // the next turn renders warm (~30ms) instead of paying the scan + SD bulk load at button
-  // time. The scan pass draws nothing (GfxRenderer skips drawing while scanning), so it never
-  // touches the displayed framebuffer. Heap-gated: warming loads an extra page transiently, so
-  // skip it when the largest free block is tight and take the classic cold turn instead.
-  prewarmedHPage_ = -1;
-  constexpr uint32_t IDLE_WARM_MIN_ALLOC = 32 * 1024;
-  if (auto* fcm = renderer.getFontCacheManager(); fcm && ESP.getMaxAllocHeap() >= IDLE_WARM_MIN_ALLOC) {
-    const int warmTarget =
-        lastTurnForward_.load(std::memory_order_relaxed) ? section->currentPage + 1 : section->currentPage - 1;
-    if (warmTarget >= 0 && warmTarget < section->pageCount) {
-      if (auto np = section->loadPageAt(warmTarget)) {
-        // createPrewarmScope() clears the cache in its constructor (FontCacheManager::clearCache
-        // -> FontDecompressor::clearCache), which frees the MAX_PAGE_SLOTS page-buffer slots.
-        // So each idle warm REPLACES the previous page's glyphs rather than consuming a new
-        // slot -- slots do not accumulate across turns even with release() keeping the result.
-        auto scope = fcm->createPrewarmScope();
-        np->render(renderer, effectiveReaderFontId(), orientedMarginLeft, orientedMarginTop, !useFurigana());
-        scope.endScanAndPrewarm();
-        scope.release();  // keep the warm resident for the upcoming turn
-        prewarmedHPage_ = warmTarget;
-      }
-    }
-  }
-
-  silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
-  saveProgress(currentSpineIndex, section->currentPage, section->pageCount, verticalOverride, furiganaOverride);
+  runPostRenderTail(viewportWidth, viewportHeight, /*vertical=*/false, orientedMarginLeft, orientedMarginTop);
 
   showPendingSyncSaveError();
 
@@ -2517,11 +2453,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
 void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   if (useVerticalText()) {
-    // Fire on the last two pages, and on single-page chapters (image-only illustration
-    // chapters are one page each -- with the old penultimate-page-only trigger a run of
-    // them showed the Indexing popup on every page turn).
+    // Fire over the last few pages, and on short chapters (image-only illustration chapters are
+    // one page each -- with the old penultimate-page-only trigger a run of them showed the
+    // Indexing popup on every page turn).
+    //
+    // The window must be wide enough for SEVERAL attempts, not one. The heap gate below rejects
+    // on transient fragmentation (observed: maxAlloc 69620 on one turn, 114676 two turns later),
+    // so a single-attempt window loses the chapter to that sampling noise and the transition pays
+    // a multi-second foreground build. Only the first attempt to pass does any work.
+    constexpr int SILENT_INDEX_WINDOW_PAGES = 5;
     if (!epub || !verticalSection || verticalSection->pageCount < 1) return;
-    if (verticalSection->currentPage < verticalSection->pageCount - 2) return;
+    if (verticalSection->currentPage < verticalSection->pageCount - SILENT_INDEX_WINDOW_PAGES) return;
 
     const int nextSpineIndex = currentSpineIndex + 1;
     if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
@@ -2536,17 +2478,13 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana()))
       return;
 
-    // Cheap pre-gate, before paying anything. releaseAllFontMemory() below cannot produce a block
-    // larger than the total free heap, so if free is already under the build's floor the release
-    // is guaranteed not to clear the gate -- and it would still cost the next render a full
-    // font-cache rebuild (~250ms). Skip the whole attempt instead.
     constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
-    if (ESP.getFreeHeap() < SILENT_VBUILD_MIN_ALLOC) {
-      LOG_DBG("ERS", "Silent vertical index skipped, free heap below floor (free=%u)", ESP.getFreeHeap());
-      silentIndexBackoffUntilMs_ = millis() + 5000;
-      return;
-    }
 
+    // Do NOT add a heap pre-gate above the release below. Free heap while reading sits near this
+    // floor (~95K) and the release is worth ~40-50K, so any pre-release check rejects attempts
+    // that would have passed. The post-release gate is the only meaningful reading. Skipping a
+    // release costs ~250ms; the foreground build a missed index causes costs 5-13s.
+    //
     // The vertical build is the most memory-intensive step in the reader, and this
     // silent path runs it at the worst heap moment: right after a page render, with
     // the glyph slab fully warmed AND the current chapter still resident. Hand the
@@ -2570,7 +2508,10 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // (which frees more up front and early-renders) builds it properly on arrival.
     if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
       LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
-      silentIndexBackoffUntilMs_ = millis() + 5000;
+      // Backoff must stay well under WINDOW * turn duration (~600ms/turn), or one rejection
+      // consumes the whole window. A rejected attempt costs the font rebuild the release above
+      // forces (~250-400ms on the next render) -- cheap against the foreground build it avoids.
+      silentIndexBackoffUntilMs_ = millis() + 1500;
       return;
     }
     silentIndexBackoffUntilMs_ = 0;
@@ -2658,6 +2599,102 @@ bool EpubReaderActivity::applyDeferredReposition() {
   return changed;
 }
 
+// Speculative + bookkeeping work that runs while the finished page is on screen. Order and gating
+// here are load-bearing; see nextTurnAlreadyRequested() in the header for the rule.
+void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                           const bool vertical, const int marginLeft, const int marginTop) {
+  const bool skimming = nextTurnAlreadyRequested();
+
+  // FIRST, and never gated. Builds the next chapter's section cache while the last pages of this
+  // one are on screen; without it a chapter transition pays a multi-second foreground build with
+  // an Indexing popup. It only does work on a chapter's closing pages -- which are exactly the
+  // pages a reader skims through, so gating it on `skimming` suppressed it whenever it mattered.
+  //
+  // Must precede the warm below: it calls releaseAllFontMemory() before building, which empties
+  // the mini-font cache and would discard a warm done first.
+  silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
+
+  // Warm the neighbouring page's glyphs so the next turn renders from RAM instead of paying the
+  // scan plus SD bulk load at button time. Direction-adaptive: the next page after a forward
+  // turn, the previous after a backward one, so sustained paging either way stays warm. The
+  // mini-font cache holds one page per style, so only the turn after a direction REVERSAL is
+  // cold; that is inherent, not a defect.
+  //
+  // Gated on `skimming`: this prepares a page a rapidly-paging reader will skip past, and it runs
+  // on the render task, so it delays the turn being waited on (~430ms, mostly the mini-kern
+  // build).
+  //
+  // Runs only after a REAL page change -- warming the neighbour of a re-rendered page evicts
+  // glyphs that page still needs.
+  const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
+  if (vertical) {
+    // renderedVPage_, never currentPage: a render takes 100-700ms and a button press during it
+    // advances currentPage, so the target would overshoot by one -- loading a page the reader is
+    // not going to next and evicting the one they are.
+    const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
+    lastRenderedVPage_ = renderedVPage_;
+    const int warmTarget = forward ? renderedVPage_ + 1 : renderedVPage_ - 1;
+    if (!skimming && pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
+      prewarmedVPage_ = -1;
+      // getPage() also leaves the page in the section's single-page read cache, so the turn skips
+      // the SD page read as well.
+      if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
+        if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
+      }
+    }
+  } else {
+    prewarmedHPage_ = -1;
+    // Warming loads an extra page transiently, so take the classic cold turn when the largest
+    // free block is tight.
+    constexpr uint32_t IDLE_WARM_MIN_ALLOC = 32 * 1024;
+    const int warmTarget = forward ? section->currentPage + 1 : section->currentPage - 1;
+    if (auto* fcm = renderer.getFontCacheManager(); fcm && !skimming && ESP.getMaxAllocHeap() >= IDLE_WARM_MIN_ALLOC &&
+                                                    warmTarget >= 0 && warmTarget < section->pageCount) {
+      if (auto np = section->loadPageAt(warmTarget)) {
+        // createPrewarmScope() clears the cache in its constructor, freeing the MAX_PAGE_SLOTS
+        // page-buffer slots, so each warm REPLACES the previous page's glyphs -- slots do not
+        // accumulate across turns even though release() keeps the result. The scan pass draws
+        // nothing (GfxRenderer skips drawing while scanning), so the displayed framebuffer is
+        // untouched and this is safe inside an async refresh window.
+        auto scope = fcm->createPrewarmScope();
+        np->render(renderer, effectiveReaderFontId(), marginLeft, marginTop, !useFurigana());
+        scope.endScanAndPrewarm();
+        scope.release();  // keep the warm resident for the upcoming turn
+        prewarmedHPage_ = warmTarget;
+      }
+    }
+  }
+
+  // Never gated on `skimming`. The saved record is not write-only -- render()'s progress-sync path
+  // restores position from it, so leaving it stale through a skim lets a sync snap the reader back
+  // to the last page actually written.
+  //
+  // It IS gated on the position having changed: writeAtomic() is several FAT ops for 6 bytes, and
+  // render() also runs for menu, bookmark and screenshot re-renders, which move nothing. Every
+  // real page turn changes `page`, so durability is unaffected.
+  //
+  // Horizontal reports estimatedTotalPages(), not pageCount: during a partial build the estimate
+  // is the meaningful total, and it moving is itself worth persisting. Compare against the same
+  // value that gets stored, or the guard never settles.
+  const int page = vertical ? verticalSection->currentPage : section->currentPage;
+  const int pageCount = vertical ? verticalSection->pageCount : section->estimatedTotalPages();
+  if (currentSpineIndex != lastSavedSpineIndex || page != lastSavedPage || pageCount != lastSavedPageCount) {
+    if (saveProgress(currentSpineIndex, page, pageCount, verticalOverride, furiganaOverride)) {
+      lastSavedSpineIndex = currentSpineIndex;
+      lastSavedPage = page;
+      lastSavedPageCount = pageCount;
+    }
+  }
+}
+
+bool EpubReaderActivity::nextTurnAlreadyRequested() const {
+  // Reading this task's own notification VALUE without side effects: ulTaskNotifyValueClear with
+  // zero bits to clear is a pure read (xTaskNotifyAndQuery is NOT -- even with eNoAction it
+  // stamps the notification state). Same signal imageWarmShouldCancel() uses, minus its input
+  // stamp, which is only meaningful once warmNextPageImageCache() has taken its snapshot.
+  return mappedInput.anyButtonDownRaw() || ulTaskNotifyValueClear(nullptr, 0) > 0;
+}
+
 bool EpubReaderActivity::imageWarmShouldCancel(const void* ctx) {
   const auto* self = static_cast<const EpubReaderActivity*>(ctx);
   if (self->mappedInput.anyButtonDownRaw()) return true;
@@ -2675,11 +2712,9 @@ bool EpubReaderActivity::imageWarmShouldCancel(const void* ctx) {
 void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
   if (imageWarmShouldCancel(this)) {
-    LOG_DBG("IWARM", "skip: render already queued");  // TEMP diagnostics (slow-books hunt)
-    return;                                           // another render is already queued -- stay out of its way
+    return;  // another render is already queued -- stay out of its way
   }
   if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC) {
-    LOG_DBG("IWARM", "skip: maxAlloc %u < %u floor", ESP.getMaxAllocHeap(), IMAGE_WARM_MIN_ALLOC);  // TEMP
     return;
   }
 
@@ -2719,7 +2754,9 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
           nextV->pageCount > 0) {
         vp = nextV->getPage(0);
       } else {
-        LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", currentSpineIndex + 1);  // TEMP
+        // Kept: this line means the next chapter has no section file, i.e. the silent index did
+        // not build it and the reader is one turn from a multi-second foreground build.
+        LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", currentSpineIndex + 1);
       }
     }
     // Warm the image on the next page and, if that one is already cached, keep looking ahead
