@@ -13,6 +13,8 @@ class BookStatsActivity final : public Activity {
   std::string bookTitle;
   // Held for the activity's life: a few hundred bytes, and re-reading it would hit SD per frame.
   BookStats stats;
+  // Swallows the release that ends a long Back press, so going home does not also finish().
+  bool backLongPressFired = false;
   int scrollOffset = 0;
   int maxScrollOffset = 0;
   uint16_t calYear = 0;

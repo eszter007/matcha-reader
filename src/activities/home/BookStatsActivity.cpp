@@ -42,7 +42,19 @@ void BookStatsActivity::onEnter() {
 void BookStatsActivity::onExit() { Activity::onExit(); }
 
 void BookStatsActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  // Tap steps back, hold goes home, as on the other two stats screens.
+  if (backLongPressFired) {
+    if (!mappedInput.isPressed(MappedInputManager::Button::Back)) backLongPressFired = false;
+    return;
+  }
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() >= StatsWidgets::HOME_HOLD_MS) {
+    backLongPressFired = true;
+    onGoHome();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() < StatsWidgets::HOME_HOLD_MS) {
     finish();
     return;
   }
@@ -121,7 +133,14 @@ void BookStatsActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  bookTitle.c_str());
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  // Hints name the months Left/Right land on, as on the other two stats screens.
+  char prevBuf[16], nextBuf[16];
+  uint16_t py = calYear, ny = calYear;
+  uint8_t pm = calMonth, nm = calMonth;
+  StatsWidgets::stepMonth(py, pm, -1);
+  StatsWidgets::stepMonth(ny, nm, +1);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
+                                            StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
