@@ -83,7 +83,7 @@ void stepMonth(uint16_t& year, uint8_t& month, const int delta) {
   month = static_cast<uint8_t>(m);
 }
 
-int drawStreakCard(GfxRenderer& renderer, const int x, const int y, const int w, const int streak,
+int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const int w, const int streak,
                    const uint16_t weekMinutes, const bool weekDays[7], const int todayDow) {
   const int iconSize = 32;
   const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
@@ -128,7 +128,7 @@ int drawStreakCard(GfxRenderer& renderer, const int x, const int y, const int w,
   return streakH;
 }
 
-int drawTileGrid(GfxRenderer& renderer, const int x, const int y, const int w, const Tile tiles[4]) {
+int drawTileGrid(const GfxRenderer& renderer, const int x, const int y, const int w, const Tile tiles[4]) {
   const int halfW = (w - CARD_GAP) / 2;
   const int iconSm = 24;
 
@@ -155,7 +155,7 @@ int drawTileGrid(GfxRenderer& renderer, const int x, const int y, const int w, c
   return 2 * (TILE_HEIGHT + CARD_GAP);
 }
 
-int drawMonthCalendar(GfxRenderer& renderer, const int x, const int y, const int w, const uint16_t calYear,
+int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, const int w, const uint16_t calYear,
                       const uint8_t calMonth, const Today& today, const MonthSource& source) {
   const int smallLH = renderer.getLineHeight(SMALL_FONT_ID);
   const int dim = daysInMonth(calYear, calMonth);

@@ -117,7 +117,6 @@ void LanguageStatsActivity::render(RenderLock&&) {
   auto metrics = theme.getMetrics();
   Rect screen = theme.getScreenSafeArea(renderer, true, false);
 
-  const int headerLineY = screen.y + metrics.topPadding + metrics.headerHeight - 3;
   // Content starts below the tab bar, which sits in the fixed band under the header exactly as
   // it does in Library and Settings.
   const int tabBarY = screen.y + metrics.topPadding + metrics.headerHeight;

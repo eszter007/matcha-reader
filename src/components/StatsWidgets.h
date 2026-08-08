@@ -39,8 +39,8 @@ const char* monthAbbrev(int month, char* out, size_t outSize);
 void stepMonth(uint16_t& year, uint8_t& month, int delta);
 
 // Flame + streak, minutes this week, Mon-Sun read/not-read row. Returns height consumed.
-int drawStreakCard(GfxRenderer& renderer, int x, int y, int w, int streak, uint16_t weekMinutes, const bool weekDays[7],
-                   int todayDow);
+int drawStreakCard(const GfxRenderer& renderer, int x, int y, int w, int streak, uint16_t weekMinutes,
+                   const bool weekDays[7], int todayDow);
 
 struct Tile {
   const char* value;
@@ -50,7 +50,7 @@ struct Tile {
 };
 
 // 2x2 grid. Returns height consumed.
-int drawTileGrid(GfxRenderer& renderer, int x, int y, int w, const Tile tiles[4]);
+int drawTileGrid(const GfxRenderer& renderer, int x, int y, int w, const Tile tiles[4]);
 
 // Day data source. Function pointers, not std::function or a virtual: called from render(),
 // and the two stores share no base class.
@@ -62,7 +62,7 @@ struct MonthSource {
 
 // Month card: title with chevrons, subtitle, weekday headers, grid. Returns height consumed.
 // `today` is outlined when it falls in the drawn month.
-int drawMonthCalendar(GfxRenderer& renderer, int x, int y, int w, uint16_t calYear, uint8_t calMonth,
+int drawMonthCalendar(const GfxRenderer& renderer, int x, int y, int w, uint16_t calYear, uint8_t calMonth,
                       const Today& today, const MonthSource& source);
 
 }  // namespace StatsWidgets

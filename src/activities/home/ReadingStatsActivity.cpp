@@ -110,8 +110,6 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const int cardMargin = 20;
   const int cardX = screen.x + cardMargin;
   const int cardW = screen.width - 2 * cardMargin;
-  const int cardPad = 16;
-  const int cardRadius = 12;
 
   const Today today = getToday();
   const int streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
