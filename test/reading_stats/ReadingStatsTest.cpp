@@ -1,7 +1,9 @@
 // Covers what neither the emulator nor the device can show without months of real history:
 // streak boundaries, session counting, per-language independence, and the save/load round trip.
+#include <HalStorage.h>  // the stub: provides testRoot()
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -11,13 +13,17 @@
 
 namespace {
 
-// The stores write through the HalStorage stub, which is rooted at ./sdroot.
+// The stores write through the HalStorage stub. Each test gets its own root: ctest runs them
+// as parallel processes sharing a working directory, so a fixed root races.
 class StatsTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    ASSERT_EQ(std::system("rm -rf sdroot && mkdir -p sdroot/system"), 0);
+    const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
+    testRoot() = std::string("sdroot_") + info->name();
+    ASSERT_EQ(std::system(("rm -rf " + testRoot() + " && mkdir -p " + testRoot() + "/system").c_str()), 0);
     READING_STATS_STORE = ReadingStatsStore{};
   }
+  void TearDown() override { std::system(("rm -rf " + testRoot()).c_str()); }
 };
 
 // 2026-08-08 is the anchor for every fixture below.
@@ -246,7 +252,7 @@ TEST_F(StatsTest, OldFormatFileIsTreatedAsNoHistory) {
   const char* path = "/Japanese/ver.epub";
   ASSERT_TRUE(BookStats::recordOpen(path));
 
-  const std::string f = "sdroot" + BookStats::filePathFor(path);
+  const std::string f = testRoot() + BookStats::filePathFor(path);
   FILE* fp = fopen(f.c_str(), "r+b");
   ASSERT_NE(fp, nullptr);
   ASSERT_EQ(fseek(fp, 4, SEEK_SET), 0);

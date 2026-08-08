@@ -6,7 +6,13 @@
 #include <cstdio>
 #include <string>
 
-inline std::string testRootPath(const char* p) { return std::string("sdroot") + p; }
+// Settable because ctest runs each test as its own parallel process from a shared working
+// directory; a fixed root would have them deleting each other's files mid-run.
+inline std::string& testRoot() {
+  static std::string root = "sdroot";
+  return root;
+}
+inline std::string testRootPath(const char* p) { return testRoot() + p; }
 
 class HalFile {
   FILE* f = nullptr;
