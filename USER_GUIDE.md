@@ -2,6 +2,13 @@
 
 Welcome to the **CrossPoint** firmware. This guide outlines the hardware controls, navigation, and reading features of the device.
 
+> [!TIP]
+> Dictionaries, fonts and manga all need converting before the device can read them.
+> [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) does all three in your browser and
+> gives you a zip laid out for the SD card, with no Python to install. Files stay on your machine, except manga
+> OCR, which sends panels to Gemini under your own API key.
+> ([source](https://github.com/eszter007/matcha-reader-tools))
+
 - [CrossPoint User Guide](#crosspoint-user-guide)
   - [1. Hardware Overview](#1-hardware-overview)
     - [Button Layout](#button-layout)
@@ -556,6 +563,9 @@ Artwork along one edge, as below, keeps most of the page readable.
 
 CrossPoint supports loading additional fonts from the SD card, extending beyond the two built-in families (Noto Serif, Noto Sans). Custom fonts can include extended Unicode coverage, enabling CJK (Chinese, Japanese, Korean) and other scripts.
 
+Convert any TTF or OTF with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and put the
+result in `.fonts/<Family>/regular.cpfont`.
+
 There are three ways to install fonts:
 
 1. **Download from device (recommended):** Go to **Settings -> System -> Manage Fonts**, browse the available font families, and select one to download over Wi-Fi.
@@ -707,7 +717,9 @@ Gemini API key in `/system/gemini.key`.
 
 ### 6.4 Reading Manga
 
-Copy a converted manga folder anywhere on the SD card, at any depth and under any folder name. It appears in the
+Convert your manga with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/), picking the X3 or
+X4 target so pages are scaled for the screen. Then copy the folder anywhere on the SD card, at any depth and under
+any folder name. It appears in the
 Library grid, on shelves, and in Continue Reading with its cover, title, author and progress.
 
 | Button | Full-page view | Panel zoom |
@@ -747,8 +759,9 @@ dictionaries/
 Japanese works differently from the rest. It always uses the converted files in `dictionaries/jp/`, split into
 vocabulary, names and grammar, because lookup needs the readings and deinflection that a plain StarDict file does
 not carry. Convert them from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject)
-or any other Yomitan dictionary with the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Every
-other language uses ordinary StarDict, one folder per dictionary.
+or any other Yomitan dictionary with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/),
+which also handles jmdict-simplified JSON and MDict `.mdx` input. Every other language uses ordinary StarDict, one
+folder per dictionary, with no conversion needed.
 
 The dictionary you choose in **Settings → Reader → Dictionary** is the fallback. It is used when the book carries
 no language, or when nothing under `dictionaries/` matches the one it carries. Reader Settings shows the
