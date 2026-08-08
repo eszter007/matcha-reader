@@ -1270,7 +1270,10 @@ struct VerticalParsedText::LayoutCursor {
     if (!o.inBox_) return 0;
     const int startRows = static_cast<int>(o.activeBlock_.startEm + 0.5f);
     const int hangRows = paragraphStart ? 0 : static_cast<int>(o.activeBlock_.hangEm + 0.5f);
-    return static_cast<uint16_t>(std::min<int>(geom.rowsPerColumn - 1, std::max(0, startRows + hangRows)));
+    // Bounded by rowsAvailable(), not the grid's geom.rowsPerColumn: a boxed column is shorter
+    // (the foot reserve, and any negative columnYShift), so the grid bound would let a large
+    // block indent start a glyph inside the strip the bottom rule occupies.
+    return static_cast<uint16_t>(std::min<int>(rowsAvailable() - 1, std::max(0, startRows + hangRows)));
   }
 };
 
