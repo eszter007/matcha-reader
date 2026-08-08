@@ -542,7 +542,10 @@ void EpubReaderActivity::loop() {
             // each line's word x-positions, so scanning with a different font rewrites the
             // page's layout. With a CJK-only family selected (UDDigiKyokasho) every Latin
             // glyph and the space measure zero, which collapsed all word gaps on the page.
-            p->render(renderer, effectiveReaderFontId(), 0, 0);  // scan only, no pixels
+            // Same suppressRuby the real render will use: the point of this scan is to warm
+            // exactly the glyphs the next page turn draws, and with furigana off the annotation
+            // glyphs are never drawn -- scanning them spends SD reads and cache RAM on nothing.
+            p->render(renderer, effectiveReaderFontId(), 0, 0, !useFurigana());  // scan only, no pixels
             scope.endScanAndPrewarm();
             LOG_DBG("ERS", "Idle prewarm: page %d in %lums", nextPage, millis() - t0);
           }
