@@ -14,7 +14,7 @@ class LanguageStatsActivity final : public Activity {
   std::vector<ReadingStatsStore::LanguageSummary> languages;
   // Owned strings, not a rotating buffer: render() collects every label into a TabInfo vector
   // (which holds const char*) before any is drawn, so all of them must stay alive at once.
-  std::vector<std::string> labels;
+  std::vector<std::string> tabLabels;
   int selectedTab = 0;
   // Swallows the release ending a long Back press, so going home does not also finish().
   bool backLongPressFired = false;

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -41,18 +42,18 @@ std::string LanguageStatsActivity::makeTabLabel(const char* code) {
 
   // No UI for this language (say "zh"): show the bare tag rather than mislabel it.
   std::string out(code);
-  for (char& c : out) {
-    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-  }
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](const char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; });
   return out;
 }
 
 void LanguageStatsActivity::onEnter() {
   Activity::onEnter();
   READING_STATS_STORE.getLanguages(languages);
-  labels.clear();
-  labels.reserve(languages.size());
-  for (const auto& l : languages) labels.push_back(makeTabLabel(l.code));
+  tabLabels.clear();
+  tabLabels.reserve(languages.size());
+  std::transform(languages.begin(), languages.end(), std::back_inserter(tabLabels),
+                 [](const ReadingStatsStore::LanguageSummary& l) { return makeTabLabel(l.code); });
   const StatsWidgets::Today today = StatsWidgets::getToday();
   calYear = today.year;
   calMonth = today.month;
@@ -180,7 +181,7 @@ void LanguageStatsActivity::render(RenderLock&&) {
     std::vector<TabInfo> tabs;
     tabs.reserve(languages.size());
     for (int i = 0; i < static_cast<int>(languages.size()); i++) {
-      tabs.push_back({labels[i].c_str(), i == selectedTab});
+      tabs.push_back({tabLabels[i].c_str(), i == selectedTab});
     }
     // Same component Library and Settings use. Always drawn focused: Confirm acts only on tabs.
     GUI.drawTabBar(renderer, Rect{0, tabBarY, screen.width, metrics.tabBarHeight}, tabs, true);
