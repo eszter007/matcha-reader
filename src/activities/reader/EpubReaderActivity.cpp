@@ -1662,6 +1662,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   // --- Vertical text mode path ---
   if (useVerticalText()) {
+    // TEMP (issue #54): phase timing for the turn. Chapter transitions measure ~1s against a
+    // 117ms steady turn and the split between section open, page read and draw is unknown.
+    const uint32_t tVEnter = millis();
+    const bool vFreshSection = !verticalSection;
     if (failedVerticalSpineIndex == currentSpineIndex) {
       // This spine index already failed to build this session (typically a transient low-heap
       // allocation failure) -- show a real error instead of silently re-attempting the same
@@ -1838,8 +1842,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     updateBookmarkFlag();
 
     bool imagePageDisplayed = false;
+    const uint32_t tVOpenDone = millis();  // TEMP (issue #54)
     {
       const auto* vpage = verticalSection->getPage();
+      const uint32_t tVPageRead = millis();  // TEMP (issue #54)
       if (!vpage) {
         if (verticalSection->lastReadHeapRefused()) {
           // Transient low heap, NOT corruption: the on-disk cache is valid. Clearing it here
@@ -1992,6 +1998,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!vGlyphsWarm) prewarmedVPage_ = verticalSection->currentPage;
       }
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
+      // TEMP (issue #54): open = ctor + loadSectionFile (+ build); read = page record off SD;
+      // draw = glyph prewarm + rasterise. fresh=1 marks a chapter transition.
+      LOG_DBG("VPHASE", "fresh=%d open=%ums read=%ums draw=%ums total=%ums maxAlloc=%u free=%u", vFreshSection ? 1 : 0,
+              tVOpenDone - tVEnter, tVPageRead - tVOpenDone, millis() - start, millis() - tVEnter,
+              ESP.getMaxAllocHeap(), ESP.getFreeHeap());
     }
 
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
@@ -2536,17 +2547,15 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana()))
       return;
 
-    // Cheap pre-gate, before paying anything. releaseAllFontMemory() below cannot produce a block
-    // larger than the total free heap, so if free is already under the build's floor the release
-    // is guaranteed not to clear the gate -- and it would still cost the next render a full
-    // font-cache rebuild (~250ms). Skip the whole attempt instead.
     constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
-    if (ESP.getFreeHeap() < SILENT_VBUILD_MIN_ALLOC) {
-      LOG_DBG("ERS", "Silent vertical index skipped, free heap below floor (free=%u)", ESP.getFreeHeap());
-      silentIndexBackoffUntilMs_ = millis() + 5000;
-      return;
-    }
 
+    // There is deliberately NO pre-gate on the heap here. One existed, testing free heap against
+    // this same floor before the release below, and it rejected every attempt ever made: it
+    // measured the heap BEFORE the release that produces the memory. Free during reading sits
+    // around 95K and the release is worth ~40-50K, so the only honest reading is the post-release
+    // one below. The rebuild the pre-gate was avoiding costs ~250ms; the foreground build it lets
+    // through instead costs 5-13s.
+    //
     // The vertical build is the most memory-intensive step in the reader, and this
     // silent path runs it at the worst heap moment: right after a page render, with
     // the glyph slab fully warmed AND the current chapter still resident. Hand the
