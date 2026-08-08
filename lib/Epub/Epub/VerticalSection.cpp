@@ -947,6 +947,9 @@ struct LayoutPageSink final : ParagraphSink {
   void (*earlyRenderFn)(void*, const VerticalPage&, int) = nullptr;
   void* earlyRenderCtx = nullptr;
   std::atomic<int>* pageRequest = nullptr;
+  std::atomic<bool>* backTurnFlag = nullptr;
+  void (*buildNoticeFn)(void*) = nullptr;
+  void* buildNoticeCtx = nullptr;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
   int fontReleasedForReq_ = -1;        // one font-cache release per starved request; see servePageRequest()
 
@@ -1144,6 +1147,11 @@ struct LayoutPageSink final : ParagraphSink {
   // mid-build -- the page appears normally once the build completes).
   void servePageRequest(const VerticalPage& justWritten, const int lastBuilt) {
     if (!pageRequest || !earlyRenderFn) return;
+    // A backward turn the build cannot serve. Drawn here rather than where the press is read:
+    // the framebuffer has one owner, and mid-build that is this task.
+    if (backTurnFlag && backTurnFlag->exchange(false, std::memory_order_relaxed) && buildNoticeFn) {
+      buildNoticeFn(buildNoticeCtx);
+    }
     const int req = pageRequest->load(std::memory_order_relaxed);
     if (req < 0 || req > lastBuilt) return;
     // Serving renders a page mid-build, and parts of that path allocate bare -- under
@@ -1209,6 +1217,16 @@ struct LayoutPageSink final : ParagraphSink {
         // unset so the very next page write retries against the roomier heap.
         fontReleasedForReq_ = req;
         if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+        return;
+      }
+      if (okRead == ReadResult::HeapRefused) {
+        // Even after the font release there is not enough contiguous heap, and there will not
+        // be until the build ends -- the layout's working set is what is holding it. Leaving
+        // the request here strands the reader on a blank screen for the whole chapter (device
+        // log: three refusals at maxAlloc=10740 for a 10528-byte record, first page shown only
+        // when the build finished, 19s in). Re-point to the page about to be laid out: it is
+        // served from RAM as it is written, at no allocation, one page later than asked.
+        pageRequest->store(lastBuilt + 1, std::memory_order_relaxed);
         return;
       }
       lastRefusedAttemptKey = attemptKey;
@@ -1422,6 +1440,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // recorded while the build runs simply overwrite it (latest wins).
   buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
   sink.pageRequest = &buildPageRequest_;
+  sink.backTurnFlag = &backTurnDuringBuild_;
+  sink.buildNoticeFn = buildNoticeFn_;
+  sink.buildNoticeCtx = buildNoticeCtx_;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
