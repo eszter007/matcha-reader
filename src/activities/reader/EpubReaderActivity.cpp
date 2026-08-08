@@ -2429,19 +2429,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
   }
-  // Only persist when the position actually changed. render() also runs on menu,
-  // bookmark and screenshot re-renders, and writeAtomic is several FAT ops for 6 bytes.
-  // Every real page turn changes currentPage, so progress durability is unaffected.
-  if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
-      section->pageCount != lastSavedPageCount) {
-    if (saveProgress(currentSpineIndex, section->currentPage, section->estimatedTotalPages(), verticalOverride,
-                     furiganaOverride)) {
-      lastSavedSpineIndex = currentSpineIndex;
-      lastSavedPage = section->currentPage;
-      lastSavedPageCount = section->estimatedTotalPages();
-    }
-  }
-
   runPostRenderTail(viewportWidth, viewportHeight, /*vertical=*/false, orientedMarginLeft, orientedMarginTop);
 
   showPendingSyncSaveError();
@@ -2678,12 +2665,26 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
     }
   }
 
-  // Never gated. The saved record is not write-only -- render()'s progress-sync path restores
-  // position from it, so leaving it stale through a skim lets a sync snap the reader back to the
-  // last page actually written.
+  // Never gated on `skimming`. The saved record is not write-only -- render()'s progress-sync path
+  // restores position from it, so leaving it stale through a skim lets a sync snap the reader back
+  // to the last page actually written.
+  //
+  // It IS gated on the position having changed: writeAtomic() is several FAT ops for 6 bytes, and
+  // render() also runs for menu, bookmark and screenshot re-renders, which move nothing. Every
+  // real page turn changes `page`, so durability is unaffected.
+  //
+  // Horizontal reports estimatedTotalPages(), not pageCount: during a partial build the estimate
+  // is the meaningful total, and it moving is itself worth persisting. Compare against the same
+  // value that gets stored, or the guard never settles.
   const int page = vertical ? verticalSection->currentPage : section->currentPage;
-  const int pageCount = vertical ? verticalSection->pageCount : section->pageCount;
-  saveProgress(currentSpineIndex, page, pageCount, verticalOverride, furiganaOverride);
+  const int pageCount = vertical ? verticalSection->pageCount : section->estimatedTotalPages();
+  if (currentSpineIndex != lastSavedSpineIndex || page != lastSavedPage || pageCount != lastSavedPageCount) {
+    if (saveProgress(currentSpineIndex, page, pageCount, verticalOverride, furiganaOverride)) {
+      lastSavedSpineIndex = currentSpineIndex;
+      lastSavedPage = page;
+      lastSavedPageCount = pageCount;
+    }
+  }
 }
 
 bool EpubReaderActivity::nextTurnAlreadyRequested() const {

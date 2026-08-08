@@ -591,7 +591,13 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     const EpdFontGroup& group = fontData->groups[groupIdx];
 
     if (!decompressGroup(fontData, groupIdx, tempBuf, group.uncompressedSize)) {
-      missed++;
+      // The return value is a GLYPH count (see the header), so charge every glyph this group
+      // owed, not 1 for the group. Those glyphs keep bufferOffset == UINT32_MAX and fall through
+      // to the hot-group path in getBitmap().
+      for (uint16_t i = 0; i < slot.glyphCount; i++) {
+        if (slot.glyphs[i].bufferOffset == UINT32_MAX && getGroupIndex(fontData, slot.glyphs[i].glyphIndex) == groupIdx)
+          missed++;
+      }
       continue;
     }
 
