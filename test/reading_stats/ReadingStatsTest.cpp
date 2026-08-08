@@ -1,10 +1,11 @@
 // Covers what neither the emulator nor the device can show without months of real history:
 // streak boundaries, session counting, per-language independence, and the save/load round trip.
 #include <HalStorage.h>  // the stub: provides testRoot()
+#include <I18n.h>
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -20,10 +21,14 @@ class StatsTest : public ::testing::Test {
   void SetUp() override {
     const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
     testRoot() = std::string("sdroot_") + info->name();
-    ASSERT_EQ(std::system(("rm -rf " + testRoot() + " && mkdir -p " + testRoot() + "/system").c_str()), 0);
+    std::filesystem::remove_all(testRoot());
+    ASSERT_TRUE(std::filesystem::create_directories(testRoot() + "/system"));
     READING_STATS_STORE = ReadingStatsStore{};
   }
-  void TearDown() override { std::system(("rm -rf " + testRoot()).c_str()); }
+  void TearDown() override {
+    std::error_code ec;
+    std::filesystem::remove_all(testRoot(), ec);  // best effort; a leftover dir fails no test
+  }
 };
 
 // 2026-08-08 is the anchor for every fixture below.
@@ -185,6 +190,17 @@ TEST_F(StatsTest, LanguageHistoryBeyond512EntriesSurvives) {
   ASSERT_TRUE(s.saveToFile());
   ASSERT_TRUE(s.loadFromFile());
   EXPECT_EQ(s.getTotalMinutes("ja"), 3500u);
+}
+
+// The tabs feed this whatever the store holds; a region subtag must not lose the name.
+TEST_F(StatsTest, LanguageNameIgnoresRegionSubtagAndCase) {
+  EXPECT_STRNE(I18n::languageNameForCode("ja"), nullptr);
+  EXPECT_STREQ(I18n::languageNameForCode("ja-JP"), I18n::languageNameForCode("ja"));
+  EXPECT_STREQ(I18n::languageNameForCode("JA"), I18n::languageNameForCode("ja"));
+  EXPECT_STREQ(I18n::languageNameForCode("pt_BR"), I18n::languageNameForCode("pt"));
+  // A language with no shipped UI must report a miss, not fall back to English.
+  EXPECT_EQ(I18n::languageNameForCode("zh"), nullptr);
+  EXPECT_EQ(I18n::languageNameForCode(""), nullptr);
 }
 
 // ---- BookStats ----

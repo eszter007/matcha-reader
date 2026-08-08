@@ -44,10 +44,11 @@ const char* I18n::getLanguageName(Language lang) const {
 
 const char* I18n::languageNameForCode(const char* code) {
   if (!code || !*code) return nullptr;
-  // Table codes are uppercase enum names; book tags arrive lowercase.
+  // Table codes are uppercase enum names; book tags arrive lowercase and may carry a region
+  // subtag ("ja-JP"), which is dropped here as it is everywhere else language is normalised.
   char upper[8];
   size_t n = 0;
-  for (; code[n] && n < sizeof(upper) - 1; n++) {
+  for (; code[n] && code[n] != '-' && code[n] != '_' && n < sizeof(upper) - 1; n++) {
     const char c = code[n];
     upper[n] = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
   }

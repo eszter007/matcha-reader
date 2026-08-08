@@ -17,14 +17,12 @@
 #include "fontIds.h"
 
 namespace {
-// MonthSource carries one void* and the store is a singleton, so the language rides here.
-const char* g_calendarLanguage = "";
-
-void languageMonthStatus(const void*, const uint16_t year, const uint8_t month, bool out[32]) {
-  READING_STATS_STORE.getMonthStatus(g_calendarLanguage, year, month, out);
+// The language travels in MonthSource::ctx, so the adapters depend on nothing but their inputs.
+void languageMonthStatus(const void* ctx, const uint16_t year, const uint8_t month, bool out[32]) {
+  READING_STATS_STORE.getMonthStatus(static_cast<const char*>(ctx), year, month, out);
 }
-int languageDaysReadInMonth(const void*, const uint16_t year, const uint8_t month) {
-  return READING_STATS_STORE.getDaysReadInMonth(g_calendarLanguage, year, month);
+int languageDaysReadInMonth(const void* ctx, const uint16_t year, const uint8_t month) {
+  return READING_STATS_STORE.getDaysReadInMonth(static_cast<const char*>(ctx), year, month);
 }
 }  // namespace
 
@@ -137,7 +135,6 @@ void LanguageStatsActivity::render(RenderLock&&) {
     maxScrollOffset = 0;
   } else {
     const char* code = selectedCode();
-    g_calendarLanguage = code;
 
     // Same cards as the overall screen, filtered to this language.
     const int streak = READING_STATS_STORE.getStreak(code, today.year, today.month, today.day);
@@ -165,7 +162,7 @@ void LanguageStatsActivity::render(RenderLock&&) {
     };
     y += StatsWidgets::drawTileGrid(renderer, cardX, y, cardW, tiles) + 8;
 
-    const StatsWidgets::MonthSource source{nullptr, languageMonthStatus, languageDaysReadInMonth};
+    const StatsWidgets::MonthSource source{code, languageMonthStatus, languageDaysReadInMonth};
     y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source);
 
     const int contentEndY = y + 10;

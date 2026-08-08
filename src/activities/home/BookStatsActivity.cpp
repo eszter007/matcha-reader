@@ -47,21 +47,11 @@ void BookStatsActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    if (calMonth == 1) {
-      calMonth = 12;
-      calYear--;
-    } else {
-      calMonth--;
-    }
+    StatsWidgets::stepMonth(calYear, calMonth, -1);
     requestUpdate();
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    if (calMonth == 12) {
-      calMonth = 1;
-      calYear++;
-    } else {
-      calMonth++;
-    }
+    StatsWidgets::stepMonth(calYear, calMonth, +1);
     requestUpdate();
   }
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {

@@ -3,6 +3,8 @@ add_executable(ReadingStatsTest
   stubs/StubDefs.cpp
   ${REPO_ROOT}/src/ReadingStatsStore.cpp
   ${REPO_ROOT}/src/BookStats.cpp
+  ${REPO_ROOT}/lib/I18n/I18n.cpp
+  ${REPO_ROOT}/lib/I18n/I18nStrings.cpp
 )
 
 # The stubs directory comes first so <HalStorage.h> and <Logging.h> resolve to the host
@@ -10,6 +12,7 @@ add_executable(ReadingStatsTest
 target_include_directories(ReadingStatsTest BEFORE PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
   ${REPO_ROOT}/src
+  ${REPO_ROOT}/lib/I18n
 )
 
 target_link_libraries(ReadingStatsTest PRIVATE
