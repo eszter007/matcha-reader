@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -107,6 +108,21 @@ class VerticalSection {
   bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
                          bool furiganaEnabled);
   bool clearCache() const;
+
+  // Position of a page's first character within the chapter's visible character data, in the
+  // same units Section::getVisibleTextOffsetForPage() reports -- which is what makes a reading
+  // position portable between the two layouts. See VerticalPage::visibleTextOffset.
+  //
+  // Read straight from the page record on SD (its first field). No table is held in RAM and
+  // none is written: the reverse lookup binary-searches the page records through the offset
+  // table that loadSectionFile already keeps, which costs ~9 four-byte reads on a 500-page
+  // chapter and, unlike a second index, nothing at all during the build -- where this layout
+  // is already fighting for every contiguous KB.
+  std::optional<uint32_t> getVisibleTextOffsetForPage(int page) const;
+
+  // The page holding `offset`: the last page whose own offset is <= it. nullopt if the chapter
+  // has no pages or the records cannot be read.
+  std::optional<int> getPageForVisibleTextOffset(uint32_t offset) const;
   const VerticalPage* getPage() const;
   const VerticalPage* getPage(int pageIndex) const;
   // True when the most recent getPage() returned nullptr only because the page's glyph vector

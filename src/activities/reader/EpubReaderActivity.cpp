@@ -1051,28 +1051,28 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
       // still be inside its (multi-second, section-touching) warm tail when this result
       // lands, and freeing the section under it is a use-after-free.
       RenderLock lock(*this);
-      // Carry the reading position across the mode change. The two modes paginate the same
-      // chapter differently, so the page NUMBER means nothing on the other side; what survives
-      // is the fraction through the chapter. Recording page + count here is what lets the
-      // rebuild remap proportionally (vertical: the cachedChapterTotalPageCount block in
-      // render(); horizontal: applyDeferredReposition()). Without it the rebuild started from
-      // whatever nextPageNumber happened to hold and the position jumped.
+      // Carry the reading position across the mode change; the rebuild on the other side has
+      // nothing else to resume from. A page NUMBER does not survive: the two modes paginate the
+      // same chapter differently. Two things that do are recorded here, in order of preference:
+      //   - the content offset, an exact anchor, since both layouts count source positions
+      //     identically (VerticalPage::visibleTextOffset);
+      //   - page + chapter total, whose ratio the rebuild remaps proportionally when no offset
+      //     can be read (vertical: the cachedChapterTotalPageCount block in render();
+      //     horizontal: applyDeferredReposition()).
+      cachedVisibleTextOffset.reset();
       if (verticalSection) {
         cachedSpineIndex = currentSpineIndex;
         nextPageNumber = verticalSection->currentPage;
         cachedChapterTotalPageCount = verticalSection->pageCount;
+        cachedVisibleTextOffset = verticalSection->getVisibleTextOffsetForPage(verticalSection->currentPage);
       } else if (section) {
         cachedSpineIndex = currentSpineIndex;
         nextPageNumber = section->currentPage;
-        // estimatedTotalPages(), not pageCount: mid-build pageCount is only the watermark of
-        // what has been laid out, which is barely ahead of currentPage -- the fraction would
-        // come out near 1.0 and drop the reader at the end of the chapter.
+        // estimatedTotalPages(), not pageCount: mid-build the watermark sits barely ahead of
+        // currentPage, so the ratio would be ~1.0 and land the reader at the chapter's end.
         cachedChapterTotalPageCount = section->estimatedTotalPages();
+        cachedVisibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
       }
-      // A content offset only resolves against a horizontal Section, and it was captured under
-      // the outgoing layout. Leaving it set would win over the remap above and, going back to
-      // horizontal, silently re-anchor to a stale position.
-      cachedVisibleTextOffset.reset();
       section.reset();
       verticalSection.reset();
     }
@@ -1631,6 +1631,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                                useFurigana()};
     if ((section || verticalSection) && currentSig != sectionLayoutSig) {
       LOG_DBG("ERS", "Layout params changed; reflowing section in place");
+      // Anchor the position by content before the sections go: a reflow re-paginates, so the
+      // page number about to be recorded below is only the fallback. Vertical can answer this
+      // now too, so a font or spacing change no longer costs vertical readers their place.
+      rememberCurrentContentOffset();
       if (verticalSection) {
         cachedSpineIndex = currentSpineIndex;
         cachedChapterTotalPageCount = verticalSection->pageCount;
@@ -1793,6 +1797,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         LOG_DBG("ERS", "Vertical cache found");
       }
 
+      // An explicit jump (bookmark, chapter list, percent) is a deliberate navigation and must
+      // outrank the position being carried across a re-pagination. Recorded before the branch
+      // below consumes it.
+      const bool hadExplicitPageJump = pendingPageJump.has_value();
       if (pendingPageJump.has_value()) {
         if (verticalSection->pageCount == 0) {
           verticalSection->currentPage = 0;
@@ -1812,8 +1820,21 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
       pendingAnchor.clear();
 
+      // Content anchor first, page fraction only as the fallback. The offset names an exact
+      // character and is immune to re-pagination; the fraction is a guess that lands the reader
+      // up to a page away and drifts a little further on every switch.
+      bool resolvedByOffset = false;
+      if (currentSpineIndex == cachedSpineIndex && cachedVisibleTextOffset.has_value() && !hadExplicitPageJump &&
+          !pendingPercentJump) {
+        if (const auto page = verticalSection->getPageForVisibleTextOffset(*cachedVisibleTextOffset)) {
+          verticalSection->currentPage = *page;
+          resolvedByOffset = true;
+        }
+      }
+      cachedVisibleTextOffset.reset();
       if (cachedChapterTotalPageCount > 0) {
-        if (currentSpineIndex == cachedSpineIndex && verticalSection->pageCount != cachedChapterTotalPageCount) {
+        if (!resolvedByOffset && currentSpineIndex == cachedSpineIndex &&
+            verticalSection->pageCount != cachedChapterTotalPageCount) {
           const float progress =
               static_cast<float>(verticalSection->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
           verticalSection->currentPage = static_cast<int>(progress * verticalSection->pageCount);
@@ -2901,7 +2922,13 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
                                       int8_t furiOverride) {
   const uint8_t percent = static_cast<uint8_t>(pageBasedPercent(spineIndex, currentPage + 1));
   std::optional<uint32_t> offset;
-  if (section && spineIndex == currentSpineIndex && currentPage >= 0 && currentPage < section->pageCount) {
+  if (verticalSection && spineIndex == currentSpineIndex && currentPage >= 0 &&
+      currentPage < verticalSection->pageCount) {
+    // Vertical records the same content offset horizontal does, so progress saved while
+    // reading vertically resolves exactly when the book is next opened horizontally (and the
+    // other way round). Without this the two modes could only meet through page proportions.
+    offset = verticalSection->getVisibleTextOffsetForPage(currentPage);
+  } else if (section && spineIndex == currentSpineIndex && currentPage >= 0 && currentPage < section->pageCount) {
     // The on-screen page's offset was captured at load; reuse it to avoid a fresh section-file
     // open on every page turn. Any other page (rare) falls back to a direct lookup.
     offset = (currentPage == section->currentPage && currentPageVisibleOffset.has_value())
@@ -2914,7 +2941,10 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
 
 void EpubReaderActivity::rememberCurrentContentOffset() {
   cachedVisibleTextOffset.reset();
-  if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
+  if (verticalSection && verticalSection->currentPage >= 0 &&
+      verticalSection->currentPage < verticalSection->pageCount) {
+    cachedVisibleTextOffset = verticalSection->getVisibleTextOffsetForPage(verticalSection->currentPage);
+  } else if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
     cachedVisibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
   }
 }
@@ -3265,7 +3295,15 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   const bool buildActive =
       verticalBuildInProgress_.load(std::memory_order_relaxed) || (section && section->isBuilding());
 
+  // Memo key: the raw watermark, which advances as the build lays pages out.
   const int livePages = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
+  // Model input: the chapter's estimated total, the same number sectionPageSpan() shows. The
+  // watermark makes a half-built chapter look only as long as the pages laid out so far, which
+  // shrinks the X/Y span and, through spinePagesReal, the whole-book percentage with it. Vertical
+  // builds in one pass, so its pageCount is already the total.
+  const int liveTotalPages = verticalSection ? verticalSection->pageCount
+                             : section       ? section->estimatedTotalPages()
+                                             : 0;
   const bool vertical = useVerticalText();
   if (chapterSpanSpine == currentSpineIndex && chapterSpanLivePages == livePages && chapterSpanVertical == vertical &&
       chapterSpanBuildActive == buildActive) {
@@ -3277,7 +3315,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   chapterSpanVertical = vertical;
   chapterSpanBuildActive = buildActive;
   chapterPagesBefore = 0;
-  chapterPagesTotal = std::max(1, livePages);
+  chapterPagesTotal = std::max(1, liveTotalPages);
   bookPagesBefore = 0;
   bookPagesTotal = 0;
   spinePagesEffective.clear();
@@ -3296,8 +3334,8 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   size_t knownBytes = 0;
   uint32_t knownPages = 0;
   for (int i = 0; i < spineCount; i++) {
-    if (i == currentSpineIndex && livePages > 0) {
-      spinePagesReal[i] = static_cast<uint16_t>(std::min(livePages, 0xFFFF));
+    if (i == currentSpineIndex && liveTotalPages > 0) {
+      spinePagesReal[i] = static_cast<uint16_t>(std::min(liveTotalPages, 0xFFFF));
     } else if (spinePagesReal[i] == 0 && !buildActive) {
       // A failed probe is remembered for the session (kSpineProbeFailed): without this, every
       // menu open / status-bar refresh after a cache-version bump re-opened (and re-discarded)

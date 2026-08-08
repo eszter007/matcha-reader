@@ -816,6 +816,11 @@ bool Section::finalizeBuild() {
     }
   }
 
+  // See the matching "chapter spans" line in VerticalSection: these two numbers come from
+  // independent parsers that must count visible characters identically.
+  if (build_ && !build_->lut.empty()) {
+    LOG_DBG("SCT", "Chapter spans %u chars over %u pages", build_->lut.back().visibleTextOffset, pageCount);
+  }
   const bool committed = commitBuildFile(SECTION_FILE_VERSION, 0, 0);
   if (build_->cssParser) build_->cssParser->clear();
   build_.reset();

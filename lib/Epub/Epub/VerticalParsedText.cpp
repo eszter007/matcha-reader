@@ -502,7 +502,10 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
       continue;
     }
     if (!canPushStreamChar()) return;
-    stream_.push_back(PendingChar{cp, paragraphIndex, static_cast<uint32_t>(i), 0, false, {}});
+    // visibleTextOffset stays 0: this overload takes plain text with no extractor context, so
+    // there is no chapter-wide position to attribute it to. Only the annotated path (the one
+    // the real chapter build uses) carries offsets.
+    stream_.push_back(PendingChar{cp, paragraphIndex, static_cast<uint32_t>(i), 0, false, {}, 0});
     i += consumed;
   }
 }
@@ -565,14 +568,23 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     // memory, only removes the many small alloc/realloc/free cycles getting there.
     std::vector<size_t> baseOffsets;
     std::vector<uint32_t> baseCps;
+    // Source codepoint index of each kept base character, relative to the run's first codepoint.
+    // Counted over EVERY decoded codepoint, including the newlines/tabs dropped below and the
+    // second half of a composed kana diacritic -- the extractor's visible-text counter advances
+    // for those too, so skipping them here would drift the two counts apart character by
+    // character. Parallel to baseCps/baseOffsets.
+    std::vector<uint32_t> baseCpIndex;
     std::vector<size_t> breakBeforeBaseIndex;
     baseOffsets.reserve(run.baseText.size());
     baseCps.reserve(run.baseText.size());
+    baseCpIndex.reserve(run.baseText.size());
     {
       size_t i = 0;
+      uint32_t cpIndex = 0;
       while (i < run.baseText.size()) {
         size_t consumed = 1;
         const uint32_t cp = decodeUtf8At(run.baseText, i, &consumed);
+        const uint32_t thisCpIndex = cpIndex++;
         if ((cp == 0x3099 || cp == 0x309A) && !baseCps.empty()) {
           const uint32_t composed = composeKanaDiacritic(baseCps.back(), cp);
           if (composed != 0) {
@@ -594,6 +606,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         }
         baseOffsets.push_back(i);
         baseCps.push_back(cp);
+        baseCpIndex.push_back(thisCpIndex);
         i += consumed;
       }
     }
@@ -615,8 +628,13 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     if (run.rubyText.empty()) {
       for (size_t k = 0; k < baseCps.size(); k++) {
         if (!canPushStreamChar()) return;
-        stream_.push_back(PendingChar{
-            baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style, run.emphasis, {}});
+        stream_.push_back(PendingChar{baseCps[k],
+                                      paragraphIndex,
+                                      static_cast<uint32_t>(baseOffsets[k]),
+                                      run.style,
+                                      run.emphasis,
+                                      {},
+                                      run.visibleTextOffset + baseCpIndex[k]});
       }
     } else {
       // Decode ruby codepoints to distribute evenly across base characters.
@@ -643,7 +661,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         for (size_t r = rubyStart; r < rubyEnd; r++) utf8AppendCodepoint(rubyCps[r], slice);
         if (!canPushStreamChar()) return;
         stream_.push_back(PendingChar{baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style,
-                                      run.emphasis, std::move(slice)});
+                                      run.emphasis, std::move(slice), run.visibleTextOffset + baseCpIndex[k]});
       }
     }
 
@@ -1071,6 +1089,10 @@ struct VerticalParsedText::LayoutCursor {
       page = VerticalPage{};
       page.columnCount = geom.columnsPerPage;
       page.rowsPerColumn = geom.rowsPerColumn;
+      // A break decided while placing a character opens this page WITH that character on it, so
+      // the page starts at its position. The per-character stamp cannot supply this: it runs
+      // before the break, against the page being closed.
+      page.visibleTextOffset = o.lastCharOffset_;
       reservePageGlyphs(page);
       column = 0;
       row = 0;
@@ -1523,6 +1545,13 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     }
 
     const PendingChar& pc = stream_[idx];
+
+    // Stamp the page with its first character's position. "No glyphs yet" stands in for "nothing
+    // placed yet", so a page continuing across a batch boundary keeps the stamp it opened with.
+    // A page opened by a break later in this iteration is seeded from lastCharOffset_ instead --
+    // see finalizePageIfNeeded().
+    lastCharOffset_ = pc.visibleTextOffset;
+    if (page.glyphs.empty()) page.visibleTextOffset = pc.visibleTextOffset;
 
     // Force a fresh column at the start of every paragraph after the
     // first, the same way horizontal layout starts a new line per
