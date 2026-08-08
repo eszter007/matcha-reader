@@ -81,21 +81,18 @@ int daysInMonth(uint16_t y, uint8_t m) {
 
 void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes) {
   const int epoch = daysSinceEpoch(year, month, day);
-  // Scanned from the back: the day being added is almost always the newest one, so the match (or
-  // the insertion point) is found in a step or two rather than by walking years of history.
+  // From the back: the day added is almost always the newest, so this ends in a step or two.
   for (auto it = days.rbegin(); it != days.rend(); ++it) {
     const int e = daysSinceEpoch(it->year, it->month, it->day);
     if (e == epoch) {
-      // Saturating rather than wrapping: minutesRead is displayed, and a wrap would show a small
-      // plausible number instead of an obviously wrong one.
+      // Saturating: a wrap would display a small plausible number instead of an obvious fault.
       const uint32_t sum = static_cast<uint32_t>(it->minutesRead) + minutes;
       it->minutesRead = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
       return;
     }
     if (e < epoch) {
-      // Sorted insert. The common case (a new latest day) lands here on the first iteration and
-      // appends; an out-of-order day, which only a backwards clock jump produces, is placed
-      // correctly rather than breaking the ordering the streak passes rely on.
+      // Sorted insert. Only a backwards clock jump lands anywhere but the end; the streak
+      // passes depend on the ordering.
       days.insert(it.base(), {year, month, day, minutes});
       return;
     }
@@ -140,9 +137,7 @@ void ReadingStatsStore::addLanguageMinutes(const char* language, const uint16_t 
   LanguageDaily fresh{year, month, day, {}, minutes};
   memcpy(fresh.language, lang, sizeof(lang));
 
-  // Kept sorted by date, exactly as days[] is and for the same reason: the per-language streak
-  // passes then need no scratch buffer and no sort. Scanned from the back because the day being
-  // added is almost always the newest.
+  // Sorted like days, so the per-language streak passes need no scratch buffer.
   for (auto it = languageDays.rbegin(); it != languageDays.rend(); ++it) {
     const int e = daysSinceEpoch(it->year, it->month, it->day);
     if (e == epoch && memcmp(it->language, lang, sizeof(lang)) == 0) {
@@ -151,7 +146,7 @@ void ReadingStatsStore::addLanguageMinutes(const char* language, const uint16_t 
       return;
     }
     if (e <= epoch) {
-      // Same date, different language: insert alongside rather than walking past the whole run.
+      // Same date, other language: insert alongside rather than walk the whole run.
       languageDays.insert(it.base(), fresh);
       return;
     }
@@ -192,7 +187,7 @@ void ReadingStatsStore::getLanguages(std::vector<LanguageSummary>& out) const {
     s.minutes = e.minutesRead;
     out.push_back(s);
   }
-  // Most-read first, so the tab a reader wants is the one they land on.
+  // Most-read first, so the wanted tab is the one you land on.
   std::sort(out.begin(), out.end(),
             [](const LanguageSummary& a, const LanguageSummary& b) { return a.minutes > b.minutes; });
 }
@@ -239,24 +234,24 @@ int ReadingStatsStore::getLongestStreak(const char* language) const {
 int ReadingStatsStore::getDaysRead(const char* language) const {
   char lang[4];
   normalizeLanguage(language, lang);
-  int count = 0;
-  for (const auto& e : languageDays) {
-    if (memcmp(e.language, lang, sizeof(lang)) == 0 && e.minutesRead > 0) count++;
-  }
-  return count;
+  return static_cast<int>(std::count_if(languageDays.begin(), languageDays.end(), [&lang](const LanguageDaily& e) {
+    return memcmp(e.language, lang, sizeof(lang)) == 0 && e.minutesRead > 0;
+  }));
 }
 
 uint16_t ReadingStatsStore::getMinutesThisWeek(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
                                                const uint8_t todayDay) const {
   const int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
-  uint16_t total = 0;
+  // Wider accumulator: per-day minutes saturate at UINT16_MAX, so seven of them can exceed it.
+  // Wrapping would show a small plausible number rather than an obvious fault.
+  uint32_t total = 0;
   for (int i = 0; i <= dow; i++) {
     uint16_t y = todayYear;
     uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, dow - i);
-    total = static_cast<uint16_t>(total + getMinutesForDay(language, y, m, d));
+    total += getMinutesForDay(language, y, m, d);
   }
-  return total;
+  return static_cast<uint16_t>(std::min<uint32_t>(total, UINT16_MAX));
 }
 
 void ReadingStatsStore::getWeekStatus(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
@@ -298,7 +293,7 @@ uint16_t ReadingStatsStore::getBooksFinished(const char* language) const {
   uint16_t count = 0;
   for (const auto& p : finishedBookPaths) {
     const auto it = std::find_if(books.begin(), books.end(), [&p](const BookReading& b) { return b.path == p; });
-    if (it == books.end()) continue;  // evicted from the per-book block: language unknown, skip
+    if (it == books.end()) continue;  // evicted from the per-book block; language unknown
     char bookLang[4];
     normalizeLanguage(it->language.c_str(), bookLang);
     if (memcmp(bookLang, lang, sizeof(lang)) == 0) count++;
@@ -320,10 +315,10 @@ void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {
   // Back to front: every caller here asks about recent days (today, this week, the month on
   // screen), which now sit at the end of a potentially years-long history.
-  for (auto it = days.rbegin(); it != days.rend(); ++it) {
-    if (it->year == year && it->month == month && it->day == day) return it->minutesRead;
-  }
-  return 0;
+  const auto it = std::find_if(days.rbegin(), days.rend(), [year, month, day](const DailyReading& d) {
+    return d.year == year && d.month == month && d.day == day;
+  });
+  return it == days.rend() ? 0 : it->minutesRead;
 }
 
 bool ReadingStatsStore::hasReadToday(uint16_t year, uint8_t month, uint8_t day) const {
@@ -331,9 +326,7 @@ bool ReadingStatsStore::hasReadToday(uint16_t year, uint8_t month, uint8_t day) 
 }
 
 int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
-  // Walks backwards through the sorted history instead of probing MAX_DAYS candidate dates.
-  // The old form both cost a subtractDays + full scan per day and could not count a streak
-  // longer than the (now removed) fixed capacity.
+  // Backwards through the sorted history, rather than probing one candidate date per day.
   if (days.empty()) return 0;
   int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
   if (getMinutesForDay(todayYear, todayMonth, todayDay) == 0) return 0;
@@ -351,8 +344,8 @@ int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t
 }
 
 int ReadingStatsStore::getLongestStreak() const {
-  // Single pass over the sorted history: no scratch buffer (the old fixed int[365] would have
-  // become an unbounded stack array) and no O(n^2) sort.
+  // Single pass over sorted history: no scratch buffer (the old int[365] lived on the STACK,
+  // which an unbounded history would overflow) and no O(n^2) sort.
   int maxStreak = 0, cur = 0, prev = 0;
   for (const auto& d : days) {
     if (d.minutesRead == 0) continue;
@@ -373,21 +366,20 @@ int ReadingStatsStore::getLongestStreak() const {
 int ReadingStatsStore::getDaysRead() const { return static_cast<int>(days.size()); }
 
 uint32_t ReadingStatsStore::getTotalMinutes() const {
-  uint32_t total = 0;
-  for (const auto& d : days) total += d.minutesRead;
-  return total;
+  return std::accumulate(days.begin(), days.end(), uint32_t{0},
+                         [](const uint32_t sum, const DailyReading& d) { return sum + d.minutesRead; });
 }
 
 uint16_t ReadingStatsStore::getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
   int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
-  uint16_t total = 0;
+  uint32_t total = 0;  // see the per-language overload: seven saturated days overflow a uint16
   for (int i = 0; i <= dow; i++) {
     uint16_t y = todayYear;
     uint8_t m = todayMonth, d = todayDay;
     subtractDays(y, m, d, dow - i);
     total += getMinutesForDay(y, m, d);
   }
-  return total;
+  return static_cast<uint16_t>(std::min<uint32_t>(total, UINT16_MAX));
 }
 
 void ReadingStatsStore::getWeekStatus(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, int todayDow,
@@ -422,10 +414,9 @@ bool ReadingStatsStore::saveToFile() const {
   HalFile f;
   if (!Storage.openFileForWrite("STAT", STATS_PATH, f)) return false;
   f.write(&STATS_VERSION, 1);
-  // The count field is 16-bit, so the on-disk history tops out at 65535 days (~179 years of
-  // reading every day). Clamped rather than truncated silently at a lower bound: this is the
-  // format's limit, not a policy one.
-  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), UINT16_MAX));
+  // Bounded by BOTH the 16-bit count field and what loadFromFile will accept -- writing more
+  // than MAX_DAYS_SANE would leave the loader mid-record and misalign every block after it.
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), MAX_DAYS_SANE));
   f.write(reinterpret_cast<const uint8_t*>(&count), 2);
   f.write(reinterpret_cast<const uint8_t*>(&booksFinished), 2);
   for (uint16_t i = 0; i < count; i++) {
@@ -502,9 +493,8 @@ bool ReadingStatsStore::loadFromFile() {
     if (dr.year < 2020) continue;
     days.push_back(dr);
   }
-  // The streak passes and addMinutes' back-to-front scan both assume ascending order. Files
-  // written by any version of this code are already in order, so this is normally a single
-  // comparison pass -- but a file that is not must not silently produce wrong streaks.
+  // The streak passes assume ascending order. Normally one comparison pass, since files are
+  // written in order; a file that is not must not silently yield wrong streaks.
   if (!std::is_sorted(days.begin(), days.end(), [](const DailyReading& a, const DailyReading& b) {
         return daysSinceEpoch(a.year, a.month, a.day) < daysSinceEpoch(b.year, b.month, b.day);
       })) {
@@ -567,8 +557,8 @@ bool ReadingStatsStore::loadFromFile() {
   languageDays.clear();
   if (version >= 4 && booksIntact) {
     uint16_t langDayCount = 0;
-    // No upper-bound check: langDayCount is a uint16, so it cannot exceed what reserve() can
-    // sanely take, and each record is fixed-size and validated as it is read.
+    // No bound check: a uint16 cannot exceed what reserve() can take, and records are
+    // fixed-size and validated as read.
     if (f.read(reinterpret_cast<uint8_t*>(&langDayCount), 2) == 2) {
       languageDays.reserve(langDayCount);
       for (int i = 0; i < langDayCount; i++) {
@@ -582,8 +572,7 @@ bool ReadingStatsStore::loadFromFile() {
         if (e.year < 2020) continue;  // same unset-clock garbage the per-day loop drops
         languageDays.push_back(e);
       }
-      // Sorted for the same reason days is: the per-language streak passes assume ascending
-      // order. Normally a single comparison pass, since files are written in order.
+      // Same ordering guarantee as days, for the same passes.
       const auto byDate = [](const LanguageDaily& a, const LanguageDaily& b) {
         return daysSinceEpoch(a.year, a.month, a.day) < daysSinceEpoch(b.year, b.month, b.day);
       };

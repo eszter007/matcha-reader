@@ -15,8 +15,8 @@
 namespace StatsWidgets {
 
 Today getToday() {
-  // gmtime_r into a stack tm: gmtime()'s shared static buffer is not safe with the render task
-  // also converting time (matches HalClock's usage).
+  // gmtime_r, not gmtime: the shared static buffer is unsafe with the render task also
+  // converting time.
   const time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
   struct tm t = {};
   gmtime_r(&now, &t);
@@ -54,14 +54,13 @@ const char* dayLabel(const int dow) {
 }
 
 const char* monthAbbrev(const int month, char* out, const size_t outSize) {
+  if (!out || outSize == 0) return "";  // outSize-1 below would wrap
   const char* full = monthName(month);
+  // unsigned char*: `char` is signed here, and masking a sign-extended byte works only by luck.
   const auto* u = reinterpret_cast<const unsigned char*>(full);
   size_t bytes = 0, chars = 0;
   while (u[bytes] && chars < 3) {
-    // Skip continuation bytes (10xxxxxx); every other byte starts a code point. Read through an
-    // unsigned char*: `char` is signed on this toolchain, and masking a sign-extended negative
-    // byte only gives the right answer by accident.
-    bytes++;
+    bytes++;  // then skip continuation bytes (10xxxxxx)
     while ((u[bytes] & 0xC0) == 0x80) bytes++;
     chars++;
   }
@@ -178,8 +177,7 @@ int drawMonthCalendar(GfxRenderer& renderer, const int x, const int y, const int
   const int monthY = y + 12;
   renderer.drawText(UI_12_FONT_ID, monthX, monthY, monthBuf, true, EpdFontFamily::BOLD);
 
-  // Chevrons centered vertically in the title+subtitle block (same style as shelves). Each is
-  // drawn twice, one pixel apart, to thicken a 1px line without a stroke-width API.
+  // Drawn twice, a pixel apart, to thicken a 1px line without a stroke-width API.
   const int chevCenterY = monthY + (calTitleH + calSubH) / 2;
   const int chevSz = 6;
   renderer.drawLine(x + CARD_PAD + chevSz, chevCenterY - chevSz, x + CARD_PAD, chevCenterY, true);

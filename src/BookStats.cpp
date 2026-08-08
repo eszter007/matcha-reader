@@ -3,32 +3,26 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <numeric>
 
 namespace {
 constexpr const char* STATS_DIR = "/system/bookstats";
-// "BKST" -- a file whose first four bytes are anything else is not ours; refuse it rather than
-// reading a stale format's fields as ours.
 constexpr uint8_t MAGIC[4] = {'B', 'K', 'S', 'T'};
-// v2 drops the lastFlushMinutes field: sessions are counted by recordOpen (one per opening of
-// the book) rather than inferred from gaps between flushes, so nothing needs the timestamp any
-// more. A v1 file is treated as no history rather than as an error -- see load().
+// v2 dropped lastFlushMinutes when sessions moved from flush-gap inference to recordOpen.
 constexpr uint8_t BOOKSTATS_VERSION = 2;
 // magic(4) + version(1) + sessions(4) + dayCount(4) + pathLen(2)
 constexpr size_t HEADER_BYTES = 15;
 constexpr size_t DAY_RECORD_BYTES = 6;
-// Same bound the reading-stats loader puts on a path, for the same reason: a corrupt length
-// field must not talk us into a large allocation.
+// Both guard reserve() against a corrupt length field, nothing more.
 constexpr uint16_t MAX_PATH_LEN = 500;
-// A book read every day for eight years still fits well inside this. It exists only so a
-// corrupt dayCount cannot drive an unbounded reserve().
-constexpr uint32_t MAX_DAYS_SANE = 20000;
+constexpr uint32_t MAX_DAYS_SANE = 20000;  // ~55 years
 
-// Fields are packed and unpacked through a byte buffer rather than by casting the buffer to a
-// struct: ESP32-C3 faults on unaligned multi-byte loads, and a record read at an arbitrary file
-// offset has no alignment guarantee.
+// Packed through a byte buffer, not a struct cast: ESP32-C3 faults on unaligned multi-byte
+// loads and a record at an arbitrary file offset has no alignment guarantee.
 void putU16(uint8_t* p, const uint16_t v) { memcpy(p, &v, 2); }
 void putU32(uint8_t* p, const uint32_t v) { memcpy(p, &v, 4); }
 uint16_t getU16(const uint8_t* p) {
@@ -51,8 +45,7 @@ int daysInMonthOf(const uint16_t y, const uint8_t m) {
 }  // namespace
 
 std::string BookStats::filePathFor(const char* path) {
-  // Same 32-bit path hash the library index and cache directories already use, so a book's
-  // identity is consistent across the firmware.
+  // Same 32-bit path hash the library index and cache directories use.
   const auto h = static_cast<uint32_t>(std::hash<std::string>{}(std::string(path ? path : "")));
   char buf[64];
   snprintf(buf, sizeof(buf), "%s/%08lx.bin", STATS_DIR, static_cast<unsigned long>(h));
@@ -74,9 +67,8 @@ bool BookStats::load(const char* path) {
   uint8_t head[HEADER_BYTES];
   if (f.read(head, sizeof(head)) != sizeof(head)) return false;
   if (memcmp(head, MAGIC, 4) != 0 || head[4] != BOOKSTATS_VERSION) {
-    // Not ours, or an older layout. Start clean instead of returning an error: this is a stats
-    // cache, and a stuck unreadable file would leave the screen permanently blank with no way
-    // to recover. The next save takes the file over.
+    // Start clean rather than error: an unreadable stats cache must not leave the screen
+    // permanently blank. The next save takes the file over.
     LOG_DBG("BSTAT", "ignoring unreadable/old %s", file.c_str());
     return true;
   }
@@ -91,9 +83,7 @@ bool BookStats::load(const char* path) {
   std::string storedPath(pathLen, '\0');
   if (pathLen && f.read(reinterpret_cast<uint8_t*>(&storedPath[0]), pathLen) != pathLen) return false;
   if (storedPath != bookPath) {
-    // Two books whose paths hash alike. Start this one clean rather than crediting it with the
-    // other's history -- wrong numbers are worse than absent ones, and the next save takes the
-    // file over.
+    // Hash collision: start clean rather than credit this book with another's history.
     LOG_ERR("BSTAT", "hash collision on %s", file.c_str());
     return true;
   }
@@ -102,17 +92,14 @@ bool BookStats::load(const char* path) {
   days.reserve(dayCount);
   for (uint32_t i = 0; i < dayCount; i++) {
     uint8_t rec[DAY_RECORD_BYTES];
-    // A short read means the file was truncated mid-write. Keep what parsed and stop; the days
-    // already read are real, and the next save rewrites the file whole.
+    // Truncated mid-write: keep what parsed; the next save rewrites the file whole.
     if (f.read(rec, DAY_RECORD_BYTES) != DAY_RECORD_BYTES) break;
     BookDay d{};
     d.year = getU16(rec);
     d.month = rec[2];
     d.day = rec[3];
     d.minutes = getU16(rec + 4);
-    // Same unset-clock garbage ReadingStatsStore drops: days recorded before the RTC was set
-    // are misdated and would pollute the calendar.
-    if (d.year < 2020) continue;
+    if (d.year < 2020) continue;  // recorded before the clock was set; misdated
     days.push_back(d);
   }
   return true;
@@ -130,16 +117,22 @@ bool BookStats::save() const {
   }
 
   const auto pathLen = static_cast<uint16_t>(bookPath.size() > MAX_PATH_LEN ? MAX_PATH_LEN : bookPath.size());
+  // Never write what load() would reject. days is sorted, so an over-long history keeps its
+  // most recent entries.
+  const size_t dayCount = std::min<size_t>(days.size(), MAX_DAYS_SANE);
+  const size_t firstDay = days.size() - dayCount;
+
   uint8_t head[HEADER_BYTES];
   memcpy(head, MAGIC, 4);
   head[4] = BOOKSTATS_VERSION;
   putU32(head + 5, sessions);
-  putU32(head + 9, static_cast<uint32_t>(days.size()));
+  putU32(head + 9, static_cast<uint32_t>(dayCount));
   putU16(head + 13, pathLen);
   if (f.write(head, sizeof(head)) != sizeof(head)) return false;
   if (f.write(bookPath.data(), pathLen) != pathLen) return false;
 
-  for (const auto& d : days) {
+  for (size_t i = firstDay; i < days.size(); i++) {
+    const auto& d = days[i];
     uint8_t rec[DAY_RECORD_BYTES];
     putU16(rec, d.year);
     rec[2] = d.month;
@@ -155,12 +148,11 @@ bool BookStats::save() const {
 }
 
 void BookStats::recordMinutes(const uint16_t year, const uint8_t month, const uint8_t day, const uint16_t minutes) {
-  if (year < 2020) return;  // clock not set -- recording it would misdate the calendar
+  if (year < 2020) return;  // clock not set; would misdate the calendar
 
   for (auto& d : days) {
     if (d.year != year || d.month != month || d.day != day) continue;
-    // Saturating: a day's minutes are displayed, and wrapping to a small number would read as a
-    // real value. 65535 minutes is 45 days, so this can only be reached by a corrupt clock.
+    // Saturating: a wrap would display a small plausible number instead of an obvious fault.
     const uint32_t sum = static_cast<uint32_t>(d.minutes) + minutes;
     d.minutes = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
     return;
@@ -177,14 +169,13 @@ bool BookStats::recordOpen(const char* path) {
 }
 
 uint32_t BookStats::getTotalMinutes() const {
-  uint32_t total = 0;
-  for (const auto& d : days) total += d.minutes;
-  return total;
+  return std::accumulate(days.begin(), days.end(), uint32_t{0},
+                         [](const uint32_t sum, const BookDay& d) { return sum + d.minutes; });
 }
 
 uint32_t BookStats::getAverageSessionMinutes() const {
   if (sessions == 0) return 0;
-  return (getTotalMinutes() + sessions / 2) / sessions;  // rounded, not truncated
+  return (getTotalMinutes() + sessions / 2) / sessions;  // rounded
 }
 
 void BookStats::getMonthStatus(const uint16_t year, const uint8_t month, bool out[32]) const {
