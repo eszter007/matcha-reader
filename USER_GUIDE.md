@@ -545,8 +545,7 @@ To use custom sleep images, set the sleep screen mode to **Custom** or **Cover +
 **Transparent** does not replace the page, it draws over it. White pixels in the image let the page through, black
 ones paint on top, so you get the wallpaper and the paragraph you stopped at in the same picture.
 
-It uses the same images as **Custom**: put 480x800 BMPs (X4) or 528x792 (X3) in `.sleep/` on the card, or a single
-`sleep.bmp` in the root. Images with a lot of white space work best, since anything solid hides the text under it.
+It uses the same images as **Custom**: put 480x800 BMPs (X4) or 528x792 (X3) in `.sleep/transparent` on the card. Images with a lot of white space work best, since anything solid hides the text under it.
 Artwork along one edge, as below, keeps most of the page readable.
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper drawn over the page, with the text still readable behind it"></p>
