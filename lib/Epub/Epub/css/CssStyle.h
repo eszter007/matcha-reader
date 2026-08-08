@@ -217,18 +217,22 @@ struct CssPropertyFlags {
         hyphens(0),
         letterSpacing(0) {}
 
+  // EVERY flag above must appear in both anySet() and clearAll(). An omission is silent and
+  // total: anySet() gates processRuleBlockWithStyle's first line, so a rule that defines only
+  // the missing property is discarded before it is ever stored or cached. `border` was left out
+  // of both, which is why no EBPAJ `.k-*` boxed block ever drew a border.
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign || textEmphasis || fontVariant || listStyleType ||
-           fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens || letterSpacing;
+           imageWidth || display || direction || verticalAlign || border || textEmphasis || fontVariant ||
+           listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens || letterSpacing;
   }
 
   void clearAll() {
     textAlign = fontStyle = fontWeight = textDecoration = textIndent = 0;
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
-    imageHeight = imageWidth = display = direction = verticalAlign = 0;
+    imageHeight = imageWidth = display = direction = verticalAlign = border = 0;
     textEmphasis = fontVariant = listStyleType = fontSize = inkMode = pageBreak = lineHeight = 0;
     textTransform = hyphens = letterSpacing = 0;
   }

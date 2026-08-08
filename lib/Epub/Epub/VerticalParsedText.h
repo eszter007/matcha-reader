@@ -359,7 +359,13 @@ class VerticalParsedText {
   int boxGeomCellPx_ = 0;
   int boxGeomColumnAdvancePx_ = 0;
   int boxGeomUsableWidthPx_ = 0;
-  uint16_t boxGeomRowsPerColumn_ = 0;
+  // Rows a column INSIDE a box may use: short of a full column by boxFootReservePx_, so the
+  // bottom rule has its inset below the last character without crossing the text area's foot.
+  uint16_t boxGeomRowsInBox_ = 0;
+  int boxFootReservePx_ = 0;
+  // 0.25em: the inset between the text and the rule, the same on all four sides (1px floor).
+  // Open-coded rather than std::max so this header needs no <algorithm>.
+  [[nodiscard]] int boxPadPx() const { return boxGeomCellPx_ / 4 > 1 ? boxGeomCellPx_ / 4 : 1; }
   bool boxContinuedFromPrevPage_ = false;
   void appendBoxRectToPage(VerticalPage& p, uint16_t startCol, uint16_t endCol, bool openLeft, bool openRight) const;
   void centerBlockColumns(VerticalPage& p, uint16_t startCol, uint16_t endCol) const;

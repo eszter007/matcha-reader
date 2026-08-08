@@ -149,7 +149,10 @@ namespace {
 //      calculateRubyExtraStartOffset/EndOffset, which no longer let the adjacent word absorb
 //      the overhang -- that word is on the neighbouring LINE and cannot. Line breaks move, so
 //      cached pages laid out by v70 no longer match.
-constexpr uint8_t SECTION_FILE_VERSION = 71;
+// v72: no format change -- CssPropertyFlags::anySet() omitted `border`, so every border-only
+//      rule was discarded before it was stored and no bordered block ever picked up its edges.
+//      Cached pages were laid out without those borders.
+constexpr uint8_t SECTION_FILE_VERSION = 72;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

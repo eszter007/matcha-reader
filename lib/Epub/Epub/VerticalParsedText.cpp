@@ -885,7 +885,10 @@ struct VerticalParsedText::LayoutCursor {
   // correctly yields fewer rows.
   uint16_t rowsAvailable() const {
     const int shift = (column == shiftColumn) ? columnYShift : 0;
-    const int rows = (static_cast<int>(o.viewportHeight_) + shift) / geom.cellPx;
+    // Inside a box the column stops short of the foot, leaving room for the bottom rule's inset
+    // (boxFootReservePx_). Columns outside a box are unaffected.
+    const int reserve = o.inBox_ ? o.boxFootReservePx_ : 0;
+    const int rows = (static_cast<int>(o.viewportHeight_) - reserve + shift) / geom.cellPx;
     return static_cast<uint16_t>(std::clamp(rows, 1, static_cast<int>(UINT16_MAX)));
   }
 
@@ -1267,7 +1270,10 @@ struct VerticalParsedText::LayoutCursor {
     if (!o.inBox_) return 0;
     const int startRows = static_cast<int>(o.activeBlock_.startEm + 0.5f);
     const int hangRows = paragraphStart ? 0 : static_cast<int>(o.activeBlock_.hangEm + 0.5f);
-    return static_cast<uint16_t>(std::min<int>(geom.rowsPerColumn - 1, std::max(0, startRows + hangRows)));
+    // Bounded by rowsAvailable(), not the grid's geom.rowsPerColumn: a boxed column is shorter
+    // (the foot reserve, and any negative columnYShift), so the grid bound would let a large
+    // block indent start a glyph inside the strip the bottom rule occupies.
+    return static_cast<uint16_t>(std::min<int>(rowsAvailable() - 1, std::max(0, startRows + hangRows)));
   }
 };
 
@@ -1366,7 +1372,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   boxGeomCellPx_ = cellPx;
   boxGeomColumnAdvancePx_ = columnAdvancePx;
   boxGeomUsableWidthPx_ = usableWidthPx;
-  boxGeomRowsPerColumn_ = rowsPerColumn;
+  boxFootReservePx_ = boxPadPx();
+  boxGeomRowsInBox_ =
+      static_cast<uint16_t>(std::max(1, (static_cast<int>(viewportHeight_) - boxFootReservePx_) / cellPx));
 
   // Re-record box markers carried across a batch boundary (see reset()) at index 0.
   if (boxEndCarry_) {
@@ -1530,7 +1538,11 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         appendBoxRectToPage(page, boxStartCol_, column, /*openLeft=*/false,
                             /*openRight=*/boxContinuedFromPrevPage_);
         if (activeBlock_.alignCenter) centerBlockColumns(page, boxStartCol_, column);
-        const bool wantAfterGap = activeBlock_.afterEm >= 0.75f;
+        // A BORDERED block always takes the gap, whatever margin-after the CSS asks for: its
+        // LEFT rule sits in the column gap that the next column's furigana occupies (furigana is
+        // set to the left of its own column in tategaki), so anything placed immediately after
+        // the box collides with the rule. Only a whole blank column clears it.
+        const bool wantAfterGap = activeBlock_.afterEm >= 0.75f || activeBlock_.borderEdges != 0;
         inBox_ = false;
         boxContinuedFromPrevPage_ = false;
         // Content after the block must not share its last column.
@@ -1579,8 +1591,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           row = 0;
           cur.finalizePageIfNeeded();
         }
-        // m-before-Xem approximation: one blank column of extra separation.
-        if (params.beforeEm >= 0.75f && column != 0) {
+        // m-before-Xem approximation: one blank column of extra separation. A bordered block
+        // always takes it -- the mirror of the after-gap above, since its RIGHT rule sits in the
+        // gap belonging to the preceding column and collides with that column's furigana.
+        if ((params.beforeEm >= 0.75f || params.borderEdges != 0) && column != 0) {
           column++;
           row = 0;
           cur.finalizePageIfNeeded();
@@ -2071,19 +2085,22 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 }
 
 // Build the pixel rect for a box spanning columns [startCol..endCol] (startCol is the RIGHTMOST
-// column in tategaki order) and append it to the page. Full column height, with the border lines
-// centered in the surrounding column gaps / padded by a fraction of the cell vertically.
+// column in tategaki order) and append it to the page. Inset 0.25em from the text on all four
+// sides; at the foot the box takes whatever is left down to the text area's bottom edge.
 void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t startCol, const uint16_t endCol,
                                              const bool openLeft, const bool openRight) const {
   if (boxGeomCellPx_ <= 0 || activeBlock_.borderEdges == 0) return;
-  const int gap = boxGeomColumnAdvancePx_ - boxGeomCellPx_;
-  // Sideways: the border sits on the column axis, i.e. halfway across the gap it runs in.
-  // Lengthwise: the same half-gap at the head, and a full character of air at the foot -- the
-  // reference rendering (Apple Books) sets the last line one character clear of the rule. The
-  // box may extend past the text area into the bottom margin.
-  const int padX = std::max(2, gap / 2);
-  const int padTop = padX;
-  const int padBottom = boxGeomCellPx_;
+  // A uniform 0.25em of air between the text and the rule on all four sides. At least 1px, so
+  // the rule never lands on the glyphs at small font sizes.
+  const int pad = boxPadPx();
+  const int padX = pad;
+  const int padTop = pad;
+  // The foot lands on the text area's bottom edge, taking whatever the boxed column left below
+  // its last character -- never into the margin band beyond it. boxFootReservePx_ (see
+  // rowsAvailable) is what guarantees that leftover is at least the inset.
+  // Extending the rule through the margin band to the status bar was tried and looked worse.
+  const int textBottom = static_cast<int>(boxGeomRowsInBox_) * boxGeomCellPx_;
+  const int padBottom = std::max(pad, static_cast<int>(viewportHeight_) - textBottom);
   auto colLeft = [&](const uint16_t c) -> int {
     return boxGeomUsableWidthPx_ - boxGeomCellPx_ - static_cast<int>(c) * boxGeomColumnAdvancePx_;
   };
@@ -2093,7 +2110,7 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
   r.x = static_cast<int16_t>(left);
   r.y = static_cast<int16_t>(-padTop);
   r.w = static_cast<int16_t>(right - left);
-  r.h = static_cast<int16_t>(static_cast<int>(boxGeomRowsPerColumn_) * boxGeomCellPx_ + padTop + padBottom);
+  r.h = static_cast<int16_t>(textBottom + padTop + padBottom);
   // CSS physical edges map 1:1 to draw bits; a page-boundary side loses its vertical line and
   // gains the extend flag instead (half-open print style).
   r.edges = activeBlock_.borderEdges;
@@ -2111,10 +2128,11 @@ void VerticalParsedText::appendBoxRectToPage(VerticalPage& p, const uint16_t sta
 // Vertically center the glyphs of columns [startCol..endCol] within the column height
 // (text-align: center in vertical writing). Runs once when a centered block closes on a page.
 void VerticalParsedText::centerBlockColumns(VerticalPage& p, const uint16_t startCol, const uint16_t endCol) const {
-  if (boxGeomCellPx_ <= 0 || boxGeomRowsPerColumn_ == 0) return;
+  // Boxed columns are laid out short of the foot, so centre within THAT height, not the full one.
+  if (boxGeomCellPx_ <= 0 || boxGeomRowsInBox_ == 0) return;
   for (uint16_t c = startCol; c <= endCol; c++) {
     int maxRow = -1;
-    int minRow = boxGeomRowsPerColumn_;
+    int minRow = boxGeomRowsInBox_;
     for (const auto& g : p.glyphs) {
       if (g.column != c) continue;
       maxRow = std::max(maxRow, static_cast<int>(g.row));
@@ -2123,7 +2141,7 @@ void VerticalParsedText::centerBlockColumns(VerticalPage& p, const uint16_t star
     if (maxRow < 0) continue;
     const int usedRows = maxRow - minRow + 1;
     const int shiftPx =
-        ((static_cast<int>(boxGeomRowsPerColumn_) - usedRows) * boxGeomCellPx_) / 2 - minRow * boxGeomCellPx_;
+        ((static_cast<int>(boxGeomRowsInBox_) - usedRows) * boxGeomCellPx_) / 2 - minRow * boxGeomCellPx_;
     if (shiftPx == 0) continue;
     for (auto& g : p.glyphs) {
       if (g.column != c) continue;

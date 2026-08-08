@@ -58,7 +58,10 @@ class CssParser {
   //      (82 -> 88 fixed), so a v17 record cannot be read with the v18 framing.
   // v19: the existing border byte now also packs line style + 1..4px width, and display retains
   //      inline-block so close-time heading rules can shrink to their text. Framing is unchanged.
-  static constexpr uint8_t CSS_CACHE_VERSION = 20;
+  // v21: CssPropertyFlags::anySet() omitted `border`, so a rule defining ONLY a border was
+  //      discarded before it was stored. Framing is unchanged, but every cache up to v20 is
+  //      missing all of them (145 rules on the EBPAJ template) while still validating cleanly.
+  static constexpr uint8_t CSS_CACHE_VERSION = 21;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

@@ -61,7 +61,14 @@ namespace {
 // v104: glyph records are fixed-size (textId) with a per-page text pool appended after
 // the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
 // v105: the header includes the vertical column-spacing setting.
-constexpr uint8_t VSECTION_FILE_VERSION = 126;
+// v131: bordered blocks render at all, and their geometry changed with them. No format change.
+// CssPropertyFlags::anySet() omitted `border`, so every border-only rule (the EBPAJ `.k-*` set)
+// was dropped at parse time and no kakomi box ever recorded a rect. Alongside that: rects are
+// inset 0.25em from the text, boxed columns end short of the foot to leave room for the bottom
+// rule, and a bordered block is separated from both neighbours by a blank column -- so
+// pagination inside and around a box changes too. (127-130 were consumed by intermediate box
+// geometries during development; caches carrying those numbers must not be trusted.)
+constexpr uint8_t VSECTION_FILE_VERSION = 131;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
