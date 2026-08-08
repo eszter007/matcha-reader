@@ -23,9 +23,9 @@ Japanese books are detected from their metadata and set vertically: right-to-lef
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="260" alt="Vertical Japanese text">
-  <img src="docs/images/screenshots/vertical-text-furigana.png" width="260" alt="Vertical text with furigana beside the kanji">
+  <img src="docs/images/screenshots/horizontal-text.png" width="260" alt="The same passage with vertical text switched off">
 </p>
-<p align="center"><em>Vertical text, and furigana beside the kanji where the book provides it</em></p>
+<p align="center"><em>The same passage, Vertical Text on and off</em></p>
 
 ### Dictionary and word lookup
 

@@ -679,7 +679,11 @@ book declares `<dc:language>ja</dc:language>`, with no setting to find.
 The reader menu (**Confirm**) gains **Vertical Text: ON/OFF** and **Furigana: ON/OFF** for Japanese books. Both
 toggle in place without leaving the menu, and both are remembered per book.
 
-<p align="center"><img src="docs/images/screenshots/reader-settings.png" width="260" alt="Reader settings showing the vertical text and furigana toggles"></p>
+<p align="center">
+  <img src="docs/images/screenshots/reader-settings.png" width="260" alt="Reader settings showing the vertical text and furigana toggles">
+  <img src="docs/images/screenshots/vertical-text-furigana.png" width="260" alt="Vertical text with furigana beside the kanji">
+</p>
+<p align="center"><em>The toggles, and furigana set beside the kanji where the book provides it</em></p>
 
 ### 6.2 Word Lookup
 
