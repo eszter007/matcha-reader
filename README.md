@@ -115,7 +115,7 @@ dictionaries/
 
 Japanese is the exception: it always uses the converted files in `dictionaries/jp/`, from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other Yomitan dictionary. Every other language uses plain StarDict.
 
-The dictionary you pick in Settings becomes the fallback, used when the book has no language or no folder matches it ([#42](https://github.com/eszter007/matcha-reader/issues/42)). Reader Settings shows which dictionary a book actually ended up with.
+The dictionary you pick in Settings becomes the fallback, used when the book has no language or no folder matches it. Reader Settings shows which dictionary a book actually ended up with.
 
 Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the script:
 
