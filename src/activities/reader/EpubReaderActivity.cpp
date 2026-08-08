@@ -2565,11 +2565,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
 void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   if (useVerticalText()) {
-    // Fire on the last two pages, and on single-page chapters (image-only illustration
-    // chapters are one page each -- with the old penultimate-page-only trigger a run of
-    // them showed the Indexing popup on every page turn).
+    // Fire over the last few pages, and on short chapters (image-only illustration chapters are
+    // one page each -- with the old penultimate-page-only trigger a run of them showed the
+    // Indexing popup on every page turn).
+    //
+    // The window is 5 pages, not 2, because the heap gate below rejects on a bad fragmentation
+    // moment and a 2-page window gave it ONE attempt: a rejection there (device log:
+    // "heap too tight (maxAlloc=69620)" on the last page but one) meant the chapter was never
+    // built and the transition paid a 7.6s foreground build. Several attempts across several
+    // turns sample several heap states, and only the first to pass does any work.
+    constexpr int SILENT_INDEX_WINDOW_PAGES = 5;
     if (!epub || !verticalSection || verticalSection->pageCount < 1) return;
-    if (verticalSection->currentPage < verticalSection->pageCount - 2) return;
+    if (verticalSection->currentPage < verticalSection->pageCount - SILENT_INDEX_WINDOW_PAGES) return;
 
     const int nextSpineIndex = currentSpineIndex + 1;
     if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
@@ -2616,7 +2623,11 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // (which frees more up front and early-renders) builds it properly on arrival.
     if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
       LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
-      silentIndexBackoffUntilMs_ = millis() + 5000;
+      // Short backoff: at ~600ms per turn a 5s window swallowed the whole trigger range, so one
+      // rejection ended the chapter's chances. A rejected attempt costs the font rebuild the
+      // release above forces (~250-400ms on the next render), which is worth paying a few times
+      // against a 7.6s foreground build.
+      silentIndexBackoffUntilMs_ = millis() + 1500;
       return;
     }
     silentIndexBackoffUntilMs_ = 0;
