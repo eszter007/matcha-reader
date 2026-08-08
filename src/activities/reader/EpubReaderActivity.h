@@ -396,6 +396,15 @@ class EpubReaderActivity final : public Activity {
   // byte model lags several percent behind the rendered-page position on Japanese books.
   // Real counts come from section-cache headers; unindexed chapters are estimated from their
   // byte share of the already-indexed ones and refine as sections get built.
+  // Page within the loaded section, 1-based, with that section's page count. Clamped, because a
+  // section whose currentPage is briefly out of range must not reach the UI: a mode switch drops
+  // both sections and render() repositions afterwards, and anything drawn in between was showing
+  // the raw value.
+  struct SectionPageSpan {
+    int page;
+    int count;
+  };
+  SectionPageSpan sectionPageSpan() const;
   int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
