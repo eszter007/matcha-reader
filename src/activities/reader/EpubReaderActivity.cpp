@@ -3261,6 +3261,18 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
     }
   }
 
+  // Nothing real to build a model from. A mode switch drops every cached count AND the live
+  // section, and no cache probe for the new mode can succeed until its first chapter is built,
+  // so for that window every spine would fall back to the one-page placeholder below. That is
+  // what produced "~228/228 7600%": book progress is (pages before + page) / total, and total
+  // was 3 for a 3-spine book. Leave the model empty instead, so callers fall back to byte
+  // weighting and per-section numbering until real counts arrive.
+  if (knownPages == 0) {
+    LOG_DBG("ERS", "No real page counts yet (spine %d, %s), using byte-weighted progress", currentSpineIndex,
+            vertical ? "vertical" : "horizontal");
+    return;
+  }
+
   // Effective counts: real where known, byte-share estimate (against the known chapters'
   // pages-per-byte ratio) where not.
   spinePagesEffective.assign(spineCount, 1);
