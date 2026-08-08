@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -43,7 +44,7 @@ namespace {
 // v99: merge of upstream 1.5.0. Not a format change -- an invalidation. Upstream reworked the
 // measurement stack the vertical layout is built on (SD kern classes + ligatures, the advance-table
 // fast path, fallback-resolved text font ids), so a v98 cache's stored glyph positions no longer
-// match the cell VerticalTextBlock::computeCellPx re-derives at DRAW time from the new metrics --
+// match the cell verticalCellPx() re-derives at DRAW time from the new metrics --
 // the exact "cell flapping" mismatch that path exists to prevent. The horizontal pipeline
 // invalidates for the same reason (SECTION_FILE_VERSION 51); this one must not be forgotten.
 // v100: image pages carry their source href.
@@ -60,7 +61,7 @@ namespace {
 // v104: glyph records are fixed-size (textId) with a per-page text pool appended after
 // the glyph array; ruby/run strings moved out of VerticalGlyph (~3x smaller page buffers).
 // v105: the header includes the vertical column-spacing setting.
-constexpr uint8_t VSECTION_FILE_VERSION = 105;
+constexpr uint8_t VSECTION_FILE_VERSION = 126;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -203,9 +204,39 @@ struct TextExtractor {
   static constexpr size_t SOFT_FLUSH_RUNS = 48;
   bool midParagraph = false;
 
+  static bool isAsciiWordByte(const unsigned char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+  }
+
+  // Whether `s` ends mid-token, i.e. inside something the layout must see whole. Byte-level testing is
+  // not enough: Japanese books write years in FULLWIDTH digits (１９３８), and U+FF10-U+FF19 encode as
+  // EF BC 90..99, whose tail byte is not an ASCII word byte. Cutting there hands the layout two
+  // 2-digit batches and each is set as its own tate-chu-yoko pair -- 19 stacked over 38 rather than one
+  // rotated run.
+  static bool endsMidToken(const std::string& s) {
+    if (s.empty()) return false;
+    const auto last = static_cast<unsigned char>(s.back());
+    if (isAsciiWordByte(last)) return true;
+    return s.size() >= 3 && static_cast<unsigned char>(s[s.size() - 3]) == 0xEF &&
+           static_cast<unsigned char>(s[s.size() - 2]) == 0xBC && last >= 0x90 && last <= 0x99;
+  }
+
   // paragraphEnds=false streams a partial paragraph: the sink lays it out with no break
   // recorded, and the next emit continues it seamlessly (continuesPrevious=true).
   void emitRuns(const bool paragraphEnds) {
+    // A soft flush is a cadence, not a deadline. If the text so far ends inside a Latin word or a number,
+    // skip this one and let the next take it: the vertical layout gathers a rotated run only within one
+    // batch, so cutting here renders "authority" as "au", a blank cell, then "thority". Deferring is
+    // bounded -- the paragraph's own end always flushes -- and the triggers retry on the next character
+    // or run.
+    //
+    // The tail is in currentText, or, when the run-COUNT trigger fires from the </ruby> handler, in the
+    // last run already pushed.
+    if (!paragraphEnds) {
+      const std::string& tail =
+          !currentText.empty() ? currentText : (currentRuns.empty() ? currentText : currentRuns.back().baseText);
+      if (endsMidToken(tail)) return;
+    }
     flushCurrentText();
     if (!currentRuns.empty()) {
       if (sink) {
@@ -563,6 +594,52 @@ namespace {
 // The footer lets loadSectionFile() open a chapter by reading only the header + 4 bytes/page,
 // and getPage() seek straight to one page -- pages are never all resident in RAM.
 
+// The glyph and box field lists below are visited by BOTH the writer and the reader, so their order
+// is defined exactly once. Two hand-maintained lists desync every record in the file on any
+// divergence, and the bytes still parse, so the version stamp gives no warning -- pages simply come
+// back scrambled. G is const on the write side, mutable on the read side.
+struct PodReadArchive {
+  HalFile& file;
+  template <typename T>
+  void operator()(T& v) {
+    serialization::readPod(file, v);
+  }
+};
+template <typename Sink>
+struct PodWriteArchive {
+  Sink& file;
+  template <typename T>
+  void operator()(const T& v) {
+    serialization::writePod(file, v);
+  }
+};
+
+// G is const on the write side, mutable on the read side.
+template <typename Ar, typename G>
+void visitGlyphFields(Ar& ar, G& g) {
+  ar(g.codepoint);
+  ar(g.column);
+  ar(g.row);
+  ar(g.x);
+  ar(g.y);
+  ar(g.paragraphIndex);
+  ar(g.byteOffset);
+  ar(g.renderKind);
+  ar(g.style);
+  ar(g.emphasis);
+  ar(g.lineHeadFlush);
+  ar(g.textId);
+}
+
+template <typename Ar, typename R>
+void visitBoxFields(Ar& ar, R& r) {
+  ar(r.x);
+  ar(r.y);
+  ar(r.w);
+  ar(r.h);
+  ar(r.edges);
+}
+
 // Sink is HalFile (direct, the historical path) or serialization::BufWriter
 // (whole page into RAM, flushed with one file.write) -- identical byte layout.
 template <typename Sink>
@@ -585,27 +662,10 @@ bool writePage(Sink& file, const VerticalPage& page) {
   // Boxed-block border rects (v63+). Bounded small (a page holds at most a handful of boxes).
   const auto boxCount = static_cast<uint8_t>(std::min<size_t>(page.boxes.size(), 8));
   serialization::writePod(file, boxCount);
-  for (uint8_t bi = 0; bi < boxCount; bi++) {
-    serialization::writePod(file, page.boxes[bi].x);
-    serialization::writePod(file, page.boxes[bi].y);
-    serialization::writePod(file, page.boxes[bi].w);
-    serialization::writePod(file, page.boxes[bi].h);
-    serialization::writePod(file, page.boxes[bi].edges);
-  }
+  PodWriteArchive<Sink> ar{file};
+  for (uint8_t bi = 0; bi < boxCount; bi++) visitBoxFields(ar, page.boxes[bi]);
 
-  for (const auto& g : page.glyphs) {
-    serialization::writePod(file, g.codepoint);
-    serialization::writePod(file, g.column);
-    serialization::writePod(file, g.row);
-    serialization::writePod(file, g.x);
-    serialization::writePod(file, g.y);
-    serialization::writePod(file, g.paragraphIndex);
-    serialization::writePod(file, g.byteOffset);
-    serialization::writePod(file, g.renderKind);
-    serialization::writePod(file, g.style);
-    serialization::writePod(file, g.emphasis);
-    serialization::writePod(file, g.textId);
-  }
+  for (const auto& g : page.glyphs) visitGlyphFields(ar, g);
 
   // Per-page text pool (v104): ruby annotations and run strings, referenced by textId.
   const auto textCount = static_cast<uint16_t>(page.texts.size());
@@ -659,13 +719,10 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
     return ReadResult::Corrupt;
   }
   page.boxes.reserve(boxCount);
+  PodReadArchive ar{file};
   for (uint8_t bi = 0; bi < boxCount; bi++) {
     VerticalBoxRect r;
-    serialization::readPod(file, r.x);
-    serialization::readPod(file, r.y);
-    serialization::readPod(file, r.w);
-    serialization::readPod(file, r.h);
-    serialization::readPod(file, r.edges);
+    visitBoxFields(ar, r);
     page.boxes.push_back(r);
   }
 
@@ -694,17 +751,7 @@ ReadResult readPage(HalFile& file, VerticalPage& page) {
 
   for (uint32_t gi = 0; gi < glyphCount; gi++) {
     VerticalGlyph g;
-    serialization::readPod(file, g.codepoint);
-    serialization::readPod(file, g.column);
-    serialization::readPod(file, g.row);
-    serialization::readPod(file, g.x);
-    serialization::readPod(file, g.y);
-    serialization::readPod(file, g.paragraphIndex);
-    serialization::readPod(file, g.byteOffset);
-    serialization::readPod(file, g.renderKind);
-    serialization::readPod(file, g.style);
-    serialization::readPod(file, g.emphasis);
-    serialization::readPod(file, g.textId);
+    visitGlyphFields(ar, g);
     page.glyphs.push_back(g);
   }
 
@@ -1182,13 +1229,23 @@ struct LayoutPageSink final : ParagraphSink {
   }
 };
 
-// Byte offset of the pageCount field in the header.
-constexpr size_t HEADER_PAGECOUNT_OFFSET = 1 + sizeof(int) + 2 * sizeof(uint16_t) + sizeof(uint8_t);
+// Byte offset of the pageCount field: everything createSectionFile writes ahead of it. Keep in step
+// with that write order. This is a SEEK target, so a stale value silently overwrites the preceding
+// field instead of failing -- adding the furigana flag without updating it wrote pageCount over the
+// flag, and a chapter whose page count happened to equal the flag passed the parameter check and
+// then read its page table from a shifted offset ("empty chapter").
+constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
+                                           + sizeof(int)       // fontId
+                                           + sizeof(uint16_t)  // viewportWidth
+                                           + sizeof(uint16_t)  // viewportHeight
+                                           + sizeof(uint8_t)   // lineSpacing
+                                           + sizeof(uint8_t);  // furiganaFlag
 
 }  // namespace
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
-                                           const uint16_t viewportHeight, const uint8_t lineSpacing) {
+                                           const uint16_t viewportHeight, const uint8_t lineSpacing,
+                                           const bool furiganaEnabled) {
   lastBuildDroppedForHeap_ = false;
   // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
   // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
@@ -1199,6 +1256,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   const uint32_t buildStartMs = millis();
   LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(),
           ESP.getMaxAllocHeap());
+  // Vertical placement measures each glyph's real ink extents (burasage, half-em pairing, the 3.8
+  // squeeze deficits), and those measurements go through the font decompressor. A heap too tight for a
+  // glyph group makes them fall back to nominal metrics silently, and the result is written to the
+  // section cache where nothing re-examines it. Sample the starved count across the build and treat any
+  // increase as heap degradation, which the stale stamp below turns into a rebuild on next open.
+  uint32_t starvedGlyphsAtStart = 0;
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) starvedGlyphsAtStart = fd->getStarvedGlyphCount();
+  }
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_v" + std::to_string(spineIndex) + ".html";
 
@@ -1239,9 +1305,6 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // XML_ParserCreate's own setup.
   LOG_DBG("VSC", "after readItemContentsToStream: maxAlloc=%u", ESP.getMaxAllocHeap());
 
-  const bool hasRuby = fileContainsRubyTag(tmpHtmlPath);
-  LOG_DBG("VSC", "after fileContainsRubyTag: maxAlloc=%u", ESP.getMaxAllocHeap());
-
   // Resolve image paths relative to the chapter's directory in the EPUB.
   const auto& spineItem = epub->getSpineItem(spineIndex);
   std::string chapterDir;
@@ -1253,15 +1316,19 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 
   VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
   layout.preallocateStream();
-  const int lineH = renderer.getLineHeight(fontId);
-  // Tight/Normal/Wide use one, two, or four sixths of a line between columns.
+  // Column gap (行間) in EMS -- the unit the constraint is stated in. Ruby is half an em (JLREQ
+  // 3.3.3) and is drawn in this gap beside its base column, so with furigana ON the floor is half
+  // an em, and the settings span the half-to-full em Japanese body text conventionally uses. With
+  // furigana OFF nothing is drawn there, so every setting tightens by a quarter em. (Line height
+  // would be the wrong yardstick: it carries Latin leading, 42px against a 28px em here.)
+  renderer.ensureSdCardFontReady(fontId, "\xe6\xbc\xa2", 0x01);  // 漢
+  const int emPx = std::max(1, renderer.getTextAdvanceX(fontId, "\xe6\xbc\xa2", static_cast<EpdFontFamily::Style>(0)));
   const int clampedLineSpacing = std::clamp<int>(lineSpacing, 0, 2);
-  const int gapSixths = clampedLineSpacing == 2 ? 4 : clampedLineSpacing + 1;
-  layout.setColumnGapPx(std::max(4, lineH * gapSixths / 6));
-  if (hasRuby) {
-    layout.setColumnGapPx(std::max(4, lineH * (gapSixths + 2) / 6));
-    layout.setRightPaddingPx((lineH / 2) < 2 ? 2 : (lineH / 2));
-  }
+  static constexpr int kGapQuarterEmsWithRuby[] = {2, 3, 4};  // Tight 1/2, Normal 3/4, Wide 1 em
+  static constexpr int kGapQuarterEmsPlain[] = {1, 2, 3};     // Tight 1/4, Normal 1/2, Wide 3/4 em
+  const int gapQuarterEms =
+      furiganaEnabled ? kGapQuarterEmsWithRuby[clampedLineSpacing] : kGapQuarterEmsPlain[clampedLineSpacing];
+  layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
 
   LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
                       viewportHeight);
@@ -1380,6 +1447,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // arbitrary fill levels, so the same usable-now/rebuild-next-open path applies (and the same
   // rebuildingFromStale_ guard breaks the loop when a retry degrades again).
   lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) {
+      const uint32_t starved = fd->getStarvedGlyphCount() - starvedGlyphsAtStart;
+      if (starved > 0) {
+        LOG_ERR("VSC", "%u glyph(s) measured without ink data on low heap; layout is approximate", starved);
+        lastBuildDroppedForHeap_ = true;
+      }
+    }
+  }
   // Persist harvested furigana pairs; runs after the parse buffers are freed, so the
   // transient merge buffer doesn't compete with layout's peak memory.
   RubyGlossary::merge(epub->getCachePath(), sink.rubyHarvest);
@@ -1390,7 +1466,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
 }
 
 bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                        const uint8_t lineSpacing) {
+                                        const uint8_t lineSpacing, const bool furiganaEnabled) {
   const auto vsectionsDir = epub->getCachePath() + "/vsections";
   Storage.mkdir(vsectionsDir.c_str());
 
@@ -1411,12 +1487,14 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   serialization::writePod(file, viewportWidth);
   serialization::writePod(file, viewportHeight);
   serialization::writePod(file, lineSpacing);
+  const uint8_t furiganaFlag = furiganaEnabled ? 1 : 0;
+  serialization::writePod(file, furiganaFlag);
   const uint16_t pageCountPlaceholder = 0;
   const uint32_t indexOffsetPlaceholder = 0;
   serialization::writePod(file, pageCountPlaceholder);
   serialization::writePod(file, indexOffsetPlaceholder);
 
-  if (!streamParseAndLayout(file, fontId, viewportWidth, viewportHeight, lineSpacing)) {
+  if (!streamParseAndLayout(file, fontId, viewportWidth, viewportHeight, lineSpacing, furiganaEnabled)) {
     file.close();
     Storage.remove(filePath.c_str());
     pageOffsets_.clear();
@@ -1461,7 +1539,7 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
 }
 
 bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                      const uint8_t lineSpacing) {
+                                      const uint8_t lineSpacing, const bool furiganaEnabled) {
   // A missing cache file is the NORMAL case here, not an error: the book-progress counter probes
   // every spine's section on each page turn, and unbuilt chapters simply don't have one yet.
   // openFileForRead would print "File does not exist" per spine per probe -- pure log spam.
@@ -1488,13 +1566,15 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
   int cachedFontId;
   uint16_t cachedWidth, cachedHeight;
   uint8_t cachedLineSpacing;
+  uint8_t cachedFurigana;
   serialization::readPod(file, cachedFontId);
   serialization::readPod(file, cachedWidth);
   serialization::readPod(file, cachedHeight);
   serialization::readPod(file, cachedLineSpacing);
+  serialization::readPod(file, cachedFurigana);
 
   if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight ||
-      cachedLineSpacing != lineSpacing) {
+      cachedLineSpacing != lineSpacing || cachedFurigana != (furiganaEnabled ? 1 : 0)) {
     file.close();
     LOG_DBG("VSC", "Parameter mismatch, clearing cache");
     clearCache();

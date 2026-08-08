@@ -6,6 +6,44 @@
 
 class GfxRenderer;
 
+// --- Shared cell metrics -------------------------------------------------------------------
+// Layout and drawing MUST agree on every one of these -- the layout paginates with them, the
+// draw positions ink with them -- or the mismatch accumulates down a column and the last row
+// lands on the status bar. They live here, not in either caller, so there is one definition.
+
+// A glyph's ink box relative to its origin, as GfxRenderer::getGlyphMetrics reports it: `top` is
+// the ink top ABOVE the baseline, `left` the left side bearing. Bundled because vertical layout
+// probes glyph ink constantly and four out-params per call buried the geometry in boilerplate.
+struct GlyphInk {
+  int left = 0;
+  int width = 0;
+  int top = 0;
+  int height = 0;
+};
+// False when the font has no such glyph (or it is blank), in which case `out` is untouched --
+// every caller has a metrics-free fallback, since an SD font may not be resident yet.
+bool measureGlyphInk(const GfxRenderer& renderer, int fontId, uint32_t cp, uint8_t style, GlyphInk* out);
+
+// The kihon-hanmen cell: one em, measured as the advance of the reference full-width glyph 漢
+// (advanceY would include interline spacing on Latin-oriented fonts). JLREQ sets solid, so the
+// cell IS the em -- inter-character air comes from the line-gap setting, never from padding here.
+// Falls back to the line height when the font has no such advance.
+// `measured` (optional) reports whether the font answered: a caller that caches the result must
+// only cache a measured one, or a probe against a not-yet-resident SD font freezes its fallback in.
+int verticalCellPx(const GfxRenderer& renderer, int fontId, bool* measured = nullptr);
+
+// The gap a grid-adjacent pair of full-width characters leaves between their ink boxes, measured
+// as the reference glyph's unused cell height. Used wherever something off-grid (a rotated Latin
+// run, a bracket, an ellipsis) must clear the character after it: matching this keeps that
+// spacing indistinguishable from the surrounding text instead of inventing a fraction of a cell.
+int verticalNominalInkGapPx(const GfxRenderer& renderer, int fontId, int cellPx, bool* measured = nullptr);
+
+// Where a glyph's baseline sits inside its cell, measured down from the cell's top: the offset
+// that centres the reference CJK glyph's ink box (中 -- full-width, even bearings, the same
+// reference the tate-chu-yoko centring uses). Falls back to the font ascender when metrics are
+// unavailable, e.g. an SD font not yet resident.
+int verticalCellBaselineOffset(const GfxRenderer& renderer, int fontId, int cellPx, bool* measured = nullptr);
+
 // A single positioned glyph cell within a vertically-laid-out page.
 // `paragraphIndex` + `byteOffset` identify exactly where this character
 // came from in the source text -- this is the hook point for phase 2
@@ -37,6 +75,9 @@ struct VerticalGlyph {
   uint8_t renderKind = Upright;
   uint8_t style = 0;      // EpdFontFamily::Style flags (BOLD, ITALIC, etc.)
   bool emphasis = false;  // text-emphasis (sesame dots beside character)
+  // Opening bracket starting its column: set flush to the line head (tentsuki), the half em
+  // before it deleted. Decided in layout, which knows where columns start (indents included).
+  uint8_t lineHeadFlush = 0;
   // Index into the owning VerticalPage's texts pool: the run string for
   // RotatedRun/UprightRun glyphs, the furigana/ruby annotation (UTF-8) for
   // every other kind. NO_TEXT = none. An id instead of inline std::strings
@@ -330,6 +371,11 @@ class VerticalParsedText {
   VerticalPage pendingPage_;
   // A paragraph break recorded at exactly the end of a batch's stream (trailing newline) --
   // carried across reset() and re-recorded at the start of the next batch. See layoutPages().
+  // A rotated Latin run that reaches the end of a non-final batch is NOT placed: the layout
+  // gathers a run only within one batch, so placing it would render "authority" as "au", a blank
+  // cell, then "thority". Its characters are held here and prepended to the next batch, where the
+  // rest of the word joins them. Survives reset(), which clears the stream itself.
+  std::vector<PendingChar> carriedRunTail_;
   bool pendingTrailingBreak_ = false;
   uint16_t pendingColumn_ = 0;
   uint16_t pendingRow_ = 0;
@@ -348,10 +394,23 @@ class VerticalParsedText {
   // would be needed and heap is too tight to risk it; the caller should skip this element.
   bool canPushStreamChar();
 
-  // Codepoint-estimating, request-size-aware reserve for stream_ (see .cpp for the full story --
-  // both the byte-count-as-slot-count over-request and the unchecked-request-size reserve have
-  // crashed a real device).
+  // Mutable page-building state for one layoutPages() pass, with the placement rules that act on it.
+  // Defined in the .cpp: it exists to give those rules a named home and an explicit set of state.
+  // Nested so it can reach this class's private stream/box state directly.
+  struct LayoutCursor;
+
   void reserveStreamFor(size_t utf8Bytes);
 
-  int charAdvancePx() const;
+  // Font metrics for this object's fontId, measured once and reused for every paragraph of the chapter.
+  // Each probe pages its reference glyph (漢/中) in from the SD font, whose on-demand slot table is
+  // small, so re-measuring per paragraph evicts real text glyphs -- it accounted for ~27% of all SD
+  // glyph loads during a chapter build.
+  //
+  // Cache only a SUCCESSFUL measurement: a probe against a font that is not resident yet returns a
+  // fallback, and storing that freezes the fallback in for the whole chapter.
+  int cellPxMemo_ = 0;
+  int inkGapPxMemo_ = -1;
+  int baselineInCellMemo_ = -1;
+
+  void recordParagraphBreakAt(size_t idx);
 };

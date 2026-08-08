@@ -92,6 +92,10 @@ void FontDecompressor::freeHotGroup() {
   free(hotGlyphBuf);
   hotGlyphBuf = nullptr;
   hotGlyphBufCapacity = 0;
+  // The release itself is the biggest heap improvement there is; never let a stale latch
+  // suppress the first retry after it.
+  hotGroupFailNeeded = 0;
+  hotGroupFailMaxAlloc = 0;
 }
 
 bool FontDecompressor::ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed) {
@@ -244,14 +248,29 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     stats.cacheMisses++;
     const EpdFontGroup& group = fontData->groups[groupIndex];
 
+    // Skip an allocation that already failed on a heap no larger than this one. Checked BEFORE
+    // ensureCapacity, which frees the existing buffer first: without the latch a doomed retry also
+    // destroys a hot group that later glyphs would have hit, turning one shortage into a cascade.
+    if (hotGroupFailNeeded != 0 && group.uncompressedSize >= hotGroupFailNeeded &&
+        ESP.getMaxAllocHeap() <= hotGroupFailMaxAlloc) {
+      starvedGlyphs++;
+      stats.getBitmapTimeUs += micros() - tStart;
+      return nullptr;
+    }
+
     // ensureCapacity may free the buffer, so the cached-group identity dies with it either way.
     hotGroupFont = nullptr;
     hotGroupIndex = UINT16_MAX;
     if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
-      LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u", group.uncompressedSize, groupIndex);
+      hotGroupFailNeeded = group.uncompressedSize;
+      hotGroupFailMaxAlloc = ESP.getMaxAllocHeap();
+      starvedGlyphs++;
+      LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u (backing off until heap > %u)",
+              group.uncompressedSize, groupIndex, hotGroupFailMaxAlloc);
       stats.getBitmapTimeUs += micros() - tStart;
       return nullptr;
     }
+    hotGroupFailNeeded = 0;  // a success proves the heap recovered
 
     if (!decompressGroup(fontData, groupIndex, hotGroup, group.uncompressedSize)) {
       free(hotGroup);

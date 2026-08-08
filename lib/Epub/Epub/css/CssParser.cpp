@@ -42,6 +42,13 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Maximum number of CSS rules to store in the selector map
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
+// Rules the CACHE FILE may hold. Deliberately larger than MAX_RULES, which bounds the rule map held
+// in RAM: the cache lives on the SD card and is read back FILTERED -- loadFromCache() keeps only the
+// selectors a chapter's classes use, and collectVerticalStyles() streams the file for vertical-block
+// rules. Capping the FILE at the RAM figure truncates in file order, so whether a book's styling
+// survives depends on where it sits in its stylesheet: the EBPAJ template runs past 1500 rules, and
+// everything after that point was absent from every book built on it.
+constexpr size_t MAX_CACHED_RULES = 4000;
 
 // Headroom for one selector-map insertion. Cache loads are streamed, so requiring enough
 // contiguous heap for the entire book-wide rule table rejects safe chapter-filtered loads.
@@ -1484,7 +1491,7 @@ bool CssParser::validateCache() const {
 
   uint16_t ruleCount = 0;
   if (file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount)) return false;
-  if (ruleCount == 0 || ruleCount > MAX_RULES) {
+  if (ruleCount == 0 || ruleCount > MAX_CACHED_RULES) {
     LOG_DBG("CSS", "Invalid cache rule count (%u)", ruleCount);
     return false;
   }
@@ -1523,7 +1530,7 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
   if (file.read(&version, 1) != 1 || version != CssParser::CSS_CACHE_VERSION) return 0;
   uint16_t ruleCount = 0;
   if (file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount)) return 0;
-  if (ruleCount > MAX_RULES) return 0;
+  if (ruleCount > MAX_CACHED_RULES) return 0;
 
   auto emOf = [](const float v, const uint8_t unit) -> float {
     return unit == static_cast<uint8_t>(CssUnit::Em) || unit == static_cast<uint8_t>(CssUnit::Rem) ? v : 0.0f;
@@ -1644,8 +1651,8 @@ bool CssParser::beginCacheAppend() {
 bool CssParser::appendRulesToCache() {
   if (!cacheAppendActive_) return false;
   for (const auto& pair : rulesBySelector_) {
-    if (appendedRuleCount_ >= MAX_RULES) {
-      LOG_DBG("CSS", "Reached max rules limit (%zu) while caching, dropping remainder", MAX_RULES);
+    if (appendedRuleCount_ >= MAX_CACHED_RULES) {
+      LOG_DBG("CSS", "Reached max cached rules limit (%zu), dropping remainder", MAX_CACHED_RULES);
       break;
     }
     writeRuleRecord(cacheAppendFile_, pair.first, pair.second);
@@ -1704,8 +1711,8 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     return false;
   }
 
-  if (ruleCount > MAX_RULES) {
-    LOG_DBG("CSS", "Invalid cache rule count (%u > %zu)", ruleCount, MAX_RULES);
+  if (ruleCount > MAX_CACHED_RULES) {
+    LOG_DBG("CSS", "Invalid cache rule count (%u > %zu)", ruleCount, MAX_CACHED_RULES);
     rulesBySelector_.clear();
     return false;
   }
@@ -1713,7 +1720,10 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
   // A chapter-filtered load keeps only a small subset of a book-wide cache. Reserving the
   // book's full rule count here defeats that filter and can consume the last contiguous block
   // before the first record is even inspected.
-  if (usedClasses == nullptr) rulesBySelector_.reserve(ruleCount);
+  // The cache may hold more rules than the RAM cap allows, so the map is bounded by MAX_RULES on
+  // every path (see the loop below). A filtered load keeps only a small subset anyway; an
+  // unfiltered one would materialise the lot, so it also reserves no more than that cap.
+  if (usedClasses == nullptr) rulesBySelector_.reserve(std::min<size_t>(ruleCount, MAX_RULES));
 
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
     return static_cast<size_t>(file.available()) >= neededBytes;
@@ -1733,6 +1743,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
+    // The RAM bound applies to EVERY load, filtered or not: a chapter touching enough classes
+    // could otherwise pull more than MAX_RULES out of a cache file that may now hold 4000.
+    if (rulesBySelector_.size() >= MAX_RULES) break;
     // Read selector string
     uint16_t selectorLen = 0;
     if (!hasRemainingBytes(sizeof(selectorLen))) {

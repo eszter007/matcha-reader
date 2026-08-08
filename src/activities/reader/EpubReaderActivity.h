@@ -60,12 +60,18 @@ class EpubReaderActivity final : public Activity {
     uint8_t imageRendering = 0;
     bool focusReadingEnabled = false;
     bool bookCssMargins = false;
+    // Vertical-only inputs. These key the vertical cache FILE, so they must be here too -- otherwise a
+    // resident section built with the old values keeps being served and a mid-book line-spacing change
+    // does not take effect until the book is reopened.
+    uint8_t lineSpacing = 0;
+    bool furigana = false;
     bool operator==(const LayoutSig& o) const {
       return fontId == o.fontId && viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight &&
              lineCompression == o.lineCompression && paragraphAlignment == o.paragraphAlignment &&
              extraParagraphSpacing == o.extraParagraphSpacing && hyphenationEnabled == o.hyphenationEnabled &&
              embeddedStyle == o.embeddedStyle && imageRendering == o.imageRendering &&
-             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins;
+             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins &&
+             lineSpacing == o.lineSpacing && furigana == o.furigana;
     }
     bool operator!=(const LayoutSig& o) const { return !(*this == o); }
   };
@@ -216,6 +222,10 @@ class EpubReaderActivity final : public Activity {
   // false when the heap was too tight to prewarm -- rendering still works via the slower
   // per-glyph on-demand path.
   bool prewarmVerticalPageGlyphs(const VerticalPage& vpage);
+  // True only while a mid-build early render is running (the build is paused mid-layout and
+  // resumes the moment it returns). Selects the conservative prewarm heap floor there, and the
+  // reading floor everywhere else -- see prewarmVerticalPageGlyphs().
+  bool duringEarlyBuildRender_ = false;
   // Draws one vertical TEXT page into the framebuffer; shared by the normal render path and
   // the early-first-render hook. Does not touch the display. glyphsAlreadyWarm skips the
   // prewarm when the page's glyphs were pre-loaded during idle (see prewarmedVPage_).
@@ -225,6 +235,17 @@ class EpubReaderActivity final : public Activity {
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
   // instead of paying the ~500-700ms per-page SD bulk load at button time.
   int prewarmedVPage_ = -1;
+  // The vertical page index actually drawn by the last render, captured BEFORE the draw.
+  // verticalSection->currentPage can advance mid-render (a button press during a 100-700ms
+  // render), so the post-render warm must not re-read it -- see the warm block in render().
+  int renderedVPage_ = -1;
+  // Evidence gate for the pre-render font release (see RESUME_HEAP_FLOOR in render()), which costs a
+  // full font-cache rebuild on the next render -- kern classes, mini kern, advance table, glyph
+  // groups, ~400ms. These track whether the PREVIOUS render ran short of glyph memory: a clean render
+  // means the heap is adequate at this level, so do not release. Needed because vertical reading sits
+  // at maxAlloc 12-32K, where a bare floor test is true almost always.
+  uint32_t starvedGlyphsAtLastRender_ = 0;
+  bool forceFontReleaseCheck_ = true;  // armed on entry: the resume path this was written for
   // Backoff for the silent next-chapter index when the heap is too tight to build clean:
   // without it the attempt re-fires every tick while the reader sits on a chapter's last two
   // pages, and each attempt releases the font caches (cold glyphs on the next turn) for
@@ -379,6 +400,15 @@ class EpubReaderActivity final : public Activity {
   int effectiveReaderFontId() const;
   void restoreSavedPosition();
   bool useVerticalText() const;
+  // Space kept clear below the text, in addition to the panel's own bezel.
+  //
+  // Horizontal follows upstream: the status bar and the reader's margin describe the same strip,
+  // so the larger of the two wins. Vertical ADDS them, because tategaki puts ink past its last
+  // row by design -- the row's own ink hang, and 。/、 set past the line end (burasage). Measured
+  // at 6px on a 29px cell, against a default margin that max() collapses to nothing whenever the
+  // status bar is taller (~24px with a clock), which would drop that ink onto the clock.
+  uint8_t readerBottomReserve(bool verticalMode) const;
+
   bool useFurigana() const;
   bool isJapaneseBook() const;
   bool showVerticalToggle() const;
