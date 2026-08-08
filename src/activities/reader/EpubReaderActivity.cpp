@@ -2037,7 +2037,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // own one-page spine item, so a text->image->text sequence popped Indexing twice. Now
     // the image chapter builds while the last text pages are read, and the next text
     // chapter builds while the reader looks at the illustration.
-    if (!skimming) silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
+    // NOT gated on `skimming`, unlike the tail work below. This is the one task here that is not
+    // speculative for the current page: skipping it does not save work, it defers a chapter build
+    // from the background into the reader's path, where it costs ~17s with an Indexing popup.
+    // Gating it cost exactly that (device log: "boundary peek failed: spine 7 section not
+    // loadable" followed by a 17302ms foreground build) because it only fires on a chapter's last
+    // two pages -- precisely the pages a reader skims through on the way to the next chapter.
+    // Cheap to leave in: on every other page of the chapter it returns immediately.
+    silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
 
     // Warm the neighbouring page's glyphs while the reader looks at this one, so the next turn
     // renders from a warm cache instead of paying the per-page SD bulk load at button time.
