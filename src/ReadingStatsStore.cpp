@@ -80,17 +80,27 @@ int daysInMonth(uint16_t y, uint8_t m) {
 }  // namespace
 
 void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes) {
-  for (int i = 0; i < dayCount; i++) {
-    if (days[i].year == year && days[i].month == month && days[i].day == day) {
-      days[i].minutesRead += minutes;
+  const int epoch = daysSinceEpoch(year, month, day);
+  // Scanned from the back: the day being added is almost always the newest one, so the match (or
+  // the insertion point) is found in a step or two rather than by walking years of history.
+  for (auto it = days.rbegin(); it != days.rend(); ++it) {
+    const int e = daysSinceEpoch(it->year, it->month, it->day);
+    if (e == epoch) {
+      // Saturating rather than wrapping: minutesRead is displayed, and a wrap would show a small
+      // plausible number instead of an obviously wrong one.
+      const uint32_t sum = static_cast<uint32_t>(it->minutesRead) + minutes;
+      it->minutesRead = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
+      return;
+    }
+    if (e < epoch) {
+      // Sorted insert. The common case (a new latest day) lands here on the first iteration and
+      // appends; an out-of-order day, which only a backwards clock jump produces, is placed
+      // correctly rather than breaking the ordering the streak passes rely on.
+      days.insert(it.base(), {year, month, day, minutes});
       return;
     }
   }
-  if (dayCount >= MAX_DAYS) {
-    memmove(&days[0], &days[1], (MAX_DAYS - 1) * sizeof(DailyReading));
-    dayCount = MAX_DAYS - 1;
-  }
-  days[dayCount++] = {year, month, day, minutes};
+  days.insert(days.begin(), {year, month, day, minutes});
 }
 
 void ReadingStatsStore::addBookMinutes(const char* bookPath, const char* language, const uint16_t minutes,
@@ -178,8 +188,10 @@ void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {
-  for (int i = 0; i < dayCount; i++) {
-    if (days[i].year == year && days[i].month == month && days[i].day == day) return days[i].minutesRead;
+  // Back to front: every caller here asks about recent days (today, this week, the month on
+  // screen), which now sit at the end of a potentially years-long history.
+  for (auto it = days.rbegin(); it != days.rend(); ++it) {
+    if (it->year == year && it->month == month && it->day == day) return it->minutesRead;
   }
   return 0;
 }
@@ -189,54 +201,50 @@ bool ReadingStatsStore::hasReadToday(uint16_t year, uint8_t month, uint8_t day) 
 }
 
 int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
-  int streak = 0;
+  // Walks backwards through the sorted history instead of probing MAX_DAYS candidate dates.
+  // The old form both cost a subtractDays + full scan per day and could not count a streak
+  // longer than the (now removed) fixed capacity.
+  if (days.empty()) return 0;
+  int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
   if (getMinutesForDay(todayYear, todayMonth, todayDay) == 0) return 0;
-  streak = 1;
-  for (int i = 1; i < MAX_DAYS; i++) {
-    uint16_t py = todayYear;
-    uint8_t pm = todayMonth, pd = todayDay;
-    subtractDays(py, pm, pd, i);
-    if (getMinutesForDay(py, pm, pd) > 0)
-      streak++;
-    else
-      break;
+
+  int streak = 0;
+  for (auto it = days.rbegin(); it != days.rend(); ++it) {
+    if (it->minutesRead == 0) continue;
+    const int e = daysSinceEpoch(it->year, it->month, it->day);
+    if (e > expected) continue;  // days after today (a clock jump) do not extend today's streak
+    if (e != expected) break;    // a gap ends it
+    streak++;
+    expected--;
   }
   return streak;
 }
 
 int ReadingStatsStore::getLongestStreak() const {
-  if (dayCount == 0) return 0;
-  // Sort by date epoch, then find longest consecutive run
-  int maxStreak = 0, cur = 1;
-  // Build epoch array on stack (MAX_DAYS ≤ 365, so 365*4 = 1460 bytes — OK)
-  int epochs[MAX_DAYS];
-  for (int i = 0; i < dayCount; i++) epochs[i] = daysSinceEpoch(days[i].year, days[i].month, days[i].day);
-  // Simple O(n^2) sort — dayCount is small
-  for (int i = 0; i < dayCount - 1; i++)
-    for (int j = i + 1; j < dayCount; j++)
-      if (epochs[j] < epochs[i]) {
-        int t = epochs[i];
-        epochs[i] = epochs[j];
-        epochs[j] = t;
-      }
-  maxStreak = 1;
-  cur = 1;
-  for (int i = 1; i < dayCount; i++) {
-    if (epochs[i] == epochs[i - 1] + 1) {
+  // Single pass over the sorted history: no scratch buffer (the old fixed int[365] would have
+  // become an unbounded stack array) and no O(n^2) sort.
+  int maxStreak = 0, cur = 0, prev = 0;
+  for (const auto& d : days) {
+    if (d.minutesRead == 0) continue;
+    const int e = daysSinceEpoch(d.year, d.month, d.day);
+    if (cur == 0) {
+      cur = 1;
+    } else if (e == prev + 1) {
       cur++;
-      if (cur > maxStreak) maxStreak = cur;
-    } else if (epochs[i] != epochs[i - 1]) {
+    } else if (e != prev) {
       cur = 1;
     }
+    prev = e;
+    if (cur > maxStreak) maxStreak = cur;
   }
   return maxStreak;
 }
 
-int ReadingStatsStore::getDaysRead() const { return dayCount; }
+int ReadingStatsStore::getDaysRead() const { return static_cast<int>(days.size()); }
 
 uint32_t ReadingStatsStore::getTotalMinutes() const {
   uint32_t total = 0;
-  for (int i = 0; i < dayCount; i++) total += days[i].minutesRead;
+  for (const auto& d : days) total += d.minutesRead;
   return total;
 }
 
@@ -284,10 +292,13 @@ bool ReadingStatsStore::saveToFile() const {
   HalFile f;
   if (!Storage.openFileForWrite("STAT", STATS_PATH, f)) return false;
   f.write(&STATS_VERSION, 1);
-  uint16_t count = static_cast<uint16_t>(dayCount);
+  // The count field is 16-bit, so the on-disk history tops out at 65535 days (~179 years of
+  // reading every day). Clamped rather than truncated silently at a lower bound: this is the
+  // format's limit, not a policy one.
+  const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), UINT16_MAX));
   f.write(reinterpret_cast<const uint8_t*>(&count), 2);
   f.write(reinterpret_cast<const uint8_t*>(&booksFinished), 2);
-  for (int i = 0; i < dayCount; i++) {
+  for (uint16_t i = 0; i < count; i++) {
     f.write(reinterpret_cast<const uint8_t*>(&days[i]), sizeof(DailyReading));
   }
   // Write finished book paths
@@ -346,8 +357,9 @@ bool ReadingStatsStore::loadFromFile() {
       return false;
     }
   }
-  if (count > MAX_DAYS) count = MAX_DAYS;
-  dayCount = 0;
+  if (count > MAX_DAYS_SANE) count = MAX_DAYS_SANE;
+  days.clear();
+  days.reserve(count);
   for (int i = 0; i < count; i++) {
     DailyReading dr;
     if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
@@ -355,7 +367,17 @@ bool ReadingStatsStore::loadFromFile() {
     // 1970 epoch before HalClock::restoreSystemTime existed) -- they are misdated garbage that
     // pollutes streaks, totals, and the calendar.
     if (dr.year < 2020) continue;
-    days[dayCount++] = dr;
+    days.push_back(dr);
+  }
+  // The streak passes and addMinutes' back-to-front scan both assume ascending order. Files
+  // written by any version of this code are already in order, so this is normally a single
+  // comparison pass -- but a file that is not must not silently produce wrong streaks.
+  if (!std::is_sorted(days.begin(), days.end(), [](const DailyReading& a, const DailyReading& b) {
+        return daysSinceEpoch(a.year, a.month, a.day) < daysSinceEpoch(b.year, b.month, b.day);
+      })) {
+    std::sort(days.begin(), days.end(), [](const DailyReading& a, const DailyReading& b) {
+      return daysSinceEpoch(a.year, a.month, a.day) < daysSinceEpoch(b.year, b.month, b.day);
+    });
   }
   // Read finished book paths
   finishedBookPaths.clear();

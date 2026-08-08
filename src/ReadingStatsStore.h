@@ -37,7 +37,17 @@ struct LanguageDaily {
 class ReadingStatsStore {
   static ReadingStatsStore instance;
 
-  static constexpr int MAX_DAYS = 365;
+  // The day history is unbounded: a calendar you can page back through is worth little if it
+  // silently forgets the year before last, which the old fixed 365-entry ring did.
+  //
+  // The cost is 6 bytes per day READ, so a reader who reads every single day adds ~2.2KB of DRAM
+  // per year -- the same order as the fixed array it replaces (2.19KB), which was paid in full
+  // from day one whether or not it was used. Years two onward are the new cost. If that ever
+  // stops being acceptable, the fix is to page the history off SD rather than to cap it again.
+  //
+  // `days` is kept sorted by date (see addMinutes), which lets getStreak and getLongestStreak
+  // run as single passes with no allocation and no fixed-size scratch buffer.
+  static constexpr size_t MAX_DAYS_SANE = 40000;  // ~110 years; guards a corrupt length field only
   // A year of days times the handful of languages one reader actually uses. Held in a vector
   // rather than a flat array so the common single-language case costs a few hundred bytes
   // instead of the worst case's 5KB; oldest entries are dropped when full.
@@ -46,8 +56,7 @@ class ReadingStatsStore {
   // long-lived singleton. When full, the least recently read book is dropped -- its minutes
   // stay counted in the per-day totals, which are the numbers the UI shows today.
   static constexpr size_t MAX_BOOKS = 150;
-  DailyReading days[MAX_DAYS] = {};
-  int dayCount = 0;
+  std::vector<DailyReading> days;  // sorted ascending by date
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
   std::vector<BookReading> books;
