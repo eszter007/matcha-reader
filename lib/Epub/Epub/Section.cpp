@@ -145,7 +145,11 @@ namespace {
 //      forward their tags' own font-style/weight, all of which move cached word positions.
 // v70: upstream merge (their v35): the header gains a fifth uint32 offset and every page
 //      records its visible-text start offset in a per-page LUT (content-based positions).
-constexpr uint8_t SECTION_FILE_VERSION = 70;
+// v71: upstream merge (their v36): ruby start/end overhang reservation moved into
+//      calculateRubyExtraStartOffset/EndOffset, which no longer let the adjacent word absorb
+//      the overhang -- that word is on the neighbouring LINE and cannot. Line breaks move, so
+//      cached pages laid out by v70 no longer match.
+constexpr uint8_t SECTION_FILE_VERSION = 71;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
