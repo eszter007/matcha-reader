@@ -126,6 +126,11 @@ struct VerticalBlockParams {
 };
 
 struct VerticalPage {
+  // Codepoint index, within the chapter's visible character data, of this page's first
+  // character -- the vertical counterpart of Page::visibleTextOffset, counted by the same rule
+  // so the two are directly comparable. This is what makes a vertical/horizontal switch land on
+  // the page holding the same sentence rather than on a proportional guess.
+  uint32_t visibleTextOffset = 0;
   std::vector<VerticalGlyph> glyphs;
   std::vector<VerticalBoxRect> boxes;
   // Variable-length glyph texts (ruby annotations, rotated/upright run strings), referenced
@@ -196,6 +201,12 @@ class VerticalParsedText {
     std::string rubyText;
     uint8_t style = 0;
     bool emphasis = false;
+    // Codepoint index, within the chapter's visible character data, of this run's FIRST base
+    // character. Counted by the extractor over the same rule the horizontal parser uses
+    // (VisibleTextUtils::isNonVisibleElement), so the number means the same thing in both
+    // layouts -- that shared meaning is the whole point: it is what lets a reading position
+    // survive a vertical/horizontal switch. See VerticalPage::visibleTextOffset.
+    uint32_t visibleTextOffset = 0;
   };
 
   // continuesPreviousParagraph: pass true when this call carries the NEXT CHUNK of a paragraph
@@ -327,6 +338,10 @@ class VerticalParsedText {
     uint8_t style;
     bool emphasis;
     std::string rubyText;
+    // See RubyRun::visibleTextOffset. Carried per character so the page that a character
+    // opens can be stamped with it; NOT carried on VerticalGlyph, which is deliberately a
+    // fixed-size POD (4 bytes x ~500 glyphs/page is a page buffer this device cannot spare).
+    uint32_t visibleTextOffset = 0;
   };
 
   // Flattened, paragraph-tagged codepoint stream built up by addParagraph()
@@ -393,6 +408,10 @@ class VerticalParsedText {
   // vector alone isn't enough once pages can be streamed out mid-call and earlier batches may
   // already have produced real pages.
   bool anyPageEverProduced_ = false;
+  // Source position of the character being placed. finalizePageIfNeeded() seeds a page opened
+  // mid-character from it, which the empty-page stamp cannot reach. See
+  // VerticalPage::visibleTextOffset.
+  uint32_t lastCharOffset_ = 0;
 
   // Call before every stream_.push_back(). Only checks free heap when the vector is actually
   // about to reallocate (size == capacity) -- cheap in the common case where capacity headroom

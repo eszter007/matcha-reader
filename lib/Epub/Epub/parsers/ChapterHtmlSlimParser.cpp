@@ -2343,8 +2343,12 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   // setting produced (see cssLineHeightPercent: it is a clamped percentage OF that value, so
   // the user's setting stays inside the result). It is applied BEFORE the ruby headroom, which
   // is not part of the book's line box -- it is room the annotation needs above the ascender.
+  // ...and none of it is needed when the annotation will not be drawn: with furigana off the
+  // headroom is empty and the page reads looser than it should. Vertical tightens for the same
+  // reason (VerticalSection::streamParseAndLayout keeps a second, narrower column-gap table).
+  // TextBlock::render() drops its matching shift on the same condition.
   const int lineFontId = line->getBlockStyle().resolveFontId(fontId);
-  const int rubyExtra = line->getRubyShift(renderer.getFontAscenderSize(lineFontId));
+  const int rubyExtra = furiganaEnabled ? line->getRubyShift(renderer.getFontAscenderSize(lineFontId)) : 0;
   // A word enlarged by an inline font-size (span) needs the line's advance to cover its taller
   // glyphs, or it collides with the next line. Only lines that actually carry per-word fonts
   // pay the scan; the base font for the leading stays the block's own.

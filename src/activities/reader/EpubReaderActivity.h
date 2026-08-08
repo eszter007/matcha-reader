@@ -396,10 +396,22 @@ class EpubReaderActivity final : public Activity {
   // byte model lags several percent behind the rendered-page position on Japanese books.
   // Real counts come from section-cache headers; unindexed chapters are estimated from their
   // byte share of the already-indexed ones and refine as sections get built.
+  // Page within the loaded section, 1-based, with that section's page count. Clamped, because a
+  // section whose currentPage is briefly out of range must not reach the UI: a mode switch drops
+  // both sections and render() repositions afterwards, and anything drawn in between was showing
+  // the raw value.
+  struct SectionPageSpan {
+    int page;
+    int count;
+  };
+  SectionPageSpan sectionPageSpan() const;
   int pageBasedPercent(int spineIndex, int sectionPage) const;  // sectionPage is 1-based
   mutable int chapterSpanSpine = -1;
   mutable int chapterSpanLivePages = -1;
   mutable bool chapterSpanVertical = false;
+  // Part of the memo key: a span computed while a build held the card skipped the per-spine
+  // probes, so it must be recomputed once the build releases it, even if nothing else changed.
+  mutable bool chapterSpanBuildActive = false;
   mutable int chapterPagesBefore = 0;
   mutable int chapterPagesTotal = 0;
   mutable std::vector<uint16_t> spinePagesReal;       // 0 = not indexed yet
@@ -414,6 +426,12 @@ class EpubReaderActivity final : public Activity {
   // measurement and the vertical engine's font-adaptive positioning all derive from one font
   // that really contains the glyphs -- per-glyph fallback stays only for rare stragglers.
   int effectiveReaderFontId() const;
+  // The horizontal layout spec for THIS book. SETTINGS.readerRenderSpec() knows only the
+  // global store; two fields are per-book and have to be applied on top of it -- the
+  // substituted font, and the furigana toggle's override. Both are cache-key fields, so a spec
+  // built without them silently fails every parameter check and rebuilds the chapter. Build
+  // every horizontal spec through here rather than repeating the fixups at each call site.
+  ReaderRenderSpec readerSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
   void restoreSavedPosition();
   bool useVerticalText() const;
   // Space kept clear below the text, in addition to the panel's own bezel.
@@ -446,7 +464,15 @@ class EpubReaderActivity final : public Activity {
   // it from page 0. Reverts to normal power behavior the moment the build finishes,
   // and while the build is heap-paused (no work is happening, so spinning at full
   // speed would only burn battery; the paused gate still retries every loop pass).
-  bool skipLoopDelay() override { return section && section->isBuilding() && !buildHeapPaused; }
+  // Full CPU only while the build is still near or behind the reader, where the wait is in front
+  // of the user. Once it is BUILD_WINDOW_AHEAD pages clear it keeps going (the chapter has to
+  // finalize, or the page total stays an estimate forever) but at the ordinary loop cadence, so
+  // the CPU can drop back to power saving. Pinning it for the whole chapter would cost battery
+  // for work nobody is waiting on.
+  bool skipLoopDelay() override {
+    return section && section->isBuilding() && !buildHeapPaused &&
+           static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD;
+  }
   bool isReaderActivity() const override { return true; }
   bool handleForcedRefresh() override {
     {

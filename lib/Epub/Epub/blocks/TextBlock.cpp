@@ -288,7 +288,12 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
 
   // Loop-invariant: hoisted out of the word loop so rubyTexts is scanned once,
   // not once per word.
-  const int rubyShift = getRubyShift(ascender);
+  //
+  // The shift makes room ABOVE the words for the annotation, and the layout reserved exactly
+  // this much in the line's height. When the annotation is suppressed the layout reserves
+  // nothing (see ChapterHtmlSlimParser::addLineToPage), so shifting here would push the words
+  // out of their own line box and into the one below.
+  const int rubyShift = suppressRuby ? 0 : getRubyShift(ascender);
 
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);

@@ -109,6 +109,9 @@ class ChapterHtmlSlimParser {
   uint16_t viewportHeight;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
+  // Reserve the leading a ruby annotation needs above the ascender only when it will be drawn.
+  // See ReaderRenderSpec::furiganaEnabled.
+  bool furiganaEnabled;
   const CssParser* cssParser;
   // Chain of open elements, for descendant (`.callout p`) and child (`div > p`) selectors.
   // Pushed at the top of startElement and popped at the top of endElement -- one push per
@@ -254,7 +257,7 @@ class ChapterHtmlSlimParser {
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
       const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
       const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
-      const bool focusReadingEnabled,
+      const bool focusReadingEnabled, const bool furiganaEnabled,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
       const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
@@ -272,6 +275,7 @@ class ChapterHtmlSlimParser {
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
+        furiganaEnabled(furiganaEnabled),
         completePageFn(completePageFn),
         popupFn(popupFn),
         cssParser(cssParser),

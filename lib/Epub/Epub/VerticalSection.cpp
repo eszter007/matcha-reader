@@ -68,7 +68,13 @@ namespace {
 // rule, and a bordered block is separated from both neighbours by a blank column -- so
 // pagination inside and around a box changes too. (127-130 were consumed by intermediate box
 // geometries during development; caches carrying those numbers must not be trusted.)
-constexpr uint8_t VSECTION_FILE_VERSION = 131;
+// v134: every page record begins with the source position of its first character
+// (VerticalPage::visibleTextOffset), counted the same way the horizontal parser counts it. It is
+// what lets a vertical/horizontal switch resolve the reading position by content instead of by
+// proportion. Format change: a v131 record starts with the image flag. (132-133 were consumed
+// during development by builds that computed those positions wrongly; such records parse cleanly,
+// so caches carrying those numbers must not be trusted.)
+constexpr uint8_t VSECTION_FILE_VERSION = 134;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -89,7 +95,10 @@ struct ParagraphSink {
   // runs seamlessly continue the previously delivered paragraph (streaming cadence) -- no
   // paragraph break must be recorded before them.
   virtual void onParagraph(std::vector<RubyRun>& runs, bool continuesPrevious) = 0;
-  virtual void onImage(const std::string& src) = 0;
+  // visibleTextOffset: the source position the image occupies, so its page can be stamped
+  // like a text page and the page-start sequence stays non-decreasing for the binary search
+  // in getPageForVisibleTextOffset(). An image contributes no visible characters of its own.
+  virtual void onImage(const std::string& src, uint32_t visibleTextOffset) = 0;
   // Styled-block boundaries -- a block element whose CSS carries vertical layout parameters
   // (border box, start offset, hanging indent, centering, before/after gaps).
   virtual void onBlockStyleStart(const VerticalBlockParams& /*params*/) {}
@@ -125,6 +134,32 @@ struct TextExtractor {
   bool inRp = false;
   std::string rubyBase;
   std::string rubyAnnotation;
+
+  // Position tracking, so a reading position survives a vertical/horizontal switch.
+  //
+  // visibleTextOffset counts codepoints of visible character data in document order, under the
+  // SAME rule the horizontal parser applies (ChapterHtmlSlimParser::characterData): inside
+  // <body>, outside head/style/script/title/rp, entity expansions excluded. Both layouts must
+  // agree character for character -- the number is only useful because it means the same thing
+  // on both sides -- so any change here needs the horizontal counter changed with it.
+  //
+  // <rt> text IS counted (rp is the excluded one), matching isNonVisibleElement().
+  uint32_t visibleTextOffset = 0;
+  bool insideBody = false;
+  // Offset of the first character of currentText / rubyBase, captured when each goes from
+  // empty to non-empty. That is what a RubyRun is stamped with.
+  uint32_t currentTextOffset = 0;
+  uint32_t rubyBaseOffset = 0;
+
+  // Stamp where a run begins. Synthetic text (entity expansion, <br/>, a gaiji replacement)
+  // occupies no counted source position -- the horizontal parser does not count it either --
+  // so a run it opens is attributed to the position the next real character will take.
+  void beginTextRunIfEmpty() {
+    if (currentText.empty()) currentTextOffset = visibleTextOffset;
+  }
+  void beginRubyBaseIfEmpty() {
+    if (rubyBase.empty()) rubyBaseOffset = visibleTextOffset;
+  }
 
   // Furigana-glossary harvest (owned by the layout sink; see RubyGlossary). Mono-ruby
   // elements (小<rt>こ</rt>林<rt>ばやし</rt>) additionally record the whole-element pair
@@ -196,7 +231,7 @@ struct TextExtractor {
       // (alloc-copy-free per step, hundreds of times per chapter) -- the main planter of the
       // persistent fragments that shredded maxAlloc on long single-file books. The copy is a
       // transient that coalesces back; currentText's capacity now lives for the whole build.
-      currentRuns.push_back(RubyRun{currentText, {}, currentStyle(), hasEmphasis()});
+      currentRuns.push_back(RubyRun{currentText, {}, currentStyle(), hasEmphasis(), currentTextOffset});
       currentText.clear();
     }
   }
@@ -336,6 +371,7 @@ struct TextExtractor {
       self->skipDepth++;
       return;
     }
+    if (strcasecmp(name, "body") == 0) self->insideBody = true;
     if (isSkipTag(name)) {
       self->skipDepth = 1;
       return;
@@ -411,6 +447,7 @@ struct TextExtractor {
         // Routing it through onImage would split the paragraph and insert a
         // near-empty full image page per gaiji; keep the text flowing with
         // replacement text instead (alt / filename codepoint / geta mark).
+        self->beginTextRunIfEmpty();
         self->currentText += gaijiReplacementText(src ? src : "", alt ? alt : "");
       } else if (src && src[0] != '\0') {
         // Complete the paragraph built so far, then emit the image in document order. (For the
@@ -418,11 +455,12 @@ struct TextExtractor {
         // accumulate-then-interleave code placed the image before the whole paragraph; identical
         // for the usual block-level images.)
         self->flushParagraph();
-        if (self->sink) self->sink->onImage(std::string(src));
+        if (self->sink) self->sink->onImage(std::string(src), self->visibleTextOffset);
       }
     }
     if (strcasecmp(name, "br") == 0 || strcasecmp(name, "br/") == 0) {
       if (!self->inRuby) {
+        self->beginTextRunIfEmpty();
         self->currentText.push_back('\n');
       }
     }
@@ -437,6 +475,10 @@ struct TextExtractor {
       if (self->skipDepth == 0) self->skipDepth = -1;
       return;
     }
+    // Mirrors the set in startElement, and ChapterHtmlSlimParser's own reset. Anything after
+    // </body> occupies no visible position, and the two counters only mean the same thing while
+    // they agree on where the body ends.
+    if (strcasecmp(name, "body") == 0) self->insideBody = false;
     if (self->boxOpenedAtDepth >= 0 && self->elementDepth == self->boxOpenedAtDepth - 1) {
       self->flushParagraph();
       if (self->sink) self->sink->onBlockStyleEnd();
@@ -458,7 +500,7 @@ struct TextExtractor {
           self->rubyElemRunCount++;
         }
         self->currentRuns.push_back(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation),
-                                            self->currentStyle(), self->hasEmphasis()});
+                                            self->currentStyle(), self->hasEmphasis(), self->rubyBaseOffset});
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
@@ -469,7 +511,8 @@ struct TextExtractor {
     if (strcasecmp(name, "ruby") == 0) {
       // Flush any remaining base text that had no <rt> (malformed markup).
       if (!self->rubyBase.empty()) {
-        self->currentRuns.push_back(RubyRun{std::move(self->rubyBase), {}, self->currentStyle(), self->hasEmphasis()});
+        self->currentRuns.push_back(
+            RubyRun{std::move(self->rubyBase), {}, self->currentStyle(), self->hasEmphasis(), self->rubyBaseOffset});
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
@@ -514,11 +557,27 @@ struct TextExtractor {
   static void XMLCALL characterData(void* userData, const char* s, int len) {
     auto* self = static_cast<TextExtractor*>(userData);
     self->checkHeap("characterData");
+    // Position bookkeeping first, and independent of every layout-side early return below:
+    // the count must track the DOCUMENT, not what this layout chooses to render. Dropped
+    // inter-tag whitespace and text past a forced split still occupy source positions, and
+    // the horizontal parser counts them.
+    const uint32_t offsetOfThisRun = self->visibleTextOffset;
+    if (self->insideBody && self->skipDepth < 0 && !self->inRp) {
+      const auto* p = reinterpret_cast<const unsigned char*>(s);
+      const auto* end = p + len;
+      while (p < end) {
+        // Advance one UTF-8 sequence: a lead byte plus its continuation bytes.
+        p++;
+        while (p < end && (*p & 0xC0) == 0x80) p++;
+        self->visibleTextOffset++;
+      }
+    }
     if (self->skipDepth >= 0) return;
     if (self->inRp) return;
     if (self->inRt) {
       self->rubyAnnotation.append(s, static_cast<size_t>(len));
     } else if (self->inRuby) {
+      if (self->rubyBase.empty()) self->rubyBaseOffset = offsetOfThisRun;
       self->rubyBase.append(s, static_cast<size_t>(len));
     } else {
       // Forced split for markup-less mega-paragraphs; see MAX_PARAGRAPH_BYTES. (Not applied
@@ -541,6 +600,9 @@ struct TextExtractor {
         if (firstInk == len) return;
         s += firstInk;
         len -= firstInk;
+        // The dropped whitespace was counted above, so the surviving text starts that many
+        // codepoints later. All of it is ASCII, so bytes and codepoints agree here.
+        self->currentTextOffset = offsetOfThisRun + static_cast<uint32_t>(firstInk);
       }
       self->currentText.append(s, static_cast<size_t>(len));
       // Streaming cadence: hand the buffered text onward as a seamless continuation well
@@ -580,8 +642,10 @@ struct TextExtractor {
       if (self->inRt) {
         self->rubyAnnotation.append(resolved);
       } else if (self->inRuby) {
+        self->beginRubyBaseIfEmpty();
         self->rubyBase.append(resolved);
       } else {
+        self->beginTextRunIfEmpty();
         self->currentText.append(resolved);
       }
     }
@@ -651,6 +715,10 @@ void visitBoxFields(Ar& ar, R& r) {
 // (whole page into RAM, flushed with one file.write) -- identical byte layout.
 template <typename Sink>
 bool writePage(Sink& file, const VerticalPage& page) {
+  // First field, before the image/text split, so every page record carries it. Lets the reader
+  // learn the current page's source position from the page it already loaded, with no extra
+  // seek per turn (the reverse direction uses the index table -- see readPageStartOffsets).
+  serialization::writePod(file, page.visibleTextOffset);
   const bool isImg = page.isImagePage();
   serialization::writePod(file, isImg);
   if (isImg) {
@@ -697,6 +765,7 @@ bool writePage(Sink& file, const VerticalPage& page) {
 enum class ReadResult { Ok, HeapRefused, Corrupt };
 
 ReadResult readPage(HalFile& file, VerticalPage& page) {
+  serialization::readPod(file, page.visibleTextOffset);
   page.glyphs.clear();
   page.boxes.clear();
   page.texts.clear();
@@ -961,6 +1030,10 @@ struct LayoutPageSink final : ParagraphSink {
       if (run.rubyText.empty() && utf8Chars(run.baseText) > RUN_SLICE_CHARS) {
         const std::string base = std::move(run.baseText);
         size_t pos = 0;
+        // Codepoints of this run already emitted as earlier slices. addAnnotatedParagraph()
+        // counts positions from the start of the run it is handed, so each slice must carry its
+        // own start or they all claim the original run's.
+        uint32_t cpConsumed = 0;
         while (pos < base.size() && !failed) {
           size_t end = pos;
           size_t chars = 0;
@@ -975,6 +1048,8 @@ struct LayoutPageSink final : ParagraphSink {
           slice.baseText = base.substr(pos, end - pos);
           slice.style = run.style;
           slice.emphasis = run.emphasis;
+          slice.visibleTextOffset = run.visibleTextOffset + cpConsumed;
+          cpConsumed += static_cast<uint32_t>(chars);
           pushRun(std::move(slice));
           pos = end;
         }
@@ -990,7 +1065,7 @@ struct LayoutPageSink final : ParagraphSink {
     if (layout.pendingCount() >= BATCH_CHARS) flushText();
   }
 
-  void onImage(const std::string& src) override {
+  void onImage(const std::string& src, const uint32_t visibleTextOffset) override {
     if (failed) return;
     // Lay out any buffered text, then FINALIZE the in-progress page before the image page is
     // written. Without this, the image page was written while the half-filled text page stayed
@@ -1000,7 +1075,9 @@ struct LayoutPageSink final : ParagraphSink {
     flushText();
     VerticalPage pendingTail;
     if (layout.finalizePendingPage(pendingTail)) writeOne(pendingTail);
-    writeOne(makeImagePage(src));
+    VerticalPage imagePage = makeImagePage(src);
+    imagePage.visibleTextOffset = visibleTextOffset;
+    writeOne(imagePage);
   }
 
   static void writePageCallback(void* ctx, VerticalPage&& page) { static_cast<LayoutPageSink*>(ctx)->writeOne(page); }
@@ -1541,7 +1618,12 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   }
   file.close();
 
-  LOG_DBG("VSC", "Cached %u vertical pages (streamed)", pageCount);
+  // Last page's source position. The horizontal build logs the same number ("SCT: chapter
+  // spans"), and the two counters are supposed to agree character for character -- if these
+  // diverge by more than roughly one page's worth of text, the two parsers have drifted and
+  // cross-mode position restore is silently landing on the wrong page.
+  const auto lastStart = getVisibleTextOffsetForPage(static_cast<int>(pageCount) - 1);
+  LOG_DBG("VSC", "Cached %u vertical pages (streamed); chapter spans %u chars", pageCount, lastStart.value_or(0));
   return true;
 }
 
@@ -1632,6 +1714,52 @@ bool VerticalSection::clearCache() const {
   }
   LOG_DBG("VSC", "Cache cleared");
   return true;
+}
+
+std::optional<uint32_t> VerticalSection::getVisibleTextOffsetForPage(const int page) const {
+  if (page < 0 || page >= static_cast<int>(pageOffsets_.size())) return std::nullopt;
+  // Already resident: the loaded page carries the value, no SD access at all. This is the
+  // common case (the reader asks about the page it is showing, on every progress save).
+  if (loadedPageIndex_ == page) return loadedPage_.visibleTextOffset;
+  HalFile file;
+  if (!Storage.openFileForRead("VSC", filePath, file)) return std::nullopt;
+  if (!file.seek(pageOffsets_[static_cast<size_t>(page)])) return std::nullopt;
+  uint32_t offset = 0;
+  if (file.read(reinterpret_cast<uint8_t*>(&offset), sizeof(offset)) != static_cast<int>(sizeof(offset))) {
+    return std::nullopt;
+  }
+  return offset;
+}
+
+std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t offset) const {
+  if (pageOffsets_.empty()) return std::nullopt;
+  HalFile file;
+  if (!Storage.openFileForRead("VSC", filePath, file)) return std::nullopt;
+  // Reads the first field of one page record. Returns nullopt on a bad read so a truncated
+  // file degrades to "cannot resolve" (the caller falls back) rather than to a wrong page.
+  auto pageStart = [&](const int page) -> std::optional<uint32_t> {
+    if (!file.seek(pageOffsets_[static_cast<size_t>(page)])) return std::nullopt;
+    uint32_t v = 0;
+    if (file.read(reinterpret_cast<uint8_t*>(&v), sizeof(v)) != static_cast<int>(sizeof(v))) return std::nullopt;
+    return v;
+  };
+  // Page starts are non-decreasing (pages are laid out in document order), so a plain binary
+  // search finds the last page starting at or before `offset`.
+  int lo = 0;
+  int hi = static_cast<int>(pageOffsets_.size()) - 1;
+  int best = 0;
+  while (lo <= hi) {
+    const int mid = lo + (hi - lo) / 2;
+    const auto start = pageStart(mid);
+    if (!start) return std::nullopt;
+    if (*start <= offset) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
 }
 
 const VerticalPage* VerticalSection::getPage() const { return getPage(currentPage); }
