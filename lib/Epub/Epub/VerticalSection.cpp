@@ -1443,7 +1443,6 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   sink.backTurnFlag = &backTurnDuringBuild_;
   sink.buildNoticeFn = buildNoticeFn_;
   sink.buildNoticeCtx = buildNoticeCtx_;
-  backTurnDuringBuild_.store(false, std::memory_order_relaxed);
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the

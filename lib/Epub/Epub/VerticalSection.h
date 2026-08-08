@@ -116,6 +116,7 @@ class VerticalSection {
   // Draws the "still indexing" notice; invoked between pages on the render task. See
   // noteBackTurnDuringBuild().
   void setBuildNoticeHook(void* ctx, void (*fn)(void*)) {
+    backTurnDuringBuild_.store(false, std::memory_order_relaxed);
     buildNoticeCtx_ = ctx;
     buildNoticeFn_ = fn;
   }
