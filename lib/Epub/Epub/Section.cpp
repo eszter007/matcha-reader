@@ -909,11 +909,19 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const int page) {
   // The .bin is open O_RDWR for the build. Read the already-written page, then restore
   // the write cursor so the next onPageComplete keeps appending where it left off.
   const uint32_t writePos = file.position();
+  const uint32_t fileSize = static_cast<uint32_t>(file.size());
   file.seek(pos);
   auto p = Page::deserialize(file);
   file.seek(writePos);
   if (p) {
     p->visibleTextOffset = build_->lut[page].visibleTextOffset;
+  }
+  // A page read back out of the tmp .bin should never come up empty: the offset comes from the
+  // build's own LUT and those bytes were written earlier in this same build. Empty means either
+  // the handle cannot read (it must be opened O_RDWR) or the file is damaged, and the reader
+  // would otherwise just draw a blank page with no clue why.
+  if (!p || p->elements.empty()) {
+    LOG_ERR("SCT", "Build-time page read empty: page %d at %u (file %u bytes)", page, pos, fileSize);
   }
   return p;
 }
