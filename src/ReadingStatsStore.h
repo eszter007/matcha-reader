@@ -48,10 +48,6 @@ class ReadingStatsStore {
   // `days` is kept sorted by date (see addMinutes), which lets getStreak and getLongestStreak
   // run as single passes with no allocation and no fixed-size scratch buffer.
   static constexpr size_t MAX_DAYS_SANE = 40000;  // ~110 years; guards a corrupt length field only
-  // A year of days times the handful of languages one reader actually uses. Held in a vector
-  // rather than a flat array so the common single-language case costs a few hundred bytes
-  // instead of the worst case's 5KB; oldest entries are dropped when full.
-  static constexpr size_t MAX_LANG_DAYS = 512;
   // Bounded because each entry heap-allocates its path (~40-80 bytes) and the store is a
   // long-lived singleton. When full, the least recently read book is dropped -- its minutes
   // stay counted in the per-day totals, which are the numbers the UI shows today.
@@ -60,7 +56,18 @@ class ReadingStatsStore {
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
   std::vector<BookReading> books;
-  std::vector<LanguageDaily> languageDays;
+  // Per-day-per-language history, also unbounded: it backs a calendar of its own, and the 512
+  // entry ring that used to hold it dropped the oldest days silently -- barely over a year for a
+  // single language, and under nine months for someone reading in two.
+  //
+  // 10 bytes per (day, language), so ~3.6KB per year per language actually read. Dearer than the
+  // overall history (6 bytes/day) because each record carries its own tag; if that ever matters,
+  // the fix is a language table with a one-byte index, not a cap.
+  //
+  // No sanity bound here, unlike MAX_DAYS_SANE: the on-disk count is a uint16, so the format
+  // itself caps a load at 65535 records (~90 years across two languages). A separate constant
+  // above that is a check that can never fire.
+  std::vector<LanguageDaily> languageDays;  // sorted ascending by date
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
@@ -86,6 +93,28 @@ class ReadingStatsStore {
   uint16_t getMinutesForDay(const char* language, uint16_t year, uint8_t month, uint8_t day) const;
   uint32_t getTotalMinutes(const char* language) const;
   void markBookFinished(const std::string& bookPath);
+
+  // ---- per-language views, mirroring the overall ones above ----
+  // One entry per language ever read, most-read first. Returned by value into a caller-supplied
+  // vector so the store keeps no derived state; the list is short (one per language, not per day).
+  struct LanguageSummary {
+    char code[4];  // primary subtag, lowercase; empty first byte = unknown
+    uint32_t minutes;
+  };
+  void getLanguages(std::vector<LanguageSummary>& out) const;
+
+  int getStreak(const char* language, uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
+  int getLongestStreak(const char* language) const;
+  int getDaysRead(const char* language) const;
+  uint16_t getMinutesThisWeek(const char* language, uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
+  void getWeekStatus(const char* language, uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, int todayDow,
+                     bool readDays[7]) const;
+  void getMonthStatus(const char* language, uint16_t year, uint8_t month, bool out[32]) const;
+  int getDaysReadInMonth(const char* language, uint16_t year, uint8_t month) const;
+  // Finished books whose recorded language matches. Only as complete as the per-book block, which
+  // is capped and LRU-evicted: a book finished long ago may have lost its language, so this can
+  // undercount. It never overcounts, which is the direction that matters for a headline number.
+  uint16_t getBooksFinished(const char* language) const;
 
   int getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
   int getLongestStreak() const;

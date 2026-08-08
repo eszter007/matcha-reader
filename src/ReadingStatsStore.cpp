@@ -136,25 +136,27 @@ void ReadingStatsStore::addLanguageMinutes(const char* language, const uint16_t 
   char lang[4];
   normalizeLanguage(language, lang);
 
-  for (auto& e : languageDays) {
-    if (e.year != year || e.month != month || e.day != day) continue;
-    if (memcmp(e.language, lang, sizeof(lang)) != 0) continue;
-    e.minutesRead = static_cast<uint16_t>(e.minutesRead + minutes);
-    return;
-  }
+  const int epoch = daysSinceEpoch(year, month, day);
+  LanguageDaily fresh{year, month, day, {}, minutes};
+  memcpy(fresh.language, lang, sizeof(lang));
 
-  if (languageDays.size() >= MAX_LANG_DAYS) {
-    // Oldest calendar day first, matching how days[] evicts: the recent past is what the
-    // streak and calendar views read.
-    auto oldest =
-        std::min_element(languageDays.begin(), languageDays.end(), [](const LanguageDaily& a, const LanguageDaily& b) {
-          return daysSinceEpoch(a.year, a.month, a.day) < daysSinceEpoch(b.year, b.month, b.day);
-        });
-    languageDays.erase(oldest);
+  // Kept sorted by date, exactly as days[] is and for the same reason: the per-language streak
+  // passes then need no scratch buffer and no sort. Scanned from the back because the day being
+  // added is almost always the newest.
+  for (auto it = languageDays.rbegin(); it != languageDays.rend(); ++it) {
+    const int e = daysSinceEpoch(it->year, it->month, it->day);
+    if (e == epoch && memcmp(it->language, lang, sizeof(lang)) == 0) {
+      const uint32_t sum = static_cast<uint32_t>(it->minutesRead) + minutes;
+      it->minutesRead = static_cast<uint16_t>(sum > UINT16_MAX ? UINT16_MAX : sum);
+      return;
+    }
+    if (e <= epoch) {
+      // Same date, different language: insert alongside rather than walking past the whole run.
+      languageDays.insert(it.base(), fresh);
+      return;
+    }
   }
-  LanguageDaily e{year, month, day, {}, minutes};
-  memcpy(e.language, lang, sizeof(lang));
-  languageDays.push_back(e);
+  languageDays.insert(languageDays.begin(), fresh);
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(const char* language, const uint16_t year, const uint8_t month,
@@ -174,6 +176,134 @@ uint32_t ReadingStatsStore::getTotalMinutes(const char* language) const {
                          [&lang](const uint32_t sum, const LanguageDaily& e) {
                            return memcmp(e.language, lang, sizeof(lang)) == 0 ? sum + e.minutesRead : sum;
                          });
+}
+
+void ReadingStatsStore::getLanguages(std::vector<LanguageSummary>& out) const {
+  out.clear();
+  for (const auto& e : languageDays) {
+    auto it = std::find_if(out.begin(), out.end(),
+                           [&e](const LanguageSummary& s) { return memcmp(s.code, e.language, sizeof(s.code)) == 0; });
+    if (it != out.end()) {
+      it->minutes += e.minutesRead;
+      continue;
+    }
+    LanguageSummary s{};
+    memcpy(s.code, e.language, sizeof(s.code));
+    s.minutes = e.minutesRead;
+    out.push_back(s);
+  }
+  // Most-read first, so the tab a reader wants is the one they land on.
+  std::sort(out.begin(), out.end(),
+            [](const LanguageSummary& a, const LanguageSummary& b) { return a.minutes > b.minutes; });
+}
+
+int ReadingStatsStore::getStreak(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
+                                 const uint8_t todayDay) const {
+  char lang[4];
+  normalizeLanguage(language, lang);
+  if (getMinutesForDay(language, todayYear, todayMonth, todayDay) == 0) return 0;
+
+  int expected = daysSinceEpoch(todayYear, todayMonth, todayDay);
+  int streak = 0;
+  for (auto it = languageDays.rbegin(); it != languageDays.rend(); ++it) {
+    if (memcmp(it->language, lang, sizeof(lang)) != 0 || it->minutesRead == 0) continue;
+    const int e = daysSinceEpoch(it->year, it->month, it->day);
+    if (e > expected) continue;
+    if (e != expected) break;
+    streak++;
+    expected--;
+  }
+  return streak;
+}
+
+int ReadingStatsStore::getLongestStreak(const char* language) const {
+  char lang[4];
+  normalizeLanguage(language, lang);
+  int maxStreak = 0, cur = 0, prev = 0;
+  for (const auto& e : languageDays) {
+    if (memcmp(e.language, lang, sizeof(lang)) != 0 || e.minutesRead == 0) continue;
+    const int ep = daysSinceEpoch(e.year, e.month, e.day);
+    if (cur == 0) {
+      cur = 1;
+    } else if (ep == prev + 1) {
+      cur++;
+    } else if (ep != prev) {
+      cur = 1;
+    }
+    prev = ep;
+    if (cur > maxStreak) maxStreak = cur;
+  }
+  return maxStreak;
+}
+
+int ReadingStatsStore::getDaysRead(const char* language) const {
+  char lang[4];
+  normalizeLanguage(language, lang);
+  int count = 0;
+  for (const auto& e : languageDays) {
+    if (memcmp(e.language, lang, sizeof(lang)) == 0 && e.minutesRead > 0) count++;
+  }
+  return count;
+}
+
+uint16_t ReadingStatsStore::getMinutesThisWeek(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
+                                               const uint8_t todayDay) const {
+  const int dow = (dowFromDate(todayYear, todayMonth, todayDay) + 6) % 7;  // ISO Mon=0
+  uint16_t total = 0;
+  for (int i = 0; i <= dow; i++) {
+    uint16_t y = todayYear;
+    uint8_t m = todayMonth, d = todayDay;
+    subtractDays(y, m, d, dow - i);
+    total = static_cast<uint16_t>(total + getMinutesForDay(language, y, m, d));
+  }
+  return total;
+}
+
+void ReadingStatsStore::getWeekStatus(const char* language, const uint16_t todayYear, const uint8_t todayMonth,
+                                      const uint8_t todayDay, const int todayDow, bool readDays[7]) const {
+  for (int i = 0; i < 7; i++) readDays[i] = false;
+  for (int i = 0; i <= todayDow; i++) {
+    uint16_t y = todayYear;
+    uint8_t m = todayMonth, d = todayDay;
+    subtractDays(y, m, d, todayDow - i);
+    readDays[i] = getMinutesForDay(language, y, m, d) > 0;
+  }
+}
+
+void ReadingStatsStore::getMonthStatus(const char* language, const uint16_t year, const uint8_t month,
+                                       bool out[32]) const {
+  char lang[4];
+  normalizeLanguage(language, lang);
+  for (int i = 0; i < 32; i++) out[i] = false;
+  for (const auto& e : languageDays) {
+    if (memcmp(e.language, lang, sizeof(lang)) != 0 || e.minutesRead == 0) continue;
+    if (e.year == year && e.month == month && e.day >= 1 && e.day <= 31) out[e.day] = true;
+  }
+}
+
+int ReadingStatsStore::getDaysReadInMonth(const char* language, const uint16_t year, const uint8_t month) const {
+  bool status[32];
+  getMonthStatus(language, year, month, status);
+  int count = 0;
+  const int dim = daysInMonth(year, month);
+  for (int d = 1; d <= dim; d++) {
+    if (status[d]) count++;
+  }
+  return count;
+}
+
+uint16_t ReadingStatsStore::getBooksFinished(const char* language) const {
+  char lang[4];
+  normalizeLanguage(language, lang);
+  uint16_t count = 0;
+  for (const auto& p : finishedBookPaths) {
+    const auto it = std::find_if(books.begin(), books.end(), [&p](const BookReading& b) { return b.path == p; });
+    if (it == books.end()) continue;  // evicted from the per-book block: language unknown, skip
+    char bookLang[4];
+    normalizeLanguage(it->language.c_str(), bookLang);
+    if (memcmp(bookLang, lang, sizeof(lang)) == 0) count++;
+  }
+  return count;
 }
 
 void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
@@ -325,9 +455,12 @@ bool ReadingStatsStore::saveToFile() const {
   // Per-day-per-language block (v4+). Fields written individually rather than as a struct blob:
   // LanguageDaily has trailing padding on some targets, and a padded layout would not survive a
   // format change on the reading side.
-  uint16_t langDayCount = static_cast<uint16_t>(languageDays.size());
+  // 16-bit count, as the format defines; clamped rather than silently truncated lower.
+  const uint16_t langDayCount = static_cast<uint16_t>(std::min<size_t>(languageDays.size(), UINT16_MAX));
   f.write(reinterpret_cast<const uint8_t*>(&langDayCount), 2);
+  size_t written = 0;
   for (const auto& e : languageDays) {
+    if (written++ >= langDayCount) break;
     f.write(reinterpret_cast<const uint8_t*>(&e.year), 2);
     f.write(&e.month, 1);
     f.write(&e.day, 1);
@@ -434,7 +567,9 @@ bool ReadingStatsStore::loadFromFile() {
   languageDays.clear();
   if (version >= 4 && booksIntact) {
     uint16_t langDayCount = 0;
-    if (f.read(reinterpret_cast<uint8_t*>(&langDayCount), 2) == 2 && langDayCount <= MAX_LANG_DAYS) {
+    // No upper-bound check: langDayCount is a uint16, so it cannot exceed what reserve() can
+    // sanely take, and each record is fixed-size and validated as it is read.
+    if (f.read(reinterpret_cast<uint8_t*>(&langDayCount), 2) == 2) {
       languageDays.reserve(langDayCount);
       for (int i = 0; i < langDayCount; i++) {
         LanguageDaily e{};
@@ -446,6 +581,14 @@ bool ReadingStatsStore::loadFromFile() {
         e.language[3] = '\0';         // a corrupt record must not leave an unterminated tag
         if (e.year < 2020) continue;  // same unset-clock garbage the per-day loop drops
         languageDays.push_back(e);
+      }
+      // Sorted for the same reason days is: the per-language streak passes assume ascending
+      // order. Normally a single comparison pass, since files are written in order.
+      const auto byDate = [](const LanguageDaily& a, const LanguageDaily& b) {
+        return daysSinceEpoch(a.year, a.month, a.day) < daysSinceEpoch(b.year, b.month, b.day);
+      };
+      if (!std::is_sorted(languageDays.begin(), languageDays.end(), byDate)) {
+        std::stable_sort(languageDays.begin(), languageDays.end(), byDate);
       }
     }
   }
