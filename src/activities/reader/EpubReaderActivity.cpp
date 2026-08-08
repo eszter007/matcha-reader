@@ -2334,6 +2334,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
   // For an in-progress incremental build, make sure the page we're about to show has been laid out.
   if (section->isBuilding()) {
+    // Same reasoning as the partial extension above: a catch-up of a page or two is quick and
+    // stays silent, but a long one is a multi-second freeze on a blank screen and needs to say
+    // what it is doing. Toggling a book between vertical and horizontal is exactly that case:
+    // the two modes use different viewport heights, so the cache fails its parameter check and
+    // the rebuild starts at page 0 while the reader is deep in the chapter. That path showed no
+    // indexing popup at all.
+    constexpr int kSilentCatchUpPages = 4;
+    if (section->currentPage - static_cast<int>(section->pageCount) > kSilentCatchUpPages) {
+      GUI.drawPopup(renderer, tr(STR_INDEXING));
+      // The popup refreshes FAST, so force the page replacing it onto the HALF ghost-cleanup
+      // path or "INDEXING" ghosts under the text.
+      pagesUntilFullRefresh = 1;
+    }
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
       if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
         LOG_ERR("ERS", "Failed during incremental section build");
