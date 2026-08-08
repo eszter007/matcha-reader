@@ -24,12 +24,9 @@ class I18n {
   void setLanguage(Language lang);
   const char* getLanguageName(Language lang) const;
   static Language languageFromCode(const char* code);
-  // Endonym for a language tag ("ja" -> the Japanese name for Japanese), matched
-  // case-insensitively, or nullptr when the tag is not one of the shipped UI languages.
-  //
-  // Deliberately NOT languageFromCode() + getLanguageName(): that pair answers a miss with
-  // Language::EN, so an unrecognised tag would be labelled "English" rather than reported as
-  // unknown. Callers that need to fall back must be able to tell the difference.
+  // Endonym for a language tag, case-insensitive; nullptr when the tag has no shipped UI.
+  // Not languageFromCode() + getLanguageName(): that pair answers a miss with Language::EN, so
+  // an unknown tag would be labelled "English" instead of reported as unknown.
   static const char* languageNameForCode(const char* code);
 
   // Get all unique characters used in a specific language

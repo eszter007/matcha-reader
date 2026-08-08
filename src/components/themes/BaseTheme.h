@@ -216,9 +216,8 @@ class BaseTheme {
                              const char* rightLabel = nullptr) const;
   virtual void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                           bool selected) const;
-  // Horizontal offset that keeps the selected tab fully inside `rect` when the tabs are wider
-  // than the bar; 0 when they all fit, so screens with few tabs are unaffected. Each theme
-  // measures its own tabs, hence the font/padding parameters.
+  // Offset keeping the selected tab inside `rect` when the row overruns it; 0 when it fits.
+  // Each theme measures its own tabs, hence the font/padding parameters.
   int tabScrollOffset(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int fontId,
                       int extraPerTab, int spacing, int sidePad, bool boldSelected) const;
   virtual bool tabIndexFromPoint(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int x, int y,

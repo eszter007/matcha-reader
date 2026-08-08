@@ -44,7 +44,7 @@ const char* I18n::getLanguageName(Language lang) const {
 
 const char* I18n::languageNameForCode(const char* code) {
   if (!code || !*code) return nullptr;
-  // The table's codes are uppercase enum names; book tags arrive lowercase ("ja").
+  // Table codes are uppercase enum names; book tags arrive lowercase.
   char upper[8];
   size_t n = 0;
   for (; code[n] && n < sizeof(upper) - 1; n++) {

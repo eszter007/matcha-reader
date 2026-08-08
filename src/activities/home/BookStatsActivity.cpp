@@ -20,8 +20,7 @@ int bookDaysReadInMonth(const void* ctx, const uint16_t year, const uint8_t mont
   return static_cast<const BookStats*>(ctx)->getDaysReadInMonth(year, month);
 }
 
-// "3h" past an hour, "45m" below it -- the same rule the Insights total-time tile uses, so the
-// two screens read alike.
+// "3h" past an hour, "45m" below, matching the Insights total-time tile.
 void formatMinutes(char* buf, const size_t size, const uint32_t minutes) {
   if (minutes >= 60) {
     snprintf(buf, size, "%dh", static_cast<int>(minutes / 60));
@@ -97,9 +96,7 @@ void BookStatsActivity::render(RenderLock&&) {
   const StatsWidgets::Today today = StatsWidgets::getToday();
   int y = contentTop + 8;
 
-  // A book that has not been read since this feature shipped has no history at all -- say so
-  // rather than showing four zeroes and an empty calendar, which reads like a bug. History
-  // starts accumulating the next time the book is opened.
+  // Four zeroes and a blank calendar read as a bug; say there is nothing yet instead.
   if (stats.getSessions() == 0 && stats.getDaysRead() == 0) {
     const char* msg = tr(STR_NO_READING_STATS_YET);
     const int mw = renderer.getTextWidth(SMALL_FONT_ID, msg);
@@ -123,14 +120,13 @@ void BookStatsActivity::render(RenderLock&&) {
     const StatsWidgets::MonthSource source{&stats, bookMonthStatus, bookDaysReadInMonth};
     y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source);
 
-    // Same scroll accounting as the Insights screen: content bottom minus the visible band,
-    // with room left for the button hints.
+    // Content bottom minus the visible band, leaving room for the button hints.
     const int contentEndY = y + 10;
     const int visibleHeight = renderer.getScreenHeight() - headerBottom - 50;
     maxScrollOffset = std::max(0, contentEndY - headerBottom - visibleHeight + scrollOffset);
   }
 
-  // Header last, over the scrolled content, so text cannot bleed through above the rule.
+  // Header last, over the scrolled content, so text cannot bleed through.
   renderer.fillRect(0, 0, screen.width, headerLineY, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  bookTitle.c_str());

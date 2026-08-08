@@ -5,17 +5,13 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Per-book reading stats: sessions, time, average session, days read, and a calendar of the days
-// this book was read. Reached by long-pressing a book in the Library.
-//
-// Started with startActivityForResult rather than replaceActivity so the Library keeps its tab,
-// scroll position and selected book while this is on top.
+// One book's stats, opened by long-pressing it in the Library.
+// startActivityForResult, not replaceActivity, so the Library keeps its tab and selection.
 class BookStatsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
   std::string bookPath;
   std::string bookTitle;
-  // Loaded once in onEnter and held for the life of the activity: it is one book's history
-  // (a few hundred bytes) and re-reading it on every render would hit the SD card per frame.
+  // Held for the activity's life: a few hundred bytes, and re-reading it would hit SD per frame.
   BookStats stats;
   int scrollOffset = 0;
   int maxScrollOffset = 0;

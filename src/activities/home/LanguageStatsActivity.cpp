@@ -15,9 +15,7 @@
 #include "fontIds.h"
 
 namespace {
-// The code the calendar adapters below read. A file-local pointer rather than a member because
-// MonthSource carries one void* and the calendar needs both the store and the language; the
-// store is a singleton, so the language is the only thing left to pass.
+// MonthSource carries one void* and the store is a singleton, so the language rides here.
 const char* g_calendarLanguage = "";
 
 void languageMonthStatus(const void*, const uint16_t year, const uint8_t month, bool out[32]) {
@@ -38,14 +36,11 @@ const char* LanguageStatsActivity::tabLabel(const int index) const {
   const char* code = languages[index].code;
   if (!code[0]) return tr(STR_LANGUAGE_UNKNOWN);
 
-  // The endonym the UI-language list already carries ("ja" -> the Japanese name for Japanese).
-  // Free: those strings are in flash whether this screen exists or not, so naming the tabs costs
-  // no table of its own. Endonyms rather than names translated into the current UI language --
-  // the same convention every language picker uses, and the only one the shipped data supports.
+  // Endonym from the UI-language list; those strings are in flash already, so this costs no
+  // table of its own.
   if (const char* name = I18n::languageNameForCode(code)) return name;
 
-  // A book tagged with a language the firmware has no UI for (say "zh"). Fall back to the tag
-  // uppercased rather than mislabelling it: a wrong language name is worse than a bare code.
+  // No UI for this language (say "zh"): show the bare tag rather than mislabel it.
   static char bufs[4][4];
   static int next = 0;
   char* out = bufs[next];
@@ -70,8 +65,7 @@ void LanguageStatsActivity::onEnter() {
 void LanguageStatsActivity::onExit() { Activity::onExit(); }
 
 void LanguageStatsActivity::loop() {
-  // Back: a tap steps back to the overall screen, a hold goes straight home. The latch stops
-  // the release that ends the hold from also firing the tap.
+  // Tap steps back, hold goes home; the latch stops the hold's release firing the tap too.
   if (backLongPressFired) {
     if (!mappedInput.isPressed(MappedInputManager::Button::Back)) backLongPressFired = false;
     return;
@@ -87,8 +81,7 @@ void LanguageStatsActivity::loop() {
     finish();
     return;
   }
-  // Confirm cycles languages. Left/Right stay on the calendar month, matching the overall
-  // screen -- a reader who has learned those there should not have to relearn them here.
+  // Confirm cycles languages; Left/Right stay on the month, as on the overall screen.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && languages.size() > 1) {
     selectedTab = (selectedTab + 1) % static_cast<int>(languages.size());
     scrollOffset = 0;
@@ -139,9 +132,8 @@ void LanguageStatsActivity::render(RenderLock&&) {
   int y = contentTop + 8;
 
   if (languages.empty()) {
-    // Nothing has been read with a language recorded yet. Distinct from "no reading at all":
-    // TXT and XTC declare none, so a reader can have plenty of overall history and still land
-    // here with nothing to split.
+    // Not the same as "no reading": TXT and XTC declare no language, so overall history can be
+    // rich while this is empty.
     const char* msg = tr(STR_NO_LANGUAGE_STATS_YET);
     const int mw = renderer.getTextWidth(SMALL_FONT_ID, msg);
     renderer.drawText(SMALL_FONT_ID, cardX + (cardW - mw) / 2, y + 40, msg, true);
@@ -150,7 +142,7 @@ void LanguageStatsActivity::render(RenderLock&&) {
     const char* code = selectedCode();
     g_calendarLanguage = code;
 
-    // ---- same three cards as the overall screen, filtered to this language ----
+    // Same cards as the overall screen, filtered to this language.
     const int streak = READING_STATS_STORE.getStreak(code, today.year, today.month, today.day);
     const uint16_t weekMinutes = READING_STATS_STORE.getMinutesThisWeek(code, today.year, today.month, today.day);
     bool weekDays[7] = {};
@@ -184,7 +176,7 @@ void LanguageStatsActivity::render(RenderLock&&) {
     maxScrollOffset = std::max(0, contentEndY - headerBottom - visibleHeight + scrollOffset);
   }
 
-  // Header and tab bar last, over the scrolled content, so nothing bleeds through above them.
+  // Header and tabs last, over the scrolled content, so nothing bleeds through.
   renderer.fillRect(0, 0, screen.width, headerBottom - metrics.verticalSpacing, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  tr(STR_LANGUAGE));
@@ -194,13 +186,11 @@ void LanguageStatsActivity::render(RenderLock&&) {
     for (int i = 0; i < static_cast<int>(languages.size()); i++) {
       tabs.push_back({tabLabel(i), i == selectedTab});
     }
-    // The same component Library and Settings draw, so a language tab looks like every other tab
-    // in the firmware. Always drawn selected: the tab row is the only thing Confirm acts on here.
+    // Same component Library and Settings use. Always drawn focused: Confirm acts only on tabs.
     GUI.drawTabBar(renderer, Rect{0, tabBarY, screen.width, metrics.tabBarHeight}, tabs, true);
   }
 
-  // Left/Right are month steps, so the hints name the months they land on rather than saying
-  // "left"/"right" -- three characters is all the hint strip has room for.
+  // Left/Right step months, so the hints name the months they land on.
   char prevBuf[16], nextBuf[16];
   uint16_t py = calYear, ny = calYear;
   uint8_t pm = calMonth, nm = calMonth;

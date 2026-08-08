@@ -814,9 +814,8 @@ void RecentBooksActivity::loop() {
       return;
     }
 
-    // The latch must be handled inside this block too: everything here returns before reaching
-    // the copy further down, so without it the release ending a long press would fall through
-    // and open the book as well.
+    // Needed here too: this block returns before the copy below, so without it the release
+    // ending a long press would fall through and open the book.
     if (longPressFired) {
       if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
         longPressFired = false;
@@ -825,8 +824,7 @@ void RecentBooksActivity::loop() {
     }
 
     if (shelfContentIndex < static_cast<int>(shelfBooks.size())) {
-      // Same gesture as the Recents grid. Shelves are where manga folders are browsed, so
-      // without this a manga read from its shelf had no way to reach its stats.
+      // Shelves are where manga folders are browsed; without this they had no route to stats.
       if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
         longPressFired = true;
         showBookStats(shelfBooks[shelfContentIndex].path, shelfBooks[shelfContentIndex].title);
@@ -864,11 +862,10 @@ void RecentBooksActivity::loop() {
     } else {
       const int itemIdx = contentIndex - 1;
       if (selectedTab == 0) {
-        // Deliberately nothing here: a book on the Recents tab opens on RELEASE (below), not on
-        // the press edge. Opening on press returns from loop() immediately, so getHeldTime()
-        // could never reach LONG_PRESS_MS and the long-press gesture was unreachable -- which is
-        // how it stayed from 803fcf3c until this was noticed. Shelves and the tab toggle keep
-        // press-to-act: neither has a long-press to make room for.
+        // Nothing here: Recents books open on RELEASE (below). Opening on the press edge
+        // returns from loop() at once, so getHeldTime() never reached LONG_PRESS_MS and the
+        // long press was unreachable (803fcf3c until now). Shelves keep press-to-act: no
+        // long press to make room for.
         (void)itemIdx;
       } else {
         if (itemIdx < static_cast<int>(shelves.size())) {
@@ -894,15 +891,13 @@ void RecentBooksActivity::loop() {
   if (selectedTab == 0 && contentIndex > 0) {
     const int itemIdx = contentIndex - 1;
     if (itemIdx < static_cast<int>(recentBooks.size())) {
-      // Held past the threshold: stats. Fires while the button is still down, so the gesture
-      // completes without waiting for release.
+      // Fires while still held, so the gesture completes without waiting for release.
       if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
         longPressFired = true;
         showBookStats(recentBooks[itemIdx].path, recentBooks[itemIdx].title);
         return;
       }
-      // Released before the threshold: open the book. The longPressFired latch above swallows
-      // the release that ends a long press, so a stats gesture never also opens the book.
+      // The latch above swallows a long press's release, so stats never also opens the book.
       if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() < LONG_PRESS_MS) {
         LOG_DBG("RBA", "Selected recent book: %s", recentBooks[itemIdx].path.c_str());
         onSelectBook(recentBooks[itemIdx].path);
@@ -988,9 +983,7 @@ void RecentBooksActivity::loop() {
 
 void RecentBooksActivity::showBookStats(const std::string& path, const std::string& title) {
   auto handler = [this](const ActivityResult&) {
-    // The stats screen painted over our whole frame, so the next render must be a full one --
-    // a partial redraw would leave its cards on screen.
-    lastRendered.valid = false;
+    lastRendered.valid = false;  // stats painted over the frame; a partial redraw would smear
   };
 
   startActivityForResult(std::make_unique<BookStatsActivity>(renderer, mappedInput, path, title), std::move(handler));

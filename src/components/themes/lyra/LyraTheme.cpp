@@ -189,9 +189,8 @@ void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::ve
     renderer.fillRectDither(rect.x, rect.y, rect.width, rect.height, Color::LightGray);
   }
 
-  // Tabs are laid out at their natural width, so enough of them overrun the bar. Scroll the row
-  // so the selected tab is always fully visible, and draw only whole tabs -- a half tab clipped
-  // at the edge reads as a rendering fault rather than as "there is more this way".
+  // Tabs sit at natural width, so enough of them overrun the bar. Whole tabs only: one clipped
+  // in half reads as a rendering fault, not as "there is more this way".
   const int scrollX = tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * hPaddingInSelection,
                                       LyraMetrics::values.tabSpacing, sidePad, false);
   int currentX = rect.x + sidePad - scrollX;
@@ -231,8 +230,7 @@ bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
     return false;
   }
 
-  // Must apply the same scroll offset and the same skip rule as drawTabBar, or a touch lands on
-  // whichever tab WOULD have been there unscrolled.
+  // Same offset and skip rule as drawTabBar, or a touch lands on the unscrolled tab.
   const int sidePad = LyraMetrics::values.contentSidePadding;
   const int scrollX = tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * hPaddingInSelection,
                                       LyraMetrics::values.tabSpacing, sidePad, false);

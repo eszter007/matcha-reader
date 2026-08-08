@@ -24,8 +24,7 @@ using StatsWidgets::dayLabel;
 using StatsWidgets::getToday;
 using Today = StatsWidgets::Today;
 
-// Adapters that let StatsWidgets read the global store without knowing the type. The per-book
-// screen supplies the same pair over a BookStats.
+// Adapters letting StatsWidgets read the global store without knowing its type.
 void overallMonthStatus(const void*, const uint16_t year, const uint8_t month, bool out[32]) {
   READING_STATS_STORE.getMonthStatus(year, month, out);
 }
@@ -46,8 +45,7 @@ void ReadingStatsActivity::onEnter() {
 void ReadingStatsActivity::onExit() { Activity::onExit(); }
 
 void ReadingStatsActivity::loop() {
-  // Back: a tap leaves Insights, a hold goes straight home -- the same gesture the language
-  // screen behind it uses, so it means one thing across both.
+  // Tap leaves Insights, hold goes home; same gesture as the language screen.
   if (backLongPressFired) {
     if (!mappedInput.isPressed(MappedInputManager::Button::Back)) backLongPressFired = false;
     return;
@@ -63,8 +61,7 @@ void ReadingStatsActivity::loop() {
     finish();
     return;
   }
-  // Confirm opens the per-language breakdown. startActivityForResult rather than replace, so
-  // this screen keeps its scroll position and calendar month while that one is on top.
+  // startActivityForResult, not replace, so this screen keeps its scroll and month.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     startActivityForResult(std::make_unique<LanguageStatsActivity>(renderer, mappedInput),
                            [](const ActivityResult&) {});
@@ -167,7 +164,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
                  tr(STR_STATS));
 
   // Button hints
-  // Left/Right step the calendar, so the hints name the months they land on.
+  // Hints name the months Left/Right land on.
   char prevBuf[16], nextBuf[16];
   uint16_t py = calYear, ny = calYear;
   uint8_t pm = calMonth, nm = calMonth;

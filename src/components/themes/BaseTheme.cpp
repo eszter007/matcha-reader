@@ -469,12 +469,12 @@ int BaseTheme::tabScrollOffset(const GfxRenderer& renderer, const Rect rect, con
     }
     total += w + spacing;
   }
-  total -= spacing;  // no trailing gap after the last tab
+  total -= spacing;  // no trailing gap
 
   const int avail = rect.width - 2 * sidePad;
   if (!found || total <= avail) return 0;
 
-  // Show the selected tab, preferring to reveal what follows it.
+  // Prefer revealing what follows the selected tab.
   int offset = 0;
   if (selRight > avail) offset = selRight - avail;
   if (selLeft < offset) offset = selLeft;
@@ -489,8 +489,7 @@ void BaseTheme::drawTabBar(const GfxRenderer& renderer, const Rect rect, const s
   const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
   const int sidePad = BaseMetrics::values.contentSidePadding;
 
-  // See LyraTheme::drawTabBar: scroll so the selected tab stays visible once the row overruns
-  // the bar, and draw only whole tabs.
+  // See LyraTheme::drawTabBar.
   const int scrollX =
       tabScrollOffset(renderer, rect, tabs, UI_12_FONT_ID, 0, BaseMetrics::values.tabSpacing, sidePad, true);
   int currentX = rect.x + sidePad - scrollX;
@@ -526,7 +525,7 @@ bool BaseTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
     return false;
   }
 
-  // Same offset and skip rule as drawTabBar, so a touch cannot select a tab that is not on screen.
+  // Same offset and skip rule as drawTabBar, so off-screen tabs are not touchable.
   const int sidePad = BaseMetrics::values.contentSidePadding;
   const int scrollX =
       tabScrollOffset(renderer, rect, tabs, UI_12_FONT_ID, 0, BaseMetrics::values.tabSpacing, sidePad, true);

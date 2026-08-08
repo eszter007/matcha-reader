@@ -71,9 +71,7 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   if (!READING_STATS_STORE.saveToFile()) {
     LOG_ERR("STATS", "saveToFile failed (load=%d, %u min lost from file)", loadOk, minutes);
   }
-  // Per-book day history and session count, in their own file per book (see BookStats). Loaded
-  // and dropped inside this scope: only one book is ever being read, so none of this stays in
-  // DRAM between flushes.
+  // Per-book day history (see BookStats). Loaded and dropped here: nothing stays in DRAM.
   if (bookPath && *bookPath) {
     BookStats bookStats;
     if (bookStats.load(bookPath)) {
