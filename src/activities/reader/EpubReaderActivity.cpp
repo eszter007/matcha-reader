@@ -2000,7 +2000,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
       // TEMP (issue #54): open = ctor + loadSectionFile (+ build); read = page record off SD;
       // draw = glyph prewarm + rasterise. fresh=1 marks a chapter transition.
-      LOG_DBG("VPHASE", "fresh=%d open=%ums read=%ums draw=%ums total=%ums maxAlloc=%u free=%u", vFreshSection ? 1 : 0,
+      // spine/page log EVERY render, unlike "Progress saved" which is now skipped while skimming
+      // -- a position jump that happens mid-skim leaves no other trace.
+      LOG_DBG("VPHASE", "spine=%d page=%d/%d fresh=%d open=%ums read=%ums draw=%ums total=%ums maxAlloc=%u free=%u",
+              currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, vFreshSection ? 1 : 0,
               tVOpenDone - tVEnter, tVPageRead - tVOpenDone, millis() - start, millis() - tVEnter,
               ESP.getMaxAllocHeap(), ESP.getFreeHeap());
     }
@@ -2071,13 +2074,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
       }
     }
-    // Skipped while skimming: this is an SD write per page turn, and the render that settles
-    // saves the position the reader actually stops on. Progress durability is unaffected -- the
-    // only pages not persisted are ones passed through on the way somewhere else.
-    if (!skimming) {
-      saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
-                   furiganaOverride);
-    }
+    // NOT gated on `skimming`. It was, on the reasoning that the render which settles would save
+    // the final position anyway -- but the saved record is not write-only: the progress-sync path
+    // in this same function restores from it (`verticalSection->currentPage = targetPage`). Leave
+    // it stale through a skim and a sync arriving mid-skim snaps the reader back to wherever the
+    // last write happened, which after skimming a chapter is near its start. One SD write per turn
+    // is the wrong thing to trade for that.
+    saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
+                 furiganaOverride);
 
     // End of the overlap window. Everything past this point may draw: the popups below, the
     // screenshot's framebuffer read, and the image warm's cache decode.
