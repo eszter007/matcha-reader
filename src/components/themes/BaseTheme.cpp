@@ -453,18 +453,55 @@ void BaseTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
   renderer.drawText(UI_12_FONT_ID, currentX, rect.y, truncatedLabel.c_str(), true, EpdFontFamily::REGULAR);
 }
 
+int BaseTheme::tabScrollOffset(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
+                               const int fontId, const int extraPerTab, const int spacing, const int sidePad,
+                               const bool boldSelected) const {
+  int total = 0, selLeft = 0, selRight = 0;
+  bool found = false;
+  for (const auto& tab : tabs) {
+    const int w = renderer.getTextWidth(fontId, tab.label,
+                                        (boldSelected && tab.selected) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR) +
+                  extraPerTab;
+    if (tab.selected) {
+      selLeft = total;
+      selRight = total + w;
+      found = true;
+    }
+    total += w + spacing;
+  }
+  total -= spacing;  // no trailing gap after the last tab
+
+  const int avail = rect.width - 2 * sidePad;
+  if (!found || total <= avail) return 0;
+
+  // Show the selected tab, preferring to reveal what follows it.
+  int offset = 0;
+  if (selRight > avail) offset = selRight - avail;
+  if (selLeft < offset) offset = selLeft;
+  return std::clamp(offset, 0, total - avail);
+}
+
 void BaseTheme::drawTabBar(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
                            bool selected) const {
   constexpr int underlineHeight = 2;  // Height of selection underline
   constexpr int underlineGap = 4;     // Gap between text and underline
 
   const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int sidePad = BaseMetrics::values.contentSidePadding;
 
-  int currentX = rect.x + BaseMetrics::values.contentSidePadding;
+  // See LyraTheme::drawTabBar: scroll so the selected tab stays visible once the row overruns
+  // the bar, and draw only whole tabs.
+  const int scrollX =
+      tabScrollOffset(renderer, rect, tabs, UI_12_FONT_ID, 0, BaseMetrics::values.tabSpacing, sidePad, true);
+  int currentX = rect.x + sidePad - scrollX;
 
   for (const auto& tab : tabs) {
     const int textWidth =
         renderer.getTextWidth(UI_12_FONT_ID, tab.label, tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    if (currentX < rect.x || currentX + textWidth > rect.x + rect.width) {
+      currentX += textWidth + BaseMetrics::values.tabSpacing;
+      continue;
+    }
 
     // Draw underline for selected tab
     if (tab.selected) {
@@ -489,11 +526,19 @@ bool BaseTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
     return false;
   }
 
-  int currentX = rect.x + BaseMetrics::values.contentSidePadding;
+  // Same offset and skip rule as drawTabBar, so a touch cannot select a tab that is not on screen.
+  const int sidePad = BaseMetrics::values.contentSidePadding;
+  const int scrollX =
+      tabScrollOffset(renderer, rect, tabs, UI_12_FONT_ID, 0, BaseMetrics::values.tabSpacing, sidePad, true);
+  int currentX = rect.x + sidePad - scrollX;
   for (size_t i = 0; i < tabs.size(); i++) {
     const auto& tab = tabs[i];
     const int textWidth =
         renderer.getTextWidth(UI_12_FONT_ID, tab.label, tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    if (currentX < rect.x || currentX + textWidth > rect.x + rect.width) {
+      currentX += textWidth + BaseMetrics::values.tabSpacing;
+      continue;  // not drawn, so not touchable
+    }
     const int left = (i == 0) ? rect.x : currentX - BaseMetrics::values.tabSpacing / 2;
     const int right = currentX + textWidth + BaseMetrics::values.tabSpacing / 2;
     if (x >= left && x < right) {
