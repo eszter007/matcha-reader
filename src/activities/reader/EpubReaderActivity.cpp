@@ -1051,6 +1051,28 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
       // still be inside its (multi-second, section-touching) warm tail when this result
       // lands, and freeing the section under it is a use-after-free.
       RenderLock lock(*this);
+      // Carry the reading position across the mode change. The two modes paginate the same
+      // chapter differently, so the page NUMBER means nothing on the other side; what survives
+      // is the fraction through the chapter. Recording page + count here is what lets the
+      // rebuild remap proportionally (vertical: the cachedChapterTotalPageCount block in
+      // render(); horizontal: applyDeferredReposition()). Without it the rebuild started from
+      // whatever nextPageNumber happened to hold and the position jumped.
+      if (verticalSection) {
+        cachedSpineIndex = currentSpineIndex;
+        nextPageNumber = verticalSection->currentPage;
+        cachedChapterTotalPageCount = verticalSection->pageCount;
+      } else if (section) {
+        cachedSpineIndex = currentSpineIndex;
+        nextPageNumber = section->currentPage;
+        // estimatedTotalPages(), not pageCount: mid-build pageCount is only the watermark of
+        // what has been laid out, which is barely ahead of currentPage -- the fraction would
+        // come out near 1.0 and drop the reader at the end of the chapter.
+        cachedChapterTotalPageCount = section->estimatedTotalPages();
+      }
+      // A content offset only resolves against a horizontal Section, and it was captured under
+      // the outgoing layout. Leaving it set would win over the remap above and, going back to
+      // horizontal, silently re-anchor to a stale position.
+      cachedVisibleTextOffset.reset();
       section.reset();
       verticalSection.reset();
     }
@@ -1781,25 +1803,28 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         }
         pendingPageJump.reset();
       } else {
+        // Left UNCLAMPED on purpose: nextPageNumber is numbered in whatever pagination saved it
+        // (a horizontal layout, or this one before a settings change), and vertical pagination is
+        // typically much shorter. Clamping first would collapse "page 204 of 213" onto the last
+        // vertical page and the remap below would then read that as ~96% of the OLD count -- the
+        // position drifted backwards on every switch. Clamp once, after the remap.
         verticalSection->currentPage = nextPageNumber;
-        if (verticalSection->pageCount == 0) {
-          verticalSection->currentPage = 0;
-        } else if (verticalSection->currentPage < 0) {
-          verticalSection->currentPage = 0;
-        } else if (verticalSection->currentPage >= verticalSection->pageCount) {
-          verticalSection->currentPage = verticalSection->pageCount - 1;
-        }
       }
       pendingAnchor.clear();
 
       if (cachedChapterTotalPageCount > 0) {
         if (currentSpineIndex == cachedSpineIndex && verticalSection->pageCount != cachedChapterTotalPageCount) {
-          float progress =
+          const float progress =
               static_cast<float>(verticalSection->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
-          int newPage = static_cast<int>(progress * verticalSection->pageCount);
-          verticalSection->currentPage = newPage;
+          verticalSection->currentPage = static_cast<int>(progress * verticalSection->pageCount);
         }
         cachedChapterTotalPageCount = 0;
+      }
+
+      if (verticalSection->pageCount == 0 || verticalSection->currentPage < 0) {
+        verticalSection->currentPage = 0;
+      } else if (verticalSection->currentPage >= verticalSection->pageCount) {
+        verticalSection->currentPage = verticalSection->pageCount - 1;
       }
 
       if (pendingPercentJump && verticalSection->pageCount > 0) {
@@ -3359,7 +3384,16 @@ EpubReaderActivity::SectionPageSpan EpubReaderActivity::sectionPageSpan() const 
   // estimatedTotalPages() rather than pageCount: while a giant spine builds, pageCount is only
   // the watermark reached so far, so "page X of Y" would count against a total that keeps moving.
   const int rawCount = verticalSection ? verticalSection->pageCount : section ? section->estimatedTotalPages() : 0;
-  if (rawCount <= 0) return {1, 1};  // empty chapter: one skippable page beats 65536/0
+  if (rawCount <= 0) {
+    // No pages laid out yet -- a chapter mid-rebuild, typically right after a vertical/horizontal
+    // switch. Publishing {1, 1} here is what made the status bar read "1/1 0%" for a reader who
+    // was 95% through the chapter a moment earlier. Hold the position being carried into the
+    // rebuild instead; the real span replaces it as soon as the section has pages.
+    if (cachedChapterTotalPageCount > 0 && currentSpineIndex == cachedSpineIndex) {
+      return {std::clamp(nextPageNumber + 1, 1, cachedChapterTotalPageCount), cachedChapterTotalPageCount};
+    }
+    return {1, 1};  // empty chapter: one skippable page beats 65536/0
+  }
 
   // Loud rather than silently clamped. An out-of-range page here is a real bug somewhere in the
   // positioning path, and the clamp below is what hides it from the screen.
