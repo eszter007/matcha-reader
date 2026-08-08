@@ -52,6 +52,7 @@ void XtcReaderActivity::onEnter() {
   APP_STATE.openEpubPath = xtc->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath());
+  BookStats::recordOpen(xtc->getPath().c_str());
 
   // Trigger first update
   requestUpdate();

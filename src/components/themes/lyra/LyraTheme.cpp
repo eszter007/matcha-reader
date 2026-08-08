@@ -183,14 +183,25 @@ void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
 
 void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                            bool selected) const {
-  int currentX = rect.x + LyraMetrics::values.contentSidePadding;
+  const int sidePad = LyraMetrics::values.contentSidePadding;
 
   if (selected) {
     renderer.fillRectDither(rect.x, rect.y, rect.width, rect.height, Color::LightGray);
   }
 
+  // Tabs sit at natural width, so enough of them overrun the bar. Whole tabs only: one clipped
+  // in half reads as a rendering fault, not as "there is more this way".
+  const int scrollX = tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * hPaddingInSelection,
+                                      LyraMetrics::values.tabSpacing, sidePad, false);
+  int currentX = rect.x + sidePad - scrollX;
+
   for (const auto& tab : tabs) {
     const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR);
+    const int tabWidth = textWidth + 2 * hPaddingInSelection;
+    if (currentX < rect.x || currentX + tabWidth > rect.x + rect.width) {
+      currentX += tabWidth + LyraMetrics::values.tabSpacing;
+      continue;
+    }
 
     if (tab.selected) {
       if (selected) {
@@ -219,10 +230,18 @@ bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
     return false;
   }
 
-  int currentX = rect.x + LyraMetrics::values.contentSidePadding;
+  // Same offset and skip rule as drawTabBar, or a touch lands on the unscrolled tab.
+  const int sidePad = LyraMetrics::values.contentSidePadding;
+  const int scrollX = tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * hPaddingInSelection,
+                                      LyraMetrics::values.tabSpacing, sidePad, false);
+  int currentX = rect.x + sidePad - scrollX;
   for (size_t i = 0; i < tabs.size(); i++) {
     const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tabs[i].label, EpdFontFamily::REGULAR);
     const int tabWidth = textWidth + 2 * hPaddingInSelection;
+    if (currentX < rect.x || currentX + tabWidth > rect.x + rect.width) {
+      currentX += tabWidth + LyraMetrics::values.tabSpacing;
+      continue;  // not drawn, so not touchable
+    }
     const int left = (i == 0) ? rect.x : currentX - LyraMetrics::values.tabSpacing / 2;
     const int right = currentX + tabWidth + LyraMetrics::values.tabSpacing / 2;
     if (x >= left && x < right) {

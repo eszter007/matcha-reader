@@ -37,21 +37,28 @@ struct LanguageDaily {
 class ReadingStatsStore {
   static ReadingStatsStore instance;
 
-  static constexpr int MAX_DAYS = 365;
-  // A year of days times the handful of languages one reader actually uses. Held in a vector
-  // rather than a flat array so the common single-language case costs a few hundred bytes
-  // instead of the worst case's 5KB; oldest entries are dropped when full.
-  static constexpr size_t MAX_LANG_DAYS = 512;
+  // Day history the calendar pages back through; the old 365-entry ring silently forgot the
+  // year before last. 6 bytes/day, ~2.2KB per year of daily reading.
+  //
+  // Bounded by MEMORY, not by a corruption guard: std::vector allocates with new, and this
+  // firmware builds -fno-exceptions, so a failed reserve() aborts rather than returning null.
+  // 3650 days is a decade of reading every day for 22KB. A file holding more keeps its most
+  // recent 3650 (see loadFromFile, which consumes the rest to stay aligned).
+  static constexpr size_t MAX_DAYS = 3650;
   // Bounded because each entry heap-allocates its path (~40-80 bytes) and the store is a
   // long-lived singleton. When full, the least recently read book is dropped -- its minutes
   // stay counted in the per-day totals, which are the numbers the UI shows today.
   static constexpr size_t MAX_BOOKS = 150;
-  DailyReading days[MAX_DAYS] = {};
-  int dayCount = 0;
+  std::vector<DailyReading> days;  // sorted ascending by date
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
   std::vector<BookReading> books;
-  std::vector<LanguageDaily> languageDays;
+  // Same, for the per-language calendar; the old 512-entry ring held barely a year for one
+  // language. 10 bytes per (day, language) -- dearer than `days` because each record carries
+  // its tag -- so a smaller cap buys the same 25KB. Shrink the record with a language table
+  // before raising this.
+  static constexpr size_t MAX_LANG_DAYS = 2500;
+  std::vector<LanguageDaily> languageDays;  // sorted ascending by date
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
@@ -77,6 +84,27 @@ class ReadingStatsStore {
   uint16_t getMinutesForDay(const char* language, uint16_t year, uint8_t month, uint8_t day) const;
   uint32_t getTotalMinutes(const char* language) const;
   void markBookFinished(const std::string& bookPath);
+
+  // ---- per-language views, mirroring the overall ones ----
+  // Every language read, most-read first. Written into the caller's vector so the store keeps
+  // no derived state.
+  struct LanguageSummary {
+    char code[4];  // primary subtag, lowercase; empty first byte = unknown
+    uint32_t minutes;
+  };
+  void getLanguages(std::vector<LanguageSummary>& out) const;
+
+  int getStreak(const char* language, uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
+  int getLongestStreak(const char* language) const;
+  int getDaysRead(const char* language) const;
+  uint16_t getMinutesThisWeek(const char* language, uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
+  void getWeekStatus(const char* language, uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay, int todayDow,
+                     bool readDays[7]) const;
+  void getMonthStatus(const char* language, uint16_t year, uint8_t month, bool out[32]) const;
+  int getDaysReadInMonth(const char* language, uint16_t year, uint8_t month) const;
+  // Can undercount: language lives in the per-book block, which is capped and LRU-evicted, so a
+  // book finished long ago may have lost its tag. Never overcounts.
+  uint16_t getBooksFinished(const char* language) const;
 
   int getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
   int getLongestStreak() const;

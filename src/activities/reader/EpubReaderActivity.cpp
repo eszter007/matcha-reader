@@ -341,6 +341,9 @@ void EpubReaderActivity::onEnter() {
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
+  // One session per opening of the book. onEnter runs once per open -- the reader survives its
+  // own menus (startActivityForResult), so this does not fire again mid-chapter.
+  BookStats::recordOpen(epub->getPath().c_str());
 
   loadCachedBookmarks();
 

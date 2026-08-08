@@ -4,6 +4,8 @@
 
 class ReadingStatsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
+  // Swallows the release that ends a long Back press, so going home does not also finish().
+  bool backLongPressFired = false;
   int scrollOffset = 0;
   int maxScrollOffset = 0;
   // Calendar month navigation

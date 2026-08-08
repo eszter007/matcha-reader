@@ -11,6 +11,7 @@
 #include <ctime>
 #include <string>
 
+#include "BookStats.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "activities/ActivityManager.h"
@@ -69,6 +70,17 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
                                          static_cast<uint8_t>(t.tm_mon + 1), static_cast<uint8_t>(t.tm_mday));
   if (!READING_STATS_STORE.saveToFile()) {
     LOG_ERR("STATS", "saveToFile failed (load=%d, %u min lost from file)", loadOk, minutes);
+  }
+  // Per-book day history (see BookStats). Loaded and dropped here: nothing stays in DRAM.
+  if (bookPath && *bookPath) {
+    BookStats bookStats;
+    if (!bookStats.load(bookPath)) {
+      LOG_ERR("STATS", "book stats load failed (%u min not attributed)", minutes);
+    } else {
+      bookStats.recordMinutes(static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1),
+                              static_cast<uint8_t>(t.tm_mday), minutes);
+      if (!bookStats.save()) LOG_ERR("STATS", "book stats save failed (%u min not attributed)", minutes);
+    }
   }
   sessionStartMs += static_cast<unsigned long>(minutes) * 60000UL;
 }
