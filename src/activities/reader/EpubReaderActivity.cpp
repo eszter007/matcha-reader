@@ -1994,11 +1994,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
     }
 
-    // Start the waveform and return, so the post-render work below (next-chapter index, glyph
-    // warm, progress save) runs DURING the panel's ~500ms refresh instead of after it. Sustained
-    // paging was device-bound at ~1030ms per turn: 50ms draw + 502ms blocking refresh + ~430ms
-    // warm. None of the overlapped work touches the framebuffer -- the glyph warm renders in scan
-    // mode, which draws nothing. Everything that DOES touch it waits first; see below.
+    // Async: start the waveform and return, so runPostRenderTail() below runs DURING the panel's
+    // ~500ms refresh rather than after it. Worth ~450ms per turn.
+    //
+    // Contract: nothing between here and waitRefreshComplete() may touch the framebuffer. The tail
+    // is safe (its glyph warm renders in scan mode, which draws nothing); popups, screenshots and
+    // the image warm are not, and run after the wait.
     const bool overlapRefresh = !imagePageDisplayed && renderer.supportsAsyncRefresh();
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
@@ -2469,11 +2470,10 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // one page each -- with the old penultimate-page-only trigger a run of them showed the
     // Indexing popup on every page turn).
     //
-    // The window is 5 pages, not 2, because the heap gate below rejects on a bad fragmentation
-    // moment and a 2-page window gave it ONE attempt: a rejection there (device log:
-    // "heap too tight (maxAlloc=69620)" on the last page but one) meant the chapter was never
-    // built and the transition paid a 7.6s foreground build. Several attempts across several
-    // turns sample several heap states, and only the first to pass does any work.
+    // The window must be wide enough for SEVERAL attempts, not one. The heap gate below rejects
+    // on transient fragmentation (observed: maxAlloc 69620 on one turn, 114676 two turns later),
+    // so a single-attempt window loses the chapter to that sampling noise and the transition pays
+    // a multi-second foreground build. Only the first attempt to pass does any work.
     constexpr int SILENT_INDEX_WINDOW_PAGES = 5;
     if (!epub || !verticalSection || verticalSection->pageCount < 1) return;
     if (verticalSection->currentPage < verticalSection->pageCount - SILENT_INDEX_WINDOW_PAGES) return;
@@ -2493,12 +2493,10 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
 
     constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
 
-    // There is deliberately NO pre-gate on the heap here. One existed, testing free heap against
-    // this same floor before the release below, and it rejected every attempt ever made: it
-    // measured the heap BEFORE the release that produces the memory. Free during reading sits
-    // around 95K and the release is worth ~40-50K, so the only honest reading is the post-release
-    // one below. The rebuild the pre-gate was avoiding costs ~250ms; the foreground build it lets
-    // through instead costs 5-13s.
+    // Do NOT add a heap pre-gate above the release below. Free heap while reading sits near this
+    // floor (~95K) and the release is worth ~40-50K, so any pre-release check rejects attempts
+    // that would have passed. The post-release gate is the only meaningful reading. Skipping a
+    // release costs ~250ms; the foreground build a missed index causes costs 5-13s.
     //
     // The vertical build is the most memory-intensive step in the reader, and this
     // silent path runs it at the worst heap moment: right after a page render, with
@@ -2523,10 +2521,9 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     // (which frees more up front and early-renders) builds it properly on arrival.
     if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
       LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
-      // Short backoff: at ~600ms per turn a 5s window swallowed the whole trigger range, so one
-      // rejection ended the chapter's chances. A rejected attempt costs the font rebuild the
-      // release above forces (~250-400ms on the next render), which is worth paying a few times
-      // against a 7.6s foreground build.
+      // Backoff must stay well under WINDOW * turn duration (~600ms/turn), or one rejection
+      // consumes the whole window. A rejected attempt costs the font rebuild the release above
+      // forces (~250-400ms on the next render) -- cheap against the foreground build it avoids.
       silentIndexBackoffUntilMs_ = millis() + 1500;
       return;
     }

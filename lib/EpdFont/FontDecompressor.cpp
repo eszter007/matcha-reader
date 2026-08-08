@@ -560,12 +560,14 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
   // Step 4: For each unique group, decompress to temp buffer and extract needed glyphs.
   //
-  // ONE buffer, sized to the largest needed group, serves every group. Per-group malloc/free of
-  // ~16KB blocks was both a fragmentation source and a retry storm: a heap too tight for one group
-  // is too tight for the next, so a failure repeated once per group (measured: 16 in a burst) and
-  // the page's prewarm silently produced nothing. If the shared allocation fails there is no
-  // smaller thing worth trying -- every group needs its own full uncompressedSize -- so the loop
-  // stops rather than re-probing.
+  // ONE buffer, sized to the largest needed group, serves every group. Do not go back to a
+  // per-group malloc/free: a reading page needs up to 128 groups, so that churned ~16KB blocks
+  // 128x per page turn (a measurable fragmentation source), and on a tight heap it failed once
+  // per group rather than once per page.
+  //
+  // A failed allocation ends the loop instead of continuing: every group needs its own full
+  // uncompressedSize, so there is nothing smaller left to try. Unextracted glyphs keep
+  // bufferOffset == UINT32_MAX and fall through to the hot-group path in getBitmap().
   uint32_t writeOffset = 0;
   int missed = 0;
 
