@@ -449,12 +449,13 @@ bool RecentBooksActivity::stepLibraryScan() {
     // manga covers were missing there and not here.
     const bool coverIsMangaTemplate = coverIsTemplate && book.coverBmpPath.rfind("/.crosspoint/manga_", 0) == 0;
     const bool mangaGridMissing =
-      !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH);
+      coverIsMangaTemplate && !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH);
     const bool mangaHomeMissing =
-      metrics.homeCoverHeight > 0 &&
+      coverIsMangaTemplate && metrics.homeCoverHeight > 0 &&
       !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, metrics.homeCoverHeight),
                         metrics.homeCoverHeight);
     const bool mangaShelfMissing =
+      coverIsMangaTemplate &&
       !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT);
     const bool mangaThumbMissing = coverIsMangaTemplate && (mangaGridMissing || mangaHomeMissing || mangaShelfMissing);
     // Manga: the walk only recorded the raw page image; convert it here, where the pass is
