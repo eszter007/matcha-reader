@@ -861,17 +861,31 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     return success;
   } else if (FsHelpers::hasBmpExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from BMP cover image");
+    // The extracted source SURVIVES a failed attempt, and only a complete extraction is kept.
+    // Unpacking a large cover costs seconds (device log: 7s for 35KB -> 43KB), and a cancelled
+    // conversion used to delete it, so every retry paid that again and got interrupted at the
+    // same point -- the cover could never be produced, however many times it was attempted.
+    // Written via .part + rename so presence of the final path means "complete": a half-written
+    // husk is never mistaken for a cached source, the same reason section builds use a tmp name.
     const auto sourcePath = getCachePath() + "/.cover-source.bmp";
+    const auto sourceTmpPath = sourcePath + ".part";
 
     HalFile sourceBmp;
-    if (!Storage.openFileForWrite("EBP", sourcePath, sourceBmp)) return false;
-    CancellablePrint cancellableCover(sourceBmp, shouldCancel, cancelCtx);
-    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+    if (!Storage.hasContent(sourcePath.c_str())) {
+      if (!Storage.openFileForWrite("EBP", sourceTmpPath, sourceBmp)) return false;
+      CancellablePrint cancellableCover(sourceBmp, shouldCancel, cancelCtx);
+      const bool extracted = readItemContentsToStream(coverImageHref, cancellableCover, 1024);
       sourceBmp.close();
-      Storage.remove(sourcePath.c_str());
-      return false;
+      if (!extracted) {
+        Storage.remove(sourceTmpPath.c_str());
+        return false;
+      }
+      Storage.remove(sourcePath.c_str());  // a stale 0-byte husk would block the rename
+      if (!Storage.rename(sourceTmpPath.c_str(), sourcePath.c_str())) {
+        Storage.remove(sourceTmpPath.c_str());
+        return false;
+      }
     }
-    sourceBmp.close();
 
     if (!Storage.openFileForRead("EBP", sourcePath, sourceBmp)) {
       Storage.remove(sourcePath.c_str());
@@ -880,20 +894,20 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     HalFile thumbBmp;
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
       sourceBmp.close();
-      Storage.remove(sourcePath.c_str());
       return false;
     }
     const bool success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(sourceBmp, thumbBmp, (height * 2) / 3,
                                                                            height, shouldCancel, cancelCtx);
     sourceBmp.close();
     thumbBmp.close();
-    Storage.remove(sourcePath.c_str());
 
     if (!success) {
       LOG_ERR("EBP", "Failed to generate thumb BMP from BMP cover image");
       Storage.remove(getThumbBmpPath(height).c_str());
+      return false;  // keep the extracted source: the next attempt resumes from the costly part
     }
-    return success;
+    Storage.remove(sourcePath.c_str());  // consumed
+    return true;
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
   }

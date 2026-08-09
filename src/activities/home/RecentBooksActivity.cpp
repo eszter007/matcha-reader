@@ -5,6 +5,7 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <JpegToBmpConverter.h>
@@ -130,7 +131,13 @@ void RecentBooksActivity::coverWorkerTrampoline(void* ctx) {
 bool RecentBooksActivity::coverWorkerShouldCancel(void* ctx) {
   auto* self = static_cast<RecentBooksActivity*>(ctx);
   if (!self) return true;
-  const bool cancel = self->coverWorkerExitRequested_ || self->coverWorkerCancelRequested_ || RenderLock::peek();
+  // NOT RenderLock::peek(). A redraw is not a reason to abandon a conversion: the worker is its
+  // own FreeRTOS task, SD access is already serialised by HalStorage's mutex, and the Library's
+  // own scan slices redraw often enough that any conversion longer than the gap between them was
+  // cancelled and restarted from zero forever (device log: a 43KB BMP cover reached ~8s, was
+  // cancelled, and began again -- it could never finish). Real user input still cancels
+  // immediately: loop() sets coverWorkerCancelRequested_ on anyButtonDownRaw().
+  const bool cancel = self->coverWorkerExitRequested_ || self->coverWorkerCancelRequested_;
   if (cancel) self->coverWorkerCancelSeen_ = true;
   return cancel;
 }
@@ -140,7 +147,16 @@ void RecentBooksActivity::coverWorkerLoop() {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     if (coverWorkerExitRequested_) break;
     if (!coverWorkerBusy_.load(std::memory_order_acquire)) continue;
-    runCoverJob();
+    {
+      // Full CPU for the length of the conversion. The Library sits idle while a cover is built,
+      // so HalPowerManager drops the clock to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at
+      // 160MHz takes ~24s at 10 -- long enough that it used to be cancelled before finishing.
+      // Same lock EpubReaderActivity holds for a section build, and for the same reason. Energy
+      // is not the trade it looks like: the work is fixed, so finishing sooner spends less time
+      // awake overall.
+      HalPowerManager::Lock powerLock;
+      runCoverJob();
+    }
     // Publishes coverResult_ to the loop task.
     coverWorkerBusy_.store(false, std::memory_order_release);
   }
