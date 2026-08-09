@@ -1,6 +1,7 @@
 #include "Epub.h"
 
 #include <BmpToBmpConverter.h>
+#include <BufferedFile.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -15,6 +16,23 @@
 #include "Epub/parsers/TocNcxParser.h"
 
 namespace {
+constexpr size_t COVER_WRITE_BUFFER_SIZE = 16 * 1024;
+
+class BufferedFilePrint final : public Print {
+ public:
+  explicit BufferedFilePrint(HalFile& file) : output(file, COVER_WRITE_BUFFER_SIZE) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* buffer, size_t size) override {
+    output.write(buffer, size);
+    return size;
+  }
+  bool finish() { return output.flush(); }
+
+ private:
+  serialization::BufferedFileWriter output;
+};
+
 class CancellablePrint final : public Print {
  public:
   CancellablePrint(Print& output, BmpConvertCancelFn shouldCancel, void* cancelCtx)
@@ -783,8 +801,13 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
-    CancellablePrint cancellableCover(coverJpg, shouldCancel, cancelCtx);
-    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+    bool extracted;
+    {
+      BufferedFilePrint bufferedCover(coverJpg);
+      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+      if (extracted) extracted = bufferedCover.finish();
+    }
+    if (!extracted) {
       coverJpg.close();
       Storage.remove(coverJpgTempPath.c_str());
       return false;
@@ -827,8 +850,13 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
-    CancellablePrint cancellableCover(coverPng, shouldCancel, cancelCtx);
-    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+    bool extracted;
+    {
+      BufferedFilePrint bufferedCover(coverPng);
+      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+      if (extracted) extracted = bufferedCover.finish();
+    }
+    if (!extracted) {
       coverPng.close();
       Storage.remove(coverPngTempPath.c_str());
       return false;
@@ -873,8 +901,12 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     HalFile sourceBmp;
     if (!FsHelpers::hasContent("EBP", sourcePath)) {
       if (!Storage.openFileForWrite("EBP", sourceTmpPath, sourceBmp)) return false;
-      CancellablePrint cancellableCover(sourceBmp, shouldCancel, cancelCtx);
-      const bool extracted = readItemContentsToStream(coverImageHref, cancellableCover, 1024);
+      bool extracted;
+      {
+        BufferedFilePrint bufferedCover(sourceBmp);
+        extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+        if (extracted) extracted = bufferedCover.finish();
+      }
       sourceBmp.close();
       if (!extracted) {
         Storage.remove(sourceTmpPath.c_str());
