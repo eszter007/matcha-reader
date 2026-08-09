@@ -147,16 +147,7 @@ void RecentBooksActivity::coverWorkerLoop() {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     if (coverWorkerExitRequested_) break;
     if (!coverWorkerBusy_.load(std::memory_order_acquire)) continue;
-    {
-      // Full CPU for the length of the conversion. The Library sits idle while a cover is built,
-      // so HalPowerManager drops the clock to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at
-      // 160MHz takes ~24s at 10 -- long enough that it used to be cancelled before finishing.
-      // Same lock EpubReaderActivity holds for a section build, and for the same reason. Energy
-      // is not the trade it looks like: the work is fixed, so finishing sooner spends less time
-      // awake overall.
-      HalPowerManager::Lock powerLock;
-      runCoverJob();
-    }
+    runCoverJob();
     // Publishes coverResult_ to the loop task.
     coverWorkerBusy_.store(false, std::memory_order_release);
   }
@@ -184,6 +175,10 @@ void RecentBooksActivity::runCoverJob() {
         !thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight)) {
       epub.generateThumbBmp(coverJob_.gridHeight, &coverWorkerShouldCancel, this);
     }
+    if (loaded && !coverWorkerShouldCancel(this) && coverJob_.homeHeight > 0 &&
+        !thumbHeightValid(epub.getThumbBmpPath(coverJob_.homeHeight), coverJob_.homeHeight)) {
+      epub.generateThumbBmp(coverJob_.homeHeight, &coverWorkerShouldCancel, this);
+    }
     if (loaded && !coverWorkerShouldCancel(this) &&
         !thumbHeightValid(epub.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
       epub.generateThumbBmp(SHELF_THUMB_HEIGHT, &coverWorkerShouldCancel, this);
@@ -206,6 +201,10 @@ void RecentBooksActivity::runCoverJob() {
     if (loaded && !coverWorkerShouldCancel(this) &&
         !thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight)) {
       xtc.generateThumbBmp(coverJob_.gridHeight, &coverWorkerShouldCancel, this);
+    }
+    if (loaded && !coverWorkerShouldCancel(this) && coverJob_.homeHeight > 0 &&
+        !thumbHeightValid(xtc.getThumbBmpPath(coverJob_.homeHeight), coverJob_.homeHeight)) {
+      xtc.generateThumbBmp(coverJob_.homeHeight, &coverWorkerShouldCancel, this);
     }
     if (loaded && !coverWorkerShouldCancel(this) &&
         !thumbHeightValid(xtc.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
@@ -395,8 +394,16 @@ bool RecentBooksActivity::stepLibraryScan() {
   // Cover-thumb pass, one catalog entry per slice. The render task owns the same catalog, so
   // copy the entry under a non-blocking lock and do all SD/decode work after releasing it.
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int thumbH =
-      gridCoverHeight_ > 0 ? gridCoverHeight_ : (metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120);
+  int thumbH = gridCoverHeight_.load(std::memory_order_acquire);
+  if (thumbH <= 0) {
+    // Match renderBooksTab()/drawGridCell() exactly. The first scan slice can run before the
+    // render task publishes its measurement; using homeCoverHeight here creates a valid BMP at
+    // the wrong [HEIGHT], which the grid then cannot find.
+    const int cellWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / GRID_COLS;
+    const int coverWidth = cellWidth - 2 * COVER_PADDING;
+    thumbH = coverWidth > 0 ? coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM : 0;
+  }
+  if (thumbH <= 0) thumbH = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
   if (scan_.thumbIndex < recentBooks.size()) {
     RecentBook book;
     {
@@ -1059,7 +1066,7 @@ void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const i
   // Request the thumb at the size it is drawn at: a theme-sized thumb (300px, 400px in
   // Classic) scaled into this cell cost ~2.5s per cover in software scaling.
   const int thumbHeight = coverHeight;
-  gridCoverHeight_ = coverHeight;
+  gridCoverHeight_.store(coverHeight, std::memory_order_release);
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int coverX = cellX + COVER_PADDING;
   const int coverY = cellY + COVER_PADDING;

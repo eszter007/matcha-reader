@@ -20,20 +20,9 @@ class HalPowerManager {
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
 
-  // Counted, not a single slot: locks nest. The cover worker holds one for the length of a
-  // thumbnail conversion while the render path takes its own around each draw, and the two
-  // overlap freely -- with a single slot the second holder was refused and, worse, the first
-  // to release re-enabled power saving while the other was still working.
-  int lockCount = 0;
-  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to lockCount
-  // A lock whose holder never released pins the CPU at full speed for the rest of the session
-  // and drains the battery with nothing on screen and nothing in the log to say why. Every
-  // holder is stack-scoped today, so the only way to strand one is deleting a task that holds
-  // it (vTaskDelete with a handle, rather than self-deletion). Report it rather than trust
-  // that no future caller does.
-  unsigned long lockHeldSinceMs = 0;
-  bool lockStuckReported = false;
-  static constexpr unsigned long LOCK_STUCK_MS = 5UL * 60UL * 1000UL;  // >> the longest real hold
+  enum LockMode { None, NormalSpeed };
+  LockMode currentLockMode = None;
+  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to currentLockMode
 
  public:
 #if BOARD_HAS_PSRAM
@@ -50,7 +39,7 @@ class HalPowerManager {
   void setPowerSaving(bool enabled);
 
   // Setup wake up GPIO and enter deep sleep
-  // Should be called inside main loop() to handle the power lock
+  // Should be called inside main loop() to handle the currentLockMode
   void startDeepSleep(HalGPIO& gpio) const;
 
   // Get battery percentage (range 0-100)

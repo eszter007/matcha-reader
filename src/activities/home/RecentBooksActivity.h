@@ -65,11 +65,10 @@ class RecentBooksActivity final : public Activity {
 
   int getVisibleRows(int cellHeight, int contentHeight) const;
   int getCellHeight(int cellWidth) const;
-  // Cover height of one grid cell, recorded while drawing so the background thumb passes
-  // generate at exactly that size. Drawing a theme-sized thumb (300px, 400px in Classic) into
-  // a ~207px cell costs seconds per cover in software scaling -- a 1:1 draw is a few ms.
-  // 0 until the first grid render; the passes fall back to the theme's cover height.
-  mutable int gridCoverHeight_ = 0;
+  // Cover height of one grid cell, published by the render task and read by the scan task.
+  // The scan also derives the same geometry before the first render, so it never generates a
+  // theme-sized thumb that the grid cannot draw.
+  std::atomic<int> gridCoverHeight_{0};
 
   void loadRecentBooks();
   void loadBookProgress();
@@ -200,6 +199,13 @@ class RecentBooksActivity final : public Activity {
   const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
   void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
                         bool hasThumb, bool coverKnownAbsent = false);
+  // Full CPU while a cover conversion runs, the same way EpubReaderActivity keeps a section
+  // build off the low-power clock. The Library sits idle while the worker converts, so the loop
+  // would drop to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz takes ~24s at 10 --
+  // long enough that it used to be cancelled before it could finish. The work is fixed, so
+  // finishing sooner spends less time awake, not more.
+  bool skipLoopDelay() override { return coverWorkerBusy_.load(std::memory_order_acquire); }
+
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   bool applyLibraryScan();
