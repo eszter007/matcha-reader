@@ -408,9 +408,8 @@ void HomeActivity::render(RenderLock&&) {
     menuIcons.insert(menuIcons.begin(), Book);
   }
 
-  const Rect menuRect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset, pageWidth,
-                      pageHeight - (metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset +
-                                    metrics.buttonHintsHeight)};
+  const int menuTop = metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
+  const Rect menuRect{0, menuTop, pageWidth, pageHeight - menuTop - metrics.buttonHintsHeight};
   const int menuSelected =
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - static_cast<int>(recentBooks.size());
 
