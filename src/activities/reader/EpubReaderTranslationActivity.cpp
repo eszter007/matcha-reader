@@ -45,7 +45,7 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 // conservative empirical floor above the crash point, not a documented ESP-IDF constant.
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
 constexpr const char* API_KEY_PATH = "/system/gemini.key";
-constexpr const char* GEMINI_MODEL = "gemini-2.5-flash";
+constexpr const char* GEMINI_MODEL = "gemini-3.6-flash";
 
 }  // namespace
 
@@ -207,7 +207,6 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
                      sourceText;
 
   auto config = reqDoc["generationConfig"].to<JsonObject>();
-  config["temperature"] = 0.3;
   config["maxOutputTokens"] = 2048;
 
   std::string body;
