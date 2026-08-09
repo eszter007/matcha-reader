@@ -146,7 +146,7 @@ bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, vo
   // hasContent(), not exists(): the destination is opened for writing before the page image is
   // converted, so a failed or cancelled run leaves a 0-byte file that exists() would report as
   // a finished thumbnail forever (see Epub::generateThumbBmp).
-  if (Storage.hasContent(thumbPath.c_str())) return true;
+  if (FsHelpers::hasContent("MNG", thumbPath)) return true;
 
   const std::string cover = findCoverImage(folderPath, shouldCancel, cancelCtx);
   if (cover.empty()) return false;

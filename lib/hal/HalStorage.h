@@ -33,12 +33,6 @@ class HalStorage {
   HalFile open(const char* path, const oflag_t oflag = O_RDONLY);
   bool mkdir(const char* path, const bool pFlag = true);
   bool exists(const char* path);
-  // exists() AND the file holds at least one byte. Generators that create their output file
-  // before writing it leave a 0-byte husk behind when the conversion fails, is cancelled, or
-  // loses power mid-write -- and a bare exists() then reports that husk as a finished artifact
-  // forever. Use this wherever "is it already generated?" is the question being asked.
-  // Costs the same as exists(): one lock, one open, no allocation.
-  bool hasContent(const char* path);
   bool remove(const char* path);
   bool rename(const char* oldPath, const char* newPath);
   bool rmdir(const char* path);

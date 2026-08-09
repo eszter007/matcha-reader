@@ -631,7 +631,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
   // Already generated, return true. hasContent(), not exists(): every failure below removes the
   // partial file, but openFileForWrite() creates it before the conversion runs, so a reset or
   // power loss in that window leaves a 0-byte cover that exists() would trust forever.
-  if (Storage.hasContent(getCoverBmpPath(cropped).c_str())) {
+  if (FsHelpers::hasContent("EBP", getCoverBmpPath(cropped))) {
     return true;
   }
 
@@ -763,7 +763,7 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
   // or power-interrupted run leaves a 0-byte file. Answering "already generated" for that husk
   // made the failure permanent AND invisible -- the caller drew a placeholder forever while
   // this function reported success and never attempted the cover again.
-  if (Storage.hasContent(getThumbBmpPath(height).c_str())) {
+  if (FsHelpers::hasContent("EBP", getThumbBmpPath(height))) {
     return true;
   }
 
@@ -871,7 +871,7 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     const auto sourceTmpPath = sourcePath + ".part";
 
     HalFile sourceBmp;
-    if (!Storage.hasContent(sourcePath.c_str())) {
+    if (!FsHelpers::hasContent("EBP", sourcePath)) {
       if (!Storage.openFileForWrite("EBP", sourceTmpPath, sourceBmp)) return false;
       CancellablePrint cancellableCover(sourceBmp, shouldCancel, cancelCtx);
       const bool extracted = readItemContentsToStream(coverImageHref, cancellableCover, 1024);

@@ -90,21 +90,6 @@ bool HalStorage::mkdir(const char* path, const bool pFlag) { HAL_STORAGE_WRAPPED
 
 bool HalStorage::exists(const char* path) { HAL_STORAGE_WRAPPED_CALL(exists, path); }
 
-bool HalStorage::hasContent(const char* path) {
-  // Same shape as every other method here: one StorageLock, one direct SDCard call. Going
-  // through the public open() would heap-allocate a HalFile::Impl (and take the mutex twice
-  // more, once in ~Impl) on every call -- this replaces exists() on checks that run per book
-  // per Library scan, so it must not add allocation churn to them.
-  //
-  // Raw FsFile is safe HERE and only here: HalStorage owns storageMutex, which is what the
-  // "never touch SdFat directly" rule in CLAUDE.md protects. Declared after the lock so the
-  // FsFile destructor closes under it (DESTRUCTOR_CLOSES_FILE=1) before the lock releases.
-  StorageLock lock;
-  FsFile f = SDCard.open(path);
-  if (!f.isOpen()) return false;
-  return f.size() > 0;
-}
-
 bool HalStorage::remove(const char* path) { HAL_STORAGE_WRAPPED_CALL(remove, path); }
 bool HalStorage::rename(const char* oldPath, const char* newPath) {
   HAL_STORAGE_WRAPPED_CALL(rename, oldPath, newPath);

@@ -101,7 +101,7 @@ bool Txt::generateCoverBmp() const {
   // Already generated, return true. hasContent(), not exists(): the JPG branch removes its
   // partial file on failure, but openFileForWrite() creates it before the conversion runs, so a
   // reset or power loss in that window leaves a 0-byte cover that exists() would trust forever.
-  if (Storage.hasContent(getCoverBmpPath().c_str())) {
+  if (FsHelpers::hasContent("TXT", getCoverBmpPath())) {
     return true;
   }
 

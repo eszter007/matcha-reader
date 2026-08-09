@@ -1,4 +1,5 @@
 #pragma once
+#include <HalStorage.h>
 #include <WString.h>
 
 #include <string>
@@ -6,6 +7,18 @@
 #include <vector>
 
 namespace FsHelpers {
+
+// Public-storage check for generated artifacts. Keep this outside HalStorage so callers can
+// reject empty files without adding another HAL-specific method.
+inline bool hasContent(const char* moduleName, const char* path) {
+  if (!Storage.exists(path)) return false;
+  HalFile file;
+  return Storage.openFileForRead(moduleName, path, file) && file.size() > 0;
+}
+
+inline bool hasContent(const char* moduleName, const std::string& path) {
+  return hasContent(moduleName, path.c_str());
+}
 
 std::string decodeUriEscapes(const std::string& path);
 

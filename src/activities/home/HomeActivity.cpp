@@ -112,7 +112,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // sentinel Epub::generateThumbBmp used to leave on failure, and exists() counted it as a
       // cover -- the card then skipped regeneration and drew a placeholder forever.
       const bool coverMissing =
-          !coverIsThumb || !Storage.hasContent(UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight).c_str());
+          !coverIsThumb ||
+          !FsHelpers::hasContent("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
       if (coverMissing) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {

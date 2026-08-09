@@ -543,7 +543,7 @@ bool RecentBooksActivity::stepLibraryScan() {
     const bool indexSaysThumbOk = indexed && (indexed->flags & INDEX_FLAG_HAS_THUMB) && indexed->fileSize == bookSize &&
                                   indexed->modifiedStamp == bookStamp &&
                                   indexed->thumbHeight == static_cast<uint16_t>(thumbH) &&
-                                  Storage.hasContent(thumbPath.c_str());
+                                  FsHelpers::hasContent("LIB", thumbPath);
     const bool gridThumbOk = indexSaysThumbOk || thumbHeightValid(thumbPath, thumbH);
     const std::string shelfThumbPath = cachePath + "/thumb_" + std::to_string(SHELF_THUMB_HEIGHT) + ".bmp";
     const bool shelfThumbOk = thumbHeightValid(shelfThumbPath, SHELF_THUMB_HEIGHT);

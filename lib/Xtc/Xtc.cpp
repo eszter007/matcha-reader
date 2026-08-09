@@ -8,6 +8,7 @@
 #include "Xtc.h"
 
 #include <Bitmap.h>
+#include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -131,7 +132,7 @@ bool Xtc::generateCoverBmp() const {
   // Already generated. hasContent(), not exists(): every failure below removes the partial file,
   // but openFileForWrite() creates it before the decode runs, so a reset or power loss in that
   // window leaves a 0-byte cover that exists() would trust forever.
-  if (Storage.hasContent(getCoverBmpPath().c_str())) {
+  if (FsHelpers::hasContent("XTC", getCoverBmpPath())) {
     return true;
   }
 
@@ -287,7 +288,7 @@ bool Xtc::generateThumbBmp(int height, CancelFn shouldCancel, void* cancelCtx) c
   // Already generated. hasContent(), not exists(): the destination is opened for writing before
   // the page decode runs, so a failed or cancelled run leaves a 0-byte file that exists() would
   // report as a finished thumbnail forever (see Epub::generateThumbBmp).
-  if (Storage.hasContent(thumbPath.c_str())) {
+  if (FsHelpers::hasContent("XTC", thumbPath)) {
     return true;
   }
 
@@ -350,7 +351,7 @@ bool Xtc::generateThumbBmp(int height, CancelFn shouldCancel, void* cancelCtx) c
       LOG_DBG("XTC", "Copied cover to thumb (no scaling needed)");
       // hasContent(): an empty source, or a write path that never ran, still leaves the
       // destination created-but-empty, and exists() would call that a successful copy.
-      return Storage.hasContent(thumbPath.c_str());
+      return FsHelpers::hasContent("XTC", thumbPath);
     }
     return false;
   }
