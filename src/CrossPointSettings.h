@@ -292,7 +292,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t touchReaderControls = TOUCH_READER_ON;
   // Swap Word Lookup navigation to side buttons and scrolling to front buttons.
   uint8_t wordLookupSideButtons = 0;
-  // Word Lookup definition font: 8/10/12/16pt (100/125/150/200% of the default).
+  // Word Lookup definition font: 8/12/14/16pt (Tiny/Small/Medium/Large; Small is the default).
   enum WORD_LOOKUP_FONT_SIZE {
     WORD_LOOKUP_FONT_TINY = 0,
     WORD_LOOKUP_FONT_SMALL,

@@ -229,7 +229,8 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
 
 void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int primaryFontId,
                                                 const uint8_t pointSize) {
-  if (manager_.currentFamilyName().empty() || pointSize == 0) return;
+  // Tiny intentionally stays on the compact built-in path; avoid loading an SD font for it.
+  if (pointSize <= 8 || manager_.currentFamilyName().empty()) return;
   const auto* family = registry_.findFamily(manager_.currentFamilyName());
   if (!family) return;
 

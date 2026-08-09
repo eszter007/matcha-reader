@@ -33,6 +33,8 @@ Look up any word on the page, vertically or horizontally. Conjugations resolve t
 
 Vocabulary, names and grammar each come from their own dictionary. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
 
+Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.
+
 <p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup with reading, part of speech, definitions and an example sentence"></p>
 
 ### Page translation
