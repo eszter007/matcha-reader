@@ -34,10 +34,10 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   }
 
   // Note: We don't use mutex here to avoid too much overhead,
-  // it's not very important if we read a slightly stale value for currentLockMode
-  const LockMode mode = currentLockMode;
+  // it's not very important if we read a slightly stale value for lockCount
+  const bool locked = lockCount > 0;
 
-  if (mode == None && enabled && !isLowPower) {
+  if (!locked && enabled && !isLowPower) {
     LOG_DBG("PWR", "Going to low-power mode");
     if (!setCpuFrequencyMhz(LOW_POWER_FREQ)) {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", LOW_POWER_FREQ);
@@ -45,7 +45,7 @@ void HalPowerManager::setPowerSaving(bool enabled) {
     }
     isLowPower = true;
 
-  } else if ((!enabled || mode != None) && isLowPower) {
+  } else if ((!enabled || locked) && isLowPower) {
     LOG_DBG("PWR", "Restoring normal CPU frequency");
     if (!setCpuFrequencyMhz(normalFreq)) {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", normalFreq);
@@ -119,25 +119,16 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
 
 HalPowerManager::Lock::Lock() {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
-  // Current limitation: only one lock at a time
-  if (powerManager.currentLockMode != None) {
-    LOG_ERR("PWR", "Lock already held, ignore");
-    valid = false;
-  } else {
-    powerManager.currentLockMode = NormalSpeed;
-    valid = true;
-  }
+  powerManager.lockCount++;
   xSemaphoreGive(powerManager.modeMutex);
-  if (valid) {
-    // Immediately restore normal CPU frequency if currently in low-power mode
-    powerManager.setPowerSaving(false);
-  }
+  valid = true;
+  // Immediately restore normal CPU frequency if currently in low-power mode. Cheap when already
+  // normal (setCpuFrequencyMhz is not called unless isLowPower).
+  powerManager.setPowerSaving(false);
 }
 
 HalPowerManager::Lock::~Lock() {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
-  if (valid) {
-    powerManager.currentLockMode = None;
-  }
+  if (valid && powerManager.lockCount > 0) powerManager.lockCount--;
   xSemaphoreGive(powerManager.modeMutex);
 }

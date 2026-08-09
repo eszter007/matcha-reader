@@ -20,9 +20,12 @@ class HalPowerManager {
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
 
-  enum LockMode { None, NormalSpeed };
-  LockMode currentLockMode = None;
-  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to currentLockMode
+  // Counted, not a single slot: locks nest. The cover worker holds one for the length of a
+  // thumbnail conversion while the render path takes its own around each draw, and the two
+  // overlap freely -- with a single slot the second holder was refused and, worse, the first
+  // to release re-enabled power saving while the other was still working.
+  int lockCount = 0;
+  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to lockCount
 
  public:
 #if BOARD_HAS_PSRAM
@@ -39,7 +42,7 @@ class HalPowerManager {
   void setPowerSaving(bool enabled);
 
   // Setup wake up GPIO and enter deep sleep
-  // Should be called inside main loop() to handle the currentLockMode
+  // Should be called inside main loop() to handle the power lock
   void startDeepSleep(HalGPIO& gpio) const;
 
   // Get battery percentage (range 0-100)
