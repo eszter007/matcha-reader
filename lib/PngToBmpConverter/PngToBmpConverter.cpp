@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 
 #include "BitmapHelpers.h"
@@ -589,14 +590,20 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
       scale = (scaleToFitWidth < scaleToFitHeight) ? scaleToFitWidth : scaleToFitHeight;
     }
 
-    outWidth = static_cast<int>(width * scale);
-    outHeight = static_cast<int>(height * scale);
+    outWidth = static_cast<int>(std::ceil(width * scale));
+    outHeight = static_cast<int>(std::ceil(height * scale));
     if (outWidth < 1) outWidth = 1;
     if (outHeight < 1) outHeight = 1;
 
     scaleX_fp = (width << 16) / outWidth;
     scaleY_fp = (height << 16) / outHeight;
     needsScaling = true;
+
+    if (crop) {
+      // Keep the sampled crop exact to the requested box after scaling past it.
+      if (outWidth > targetWidth) outWidth = targetWidth;
+      if (outHeight > targetHeight) outHeight = targetHeight;
+    }
 
     LOG_DBG("PNG", "Scaling %ux%u -> %dx%d (target %dx%d)", width, height, outWidth, outHeight, targetWidth,
             targetHeight);
