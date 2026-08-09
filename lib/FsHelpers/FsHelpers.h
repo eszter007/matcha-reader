@@ -16,9 +16,7 @@ inline bool hasContent(const char* moduleName, const char* path) {
   return Storage.openFileForRead(moduleName, path, file) && file.size() > 0;
 }
 
-inline bool hasContent(const char* moduleName, const std::string& path) {
-  return hasContent(moduleName, path.c_str());
-}
+inline bool hasContent(const char* moduleName, const std::string& path) { return hasContent(moduleName, path.c_str()); }
 
 std::string decodeUriEscapes(const std::string& path);
 

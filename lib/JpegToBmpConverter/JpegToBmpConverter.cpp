@@ -8,8 +8,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#include <cstdio>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "BitmapHelpers.h"

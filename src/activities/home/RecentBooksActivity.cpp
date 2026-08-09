@@ -449,14 +449,14 @@ bool RecentBooksActivity::stepLibraryScan() {
     // manga covers were missing there and not here.
     const bool coverIsMangaTemplate = coverIsTemplate && book.coverBmpPath.rfind("/.crosspoint/manga_", 0) == 0;
     const bool mangaGridMissing =
-      coverIsMangaTemplate && !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH);
+        coverIsMangaTemplate && !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH);
     const bool mangaHomeMissing =
-      coverIsMangaTemplate && metrics.homeCoverHeight > 0 &&
-      !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, metrics.homeCoverHeight),
-                        metrics.homeCoverHeight);
+        coverIsMangaTemplate && metrics.homeCoverHeight > 0 &&
+        !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, metrics.homeCoverHeight),
+                          metrics.homeCoverHeight);
     const bool mangaShelfMissing =
-      coverIsMangaTemplate &&
-      !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT);
+        coverIsMangaTemplate &&
+        !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT);
     const bool mangaThumbMissing = coverIsMangaTemplate && (mangaGridMissing || mangaHomeMissing || mangaShelfMissing);
     // Manga: the walk only recorded the raw page image; convert it here, where the pass is
     // idle-gated and cancellable, instead of freezing the walk.
@@ -468,10 +468,10 @@ bool RecentBooksActivity::stepLibraryScan() {
       CoverJob job;
       job.book = book;
       job.gridHeight = thumbH;
-      job.targetHeight = coverIsMangaTemplate
-                             ? (mangaGridMissing ? thumbH
-                                                 : (mangaHomeMissing ? metrics.homeCoverHeight : SHELF_THUMB_HEIGHT))
-                             : thumbH;
+      job.targetHeight =
+          coverIsMangaTemplate
+              ? (mangaGridMissing ? thumbH : (mangaHomeMissing ? metrics.homeCoverHeight : SHELF_THUMB_HEIGHT))
+              : thumbH;
       if (!postCoverJob(std::move(job))) scan_.thumbIndex++;
       return false;
     }
