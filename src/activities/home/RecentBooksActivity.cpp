@@ -92,35 +92,6 @@ bool thumbHeightValid(const std::string& thumbPath, const int h) {
   return ok;
 }
 
-// Generate (once) 1-bit BMP cover thumbnails for a manga folder from its first page image, at
-// every height that draws one: the Library's cover grid (gridHeight), the home screen's Continue
-// Reading card (homeHeight) and the shelves tab (SHELF_THUMB_HEIGHT). Decoding the raw page JPEG
-// straight to the framebuffer cost ~430ms per visible manga cover on EVERY render; the cached
-// BMPs draw in a few ms via the same fast path as EPUB covers. Returns the [HEIGHT]-templated
-// thumb path, or empty on any failure (caller keeps the raw image path -- the old,
-// slow-but-working behavior).
-//
-// homeHeight has to be generated HERE because nothing else can: HomeActivity::loadRecentCovers
-// regenerates a missing thumb only for .epub and .xtc, so a manga folder resolves the same
-// [HEIGHT] template against a height nobody produced and the card falls back to a placeholder.
-// That is the X3 report of missing manga covers on the home screen -- the X4 only appeared to
-// work because its 480px-wide grid yields a cell height near Lyra's 226px card, while the X3's
-// 528px grid does not. Repeated heights cost nothing: the existing validity check below skips a
-// height whose thumb is already on disk.
-std::string ensureMangaCoverThumb(const std::string& mangaFolder, const int gridHeight, const int homeHeight,
-                                  BmpConvertCancelFn shouldCancel, void* cancelCtx) {
-  const manga::MangaBook book(mangaFolder);
-  const int heights[3] = {gridHeight, homeHeight, SHELF_THUMB_HEIGHT};
-
-  for (const int h : heights) {
-    if (h <= 0) continue;
-    const std::string thumbPath = book.getThumbBmpPath(h);
-    if (thumbHeightValid(thumbPath, h)) continue;
-    Storage.remove(thumbPath.c_str());  // stale aspect-fill thumb (see thumbHeightValid); rebuild
-    if (!book.generateThumbBmp(h, shouldCancel, cancelCtx)) return "";
-  }
-  return book.getThumbBmpPath();
-}
 }  // namespace
 
 void RecentBooksActivity::coverWorkerTrampoline(void* ctx) {
@@ -130,7 +101,13 @@ void RecentBooksActivity::coverWorkerTrampoline(void* ctx) {
 bool RecentBooksActivity::coverWorkerShouldCancel(void* ctx) {
   auto* self = static_cast<RecentBooksActivity*>(ctx);
   if (!self) return true;
-  const bool cancel = self->coverWorkerExitRequested_ || self->coverWorkerCancelRequested_ || RenderLock::peek();
+  // NOT RenderLock::peek(). A redraw is not a reason to abandon a conversion: the worker is its
+  // own FreeRTOS task, SD access is already serialised by HalStorage's mutex, and the Library's
+  // own scan slices redraw often enough that any conversion longer than the gap between them was
+  // cancelled and restarted from zero forever (device log: a 43KB BMP cover reached ~8s, was
+  // cancelled, and began again -- it could never finish). Real user input still cancels
+  // immediately: loop() sets coverWorkerCancelRequested_ on anyButtonDownRaw().
+  const bool cancel = self->coverWorkerExitRequested_ || self->coverWorkerCancelRequested_;
   if (cancel) self->coverWorkerCancelSeen_ = true;
   return cancel;
 }
@@ -158,33 +135,40 @@ void RecentBooksActivity::runCoverJob() {
   const bool isXtc = FsHelpers::hasXtcExtension(result.book.path);
   if (!isEpub && !isXtc) {
     const manga::MangaBook mangaBook(result.book.path);
-    ensureMangaCoverThumb(result.book.path, coverJob_.gridHeight, coverJob_.homeHeight, &coverWorkerShouldCancel, this);
+    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
+    if (targetHeight > 0 && !thumbHeightValid(mangaBook.getThumbBmpPath(targetHeight), targetHeight)) {
+      Storage.remove(mangaBook.getThumbBmpPath(targetHeight).c_str());
+      mangaBook.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
+    }
     result.hasGridThumb = thumbHeightValid(mangaBook.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = mangaBook.getThumbBmpPath();
   } else if (isEpub) {
     Epub epub(result.book.path, "/.crosspoint");
     const bool loaded = epub.load(true, true, &coverWorkerShouldCancel, this);
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight)) {
-      epub.generateThumbBmp(coverJob_.gridHeight, &coverWorkerShouldCancel, this);
-    }
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(epub.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
-      epub.generateThumbBmp(SHELF_THUMB_HEIGHT, &coverWorkerShouldCancel, this);
+    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
+    if (loaded && !coverWorkerShouldCancel(this) && targetHeight > 0 &&
+        !thumbHeightValid(epub.getThumbBmpPath(targetHeight), targetHeight)) {
+      epub.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
     result.hasGridThumb = loaded && thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = epub.getThumbBmpPath();
     if (loaded && !epub.getTitle().empty()) result.book.title = epub.getTitle();
+    // Separate "there is nothing to render" from "it did not fit right now", the same split
+    // HomeActivity::loadRecentCovers makes. Only a book that loaded and declares no cover is a
+    // permanent fact worth recording; a failure with a cover present must stay retryable, or one
+    // low-heap moment costs the cover forever. Requires !cancelled: a cancelled load leaves the
+    // metadata cache unpopulated, which hasCoverImage() cannot distinguish from a coverless book.
+    result.coverKnownAbsent = loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && !epub.hasCoverImage();
+    if (loaded && !result.hasGridThumb && !result.coverKnownAbsent) {
+      LOG_ERR("RBA", "Cover thumb failed for %s; will retry", result.book.path.c_str());
+    }
   } else {
     Xtc xtc(result.book.path, "/.crosspoint");
     const bool loaded = xtc.load();
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight)) {
-      xtc.generateThumbBmp(coverJob_.gridHeight, &coverWorkerShouldCancel, this);
-    }
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(xtc.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
-      xtc.generateThumbBmp(SHELF_THUMB_HEIGHT, &coverWorkerShouldCancel, this);
+    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
+    if (loaded && !coverWorkerShouldCancel(this) && targetHeight > 0 &&
+        !thumbHeightValid(xtc.getThumbBmpPath(targetHeight), targetHeight)) {
+      xtc.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
     result.hasGridThumb = loaded && thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = xtc.getThumbBmpPath();
@@ -316,14 +300,19 @@ const RecentBooksActivity::LibraryIndexEntry* RecentBooksActivity::findIndexEntr
 }
 
 void RecentBooksActivity::recordIndexEntry(const std::string& path, const uint32_t fileSize,
-                                           const uint32_t modifiedStamp, const int thumbHeight, const bool hasThumb) {
+                                           const uint32_t modifiedStamp, const int thumbHeight, const bool hasThumb,
+                                           const bool coverKnownAbsent) {
   const uint32_t hash = static_cast<uint32_t>(std::hash<std::string>{}(path));
   LibraryIndexEntry entry;
   entry.pathHash = hash;
   entry.fileSize = fileSize;
   entry.modifiedStamp = modifiedStamp;
   entry.thumbHeight = static_cast<uint16_t>(thumbHeight);
-  entry.flags = hasThumb ? INDEX_FLAG_HAS_THUMB : 0;
+  entry.flags = 0;
+  if (hasThumb) entry.flags |= INDEX_FLAG_HAS_THUMB;
+  // Only a caller that positively established the book has no cover sets this; every other
+  // failure leaves the bit clear so the next visit tries again.
+  if (coverKnownAbsent) entry.flags |= INDEX_FLAG_NO_COVER;
 
   for (auto& e : libraryIndex_) {
     if (e.pathHash != hash) continue;
@@ -365,8 +354,16 @@ bool RecentBooksActivity::stepLibraryScan() {
   // Cover-thumb pass, one catalog entry per slice. The render task owns the same catalog, so
   // copy the entry under a non-blocking lock and do all SD/decode work after releasing it.
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int thumbH =
-      gridCoverHeight_ > 0 ? gridCoverHeight_ : (metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120);
+  int thumbH = gridCoverHeight_.load(std::memory_order_acquire);
+  if (thumbH <= 0) {
+    // Match renderBooksTab()/drawGridCell() exactly. The first scan slice can run before the
+    // render task publishes its measurement; using homeCoverHeight here creates a valid BMP at
+    // the wrong [HEIGHT], which the grid then cannot find.
+    const int cellWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / GRID_COLS;
+    const int coverWidth = cellWidth - 2 * COVER_PADDING;
+    thumbH = coverWidth > 0 ? coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM : 0;
+  }
+  if (thumbH <= 0) thumbH = metrics.homeCoverHeight > 0 ? metrics.homeCoverHeight : 120;
   if (scan_.thumbIndex < recentBooks.size()) {
     RecentBook book;
     {
@@ -416,7 +413,7 @@ bool RecentBooksActivity::stepLibraryScan() {
       }
       if (matches && (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path))) {
         recordIndexEntry(book.path, coverResult_.fileSize, coverResult_.modifiedStamp, thumbH,
-                         coverResult_.hasGridThumb);
+                         coverResult_.hasGridThumb, coverResult_.coverKnownAbsent);
       }
       const bool completed = coverResult_.completed;
       coverResult_.pending = false;
@@ -451,13 +448,16 @@ bool RecentBooksActivity::stepLibraryScan() {
     // (52272-byte framebuffer, wider viewport) has nothing left for a 20KB JPEGDEC, which is why
     // manga covers were missing there and not here.
     const bool coverIsMangaTemplate = coverIsTemplate && book.coverBmpPath.rfind("/.crosspoint/manga_", 0) == 0;
-    const bool mangaThumbMissing =
+    const bool mangaGridMissing =
+        coverIsMangaTemplate && !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH);
+    const bool mangaHomeMissing =
+        coverIsMangaTemplate && metrics.homeCoverHeight > 0 &&
+        !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, metrics.homeCoverHeight),
+                          metrics.homeCoverHeight);
+    const bool mangaShelfMissing =
         coverIsMangaTemplate &&
-        (!thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH) ||
-         (metrics.homeCoverHeight > 0 &&
-          !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, metrics.homeCoverHeight),
-                            metrics.homeCoverHeight)) ||
-         !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT));
+        !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT);
+    const bool mangaThumbMissing = coverIsMangaTemplate && (mangaGridMissing || mangaHomeMissing || mangaShelfMissing);
     // Manga: the walk only recorded the raw page image; convert it here, where the pass is
     // idle-gated and cancellable, instead of freezing the walk.
     if (isMangaEntry && (book.coverBmpPath.empty() || coverIsRawImage || mangaThumbMissing)) {
@@ -465,7 +465,13 @@ bool RecentBooksActivity::stepLibraryScan() {
       if (!lock.held()) return false;
       if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
       lock.unlock();
-      CoverJob job{book, thumbH, metrics.homeCoverHeight, 0, 0};
+      CoverJob job;
+      job.book = book;
+      job.gridHeight = thumbH;
+      job.targetHeight =
+          coverIsMangaTemplate
+              ? (mangaGridMissing ? thumbH : (mangaHomeMissing ? metrics.homeCoverHeight : SHELF_THUMB_HEIGHT))
+              : thumbH;
       if (!postCoverJob(std::move(job))) scan_.thumbIndex++;
       return false;
     }
@@ -494,13 +500,19 @@ bool RecentBooksActivity::stepLibraryScan() {
     // The index knows a thumb WAS produced; it cannot know the file is still there. Trusting the
     // flag alone left three books on a test card with a cover the grid could never draw
     // (idxOk=1, file absent) -- and because the shortcut below re-records its own claim, that
-    // state sustained itself across every later scan. Confirm with a bare exists(), which still
+    // state sustained itself across every later scan. Confirm with hasContent(), which still
     // skips the expensive part this shortcut exists for: the header parse and payload-length
     // check inside thumbHeightValid().
+    //
+    // hasContent() rather than exists() because a 0-byte file satisfied exists() and so let the
+    // index validate its own claim against a husk: the grid published thumb_[HEIGHT].bmp as the
+    // cover path, drawCoverThumbFilled() failed parseHeaders(), the placeholder was drawn, and
+    // recordIndexEntry() wrote the same flag back -- a wrong entry that kept itself alive with
+    // nothing logged. Generators no longer write such files, but cards already carry them.
     const bool indexSaysThumbOk = indexed && (indexed->flags & INDEX_FLAG_HAS_THUMB) && indexed->fileSize == bookSize &&
                                   indexed->modifiedStamp == bookStamp &&
                                   indexed->thumbHeight == static_cast<uint16_t>(thumbH) &&
-                                  Storage.exists(thumbPath.c_str());
+                                  FsHelpers::hasContent("LIB", thumbPath);
     const bool gridThumbOk = indexSaysThumbOk || thumbHeightValid(thumbPath, thumbH);
     const std::string shelfThumbPath = cachePath + "/thumb_" + std::to_string(SHELF_THUMB_HEIGHT) + ".bmp";
     const bool shelfThumbOk = thumbHeightValid(shelfThumbPath, SHELF_THUMB_HEIGHT);
@@ -511,6 +523,17 @@ bool RecentBooksActivity::stepLibraryScan() {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
       recordIndexEntry(book.path, bookSize, bookStamp, thumbH, true);
       if (!publishBook(book)) return false;
+      scan_.thumbIndex++;
+      return false;
+    }
+    // The book has no cover image to render, established by a previous visit that actually
+    // loaded it (INDEX_FLAG_NO_COVER; see Epub::hasCoverImage). Skipping here is what keeps a
+    // coverless book from being re-parsed on every Library visit now that generateThumbBmp()
+    // no longer drops a 0-byte file to shortcut itself. Guarded by the same size/stamp match as
+    // the thumb shortcut, so replacing the file re-examines it -- and unlike the sentinel this
+    // records a fact about the BOOK, which a failed conversion can never fake.
+    if (indexed && (indexed->flags & INDEX_FLAG_NO_COVER) && indexed->fileSize == bookSize &&
+        indexed->modifiedStamp == bookStamp) {
       scan_.thumbIndex++;
       return false;
     }
@@ -525,7 +548,12 @@ bool RecentBooksActivity::stepLibraryScan() {
     lock.unlock();
     if (!gridThumbOk) Storage.remove(thumbPath.c_str());
     if (!shelfThumbOk) Storage.remove(shelfThumbPath.c_str());
-    CoverJob job{book, thumbH, metrics.homeCoverHeight, bookSize, bookStamp};
+    CoverJob job;
+    job.book = book;
+    job.gridHeight = thumbH;
+    job.targetHeight = gridThumbOk ? SHELF_THUMB_HEIGHT : thumbH;
+    job.fileSize = bookSize;
+    job.modifiedStamp = bookStamp;
     if (!postCoverJob(std::move(job))) {
       recordIndexEntry(book.path, bookSize, bookStamp, thumbH, false);
       scan_.thumbIndex++;
@@ -1012,7 +1040,7 @@ void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const i
   // Request the thumb at the size it is drawn at: a theme-sized thumb (300px, 400px in
   // Classic) scaled into this cell cost ~2.5s per cover in software scaling.
   const int thumbHeight = coverHeight;
-  gridCoverHeight_ = coverHeight;
+  gridCoverHeight_.store(coverHeight, std::memory_order_release);
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int coverX = cellX + COVER_PADDING;
   const int coverY = cellY + COVER_PADDING;

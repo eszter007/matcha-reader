@@ -1,6 +1,7 @@
 #include "Epub.h"
 
 #include <BmpToBmpConverter.h>
+#include <BufferedFile.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -15,6 +16,23 @@
 #include "Epub/parsers/TocNcxParser.h"
 
 namespace {
+constexpr size_t COVER_WRITE_BUFFER_SIZE = 16 * 1024;
+
+class BufferedFilePrint final : public Print {
+ public:
+  explicit BufferedFilePrint(HalFile& file) : output(file, COVER_WRITE_BUFFER_SIZE) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* buffer, size_t size) override {
+    output.write(buffer, size);
+    return size;
+  }
+  bool finish() { return output.flush(); }
+
+ private:
+  serialization::BufferedFileWriter output;
+};
+
 class CancellablePrint final : public Print {
  public:
   CancellablePrint(Print& output, BmpConvertCancelFn shouldCancel, void* cancelCtx)
@@ -628,8 +646,10 @@ std::string Epub::getCoverBmpPath(bool cropped) const {
 }
 
 bool Epub::generateCoverBmp(bool cropped) const {
-  // Already generated, return true
-  if (Storage.exists(getCoverBmpPath(cropped).c_str())) {
+  // Already generated, return true. hasContent(), not exists(): every failure below removes the
+  // partial file, but openFileForWrite() creates it before the conversion runs, so a reset or
+  // power loss in that window leaves a 0-byte cover that exists() would trust forever.
+  if (FsHelpers::hasContent("EBP", getCoverBmpPath(cropped))) {
     return true;
   }
 
@@ -756,8 +776,12 @@ std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
 bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
-  // Already generated, return true
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
+  // Already generated, return true. hasContent(), not exists(): every branch below opens the
+  // destination for writing before it knows the conversion will succeed, so a failed, cancelled
+  // or power-interrupted run leaves a 0-byte file. Answering "already generated" for that husk
+  // made the failure permanent AND invisible -- the caller drew a placeholder forever while
+  // this function reported success and never attempted the cover again.
+  if (FsHelpers::hasContent("EBP", getThumbBmpPath(height))) {
     return true;
   }
 
@@ -777,8 +801,13 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
-    CancellablePrint cancellableCover(coverJpg, shouldCancel, cancelCtx);
-    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+    bool extracted;
+    {
+      BufferedFilePrint bufferedCover(coverJpg);
+      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+      if (extracted) extracted = bufferedCover.finish();
+    }
+    if (!extracted) {
       coverJpg.close();
       Storage.remove(coverJpgTempPath.c_str());
       return false;
@@ -821,8 +850,13 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
-    CancellablePrint cancellableCover(coverPng, shouldCancel, cancelCtx);
-    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+    bool extracted;
+    {
+      BufferedFilePrint bufferedCover(coverPng);
+      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+      if (extracted) extracted = bufferedCover.finish();
+    }
+    if (!extracted) {
       coverPng.close();
       Storage.remove(coverPngTempPath.c_str());
       return false;
@@ -855,17 +889,35 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     return success;
   } else if (FsHelpers::hasBmpExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from BMP cover image");
+    // The extracted source SURVIVES a failed attempt, and only a complete extraction is kept.
+    // Unpacking a large cover costs seconds (device log: 7s for 35KB -> 43KB), and a cancelled
+    // conversion used to delete it, so every retry paid that again and got interrupted at the
+    // same point -- the cover could never be produced, however many times it was attempted.
+    // Written via .part + rename so presence of the final path means "complete": a half-written
+    // husk is never mistaken for a cached source, the same reason section builds use a tmp name.
     const auto sourcePath = getCachePath() + "/.cover-source.bmp";
+    const auto sourceTmpPath = sourcePath + ".part";
 
     HalFile sourceBmp;
-    if (!Storage.openFileForWrite("EBP", sourcePath, sourceBmp)) return false;
-    CancellablePrint cancellableCover(sourceBmp, shouldCancel, cancelCtx);
-    if (!readItemContentsToStream(coverImageHref, cancellableCover, 1024)) {
+    if (!FsHelpers::hasContent("EBP", sourcePath)) {
+      if (!Storage.openFileForWrite("EBP", sourceTmpPath, sourceBmp)) return false;
+      bool extracted;
+      {
+        BufferedFilePrint bufferedCover(sourceBmp);
+        extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+        if (extracted) extracted = bufferedCover.finish();
+      }
       sourceBmp.close();
-      Storage.remove(sourcePath.c_str());
-      return false;
+      if (!extracted) {
+        Storage.remove(sourceTmpPath.c_str());
+        return false;
+      }
+      Storage.remove(sourcePath.c_str());  // a stale 0-byte husk would block the rename
+      if (!Storage.rename(sourceTmpPath.c_str(), sourcePath.c_str())) {
+        Storage.remove(sourceTmpPath.c_str());
+        return false;
+      }
     }
-    sourceBmp.close();
 
     if (!Storage.openFileForRead("EBP", sourcePath, sourceBmp)) {
       Storage.remove(sourcePath.c_str());
@@ -874,27 +926,30 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     HalFile thumbBmp;
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
       sourceBmp.close();
-      Storage.remove(sourcePath.c_str());
       return false;
     }
     const bool success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(sourceBmp, thumbBmp, (height * 2) / 3,
                                                                            height, shouldCancel, cancelCtx);
     sourceBmp.close();
     thumbBmp.close();
-    Storage.remove(sourcePath.c_str());
 
     if (!success) {
       LOG_ERR("EBP", "Failed to generate thumb BMP from BMP cover image");
       Storage.remove(getThumbBmpPath(height).c_str());
+      return false;  // keep the extracted source: the next attempt resumes from the costly part
     }
-    return success;
+    Storage.remove(sourcePath.c_str());  // consumed
+    return true;
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
   }
 
-  // Write an empty bmp file to avoid generation attempts in the future
-  HalFile thumbBmp;
-  Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
+  // No sentinel file. This used to write an empty .bmp "to avoid generation attempts in the
+  // future", which recorded a failure as a finished artifact -- the exact pattern the project
+  // forbids. Whether there is anything to generate is a question hasCoverImage() answers
+  // truthfully and for free; callers that want to stop retrying must ask it (see
+  // HomeActivity::loadRecentCovers and RecentBooksActivity::runCoverJob) rather than reading a
+  // fake file back.
   return false;
 }
 

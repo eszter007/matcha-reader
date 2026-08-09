@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -589,8 +590,11 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
       scale = (scaleToFitWidth < scaleToFitHeight) ? scaleToFitWidth : scaleToFitHeight;
     }
 
-    outWidth = static_cast<int>(srcWidth * scale);
-    outHeight = static_cast<int>(srcHeight * scale);
+    // Crop mode must cover the requested box before trimming overflow. Flooring here can leave
+    // the short axis one pixel undersized (e.g. 151x206 for a 138x207 thumb), which the cache
+    // validator correctly rejects even though conversion reported success.
+    outWidth = static_cast<int>(std::ceil(srcWidth * scale));
+    outHeight = static_cast<int>(std::ceil(srcHeight * scale));
     if (outWidth < 1) outWidth = 1;
     if (outHeight < 1) outHeight = 1;
   }
