@@ -190,6 +190,12 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
   return s;
 }
 
+inline SettingInfo buildWordLookupFontSizeSetting() {
+  return SettingInfo::Enum(StrId::STR_WORD_LOOKUP_FONT_SIZE, &CrossPointSettings::wordLookupFontSize,
+                           {StrId::STR_TINY, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE},
+                           "wordLookupFontSize", StrId::STR_CAT_READER);
+}
+
 // Shared settings list used by both the device settings UI and the web settings API.
 // Each entry has a key (for JSON API) and category (for grouping).
 // ACTION-type entries and entries without a key are device-only.
@@ -496,6 +502,18 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     auto it =
         std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
     v.insert(it, buildDictionarySetting(*dictionaries, bookLanguage, showAppliedDictionary));
+  }
+  if (categoryFilter == StrId::STR_NONE_OPT || categoryFilter == StrId::STR_CAT_READER) {
+    // Keep this immediately below the dictionary row in Reader Settings, when present.
+    auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) {
+      return s.nameId == StrId::STR_DICTIONARY || s.nameId == StrId::STR_FALLBACK_DICTIONARY;
+    });
+    if (it != v.end()) {
+      v.insert(it + 1, buildWordLookupFontSizeSetting());
+    } else {
+      it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
+      v.insert(it, buildWordLookupFontSizeSetting());
+    }
   }
   return v;
 }

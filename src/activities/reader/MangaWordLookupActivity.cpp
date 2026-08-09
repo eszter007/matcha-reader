@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <SdCardFontSystem.h>
 #include <WordLookup.h>
 
 #include "CrossPointSettings.h"
@@ -356,7 +357,9 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
   // groups (16KB decompression buffers each) into a heap that is already at its tightest here.
-  const int jaFont = NOTOSERIF_16_FONT_ID;
+  const int defFont = DefinitionText::wordLookupFontId();
+  const uint16_t defScale = DefinitionText::wordLookupFontScale();
+  sdFontSystem.ensureWordLookupFallback(renderer, defFont, DefinitionText::wordLookupFontPointSize());
 
   // Bulk-load every glyph the headword + definition need before drawing/measuring any of them.
   // Without this, each drawText()/getTextWidth() call for a character that isn't already cached
@@ -371,8 +374,8 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
       // -- a blanket "all 4 styles" request can itself exhaust the font decompressor's 4-slot
       // page buffer (each style, plus one more per style if the font has a fallback), same trap
       // found and fixed for vertical-page rendering earlier this session.
-      fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
     }
   }
 
@@ -388,20 +391,19 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
   int defY;
 
   if (scrollOffset == 0) {
-    renderer.drawText(jaFont, textX, contentTop, resultHeadword.c_str(), true, EpdFontFamily::BOLD);
-    defY = contentTop + renderer.getLineHeight(jaFont) + metrics.verticalSpacing;
+    renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
+    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
   } else {
-    std::string scrollInfo = resultHeadword + " \xe2\x96\xb2";
-    renderer.drawText(SMALL_FONT_ID, textX, contentTop, scrollInfo.c_str(), true);
-    defY = contentTop + renderer.getLineHeight(SMALL_FONT_ID) + 4;
+    std::string scrollInfo = resultHeadword;
+    renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
+    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
   }
 
-  const int defFont = SMALL_FONT_ID;
-  const int defLineH = renderer.getLineHeight(defFont);
+  const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
   const int maxDefY = screen.y + screen.height - 2;
   const int firstDefY = defY;
   const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                maxDefY, scrollOffset);
+                                                maxDefY, scrollOffset, defScale);
 
   totalLines = wrap.totalLines;
   const int visibleCapacity = (maxDefY - firstDefY) / defLineH;

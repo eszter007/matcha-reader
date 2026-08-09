@@ -58,6 +58,9 @@ class SdCardFontSystem {
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
 
+  /// Lazily load the selected family's exact CJK fallback size for a native Word Lookup font.
+  void ensureWordLookupFallback(GfxRenderer& renderer, int primaryFontId, uint8_t pointSize);
+
   /// Non-const access to the registry (for FontInstaller).
   SdCardFontRegistry& registry() { return registry_; }
 

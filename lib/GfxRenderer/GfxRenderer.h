@@ -280,12 +280,18 @@ class GfxRenderer {
   // Text
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                    BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
+  int getTextWidthScaled(int fontId, const char* text, uint16_t scale,
+                         EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                         BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
   void drawCenteredText(int fontId, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                         BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
   void drawText(int fontId, int x, int y, const char* text, bool black = true,
                 EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                 BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
+  void drawTextScaled(int fontId, int x, int y, const char* text, uint16_t scale, bool black = true,
+                      EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                      BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
   int getSpaceWidth(int fontId, EpdFontFamily::Style style = EpdFontFamily::REGULAR, int8_t letterSpacing = 0) const;
   /// Returns the total inter-word advance: fp4::toPixel(spaceAdvance + kern(leftCp,' ') + kern(' ',rightCp)).
   /// Using a single snap avoids the +/-1 px rounding error that arises when space advance and kern are
@@ -302,6 +308,7 @@ class GfxRenderer {
                        int* height) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
+  int getLineHeightScaled(int fontId, uint16_t scale) const;
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;

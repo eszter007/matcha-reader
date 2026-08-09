@@ -8,6 +8,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <SdCardFontSystem.h>
 #include <WordLookup.h>
 
 #include <algorithm>
@@ -567,7 +568,9 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
   // groups (16KB decompression buffers each) into a heap that is already at its tightest here.
-  const int jaFont = NOTOSERIF_16_FONT_ID;
+  const int defFont = DefinitionText::wordLookupFontId();
+  const uint16_t defScale = DefinitionText::wordLookupFontScale();
+  sdFontSystem.ensureWordLookupFallback(renderer, defFont, DefinitionText::wordLookupFontPointSize());
 
   // Bulk-load every glyph the headword + definition need before drawing/measuring any of them --
   // same fix, and same root cause, as the vertical-page-turn slowness fixed earlier this session.
@@ -579,7 +582,7 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
   if (hasResult) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
-      fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
       // Prewarm only the ON-SCREEN slice of the definition, in ONE call. A merged 5-entry
       // definition can run to thousands of bytes, but only ~13 lines show; warming the whole
       // thing was the ~1s-per-step navigation cost (renders serialize on the RenderLock, so a
@@ -593,10 +596,10 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
         while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
         const char saved = resultDefinition[cut];
         resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
-        renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
         resultDefinition[cut] = saved;
       } else {
-        renderer.prewarmText(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
       }
     }
   }
@@ -615,23 +618,22 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
 
     if (scrollOffset == 0) {
       // Headword at the top (position counter is now in the header).
-      renderer.drawText(jaFont, textX, contentTop, resultHeadword.c_str(), true, EpdFontFamily::BOLD);
-      defY = contentTop + renderer.getLineHeight(jaFont) + metrics.verticalSpacing;
+      renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
+      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
     } else {
       // When scrolled, show a compact header line with the headword + scroll mark.
-      std::string scrollInfo = resultHeadword + " \xe2\x96\xb2";
-      renderer.drawText(SMALL_FONT_ID, textX, contentTop, scrollInfo.c_str(), true);
-      defY = contentTop + renderer.getLineHeight(SMALL_FONT_ID) + 4;
+      std::string scrollInfo = resultHeadword;
+      renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
+      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
     }
 
-    const int defFont = SMALL_FONT_ID;
-    const int defLineH = renderer.getLineHeight(defFont);
+    const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
     // screen.height already excludes the button-hints band, so its bottom edge
     // is the top of the buttons; stay a hair above it.
     const int maxDefY = screen.y + screen.height - 2;
     const int firstDefY = defY;
     const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                  maxDefY, scrollOffset);
+                                                  maxDefY, scrollOffset, defScale);
 
     totalLines = wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
