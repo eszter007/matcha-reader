@@ -37,6 +37,7 @@ class HalStorage {
   // before writing it leave a 0-byte husk behind when the conversion fails, is cancelled, or
   // loses power mid-write -- and a bare exists() then reports that husk as a finished artifact
   // forever. Use this wherever "is it already generated?" is the question being asked.
+  // Costs the same as exists(): one lock, one open, no allocation.
   bool hasContent(const char* path);
   bool remove(const char* path);
   bool rename(const char* oldPath, const char* newPath);
