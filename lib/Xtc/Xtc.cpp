@@ -128,8 +128,10 @@ const std::vector<xtc::ChapterInfo>& Xtc::getChapters() {
 std::string Xtc::getCoverBmpPath() const { return cachePath + "/cover.bmp"; }
 
 bool Xtc::generateCoverBmp() const {
-  // Already generated
-  if (Storage.exists(getCoverBmpPath().c_str())) {
+  // Already generated. hasContent(), not exists(): every failure below removes the partial file,
+  // but openFileForWrite() creates it before the decode runs, so a reset or power loss in that
+  // window leaves a 0-byte cover that exists() would trust forever.
+  if (Storage.hasContent(getCoverBmpPath().c_str())) {
     return true;
   }
 

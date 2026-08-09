@@ -98,8 +98,10 @@ std::string Txt::findCoverImage() const {
 std::string Txt::getCoverBmpPath() const { return cachePath + "/cover.bmp"; }
 
 bool Txt::generateCoverBmp() const {
-  // Already generated, return true
-  if (Storage.exists(getCoverBmpPath().c_str())) {
+  // Already generated, return true. hasContent(), not exists(): the JPG branch removes its
+  // partial file on failure, but openFileForWrite() creates it before the conversion runs, so a
+  // reset or power loss in that window leaves a 0-byte cover that exists() would trust forever.
+  if (Storage.hasContent(getCoverBmpPath().c_str())) {
     return true;
   }
 
