@@ -36,6 +36,10 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   // Note: We don't use mutex here to avoid too much overhead,
   // it's not very important if we read a slightly stale value for lockCount
   const bool locked = lockCount > 0;
+  if (locked && !lockStuckReported && millis() - lockHeldSinceMs > LOCK_STUCK_MS) {
+    lockStuckReported = true;
+    LOG_ERR("PWR", "Power lock held %lu ms; CPU pinned at full speed (leaked lock?)", millis() - lockHeldSinceMs);
+  }
 
   if (!locked && enabled && !isLowPower) {
     LOG_DBG("PWR", "Going to low-power mode");
@@ -119,6 +123,10 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
 
 HalPowerManager::Lock::Lock() {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
+  if (powerManager.lockCount == 0) {
+    powerManager.lockHeldSinceMs = millis();
+    powerManager.lockStuckReported = false;
+  }
   powerManager.lockCount++;
   xSemaphoreGive(powerManager.modeMutex);
   valid = true;

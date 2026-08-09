@@ -26,6 +26,14 @@ class HalPowerManager {
   // to release re-enabled power saving while the other was still working.
   int lockCount = 0;
   SemaphoreHandle_t modeMutex = nullptr;  // Protect access to lockCount
+  // A lock whose holder never released pins the CPU at full speed for the rest of the session
+  // and drains the battery with nothing on screen and nothing in the log to say why. Every
+  // holder is stack-scoped today, so the only way to strand one is deleting a task that holds
+  // it (vTaskDelete with a handle, rather than self-deletion). Report it rather than trust
+  // that no future caller does.
+  unsigned long lockHeldSinceMs = 0;
+  bool lockStuckReported = false;
+  static constexpr unsigned long LOCK_STUCK_MS = 5UL * 60UL * 1000UL;  // >> the longest real hold
 
  public:
 #if BOARD_HAS_PSRAM
