@@ -409,8 +409,8 @@ void HomeActivity::render(RenderLock&&) {
   }
 
   const Rect menuRect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset, pageWidth,
-                      pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
-                                    metrics.homeMenuTopOffset + metrics.buttonHintsHeight)};
+                      pageHeight - (metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset +
+                                    metrics.buttonHintsHeight)};
   const int menuSelected =
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - static_cast<int>(recentBooks.size());
 
