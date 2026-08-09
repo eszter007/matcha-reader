@@ -532,6 +532,55 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   }
 }
 
+static int scaleSigned(const int value, const uint16_t scale) {
+  const int64_t scaled = static_cast<int64_t>(value) * scale;
+  return static_cast<int>(scaled >= 0 ? (scaled + 128) / 256 : (scaled - 128) / 256);
+}
+
+static int scalePositive(const int value, const uint16_t scale) {
+  return std::max(0, static_cast<int>((static_cast<int64_t>(value) * scale + 128) / 256));
+}
+
+// Word Lookup needs a few larger sizes, but the built-in small font is the only one that has
+// the desired CJK fallback. Scale its bitmap directly instead of adding another font family.
+static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode,
+                              const EpdFontFamily& fontFamily, const uint32_t cp, const int cursorX, const int cursorY,
+                              const bool pixelState, const EpdFontFamily::Style style, const uint16_t scale) {
+  const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
+  if (!glyph) return;
+  const EpdFontData* fontData = fontFamily.getDataForGlyph(cp, style);
+  const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
+  if (!bitmap || glyph->width == 0 || glyph->height == 0) return;
+
+  const int width = scalePositive(glyph->width, scale);
+  const int height = scalePositive(glyph->height, scale);
+  const int baseX = cursorX + scaleSigned(glyph->left, scale);
+  const int baseY = cursorY - scaleSigned(glyph->top, scale);
+  if (!renderer.glyphIntersectsStrip(baseX, baseY, baseX + width - 1, baseY + height - 1)) return;
+
+  for (int dstY = 0; dstY < height; ++dstY) {
+    const int srcY = std::min<int>(glyph->height - 1, (dstY * 256) / scale);
+    for (int dstX = 0; dstX < width; ++dstX) {
+      const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
+      const int pos = srcY * glyph->width + srcX;
+      if (fontData->is2Bit) {
+        const uint8_t byte = bitmap[pos >> 2];
+        const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
+        const uint8_t bmpVal = 3 - raw;
+        if (renderMode == GfxRenderer::BW && bmpVal < 3) {
+          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+        } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
+          renderer.drawPixel(baseX + dstX, baseY + dstY, false);
+        } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
+          renderer.drawPixel(baseX + dstX, baseY + dstY, false);
+        }
+      } else if ((bitmap[pos >> 3] >> (7 - (pos & 7))) & 1) {
+        renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+      }
+    }
+  }
+}
+
 // IMPORTANT: This function is in critical rendering path and is called for every pixel. Please keep it as simple and
 // efficient as possible.
 void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
@@ -596,6 +645,13 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   int w = 0, h = 0;
   fontIt->second.getTextDimensions(renderedText, &w, &h, style);
   return w;
+}
+
+int GfxRenderer::getTextWidthScaled(const int fontId, const char* text, const uint16_t scale,
+                                    const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
+                                    const int8_t letterSpacing) const {
+  if (scale == 256) return getTextWidth(fontId, text, style, baseDir, letterSpacing);
+  return scalePositive(getTextWidth(fontId, text, style, baseDir, letterSpacing), scale);
 }
 
 void GfxRenderer::drawCenteredText(const int fontId, const int y, const char* text, const bool black,
@@ -691,6 +747,73 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     } else {
       renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
     }
+    prevCp = cp;
+  }
+}
+
+void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, const char* text, const uint16_t scale,
+                                 const bool black, const EpdFontFamily::Style style,
+                                 const BidiUtils::BidiBaseDir baseDir, const int8_t letterSpacing) const {
+  if (scale == 256) {
+    drawText(fontId, x, y, text, black, style, baseDir, letterSpacing);
+    return;
+  }
+  if (text == nullptr || *text == '\0') return;
+
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  std::string visual;
+  const char* renderedText = resolveVisualText(text, visual, baseDir);
+  const int yPos = y + scaleSigned(getFontAscenderSize(resolvedFontId), scale);
+  int lastBaseX = x;
+  int lastBaseLeft = 0;
+  int lastBaseWidth = 0;
+  int lastBaseTop = 0;
+  int32_t prevAdvanceFP = 0;
+
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(renderedText, resolvedFontId, style);
+    return;
+  }
+
+  const auto fontIt = fontMap.find(resolvedFontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
+    return;
+  }
+  const auto& font = fontIt->second;
+  const char* textCursor = renderedText;
+  uint32_t cp;
+  uint32_t prevCp = 0;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&textCursor)))) {
+    if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
+      if (!combiningGlyph) continue;
+      const auto anchor = combiningMark::anchorFor(cp);
+      const int raiseBy =
+          combiningMark::raiseAboveBase(anchor, combiningGlyph->top, combiningGlyph->height, lastBaseTop);
+      const int combiningX = combiningMark::anchorOver(
+          anchor, lastBaseX, scaleSigned(lastBaseLeft, scale), scaleSigned(lastBaseWidth, scale),
+          scaleSigned(combiningGlyph->left, scale), scaleSigned(combiningGlyph->width, scale));
+      renderCharAtScale(*this, renderMode, font, cp, combiningX, yPos - scaleSigned(raiseBy, scale), black, style,
+                        scale);
+      continue;
+    }
+
+    cp = font.applyLigatures(cp, textCursor, style);
+    if (prevCp != 0) {
+      const auto kernFP = font.getKerning(prevCp, cp, style);
+      const int advance = textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
+      lastBaseX += scalePositive(advance, scale);
+    }
+
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    lastBaseLeft = glyph ? glyph->left : 0;
+    lastBaseWidth = glyph ? glyph->width : 0;
+    lastBaseTop = glyph ? glyph->top : 0;
+    prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+    if (isSupSub) prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, scale);
     prevCp = cp;
   }
 }
@@ -2199,6 +2322,11 @@ int GfxRenderer::getLineHeight(const int fontId) const {
   }
 
   return fontIt->second.getData(EpdFontFamily::REGULAR)->advanceY;
+}
+
+int GfxRenderer::getLineHeightScaled(const int fontId, const uint16_t scale) const {
+  if (scale == 256) return getLineHeight(fontId);
+  return std::max(1, scalePositive(getLineHeight(fontId), scale));
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {

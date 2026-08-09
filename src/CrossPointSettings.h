@@ -292,6 +292,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t touchReaderControls = TOUCH_READER_ON;
   // Swap Word Lookup navigation to side buttons and scrolling to front buttons.
   uint8_t wordLookupSideButtons = 0;
+  // Word Lookup definition font: 8/10/12/16pt (100/125/150/200% of the default).
+  enum WORD_LOOKUP_FONT_SIZE {
+    WORD_LOOKUP_FONT_TINY = 0,
+    WORD_LOOKUP_FONT_SMALL,
+    WORD_LOOKUP_FONT_MEDIUM,
+    WORD_LOOKUP_FONT_LARGE,
+    WORD_LOOKUP_FONT_SIZE_COUNT
+  };
+  uint8_t wordLookupFontSize = WORD_LOOKUP_FONT_SMALL;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.

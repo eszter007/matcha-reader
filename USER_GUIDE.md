@@ -711,6 +711,8 @@ Enable **Settings → Controls → Navigate with Side Buttons in Word Lookup** t
 between words and the front Left / Right buttons for scrolling. The default mapping above remains active when
 **Side Button Layout** is set to **Disabled**.
 
+In Reader Settings, **Word Lookup Font Size** offers Tiny, Small (default), Medium, and Large definition text.
+
 For one-press access, set **Settings → Controls → Short power button click** to **Word Lookup**. It then opens
 straight from the page, in both EPUBs and manga.
 

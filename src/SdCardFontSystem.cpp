@@ -227,6 +227,19 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
   }
 }
 
+void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int primaryFontId,
+                                                const uint8_t pointSize) {
+  if (manager_.currentFamilyName().empty() || pointSize == 0) return;
+  const auto* family = registry_.findFamily(manager_.currentFamilyName());
+  if (!family) return;
+
+  const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, pointSize);
+  if (sdFontId == 0) return;
+  renderer.setFallbackFont(primaryFontId, sdFontId);
+  const auto builtinIt = renderer.getFontMap().find(primaryFontId);
+  if (builtinIt != renderer.getFontMap().end()) renderer.setFamilyFallback(sdFontId, &builtinIt->second);
+}
+
 int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*/) const {
   // The manager holds exactly one reader-size font, already selected for
   // SETTINGS.fontPointSize, so the size argument is implicit — always return
