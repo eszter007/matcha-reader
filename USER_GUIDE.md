@@ -707,6 +707,10 @@ Reader menu → **Word Lookup**.
 The header counts your position (e.g. 10/35). The page is pre-scanned, so you only ever land on a word the
 dictionary actually has.
 
+Enable **Settings → Controls → Navigate with Side Buttons in Word Lookup** to use the side buttons for moving
+between words and the front Left / Right buttons for scrolling. The default mapping above remains active when
+**Side Button Layout** is set to **Disabled**.
+
 For one-press access, set **Settings → Controls → Short power button click** to **Word Lookup**. It then opens
 straight from the page, in both EPUBs and manga.
 

@@ -307,14 +307,19 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
-  const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0;
+  const bool sideButtonsForLookup =
+      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const bool swapFrontButtons = mappedInput.isNavDirectionSwapped();
   const auto nextEntryButton =
       sideButtonsForLookup ? MappedInputManager::Button::PageForward : MappedInputManager::Button::Right;
   const auto previousEntryButton =
       sideButtonsForLookup ? MappedInputManager::Button::PageBack : MappedInputManager::Button::Left;
   const auto scrollDownButton =
-      sideButtonsForLookup ? MappedInputManager::Button::Right : MappedInputManager::Button::Down;
-  const auto scrollUpButton = sideButtonsForLookup ? MappedInputManager::Button::Left : MappedInputManager::Button::Up;
+      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Left : MappedInputManager::Button::Right)
+                           : MappedInputManager::Button::Down;
+  const auto scrollUpButton =
+      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
+                           : MappedInputManager::Button::Up;
   buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
   buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
@@ -421,7 +426,8 @@ void MangaWordLookupActivity::render(RenderLock&&) {
     renderer.clearScreen();
     GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
     renderContentArea(screen, contentTop);
-    const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0;
+    const bool sideButtonsForLookup =
+        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
     const auto labels =
         mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
                               sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
@@ -433,7 +439,8 @@ void MangaWordLookupActivity::render(RenderLock&&) {
     const int physBottom = renderer.getScreenHeight();
     renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
     GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0;
+    const bool sideButtonsForLookup =
+        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
     const auto labels2 =
         mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
                               sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
