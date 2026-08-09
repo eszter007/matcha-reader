@@ -161,7 +161,7 @@ class RecentBooksActivity final : public Activity {
   struct CoverJob {
     RecentBook book;
     int gridHeight = 0;
-    int homeHeight = 0;
+    int targetHeight = 0;
     uint32_t fileSize = 0;
     uint32_t modifiedStamp = 0;
   };

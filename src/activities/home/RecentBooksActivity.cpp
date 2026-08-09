@@ -5,7 +5,6 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
-#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <JpegToBmpConverter.h>
@@ -93,35 +92,6 @@ bool thumbHeightValid(const std::string& thumbPath, const int h) {
   return ok;
 }
 
-// Generate (once) 1-bit BMP cover thumbnails for a manga folder from its first page image, at
-// every height that draws one: the Library's cover grid (gridHeight), the home screen's Continue
-// Reading card (homeHeight) and the shelves tab (SHELF_THUMB_HEIGHT). Decoding the raw page JPEG
-// straight to the framebuffer cost ~430ms per visible manga cover on EVERY render; the cached
-// BMPs draw in a few ms via the same fast path as EPUB covers. Returns the [HEIGHT]-templated
-// thumb path, or empty on any failure (caller keeps the raw image path -- the old,
-// slow-but-working behavior).
-//
-// homeHeight has to be generated HERE because nothing else can: HomeActivity::loadRecentCovers
-// regenerates a missing thumb only for .epub and .xtc, so a manga folder resolves the same
-// [HEIGHT] template against a height nobody produced and the card falls back to a placeholder.
-// That is the X3 report of missing manga covers on the home screen -- the X4 only appeared to
-// work because its 480px-wide grid yields a cell height near Lyra's 226px card, while the X3's
-// 528px grid does not. Repeated heights cost nothing: the existing validity check below skips a
-// height whose thumb is already on disk.
-std::string ensureMangaCoverThumb(const std::string& mangaFolder, const int gridHeight, const int homeHeight,
-                                  BmpConvertCancelFn shouldCancel, void* cancelCtx) {
-  const manga::MangaBook book(mangaFolder);
-  const int heights[3] = {gridHeight, homeHeight, SHELF_THUMB_HEIGHT};
-
-  for (const int h : heights) {
-    if (h <= 0) continue;
-    const std::string thumbPath = book.getThumbBmpPath(h);
-    if (thumbHeightValid(thumbPath, h)) continue;
-    Storage.remove(thumbPath.c_str());  // stale aspect-fill thumb (see thumbHeightValid); rebuild
-    if (!book.generateThumbBmp(h, shouldCancel, cancelCtx)) return "";
-  }
-  return book.getThumbBmpPath();
-}
 }  // namespace
 
 void RecentBooksActivity::coverWorkerTrampoline(void* ctx) {
@@ -165,23 +135,20 @@ void RecentBooksActivity::runCoverJob() {
   const bool isXtc = FsHelpers::hasXtcExtension(result.book.path);
   if (!isEpub && !isXtc) {
     const manga::MangaBook mangaBook(result.book.path);
-    ensureMangaCoverThumb(result.book.path, coverJob_.gridHeight, coverJob_.homeHeight, &coverWorkerShouldCancel, this);
+    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
+    if (targetHeight > 0 && !thumbHeightValid(mangaBook.getThumbBmpPath(targetHeight), targetHeight)) {
+      Storage.remove(mangaBook.getThumbBmpPath(targetHeight).c_str());
+      mangaBook.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
+    }
     result.hasGridThumb = thumbHeightValid(mangaBook.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = mangaBook.getThumbBmpPath();
   } else if (isEpub) {
     Epub epub(result.book.path, "/.crosspoint");
     const bool loaded = epub.load(true, true, &coverWorkerShouldCancel, this);
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight)) {
-      epub.generateThumbBmp(coverJob_.gridHeight, &coverWorkerShouldCancel, this);
-    }
-    if (loaded && !coverWorkerShouldCancel(this) && coverJob_.homeHeight > 0 &&
-        !thumbHeightValid(epub.getThumbBmpPath(coverJob_.homeHeight), coverJob_.homeHeight)) {
-      epub.generateThumbBmp(coverJob_.homeHeight, &coverWorkerShouldCancel, this);
-    }
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(epub.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
-      epub.generateThumbBmp(SHELF_THUMB_HEIGHT, &coverWorkerShouldCancel, this);
+    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
+    if (loaded && !coverWorkerShouldCancel(this) && targetHeight > 0 &&
+        !thumbHeightValid(epub.getThumbBmpPath(targetHeight), targetHeight)) {
+      epub.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
     result.hasGridThumb = loaded && thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = epub.getThumbBmpPath();
@@ -198,17 +165,10 @@ void RecentBooksActivity::runCoverJob() {
   } else {
     Xtc xtc(result.book.path, "/.crosspoint");
     const bool loaded = xtc.load();
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight)) {
-      xtc.generateThumbBmp(coverJob_.gridHeight, &coverWorkerShouldCancel, this);
-    }
-    if (loaded && !coverWorkerShouldCancel(this) && coverJob_.homeHeight > 0 &&
-        !thumbHeightValid(xtc.getThumbBmpPath(coverJob_.homeHeight), coverJob_.homeHeight)) {
-      xtc.generateThumbBmp(coverJob_.homeHeight, &coverWorkerShouldCancel, this);
-    }
-    if (loaded && !coverWorkerShouldCancel(this) &&
-        !thumbHeightValid(xtc.getThumbBmpPath(SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT)) {
-      xtc.generateThumbBmp(SHELF_THUMB_HEIGHT, &coverWorkerShouldCancel, this);
+    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
+    if (loaded && !coverWorkerShouldCancel(this) && targetHeight > 0 &&
+        !thumbHeightValid(xtc.getThumbBmpPath(targetHeight), targetHeight)) {
+      xtc.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
     result.hasGridThumb = loaded && thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = xtc.getThumbBmpPath();
@@ -488,13 +448,15 @@ bool RecentBooksActivity::stepLibraryScan() {
     // (52272-byte framebuffer, wider viewport) has nothing left for a 20KB JPEGDEC, which is why
     // manga covers were missing there and not here.
     const bool coverIsMangaTemplate = coverIsTemplate && book.coverBmpPath.rfind("/.crosspoint/manga_", 0) == 0;
-    const bool mangaThumbMissing =
-        coverIsMangaTemplate &&
-        (!thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH) ||
-         (metrics.homeCoverHeight > 0 &&
-          !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, metrics.homeCoverHeight),
-                            metrics.homeCoverHeight)) ||
-         !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT));
+    const bool mangaGridMissing =
+      !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, thumbH), thumbH);
+    const bool mangaHomeMissing =
+      metrics.homeCoverHeight > 0 &&
+      !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, metrics.homeCoverHeight),
+                        metrics.homeCoverHeight);
+    const bool mangaShelfMissing =
+      !thumbHeightValid(UITheme::getCoverThumbPath(book.coverBmpPath, SHELF_THUMB_HEIGHT), SHELF_THUMB_HEIGHT);
+    const bool mangaThumbMissing = coverIsMangaTemplate && (mangaGridMissing || mangaHomeMissing || mangaShelfMissing);
     // Manga: the walk only recorded the raw page image; convert it here, where the pass is
     // idle-gated and cancellable, instead of freezing the walk.
     if (isMangaEntry && (book.coverBmpPath.empty() || coverIsRawImage || mangaThumbMissing)) {
@@ -502,7 +464,13 @@ bool RecentBooksActivity::stepLibraryScan() {
       if (!lock.held()) return false;
       if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
       lock.unlock();
-      CoverJob job{book, thumbH, metrics.homeCoverHeight, 0, 0};
+      CoverJob job;
+      job.book = book;
+      job.gridHeight = thumbH;
+      job.targetHeight = coverIsMangaTemplate
+                             ? (mangaGridMissing ? thumbH
+                                                 : (mangaHomeMissing ? metrics.homeCoverHeight : SHELF_THUMB_HEIGHT))
+                             : thumbH;
       if (!postCoverJob(std::move(job))) scan_.thumbIndex++;
       return false;
     }
@@ -579,7 +547,12 @@ bool RecentBooksActivity::stepLibraryScan() {
     lock.unlock();
     if (!gridThumbOk) Storage.remove(thumbPath.c_str());
     if (!shelfThumbOk) Storage.remove(shelfThumbPath.c_str());
-    CoverJob job{book, thumbH, metrics.homeCoverHeight, bookSize, bookStamp};
+    CoverJob job;
+    job.book = book;
+    job.gridHeight = thumbH;
+    job.targetHeight = gridThumbOk ? SHELF_THUMB_HEIGHT : thumbH;
+    job.fileSize = bookSize;
+    job.modifiedStamp = bookStamp;
     if (!postCoverJob(std::move(job))) {
       recordIndexEntry(book.path, bookSize, bookStamp, thumbH, false);
       scan_.thumbIndex++;
