@@ -756,8 +756,12 @@ std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
 bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
-  // Already generated, return true
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
+  // Already generated, return true. hasContent(), not exists(): every branch below opens the
+  // destination for writing before it knows the conversion will succeed, so a failed, cancelled
+  // or power-interrupted run leaves a 0-byte file. Answering "already generated" for that husk
+  // made the failure permanent AND invisible -- the caller drew a placeholder forever while
+  // this function reported success and never attempted the cover again.
+  if (Storage.hasContent(getThumbBmpPath(height).c_str())) {
     return true;
   }
 
@@ -892,9 +896,12 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
   }
 
-  // Write an empty bmp file to avoid generation attempts in the future
-  HalFile thumbBmp;
-  Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
+  // No sentinel file. This used to write an empty .bmp "to avoid generation attempts in the
+  // future", which recorded a failure as a finished artifact -- the exact pattern the project
+  // forbids. Whether there is anything to generate is a question hasCoverImage() answers
+  // truthfully and for free; callers that want to stop retrying must ask it (see
+  // HomeActivity::loadRecentCovers and RecentBooksActivity::runCoverJob) rather than reading a
+  // fake file back.
   return false;
 }
 

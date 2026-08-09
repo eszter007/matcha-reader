@@ -143,9 +143,16 @@ class RecentBooksActivity final : public Activity {
     uint32_t fileSize = 0;       // manga folders: size of panels.idx
     uint32_t modifiedStamp = 0;  // packed FAT date/time, 0 when the driver has none
     uint16_t thumbHeight = 0;    // cover height this thumb was verified for (theme-dependent)
-    uint8_t flags = 0;           // bit0: verified thumbnail present
+    uint8_t flags = 0;           // bit0: verified thumbnail present, bit1: book declares no cover
   };
   static constexpr uint8_t INDEX_FLAG_HAS_THUMB = 1 << 0;
+  // The book itself declares no cover image (Epub::hasCoverImage() == false) -- a permanent fact
+  // about the file, not the outcome of one conversion, so it is safe to record and skip on later
+  // visits. This is what stops a coverless book being re-parsed every time the Library opens,
+  // the job the 0-byte sentinel file used to do dishonestly. Cleared whenever the book's size or
+  // modification stamp changes, so replacing the file re-examines it. Only set for EPUBs: Xtc
+  // and MangaBook expose no equivalent predicate, so they keep retrying.
+  static constexpr uint8_t INDEX_FLAG_NO_COVER = 1 << 1;
   std::vector<LibraryIndexEntry> libraryIndex_;
   bool libraryIndexDirty_ = false;
 
@@ -163,6 +170,10 @@ class RecentBooksActivity final : public Activity {
     bool pending = false;
     bool completed = false;  // false means foreground work cancelled it; retry after idle
     bool hasGridThumb = false;
+    // The book declares no cover image at all, so no future attempt can succeed. Distinct from
+    // hasGridThumb=false, which usually means the conversion did not fit in the heap this time
+    // and must be retried -- conflating the two costs a cover forever (see Epub::hasCoverImage).
+    bool coverKnownAbsent = false;
     RecentBook book;
     uint32_t fileSize = 0;
     uint32_t modifiedStamp = 0;
@@ -188,7 +199,7 @@ class RecentBooksActivity final : public Activity {
   void saveLibraryIndex();
   const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
   void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
-                        bool hasThumb);
+                        bool hasThumb, bool coverKnownAbsent = false);
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   bool applyLibraryScan();

@@ -175,6 +175,15 @@ void RecentBooksActivity::runCoverJob() {
     result.hasGridThumb = loaded && thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = epub.getThumbBmpPath();
     if (loaded && !epub.getTitle().empty()) result.book.title = epub.getTitle();
+    // Separate "there is nothing to render" from "it did not fit right now", the same split
+    // HomeActivity::loadRecentCovers makes. Only a book that loaded and declares no cover is a
+    // permanent fact worth recording; a failure with a cover present must stay retryable, or one
+    // low-heap moment costs the cover forever. Requires !cancelled: a cancelled load leaves the
+    // metadata cache unpopulated, which hasCoverImage() cannot distinguish from a coverless book.
+    result.coverKnownAbsent = loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && !epub.hasCoverImage();
+    if (loaded && !result.hasGridThumb && !result.coverKnownAbsent) {
+      LOG_ERR("RBA", "Cover thumb failed for %s; will retry", result.book.path.c_str());
+    }
   } else {
     Xtc xtc(result.book.path, "/.crosspoint");
     const bool loaded = xtc.load();
@@ -316,14 +325,19 @@ const RecentBooksActivity::LibraryIndexEntry* RecentBooksActivity::findIndexEntr
 }
 
 void RecentBooksActivity::recordIndexEntry(const std::string& path, const uint32_t fileSize,
-                                           const uint32_t modifiedStamp, const int thumbHeight, const bool hasThumb) {
+                                           const uint32_t modifiedStamp, const int thumbHeight, const bool hasThumb,
+                                           const bool coverKnownAbsent) {
   const uint32_t hash = static_cast<uint32_t>(std::hash<std::string>{}(path));
   LibraryIndexEntry entry;
   entry.pathHash = hash;
   entry.fileSize = fileSize;
   entry.modifiedStamp = modifiedStamp;
   entry.thumbHeight = static_cast<uint16_t>(thumbHeight);
-  entry.flags = hasThumb ? INDEX_FLAG_HAS_THUMB : 0;
+  entry.flags = 0;
+  if (hasThumb) entry.flags |= INDEX_FLAG_HAS_THUMB;
+  // Only a caller that positively established the book has no cover sets this; every other
+  // failure leaves the bit clear so the next visit tries again.
+  if (coverKnownAbsent) entry.flags |= INDEX_FLAG_NO_COVER;
 
   for (auto& e : libraryIndex_) {
     if (e.pathHash != hash) continue;
@@ -416,7 +430,7 @@ bool RecentBooksActivity::stepLibraryScan() {
       }
       if (matches && (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path))) {
         recordIndexEntry(book.path, coverResult_.fileSize, coverResult_.modifiedStamp, thumbH,
-                         coverResult_.hasGridThumb);
+                         coverResult_.hasGridThumb, coverResult_.coverKnownAbsent);
       }
       const bool completed = coverResult_.completed;
       coverResult_.pending = false;
@@ -494,13 +508,19 @@ bool RecentBooksActivity::stepLibraryScan() {
     // The index knows a thumb WAS produced; it cannot know the file is still there. Trusting the
     // flag alone left three books on a test card with a cover the grid could never draw
     // (idxOk=1, file absent) -- and because the shortcut below re-records its own claim, that
-    // state sustained itself across every later scan. Confirm with a bare exists(), which still
+    // state sustained itself across every later scan. Confirm with hasContent(), which still
     // skips the expensive part this shortcut exists for: the header parse and payload-length
     // check inside thumbHeightValid().
+    //
+    // hasContent() rather than exists() because a 0-byte file satisfied exists() and so let the
+    // index validate its own claim against a husk: the grid published thumb_[HEIGHT].bmp as the
+    // cover path, drawCoverThumbFilled() failed parseHeaders(), the placeholder was drawn, and
+    // recordIndexEntry() wrote the same flag back -- a wrong entry that kept itself alive with
+    // nothing logged. Generators no longer write such files, but cards already carry them.
     const bool indexSaysThumbOk = indexed && (indexed->flags & INDEX_FLAG_HAS_THUMB) && indexed->fileSize == bookSize &&
                                   indexed->modifiedStamp == bookStamp &&
                                   indexed->thumbHeight == static_cast<uint16_t>(thumbH) &&
-                                  Storage.exists(thumbPath.c_str());
+                                  Storage.hasContent(thumbPath.c_str());
     const bool gridThumbOk = indexSaysThumbOk || thumbHeightValid(thumbPath, thumbH);
     const std::string shelfThumbPath = cachePath + "/thumb_" + std::to_string(SHELF_THUMB_HEIGHT) + ".bmp";
     const bool shelfThumbOk = thumbHeightValid(shelfThumbPath, SHELF_THUMB_HEIGHT);
@@ -511,6 +531,17 @@ bool RecentBooksActivity::stepLibraryScan() {
       book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
       recordIndexEntry(book.path, bookSize, bookStamp, thumbH, true);
       if (!publishBook(book)) return false;
+      scan_.thumbIndex++;
+      return false;
+    }
+    // The book has no cover image to render, established by a previous visit that actually
+    // loaded it (INDEX_FLAG_NO_COVER; see Epub::hasCoverImage). Skipping here is what keeps a
+    // coverless book from being re-parsed on every Library visit now that generateThumbBmp()
+    // no longer drops a 0-byte file to shortcut itself. Guarded by the same size/stamp match as
+    // the thumb shortcut, so replacing the file re-examines it -- and unlike the sentinel this
+    // records a fact about the BOOK, which a failed conversion can never fake.
+    if (indexed && (indexed->flags & INDEX_FLAG_NO_COVER) && indexed->fileSize == bookSize &&
+        indexed->modifiedStamp == bookStamp) {
       scan_.thumbIndex++;
       return false;
     }

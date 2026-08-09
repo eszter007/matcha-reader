@@ -143,7 +143,10 @@ std::string MangaBook::getThumbBmpPath(int height) const {
 bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   if (height <= 0) return false;
   const std::string thumbPath = getThumbBmpPath(height);
-  if (Storage.exists(thumbPath.c_str())) return true;
+  // hasContent(), not exists(): the destination is opened for writing before the page image is
+  // converted, so a failed or cancelled run leaves a 0-byte file that exists() would report as
+  // a finished thumbnail forever (see Epub::generateThumbBmp).
+  if (Storage.hasContent(thumbPath.c_str())) return true;
 
   const std::string cover = findCoverImage(folderPath, shouldCancel, cancelCtx);
   if (cover.empty()) return false;

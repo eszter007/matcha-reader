@@ -90,6 +90,14 @@ bool HalStorage::mkdir(const char* path, const bool pFlag) { HAL_STORAGE_WRAPPED
 
 bool HalStorage::exists(const char* path) { HAL_STORAGE_WRAPPED_CALL(exists, path); }
 
+bool HalStorage::hasContent(const char* path) {
+  // Composed from the public API rather than wrapped: open() and HalFile::size() take the
+  // storage mutex themselves, so holding it across both here would deadlock.
+  HalFile f = open(path);
+  if (!f) return false;
+  return f.size() > 0;
+}
+
 bool HalStorage::remove(const char* path) { HAL_STORAGE_WRAPPED_CALL(remove, path); }
 bool HalStorage::rename(const char* oldPath, const char* newPath) {
   HAL_STORAGE_WRAPPED_CALL(rename, oldPath, newPath);
