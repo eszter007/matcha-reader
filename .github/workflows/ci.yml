@@ -57,7 +57,13 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+        # littlefs-python alongside the core: the espressif32 builder imports `littlefs`
+        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from
+        # system site-packages while installing its own dependencies into a penv the builder
+        # never sees. Without it every build and cppcheck job dies with ModuleNotFoundError.
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          uv pip install --system littlefs-python
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -88,7 +94,13 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+        # littlefs-python alongside the core: the espressif32 builder imports `littlefs`
+        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from
+        # system site-packages while installing its own dependencies into a penv the builder
+        # never sees. Without it every build and cppcheck job dies with ModuleNotFoundError.
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          uv pip install --system littlefs-python
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -142,7 +154,13 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+        # littlefs-python alongside the core: the espressif32 builder imports `littlefs`
+        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from
+        # system site-packages while installing its own dependencies into a penv the builder
+        # never sees. Without it every build and cppcheck job dies with ModuleNotFoundError.
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          uv pip install --system littlefs-python
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
