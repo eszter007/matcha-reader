@@ -820,6 +820,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
+  // A font-size on <html>/<body> is the book restating the size its body text should have --
+  // and that base is the READER's font here, because every font-size resolves against it
+  // (cssBlockFontId, ReaderFontScale.cpp) rather than against a fixed 16px. Applying a root
+  // declaration on top of a base it is itself describing multiplies the user's setting by the
+  // publisher's default: `body { font-size: 0.8em }` drags an entire book a ladder step (or two,
+  // since ties snap down) below the size they chose, and no declaration further in ever brings
+  // it back -- <p> inherits the root font through the block/inline style stack. Dropping it here
+  // costs nothing the book can express elsewhere: every nested font-size still applies, so
+  // headings, captions and small print keep their intended relationship to the body text.
+  if (strcasecmp(name, "body") == 0 || strcasecmp(name, "html") == 0) {
+    cssStyle.defined.fontSize = 0;
+  }
+
   // HTML dir attribute overrides CSS direction (case-insensitive per HTML spec)
   if (!dirAttr.empty()) {
     if (strcasecmp(dirAttr.c_str(), "rtl") == 0) {
