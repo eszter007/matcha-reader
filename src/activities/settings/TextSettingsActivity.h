@@ -41,7 +41,9 @@ class TextSettingsActivity final : public Activity {
  private:
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
-  enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
+  // BookSideMargins is horizontal-only (the vertical engine never reads honorBookInsets), so it
+  // is hidden for a Japanese book alongside ParaSpacing and Alignment -- see layoutRowAt().
+  enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, BookSideMargins, Count };
   enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
 
   void applyFamily(int listIndex);

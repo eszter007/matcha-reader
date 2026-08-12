@@ -285,15 +285,19 @@ void TextSettingsActivity::render(RenderLock&&) {
 
     case Tab::Layout: {
       static constexpr StrId ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING, StrId::STR_ALIGNMENT,
-                                               StrId::STR_SCREEN_MARGIN};
+                                               StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS};
       GUI.drawList(
           renderer, listRect, currentListSize(), selectedItem,
           [this](int index) { return std::string(I18N.get(ROW_NAME_IDS[static_cast<int>(layoutRowAt(index))])); },
           nullptr, nullptr, [this](int index) { return layoutValueText(static_cast<int>(layoutRowAt(index))); }, true);
       if (onTabBar)
         confirmLabel = japaneseBook_ ? tr(STR_FONT) : tr(STR_STYLE);
-      else  // Extra Paragraph Spacing toggles; the rest open a picker
-        confirmLabel = layoutRowAt(selectedItem) == LayoutRow::ParaSpacing ? tr(STR_TOGGLE) : tr(STR_SELECT);
+      else {
+        // The two booleans toggle in place; every other row opens a picker.
+        const LayoutRow row = layoutRowAt(selectedItem);
+        const bool toggles = row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins;
+        confirmLabel = toggles ? tr(STR_TOGGLE) : tr(STR_SELECT);
+      }
       break;
     }
 
@@ -407,6 +411,10 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       SETTINGS.extraParagraphSpacing = !SETTINGS.extraParagraphSpacing;
       requestUpdate();
       break;
+    case LayoutRow::BookSideMargins:
+      SETTINGS.bookCssMargins = SETTINGS.bookCssMargins ? 0 : 1;
+      requestUpdate();
+      break;
     case LayoutRow::LineSpacing:
       optionPopup_.show(StrId::STR_LINE_SPACING, LINE_SPACING_IDS, static_cast<int>(std::size(LINE_SPACING_IDS)),
                         SETTINGS.lineSpacing, [](int idx) { SETTINGS.lineSpacing = static_cast<uint8_t>(idx); });
@@ -448,6 +456,8 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
+    case LayoutRow::BookSideMargins:
+      return SETTINGS.bookCssMargins ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
 
     default:
       return "";
@@ -523,7 +533,9 @@ int TextSettingsActivity::currentListSize() const {
     case Tab::Size:
       return static_cast<int>(sizes_.size());
     case Tab::Layout:
-      return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 2 : 0);
+      // Japanese books hide ParaSpacing, Alignment and BookSideMargins: all three are horizontal
+      // layout inputs the vertical engine does not read.
+      return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 3 : 0);
     case Tab::Style:
       return static_cast<int>(StyleRow::Count);
 
