@@ -209,8 +209,31 @@ def main():
     elif ncx_path and ncx_path in files:
         toc_source = files[ncx_path].decode("utf-8")
     existing_names = {Path(h.split("#", 1)[0]).name for h in re.findall(r'(?:href|src)="([^"]+)"', toc_source)}
-    recover_spine_toc = bool(toc_source) and len(spine_chapters) >= 2 and any(
-        Path(href).name not in existing_names for href, _ in spine_chapters
+    # Does the book's own ToC navigate the whole book? Not "does it exist" and not "how many
+    # entries" -- both stubs and real ToCs have entries. What separates them is REACH: a working
+    # ToC lets you jump to the end, a stub stops near the start. Measured on two real books: a
+    # correctly built light novel's ToC reaches spine index 29 of 30 (100%), while a novel that
+    # genuinely needs repair reaches index 4 of 17 (29%) -- it lists the cover and the first page
+    # and nothing else.
+    #
+    # This matters because recovery adds an entry for every structurally-named spine file, and in
+    # a book that is already chaptered most of those files are CONTINUATIONS, not chapter starts.
+    # Left ungated it buried the author's 11 chapters under 29 entries, titling front matter with
+    # its filename ("part0000") and mid-chapter files with whatever sentence they opened on.
+    spine_index_by_name = {}
+    for index, idref in enumerate(spine_ids):
+        href = manifest.get(idref)
+        if href:
+            spine_index_by_name.setdefault(Path(href).name, index)
+    toc_spine_indexes = [spine_index_by_name[n] for n in existing_names if n in spine_index_by_name]
+    book_has_working_toc = (
+        len(toc_spine_indexes) >= 2 and max(toc_spine_indexes) >= (len(spine_ids) - 1) / 2
+    )
+    recover_spine_toc = (
+        bool(toc_source)
+        and not book_has_working_toc
+        and len(spine_chapters) >= 2
+        and any(Path(href).name not in existing_names for href, _ in spine_chapters)
     )
     if recover_spine_toc:
         toc_additions.extend(spine_chapters)
