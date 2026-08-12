@@ -3876,12 +3876,17 @@ void EpubReaderActivity::addBookmark() {
     entry.computedChapterPageCount = pageCount;
     entry.computedChapterProgress = currentPage;
     // Record the exact content offset so the bookmark lands correctly after any re-pagination.
-    // currentPageVisibleOffset was captured for this very page at its last render.
-    const std::optional<uint32_t> offset =
-        currentPageVisibleOffset.has_value() ? currentPageVisibleOffset
-        : (currentPage >= 0 && currentPage < section->pageCount)
-            ? section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage))
-            : std::nullopt;
+    // The two layouts own different section objects; never touch `section` while a vertical page
+    // is active (it is null in that mode).
+    std::optional<uint32_t> offset;
+    if (verticalSection && currentPage >= 0 && currentPage < verticalSection->pageCount) {
+      offset = verticalSection->getVisibleTextOffsetForPage(currentPage);
+    } else if (section && currentPage >= 0 && currentPage < section->pageCount) {
+      // currentPageVisibleOffset was captured for this very page at its last render.
+      offset = currentPageVisibleOffset.has_value()
+                   ? currentPageVisibleOffset
+                   : section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
+    }
     if (offset.has_value()) {
       entry.visibleTextOffset = *offset;
       entry.hasVisibleTextOffset = true;
