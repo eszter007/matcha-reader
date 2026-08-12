@@ -5051,7 +5051,31 @@ async function splitEpubChapters(file) {
   const tocRefRe = /(?:href|src)="([^"]+)"/g;
   let tocRef;
   while ((tocRef = tocRefRe.exec(nav || ncx || '')) !== null) existingNames.add(baseName(tocRef[1]));
-  const recoverSpineToc = !!(nav || ncx) && spineChapters.length >= 2 &&
+  // Does the book's own ToC navigate the whole book? Not "does it exist" and not "how many
+  // entries" -- both stubs and real ToCs have entries. What separates them is REACH: a working
+  // ToC lets you jump to the end, a stub stops near the start. Measured on two real books: a
+  // correctly built light novel's ToC reaches spine index 29 of 30 (100%), while a novel that
+  // genuinely needs repair reaches index 4 of 17 (29%) -- it lists the cover and the first page
+  // and nothing else.
+  //
+  // This matters because recovery adds an entry for every structurally-named spine file, and in
+  // a book that is already chaptered most of those files are CONTINUATIONS, not chapter starts.
+  // Left ungated it buried the author's 11 chapters under 29 entries, titling front matter with
+  // its filename ("part0000") and mid-chapter files with whatever sentence they opened on.
+  const spineIndexByName = new Map();
+  spineIds.forEach((id, index) => {
+    const name = baseName(manifest[id] || '');
+    if (name && !spineIndexByName.has(name)) spineIndexByName.set(name, index);
+  });
+  let tocSpineRefs = 0, lastTocSpineIndex = -1;
+  for (const name of existingNames) {
+    const index = spineIndexByName.get(name);
+    if (index === undefined) continue;  // stylesheets, scripts, images: not navigation
+    tocSpineRefs++;
+    if (index > lastTocSpineIndex) lastTocSpineIndex = index;
+  }
+  const bookHasWorkingToc = tocSpineRefs >= 2 && lastTocSpineIndex >= (spineIds.length - 1) / 2;
+  const recoverSpineToc = !!(nav || ncx) && !bookHasWorkingToc && spineChapters.length >= 2 &&
     spineChapters.some(t => !existingNames.has(baseName(t.href)));
   if (recoverSpineToc) {
     tocAdditions.push(...spineChapters);
