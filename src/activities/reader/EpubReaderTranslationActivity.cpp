@@ -144,18 +144,70 @@ void EpubReaderTranslationActivity::onExit() {
 }
 
 bool EpubReaderTranslationActivity::readApiKey(std::string& keyOut) {
-  char buf[128];
+  char buf[256];
   size_t len = Storage.readFileToBuffer(API_KEY_PATH, buf, sizeof(buf));
   if (len == 0) return false;
+  // readFileToBuffer stops at bufferSize-1 and reports the truncated length, so a key longer
+  // than the buffer arrives silently cut in half and is rejected by the API as malformed.
+  // 256 is far above any key Google issues (a current AI Studio key is ~53 characters), and a
+  // full buffer now means "this is not a key" rather than "here is most of one".
+  if (len >= sizeof(buf) - 1) {
+    LOG_ERR("XLAT", "gemini.key is %u+ bytes; that is not an API key", static_cast<unsigned>(len));
+    return false;
+  }
 
-  // Trim trailing whitespace/newlines
-  while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' ')) {
+  size_t start = 0;
+  // A UTF-8 BOM is what an editor on Windows writes when the file is saved as UTF-8, and the
+  // documented way to install a key is to paste it into a text file. The three bytes go out in
+  // front of the key, the API rejects it, and nothing on screen suggests the file is at fault.
+  if (len - start >= 3 && static_cast<unsigned char>(buf[start]) == 0xEF &&
+      static_cast<unsigned char>(buf[start + 1]) == 0xBB && static_cast<unsigned char>(buf[start + 2]) == 0xBF) {
+    start += 3;
+  }
+  // Trim whitespace/newlines from BOTH ends: a leading space or newline corrupts the key exactly
+  // as invisibly as a trailing one, and only the trailing end was handled.
+  while (start < len && (buf[start] == '\n' || buf[start] == '\r' || buf[start] == ' ' || buf[start] == '\t')) {
+    start++;
+  }
+  while (len > start && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' ' || buf[len - 1] == '\t')) {
     len--;
   }
-  if (len == 0) return false;
+  if (len <= start) return false;
 
-  keyOut.assign(buf, len);
+  keyOut.assign(buf + start, len - start);
   return true;
+}
+
+// What the screen says when Google refuses the request. The status alone separates the causes a
+// reader can actually act on -- a rejected key, an account with no billing set up, a quota that
+// has run out -- from one another and from "the network is down", which is what a single generic
+// failure message left every one of them looking like. The code is appended because it is the
+// one detail that makes a bug report actionable without asking for logs.
+static std::string translationHttpError(const int httpCode) {
+  // tr() pastes its argument into StrId::, so each case names its string directly.
+  const char* base = tr(STR_TRANSLATION_FAILED);
+  switch (httpCode) {
+    case 400:
+      base = tr(STR_TRANSLATION_KEY_REJECTED);
+      break;
+    case 401:
+    case 403:
+      base = tr(STR_TRANSLATION_ACCESS_DENIED);
+      break;
+    case 429:
+      base = tr(STR_TRANSLATION_QUOTA);
+      break;
+    default:
+      if (httpCode >= 500) base = tr(STR_TRANSLATION_SERVICE_DOWN);
+      break;
+  }
+  std::string msg = base;
+  if (httpCode > 0) {
+    char code[16];
+    snprintf(code, sizeof(code), " (%d)", httpCode);
+    msg += code;
+  }
+  return msg;
 }
 
 bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
@@ -230,7 +282,7 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
 
   if (httpCode != 200 || response.empty()) {
     LOG_ERR("XLAT", "API call failed: http=%d", httpCode);
-    errorMessage = tr(STR_TRANSLATION_FAILED);
+    errorMessage = translationHttpError(httpCode);
     return false;
   }
 
