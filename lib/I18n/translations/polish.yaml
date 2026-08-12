@@ -423,7 +423,7 @@ STR_RECOVERY_MODE_HINT: "Umieść firmware.bin w głównym katalogu karty SD i w
 STR_ADD_HIDDEN_NETWORK: "Dodaj ukrytą sieć..."
 STR_ENTER_WIFI_SSID: "Wprowadź nazwę sieci (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Boczne marginesy książki"
+STR_BOOK_CSS_MARGINS: "Użyj marginesów książki"
 STR_TRANSPARENT: "Przezroczysty"
 STR_BOOK_BADGE_NEW: "Nowa"
 STR_BOOK_BADGE_READ: "Przeczytana"

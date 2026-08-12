@@ -412,7 +412,7 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       requestUpdate();
       break;
     case LayoutRow::BookSideMargins:
-      SETTINGS.bookCssMargins = SETTINGS.bookCssMargins ? 0 : 1;
+      SETTINGS.bookCssMargins = !SETTINGS.bookCssMargins;
       requestUpdate();
       break;
     case LayoutRow::LineSpacing:

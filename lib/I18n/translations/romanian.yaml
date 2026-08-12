@@ -318,7 +318,7 @@ STR_TILT_PAGE_TURN: "Întoarcere pagină prin înclinare"
 STR_ADD_HIDDEN_NETWORK: "Adaugă rețea ascunsă..."
 STR_ENTER_WIFI_SSID: "Introduceți numele rețelei (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Margini laterale ale cărții"
+STR_BOOK_CSS_MARGINS: "Folosește marginile cărții"
 STR_SMALL: "Mic"
 STR_TINY: "Foarte mic"
 STR_MEDIUM: "Mediu"

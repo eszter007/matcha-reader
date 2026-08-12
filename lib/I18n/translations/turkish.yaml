@@ -432,7 +432,7 @@ STR_UPDATE_AVAILABLE: "Güncelle"
 STR_VALIDATING_FIRMWARE: "Firmware doğrulanıyor..."
 STR_XTC_STATUS_BAR: "XTC Durum Çubuğu"
 
-STR_BOOK_CSS_MARGINS: "Kitap yan kenar boşlukları"
+STR_BOOK_CSS_MARGINS: "Kitap kenar boşluklarını kullan"
 STR_SMALL: "Küçük"
 STR_TINY: "Çok küçük"
 STR_MEDIUM: "Orta"

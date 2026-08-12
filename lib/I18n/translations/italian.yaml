@@ -431,7 +431,7 @@ STR_WIFI_NETWORKS: "Reti Wi-Fi"
 STR_XTC_STATUS_BAR: "Barra di stato XTC"
 STR_YES: "Sì"
 
-STR_BOOK_CSS_MARGINS: "Margini laterali del libro"
+STR_BOOK_CSS_MARGINS: "Usa i margini del libro"
 STR_SMALL: "Piccolo"
 STR_TINY: "Minuscolo"
 STR_MEDIUM: "Medio"

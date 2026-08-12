@@ -432,7 +432,7 @@ STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF: "Stäng inte av!"
 STR_RECOVERY_MODE: "Återställningsläge"
 STR_RECOVERY_MODE_HINT: "Placera firmware.bin i SD-kortroten och välj den"
 
-STR_BOOK_CSS_MARGINS: "Bokens sidomarginaler"
+STR_BOOK_CSS_MARGINS: "Använd bokens marginaler"
 STR_SMALL: "Liten"
 STR_TINY: "Mycket liten"
 STR_MEDIUM: "Medium"

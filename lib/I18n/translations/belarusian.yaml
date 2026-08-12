@@ -432,7 +432,7 @@ STR_RECOVERY_MODE_HINT: "Змясціце firmware.bin у корань SD-кар
 STR_ADD_HIDDEN_NETWORK: "Дадаць схаваную сетку..."
 STR_ENTER_WIFI_SSID: "Увядзіце назву сеткі (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Бакавыя палі кнігі"
+STR_BOOK_CSS_MARGINS: "Ужываць палі кнігі"
 STR_SMALL: "Маленькі"
 STR_TINY: "Вельмі маленькі"
 STR_MEDIUM: "Сярэдні"

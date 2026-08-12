@@ -432,7 +432,7 @@ STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF: "Não desligue o dispositivo!"
 STR_RECOVERY_MODE: "Modo de Recuperação"
 STR_RECOVERY_MODE_HINT: "Coloque o arquivo firmware.bin na raiz do cartão SD e selecione-o"
 
-STR_BOOK_CSS_MARGINS: "Margens laterais do livro"
+STR_BOOK_CSS_MARGINS: "Usar margens do livro"
 STR_SMALL: "Pequeno"
 STR_TINY: "Muito pequeno"
 STR_MEDIUM: "Médio"

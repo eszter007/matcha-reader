@@ -397,7 +397,7 @@ STR_RECOVERY_MODE_HINT: "Lege firmware.bin im SD-Kartenwurzelverzeichnis ab und 
 STR_ADD_HIDDEN_NETWORK: "Verstecktes Netzwerk hinzufügen…"
 STR_ENTER_WIFI_SSID: "Netzwerknamen eingeben (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Buch-Seitenränder"
+STR_BOOK_CSS_MARGINS: "Buchränder verwenden"
 STR_SMALL: "Klein"
 STR_TINY: "Sehr klein"
 STR_MEDIUM: "Mittel"
