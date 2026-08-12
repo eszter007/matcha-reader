@@ -17,11 +17,12 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        std::string folderName)
+                                        std::string folderName, int baseFontId)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         page(std::move(page)),
         marginLeft(marginLeft),
         marginTop(marginTop),
+        fontId(baseFontId),
         folderName(std::move(folderName)) {}
 
   void onEnter() override;
@@ -61,6 +62,9 @@ class DictionaryWordSelectActivity final : public Activity {
   std::unique_ptr<Page> page;
   const int marginLeft;
   const int marginTop;
+  // The page's base font, as the reader laid it out: effectiveReaderFontId(), not the raw
+  // setting. A book whose script the selected family cannot carry is rendered with a
+  // substitute, and measuring the page here with the setting would disagree with the pixels.
   int fontId = 0;
   int lineHeight = 0;
 
