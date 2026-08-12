@@ -313,7 +313,7 @@ STR_TILT_PAGE_TURN: "Еңкейту арқылы бет аудару"
 STR_ADD_HIDDEN_NETWORK: "Жасырын желіні қосу..."
 STR_ENTER_WIFI_SSID: "Желі атауын енгізіңіз (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Кітаптың бүйір жиектері"
+STR_BOOK_CSS_MARGINS: "Кітап жиектерін қолдану"
 STR_SMALL: "Кішкентай"
 STR_TINY: "Өте кіші"
 STR_MEDIUM: "Орташа"

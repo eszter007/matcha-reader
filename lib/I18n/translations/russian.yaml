@@ -429,7 +429,7 @@ STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF: "Не выключайте питание!
 STR_RECOVERY_MODE: "Режим восстановления"
 STR_RECOVERY_MODE_HINT: "Поместите firmware.bin в корень SD-карты и выберите его"
 
-STR_BOOK_CSS_MARGINS: "Боковые поля книги"
+STR_BOOK_CSS_MARGINS: "Использовать поля книги"
 STR_SMALL: "Маленький"
 STR_TINY: "Очень маленький"
 STR_MEDIUM: "Средний"

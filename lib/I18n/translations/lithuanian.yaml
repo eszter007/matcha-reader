@@ -404,7 +404,7 @@ STR_CRASH_REASON: "Klaidos priežastis:"
 STR_CRASH_NO_REASON: "(Priežastis neįrašyta)"
 STR_TILT_PAGE_TURN: "Puslapio vertimas pakreipiant"
 
-STR_BOOK_CSS_MARGINS: "Knygos šoninės paraštės"
+STR_BOOK_CSS_MARGINS: "Naudoti knygos paraštes"
 STR_SMALL: "Mažas"
 STR_TINY: "Labai mažas"
 STR_MEDIUM: "Vidut."

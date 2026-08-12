@@ -261,7 +261,20 @@ struct BlockStyle {
     // For textIndent: if it's a percentage we can't resolve (no viewport width),
     // leave textIndentDefined=false so the space-width fallback in resolveFirstLineIndent() is used
     if (cssStyle.hasTextIndent() && cssStyle.textIndent.isResolvable(vw)) {
-      blockStyle.textIndent = cssStyle.textIndent.toPixelsInt16(emSize, vw);
+      auto indent = cssStyle.textIndent.toPixelsInt16(emSize, vw);
+      // A NEGATIVE indent is a hanging indent, and it is only half of a pair: it exists to pull
+      // the first line back out of the left inset declared alongside it (Dune's contents:
+      // margin-left 1.5em with text-indent -1.5em, which together sit flush). Applying it
+      // without that inset walks the first line off the left edge of the screen and clips its
+      // opening character -- which is what happened with Book Margins off, where the margin is
+      // dropped and this was not. Bound it by the inset actually in force: zero when insets are
+      // off, and the CLAMPED margin when they are on, since MAX_HORIZONTAL_INSET_EM can leave
+      // less room than the indent assumed.
+      if (indent < 0) {
+        const auto hangLimit = static_cast<int16_t>(blockStyle.marginLeft + blockStyle.paddingLeft);
+        indent = std::max<int16_t>(indent, static_cast<int16_t>(-hangLimit));
+      }
+      blockStyle.textIndent = indent;
       blockStyle.textIndentDefined = true;
     }
     blockStyle.textAlignDefined = cssStyle.hasTextAlign();

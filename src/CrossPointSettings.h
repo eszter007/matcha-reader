@@ -245,8 +245,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr uint8_t SCREEN_MARGIN_STEP = 5;
   uint8_t screenMargin = SCREEN_MARGIN_MIN;
   // Honor the book's own horizontal CSS margins/padding (clamped per element).
-  // Default off: the text column's side margins come only from screenMargin.
-  uint8_t bookCssMargins = 0;
+  // Default ON: a book that insets a block -- an epigraph, a letter, a blockquote -- means it,
+  // and dropping the inset renders it as ordinary body text. Turning this off is a preference
+  // about a particular book's typography, so it belongs to the reader rather than to the
+  // default. Exposed as "Book Side Margins" in Text Settings > Layout.
+  uint8_t bookCssMargins = 1;
   // OPDS download destination folder ("" = SD root). Global; edited from the
   // OPDS server list. Persisted via a category-less SettingInfo::String in
   // SettingsList.h, so it stays out of the on-device Settings screen.

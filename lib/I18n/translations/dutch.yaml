@@ -318,7 +318,7 @@ STR_TILT_PAGE_TURN: "Kantel om te bladeren"
 STR_ADD_HIDDEN_NETWORK: "Verborgen netwerk toevoegen..."
 STR_ENTER_WIFI_SSID: "Voer netwerknaam in (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Zijmarges van het boek"
+STR_BOOK_CSS_MARGINS: "Boekmarges gebruiken"
 STR_SMALL: "Klein"
 STR_TINY: "Extra klein"
 STR_MEDIUM: "Gemiddeld"

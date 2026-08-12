@@ -390,7 +390,7 @@ STR_AUTO_TURN_ENABLED: "Samodejno obračanje omogočeno: "
 STR_AUTO_TURN_PAGES_PER_MIN: "Samodejno obračanje (strani na minuto)"
 STR_TILT_PAGE_TURN: "Obračanje s priklonom"
 
-STR_BOOK_CSS_MARGINS: "Stranski robovi knjige"
+STR_BOOK_CSS_MARGINS: "Uporabi robove knjige"
 STR_SMALL: "Majhno"
 STR_TINY: "Zelo majhno"
 STR_MEDIUM: "Srednje"

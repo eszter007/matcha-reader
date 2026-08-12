@@ -155,7 +155,10 @@ namespace {
 // v73: the header records whether furigana is on, and a ruby-carrying line only reserves the
 //      leading its annotation needs when it is. With furigana off, pages now hold more lines,
 //      so the toggle re-lays the chapter out instead of only suppressing the annotations.
-constexpr uint8_t SECTION_FILE_VERSION = 73;
+// v74: a negative text-indent is bounded by the left inset in force. A hanging indent whose
+//      paired margin-left was dropped (Book Margins off) drew the first line off the left edge
+//      of the screen with its first character clipped; cached pages hold those positions.
+constexpr uint8_t SECTION_FILE_VERSION = 74;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

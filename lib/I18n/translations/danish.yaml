@@ -318,7 +318,7 @@ STR_TILT_PAGE_TURN: "Vip for at vende side"
 STR_ADD_HIDDEN_NETWORK: "Tilføj skjult netværk..."
 STR_ENTER_WIFI_SSID: "Indtast netværksnavn (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Bogens sidemargener"
+STR_BOOK_CSS_MARGINS: "Brug bogens margener"
 STR_SMALL: "Lille"
 STR_TINY: "Meget lille"
 STR_MEDIUM: "Mellem"

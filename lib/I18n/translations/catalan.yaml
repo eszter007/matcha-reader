@@ -432,7 +432,7 @@ STR_RECOVERY_MODE_HINT: "Posa firmware.bin a l'arrel de la targeta SD i seleccio
 STR_ADD_HIDDEN_NETWORK: "Afegeix una xarxa oculta..."
 STR_ENTER_WIFI_SSID: "Introdueix el nom de la xarxa (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Marges laterals del llibre"
+STR_BOOK_CSS_MARGINS: "Usa els marges del llibre"
 STR_SMALL: "Petita"
 STR_TINY: "Molt petita"
 STR_MEDIUM: "Mitjana"

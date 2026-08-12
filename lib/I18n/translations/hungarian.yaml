@@ -432,7 +432,7 @@ STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF: "Ne kapcsold ki!"
 STR_RECOVERY_MODE: "Helyreállítási mód"
 STR_RECOVERY_MODE_HINT: "Helyezd a firmware.bin fájlt az SD-kártya gyökerébe, majd válaszd ki"
 
-STR_BOOK_CSS_MARGINS: "Könyv oldalmargói"
+STR_BOOK_CSS_MARGINS: "Könyv margóinak használata"
 STR_SMALL: "Kicsi"
 STR_TINY: "Nagyon kicsi"
 STR_MEDIUM: "Közepes"

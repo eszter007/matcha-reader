@@ -404,7 +404,7 @@ STR_CRASH_REASON: "Raison du plantage :"
 STR_CRASH_NO_REASON: "(Aucune raison enregistrée)"
 STR_TILT_PAGE_TURN: "Tourner par inclinaison"
 
-STR_BOOK_CSS_MARGINS: "Marges latérales du livre"
+STR_BOOK_CSS_MARGINS: "Utiliser les marges du livre"
 STR_SMALL: "Petit"
 STR_TINY: "Très petit"
 STR_MEDIUM: "Moyen"

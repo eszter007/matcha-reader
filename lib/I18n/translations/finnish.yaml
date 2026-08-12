@@ -288,7 +288,7 @@ STR_TILT_PAGE_TURN: "Sivunkääntö kallistamalla"
 STR_ADD_HIDDEN_NETWORK: "Lisää piilotettu verkko..."
 STR_ENTER_WIFI_SSID: "Anna verkon nimi (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Kirjan sivumarginaalit"
+STR_BOOK_CSS_MARGINS: "Käytä kirjan marginaaleja"
 STR_SMALL: "Pieni"
 STR_TINY: "Erittäin pieni"
 STR_MEDIUM: "Keskikokoinen"

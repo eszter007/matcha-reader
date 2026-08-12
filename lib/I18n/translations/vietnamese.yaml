@@ -432,7 +432,7 @@ STR_RECOVERY_MODE_HINT: "Đặt firmware.bin ở thư mục gốc thẻ SD rồi
 STR_ADD_HIDDEN_NETWORK: "Thêm mạng ẩn..."
 STR_ENTER_WIFI_SSID: "Nhập tên mạng (SSID)"
 
-STR_BOOK_CSS_MARGINS: "Lề bên của sách"
+STR_BOOK_CSS_MARGINS: "Dùng lề của sách"
 STR_SMALL: "Nhỏ"
 STR_TINY: "Rất nhỏ"
 STR_MEDIUM: "Vừa"

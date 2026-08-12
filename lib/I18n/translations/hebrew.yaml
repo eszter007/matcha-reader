@@ -432,7 +432,7 @@ STR_STEP_HINT_SIDE: "לחצני צד:"
 STR_ADD_HIDDEN_NETWORK: "הוסף רשת מוסתרת..."
 STR_ENTER_WIFI_SSID: "הזן שם רשת (SSID)"
 
-STR_BOOK_CSS_MARGINS: "שוליים צדדיים של הספר"
+STR_BOOK_CSS_MARGINS: "השתמש בשולי הספר"
 STR_SMALL: "קטן"
 STR_TINY: "זעיר"
 STR_MEDIUM: "בינוני"
