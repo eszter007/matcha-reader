@@ -65,7 +65,7 @@ jobs:
         # package) or semantic_version (a core dependency).
         run: |
           uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
-          uv pip install --system littlefs-python fatfs-ng
+          uv pip install --system littlefs-python fatfs-ng pyyaml
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -104,7 +104,7 @@ jobs:
         # package) or semantic_version (a core dependency).
         run: |
           uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
-          uv pip install --system littlefs-python fatfs-ng
+          uv pip install --system littlefs-python fatfs-ng pyyaml
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -166,7 +166,7 @@ jobs:
         # package) or semantic_version (a core dependency).
         run: |
           uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
-          uv pip install --system littlefs-python fatfs-ng
+          uv pip install --system littlefs-python fatfs-ng pyyaml
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
