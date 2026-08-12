@@ -176,19 +176,39 @@ struct TextExtractor {
   // Style tracking — each entry records the elementDepth at which
   // bold/italic was activated. On endElement, if we're leaving that
   // depth, pop and flush.
-  int boldDepth = 0;
-  int italicDepth = 0;
   int elementDepth = 0;
-  static constexpr int MAX_STYLE_STACK = 8;
-  int boldOpenedAtDepth[MAX_STYLE_STACK] = {};
-  int boldStackSize = 0;
-  int italicOpenedAtDepth[MAX_STYLE_STACK] = {};
-  int italicStackSize = 0;
-  int emphasisDepth = 0;
-  int emphasisOpenedAtDepth[MAX_STYLE_STACK] = {};
-  int emphasisStackSize = 0;
 
-  bool hasEmphasis() const { return emphasisDepth > 0; }
+  static constexpr int MAX_STYLE_STACK = 8;
+  // One inline style's nesting. This existed three times over -- three counters, three arrays,
+  // three copies of the same push/pop arithmetic -- which is how a single off-by-one in the
+  // close check shipped in triplicate. Plain ints, so the footprint is exactly what the loose
+  // members cost.
+  struct StyleStack {
+    int depth = 0;
+    int openedAt[MAX_STYLE_STACK] = {};
+    int size = 0;
+
+    bool active() const { return depth > 0; }
+    // Past MAX_STYLE_STACK the open cannot be recorded, so it must not be counted either: a
+    // counter with no stack entry to close it stays raised for the rest of the chapter.
+    bool canOpen() const { return size < MAX_STYLE_STACK; }
+    void open(const int elementDepth) {
+      depth++;
+      openedAt[size++] = elementDepth;
+    }
+    // endElement decrements elementDepth before asking, so the element that opened the style
+    // sits one level deeper than the value being compared against.
+    bool closesHere(const int elementDepth) const { return size > 0 && openedAt[size - 1] - 1 == elementDepth; }
+    void close() {
+      depth--;
+      size--;
+    }
+  };
+  StyleStack boldStack;
+  StyleStack italicStack;
+  StyleStack emphasisStack;
+
+  bool hasEmphasis() const { return emphasisStack.active(); }
 
   // Diagnostic: bisects a ~11KB drop seen accumulating within a single furigana-dense paragraph's
   // SAX processing, too large to be explained by RubyRun/string vector growth alone. Call at the
@@ -207,8 +227,8 @@ struct TextExtractor {
   static bool isItalicTag(const char* name) { return strcasecmp(name, "i") == 0 || strcasecmp(name, "em") == 0; }
   uint8_t currentStyle() const {
     uint8_t s = 0;
-    if (boldDepth > 0) s |= 1;    // EpdFontFamily::BOLD
-    if (italicDepth > 0) s |= 2;  // EpdFontFamily::ITALIC
+    if (boldStack.active()) s |= 1;    // EpdFontFamily::BOLD
+    if (italicStack.active()) s |= 2;  // EpdFontFamily::ITALIC
     return s;
   }
 
@@ -416,32 +436,29 @@ struct TextExtractor {
       self->inRp = true;
     }
     if (isBoldTag(name) || hasClass(atts, "bold")) {
-      self->flushCurrentText();
-      // Both together or neither: the counter is undone by a matching entry on the stack, so
-      // incrementing it past MAX_STYLE_STACK leaves the style on for the rest of the chapter.
-      if (self->boldStackSize < MAX_STYLE_STACK) {
-        self->boldDepth++;
-        self->boldOpenedAtDepth[self->boldStackSize++] = self->elementDepth;
+      if (self->boldStack.canOpen()) {
+        // Before the change, so the run built so far is closed under the OLD style. A full
+        // stack changes nothing, so it must not split the run either.
+        self->flushCurrentText();
+        self->boldStack.open(self->elementDepth);
       }
     }
     if (isItalicTag(name) || hasClass(atts, "italic")) {
-      self->flushCurrentText();
-      // Both together or neither: the counter is undone by a matching entry on the stack, so
-      // incrementing it past MAX_STYLE_STACK leaves the style on for the rest of the chapter.
-      if (self->italicStackSize < MAX_STYLE_STACK) {
-        self->italicDepth++;
-        self->italicOpenedAtDepth[self->italicStackSize++] = self->elementDepth;
+      if (self->italicStack.canOpen()) {
+        // Before the change, so the run built so far is closed under the OLD style. A full
+        // stack changes nothing, so it must not split the run either.
+        self->flushCurrentText();
+        self->italicStack.open(self->elementDepth);
       }
     }
     if (hasClass(atts, "em-sesame") || hasClass(atts, "em-dot") || hasClass(atts, "em-circle") ||
         hasClass(atts, "em-sesame-open") || hasClass(atts, "em-dot-open") || hasClass(atts, "em-circle-open") ||
         hasClass(atts, "em-triangle") || hasClass(atts, "em-double-circle")) {
-      self->flushCurrentText();
-      // Both together or neither: the counter is undone by a matching entry on the stack, so
-      // incrementing it past MAX_STYLE_STACK leaves the style on for the rest of the chapter.
-      if (self->emphasisStackSize < MAX_STYLE_STACK) {
-        self->emphasisDepth++;
-        self->emphasisOpenedAtDepth[self->emphasisStackSize++] = self->elementDepth;
+      if (self->emphasisStack.canOpen()) {
+        // Before the change, so the run built so far is closed under the OLD style. A full
+        // stack changes nothing, so it must not split the run either.
+        self->flushCurrentText();
+        self->emphasisStack.open(self->elementDepth);
       }
     }
     if (strcasecmp(name, "img") == 0 || strcasecmp(name, "image") == 0) {
@@ -544,21 +561,17 @@ struct TextExtractor {
       if (self->currentRuns.size() >= SOFT_FLUSH_RUNS) self->emitRuns(false);
       return;
     }
-    if (self->boldStackSize > 0 && self->boldOpenedAtDepth[self->boldStackSize - 1] - 1 == self->elementDepth) {
+    if (self->boldStack.closesHere(self->elementDepth)) {
       self->flushCurrentText();
-      self->boldDepth--;
-      self->boldStackSize--;
+      self->boldStack.close();
     }
-    if (self->italicStackSize > 0 && self->italicOpenedAtDepth[self->italicStackSize - 1] - 1 == self->elementDepth) {
+    if (self->italicStack.closesHere(self->elementDepth)) {
       self->flushCurrentText();
-      self->italicDepth--;
-      self->italicStackSize--;
+      self->italicStack.close();
     }
-    if (self->emphasisStackSize > 0 &&
-        self->emphasisOpenedAtDepth[self->emphasisStackSize - 1] - 1 == self->elementDepth) {
+    if (self->emphasisStack.closesHere(self->elementDepth)) {
       self->flushCurrentText();
-      self->emphasisDepth--;
-      self->emphasisStackSize--;
+      self->emphasisStack.close();
     }
     if (isBlockTag(name)) {
       self->blockDepth--;
