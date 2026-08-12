@@ -14,7 +14,10 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          # 3.13, not 3.14: PlatformIO Core 6.1.19 cannot build its penv on 3.14
+          # ("Failed to install Python dependencies into penv"), which fails every job
+          # before a single file is compiled. Raise only once pio can create its env there.
+          python-version: '3.13'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
