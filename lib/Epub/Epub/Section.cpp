@@ -158,7 +158,10 @@ namespace {
 // v74: a negative text-indent is bounded by the left inset in force. A hanging indent whose
 //      paired margin-left was dropped (Book Margins off) drew the first line off the left edge
 //      of the screen with its first character clipped; cached pages hold those positions.
-constexpr uint8_t SECTION_FILE_VERSION = 74;
+// v75: a font-size on <html>/<body> is ignored -- it restates the base size, which IS the
+//      reader's own font here, so honouring it sized whole books off the user's setting.
+//      Cached pages hold the shrunken layout and its line positions.
+constexpr uint8_t SECTION_FILE_VERSION = 75;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
