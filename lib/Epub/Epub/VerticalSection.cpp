@@ -74,7 +74,11 @@ namespace {
 // proportion. Format change: a v131 record starts with the image flag. (132-133 were consumed
 // during development by builds that computed those positions wrongly; such records parse cleanly,
 // so caches carrying those numbers must not be trusted.)
-constexpr uint8_t VSECTION_FILE_VERSION = 134;
+// v135: bold/italic/bouten now END where their element ends. The close compared the opening
+// elementDepth against an already-decremented one, so a style was never popped and ran to the end
+// of the chapter -- most visibly a <span class="em-sesame"> putting sesame marks on every
+// character after it. Cached pages carry the marks and the pagination they caused.
+constexpr uint8_t VSECTION_FILE_VERSION = 135;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -413,22 +417,32 @@ struct TextExtractor {
     }
     if (isBoldTag(name) || hasClass(atts, "bold")) {
       self->flushCurrentText();
-      self->boldDepth++;
-      if (self->boldStackSize < MAX_STYLE_STACK) self->boldOpenedAtDepth[self->boldStackSize++] = self->elementDepth;
+      // Both together or neither: the counter is undone by a matching entry on the stack, so
+      // incrementing it past MAX_STYLE_STACK leaves the style on for the rest of the chapter.
+      if (self->boldStackSize < MAX_STYLE_STACK) {
+        self->boldDepth++;
+        self->boldOpenedAtDepth[self->boldStackSize++] = self->elementDepth;
+      }
     }
     if (isItalicTag(name) || hasClass(atts, "italic")) {
       self->flushCurrentText();
-      self->italicDepth++;
-      if (self->italicStackSize < MAX_STYLE_STACK)
+      // Both together or neither: the counter is undone by a matching entry on the stack, so
+      // incrementing it past MAX_STYLE_STACK leaves the style on for the rest of the chapter.
+      if (self->italicStackSize < MAX_STYLE_STACK) {
+        self->italicDepth++;
         self->italicOpenedAtDepth[self->italicStackSize++] = self->elementDepth;
+      }
     }
     if (hasClass(atts, "em-sesame") || hasClass(atts, "em-dot") || hasClass(atts, "em-circle") ||
         hasClass(atts, "em-sesame-open") || hasClass(atts, "em-dot-open") || hasClass(atts, "em-circle-open") ||
         hasClass(atts, "em-triangle") || hasClass(atts, "em-double-circle")) {
       self->flushCurrentText();
-      self->emphasisDepth++;
-      if (self->emphasisStackSize < MAX_STYLE_STACK)
+      // Both together or neither: the counter is undone by a matching entry on the stack, so
+      // incrementing it past MAX_STYLE_STACK leaves the style on for the rest of the chapter.
+      if (self->emphasisStackSize < MAX_STYLE_STACK) {
+        self->emphasisDepth++;
         self->emphasisOpenedAtDepth[self->emphasisStackSize++] = self->elementDepth;
+      }
     }
     if (strcasecmp(name, "img") == 0 || strcasecmp(name, "image") == 0) {
       const char* src = nullptr;
@@ -530,17 +544,18 @@ struct TextExtractor {
       if (self->currentRuns.size() >= SOFT_FLUSH_RUNS) self->emitRuns(false);
       return;
     }
-    if (self->boldStackSize > 0 && self->boldOpenedAtDepth[self->boldStackSize - 1] == self->elementDepth) {
+    if (self->boldStackSize > 0 && self->boldOpenedAtDepth[self->boldStackSize - 1] - 1 == self->elementDepth) {
       self->flushCurrentText();
       self->boldDepth--;
       self->boldStackSize--;
     }
-    if (self->italicStackSize > 0 && self->italicOpenedAtDepth[self->italicStackSize - 1] == self->elementDepth) {
+    if (self->italicStackSize > 0 && self->italicOpenedAtDepth[self->italicStackSize - 1] - 1 == self->elementDepth) {
       self->flushCurrentText();
       self->italicDepth--;
       self->italicStackSize--;
     }
-    if (self->emphasisStackSize > 0 && self->emphasisOpenedAtDepth[self->emphasisStackSize - 1] == self->elementDepth) {
+    if (self->emphasisStackSize > 0 &&
+        self->emphasisOpenedAtDepth[self->emphasisStackSize - 1] - 1 == self->elementDepth) {
       self->flushCurrentText();
       self->emphasisDepth--;
       self->emphasisStackSize--;
