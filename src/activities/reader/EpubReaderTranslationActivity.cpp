@@ -144,12 +144,14 @@ void EpubReaderTranslationActivity::onExit() {
 }
 
 bool EpubReaderTranslationActivity::readApiKey(std::string& keyOut) {
-  char buf[256];
+  // 192, not 256: the stack budget for a local is under 256 bytes (CLAUDE.md), and this is
+  // still more than three times the longest key Google issues (a current AI Studio key is ~53
+  // characters, the older AIza form 39).
+  char buf[192];
   size_t len = Storage.readFileToBuffer(API_KEY_PATH, buf, sizeof(buf));
   if (len == 0) return false;
   // readFileToBuffer stops at bufferSize-1 and reports the truncated length, so a key longer
-  // than the buffer arrives silently cut in half and is rejected by the API as malformed.
-  // 256 is far above any key Google issues (a current AI Studio key is ~53 characters), and a
+  // than the buffer arrives silently cut in half and is rejected by the API as malformed. A
   // full buffer now means "this is not a key" rather than "here is most of one".
   if (len >= sizeof(buf) - 1) {
     LOG_ERR("XLAT", "gemini.key is %u+ bytes; that is not an API key", static_cast<unsigned>(len));
