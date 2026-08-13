@@ -410,7 +410,18 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
   selectableGlyphs.clear();
   selectToAllIdx.clear();
   reserveGlyphsSafe(selectableGlyphs, hdr.count);
-  selectToAllIdx.reserve(hdr.count);
+  // Same guard as reserveGlyphsSafe, for the same reason: reserve() allocates through `new`,
+  // which aborts the device under -fno-exceptions rather than returning null. A cache load must
+  // never be able to do that -- the worst it may do is miss and let the page be rescanned.
+  if (hdr.count > selectToAllIdx.capacity()) {
+    const size_t requestBytes = static_cast<size_t>(hdr.count) * sizeof(size_t);
+    if (ESP.getMaxAllocHeap() >= requestBytes + SMALL_ALLOC_MARGIN) {
+      selectToAllIdx.reserve(hdr.count);
+    } else {
+      LOG_ERR("WLS", "Skipping index reserve (%u bytes doesn't fit, maxAlloc=%u); growing incrementally",
+              static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
+    }
+  }
   for (uint16_t i = 0; i < hdr.count; i++) {
     // Read as bytes and memcpy the index out: a record is 5 bytes, so every second one starts
     // off a 4-byte boundary, and this target faults on unaligned multi-byte loads.
