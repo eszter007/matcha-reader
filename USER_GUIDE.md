@@ -705,7 +705,7 @@ Reader menu → **Word Lookup**.
 | Left / Right | Move between matched words on the page |
 | Up / Down | Scroll a long definition |
 | Back | Return to reading |
-| Power (short click) | Return to reading, when **Short power button click** is set to **Word Lookup** |
+| Power (short click) | Go back, same as Back, when **Short power button click** is set to **Word Lookup** |
 
 The header counts your position (e.g. 10/35). The page is pre-scanned, so you only ever land on a word the
 dictionary actually has.

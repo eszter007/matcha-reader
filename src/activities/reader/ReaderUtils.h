@@ -142,9 +142,10 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 // Left alone under every other shortPwrBtn value: Sleep, Page Turn, Force Refresh and Footnotes
 // each own the click elsewhere, and a lookup screen must not swallow it from them.
 //
-// Down is excluded for the same reason the open paths exclude it (EpubReaderActivity,
-// MangaReaderActivity): Power+Down is the screenshot combo, which must not also dismiss the very
-// screen it was pressed to capture.
+// The Down term mirrors the open paths (EpubReaderActivity, MangaReaderActivity) exactly: a power
+// release that arrives in the SAME input update as a Down release is the Power+Down screenshot
+// combo being let go, not a request to leave, so the screen survives being screenshotted. Down held
+// on its own is not consulted -- only the two releases coinciding.
 inline bool powerClickLeavesWordLookup(const MappedInputManager& input) {
   return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
          input.wasReleased(MappedInputManager::Button::Power) && !input.wasReleased(MappedInputManager::Button::Down);
