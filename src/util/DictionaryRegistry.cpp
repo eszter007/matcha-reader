@@ -17,6 +17,18 @@ namespace {
 // see FileBrowserActivity's showHiddenFiles check).
 constexpr const char* DICT_ROOTS[] = {"/dictionaries", "/.dictionaries"};
 
+// /dictionaries/jp belongs to DictIndex (the Japanese lookup path), not to StarDict: it holds
+// vocab, names and grammar .idx+.dat side by side, at the fixed paths DictIndex.h declares.
+// Three stems in one folder is exactly what findStem() calls ambiguous, so probing it logged a
+// "multiple index stems" skip on every scan -- a correct outcome reported as a fault, for a
+// folder that was never a StarDict dictionary. Japanese does not use StarDict at all, so the
+// folder itself is never a dictionary this registry should return.
+//
+// Only the folder ITSELF is DictIndex's. StarDict dictionaries nested inside it
+// (/dictionaries/jp/<name>/) are still discovered, and folderForLanguage() resolves "ja" to
+// exactly that "jp/" prefix.
+bool isDictIndexFolder(const char* folderName) { return strcmp(folderName, "jp") == 0; }
+
 std::string languageFolder(const std::string& language) {
   if (language.size() < 2) return {};
   std::string out = language.substr(0, 2);
@@ -86,7 +98,8 @@ void discover(std::vector<DictionaryEntry>& out) {
 
       std::string folderPath = std::string(dictRoot) + "/" + name;
       std::string stem;
-      if (findStem(folderPath.c_str(), stem)) {
+      // Skipped as a dictionary in its own right, still descended into below for nested ones.
+      if (!isDictIndexFolder(name) && findStem(folderPath.c_str(), stem)) {
         out.push_back({name, std::move(stem)});
         continue;
       }
@@ -113,6 +126,10 @@ bool resolveBasePath(const char* folderName, std::string& basePathOut) {
   if (folderName[0] == '.' || strpbrk(folderName, "\\") != nullptr || strstr(folderName, "..") != nullptr) return false;
   const char* slash = strchr(folderName, '/');
   if (slash && (slash == folderName || slash[1] == '\0' || strchr(slash + 1, '/'))) return false;
+  // Never resolvable as StarDict (see isDictIndexFolder); returning early keeps a stale settings
+  // value naming it from re-logging the ambiguous-stem skip on every lookup. Nested "jp/<name>"
+  // still resolves -- only the bare folder is DictIndex's.
+  if (isDictIndexFolder(folderName)) return false;
 
   for (const char* dictRoot : DICT_ROOTS) {
     std::string folderPath = std::string(dictRoot) + "/" + folderName;
