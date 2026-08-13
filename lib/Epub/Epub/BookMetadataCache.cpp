@@ -490,7 +490,18 @@ bool BookMetadataCache::load() {
   const uint32_t lutSize = (static_cast<uint32_t>(spineCount) + tocCount) * sizeof(uint32_t);
   bookFile.seek(lutOffset + lutSize);
   for (uint16_t i = 0; i < spineCount; i++) {
-    cumulativeSizes.push_back(readSpineEntry(bookFile).cumulativeSize);
+    // Read the entry by hand rather than via readSpineEntry(): only cumulativeSize is wanted
+    // here, and the full read would allocate and immediately discard a std::string href per
+    // spine item -- spineCount allocate/free pairs at load, on a heap this code exists to
+    // spare. A string is [u32 length][bytes], so the href is skipped with a seek.
+    uint32_t hrefLen = 0;
+    serialization::readPod(bookFile, hrefLen);
+    bookFile.seekCur(static_cast<int32_t>(hrefLen));
+    uint32_t cumulativeSize = 0;
+    serialization::readPod(bookFile, cumulativeSize);
+    int16_t tocIndex = 0;
+    serialization::readPod(bookFile, tocIndex);
+    cumulativeSizes.push_back(cumulativeSize);
   }
 
   loaded = true;

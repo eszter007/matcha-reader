@@ -149,7 +149,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 37
+#define EXPECTED_VERSION 76
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
