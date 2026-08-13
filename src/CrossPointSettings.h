@@ -1,29 +1,25 @@
 #pragma once
-#include <HalStorage.h>
+#include <ArduinoJson.h>
+#include <Epub/ReaderRenderSpec.h>
+#include <PersistableStore.h>
 
 #include <cstdint>
-#include <iosfwd>
 
-class CrossPointSettings {
+class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:
   // Private constructor for singleton
   CrossPointSettings() = default;
 
-  // Static instance
-  static CrossPointSettings instance;
+  friend class PersistableStore<CrossPointSettings>;
 
  public:
-  // Delete copy constructor and assignment
-  CrossPointSettings(const CrossPointSettings&) = delete;
-  CrossPointSettings& operator=(const CrossPointSettings&) = delete;
-
   enum SLEEP_SCREEN_MODE {
     DARK = 0,
     LIGHT = 1,
     CUSTOM = 2,
     COVER = 3,
-    BLANK = 4,
-    COVER_CUSTOM = 5,
+    COVER_CUSTOM = 4,
+    BLANK = 5,
     QUICK_RESUME = 6,
     TRANSPARENT = 7,
     SLEEP_SCREEN_MODE_COUNT
@@ -36,16 +32,6 @@ class CrossPointSettings {
     SLEEP_SCREEN_COVER_FILTER_COUNT
   };
 
-  // Status bar enum - legacy
-  enum STATUS_BAR_MODE {
-    NONE = 0,
-    NO_PROGRESS = 1,
-    FULL = 2,
-    BOOK_PROGRESS_BAR = 3,
-    ONLY_BOOK_PROGRESS_BAR = 4,
-    CHAPTER_PROGRESS_BAR = 5,
-    STATUS_BAR_MODE_COUNT
-  };
   enum STATUS_BAR_PROGRESS_BAR {
     BOOK_PROGRESS = 0,
     CHAPTER_PROGRESS = 1,
@@ -66,7 +52,12 @@ class CrossPointSettings {
     XTC_STATUS_BAR_MODE_COUNT
   };
 
-  enum STATUS_BAR_CLOCK_MODE { STATUS_BAR_CLOCK_HIDE = 0, STATUS_BAR_CLOCK_RIGHT = 1, STATUS_BAR_CLOCK_LEFT = 2 };
+  enum STATUS_BAR_CLOCK_MODE {
+    STATUS_BAR_CLOCK_HIDE = 0,
+    STATUS_BAR_CLOCK_RIGHT = 1,
+    STATUS_BAR_CLOCK_LEFT = 2,
+    STATUS_BAR_CLOCK_MODE_COUNT
+  };
 
   enum ORIENTATION {
     PORTRAIT = 0,       // 480x800 logical coordinates (current default)
@@ -104,8 +95,11 @@ class CrossPointSettings {
   enum FONT_FAMILY { NOTOSERIF = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
   static constexpr uint8_t LEGACY_OPENDYSLEXIC = 2;
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
-  // Font size options
-  enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, FONT_SIZE_COUNT };
+  // Reader font size is a point size, not an enum slot — see fontPointSize.
+  // Legacy 1.4-and-earlier files stored a 0..3 SMALL/MEDIUM/LARGE/EXTRA_LARGE
+  // slot; fromJson() folds that range up (see LEGACY_FONT_SIZE_MAX).
+  static constexpr uint8_t LEGACY_FONT_SIZE_MAX = 3;
+  static constexpr uint8_t DEFAULT_FONT_POINT_SIZE = 14;
   enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, LINE_COMPRESSION_COUNT };
   enum PARAGRAPH_ALIGNMENT {
     JUSTIFIED = 0,
@@ -155,6 +149,7 @@ class CrossPointSettings {
     LP_MENU_KOSYNC = 0,
     LP_MENU_DISABLED = 1,
     LP_MENU_BOOKMARK = 2,
+    LP_MENU_DICTIONARY = 3,
     LONG_PRESS_MENU_FUNCTION_COUNT
   };
 
@@ -177,6 +172,8 @@ class CrossPointSettings {
 
   enum TILT_PAGE_TURN { TILT_OFF = 0, TILT_NORMAL = 1, TILT_NVERTED = 2, TILT_PAGE_TURN_COUNT };
 
+  enum TOUCH_READER_CONTROLS { TOUCH_READER_OFF = 0, TOUCH_READER_ON = 1, TOUCH_READER_CONTROLS_COUNT };
+
   enum QUICK_RESUME_SLEEP_SCREEN {
     QUICK_RESUME_NEVER = 0,
     QUICK_RESUME_AFTER_TIMEOUT = 1,
@@ -189,8 +186,7 @@ class CrossPointSettings {
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
   uint8_t sleepScreenCoverFilter = NO_FILTER;
-  // Status bar settings (statusBar retained for migration only)
-  uint8_t statusBar = FULL;
+  // Status bar settings
   uint8_t statusBarChapterPageCount = 1;
   uint8_t statusBarBookProgressPercentage = 1;
   uint8_t statusBarProgressBar = HIDE_PROGRESS;
@@ -217,6 +213,8 @@ class CrossPointSettings {
   // EPUB reading orientation settings
   // 0 = portrait (default), 1 = landscape clockwise, 2 = inverted, 3 = landscape counter-clockwise
   uint8_t orientation = PORTRAIT;
+  // Automatically rotate manga panels whose aspect ratio does not match the screen.
+  uint8_t rotateMangaPanels = 1;
   // Button layouts (front layout retained for migration only)
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
   uint8_t sideButtonLayout = PREV_NEXT;
@@ -229,7 +227,10 @@ class CrossPointSettings {
   uint8_t frontButtonRight = FRONT_HW_RIGHT;
   // Reader font settings
   uint8_t fontFamily = NOTOSERIF;
-  uint8_t fontSize = MEDIUM;
+  // Point size of the reader font. Only sizes the active family actually ships
+  // are selectable; SdCardFontSystem::ensureLoaded() snaps this to the nearest
+  // available size (and persists the snap) whenever the family changes.
+  uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
   uint8_t lineSpacing = NORMAL;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
@@ -239,14 +240,24 @@ class CrossPointSettings {
   uint8_t hyphenationEnabled = 0;
 
   // Reader screen margin settings
-  uint8_t screenMargin = 5;
+  static constexpr uint8_t SCREEN_MARGIN_MIN = 5;
+  static constexpr uint8_t SCREEN_MARGIN_MAX = 40;
+  static constexpr uint8_t SCREEN_MARGIN_STEP = 5;
+  uint8_t screenMargin = SCREEN_MARGIN_MIN;
   // Honor the book's own horizontal CSS margins/padding (clamped per element).
-  // Default off: the text column's side margins come only from screenMargin.
-  uint8_t bookCssMargins = 0;
-  // OPDS browser settings
-  char opdsServerUrl[128] = "";
-  char opdsUsername[64] = "";
-  char opdsPassword[64] = "";
+  // Default ON: a book that insets a block -- an epigraph, a letter, a blockquote -- means it,
+  // and dropping the inset renders it as ordinary body text. Turning this off is a preference
+  // about a particular book's typography, so it belongs to the reader rather than to the
+  // default. Exposed as "Book Side Margins" in Text Settings > Layout.
+  uint8_t bookCssMargins = 1;
+  // OPDS download destination folder ("" = SD root). Global; edited from the
+  // OPDS server list. Persisted via a category-less SettingInfo::String in
+  // SettingsList.h, so it stays out of the on-device Settings screen.
+  char opdsDownloadFolder[64] = "";
+  // On-disk filename format for OPDS downloads (0=Author-Title default, 1=Title-Author,
+  // 2=Title). See OpdsFilenameFormat. Persisted via a category-less SettingInfo::Enum,
+  // edited from the OPDS server list; hidden from the on-device Settings screen.
+  uint8_t opdsFilenameFormat = 0;
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior
@@ -258,7 +269,9 @@ class CrossPointSettings {
   uint8_t uiTheme = LYRA;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
-  // Power button return from footnotes (1 = enabled, 0 = disabled)
+  // Power button return from footnotes (1 = enabled, 0 = disabled). Read by
+  // EpubReaderActivity::loop, and only meaningful while shortPwrBtn == FOOTNOTES -- which is also
+  // the only time either settings UI offers it.
   uint8_t pwrBtnFootnoteBack = 1;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)
   uint8_t embeddedStyle = 1;
@@ -266,25 +279,37 @@ class CrossPointSettings {
   uint8_t focusReadingEnabled = 0;
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
+  // Fallback dictionary folder under /dictionaries (empty = no fallback)
+  char dictionaryName[32] = "";
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
   // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
   uint8_t removeReadBooksFromRecents = 0;
   // Move epub to /Read/ folder on SD card when finished (0 = disabled, 1 = enabled)
   uint8_t moveFinishedToReadFolder = 0;
+  // Short press Back goes to file browser instead of home (0 = disabled, 1 = enabled)
+  uint8_t backShortToFileBrowser = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
   // Tilt-based page turning (X3 only — requires QMI8658 IMU)
   uint8_t tiltPageTurn = TILT_OFF;
+  // Touch screen reader zones/gestures on boards with a touch controller.
+  uint8_t touchReaderControls = TOUCH_READER_ON;
+  // Swap Word Lookup navigation to side buttons and scrolling to front buttons.
+  uint8_t wordLookupSideButtons = 0;
+  // Word Lookup definition font: 8/12/14/16pt (Tiny/Small/Medium/Large; Small is the default).
+  enum WORD_LOOKUP_FONT_SIZE {
+    WORD_LOOKUP_FONT_TINY = 0,
+    WORD_LOOKUP_FONT_SMALL,
+    WORD_LOOKUP_FONT_MEDIUM,
+    WORD_LOOKUP_FONT_LARGE,
+    WORD_LOOKUP_FONT_SIZE_COUNT
+  };
+  uint8_t wordLookupFontSize = WORD_LOOKUP_FONT_SMALL;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
-
-  ~CrossPointSettings() = default;
-
-  // Get singleton instance
-  static CrossPointSettings& getInstance() { return instance; }
 
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;
@@ -300,22 +325,68 @@ class CrossPointSettings {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
   int getReaderFontId() const;
+  /// Built-in Noto Serif at the current reader size, used when a selected CJK-only
+  /// family cannot render a Latin book.
+  int getBuiltinSerifReaderFontId() const;
+  /// Reader font id ignoring any SD selection: the built-in Noto Serif/Sans at the
+  /// current size. Used as the Latin fallback when the selected SD family has no
+  /// Latin glyphs and the book is not Japanese.
+  int getBuiltinReaderFontId() const;
   int getRubyFontId() const;
 
-  // If count_only is true, returns the number of settings items that would be written.
-  uint8_t writeSettings(HalFile& file, bool count_only = false) const;
+  // Drop the SD font selection and fall back to the built-in family. The reader
+  // point size comes back into BUILTIN_READER_POINT_SIZES with it, since that is
+  // the only set a built-in family ships — otherwise the settings UI would keep
+  // offering a size nothing renders at. Both fields are persisted in one write.
+  void clearSdFontFamily();
 
-  bool saveToFile() const;
-  bool loadFromFile();
+  // Resolved status-bar composition. Consumers read the spec; only settings
+  // editors read the raw fields.
+  //
+  // Deliberately NOT built under storeMutex: every field it reads is a single
+  // byte, so a concurrent settings write can never produce a corrupt value —
+  // only a snapshot mixing pre- and post-change fields. That costs at most one
+  // e-ink frame drawn with a mixed status bar, which self-corrects on the next
+  // refresh. Locking here would instead put a mutex on the render path and
+  // stall it behind the SD write inside saveToFile(). Don't add one back.
+  struct StatusBarSpec {
+    bool showChapterPageCount = false;
+    bool showBookProgressPercent = false;
+    uint8_t titleMode = HIDE_TITLE;  // STATUS_BAR_TITLE
+    bool showBattery = false;
+    bool showBatteryPercent = false;
+    uint8_t clockMode = STATUS_BAR_CLOCK_HIDE;  // STATUS_BAR_CLOCK_MODE
+    bool clock12h = false;
+    uint8_t clockUtcOffsetQ = 48;             // 48 = UTC+0
+    uint8_t progressBarMode = HIDE_PROGRESS;  // STATUS_BAR_PROGRESS_BAR
+    uint8_t progressBarHeightPx = 0;          // (thickness+1)*2; 0 when the bar is hidden
+    uint8_t xtcMode = XTC_STATUS_BAR_HIDE;    // XTC_STATUS_BAR_MODE
+
+    bool showsProgressBar() const { return progressBarMode != HIDE_PROGRESS; }
+    bool showsTitle() const { return titleMode != HIDE_TITLE; }
+    bool showsClock() const { return clockMode != STATUS_BAR_CLOCK_HIDE; }
+    // Visibility of the text lane. Clock hardware presence is the caller's
+    // concern: pass halClock.isAvailable(), or true for layout reservation.
+    bool textLaneVisible(bool clockAvailable) const {
+      return showChapterPageCount || showBookProgressPercent || showsTitle() || showBattery ||
+             (showsClock() && clockAvailable);
+    }
+  };
+  StatusBarSpec statusBarSpec() const;
+
+  // Resolved text-rendering configuration for the Epub layout engine. The
+  // viewport is renderer/orientation-derived, so the caller supplies it —
+  // passing it in keeps a spec from ever existing in a half-filled state.
+  // Unlocked for the same reason as statusBarSpec(); see the note above.
+  ReaderRenderSpec readerRenderSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
+
+  static const char* getFilePath() { return "/.crosspoint/settings.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
 
   static void validateFrontButtonMapping(CrossPointSettings& settings);
   static uint8_t sleepTimeoutEnumToMinutes(uint8_t legacyValue);
 
- private:
-  bool loadFromBinaryFile();
-  bool migrateLanguageBinaryFile();
-
- public:
   float getReaderLineCompression() const;
   unsigned long getSleepTimeoutMs() const;
   int getRefreshFrequency() const;

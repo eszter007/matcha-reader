@@ -1,37 +1,33 @@
 #pragma once
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
 #include <string>
 #include <vector>
 
-struct RecentBook {
-  std::string path;
-  std::string title;
-  std::string author;
-  std::string coverBmpPath;
+#include "RecentBook.h"
 
-  bool operator==(const RecentBook& other) const { return path == other.path; }
-};
-
-class RecentBooksStore;
-namespace JsonSettingsIO {
-bool loadRecentBooks(RecentBooksStore& store, const char* json);
-}  // namespace JsonSettingsIO
-
-class RecentBooksStore {
-  // Static instance
-  static RecentBooksStore instance;
-
+class RecentBooksStore : public PersistableStore<RecentBooksStore> {
+ private:
   std::vector<RecentBook> recentBooks;
 
-  friend bool JsonSettingsIO::loadRecentBooks(RecentBooksStore&, const char*);
+  static constexpr int MAX_RECENT_BOOKS = 10;
 
  public:
-  // Populate directly (library scan cache reuses this store's JSON schema for a second file).
-  void setBooks(std::vector<RecentBook> books) { recentBooks = std::move(books); }
-
+  RecentBooksStore() = default;
   ~RecentBooksStore() = default;
 
-  // Get singleton instance
-  static RecentBooksStore& getInstance() { return instance; }
+  friend class PersistableStore<RecentBooksStore>;
+
+ public:
+  static const char* getFilePath() { return "/.crosspoint/recent.json"; }
+  // Same schema, different file: the library scan cache is a second store instance living at
+  // its own path, so it can't use the singleton's fixed getFilePath().
+  static bool saveBooksToPath(const std::vector<RecentBook>& books, const char* path);
+  bool loadFromPath(const char* path);
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
+  bool fromJson(JsonVariantConst doc, size_t maxBooks);
 
   // Add a book to the recent list (moves to front if already exists)
   void addBook(const std::string& path, const std::string& title, const std::string& author,
@@ -60,17 +56,12 @@ class RecentBooksStore {
 
   // Get the list of recent books (most recent first)
   const std::vector<RecentBook>& getBooks() const { return recentBooks; }
+  std::vector<RecentBook> takeBooks() { return std::move(recentBooks); }
 
   // Get the count of recent books
   int getCount() const { return static_cast<int>(recentBooks.size()); }
 
-  bool saveToFile() const;
-
-  bool loadFromFile();
   RecentBook getDataFromBook(std::string path) const;
-
- private:
-  bool loadFromBinaryFile();
 };
 
 // Helper macro to access recent books store

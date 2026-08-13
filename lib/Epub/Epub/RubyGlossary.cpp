@@ -1,5 +1,6 @@
 #include "RubyGlossary.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -18,6 +19,7 @@ constexpr size_t MAX_TEXT_BYTES = 32;
 // Per-section collection cap: bounds parse-time RAM (worst case ~200 * 64B = 12.8KB of
 // short strings, transient until the post-parse merge).
 constexpr size_t MAX_PAIRS_PER_SECTION = 200;
+constexpr size_t COLLECT_HEAP_HEADROOM = 8 * 1024;
 // File caps: a typical novel yields a few hundred unique pairs (single-digit KB).
 constexpr uint16_t MAX_FILE_RECORDS = 1024;
 constexpr size_t MAX_FILE_BYTES = 16 * 1024;
@@ -94,11 +96,13 @@ void collect(std::vector<Pair>& pairs, const std::string& base, const std::strin
   if (std::any_of(pairs.begin(), pairs.end(), [&](const Pair& p) { return p.first == base && p.second == ruby; })) {
     return;
   }
-  if (pairs.capacity() == 0) {
-    // One up-front block instead of doubling growth during the parse. 32 covers a typical
-    // section's unique pairs; a full MAX_PAIRS_PER_SECTION reserve would cost ~10KB per
-    // section whether or not the book has ruby, which this heap can't spare.
-    pairs.reserve(32);
+  if (pairs.size() == pairs.capacity()) {
+    const size_t nextCapacity = pairs.empty() ? 32 : std::min(MAX_PAIRS_PER_SECTION, pairs.capacity() * 2);
+    const size_t requestBytes = nextCapacity * sizeof(Pair);
+    // Growing 64 -> 128 pairs requests a contiguous 6KB block; this exact
+    // allocation aborted a low-heap X3 build. Glossary entries are best-effort.
+    if (ESP.getMaxAllocHeap() < requestBytes + COLLECT_HEAP_HEADROOM) return;
+    pairs.reserve(nextCapacity);
   }
   pairs.emplace_back(base, ruby);
 }

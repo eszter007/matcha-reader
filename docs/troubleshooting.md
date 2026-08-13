@@ -7,6 +7,7 @@ This document shows common issues and possible solutions while using the device 
     - [Connection Drops or Times Out](#connection-drops-or-times-out)
     - [Upload Fails](#upload-fails)
     - [Saved Password Not Working](#saved-password-not-working)
+    - [BMP Manga Cover Is Too Dark](#bmp-manga-cover-is-too-dark)
 
 ### Cannot See the Device on the Network
 
@@ -58,3 +59,13 @@ This document shows common issues and possible solutions while using the device 
 2. Select **Yes** to remove the saved password
 3. Reconnect and enter the password again
 4. Choose to save the new password
+
+### BMP Manga Cover Is Too Dark
+
+Older firmware could generate an almost-black Library thumbnail when the first manga page was
+already a BMP. Thumbnail filenames intentionally remain stable across firmware updates, so an
+existing cached image is not replaced automatically.
+
+Delete the affected manga's `thumb_*.bmp` files from its `/.crosspoint/manga_*` cache directory.
+The Library will regenerate the missing thumbnails with the corrected BMP downscaler. You do not
+need to reconvert the manga, and EPUB/XTC cover caches are unaffected.

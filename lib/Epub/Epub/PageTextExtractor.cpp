@@ -45,8 +45,9 @@ std::string PageTextExtractor::fromVerticalPage(const VerticalPage& page) {
     // companion font mid-page (confirmed on-device: Kyokasho page flipping to NotoSans after
     // the first tate-chu-yoko number).
     if (g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
-      if (!g.rotatedRunText.empty()) {
-        text += g.rotatedRunText;
+      const std::string& runText = page.glyphTextStr(g);
+      if (!runText.empty()) {
+        text += runText;
       }
       continue;
     }
@@ -58,8 +59,9 @@ std::string PageTextExtractor::fromVerticalPage(const VerticalPage& page) {
     // the prewarm covers them too; otherwise every ruby character is an on-demand SD read
     // through the 8-slot overflow ring on EVERY page render (measured: 120 reads, ~750ms/page
     // on a furigana-dense book).
-    if (!g.rubyText.empty()) {
-      text += g.rubyText;
+    const std::string& rubyText = page.glyphTextStr(g);
+    if (!rubyText.empty()) {
+      text += rubyText;
     }
   }
 
@@ -72,10 +74,10 @@ std::string PageTextExtractor::fromHorizontalPage(const Page& page) {
     if (el->getTag() != TAG_PageLine) continue;
     const auto& line = static_cast<const PageLine&>(*el);
     if (!line.getBlock()) continue;
-    const auto& words = line.getBlock()->getWords();
-    for (const auto& w : words) {
+    const auto& block = line.getBlock();
+    for (uint16_t i = 0; i < block->wordCount(); i++) {
       if (!text.empty()) text += " ";
-      text += w;
+      text += block->wordText(i);
     }
   }
   return text;

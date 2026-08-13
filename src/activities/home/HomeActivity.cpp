@@ -108,16 +108,18 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // card drew the full-size page scaled into the cell. For a dithered manga page that comes
       // out near-black (device report).
       const bool coverIsThumb = book.coverBmpPath.find("[HEIGHT]") != std::string::npos;
+      // hasContent(), not exists(): SD cards written by earlier builds still carry the 0-byte
+      // sentinel Epub::generateThumbBmp used to leave on failure, and exists() counted it as a
+      // cover -- the card then skipped regeneration and drew a placeholder forever.
       const bool coverMissing =
-          !coverIsThumb || !Storage.exists(UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight).c_str());
+          !coverIsThumb || !FsHelpers::hasContent("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
       if (coverMissing) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
-          // Build the metadata cache if missing so the cover can be generated on
-          // the first home visit (e.g. right after the book was added to recents
-          // but before book.bin exists). Skip CSS — only metadata is needed here.
-          epub.load(true, true);
+          // Build the CSS cache alongside the first cover while the loading UI is already
+          // active, so the later book click does not synchronously parse every stylesheet.
+          epub.load(true, SETTINGS.embeddedStyle == 0);
 
           // Try to generate thumbnail image for Continue Reading card
           if (!showingLoading) {
@@ -275,6 +277,37 @@ void HomeActivity::freeCoverBuffer() {
 
 void HomeActivity::loop() {
   const int menuCount = getMenuItemCount();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+
+  auto activateSelection = [this] {
+    if (selectorIndex < recentBooks.size()) {
+      onSelectBook(recentBooks[selectorIndex].path);
+      return;
+    }
+    const int menuIndex = selectorIndex - static_cast<int>(recentBooks.size());
+    switch (indexToMenuItem(menuIndex, hasOpdsServers)) {
+      case HomeMenuItem::FILE_BROWSER:
+        onFileBrowserOpen();
+        break;
+      case HomeMenuItem::RECENTS:
+        onLibraryOpen();
+        break;
+      case HomeMenuItem::OPDS_BROWSER:
+        onOpdsBrowserOpen();
+        break;
+      case HomeMenuItem::FILE_TRANSFER:
+        onFileTransferOpen();
+        break;
+      case HomeMenuItem::READING_STATS:
+        onStatsOpen();
+        break;
+      case HomeMenuItem::SETTINGS_MENU:
+        onSettingsOpen();
+        break;
+      default:
+        break;
+    }
+  };
 
   buttonNavigator.onNext([this, menuCount] {
     selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
@@ -286,34 +319,71 @@ void HomeActivity::loop() {
     requestUpdate();
   });
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectorIndex < recentBooks.size()) {
-      onSelectBook(recentBooks[selectorIndex].path);
-    } else {
-      const int menuIndex = selectorIndex - static_cast<int>(recentBooks.size());
-      switch (indexToMenuItem(menuIndex, hasOpdsServers)) {
-        case HomeMenuItem::FILE_BROWSER:
-          onFileBrowserOpen();
-          break;
-        case HomeMenuItem::RECENTS:
-          onLibraryOpen();
-          break;
-        case HomeMenuItem::OPDS_BROWSER:
-          onOpdsBrowserOpen();
-          break;
-        case HomeMenuItem::FILE_TRANSFER:
-          onFileTransferOpen();
-          break;
-        case HomeMenuItem::READING_STATS:
-          onStatsOpen();
-          break;
-        case HomeMenuItem::SETTINGS_MENU:
-          onSettingsOpen();
-          break;
-        default:
-          break;
-      }
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
+    requestUpdate();
+    return;
+  }
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
+
+  // Back is otherwise unused on the home menu: open the most recently read
+  // book directly (recentBooks is most-recent-first and already pruned of
+  // files missing from the SD card). backPressSeen guards against the stale
+  // release of the Back press that closed the previous activity.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backPressSeen && !recentBooks.empty()) {
+    onSelectBook(recentBooks[0].path);
+    return;
+  }
+
+  int tx = 0;
+  int ty = 0;
+  if (!recentBooks.empty() && mappedInput.wasScreenTouchDown(tx, ty) && tx >= 0 && tx < renderer.getScreenWidth() &&
+      ty >= metrics.homeTopPadding && ty < metrics.homeTopPadding + metrics.homeCoverTileHeight) {
+    if (selectorIndex != 0) {
+      selectorIndex = 0;
+      requestUpdate();
     }
+  }
+
+  if (!recentBooks.empty() &&
+      mappedInput.wasTapInRect(0, metrics.homeTopPadding, renderer.getScreenWidth(), metrics.homeCoverTileHeight)) {
+    selectorIndex = 0;
+    activateSelection();
+    return;
+  }
+
+  const int menuTop = metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
+  const int renderedMenuSelection =
+      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size();
+  const int renderedMenuCount =
+      menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
+  int menuRow = -1;
+  const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, metrics.menuRowHeight + metrics.menuSpacing,
+                                              renderedMenuCount, 0, INT32_MAX, metrics.menuRowHeight);
+  if (menuTouch != MappedInputManager::RowTouch::None) {
+    const int touchedIndex =
+        metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());
+    if (menuTouch == MappedInputManager::RowTouch::Down) {
+      if (selectorIndex != touchedIndex) {
+        selectorIndex = touchedIndex;
+        requestUpdate();
+      }
+    } else {
+      selectorIndex = touchedIndex;
+      activateSelection();
+    }
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    activateSelection();
   }
 }
 
@@ -338,9 +408,8 @@ void HomeActivity::render(RenderLock&&) {
     menuIcons.insert(menuIcons.begin(), Book);
   }
 
-  const Rect menuRect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset, pageWidth,
-                      pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
-                                    metrics.homeMenuTopOffset + metrics.buttonHintsHeight)};
+  const int menuTop = metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
+  const Rect menuRect{0, menuTop, pageWidth, pageHeight - menuTop - metrics.buttonHintsHeight};
   const int menuSelected =
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - static_cast<int>(recentBooks.size());
 
@@ -395,7 +464,8 @@ void HomeActivity::render(RenderLock&&) {
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 
-  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(recentBooks.empty() ? "" : tr(STR_RESUME), tr(STR_SELECT), tr(STR_DIR_UP),
+                                            tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   lastRenderValid = true;
@@ -403,7 +473,7 @@ void HomeActivity::render(RenderLock&&) {
   renderer.displayBuffer();
 }
 
-void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
+void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path, true); }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 

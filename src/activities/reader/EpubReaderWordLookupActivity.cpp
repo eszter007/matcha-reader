@@ -8,6 +8,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <SdCardFontSystem.h>
 #include <WordLookup.h>
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include "DefinitionTextRenderer.h"
 #include "Epub/Page.h"
 #include "MappedInputManager.h"
+#include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -103,6 +105,16 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
 // and every caller already guards against an out-of-range cursor while it refills, so the user's
 // position resumes naturally once the rescan passes it again.
 bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
+  // Definition rendering leaves compressed-font groups resident. Reclaim before the next scan
+  // slice needs to grow a vector; waiting until that growth fails discards progress and rescans
+  // the whole page. This is the same recovery used below, just before damage instead of after it.
+  if (ESP.getMaxAllocHeap() < 20 * 1024) {
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_INF("WLA", "Reclaimed fonts before scan: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+  }
   const bool done = scan.step(budgetMs);
   if (scan.wasTruncated() && !scanHealAttempted && !scan.allGlyphs.empty()) {
     scanHealAttempted = true;
@@ -367,7 +379,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     // For short hiragana-only matches (≤3 chars), check if the grammar dict
     // has a better entry and promote it to the main result. Functional words
     // like こと, もの, よう get unhelpful JMdict hits ("ancient capital").
-    if (chars <= 3 && Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
+    if (chars <= 3 && Storage.exists(DictIndex::grammarIdxPath())) {
       bool allHiragana = true;
       for (size_t b = 0; b < result.matchLength && b < text.size();) {
         auto c = static_cast<unsigned char>(text[b]);
@@ -391,7 +403,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
         }
@@ -411,7 +423,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   // ~30-byte string allocation failing in this block. Show the plain result instead of crashing.
   if (ESP.getMaxAllocHeap() < 16 * 1024) {
     LOG_ERR("WLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
+  } else if (Storage.exists(DictIndex::grammarIdxPath())) {
     const size_t allStart = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
     const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
 
@@ -452,7 +464,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         }
         std::string window = gramText.substr(0, byteEnd);
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(window.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
             bestGramLen = wLen;
@@ -488,7 +500,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 }
 
 void EpubReaderWordLookupActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));
@@ -501,15 +514,28 @@ void EpubReaderWordLookupActivity::loop() {
     return;
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { moveCursor(1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { moveCursor(-1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+  const bool sideButtonsForLookup =
+      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const bool swapFrontButtons = mappedInput.isNavDirectionSwapped();
+  const auto nextEntryButton =
+      sideButtonsForLookup ? MappedInputManager::Button::PageForward : MappedInputManager::Button::Right;
+  const auto previousEntryButton =
+      sideButtonsForLookup ? MappedInputManager::Button::PageBack : MappedInputManager::Button::Left;
+  const auto scrollDownButton =
+      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Left : MappedInputManager::Button::Right)
+                           : MappedInputManager::Button::Down;
+  const auto scrollUpButton =
+      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
+                           : MappedInputManager::Button::Up;
+  buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
+  buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
+  buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
     if (hasResult && scrollOffset < maxScroll) {
       scrollOffset = std::min(maxScroll, scrollOffset + 5);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+  buttonNavigator.onPressAndContinuous({scrollUpButton}, [this] {
     if (scrollOffset > 0) {
       scrollOffset = std::max(0, scrollOffset - 5);
       requestUpdate();
@@ -521,7 +547,9 @@ void EpubReaderWordLookupActivity::loop() {
   // slice never swallows a button press). Everything here runs on the main task -- the render
   // task only ever reads counter sizes -- so no lock is needed and, unlike the abandoned
   // reader-idle precompute, nothing can starve another activity's rendering.
-  if (!scan.isDone()) {
+  // The render task's font decompressor can temporarily consume nearly the entire largest block.
+  // Do not overlap that transient allocation with dictionary reads/vector growth.
+  if (!scan.isDone() && !RenderLock::peek()) {
     const bool done = stepScan(40);
     // The open can show "No match" if the initial burst found nothing yet -- promote the first
     // word as soon as the background scan discovers it.
@@ -542,7 +570,9 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
   // groups (16KB decompression buffers each) into a heap that is already at its tightest here.
-  const int jaFont = NOTOSERIF_16_FONT_ID;
+  const int defFont = DefinitionText::wordLookupFontId();
+  const uint16_t defScale = DefinitionText::wordLookupFontScale();
+  sdFontSystem.ensureWordLookupFallback(renderer, defFont, DefinitionText::wordLookupFontPointSize());
 
   // Bulk-load every glyph the headword + definition need before drawing/measuring any of them --
   // same fix, and same root cause, as the vertical-page-turn slowness fixed earlier this session.
@@ -554,7 +584,7 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
   if (hasResult) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
-      fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
       // Prewarm only the ON-SCREEN slice of the definition, in ONE call. A merged 5-entry
       // definition can run to thousands of bytes, but only ~13 lines show; warming the whole
       // thing was the ~1s-per-step navigation cost (renders serialize on the RenderLock, so a
@@ -568,10 +598,10 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
         while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
         const char saved = resultDefinition[cut];
         resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
-        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
         resultDefinition[cut] = saved;
       } else {
-        fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
       }
     }
   }
@@ -590,23 +620,22 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
 
     if (scrollOffset == 0) {
       // Headword at the top (position counter is now in the header).
-      renderer.drawText(jaFont, textX, contentTop, resultHeadword.c_str(), true, EpdFontFamily::BOLD);
-      defY = contentTop + renderer.getLineHeight(jaFont) + metrics.verticalSpacing;
+      renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
+      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
     } else {
       // When scrolled, show a compact header line with the headword + scroll mark.
-      std::string scrollInfo = resultHeadword + " \xe2\x96\xb2";
-      renderer.drawText(SMALL_FONT_ID, textX, contentTop, scrollInfo.c_str(), true);
-      defY = contentTop + renderer.getLineHeight(SMALL_FONT_ID) + 4;
+      std::string scrollInfo = resultHeadword;
+      renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
+      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
     }
 
-    const int defFont = SMALL_FONT_ID;
-    const int defLineH = renderer.getLineHeight(defFont);
+    const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
     // screen.height already excludes the button-hints band, so its bottom edge
     // is the top of the buttons; stay a hair above it.
     const int maxDefY = screen.y + screen.height - 2;
     const int firstDefY = defY;
     const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                  maxDefY, scrollOffset);
+                                                  maxDefY, scrollOffset, defScale);
 
     totalLines = wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
@@ -638,7 +667,11 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
 
     renderContentArea(screen, contentTop);
 
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    const bool sideButtonsForLookup =
+        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
+                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
     renderer.displayBuffer();
@@ -651,7 +684,11 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
     // Redraw the header so the position counter updates (drawHeader clears it).
     GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    const auto labels2 = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    const bool sideButtonsForLookup =
+        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+    const auto labels2 =
+        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
+                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
     GUI.drawButtonHints(renderer, labels2.btn1, labels2.btn2, labels2.btn3, labels2.btn4);
 
     renderContentArea(screen, contentTop);
@@ -664,4 +701,8 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     }
   }
+
+  // The framebuffer owns the finished pixels; keeping the decompressed glyph slab until the
+  // next keypress only fragments the heap while the dictionary caches are resident.
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
 }

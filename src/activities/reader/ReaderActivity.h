@@ -14,8 +14,10 @@ class MangaBook;
 class ReaderActivity final : public Activity {
   std::string initialBookPath;
   std::string currentBookPath;  // Track current book path for navigation
-  // Non-static: needs renderer to release font caches before the heap-hungry Epub::load().
-  std::unique_ptr<Epub> loadEpub(const std::string& path) const;
+  bool allowFastInitialRefresh;
+  // Also releases font caches before the heap-hungry Epub::load().
+  // Non-static (unlike the other loaders): draws the first-open indexing popup, which needs the renderer.
+  std::unique_ptr<Epub> loadEpub(const std::string& path);
   static std::unique_ptr<Xtc> loadXtc(const std::string& path);
   static std::unique_ptr<Txt> loadTxt(const std::string& path);
   static std::unique_ptr<manga::MangaBook> loadManga(const std::string& path);
@@ -32,10 +34,14 @@ class ReaderActivity final : public Activity {
   void onGoToMangaReader(std::unique_ptr<manga::MangaBook> manga);
 
   void onGoBack();
+  int initialRefreshCountdown() const;
 
  public:
-  explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath)
-      : Activity("Reader", renderer, mappedInput), initialBookPath(std::move(initialBookPath)) {}
+  explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath,
+                          bool allowFastInitialRefresh)
+      : Activity("Reader", renderer, mappedInput),
+        initialBookPath(std::move(initialBookPath)),
+        allowFastInitialRefresh(allowFastInitialRefresh) {}
   void onEnter() override;
   bool isReaderActivity() const override { return true; }
 };

@@ -1,6 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
+
+#include "CrossPointSettings.h"
+#include "fontIds.h"
 
 class GfxRenderer;
 
@@ -16,6 +20,38 @@ class GfxRenderer;
 // guarded reserve happens up front: zero heap growth per line, per paragraph, or per frame.
 namespace DefinitionText {
 
+// Tiny keeps the compact, readable 8pt font. Larger options use native built-in fonts so their
+// glyphs stay sharp; CJK characters can be routed to a matching SD-card size by the activity.
+inline int wordLookupFontId() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+      return NOTOSANS_12_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return NOTOSANS_14_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return NOTOSANS_16_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    default:
+      return SMALL_FONT_ID;
+  }
+}
+
+inline uint8_t wordLookupFontPointSize() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+      return 12;
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return 14;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return 16;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    default:
+      return 8;
+  }
+}
+
+inline uint16_t wordLookupFontScale() { return 256; }
+
 struct WrapResult {
   int totalLines = 0;  // wrapped line count of the whole text (for scroll bookkeeping)
   int linesDrawn = 0;
@@ -26,6 +62,6 @@ struct WrapResult {
 // the last fitting space; CJK breaks per character, keeping sentence-ending punctuation
 // attached to its line rather than orphaned at a line start.
 WrapResult drawWrapped(GfxRenderer& renderer, int fontId, const std::string& text, int textX, int startY,
-                       int lineHeight, int maxWidth, int maxY, int scrollOffset);
+                       int lineHeight, int maxWidth, int maxY, int scrollOffset, uint16_t scale = 256);
 
 }  // namespace DefinitionText

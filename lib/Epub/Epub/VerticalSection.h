@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,7 +49,8 @@ class VerticalSection {
   // a valid cache. See lastReadHeapRefused().
   mutable bool lastReadHeapRefused_ = false;
 
-  bool streamParseAndLayout(HalFile& out, int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
+  bool streamParseAndLayout(HalFile& out, int fontId, uint16_t viewportWidth, uint16_t viewportHeight,
+                            uint8_t lineSpacing, bool furiganaEnabled);
 
   // Set by streamParseAndLayout when the layout dropped chars/glyphs on low heap. The pages that
   // made it to disk are readable (this session keeps working), but createSectionFile stamps the
@@ -68,6 +70,11 @@ class VerticalSection {
   // See requestPageDuringBuild(). Written by the loop() task, read by the build on the
   // render task; -1 = no pending request.
   std::atomic<int> buildPageRequest_{-1};
+  // See noteBackTurnDuringBuild(). Set by loop(), consumed on the render task between pages so
+  // the notice is drawn by the same task that draws pages -- the framebuffer has one owner.
+  std::atomic<bool> backTurnDuringBuild_{false};
+  void (*buildNoticeFn_)(void*) = nullptr;
+  void* buildNoticeCtx_ = nullptr;
 
  public:
   uint16_t pageCount = 0;
@@ -99,9 +106,43 @@ class VerticalSection {
   // collapse to the final target.
   void requestPageDuringBuild(int pageIndex) { buildPageRequest_.store(pageIndex, std::memory_order_relaxed); }
 
-  bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
-  bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight);
+  // A BACKWARD turn while the build runs. Unlike a forward one it cannot be served: the page is
+  // already behind the build frontier, so showing it needs a cache read-back, and read-back wants
+  // ~10KB contiguous that the layout's own working set does not leave (measured on device:
+  // maxAlloc bottoms near 6KB mid-build). Rather than refuse silently, tell the reader the
+  // chapter is still indexing. Drawn via setBuildNoticeHook() on the render task.
+  void noteBackTurnDuringBuild() { backTurnDuringBuild_.store(true, std::memory_order_relaxed); }
+
+  // Draws the "still indexing" notice; invoked between pages on the render task. See
+  // noteBackTurnDuringBuild().
+  void setBuildNoticeHook(void* ctx, void (*fn)(void*)) {
+    backTurnDuringBuild_.store(false, std::memory_order_relaxed);
+    buildNoticeCtx_ = ctx;
+    buildNoticeFn_ = fn;
+  }
+
+  // furiganaEnabled is part of the cache key: the column gap only has to clear ruby when ruby is
+  // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.
+  bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
+                       bool furiganaEnabled);
+  bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
+                         bool furiganaEnabled);
   bool clearCache() const;
+
+  // Position of a page's first character within the chapter's visible character data, in the
+  // same units Section::getVisibleTextOffsetForPage() reports -- which is what makes a reading
+  // position portable between the two layouts. See VerticalPage::visibleTextOffset.
+  //
+  // Read straight from the page record on SD (its first field). No table is held in RAM and
+  // none is written: the reverse lookup binary-searches the page records through the offset
+  // table that loadSectionFile already keeps, which costs ~9 four-byte reads on a 500-page
+  // chapter and, unlike a second index, nothing at all during the build -- where this layout
+  // is already fighting for every contiguous KB.
+  std::optional<uint32_t> getVisibleTextOffsetForPage(int page) const;
+
+  // The page holding `offset`: the last page whose own offset is <= it. nullopt if the chapter
+  // has no pages or the records cannot be read.
+  std::optional<int> getPageForVisibleTextOffset(uint32_t offset) const;
   const VerticalPage* getPage() const;
   const VerticalPage* getPage(int pageIndex) const;
   // True when the most recent getPage() returned nullptr only because the page's glyph vector

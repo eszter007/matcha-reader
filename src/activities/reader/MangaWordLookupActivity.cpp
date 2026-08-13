@@ -7,11 +7,13 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <SdCardFontSystem.h>
 #include <WordLookup.h>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "MappedInputManager.h"
+#include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -192,7 +194,7 @@ void MangaWordLookupActivity::performLookupImpl() {
     resultMatchLen = chars;
 
     // Check grammar dictionary for short hiragana matches
-    if (chars <= 3 && Storage.exists(DictIndex::GRAMMAR_IDX_PATH)) {
+    if (chars <= 3 && Storage.exists(DictIndex::grammarIdxPath())) {
       bool allHiragana = true;
       for (size_t b = 0; b < result.matchLength && b < text.size();) {
         auto c = static_cast<unsigned char>(text[b]);
@@ -216,7 +218,7 @@ void MangaWordLookupActivity::performLookupImpl() {
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
         }
@@ -229,7 +231,7 @@ void MangaWordLookupActivity::performLookupImpl() {
   // allocation abort() -- see EpubReaderWordLookupActivity's grammar scan.
   if (ESP.getMaxAllocHeap() < 16 * 1024) {
     LOG_ERR("MWLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-  } else if (Storage.exists(DictIndex::GRAMMAR_IDX_PATH) &&
+  } else if (Storage.exists(DictIndex::grammarIdxPath()) &&
              cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
     const size_t allStart = scan.selectToAllIdx[cursorIndex];
     int bestGramLen = 0;
@@ -263,7 +265,7 @@ void MangaWordLookupActivity::performLookupImpl() {
         }
         std::string window = gramText.substr(0, byteEnd);
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(window.c_str(), DictIndex::GRAMMAR_IDX_PATH, DictIndex::GRAMMAR_DAT_PATH,
+        if (DictIndex::lookupInFile(window.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
             bestGramLen = wLen;
@@ -294,7 +296,8 @@ void MangaWordLookupActivity::performLookupImpl() {
 }
 
 void MangaWordLookupActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));
@@ -307,15 +310,28 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { moveCursor(1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { moveCursor(-1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+  const bool sideButtonsForLookup =
+      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const bool swapFrontButtons = mappedInput.isNavDirectionSwapped();
+  const auto nextEntryButton =
+      sideButtonsForLookup ? MappedInputManager::Button::PageForward : MappedInputManager::Button::Right;
+  const auto previousEntryButton =
+      sideButtonsForLookup ? MappedInputManager::Button::PageBack : MappedInputManager::Button::Left;
+  const auto scrollDownButton =
+      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Left : MappedInputManager::Button::Right)
+                           : MappedInputManager::Button::Down;
+  const auto scrollUpButton =
+      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
+                           : MappedInputManager::Button::Up;
+  buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
+  buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
+  buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
     if (hasResult && scrollOffset < maxScroll) {
       scrollOffset = std::min(maxScroll, scrollOffset + 5);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+  buttonNavigator.onPressAndContinuous({scrollUpButton}, [this] {
     if (scrollOffset > 0) {
       scrollOffset = std::max(0, scrollOffset - 5);
       requestUpdate();
@@ -343,7 +359,9 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
   // groups (16KB decompression buffers each) into a heap that is already at its tightest here.
-  const int jaFont = NOTOSERIF_16_FONT_ID;
+  const int defFont = DefinitionText::wordLookupFontId();
+  const uint16_t defScale = DefinitionText::wordLookupFontScale();
+  sdFontSystem.ensureWordLookupFallback(renderer, defFont, DefinitionText::wordLookupFontPointSize());
 
   // Bulk-load every glyph the headword + definition need before drawing/measuring any of them.
   // Without this, each drawText()/getTextWidth() call for a character that isn't already cached
@@ -358,8 +376,8 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
       // -- a blanket "all 4 styles" request can itself exhaust the font decompressor's 4-slot
       // page buffer (each style, plus one more per style if the font has a fallback), same trap
       // found and fixed for vertical-page rendering earlier this session.
-      fcm->prewarmCache(jaFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      fcm->prewarmCache(SMALL_FONT_ID, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
     }
   }
 
@@ -375,20 +393,19 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
   int defY;
 
   if (scrollOffset == 0) {
-    renderer.drawText(jaFont, textX, contentTop, resultHeadword.c_str(), true, EpdFontFamily::BOLD);
-    defY = contentTop + renderer.getLineHeight(jaFont) + metrics.verticalSpacing;
+    renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
+    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
   } else {
-    std::string scrollInfo = resultHeadword + " \xe2\x96\xb2";
-    renderer.drawText(SMALL_FONT_ID, textX, contentTop, scrollInfo.c_str(), true);
-    defY = contentTop + renderer.getLineHeight(SMALL_FONT_ID) + 4;
+    std::string scrollInfo = resultHeadword;
+    renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
+    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
   }
 
-  const int defFont = SMALL_FONT_ID;
-  const int defLineH = renderer.getLineHeight(defFont);
+  const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
   const int maxDefY = screen.y + screen.height - 2;
   const int firstDefY = defY;
   const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                maxDefY, scrollOffset);
+                                                maxDefY, scrollOffset, defScale);
 
   totalLines = wrap.totalLines;
   const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
@@ -413,7 +430,11 @@ void MangaWordLookupActivity::render(RenderLock&&) {
     renderer.clearScreen();
     GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
     renderContentArea(screen, contentTop);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    const bool sideButtonsForLookup =
+        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
+                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     initialRenderDone = true;
@@ -422,7 +443,11 @@ void MangaWordLookupActivity::render(RenderLock&&) {
     const int physBottom = renderer.getScreenHeight();
     renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
     GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    const auto labels2 = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    const bool sideButtonsForLookup =
+        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+    const auto labels2 =
+        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
+                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
     GUI.drawButtonHints(renderer, labels2.btn1, labels2.btn2, labels2.btn3, labels2.btn4);
     renderContentArea(screen, contentTop);
 

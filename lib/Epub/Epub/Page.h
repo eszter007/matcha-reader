@@ -51,6 +51,7 @@ class PageImage final : public PageElement {
   PageImage(std::shared_ptr<ImageBlock> block, const int16_t xPos, const int16_t yPos)
       : PageElement(xPos, yPos), imageBlock(std::move(block)) {}
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) override;
+  void renderPlaceholder(GfxRenderer& renderer, int xOffset, int yOffset) const;
   bool serialize(HalFile& file) override;
   PageElementTag getTag() const override { return TAG_PageImage; }
   static std::unique_ptr<PageImage> deserialize(HalFile& file);
@@ -77,11 +78,20 @@ class PageHorizontalRule final : public PageElement {
 class PageBox final : public PageElement {
   int16_t width;
   int16_t height;
-  uint8_t edges;
+  // Same packed byte as CssStyle::borderEdges: edge mask + line style + 1..4px width.
+  uint8_t borderSpec;
+  // Solid black fill under the box, for a CssInkMode::Inverted block's panel. The page's elements
+  // render in insertion order, so a filled box is pushed immediately BEFORE the line it sits
+  // behind and the white glyphs land on top of it.
+  bool filled;
 
  public:
-  PageBox(const int16_t width, const int16_t height, const uint8_t edges, const int16_t xPos, const int16_t yPos)
-      : PageElement(xPos, yPos), width(width), height(height), edges(edges) {}
+  PageBox(const int16_t width, const int16_t height, const uint8_t borderSpec, const int16_t xPos, const int16_t yPos,
+          const bool filled = false)
+      : PageElement(xPos, yPos), width(width), height(height), borderSpec(borderSpec), filled(filled) {}
+
+  // Grow the panel downward, to take in the block's bottom padding once the last line is known.
+  void extendHeight(const int16_t extraPixels) { height = static_cast<int16_t>(height + extraPixels); }
 
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) override;
   bool serialize(HalFile& file) override;
@@ -96,6 +106,12 @@ class Page {
   std::vector<FootnoteEntry> footnotes;
   static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
 
+  // Zero-based visible-codepoint offset where this page starts. Not part of the serialized page
+  // body (it lives in the section's visible-offset LUT); Section::loadPage* fills it in from the
+  // build LUT or the on-disk LUT while the page file is already open, so the reader can persist
+  // progress without a second section-file open per page turn.
+  uint32_t visibleTextOffset = 0;
+
   void addFootnote(const char* number, const char* href) {
     if (footnotes.size() >= MAX_FOOTNOTES_PER_PAGE) return;  // Cap per-page footnotes
     FootnoteEntry entry;
@@ -108,6 +124,7 @@ class Page {
 
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool skipRuby = false) const;
   void renderImages(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
+  void renderWithImagePlaceholders(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
   bool serialize(HalFile& file) const;
   static std::unique_ptr<Page> deserialize(HalFile& file);
 
@@ -115,6 +132,13 @@ class Page {
   bool hasImages() const {
     return std::any_of(elements.begin(), elements.end(),
                        [](const std::shared_ptr<PageElement>& el) { return el->getTag() == TAG_PageImage; });
+  }
+
+  bool hasImagesNeedingDecode() const {
+    return std::any_of(elements.begin(), elements.end(), [](const std::shared_ptr<PageElement>& element) {
+      return element->getTag() == TAG_PageImage &&
+             static_cast<const PageImage&>(*element).getImageBlock().needsDecode();
+    });
   }
 
   // Get bounding box of all images on the page (union of image rects)

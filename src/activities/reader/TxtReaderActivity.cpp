@@ -44,6 +44,7 @@ void TxtReaderActivity::onEnter() {
   APP_STATE.openEpubPath = filePath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(filePath, fileName, "", "");
+  BookStats::recordOpen(filePath.c_str());
 
   // Trigger first update
   requestUpdate();
@@ -55,7 +56,7 @@ void TxtReaderActivity::onExit() {
   // Record the sub-interval tail of the session; whole minutes were already flushed
   // periodically from loop(). TXT books never counted toward the reading streak at all
   // before this.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, txt ? txt->getPath().c_str() : nullptr);
 
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -70,22 +71,17 @@ void TxtReaderActivity::onExit() {
 void TxtReaderActivity::loop() {
   // Crash-proof stats: flush whole minutes every few minutes so an exit path that
   // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs);
+  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, txt ? txt->getPath().c_str() : nullptr);
 
-  // Long press BACK (1s+) goes to file selection
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
-    activityManager.goToFileBrowser(txt ? txt->getPath() : "");
+  if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, txt ? txt->getPath().c_str() : "",
+                                        {this, [](void* ctx) { static_cast<TxtReaderActivity*>(ctx)->onGoHome(); }})) {
     return;
   }
 
-  // Short press BACK goes directly to home
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
-    onGoHome();
-    return;
-  }
-
-  const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  prevTriggered = prevTriggered || touch.prev;
+  nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
     return;
   }
@@ -427,7 +423,7 @@ void TxtReaderActivity::renderPage() {
 void TxtReaderActivity::renderStatusBar() const {
   const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
   std::string title;
-  if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
+  if (SETTINGS.statusBarSpec().showsTitle()) {
     title = txt->getTitle();
   }
   GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);

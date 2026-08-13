@@ -14,6 +14,10 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
+namespace PixelCacheIO {
+class Reader;
+}
+
 class MangaReaderActivity final : public Activity {
  public:
   explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -56,6 +60,9 @@ class MangaReaderActivity final : public Activity {
 
   enum class ViewMode { FullPage, PanelZoom, TextOverlay };
   ViewMode viewMode = ViewMode::FullPage;
+  // Per-book preference persisted as progress.bin byte 7. Books that physically omit page images
+  // still enter their crops regardless of this preference.
+  bool panelsOnlyMode = false;
 
   // Prefetch state flags below are written from the render task (renderFullPage/renderPanelZoom)
   // and read/updated from the loop task (loop/loadCurrentPagePanels). They're word-sized and only
@@ -86,6 +93,14 @@ class MangaReaderActivity final : public Activity {
   // Touches NO renderer state: rotation is just a screen-dim swap here, which matches what
   // setOrientation((o+3)%4) does to getScreenWidth/Height. savedOrientation is left at 0.
   static FullPageGeom computeFullPageGeom(int imgWidth, int imgHeight, int screenW, int screenH);
+  // Stamps savedOrientation and applies the rotation, so a geometry obtained any way (from the
+  // source dimensions or recovered from a warm pixel cache) enters the render path identically.
+  FullPageGeom adoptFullPageGeom(FullPageGeom g);
+  // Recovers the full-page geometry from an open cache's header alone, so a page whose pixels are
+  // already cached never opens the source image just to read its dimensions. Returns false when
+  // the cached size cannot be proven to be this screen's fit -- the caller must then probe the
+  // source. See the definition for what "proven" means.
+  bool fullPageGeomFromCache(const PixelCacheIO::Reader& cache, FullPageGeom& out);
 
   void prefetchNextPageCache();
 
@@ -120,14 +135,33 @@ class MangaReaderActivity final : public Activity {
   // on every full-page -> panel press, and renderPanelZoom re-parsed the crop's JPEG header on
   // every entry. Both answers are static for a given page.
   bool pageHasPanelCrops = false;
+  // Book-level capability derived once from panels.idx on entry. A cover/splash can deliberately
+  // omit its redundant crop, but the per-book Panels Only preference must still be configurable.
+  bool bookHasPanelCropCapability = false;
+  // Index of the first crop that actually exists. Full-page cover/splash panels intentionally
+  // had no duplicate crop in older conversions, so crop 0 is not a reliable format probe.
+  int firstPanelWithCrop = -1;
+  // Some space-saving conversions contain only panel crops. Cache whether a full-page image is
+  // available so navigation never switches such a book into an unrenderable overview.
+  bool currentPageHasImage = false;
   // True when the current full-page image is a 1-bit monochrome BMP: it renders with a single BW
   // e-ink pass (no 4-level gray refresh), so renderFullPage skips the grayscale planes entirely.
   // Computed once per page in loadCurrentPagePanels(). Read on the render task, written under
   // RenderLock (see panelDims note below).
   bool currentPageBwOnly = false;
+  // BMP dimensions come from the same header read that determines currentPageBwOnly. Keeping
+  // them here prevents renderFullPage() from reopening the page merely to ask its dimensions.
+  int currentPageBmpWidth = 0;
+  int currentPageBmpHeight = 0;
   // Panel crop format for this book (uniform per book): the converter writes p<page>_<panel>.jpg
   // normally, or .bmp with --mono. panelCropPath() picks the extension from this.
   bool panelCropIsBmp = false;
+  // Panel crop location for this book. Conversions since the directory-scan fix put crops in a
+  // subfolder, so the book folder holds only page images and opening it does not walk a crop per
+  // panel; books converted before that have them loose alongside the pages. Detected once in
+  // onEnter() -- both layouts stay readable.
+  static constexpr const char* PANEL_CROP_SUBDIR = "panels";
+  bool panelCropsInSubdir = false;
   // True when this page's panel crops are 1-bit monochrome BMP -> renderPanelZoom takes the same
   // single-BW-wave fast path as a mono full page. Detected once per page in loadCurrentPagePanels.
   bool panelsBwOnly = false;
@@ -197,11 +231,12 @@ class MangaReaderActivity final : public Activity {
     bool isPanel = false;
     bool isFirstPanel = false;  // which done-flag a panel job resolves
     int panelIdx = -1;
-    uint32_t gen = 0;       // pageGeneration at post time
-    int screenW = 0;        // base (unrotated) screen dims captured at post time --
-    int screenH = 0;        //   inputs to the pure geometry helpers
-    std::string imgPath;    // page image or panel crop
-    std::string cachePath;  // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
+    uint32_t gen = 0;          // pageGeneration at post time
+    int screenW = 0;           // base (unrotated) screen dims captured at post time --
+    int screenH = 0;           //   inputs to the pure geometry helpers
+    bool rotatePanels = true;  // setting captured with geometry inputs
+    std::string imgPath;       // page image or panel crop
+    std::string cachePath;     // real .2bp target; worker writes cachePath + ".tmp", publishes by rename
   };
   PrefetchJob prefetchJob;
 
@@ -221,7 +256,7 @@ class MangaReaderActivity final : public Activity {
   void workerWarmNextPage();
   void workerWarmPanel();
 
-  // Geometry of a zoomed panel on the (possibly temporarily rotated) screen. Shared by
+  // Geometry of a zoomed panel on the configured or temporarily rotated screen. Shared by
   // renderPanelZoom() and prefetchPanelCache() so the prefetch-written pixel cache has exactly
   // the dimensions the later render expects. Same restore contract as applyFullPageGeometry.
   struct PanelGeom {
@@ -232,7 +267,7 @@ class MangaReaderActivity final : public Activity {
   };
   PanelGeom applyPanelGeometry(int imgWidth, int imgHeight);
   // Pure twin of applyPanelGeometry, same contract as computeFullPageGeom (no renderer access).
-  static PanelGeom computePanelGeom(int imgWidth, int imgHeight, int screenW, int screenH);
+  static PanelGeom computePanelGeom(int imgWidth, int imgHeight, int screenW, int screenH, bool rotatePanels);
 
   std::string panelCropPath(int panelIdx) const;                      // uses panelCropIsBmp for the extension
   std::string panelCropPathExt(int panelIdx, const char* ext) const;  // explicit extension (format detection)
@@ -245,8 +280,9 @@ class MangaReaderActivity final : public Activity {
 
   void nextPanel();
   void prevPanel();
-  void nextPage();
-  void prevPage();
+  void nextPage(bool keepPanelMode = false);
+  void prevPage(bool keepPanelMode = false);
+  int findPanelWithCrop(int start, int step) const;
 
   void saveProgress() const;
   void loadProgress();

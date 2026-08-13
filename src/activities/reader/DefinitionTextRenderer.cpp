@@ -21,7 +21,7 @@ inline size_t utf8CharLen(const unsigned char c0) {
 
 WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                            const int startY, const int lineHeight, const int maxWidth, const int maxY,
-                           const int scrollOffset, std::string& lineBuf) {
+                           const int scrollOffset, const uint16_t scale, std::string& lineBuf) {
   WrapResult out;
   int defY = startY;
   int lineIndex = 0;
@@ -47,10 +47,10 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
       // remainder could never fit one line anyway.)
       if (remLen < LINE_BUF_CAP) {
         lineBuf.assign(text, remStart, remLen);
-        if (renderer.getTextWidth(fontId, lineBuf.c_str()) <= maxWidth) {
+        if (renderer.getTextWidthScaled(fontId, lineBuf.c_str(), scale) <= maxWidth) {
           lineIndex++;
           if (lineIndex > scrollOffset && defY + lineHeight <= maxY) {
-            renderer.drawText(fontId, textX, defY, lineBuf.c_str(), true);
+            renderer.drawTextScaled(fontId, textX, defY, lineBuf.c_str(), scale, true);
             defY += lineHeight;
             out.linesDrawn++;
           }
@@ -68,7 +68,7 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
         if (charLen > remEndFixed - pos) charLen = remEndFixed - pos;
         if (lineBuf.size() + charLen >= LINE_BUF_CAP) break;  // buffer full -> hard break, no realloc
         lineBuf.append(text, pos, charLen);
-        if (renderer.getTextWidth(fontId, lineBuf.c_str()) > maxWidth) {
+        if (renderer.getTextWidthScaled(fontId, lineBuf.c_str(), scale) > maxWidth) {
           // Never orphan sentence-ending punctuation at the start of the next line.
           uint32_t cp = 0;
           if (charLen == 3) {
@@ -107,7 +107,7 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
 
       lineIndex++;
       if (lineIndex > scrollOffset && defY + lineHeight <= maxY) {
-        renderer.drawText(fontId, textX, defY, lineBuf.c_str(), true);
+        renderer.drawTextScaled(fontId, textX, defY, lineBuf.c_str(), scale, true);
         defY += lineHeight;
         out.linesDrawn++;
       }
@@ -120,7 +120,7 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
 
 WrapResult drawWrapped(GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                        const int startY, const int lineHeight, const int maxWidth, const int maxY,
-                       const int scrollOffset) {
+                       const int scrollOffset, const uint16_t scale) {
   // The single allocation of this whole function, guarded: if even one line buffer doesn't
   // fit, drawing text under a heap this starved would abort() inside the renderer anyway --
   // show nothing (header/word still render) rather than crash. -fno-exceptions makes an
@@ -131,7 +131,8 @@ WrapResult drawWrapped(GfxRenderer& renderer, const int fontId, const std::strin
   }
   std::string lineBuf;
   lineBuf.reserve(LINE_BUF_CAP);
-  return DrawWrappedImpl(renderer, fontId, text, textX, startY, lineHeight, maxWidth, maxY, scrollOffset, lineBuf);
+  return DrawWrappedImpl(renderer, fontId, text, textX, startY, lineHeight, maxWidth, maxY, scrollOffset, scale,
+                         lineBuf);
 }
 
 }  // namespace DefinitionText

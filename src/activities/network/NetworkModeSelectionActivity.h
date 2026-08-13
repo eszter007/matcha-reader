@@ -23,7 +23,7 @@ class NetworkModeSelectionActivity final : public Activity {
 
  public:
   explicit NetworkModeSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("NetworkModeSelection", renderer, mappedInput) {}
+      : Activity("NetworkMode", renderer, mappedInput) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <BoardConfig.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -58,18 +59,19 @@ EpdFont notoserif12ItalicFont(&notoserif_12_italic);
 EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
 EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
                                     &notoserif12BoldItalicFont);
+// No bold-italic at 16/18pt: the two largest reader sizes cost ~298KB of flash for a style
+// combination books use rarely, and that flash carries the 8pt CJK subset the UI needs at
+// every screen plus the headroom diagnostics builds need. Restoring them fits (release goes
+// to 98.6%, debug to 99.4%) but leaves no room to work in. EpdFontFamily::getFont falls back
+// to bold when boldItalic is null.
 EpdFont notoserif16RegularFont(&notoserif_16_regular);
 EpdFont notoserif16BoldFont(&notoserif_16_bold);
 EpdFont notoserif16ItalicFont(&notoserif_16_italic);
-EpdFont notoserif16BoldItalicFont(&notoserif_16_bolditalic);
-EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont,
-                                    &notoserif16BoldItalicFont);
+EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont);
 EpdFont notoserif18RegularFont(&notoserif_18_regular);
 EpdFont notoserif18BoldFont(&notoserif_18_bold);
 EpdFont notoserif18ItalicFont(&notoserif_18_italic);
-EpdFont notoserif18BoldItalicFont(&notoserif_18_bolditalic);
-EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont,
-                                    &notoserif18BoldItalicFont);
+EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont);
 
 EpdFont notosans12RegularFont(&notosans_12_regular);
 EpdFont notosans12BoldFont(&notosans_12_bold);
@@ -86,15 +88,11 @@ EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, 
 EpdFont notosans16RegularFont(&notosans_16_regular);
 EpdFont notosans16BoldFont(&notosans_16_bold);
 EpdFont notosans16ItalicFont(&notosans_16_italic);
-EpdFont notosans16BoldItalicFont(&notosans_16_bolditalic);
-EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont,
-                                   &notosans16BoldItalicFont);
+EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont);
 EpdFont notosans18RegularFont(&notosans_18_regular);
 EpdFont notosans18BoldFont(&notosans_18_bold);
 EpdFont notosans18ItalicFont(&notosans_18_italic);
-EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
-                                   &notosans18BoldItalicFont);
+EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont);
 
 #endif  // OMIT_FONTS
 
@@ -106,8 +104,13 @@ EpdFontFamily smallFontFamily(&smallFont);
 // alongside everything else. No bold variant; EpdFontFamily::getFont() falls
 // back to regular when bold is null, which is fine for an occasional-use
 // fallback font.
-EpdFont cjk10RegularFont(&notosansjp_joyo_10_regular);
-EpdFontFamily cjk10FontFamily(&cjk10RegularFont);
+// Two built-in CJK subsets, 8pt and 12pt. The SD font system would rather use the card's own
+// font at UI sizes, but no .cpfont ships 8 or 10pt (sd-fonts.yaml generates 12/14/16/18), so
+// these built-ins are what EVERY device renders UI Japanese with -- not just the ones without
+// an SD font. 8pt serves both the 8pt rows (library titles, list subtitles) and the 10pt ones
+// (the Continue Reading author): a hair small there, where 12pt was glaringly large.
+EpdFont cjk8RegularFont(&notosansjp_joyo_8_regular);
+EpdFontFamily cjk8FontFamily(&cjk8RegularFont);
 
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
 EpdFontFamily cjk12FontFamily(&cjk12RegularFont);
@@ -122,7 +125,6 @@ EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 
 // measurement of power button press duration calibration value
 unsigned long t1 = 0;
-unsigned long t2 = 0;
 
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
@@ -183,49 +185,6 @@ void silentRestartToTranslation() {
   ESP.restart();
 }
 
-// Verify power button press duration on wake-up from deep sleep
-// Pre-condition: isWakeupByPowerButton() == true
-void verifyPowerButtonDuration() {
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) {
-    // Fast path for short press
-    // Needed because inputManager.isPressed() may take up to ~500ms to return the correct state
-    return;
-  }
-
-  // Give the user up to 1000ms to start holding the power button, and must hold for SETTINGS.getPowerButtonDuration()
-  const auto start = millis();
-  bool abort = false;
-  // Subtract the current time, because inputManager only starts counting the HeldTime from the first update()
-  // This way, we remove the time we already took to reach here from the duration,
-  // assuming the button was held until now from millis()==0 (i.e. device start time).
-  const uint16_t calibration = start;
-  const uint16_t calibratedPressDuration =
-      (calibration < SETTINGS.getPowerButtonDuration()) ? SETTINGS.getPowerButtonDuration() - calibration : 1;
-
-  gpio.update();
-  // Needed because inputManager.isPressed() may take up to ~500ms to return the correct state
-  while (!gpio.isPressed(HalGPIO::BTN_POWER) && millis() - start < 1000) {
-    delay(10);  // only wait 10ms each iteration to not delay too much in case of short configured duration.
-    gpio.update();
-  }
-
-  t2 = millis();
-  if (gpio.isPressed(HalGPIO::BTN_POWER)) {
-    do {
-      delay(10);
-      gpio.update();
-    } while (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() < calibratedPressDuration);
-    abort = gpio.getPowerButtonHeldTime() < calibratedPressDuration;
-  } else {
-    abort = true;
-  }
-
-  if (abort) {
-    // Button released too early. Returning to sleep.
-    // IMPORTANT: Re-arm the wakeup trigger before sleeping again
-    powerManager.startDeepSleep(gpio);
-  }
-}
 void waitForPowerRelease() {
   gpio.update();
   while (gpio.isPressed(HalGPIO::BTN_POWER)) {
@@ -328,9 +287,9 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
 #endif  // OMIT_FONTS
-  ui10FontFamily.setFallback(&cjk10FontFamily);
+  ui10FontFamily.setFallback(&cjk8FontFamily);
   ui12FontFamily.setFallback(&cjk12FontFamily);
-  smallFontFamily.setFallback(&cjk10FontFamily);
+  smallFontFamily.setFallback(&cjk8FontFamily);
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
@@ -347,6 +306,8 @@ void setupDisplayAndFonts(bool seamless = false) {
 }
 
 void setup() {
+  BoardConfig::holdPowerRails();
+
   t1 = millis();
 
 #ifdef ENABLE_SERIAL_LOG
@@ -357,7 +318,9 @@ void setup() {
   // worked without the delay because USB was already enumerated.
   delay(250);
   Serial.begin(115200);
+#if LOG_SERIAL_HAS_TX_TIMEOUT
   logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
+#endif
 #endif
 
   HalSystem::begin();
@@ -407,8 +370,10 @@ void setup() {
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration");
-      gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
-                                   SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
+      if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
+                                        SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
+        powerManager.startDeepSleep(gpio);
+      }
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
       // If USB power caused a cold boot, go back to sleep
@@ -451,6 +416,7 @@ void setup() {
   const BootResume resume = isSilentReboot              ? BootResume::Silent
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
+  bool allowFastInitialReaderRefresh = false;
 
   setupDisplayAndFonts(resume != BootResume::Splash);
 
@@ -466,10 +432,21 @@ void setup() {
       APP_STATE.showBootScreen = true;
       APP_STATE.saveToFile();
       if (loadSleepFrameBuffer()) {
-        // Frame restored: swap the sleep moon for the loading icon.
+        const bool useDifferentialRefresh = gpio.deviceIsX3();
+        if (useDifferentialRefresh) {
+          // begin() clears the X3 controller RAM, so restore the saved frame as
+          // the baseline before replacing the moon with the loading icon.
+          renderer.cleanupGrayscaleWithFrameBuffer();
+        }
+
         const auto pageHeight = renderer.getScreenHeight();
         renderer.drawImage(LoadingIcon, 0, pageHeight - LOADINGICON_HEIGHT, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (useDifferentialRefresh) {
+          renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+          allowFastInitialReaderRefresh = true;
+        } else {
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        }
       } else {
         activityManager.goToBoot();  // frame file missing, fall back to the splash
       }
@@ -524,7 +501,7 @@ void setup() {
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
-    activityManager.goToReader(path);
+    activityManager.goToReader(path, allowFastInitialReaderRefresh);
   }
 
   if (resume == BootResume::Silent) {
@@ -554,10 +531,14 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
-  renderer.setFadingFix(SETTINGS.fadingFix);
+  // The sunlight workaround was designed for X4. On X3, powering the panel off after
+  // every update forces the stronger wake waveform on the next refresh and causes severe
+  // grain/ghosting.
+  renderer.setFadingFix(SETTINGS.fadingFix && gpio.deviceIsX4());
 
   if (Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
@@ -595,7 +576,7 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity() ||
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
       activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
@@ -648,8 +629,10 @@ void loop() {
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     LOG_DBG("MAIN", "Manual screen refresh triggered");
-    RenderLock lock;
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    if (!activityManager.handleForcedRefresh()) {
+      RenderLock lock;
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    }
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.

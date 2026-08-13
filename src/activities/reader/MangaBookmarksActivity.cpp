@@ -3,7 +3,6 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <JsonSettingsIO.h>
 #include <util/BookmarkUtil.h>
 
 #include <algorithm>
@@ -11,6 +10,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookmarkFile.h"
 
 namespace {
 constexpr int ENTER_DELETE_MODE_MS = 700;
@@ -25,19 +25,7 @@ constexpr int LINE_HEIGHT = 60;
 void MangaBookmarksActivity::onEnter() {
   Activity::onEnter();
 
-  const std::string path = BookmarkUtil::getBookmarkPath(bookPath);
-  if (Storage.exists(path.c_str())) {
-    String json = Storage.readFile(path.c_str());
-    if (json.isEmpty()) {
-      LOG_ERR("MNG", "Failed to load bookmarks from %s. Empty bookmark file", path.c_str());
-      bookmarks.clear();
-      bookmarks.shrink_to_fit();
-    } else {
-      JsonSettingsIO::loadBookmarks(bookmarks, json.c_str());
-    }
-  } else {
-    LOG_DBG("MNG", "No bookmark file found at %s, starting with empty bookmarks", path.c_str());
-    bookmarks.clear();
+  if (!BookmarkFile::load(bookPath, bookmarks)) {
     bookmarks.shrink_to_fit();
   }
   LOG_DBG("MNG", "Loaded %d bookmarks for book: %s", static_cast<int>(bookmarks.size()), bookPath.c_str());
@@ -69,9 +57,7 @@ void MangaBookmarksActivity::loop() {
         return;
       }
       bookmarks.erase(bookmarks.begin() + selectorIndex);
-      const std::string path = BookmarkUtil::getBookmarkPath(bookPath);
-      Storage.mkdir(BookmarkUtil::getBookmarksDir().c_str());
-      if (!JsonSettingsIO::saveBookmarks(bookmarks, path.c_str())) {
+      if (!BookmarkFile::save(bookPath, bookmarks)) {
         LOG_ERR("MNG", "Failed to save bookmarks after delete");
       }
 

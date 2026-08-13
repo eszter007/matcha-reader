@@ -1,25 +1,82 @@
 #include "RecentBooksStore.h"
 
+#include <BufferedFile.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
-#include <JsonSettingsIO.h>
 #include <Logging.h>
-#include <Serialization.h>
 #include <Xtc.h>
 
 #include <algorithm>
-#include <iterator>
 
 namespace {
-constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 3;
-constexpr char RECENT_BOOKS_FILE_BIN[] = "/.crosspoint/recent.bin";
-constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
-constexpr char RECENT_BOOKS_FILE_BAK[] = "/.crosspoint/recent.bin.bak";
-constexpr int MAX_RECENT_BOOKS = 10;
+constexpr size_t LIBRARY_CACHE_MAX_BOOKS = 2048;
+
+class JsonFileReader {
+ public:
+  explicit JsonFileReader(HalFile& file) : input_(file, 512) {}
+
+  int read() {
+    uint8_t value = 0;
+    return input_.read(&value, 1) == 1 ? value : -1;
+  }
+
+  size_t readBytes(char* output, size_t length) { return input_.read(output, length); }
+
+ private:
+  serialization::BufferedFileReader input_;
+};
+
+class JsonFileWriter final : public Print {
+ public:
+  explicit JsonFileWriter(HalFile& file) : output_(file, 512) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+
+  size_t write(const uint8_t* input, size_t length) override {
+    output_.write(input, length);
+    return length;
+  }
+
+  bool finish() { return output_.flush(); }
+
+ private:
+  serialization::BufferedFileWriter output_;
+};
 }  // namespace
 
-RecentBooksStore RecentBooksStore::instance;
+void RecentBooksStore::toJson(JsonDocument& doc) const {
+  JsonArray arr = doc["books"].to<JsonArray>();
+  for (const auto& book : recentBooks) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["path"] = book.path;
+    obj["title"] = book.title;
+    obj["author"] = book.author;
+    obj["coverBmpPath"] = book.coverBmpPath;
+  }
+}
+
+bool RecentBooksStore::fromJson(JsonVariantConst doc) { return fromJson(doc, MAX_RECENT_BOOKS); }
+
+bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
+  // Tolerate a missing/invalid 'books' key (treat as empty list); only a
+  // JSON parse error is fatal. A null JsonArray iterates zero times.
+  recentBooks.clear();
+  JsonArrayConst arr = doc["books"].as<JsonArrayConst>();
+  recentBooks.reserve(std::min(arr.size(), maxBooks));
+  for (JsonObjectConst obj : arr) {
+    if (recentBooks.size() >= maxBooks) break;
+    RecentBook book;
+    book.path = obj["path"] | "";
+    book.title = obj["title"] | "";
+    book.author = obj["author"] | "";
+    book.coverBmpPath = obj["coverBmpPath"] | "";
+    recentBooks.push_back(std::move(book));
+  }
+
+  LOG_DBG("RBS", "Recent books loaded from file (%d entries)", getCount());
+  return true;
+}
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
                                const std::string& coverBmpPath) {
@@ -92,11 +149,6 @@ bool RecentBooksStore::pruneMissing() {
   return recentBooks.size() != before;
 }
 
-bool RecentBooksStore::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveRecentBooks(*this, RECENT_BOOKS_FILE_JSON);
-}
-
 RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   std::string lastBookFileName = "";
   const size_t lastSlash = path.find_last_of('/');
@@ -125,94 +177,74 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   return RecentBook{path, "", "", ""};
 }
 
-bool RecentBooksStore::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(RECENT_BOOKS_FILE_JSON)) {
-    String json = Storage.readFile(RECENT_BOOKS_FILE_JSON);
-    if (!json.isEmpty()) {
-      return JsonSettingsIO::loadRecentBooks(*this, json.c_str());
+bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, const char* path) {
+  Storage.mkdir("/.crosspoint");
+  const std::string tmpPath = std::string(path) + ".tmp";
+  bool written = false;
+  {
+    HalFile file;
+    if (!Storage.openFileForWrite("RBS", tmpPath, file)) return false;
+    JsonFileWriter output(file);
+
+    constexpr char PREFIX[] = "{\"books\":[";
+    output.write(reinterpret_cast<const uint8_t*>(PREFIX), sizeof(PREFIX) - 1);
+
+    JsonDocument record;
+    bool first = true;
+    for (const auto& book : books) {
+      if (!first) output.write(static_cast<uint8_t>(','));
+      first = false;
+      record.clear();
+      record["path"] = book.path;
+      record["title"] = book.title;
+      record["author"] = book.author;
+      record["coverBmpPath"] = book.coverBmpPath;
+      serializeJson(record, output);
     }
+
+    constexpr char SUFFIX[] = "]}";
+    output.write(reinterpret_cast<const uint8_t*>(SUFFIX), sizeof(SUFFIX) - 1);
+    written = output.finish();
+  }
+  if (!written) {
+    Storage.remove(tmpPath.c_str());
+    return false;
   }
 
-  // Fall back to binary migration
-  if (Storage.exists(RECENT_BOOKS_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
-      saveToFile();
-      Storage.rename(RECENT_BOOKS_FILE_BIN, RECENT_BOOKS_FILE_BAK);
-      LOG_DBG("RBS", "Migrated recent.bin to recent.json");
-      return true;
-    }
+  const std::string backupPath = std::string(path) + ".bak";
+  if (!Storage.exists(path) && Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
+    LOG_ERR("RBS", "Failed to restore %s before replacing it", path);
+    Storage.remove(tmpPath.c_str());
+    return false;
   }
-
-  return false;
+  Storage.remove(backupPath.c_str());
+  if (Storage.exists(path) && !Storage.rename(path, backupPath.c_str())) {
+    LOG_ERR("RBS", "Failed to back up %s before replacing it", path);
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  if (!Storage.rename(tmpPath.c_str(), path)) {
+    LOG_ERR("RBS", "Failed to replace %s", path);
+    if (Storage.exists(backupPath.c_str()) && !Storage.rename(backupPath.c_str(), path)) {
+      LOG_ERR("RBS", "Previous cache remains at %s", backupPath.c_str());
+    }
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+  Storage.remove(backupPath.c_str());
+  return true;
 }
 
-bool RecentBooksStore::loadFromBinaryFile() {
-  HalFile inputFile;
-  if (!Storage.openFileForRead("RBS", RECENT_BOOKS_FILE_BIN, inputFile)) {
+bool RecentBooksStore::loadFromPath(const char* path) {
+  if (!Storage.exists(path)) return false;
+  HalFile file;
+  if (!Storage.openFileForRead("RBS", path, file)) return false;
+  JsonFileReader input(file);
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, input);
+  if (error) {
+    LOG_ERR("RBS", "JSON parse error in %s: %s", path, error.c_str());
     return false;
   }
-
-  uint8_t version;
-  serialization::readPod(inputFile, version);
-  if (version == 1 || version == 2) {
-    // Old version, just read paths
-    uint8_t count;
-    serialization::readPod(inputFile, count);
-    recentBooks.clear();
-    recentBooks.reserve(count);
-    for (uint8_t i = 0; i < count; i++) {
-      std::string path;
-      serialization::readString(inputFile, path);
-
-      // load book to get missing data
-      RecentBook book = getDataFromBook(path);
-      if (book.title.empty() && book.author.empty() && version == 2) {
-        // Fall back to loading what we can from the store
-        std::string title, author;
-        serialization::readString(inputFile, title);
-        serialization::readString(inputFile, author);
-        recentBooks.push_back({path, title, author, ""});
-      } else {
-        recentBooks.push_back(book);
-      }
-    }
-  } else if (version == 3) {
-    uint8_t count;
-    serialization::readPod(inputFile, count);
-
-    recentBooks.clear();
-    recentBooks.reserve(count);
-    uint8_t omitted = 0;
-
-    for (uint8_t i = 0; i < count; i++) {
-      std::string path, title, author, coverBmpPath;
-      serialization::readString(inputFile, path);
-      serialization::readString(inputFile, title);
-      serialization::readString(inputFile, author);
-      serialization::readString(inputFile, coverBmpPath);
-
-      // Omit books with missing title (e.g. saved before metadata was available)
-      if (title.empty()) {
-        omitted++;
-        continue;
-      }
-
-      recentBooks.push_back({path, title, author, coverBmpPath});
-    }
-
-    if (omitted > 0) {
-      // Explicitly close() file before saveToFile() rewrites the same file
-      inputFile.close();
-      saveToFile();
-      LOG_DBG("RBS", "Omitted %u recent book(s) with missing title", omitted);
-      return true;
-    }
-  } else {
-    LOG_ERR("RBS", "Deserialization failed: Unknown version %u", version);
-    return false;
-  }
-
-  LOG_DBG("RBS", "Recent books loaded from binary file (%d entries)", static_cast<int>(recentBooks.size()));
-  return true;
+  return fromJson(doc.as<JsonVariantConst>(), LIBRARY_CACHE_MAX_BOOKS);
 }

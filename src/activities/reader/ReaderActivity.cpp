@@ -3,8 +3,11 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <MangaPanel.h>
 #include <Memory.h>
+
+#include <optional>
 
 #include "CrossPointSettings.h"
 #include "Epub.h"
@@ -17,6 +20,7 @@
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
+#include "components/UITheme.h"
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
@@ -47,7 +51,7 @@ void ReaderActivity::onGoToMangaReader(std::unique_ptr<manga::MangaBook> manga) 
   activityManager.replaceActivity(std::make_unique<MangaReaderActivity>(renderer, mappedInput, std::move(manga)));
 }
 
-std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) const {
+std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
@@ -71,12 +75,47 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) const {
     LOG_ERR("READER", "Failed to allocate EPUB object");
     return nullptr;
   }
-  if (epub->load(true, SETTINGS.embeddedStyle == 0)) {
+  // First open: building the spine/TOC index (book.bin) takes a couple of seconds. Show the
+  // indexing popup so it isn't a silent wait on the home screen. The cachePath/hash is known at
+  // construction, so this check is valid before load(); a cached open loads in a blink -> no popup.
+  const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
+  if (uncached) {
+    // The popup replaces the restored Quick Resume frame, so the reader must clean it.
+    allowFastInitialRefresh = false;
+    GUI.drawPopup(renderer, tr(STR_INDEXING));
+  }
+  bool loaded;
+  {
+    // Lend the framebuffer's 48 KB to the container parse (expat + spine/TOC
+    // build). The popup just displayed stays on the panel; whichever reader
+    // activity follows redraws the full screen anyway.
+    std::optional<GfxRenderer::FrameBufferLoan> loan;
+    if (uncached) loan.emplace(renderer);
+    loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
+  }
+  if (loaded) {
     return epub;
+  }
+
+  // A book load() refused because its content isn't readable on this device --
+  // tell the user instead of silently dropping back to the library.
+  if (!epub->getAccessError().empty()) {
+    LOG_ERR("READER", "book unavailable: %s", epub->getAccessError().c_str());
+    renderer.clearScreen();
+    GUI.drawPopup(renderer, tr(STR_BOOK_NOT_READABLE));
+    delay(2500);
+    return nullptr;
   }
 
   LOG_ERR("READER", "Failed to load epub");
   return nullptr;
+}
+
+int ReaderActivity::initialRefreshCountdown() const {
+  if (!allowFastInitialRefresh) return 0;
+
+  const int refreshFrequency = SETTINGS.getRefreshFrequency();
+  return refreshFrequency > 1 ? refreshFrequency : 2;
 }
 
 std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
@@ -126,7 +165,8 @@ void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+  activityManager.replaceActivity(
+      std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub), initialRefreshCountdown()));
 }
 
 void ReaderActivity::onGoToBmpViewer(const std::string& path) {
@@ -137,14 +177,16 @@ void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
   sdFontSystem.setJpFallbackNeeded(renderer, false);
   const auto xtcPath = xtc->getPath();
   currentBookPath = xtcPath;
-  activityManager.replaceActivity(std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc)));
+  activityManager.replaceActivity(
+      std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc), initialRefreshCountdown()));
 }
 
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
   sdFontSystem.setJpFallbackNeeded(renderer, false);
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
-  activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
+  activityManager.replaceActivity(
+      std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt), initialRefreshCountdown()));
 }
 
 void ReaderActivity::onEnter() {
@@ -159,10 +201,13 @@ void ReaderActivity::onEnter() {
 
   currentBookPath = initialBookPath;
   if (isMangaFolder(initialBookPath)) {
-    // Manga is Japanese content (OCR text overlays, lookup): needs the JP fallback font.
-    sdFontSystem.setJpFallbackNeeded(renderer, true);
+    // Manga page/panel pixels use no reader font. Keeping the selected SD family (including its
+    // UI fallback sizes) resident left only 25-29 KB in a device report, below the JPEG decoder's
+    // 36 KB and PNG decoder's 60 KB requirements. Preserve the setting but lend its RAM to images.
+    sdFontSystem.releaseForImageDecode(renderer);
     auto manga = loadManga(initialBookPath);
     if (!manga) {
+      sdFontSystem.ensureLoaded(renderer);
       onGoBack();
       return;
     }

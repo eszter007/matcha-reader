@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "CssSelector.h"
 #include "CssStyle.h"
 
 /**
@@ -23,10 +24,13 @@
  *   - Class selectors: .classname
  *   - Combined: element.classname
  *   - Grouped: selector1, selector2 { }
+ *   - Descendant: .callout p, div.sidebar span  (two compounds)
+ *   - Child: blockquote > p                     (two compounds)
  *
  * Not supported (silently ignored):
- *   - Descendant/child selectors
+ *   - Three or more compounds (.a .b p) -- rejected rather than approximated, see CssSelector.h
  *   - Pseudo-classes and pseudo-elements
+ *   - Sibling combinators, attribute and id selectors, the universal selector
  *   - Media queries (content is skipped)
  *   - @import, @font-face, etc.
  */
@@ -37,7 +41,27 @@ class CssParser {
   // v11: +textEmphasis/fontVariant/listStyleType bytes and defined bits 19-21
   // v12: border-top/bottom/left/right and the font shorthand are parsed; rules
   //      cached under v11 lack their edges/style bits.
-  static constexpr uint8_t CSS_CACHE_VERSION = 12;
+  // v13: +font-size as a 12th CssLength and defined bit 22 -- the record grew by 5 bytes,
+  //      so a v12 record cannot be read with the v13 layout.
+  // v14: +inkMode (color/background-color polarity) as a 7th trailing enum byte and defined
+  //      bit 23 -- the record grew by 1 byte, so a v13 record mis-parses under v14 framing.
+  // v15: +page-break-{before,after,inside} packed into an 8th trailing enum byte and defined
+  //      bit 24 -- one more byte again, so a v14 record is short by one under v15 framing.
+  // v16: descendant (`A B`) and child (`A>B`) selectors are stored, under a key that is the
+  //      normalized selector itself. The RECORD framing is unchanged; the bump exists because a
+  //      v15 cache was written by a parser that dropped every such rule, so reusing it would
+  //      silently keep the book unstyled with no way to notice.
+  // v17: +line-height as a 13th CssLength and defined bit 25 -- the record grew by 5 bytes
+  //      (77 -> 82 fixed), so a v16 record cannot be read with the v17 framing.
+  // v18: +letter-spacing as a 14th CssLength (defined bit 28) and +text-transform/hyphens packed
+  //      into a 9th trailing enum byte (defined bits 26/27) -- the record grew by 6 bytes
+  //      (82 -> 88 fixed), so a v17 record cannot be read with the v18 framing.
+  // v19: the existing border byte now also packs line style + 1..4px width, and display retains
+  //      inline-block so close-time heading rules can shrink to their text. Framing is unchanged.
+  // v21: CssPropertyFlags::anySet() omitted `border`, so a rule defining ONLY a border was
+  //      discarded before it was stored. Framing is unchanged, but every cache up to v20 is
+  //      missing all of them (145 rules on the EBPAJ template) while still validating cleanly.
+  static constexpr uint8_t CSS_CACHE_VERSION = 21;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -55,14 +79,24 @@ class CssParser {
   bool loadFromStream(HalFile& source);
 
   /**
-   * Look up the style for an HTML element, considering tag name and class attributes.
-   * Applies CSS cascade: element style < class style < element.class style
+   * Look up the style for an HTML element from its tag, its classes and -- when the caller
+   * tracks one -- the chain of elements it sits inside.
+   *
+   * Cascade: every matching rule is collected and applied in ascending CSS specificity, so
+   * `p` < `div p` < `.note` < {`p.note`, `.callout p`} < `div p.note` < `.callout .note`.
+   * Equal specificity (the braced pair above) resolves to the LAST match in enumeration order
+   * -- simple before compound, outer ancestor before inner, descendant before child -- rather
+   * than to document order, which the rule table does not preserve. See resolveStyle() in the
+   * .cpp for why.
    *
    * @param tagName The HTML element name (e.g., "p", "div")
    * @param classAttr The class attribute value (may contain multiple space-separated classes)
+   * @param path Open-element chain with THIS element on top; nullptr disables descendant and
+   *             child matching (simple selectors are unaffected)
    * @return Combined style with all applicable rules merged
    */
-  [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr) const;
+  [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr,
+                                      const CssElementPath* path = nullptr) const;
 
   /**
    * Parse an inline style attribute string.
@@ -162,7 +196,7 @@ class CssParser {
     float afterEm = 0;         // v margin-left: extra gap after the block's last column
     float hangEm = 0;          // v padding-top + negative text-indent: hanging indent for wrapped lines
     bool alignCenter = false;  // text-align: center -> column content vertically centered
-    uint8_t borderEdges = 0;   // CssStyle::BORDER_* mask (full = box, TOP = separator rule)
+    uint8_t borderEdges = 0;   // CssStyle::BORDER_* edge mask; vertical rendering stays solid
     [[nodiscard]] bool any() const {
       return startEm > 0 || beforeEm > 0 || afterEm > 0 || hangEm > 0 || alignCenter || borderEdges != 0;
     }
@@ -176,15 +210,17 @@ class CssParser {
   size_t collectVerticalStyles(std::vector<std::pair<std::string, VerticalBlockStyle>>& out, size_t maxOut = 256) const;
 
  private:
-  // Lookup key for a multi-piece selector. The pieces are hashed and compared
-  // as if concatenated, so callers can look up composite keys without
-  // materializing the concatenation in a scratch buffer. Constructed from a
-  // braced list of any arity, e.g. `CompositeKey{tagName, ".", cls}` or
-  // `CompositeKey{".", cls}`. The initializer_list's backing array lives for
-  // the full expression, which covers the lifetime of the find() call.
+  // Lookup key for a multi-piece selector: the pieces are hashed and compared as if
+  // concatenated, so a composite key is looked up without materializing the concatenation in
+  // a scratch buffer. The pieces are a caller-owned run (CssSelector::forEachCandidate fills
+  // a stack array), which must outlive the find() call -- as a local array in the calling
+  // scope always does.
   struct CompositeKey {
-    std::initializer_list<std::string_view> pieces;
-    CompositeKey(std::initializer_list<std::string_view> p) noexcept : pieces(p) {}
+    const std::string_view* first;
+    size_t count;
+    CompositeKey(const std::string_view* p, const size_t n) noexcept : first(p), count(n) {}
+    [[nodiscard]] const std::string_view* begin() const noexcept { return first; }
+    [[nodiscard]] const std::string_view* end() const noexcept { return first + count; }
   };
 
   // ASCII-case-insensitive transparent hash/equal. Stored selectors and lookup
@@ -208,9 +244,23 @@ class CssParser {
   };
 
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
+  // Compound selectors live in the SAME map under their normalized key (".callout p",
+  // "blockquote>p"), so a rule costs no more than a simple one -- only the key string is a
+  // few characters longer, which for real selectors still fits std::string's inline buffer.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
   bool heapTruncated_ = false;           // see wasHeapTruncated()
   bool cacheLoadFailedForHeap_ = false;  // see cacheLoadFailedForHeap()
+
+  // Set when a rule with that combinator is present. resolveStyle walks the ancestor chain
+  // only when one is set, so a book with no compound selectors (the common case) does the
+  // exact same lookups it did before this existed. Sticky within a parser: clear() empties
+  // the map as a write buffer between stylesheets, and a stale `true` costs lookups, never
+  // correctness.
+  bool hasDescendantRules_ = false;
+  bool hasChildRules_ = false;
+
+  /** Record which combinators the table contains, from a stored (already normalized) key. */
+  void noteCombinatorsIn(std::string_view key);
 
   // Incremental cache writing state (beginCacheAppend/appendRulesToCache/endCacheAppend).
   HalFile cacheAppendFile_;
@@ -221,10 +271,25 @@ class CssParser {
 
   std::string cachePath;
 
+  /**
+   * The colours seen so far inside ONE `{ ... }` rule block, as luma (0 = black, 255 = white).
+   * Purely transient: it lives on the stack for the duration of the block and is folded into the
+   * single CssStyle::inkMode byte by resolveInkMode(). Deliberately not a CssStyle member -- a
+   * heavy book's rule map holds hundreds of styles at once and every byte there multiplies.
+   */
+  struct InkColors {
+    static constexpr int16_t UNSET = -1;
+    int16_t textLuma = UNSET;  // `color`
+    int16_t bgLuma = UNSET;    // `background-color`
+    [[nodiscard]] bool any() const { return textLuma != UNSET || bgLuma != UNSET; }
+  };
+
   // Internal parsing helpers
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
   static CssStyle parseDeclarations(std::string_view declBlock);
-  static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style);
+  static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style, InkColors& ink);
+  /** Fold the block's colours into style.inkMode. Call once, after the block's last declaration. */
+  static void resolveInkMode(CssStyle& style, const InkColors& ink);
 
   // Individual property value parsers
   static CssTextAlign interpretAlignment(std::string_view val);

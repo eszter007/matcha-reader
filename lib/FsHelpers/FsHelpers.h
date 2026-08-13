@@ -1,4 +1,5 @@
 #pragma once
+#include <HalStorage.h>
 #include <WString.h>
 
 #include <string>
@@ -7,9 +8,23 @@
 
 namespace FsHelpers {
 
+// Public-storage check for generated artifacts. Keep this outside HalStorage so callers can
+// reject empty files without adding another HAL-specific method.
+inline bool hasContent(const char* moduleName, const char* path) {
+  if (!Storage.exists(path)) return false;
+  HalFile file;
+  return Storage.openFileForRead(moduleName, path, file) && file.size() > 0;
+}
+
+inline bool hasContent(const char* moduleName, const std::string& path) { return hasContent(moduleName, path.c_str()); }
+
 std::string decodeUriEscapes(const std::string& path);
 
 std::string normalisePath(const std::string& path);
+
+// Numeric-aware, case-insensitive comparison ("2" < "10"). Returns true when str1 orders
+// before str2. Same ordering sortFileList applies within the file/directory groups.
+bool naturalLess(const std::string& str1, const std::string& str2);
 
 void sortFileList(std::vector<std::string>& strs);
 

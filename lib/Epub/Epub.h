@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ContentAccess.h>
 #include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 #include <Print.h>
 
@@ -30,11 +31,18 @@ class Epub {
   std::unique_ptr<CssParser> cssParser;
   // CSS files
   std::vector<std::string> cssFiles;
+  // Optional alternative item source, set in load(). Null unless a build
+  // provides one, in which case every item is read from the ZIP.
+  contentaccess::HandlePtr itemSource;
+  // User-presentable reason load() refused the book (empty otherwise).
+  std::string accessError;
 
-  bool findContentOpfFile(std::string* contentOpfFile) const;
-  bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true);
-  bool parseTocNcxFile() const;
-  bool parseTocNavFile() const;
+  bool findContentOpfFile(std::string* contentOpfFile, BmpConvertCancelFn shouldCancel = nullptr,
+                          void* cancelCtx = nullptr) const;
+  bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
+                       BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr);
+  bool parseTocNcxFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  bool parseTocNavFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
 
@@ -45,11 +53,14 @@ class Epub {
   }
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
-  bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
+  bool load(bool buildIfMissing = true, bool skipLoadingCss = false, BmpConvertCancelFn shouldCancel = nullptr,
+            void* cancelCtx = nullptr);
   bool clearCache() const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;
   const std::string& getPath() const;
+  // Empty unless load() refused the book because its content is not readable here.
+  const std::string& getAccessError() const { return accessError; }
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
@@ -61,12 +72,15 @@ class Epub {
   // nothing to render" apart from a generateThumbBmp() that merely failed this time -- the two
   // deserve opposite handling, and conflating them costs a cover forever.
   bool hasCoverImage() const;
-  // shouldCancel is polled during the cover decode; on cancel nothing is written and the call
-  // returns false, so a long thumbnail generation can give way to a button press.
+  // shouldCancel is polled during cover extraction and decode; on cancel partial files are
+  // removed and the call returns false, so a long thumbnail generation can give way to input.
   bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
-  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;
+  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize, bool allowEarlyStop = false,
+                                BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  // Extract an item to a file on SD. On failure the partial file is removed.
+  bool extractItemToFile(const std::string& itemHref, const std::string& destPath) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;

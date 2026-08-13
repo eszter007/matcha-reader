@@ -10,22 +10,27 @@ bool BmpToFramebufferConverter::supportsFormat(const std::string& extension) {
   return FsHelpers::hasBmpExtension(extension);
 }
 
-bool BmpToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
+bool BmpToFramebufferConverter::getMetadataStatic(const std::string& imagePath, Metadata& out) {
   HalFile file;
   if (!Storage.openFileForRead("BMP", imagePath, file)) return false;
   Bitmap bmp(file);
   if (bmp.parseHeaders() != BmpReaderError::Ok) return false;
-  out.width = static_cast<int16_t>(bmp.getWidth());
-  out.height = static_cast<int16_t>(bmp.getHeight());
-  return out.width > 0 && out.height > 0;
+  out.dimensions.width = static_cast<int16_t>(bmp.getWidth());
+  out.dimensions.height = static_cast<int16_t>(bmp.getHeight());
+  out.monochrome = bmp.is1Bit();
+  return out.dimensions.width > 0 && out.dimensions.height > 0;
+}
+
+bool BmpToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
+  Metadata metadata;
+  if (!getMetadataStatic(imagePath, metadata)) return false;
+  out = metadata.dimensions;
+  return true;
 }
 
 bool BmpToFramebufferConverter::isMonochromeStatic(const std::string& imagePath) {
-  HalFile file;
-  if (!Storage.openFileForRead("BMP", imagePath, file)) return false;
-  Bitmap bmp(file);
-  if (bmp.parseHeaders() != BmpReaderError::Ok) return false;
-  return bmp.is1Bit();
+  Metadata metadata;
+  return getMetadataStatic(imagePath, metadata) && metadata.monochrome;
 }
 
 bool BmpToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,

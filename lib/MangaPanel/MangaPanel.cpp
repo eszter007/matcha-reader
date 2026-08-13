@@ -1,5 +1,6 @@
 #include "MangaPanel.h"
 
+#include <Arduino.h>
 #include <BmpToBmpConverter.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -82,13 +83,21 @@ std::string MangaBook::getTitle() const {
   return folderPath;
 }
 
-std::string MangaBook::findCoverImage(const std::string& folderPath) {
+std::string MangaBook::findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel, void* cancelCtx) {
+  static constexpr const char* kCanonicalCovers[] = {"/page_0000.jpg", "/page_0000.bmp", "/page_0000.png"};
+  for (const char* suffix : kCanonicalCovers) {
+    if (shouldCancel && shouldCancel(cancelCtx)) return "";
+    const std::string path = folderPath + suffix;
+    if (Storage.exists(path.c_str())) return path;
+  }
+
   auto dir = Storage.open(folderPath.c_str());
   if (!dir || !dir.isDirectory()) return "";
   dir.rewindDirectory();
   std::string firstPageImage;
   std::string firstAnyImage;
   for (auto mf = dir.openNextFile(); mf; mf = dir.openNextFile()) {
+    if (shouldCancel && shouldCancel(cancelCtx)) return "";
     char imgName[200];
     mf.getName(imgName, sizeof(imgName));
     if (imgName[0] == '.' || mf.isDirectory()) continue;
@@ -108,21 +117,38 @@ std::string MangaBook::findCoverImage(const std::string& folderPath) {
   }
   dir.close();
   const std::string& chosen = !firstPageImage.empty() ? firstPageImage : firstAnyImage;
-  return chosen.empty() ? "" : folderPath + "/" + chosen;
+  if (!chosen.empty()) return folderPath + "/" + chosen;
+
+  // Panels-only conversions intentionally omit root page images. Their converter guarantees
+  // p0_0 exists (even when it covers the full page), so use that first snippet as the cover and
+  // keep Library/Home thumbnail generation working without walking the large panels directory.
+  static constexpr const char* panelCoverNames[] = {"/panels/p0_0.jpg", "/panels/p0_0.bmp"};
+  for (const char* name : panelCoverNames) {
+    const std::string candidate = folderPath + name;
+    if (Storage.exists(candidate.c_str())) return candidate;
+  }
+  return "";
 }
 
 std::string MangaBook::getThumbBmpPath() const { return getCachePath() + "/thumb_[HEIGHT].bmp"; }
 
 std::string MangaBook::getThumbBmpPath(int height) const {
+  // Keep this stable: users may remove legacy near-black BMP thumbnails manually, after which
+  // the corrected BmpToBmpConverter recreates them at this same path. Do not version the filename
+  // just to invalidate that historical output; doing so abandons otherwise-valid caches on every
+  // device and makes manga behave differently from EPUB/XTC.
   return getCachePath() + "/thumb_" + std::to_string(height) + ".bmp";
 }
 
 bool MangaBook::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   if (height <= 0) return false;
   const std::string thumbPath = getThumbBmpPath(height);
-  if (Storage.exists(thumbPath.c_str())) return true;
+  // hasContent(), not exists(): the destination is opened for writing before the page image is
+  // converted, so a failed or cancelled run leaves a 0-byte file that exists() would report as
+  // a finished thumbnail forever (see Epub::generateThumbBmp).
+  if (FsHelpers::hasContent("MNG", thumbPath)) return true;
 
-  const std::string cover = findCoverImage(folderPath);
+  const std::string cover = findCoverImage(folderPath, shouldCancel, cancelCtx);
   if (cover.empty()) return false;
   const bool isJpg = FsHelpers::hasJpgExtension(cover);
   const bool isPng = FsHelpers::hasPngExtension(cover);
@@ -223,8 +249,52 @@ bool MangaBook::loadIndex() {
   return true;
 }
 
+// Derives the page list from panels.idx's page count and the converter's canonical
+// page_NNNN.<ext> naming, instead of discovering it by walking the directory.
+//
+// The walk is what made opening a book slow, and its cost is per *directory entry*, not per page
+// image -- so anything else sharing the folder is charged for. On the test card that was 974
+// panel crops (since moved to panels/) and 1198 macOS AppleDouble ._* sidecars, one per file, put
+// there by Finder copying onto FAT and invisible to every filter this scan applies. Deriving the
+// names sidesteps all of it: two Storage.exists() probes regardless of how much junk is present.
+//
+// Only claims the list when both the first and last page resolve, so a folder that is not in the
+// canonical layout (hand-assembled image folders, mixed extensions) falls through to the walk
+// rather than producing paths that would fail to load later.
+bool MangaBook::buildCanonicalPageList() {
+  if (pageCount == 0) return false;  // load() calls loadIndex() first, so this is populated
+
+  std::string dirPath = folderPath;
+  if (dirPath.empty() || dirPath.back() != '/') dirPath += '/';
+
+  static constexpr const char* kExts[] = {".jpg", ".bmp", ".png"};
+  char name[32];
+  for (const char* ext : kExts) {
+    snprintf(name, sizeof(name), "page_%04u%s", 0u, ext);
+    if (!Storage.exists((dirPath + name).c_str())) continue;
+    snprintf(name, sizeof(name), "page_%04u%s", static_cast<unsigned>(pageCount - 1), ext);
+    if (!Storage.exists((dirPath + name).c_str())) continue;
+
+    imageFiles.clear();
+    imageFiles.reserve(pageCount);
+    for (uint32_t i = 0; i < pageCount; i++) {
+      snprintf(name, sizeof(name), "page_%04u%s", static_cast<unsigned>(i), ext);
+      imageFiles.emplace_back(name);
+    }
+    return true;  // already in page order -- no sort needed
+  }
+  return false;
+}
+
 bool MangaBook::scanImages() {
   imageFiles.clear();
+
+  const unsigned long canonStart = millis();
+  if (buildCanonicalPageList()) {
+    LOG_DBG("MNG", "Canonical page list: %u pages in %ums (directory not walked)", (unsigned)imageFiles.size(),
+            (unsigned)(millis() - canonStart));
+    return true;
+  }
 
   std::string dirPath = folderPath;
   auto dir = Storage.open(dirPath.c_str());
@@ -234,8 +304,16 @@ bool MangaBook::scanImages() {
     return false;
   }
 
+  // This scan dominates opening a manga (6017ms of an 8225ms first loop iteration, measured on
+  // device). The per-entry cost is the same slow-directory behaviour that makes a single file open
+  // ~85ms, so what decides the fix is how many entries there are versus how many are page images:
+  // a converted book carries a p<page>_<panel> crop per panel in the same folder, which would put
+  // most of the cost in entries this loop only skips. Counted rather than assumed.
   char name[200];
+  uint32_t entriesSeen = 0, cropsSkipped = 0;
+  const unsigned long scanStart = millis();
   for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    entriesSeen++;
     if (!file.isDirectory()) {
       file.getName(name, sizeof(name));
       if (name[0] != '.' && !isPanelCropFile(name)) {
@@ -243,14 +321,19 @@ bool MangaBook::scanImages() {
         if (FsHelpers::hasBmpExtension(sv) || FsHelpers::hasJpgExtension(sv) || FsHelpers::hasPngExtension(sv)) {
           imageFiles.emplace_back(name);
         }
+      } else if (isPanelCropFile(name)) {
+        cropsSkipped++;
       }
     }
     file.close();
   }
   dir.close();
+  const unsigned long scanMs = millis() - scanStart;
 
   sortPageFileList(imageFiles);
-  LOG_DBG("MNG", "Found %u page images in %s", (unsigned)imageFiles.size(), dirPath.c_str());
+  LOG_DBG("MNG", "Found %u page images in %s (%ums, %u dir entries, %u panel crops skipped)",
+          (unsigned)imageFiles.size(), dirPath.c_str(), (unsigned)scanMs, (unsigned)entriesSeen,
+          (unsigned)cropsSkipped);
   return true;
 }
 
@@ -426,6 +509,7 @@ void MangaBook::loadToc() {
 void MangaBook::loadMeta() {
   metaTitle.clear();
   author.clear();
+  language.clear();
 
   std::string metaPath = folderPath;
   if (metaPath.back() != '/') metaPath += '/';
@@ -456,7 +540,22 @@ void MangaBook::loadMeta() {
     author.assign(buf.get(), authorLen);
   }
 
-  LOG_DBG("MNG", "Loaded meta.bin: title=%s author=%s", metaTitle.c_str(), author.c_str());
+  // Optional language trailer (uint16 languageLen + UTF-8 tag), appended after the author
+  // without a version bump -- see convert_manga.py's meta.bin format notes. A short read here
+  // just means the file predates the trailer, which is the common case; not an error.
+  uint8_t langHdr[2];
+  if (f.read(langHdr, 2) == 2) {
+    const uint16_t languageLen = readU16(langHdr);
+    // Language tags are a handful of bytes ("ja", "zh-Hant"); anything longer is a malformed
+    // or misaligned file, so ignore it rather than allocate on its say-so.
+    char langBuf[16];
+    if (languageLen > 0 && languageLen <= sizeof(langBuf) &&
+        f.read(reinterpret_cast<uint8_t*>(langBuf), languageLen) == languageLen) {
+      language.assign(langBuf, languageLen);
+    }
+  }
+
+  LOG_DBG("MNG", "Loaded meta.bin: title=%s author=%s lang=%s", metaTitle.c_str(), author.c_str(), language.c_str());
 }
 
 }  // namespace manga

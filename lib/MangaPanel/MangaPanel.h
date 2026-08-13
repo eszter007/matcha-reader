@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -53,8 +54,16 @@ class MangaBook {
   const std::string& getFolder() const { return folderPath; }
   std::string getTitle() const;
   const std::string& getAuthor() const { return author; }
+  // BCP-47/ISO-639 tag from meta.bin's optional trailer ("ja", "en", ...). Empty when the
+  // folder was converted before convert_manga.py wrote one, or the source carried no language.
+  const std::string& getLanguage() const { return language; }
 
   bool loadPagePanels(uint32_t pageIndex, std::vector<Panel>& panels) const;
+  // panels.idx is loaded once on open. Any non-empty record means this book has real panel
+  // data, even when its current page is a cover/splash that intentionally has no crop file.
+  bool hasPanelCropCapability() const {
+    return std::any_of(pageIndex.begin(), pageIndex.end(), [](const PageInfo& page) { return page.dataLength != 0; });
+  }
   uint16_t getPageImgWidth(uint32_t pageIndex) const;
   uint16_t getPageImgHeight(uint32_t pageIndex) const;
 
@@ -74,8 +83,9 @@ class MangaBook {
   bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
 
   // The folder's cover page: first page_NNNN, else the first non-panel-crop image. Empty when
-  // the folder holds no usable image. Costs a directory listing.
-  static std::string findCoverImage(const std::string& folderPath);
+  // the folder holds no usable image.
+  static std::string findCoverImage(const std::string& folderPath, BmpConvertCancelFn shouldCancel = nullptr,
+                                    void* cancelCtx = nullptr);
 
   // Table of contents (toc.idx), optional -- empty when the manga folder
   // has no toc.idx (most don't; SELECT_CHAPTER falls back to percent jump).
@@ -88,6 +98,7 @@ class MangaBook {
   std::string folderPath;
   std::string metaTitle;
   std::string author;
+  std::string language;
   uint32_t pageCount = 0;
   std::vector<PageInfo> pageIndex;
   std::vector<std::string> imageFiles;
@@ -95,6 +106,10 @@ class MangaBook {
 
   bool loadIndex();
   bool scanImages();
+  // Fast path for scanImages(): derives page filenames from pageCount + the converter's canonical
+  // page_NNNN.<ext> naming, so opening a book costs two probes instead of a directory walk whose
+  // price scales with everything else in the folder. False when the layout is not canonical.
+  bool buildCanonicalPageList();
   void loadToc();
   void loadMeta();
 };

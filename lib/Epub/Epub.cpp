@@ -1,5 +1,7 @@
 #include "Epub.h"
 
+#include <BmpToBmpConverter.h>
+#include <BufferedFile.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -13,7 +15,43 @@
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
 
-bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
+namespace {
+constexpr size_t COVER_WRITE_BUFFER_SIZE = 16 * 1024;
+
+class BufferedFilePrint final : public Print {
+ public:
+  explicit BufferedFilePrint(HalFile& file) : output(file, COVER_WRITE_BUFFER_SIZE) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* buffer, size_t size) override {
+    output.write(buffer, size);
+    return size;
+  }
+  bool finish() { return output.flush(); }
+
+ private:
+  serialization::BufferedFileWriter output;
+};
+
+class CancellablePrint final : public Print {
+ public:
+  CancellablePrint(Print& output, BmpConvertCancelFn shouldCancel, void* cancelCtx)
+      : output(output), shouldCancel(shouldCancel), cancelCtx(cancelCtx) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* buffer, size_t size) override {
+    if (shouldCancel && shouldCancel(cancelCtx)) return 0;
+    return output.write(buffer, size);
+  }
+
+ private:
+  Print& output;
+  BmpConvertCancelFn shouldCancel;
+  void* cancelCtx;
+};
+}  // namespace
+
+bool Epub::findContentOpfFile(std::string* contentOpfFile, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   const auto containerPath = "META-INF/container.xml";
   size_t containerSize;
 
@@ -30,7 +68,7 @@ bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   }
 
   // Stream read (reusing your existing stream logic)
-  if (!readItemContentsToStream(containerPath, containerParser, 512)) {
+  if (!readItemContentsToStream(containerPath, containerParser, 512, false, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not read META-INF/container.xml");
     return false;
   }
@@ -45,9 +83,10 @@ bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   return true;
 }
 
-bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const bool writeSpineEntries) {
+bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const bool writeSpineEntries,
+                           BmpConvertCancelFn shouldCancel, void* cancelCtx) {
   std::string contentOpfFilePath;
-  if (!findContentOpfFile(&contentOpfFilePath)) {
+  if (!findContentOpfFile(&contentOpfFilePath, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not find content.opf in zip");
     return false;
   }
@@ -69,7 +108,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
     return false;
   }
 
-  if (!readItemContentsToStream(contentOpfFilePath, opfParser, 1024)) {
+  if (!readItemContentsToStream(contentOpfFilePath, opfParser, 1024, false, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not read content.opf");
     return false;
   }
@@ -84,6 +123,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   // Guide-based cover fallback: if no cover found via metadata/properties,
   // try extracting the image reference from the guide's cover page XHTML
   if (bookMetadata.coverItemHref.empty() && !opfParser.guideCoverPageHref.empty()) {
+    if (shouldCancel && shouldCancel(cancelCtx)) return false;
     LOG_DBG("EBP", "No cover from metadata, trying guide cover page: %s", opfParser.guideCoverPageHref.c_str());
     size_t coverPageSize;
     uint8_t* coverPageData = readItemContentsToBytes(opfParser.guideCoverPageHref, &coverPageSize, true);
@@ -144,7 +184,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   return true;
 }
 
-bool Epub::parseTocNcxFile() const {
+bool Epub::parseTocNcxFile(BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   // the ncx file should have been specified in the content.opf file
   if (tocNcxItem.empty()) {
     LOG_DBG("EBP", "No ncx file specified");
@@ -153,18 +193,11 @@ bool Epub::parseTocNcxFile() const {
 
   LOG_DBG("EBP", "Parsing toc ncx file: %s", tocNcxItem.c_str());
 
-  const auto tmpNcxPath = getCachePath() + "/toc.ncx";
-  HalFile tempNcxFile;
-  if (!Storage.openFileForWrite("EBP", tmpNcxPath, tempNcxFile)) {
+  size_t ncxSize;
+  if (!getItemSize(tocNcxItem, &ncxSize)) {
+    LOG_ERR("EBP", "Could not get size of toc ncx file");
     return false;
   }
-  readItemContentsToStream(tocNcxItem, tempNcxFile, 1024);
-  // Explicitly close() file before reopening for reading
-  tempNcxFile.close();
-  if (!Storage.openFileForRead("EBP", tmpNcxPath, tempNcxFile)) {
-    return false;
-  }
-  const auto ncxSize = tempNcxFile.size();
 
   TocNcxParser ncxParser(contentBasePath, ncxSize, bookMetadataCache.get());
 
@@ -173,34 +206,18 @@ bool Epub::parseTocNcxFile() const {
     return false;
   }
 
-  const auto ncxBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!ncxBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for toc ncx parser");
+  // Stream the decompressed NCX straight into the parser instead of round-tripping
+  // through a temp file on the SD card (decompress -> write -> reopen -> reread -> delete).
+  if (!readItemContentsToStream(tocNcxItem, ncxParser, 1024, false, shouldCancel, cancelCtx)) {
+    LOG_ERR("EBP", "Could not read toc ncx file");
     return false;
   }
-
-  while (tempNcxFile.available()) {
-    const auto readSize = tempNcxFile.read(ncxBuffer, 1024);
-    if (readSize == 0) break;
-    const auto processedSize = ncxParser.write(ncxBuffer, readSize);
-
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all toc ncx data");
-      free(ncxBuffer);
-      return false;
-    }
-  }
-
-  free(ncxBuffer);
-  // Explicitly close() file before calling Storage.remove()
-  tempNcxFile.close();
-  Storage.remove(tmpNcxPath.c_str());
 
   LOG_DBG("EBP", "Parsed TOC items");
   return true;
 }
 
-bool Epub::parseTocNavFile() const {
+bool Epub::parseTocNavFile(BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   // the nav file should have been specified in the content.opf file (EPUB 3)
   if (tocNavItem.empty()) {
     LOG_DBG("EBP", "No nav file specified");
@@ -209,18 +226,11 @@ bool Epub::parseTocNavFile() const {
 
   LOG_DBG("EBP", "Parsing toc nav file: %s", tocNavItem.c_str());
 
-  const auto tmpNavPath = getCachePath() + "/toc.nav";
-  HalFile tempNavFile;
-  if (!Storage.openFileForWrite("EBP", tmpNavPath, tempNavFile)) {
+  size_t navSize;
+  if (!getItemSize(tocNavItem, &navSize)) {
+    LOG_ERR("EBP", "Could not get size of toc nav file");
     return false;
   }
-  readItemContentsToStream(tocNavItem, tempNavFile, 1024);
-  // Explicitly close() file before reopening for reading
-  tempNavFile.close();
-  if (!Storage.openFileForRead("EBP", tmpNavPath, tempNavFile)) {
-    return false;
-  }
-  const auto navSize = tempNavFile.size();
 
   // Note: We can't use `contentBasePath` here as the nav file may be in a different folder to the content.opf
   // and the HTMLX nav file will have hrefs relative to itself
@@ -232,27 +242,12 @@ bool Epub::parseTocNavFile() const {
     return false;
   }
 
-  const auto navBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!navBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for toc nav parser");
+  // Stream the decompressed nav document straight into the parser instead of round-tripping
+  // through a temp file on the SD card (decompress -> write -> reopen -> reread -> delete).
+  if (!readItemContentsToStream(tocNavItem, navParser, 1024, false, shouldCancel, cancelCtx)) {
+    LOG_ERR("EBP", "Could not read toc nav file");
     return false;
   }
-
-  while (tempNavFile.available()) {
-    const auto readSize = tempNavFile.read(navBuffer, 1024);
-    const auto processedSize = navParser.write(navBuffer, readSize);
-
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all toc nav data");
-      free(navBuffer);
-      return false;
-    }
-  }
-
-  free(navBuffer);
-  // Explicitly close() file before calling Storage.remove()
-  tempNavFile.close();
-  Storage.remove(tmpNavPath.c_str());
 
   LOG_DBG("EBP", "Parsed TOC nav items");
   return true;
@@ -301,6 +296,33 @@ void Epub::parseCssFiles() const {
     return;
   }
 
+  // Some converters emit one byte-identical stylesheet per chapter (100+ .css
+  // entries), and each parse costs a zip locate plus an SD extract round-trip.
+  // Map every CSS path to its central-directory (CRC32, compressed size) in a
+  // single scan and parse only the first of each identical pair. Rules merge
+  // into one global set, so dropping exact duplicates cannot lose styles. A
+  // path that never matches a directory entry keeps key 0 and always parses.
+  std::vector<uint64_t> dedupKeys(cssFiles.size(), 0);
+  if (cssFiles.size() > 1) {
+    std::unordered_map<std::string, size_t> pathToIndex;
+    pathToIndex.reserve(cssFiles.size());
+    for (size_t i = 0; i < cssFiles.size(); i++) {
+      pathToIndex.emplace(FsHelpers::normalisePath(cssFiles[i]), i);
+    }
+    ZipFile(filepath).enumerateFileEntries([&](std::string_view entryPath, uint32_t crc32, uint32_t compressedSize) {
+      if (!FsHelpers::hasCssExtension(entryPath)) {
+        return;
+      }
+      const auto it = pathToIndex.find(std::string{entryPath});
+      if (it != pathToIndex.end()) {
+        dedupKeys[it->second] = (static_cast<uint64_t>(crc32) << 32) | compressedSize;
+      }
+    });
+  }
+  std::vector<uint64_t> seenKeys;
+  seenKeys.reserve(cssFiles.size());
+  size_t skippedDuplicates = 0;
+
   // No cache yet - parse CSS files ONE AT A TIME, flushing each file's rules to the cache and
   // clearing the map before the next file. Keeping every parsed file's rules resident was what
   // starved the later files: one heavy 818-rule stylesheet left ~23KB free against the 64KB the
@@ -312,7 +334,17 @@ void Epub::parseCssFiles() const {
   if (!cacheOk) {
     LOG_ERR("EBP", "Could not open CSS cache for writing; parsing without caching");
   }
-  for (const auto& cssPath : cssFiles) {
+  // No cache yet - parse CSS files
+  for (size_t cssIndex = 0; cssIndex < cssFiles.size(); cssIndex++) {
+    const auto& cssPath = cssFiles[cssIndex];
+    const uint64_t dedupKey = dedupKeys[cssIndex];
+    if (dedupKey != 0) {
+      if (std::find(seenKeys.begin(), seenKeys.end(), dedupKey) != seenKeys.end()) {
+        skippedDuplicates++;
+        continue;
+      }
+      seenKeys.push_back(dedupKey);
+    }
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
     // Check heap before parsing - CSS parsing allocates heavily
@@ -381,12 +413,20 @@ void Epub::parseCssFiles() const {
     LOG_ERR("EBP", "Failed to save CSS rules to cache");
   }
 
-  LOG_DBG("EBP", "Parsed %zu CSS style rules from %zu files", totalRulesParsed, cssFiles.size());
+  LOG_DBG("EBP", "Loaded %zu CSS style rules from %zu files (%zu identical duplicates skipped)", cssParser->ruleCount(),
+          cssFiles.size(), skippedDuplicates);
+  cssParser->clear();
 }
 
 // load in the meta data for the epub file
-bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
+bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvertCancelFn shouldCancel,
+                void* cancelCtx) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
+
+  // Open the optional content accessor before any parsing. Ships as a no-op
+  // here, so this always succeeds with a null handle and costs one call.
+  if (!contentaccess::open(filepath, &itemSource, &accessError)) return false;
 
   // Initialize spine/TOC cache
   bookMetadataCache.reset(new BookMetadataCache(cachePath));
@@ -406,7 +446,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         cssParser->deleteCache();
 
         BookMetadataCache::BookMetadata cachedMetadata = bookMetadataCache->coreMetadata;
-        if (!parseContentOpf(cachedMetadata, /*writeSpineEntries=*/false)) {
+        if (!parseContentOpf(cachedMetadata, /*writeSpineEntries=*/false, shouldCancel, cancelCtx)) {
           LOG_ERR("EBP", "Could not parse content.opf from cached bookMetadata for CSS files");
           // continue anyway - book will work without CSS and we'll still load any inline style CSS
         } else {
@@ -430,6 +470,11 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
       // contiguous stream reserve and silently truncated long chapters into sparse pages.)
       cssParser->clear();
     }
+    // Release the resolved CSS rule map: it is only needed transiently while building
+    // section caches, and createSectionFile reloads it from cache on demand. Holding it
+    // resident pins tens of KB for the whole reading session (more on warm resume into
+    // an already-cached chapter, where createSectionFile never runs to clear it).
+    cssParser->clear();
     LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
     return true;
   }
@@ -438,6 +483,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   if (!buildIfMissing) {
     return false;
   }
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
   // Cache doesn't exist or is invalid, build it
   LOG_DBG("EBP", "Cache not found, building spine/TOC cache");
@@ -458,11 +504,11 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     LOG_ERR("EBP", "Could not begin writing content.opf pass");
     return false;
   }
-  if (!parseContentOpf(bookMetadata)) {
+  if (!parseContentOpf(bookMetadata, true, shouldCancel, cancelCtx)) {
     LOG_ERR("EBP", "Could not parse content.opf");
     return false;
   }
-  discoverCssFilesFromZip();
+  if (!skipLoadingCss) discoverCssFilesFromZip();
   if (!bookMetadataCache->endContentOpfPass()) {
     LOG_ERR("EBP", "Could not end writing content.opf pass");
     return false;
@@ -477,17 +523,18 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
 
   bool tocParsed = false;
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
   // Try EPUB 3 nav document first (preferred)
   if (!tocNavItem.empty()) {
     LOG_DBG("EBP", "Attempting to parse EPUB 3 nav document");
-    tocParsed = parseTocNavFile();
+    tocParsed = parseTocNavFile(shouldCancel, cancelCtx);
   }
 
   // Fall back to NCX if nav parsing failed or wasn't available
   if (!tocParsed && !tocNcxItem.empty()) {
     LOG_DBG("EBP", "Falling back to NCX TOC");
-    tocParsed = parseTocNcxFile();
+    tocParsed = parseTocNcxFile(shouldCancel, cancelCtx);
   }
 
   if (!tocParsed) {
@@ -499,6 +546,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     LOG_ERR("EBP", "Could not end writing toc pass");
     return false;
   }
+  if (shouldCancel && shouldCancel(cancelCtx)) return false;
   LOG_DBG("EBP", "TOC pass completed in %lu ms", millis() - tocStart);
 
   // Close the cache files
@@ -598,8 +646,10 @@ std::string Epub::getCoverBmpPath(bool cropped) const {
 }
 
 bool Epub::generateCoverBmp(bool cropped) const {
-  // Already generated, return true
-  if (Storage.exists(getCoverBmpPath(cropped).c_str())) {
+  // Already generated, return true. hasContent(), not exists(): every failure below removes the
+  // partial file, but openFileForWrite() creates it before the conversion runs, so a reset or
+  // power loss in that window leaves a 0-byte cover that exists() would trust forever.
+  if (FsHelpers::hasContent("EBP", getCoverBmpPath(cropped))) {
     return true;
   }
 
@@ -682,6 +732,38 @@ bool Epub::generateCoverBmp(bool cropped) const {
     return success;
   }
 
+  if (FsHelpers::hasBmpExtension(coverImageHref)) {
+    LOG_DBG("EBP", "Using BMP cover image directly");
+    const std::string outPath = getCoverBmpPath(cropped);
+
+    HalFile coverBmp;
+    if (!Storage.openFileForWrite("EBP", outPath, coverBmp)) return false;
+    const bool copied = readItemContentsToStream(coverImageHref, coverBmp, 1024);
+    coverBmp.close();
+
+    if (!copied) {
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+
+    // Sanity-check header so we don't cache a non-BMP blob forever.
+    HalFile verify;
+    if (!Storage.openFileForRead("EBP", outPath, verify)) {
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+    uint8_t sig[2];
+    const bool ok = verify.read(sig, sizeof(sig)) == static_cast<int>(sizeof(sig)) && sig[0] == 'B' && sig[1] == 'M';
+    verify.close();
+    if (!ok) {
+      LOG_ERR("EBP", "Cover item has .bmp extension but is not a BMP, skipping");
+      Storage.remove(outPath.c_str());
+      return false;
+    }
+
+    return true;
+  }
+
   LOG_ERR("EBP", "Cover image is not a supported format, skipping");
   return false;
 }
@@ -694,8 +776,12 @@ std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
 bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
-  // Already generated, return true
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
+  // Already generated, return true. hasContent(), not exists(): every branch below opens the
+  // destination for writing before it knows the conversion will succeed, so a failed, cancelled
+  // or power-interrupted run leaves a 0-byte file. Answering "already generated" for that husk
+  // made the failure permanent AND invisible -- the caller drew a placeholder forever while
+  // this function reported success and never attempted the cover again.
+  if (FsHelpers::hasContent("EBP", getThumbBmpPath(height))) {
     return true;
   }
 
@@ -715,7 +801,17 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverJpg, 1024);
+    bool extracted;
+    {
+      BufferedFilePrint bufferedCover(coverJpg);
+      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+      if (extracted) extracted = bufferedCover.finish();
+    }
+    if (!extracted) {
+      coverJpg.close();
+      Storage.remove(coverJpgTempPath.c_str());
+      return false;
+    }
     // Explicitly close() file before reopening for reading
     coverJpg.close();
 
@@ -754,7 +850,17 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverPng, 1024);
+    bool extracted;
+    {
+      BufferedFilePrint bufferedCover(coverPng);
+      extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+      if (extracted) extracted = bufferedCover.finish();
+    }
+    if (!extracted) {
+      coverPng.close();
+      Storage.remove(coverPngTempPath.c_str());
+      return false;
+    }
     // Explicitly close() file before reopening for reading
     coverPng.close();
 
@@ -781,13 +887,69 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     }
     LOG_DBG("EBP", "Generated thumb BMP from PNG cover image, success: %s", success ? "yes" : "no");
     return success;
+  } else if (FsHelpers::hasBmpExtension(coverImageHref)) {
+    LOG_DBG("EBP", "Generating thumb BMP from BMP cover image");
+    // The extracted source SURVIVES a failed attempt, and only a complete extraction is kept.
+    // Unpacking a large cover costs seconds (device log: 7s for 35KB -> 43KB), and a cancelled
+    // conversion used to delete it, so every retry paid that again and got interrupted at the
+    // same point -- the cover could never be produced, however many times it was attempted.
+    // Written via .part + rename so presence of the final path means "complete": a half-written
+    // husk is never mistaken for a cached source, the same reason section builds use a tmp name.
+    const auto sourcePath = getCachePath() + "/.cover-source.bmp";
+    const auto sourceTmpPath = sourcePath + ".part";
+
+    HalFile sourceBmp;
+    if (!FsHelpers::hasContent("EBP", sourcePath)) {
+      if (!Storage.openFileForWrite("EBP", sourceTmpPath, sourceBmp)) return false;
+      bool extracted;
+      {
+        BufferedFilePrint bufferedCover(sourceBmp);
+        extracted = readItemContentsToStream(coverImageHref, bufferedCover, 1024, false, shouldCancel, cancelCtx);
+        if (extracted) extracted = bufferedCover.finish();
+      }
+      sourceBmp.close();
+      if (!extracted) {
+        Storage.remove(sourceTmpPath.c_str());
+        return false;
+      }
+      Storage.remove(sourcePath.c_str());  // a stale 0-byte husk would block the rename
+      if (!Storage.rename(sourceTmpPath.c_str(), sourcePath.c_str())) {
+        Storage.remove(sourceTmpPath.c_str());
+        return false;
+      }
+    }
+
+    if (!Storage.openFileForRead("EBP", sourcePath, sourceBmp)) {
+      Storage.remove(sourcePath.c_str());
+      return false;
+    }
+    HalFile thumbBmp;
+    if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      sourceBmp.close();
+      return false;
+    }
+    const bool success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(sourceBmp, thumbBmp, (height * 2) / 3,
+                                                                           height, shouldCancel, cancelCtx);
+    sourceBmp.close();
+    thumbBmp.close();
+
+    if (!success) {
+      LOG_ERR("EBP", "Failed to generate thumb BMP from BMP cover image");
+      Storage.remove(getThumbBmpPath(height).c_str());
+      return false;  // keep the extracted source: the next attempt resumes from the costly part
+    }
+    Storage.remove(sourcePath.c_str());  // consumed
+    return true;
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
   }
 
-  // Write an empty bmp file to avoid generation attempts in the future
-  HalFile thumbBmp;
-  Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
+  // No sentinel file. This used to write an empty .bmp "to avoid generation attempts in the
+  // future", which recorded a failure as a finished artifact -- the exact pattern the project
+  // forbids. Whether there is anything to generate is a question hasCoverImage() answers
+  // truthfully and for free; callers that want to stop retrying must ask it (see
+  // HomeActivity::loadRecentCovers and RecentBooksActivity::runCoverJob) rather than reading a
+  // fake file back.
   return false;
 }
 
@@ -799,6 +961,10 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
 
   const std::string path = FsHelpers::normalisePath(itemHref);
 
+  if (contentaccess::handles(itemSource, path)) {
+    return contentaccess::readToBytes(itemSource, path, size, trailingNullByte);
+  }
+
   const auto content = ZipFile(filepath).readFileToMemory(path.c_str(), size, trailingNullByte);
   if (!content) {
     LOG_DBG("EBP", "Failed to read item %s", path.c_str());
@@ -808,14 +974,47 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
   return content;
 }
 
-bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize) const {
+bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize,
+                                    const bool allowEarlyStop, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
   if (itemHref.empty()) {
     LOG_DBG("EBP", "Failed to read item, empty href");
     return false;
   }
 
   const std::string path = FsHelpers::normalisePath(itemHref);
-  return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize);
+
+  if (shouldCancel) {
+    CancellablePrint cancellable(out, shouldCancel, cancelCtx);
+    if (contentaccess::handles(itemSource, path)) {
+      return contentaccess::readToStream(itemSource, path, cancellable);
+    }
+    return ZipFile(filepath).readFileToStream(path.c_str(), cancellable, chunkSize, allowEarlyStop);
+  }
+
+  if (contentaccess::handles(itemSource, path)) {
+    return contentaccess::readToStream(itemSource, path, out);
+  }
+
+  return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize, allowEarlyStop);
+}
+
+bool Epub::extractItemToFile(const std::string& itemHref, const std::string& destPath) const {
+  HalFile out;
+  if (!Storage.openFileForWrite("EBP", destPath, out)) {
+    return false;
+  }
+  // Extraction targets are images (hundreds of KB): SD write throughput is dominated by
+  // per-chunk latency, so 4KB chunks measured ~100KB/s on an X3 device log (9.3s for one
+  // 928KB illustration). 16KB chunks cut the round-trips 4x. readFileToStream allocates
+  // 2x chunkSize transiently, so gate on the heap and keep 4KB as the tight-heap fallback.
+  const size_t chunkSize = ESP.getMaxAllocHeap() >= 96 * 1024 ? 16384 : 4096;
+  const bool ok = readItemContentsToStream(itemHref, out, chunkSize);
+  out.flush();
+  out.close();
+  if (!ok) {
+    Storage.remove(destPath.c_str());
+  }
+  return ok;
 }
 
 bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {

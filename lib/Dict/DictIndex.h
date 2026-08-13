@@ -53,16 +53,28 @@ class DictIndex {
   // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
   // filenames (jmdict/jmnedict) -- resolved at runtime by the accessors below, so existing SD
   // cards keep working without any re-conversion or renaming.
-  static constexpr const char* VOCAB_IDX_PATH = "/dict/vocab.idx";
-  static constexpr const char* VOCAB_DAT_PATH = "/dict/vocab.dat";
-  static constexpr const char* NAMES_IDX_PATH = "/dict/names.idx";
-  static constexpr const char* NAMES_DAT_PATH = "/dict/names.dat";
+  static constexpr const char* VOCAB_IDX_PATH = "/dictionaries/jp/vocab.idx";
+  static constexpr const char* VOCAB_DAT_PATH = "/dictionaries/jp/vocab.dat";
+  static constexpr const char* NAMES_IDX_PATH = "/dictionaries/jp/names.idx";
+  static constexpr const char* NAMES_DAT_PATH = "/dictionaries/jp/names.dat";
+  // Yomitan files moved into /dictionaries/jp may still retain the original
+  // converter basenames. Keep those names working without a re-conversion.
+  static constexpr const char* JP_LEGACY_VOCAB_IDX_PATH = "/dictionaries/jp/jmdict.idx";
+  static constexpr const char* JP_LEGACY_VOCAB_DAT_PATH = "/dictionaries/jp/jmdict.dat";
+  static constexpr const char* JP_LEGACY_NAMES_IDX_PATH = "/dictionaries/jp/jmnedict.idx";
+  static constexpr const char* JP_LEGACY_NAMES_DAT_PATH = "/dictionaries/jp/jmnedict.dat";
+  static constexpr const char* OLD_VOCAB_IDX_PATH = "/dict/vocab.idx";
+  static constexpr const char* OLD_VOCAB_DAT_PATH = "/dict/vocab.dat";
+  static constexpr const char* OLD_NAMES_IDX_PATH = "/dict/names.idx";
+  static constexpr const char* OLD_NAMES_DAT_PATH = "/dict/names.dat";
   static constexpr const char* LEGACY_VOCAB_IDX_PATH = "/dict/jmdict.idx";
   static constexpr const char* LEGACY_VOCAB_DAT_PATH = "/dict/jmdict.dat";
   static constexpr const char* LEGACY_NAMES_IDX_PATH = "/dict/jmnedict.idx";
   static constexpr const char* LEGACY_NAMES_DAT_PATH = "/dict/jmnedict.dat";
-  static constexpr const char* GRAMMAR_IDX_PATH = "/dict/grammar.idx";
-  static constexpr const char* GRAMMAR_DAT_PATH = "/dict/grammar.dat";
+  static constexpr const char* GRAMMAR_IDX_PATH = "/dictionaries/jp/grammar.idx";
+  static constexpr const char* GRAMMAR_DAT_PATH = "/dictionaries/jp/grammar.dat";
+  static constexpr const char* OLD_GRAMMAR_IDX_PATH = "/dict/grammar.idx";
+  static constexpr const char* OLD_GRAMMAR_DAT_PATH = "/dict/grammar.dat";
 
   // Resolved paths for the vocab/names dictionaries: the preferred filename if it exists on the
   // SD card, else the legacy one. Probed lazily on first use and cached; releaseCaches() clears
@@ -72,6 +84,8 @@ class DictIndex {
   static const char* vocabDatPath();
   static const char* namesIdxPath();
   static const char* namesDatPath();
+  static const char* grammarIdxPath();
+  static const char* grammarDatPath();
 
   // Which dictionaries lookupExact() should consult. Each dict search is ~2 SD reads, so scoping
   // out dictionaries a candidate can't possibly be in is the main lever for Word Lookup speed:

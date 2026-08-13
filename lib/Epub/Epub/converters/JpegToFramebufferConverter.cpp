@@ -4,6 +4,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
+#include <JpegDecodeError.h>
 #include <Logging.h>
 #include <Memory.h>
 
@@ -575,7 +576,8 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     if (ctx.cancelled) {
       LOG_DBG("JPG", "Decode cancelled: %s", imagePath.c_str());
     } else {
-      LOG_ERR("JPG", "Decode failed (rc=%d, lastError=%d)", rc, jpeg->getLastError());
+      const int err = jpeg->getLastError();
+      LOG_ERR("JPG", "Decode failed (rc=%d, lastError=%d): %s", rc, err, jpegDecodeErrorText(err));
     }
     if (ctx.caching) ctx.cache.abort();
     return false;

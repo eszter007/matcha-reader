@@ -21,7 +21,10 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          # 3.13, not 3.14: PlatformIO Core 6.1.19 cannot build its penv on 3.14
+          # ("Failed to install Python dependencies into penv"), which fails every job
+          # before a single file is compiled. Raise only once pio can create its env there.
+          python-version: '3.13'
 
       - name: Install clang-format-21
         run: |
@@ -45,7 +48,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -54,7 +57,15 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+        # The espressif32 builder imports `littlefs` and `fatfs` at module scope
+        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from system
+        # site-packages while installing its own dependencies into a penv the builder never sees.
+        # Without them every build and cppcheck job dies with ModuleNotFoundError. These are the
+        # only two: every other import in that builder is stdlib, platformio, SCons (a tool
+        # package) or semantic_version (a core dependency).
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          uv pip install --system littlefs-python fatfs-ng pyyaml
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -66,7 +77,8 @@ jobs:
       - name: Run cppcheck
         run: pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
 
-  build:
+  build-default:
+    name: Build default
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -75,7 +87,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -84,7 +96,15 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+        # The espressif32 builder imports `littlefs` and `fatfs` at module scope
+        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from system
+        # site-packages while installing its own dependencies into a penv the builder never sees.
+        # Without them every build and cppcheck job dies with ModuleNotFoundError. These are the
+        # only two: every other import in that builder is stdlib, platformio, SCons (a tool
+        # package) or semantic_version (a core dependency).
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          uv pip install --system littlefs-python fatfs-ng pyyaml
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -93,10 +113,10 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
-      - name: Build CrossPoint
+      - name: Build default firmware
         run: |
           set -euo pipefail
-          pio run | tee pio.log
+          pio run -e default | tee pio.log
 
       - name: Extract firmware stats
 
@@ -118,6 +138,60 @@ jobs:
           name: firmware.bin
           path: .pio/build/default/firmware.bin
           if-no-files-found: error
+
+  build-sticky:
+    name: Build sticky
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Install PlatformIO Core
+        # The espressif32 builder imports `littlefs` and `fatfs` at module scope
+        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from system
+        # site-packages while installing its own dependencies into a penv the builder never sees.
+        # Without them every build and cppcheck job dies with ModuleNotFoundError. These are the
+        # only two: every other import in that builder is stdlib, platformio, SCons (a tool
+        # package) or semantic_version (a core dependency).
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          uv pip install --system littlefs-python fatfs-ng pyyaml
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Build sticky firmware
+        run: |
+          set -euo pipefail
+          pio run -e sticky | tee pio.log
+
+      - name: Extract firmware stats
+        run: |
+          set -euo pipefail
+          ram_line="$(grep -E "RAM:\\s" -m1 pio.log || true)"
+          flash_line="$(grep -E "Flash:\\s" -m1 pio.log || true)"
+          echo "ram_line=${ram_line}" >> "$GITHUB_OUTPUT"
+          echo "flash_line=${flash_line}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Sticky firmware build stats"
+            if [ -n "$ram_line" ]; then echo "- ${ram_line}"; else echo "- RAM: not found"; fi
+            if [ -n "$flash_line" ]; then echo "- ${flash_line}"; else echo "- Flash: not found"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -151,7 +225,8 @@ jobs:
   test-status:
     name: Test Status
     needs:
-      - build
+      - build-default
+      - build-sticky
       - clang-format
       - cppcheck
       - unit-tests

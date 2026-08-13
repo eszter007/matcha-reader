@@ -124,22 +124,31 @@ uint32_t utf8NextCodepoint(const unsigned char** string) {
   return cp;
 }
 
-void utf8AppendCodepoint(uint32_t cp, std::string& out) {
+int utf8EncodeCodepoint(uint32_t cp, char out[5]) {
+  int n = 0;
   if (cp < 0x80) {
-    out += static_cast<char>(cp);
+    out[n++] = static_cast<char>(cp);
   } else if (cp < 0x800) {
-    out += static_cast<char>(0xC0 | (cp >> 6));
-    out += static_cast<char>(0x80 | (cp & 0x3F));
+    out[n++] = static_cast<char>(0xC0 | (cp >> 6));
+    out[n++] = static_cast<char>(0x80 | (cp & 0x3F));
   } else if (cp < 0x10000) {
-    out += static_cast<char>(0xE0 | (cp >> 12));
-    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-    out += static_cast<char>(0x80 | (cp & 0x3F));
+    out[n++] = static_cast<char>(0xE0 | (cp >> 12));
+    out[n++] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    out[n++] = static_cast<char>(0x80 | (cp & 0x3F));
   } else {
-    out += static_cast<char>(0xF0 | (cp >> 18));
-    out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
-    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-    out += static_cast<char>(0x80 | (cp & 0x3F));
+    out[n++] = static_cast<char>(0xF0 | (cp >> 18));
+    out[n++] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+    out[n++] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    out[n++] = static_cast<char>(0x80 | (cp & 0x3F));
   }
+  out[n] = '\0';
+  return n;
+}
+
+void utf8AppendCodepoint(uint32_t cp, std::string& out) {
+  char buf[5];
+  const int n = utf8EncodeCodepoint(cp, buf);
+  out.append(buf, static_cast<size_t>(n));
 }
 
 int utf8SafeTruncateBuffer(const char* buf, int len) {
