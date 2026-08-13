@@ -355,6 +355,10 @@ constexpr uint32_t WLSCAN_MAGIC =
     0x45534C57;  // "WLSE" -- records now carry the match's cell span (GlyphRef::matchLen) after
                  // the glyph index; a "WLSD" file has 4-byte records and cannot be read as these
 
+// One cached selectable entry on disk: a 4-byte allGlyphs index followed by the match's cell
+// span. Written and read byte-wise -- see the memcpy in tryLoadCache/saveCache.
+constexpr size_t kRecordBytes = sizeof(uint32_t) + sizeof(uint8_t);
+
 // Cheap fingerprint of the dictionary content: a changed/replaced vocab index (vocab.idx, or
 // legacy jmdict.idx -- whichever resolves) invalidates cached scans (segmentation depends on
 // the dictionary). File size is not a perfect identity, but any realistic dictionary swap
@@ -408,26 +412,31 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
   reserveGlyphsSafe(selectableGlyphs, hdr.count);
   selectToAllIdx.reserve(hdr.count);
   for (uint16_t i = 0; i < hdr.count; i++) {
-    struct Record {
-      uint32_t idx;
-      uint8_t matchLen;
-    } __attribute__((packed)) rec;
-    if (f.read(reinterpret_cast<uint8_t*>(&rec), sizeof(rec)) != static_cast<int>(sizeof(rec)) ||
-        rec.idx >= allGlyphs.size()) {
+    // Read as bytes and memcpy the index out: a record is 5 bytes, so every second one starts
+    // off a 4-byte boundary, and this target faults on unaligned multi-byte loads.
+    uint8_t rec[kRecordBytes];
+    if (f.read(rec, sizeof(rec)) != static_cast<int>(sizeof(rec))) {
+      selectableGlyphs.clear();
+      selectToAllIdx.clear();
+      return false;
+    }
+    uint32_t idx;
+    memcpy(&idx, rec, sizeof(idx));
+    if (idx >= allGlyphs.size()) {
       selectableGlyphs.clear();
       selectToAllIdx.clear();
       return false;
     }
     // The glyph itself comes from the freshly rebuilt allGlyphs (positions are re-derived from
     // the page every open); only the span is restored from the record.
-    GlyphRef entry = allGlyphs[rec.idx];
-    entry.matchLen = rec.matchLen;
+    GlyphRef entry = allGlyphs[idx];
+    entry.matchLen = rec[sizeof(idx)];
     if (!pushGlyphSafe(selectableGlyphs, entry)) {
       selectableGlyphs.clear();
       selectToAllIdx.clear();
       return false;
     }
-    selectToAllIdx.push_back(rec.idx);
+    selectToAllIdx.push_back(idx);
   }
   phase = Phase::Done;
   restoredCursorIndex = hdr.lastCursor < hdr.count ? hdr.lastCursor : kNoRestoredCursor;
@@ -469,13 +478,13 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
   hdr.lastCursor = cursorIndex < hdr.count ? cursorIndex : 0;
   f.write(reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
   for (size_t i = 0; i < selectToAllIdx.size(); i++) {
-    struct Record {
-      uint32_t idx;
-      uint8_t matchLen;
-    } __attribute__((packed)) rec;
-    rec.idx = static_cast<uint32_t>(selectToAllIdx[i]);
-    rec.matchLen = i < selectableGlyphs.size() ? selectableGlyphs[i].matchLen : 0;
-    f.write(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
+    // Byte buffer + memcpy, matching the read side: the 5-byte record leaves every second index
+    // unaligned, which this target cannot load or store directly.
+    uint8_t rec[kRecordBytes];
+    const uint32_t idx = static_cast<uint32_t>(selectToAllIdx[i]);
+    memcpy(rec, &idx, sizeof(idx));
+    rec[sizeof(idx)] = i < selectableGlyphs.size() ? selectableGlyphs[i].matchLen : 0;
+    f.write(rec, sizeof(rec));
   }
   return true;
 }

@@ -243,11 +243,19 @@ bool EpubReaderWordLookupActivity::stepCursor(const int delta, int& outIndex) {
 
   const int maxIdx = static_cast<int>(scan.selectableGlyphs.size()) - 1;
   int newIndex = cursorIndex + delta;
+  // Past an end the walk has not confirmed yet: park the move rather than pretend the page stops
+  // here. Once the walk is done the end is real, and what to do there depends on how the move
+  // got its size: a single step cycles round, as in the definition view, while a multi-step move
+  // (presses that piled up while the frontier caught up) stops at the last word instead of
+  // wrapping to an arbitrary one.
   if (newIndex > maxIdx) {
     if (!scan.isDone()) return false;
-    newIndex = 0;  // the whole page is mapped, so the end is real -- cycle round
+    newIndex = delta == 1 ? 0 : maxIdx;
+  } else if (newIndex < 0) {
+    // The other end needs no waiting: everything before the cursor was mapped on the way here.
+    // Cycling back to the last word is only meaningful once the walk knows which word that is.
+    newIndex = scan.isDone() && delta == -1 ? maxIdx : 0;
   }
-  if (newIndex < 0) newIndex = scan.isDone() ? maxIdx : 0;
   outIndex = newIndex;
   return true;
 }
