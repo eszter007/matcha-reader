@@ -347,6 +347,8 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
     } else {
       stillWaiting = true;
     }
+  } else if (pending.hasWaitTarget && !scan.isDone() && scan.scannedGlyphs() <= pending.waitUntilGlyph) {
+    stillWaiting = true;  // known-unreached column: one comparison, no re-walk
   } else {
     // Walk in the jump's direction: a column can legitimately hold no selectable word (all
     // particles, or a run of punctuation), and stopping there would strand the cursor. Running
@@ -357,7 +359,12 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
       size_t last = 0;
       if (!columnRange(static_cast<uint16_t>(column), first, last)) break;  // past the page edge
       if (!scan.isDone() && scan.scannedGlyphs() <= last) {
-        stillWaiting = true;  // this column is not mapped yet
+        // Park on THIS column: the walk only moves on once a column is mapped, so the range is
+        // looked up once per column entered rather than once per tick of the wait.
+        pending.targetColumn = static_cast<uint16_t>(column);
+        pending.waitUntilGlyph = last;
+        pending.hasWaitTarget = true;
+        stillWaiting = true;
         break;
       }
       const int hit = selectableInColumn(static_cast<uint16_t>(column), pending.anchorRow);
@@ -422,9 +429,12 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
   // the release that follows is not a selection -- wait for a fresh press first.
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmPressSeen) {
-    // While a move is parked the user is waiting to arrive somewhere; looking up the word they
-    // are leaving would be the wrong entry, and the wait is a few hundred ms at most.
-    if (pending.kind == PendingMove::Kind::None && !scan.selectableGlyphs.empty()) {
+    // Blocked only while a move is parked: the user is waiting to arrive somewhere, and looking
+    // up the word they are leaving would be the wrong entry for a wait of a few hundred ms.
+    // A page with nothing selectable still opens the definition view, which is where "No match
+    // found" (or "Loading..." while the walk runs) lives -- otherwise Confirm would do nothing at
+    // all and the page would look broken rather than empty.
+    if (pending.kind == PendingMove::Kind::None) {
       enterDefinition();
       return false;
     }

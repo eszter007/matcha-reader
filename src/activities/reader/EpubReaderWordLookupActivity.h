@@ -130,6 +130,12 @@ class EpubReaderWordLookupActivity final : public Activity {
     uint16_t anchorRow = 0;     // Column: the row to land nearest to
     uint32_t requestedAt = 0;
     bool noticeShown = false;
+    // Column: last glyph of the column being waited on, remembered so each further tick of the
+    // wait is one comparison. Finding it means walking the page's glyphs, and doing that on every
+    // tick would steal the CPU from the walk the wait is waiting for -- loop() runs flat out
+    // while the scan is unfinished (see skipLoopDelay()).
+    size_t waitUntilGlyph = 0;
+    bool hasWaitTarget = false;
   };
   PendingMove pending;
   // Only announce a wait the user can actually perceive; shorter ones resolve before the panel
