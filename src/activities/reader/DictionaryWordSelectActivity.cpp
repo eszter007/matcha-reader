@@ -12,6 +12,7 @@
 
 #include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
+#include "ReaderUtils.h"
 #include "components/UITheme.h"
 
 namespace {
@@ -250,7 +251,8 @@ void DictionaryWordSelectActivity::loop() {
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
     finish();
     return;
   }

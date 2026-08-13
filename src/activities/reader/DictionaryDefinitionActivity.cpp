@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include "CrossPointSettings.h"
+#include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/HtmlToPlainText.h"
@@ -159,7 +160,11 @@ void DictionaryDefinitionActivity::wrapText() {
 }
 
 void DictionaryDefinitionActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  // The power click steps back one screen, exactly like Back: from the definition to the word
+  // selection, and from there out to the page. Two clicks leave the dictionary entirely without
+  // the reading hand ever moving.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
     finish();
     return;
   }

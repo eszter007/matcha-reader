@@ -705,6 +705,7 @@ Reader menu → **Word Lookup**.
 | Left / Right | Move between matched words on the page |
 | Up / Down | Scroll a long definition |
 | Back | Return to reading |
+| Power (short click) | Return to reading, when **Short power button click** is set to **Word Lookup** |
 
 The header counts your position (e.g. 10/35). The page is pre-scanned, so you only ever land on a word the
 dictionary actually has.
@@ -716,7 +717,10 @@ between words and the front Left / Right buttons for scrolling. The default mapp
 In Reader Settings, **Word Lookup Font Size** offers Tiny, Small (default), Medium, and Large definition text.
 
 For one-press access, set **Settings → Controls → Short power button click** to **Word Lookup**. It then opens
-straight from the page, in both EPUBs and manga.
+straight from the page, in both EPUBs and manga — and closes it again: the same click steps back out of a
+definition and out of word selection, so a whole lookup happens under the index finger of the hand already
+holding the device. Back still works as before, and the click only does this while the setting is **Word
+Lookup** (the other settings keep the click for sleep, page turns, refresh or footnotes).
 
 ### 6.3 Page Translation
 

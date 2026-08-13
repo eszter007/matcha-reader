@@ -134,6 +134,22 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   return {prev, next, tiltPrev || tiltNext};
 }
 
+// A short power-button click closes the dictionary / word-lookup screens, but only when that same
+// click is what opens them (SHORT_PWRBTN::WORD_LOOKUP). The button sits under the holding hand's
+// index finger, so entering AND leaving with it is what makes the shortcut one-handed -- opening
+// with the power button and having to reach across for Back defeats the point.
+//
+// Left alone under every other shortPwrBtn value: Sleep, Page Turn, Force Refresh and Footnotes
+// each own the click elsewhere, and a lookup screen must not swallow it from them.
+//
+// Down is excluded for the same reason the open paths exclude it (EpubReaderActivity,
+// MangaReaderActivity): Power+Down is the screenshot combo, which must not also dismiss the very
+// screen it was pressed to capture.
+inline bool powerClickLeavesWordLookup(const MappedInputManager& input) {
+  return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
+         input.wasReleased(MappedInputManager::Button::Power) && !input.wasReleased(MappedInputManager::Button::Down);
+}
+
 struct TouchPageTurn {
   bool prev;
   bool next;
