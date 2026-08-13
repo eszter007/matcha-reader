@@ -356,7 +356,14 @@ void FileBrowserActivity::activateSelected(const bool forceDelete, const bool fr
     if (basepath.back() != '/') basepath += "/";
 
     if (isDirectory) {
-      basepath += entry.substr(0, entry.length() - 1);
+      // A manga book IS a directory (page images + panels.idx), so it must open as a book
+      // rather than be navigated into. Upstream has no manga and navigates every directory.
+      const std::string dirPath = basepath + entry.substr(0, entry.length() - 1);
+      if (manga::MangaBook::isMangaFolder(dirPath)) {
+        onSelectBook(dirPath);
+        return;
+      }
+      basepath = dirPath;
       loadFiles();
       nav.selected = 0;
       nav.top = 0;

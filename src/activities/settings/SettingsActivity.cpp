@@ -525,6 +525,12 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     return SETTINGS.*(setting.valuePtr) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
   }
+  // DynamicToggle (Vertical Text, Furigana): per-book state that lives on the pushing reader
+  // activity, not in CrossPointSettings, so it has a getter instead of a member pointer. Without
+  // this branch the row renders with no value at all -- the ENUM path below has the same pair.
+  if (setting.type == SettingType::TOGGLE && setting.valueGetter) {
+    return setting.valueGetter() != 0 ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+  }
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch below: a corrupt/migrated settings
     // byte must not index past the enum table.
@@ -613,10 +619,15 @@ void SettingsActivity::render(RenderLock&&) {
   renderUi();
 
   const int ring = ringPos();
-  const auto confirmLabel =
-      (ring == 0) ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-                  : (ring > 0 && (*currentSettings)[ring - 1].nameId == StrId::STR_TIME_TO_SLEEP ? tr(STR_SELECT)
-                                                                                                 : tr(STR_TOGGLE));
+  // A row with a getter but no setter is informational (the applied-dictionary rows in reader
+  // settings): toggleCurrentSetting() returns early on it, so hinting "Toggle" promises an
+  // action that does nothing. Upstream has no such rows and so has no label for them.
+  const bool readOnlyRow =
+      ring > 0 && (*currentSettings)[ring - 1].valueGetter && !(*currentSettings)[ring - 1].valueSetter;
+  const auto confirmLabel = (ring == 0)   ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
+                            : readOnlyRow ? tr(STR_READ_ONLY)
+                            : ((*currentSettings)[ring - 1].nameId == StrId::STR_TIME_TO_SLEEP) ? tr(STR_SELECT)
+                                                                                                : tr(STR_TOGGLE);
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
