@@ -438,6 +438,9 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // Try to render from cache first
   std::string cachePath = getCachePath(imagePath);
   if (renderFromCache(renderer, cachePath, drawX, drawY, drawW, drawH)) {
+    // The DRAWN rect, not the block's: a rotated fit moves and resizes the image, and inverting
+    // the block rect would counter-invert the wrong pixels (see the rotated-fit branch above).
+    renderer.preserveImagePolarity(drawX, drawY, drawW, drawH);
     return;  // Successfully rendered from cache
   }
 
@@ -511,6 +514,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;
   }
 
+  renderer.preserveImagePolarity(x, y, width, height);
   LOG_DBG("IMG", "Decode successful");
 }
 

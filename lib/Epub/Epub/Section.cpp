@@ -161,7 +161,10 @@ namespace {
 // v75: a font-size on <html>/<body> is ignored -- it restates the base size, which IS the
 //      reader's own font here, so honouring it sized whole books off the user's setting.
 //      Cached pages hold the shrunken layout and its line positions.
-constexpr uint8_t SECTION_FILE_VERSION = 75;
+// v76: upstream merge (their v37): FootnoteEntry::href grew from 96 to 256 bytes for long
+//      calibre paths, so every cached footnote record shifts by 160 bytes and a v75 file
+//      mis-parses under v76 framing.
+constexpr uint8_t SECTION_FILE_VERSION = 76;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

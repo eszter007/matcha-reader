@@ -1,11 +1,13 @@
 #include "ActivityManager.h"
 
 #include <FontCacheManager.h>
+#include <HalDisplay.h>
 #include <HalPowerManager.h>
 #include <Memory.h>
 
 #include <algorithm>
 
+#include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -52,6 +54,10 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      // Night mode inverts only the reading surfaces (appliesNightMode):
+      // resolving the output polarity here, per render, means menus, popups,
+      // and every other activity revert to normal automatically.
+      display.setInverted(SETTINGS.screenInverted != 0 && currentActivity->appliesNightMode());
       currentActivity->render(std::move(lock));
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
@@ -329,7 +335,11 @@ void ActivityManager::requestUpdateAndWait() {
   assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
 
   xTaskNotify(renderTaskHandle, 1, eIncrement);
+  // Tell the power manager the loop is parked here: it cannot poll input until the
+  // render finishes, so the BUSY-wait slice hook should not yield to it meanwhile.
+  powerManager.noteRenderWaitBegin();
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  powerManager.noteRenderWaitEnd();
 }
 
 // RenderLock

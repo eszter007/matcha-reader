@@ -2,6 +2,7 @@
 #include "activities/Activity.h"
 
 class Bitmap;
+class HalFile;
 
 class SleepActivity final : public Activity {
  public:
@@ -14,16 +15,16 @@ class SleepActivity final : public Activity {
   void renderDefaultSleepScreen() const;
   void renderCustomSleepScreen() const;
   void renderCoverSleepScreen() const;
-  void renderTransparentSleepScreen() const;
-  void renderBitmapSleepScreen(const Bitmap& bitmap, bool overlay = false) const;
+  void renderBitmapSleepScreen(const Bitmap& bitmap, bool preserveBackground = false) const;
+  bool renderSleepOverlayFile(HalFile& file, const char* pathForLog) const;
   void renderLastScreenSleepScreen() const;
-  void renderBlankSleepScreen() const;
-  // Scan dirPath for BMP wallpapers (plus PNGs in overlay mode) and render a random one
-  // (excluding recently shown). overlay=true draws it over the retained framebuffer instead
-  // of a cleared screen. Returns false when the folder is missing/empty or the image could
-  // not be rendered.
-  bool renderRandomSleepImage(const char* dirPath, bool overlay) const;
+  void renderTransparentCustomSleepScreen() const;
+  // Legacy fork overlay locations (/.sleep/transparent, /sleep/transparent), tried after the
+  // upstream ones so cards set up before this merge keep working. PNG overlays only exist here:
+  // upstream's BGRA path is BMP-only, and a PNG carries its alpha without a hand-built BMP.
+  bool renderLegacyTransparentOverlay() const;
   bool renderPngOverlaySleepImage(const std::string& path) const;
+  void renderBlankSleepScreen() const;
 
   bool fromTimeout = false;
 };

@@ -471,6 +471,8 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   orientedMarginTop += SETTINGS.screenMargin;
   orientedMarginLeft += SETTINGS.screenMargin;
 
+  // A lookup ends back on the page no matter how it was opened (menu or
+  // long-press): the user is mid-reading, not mid-menu.
   startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(
                              renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop,
                              std::move(dictionaryFolder), effectiveReaderFontId()),
@@ -621,6 +623,14 @@ void EpubReaderActivity::loop() {
   // finished. Two independent finished-book features key off this same condition.
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
 
+  // Paged back into the book: drop the end screen's suggestion menu (its app +
+  // theme tokens, ~2KB) so long sessions read with the smaller footprint.
+  if (!atEndOfBook && endOfBookOptionsReady.load(std::memory_order_acquire)) {
+    RenderLock lock(*this);
+    endOfBookOptionsReady.store(false, std::memory_order_release);
+    endOfBookOptions.reset();
+  }
+
   // Drop this book from the Recent Books list; if the reader then pages back into the book,
   // re-add it. So removal only sticks if the reader leaves while still on the End-of-Book
   // screen. Acts only on the transition (guarded by recentsEntryRemoved) — no per-frame writes.
@@ -650,7 +660,8 @@ void EpubReaderActivity::loop() {
 
   if (automaticPageTurnActive) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::isTouchMenuGesture(mappedInput)) {
+        mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        ReaderUtils::isTouchMenuGesture(renderer, mappedInput)) {
       automaticPageTurnActive = false;
       // updates chapter title space to indicate page turn disabled
       requestUpdate();
@@ -689,10 +700,10 @@ void EpubReaderActivity::loop() {
   // through to the regular handlers below; page turns are absorbed by the end-of-book
   // block. A Confirm release after a long-press function (bookmark/sync) fired is left
   // to the regular Confirm handler below, which consumes it via ignoreNextConfirmRelease.
-  if (atEndOfBook && endOfBookOptions.menuActive() &&
+  if (atEndOfBook && endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions->menuActive() &&
       !(ignoreNextConfirmRelease && mappedInput.wasReleased(MappedInputManager::Button::Confirm))) {
     std::string openPath;
-    switch (endOfBookOptions.handleMenuInput(mappedInput, &openPath)) {
+    switch (endOfBookOptions->handleMenuInput(mappedInput, &openPath)) {
       case EndOfBookOptions::Action::OpenBook:
         activityManager.goToReader(openPath);
         return;
@@ -713,10 +724,12 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  // Enter reader menu activity on short-press Confirm or a downward swipe from the top edge. A long-press
+  // Enter reader menu activity on short-press Confirm, the board's menu edge-swipe, or a
+  // middle-third tap (see ReaderUtils::isTouchMenuGesture). A long-press
   // that fired a bound function (bookmark or KOReader sync) sets ignoreNextConfirmRelease so the release
   // following the hold does not also open the menu.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || ReaderUtils::isTouchMenuGesture(mappedInput)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
+      ReaderUtils::isTouchMenuGesture(renderer, mappedInput)) {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else {
@@ -792,6 +805,25 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Manual turns can't outrun the panel, so the guard below refuses to start a
+  // turn while a render is in flight or inside a short post-turn gap. But the
+  // press itself shouldn't be lost: it's latched into pendingManualTurn and
+  // executed here, on the first idle tick after the guard clears.
+  constexpr unsigned long kMinManualTurnGapMs = 200;
+  const bool turnGuardActive = RenderLock::peek() || (millis() - lastPageTurnTime) < kMinManualTurnGapMs;
+  if (pendingManualTurn != 0 && !turnGuardActive) {
+    if (!section) {
+      // The section was dropped after the latch (re-layout, build failure,
+      // bookmark jump): the queued turn no longer names a page.
+      pendingManualTurn = 0;
+      return;
+    }
+    const bool forward = pendingManualTurn > 0;
+    pendingManualTurn = 0;
+    pageTurn(forward);
+    return;
+  }
+
   // Handle short power button press for word lookup
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
       mappedInput.wasReleased(MappedInputManager::Button::Power) &&
@@ -810,7 +842,7 @@ void EpubReaderActivity::loop() {
   // At end of the book with no suggestion menu, forward button goes home and back
   // button returns to last page
   if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
-    if (endOfBookOptions.menuActive()) {
+    if (endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions->menuActive()) {
       // Selection movement was handled above; absorb leftover page-turn triggers so
       // e.g. "previous" at the top of the list doesn't jump back into the book
       return;
@@ -873,6 +905,25 @@ void EpubReaderActivity::loop() {
   // No current section, attempt to rerender the book
   if (!section && !verticalSection) {
     requestUpdate();
+    return;
+  }
+
+  // Refuse to START a turn while a render is in flight, OR within a short window
+  // of the last turn. render() runs on its own task (renderTaskLoop) concurrently
+  // with input; a slow AA/image page display lags behind fast taps, and a second
+  // turn firing before the first commits its differential baseline writes the
+  // panel twice -> two overlapping page segments. RenderLock::peek() catches a
+  // render that has already taken the lock (mirrors the automatic-turn guard),
+  // but there is a brief window between requesting a turn and the render task
+  // acquiring the lock where peek() is still false — a mashed second tap slips
+  // through there, which is what still triggered after slow image pages. The
+  // lastPageTurnTime gap bridges that startup latency; after it, peek() takes
+  // over for the rest of the (variable-length) render. The press is latched, not
+  // dropped: the consume block above runs it on the first idle tick, so one
+  // eager tap during a slow render still turns the page. Latching (assign, not
+  // increment) means mashing collapses to a single queued turn.
+  if (turnGuardActive) {
+    pendingManualTurn = prevTriggered ? -1 : 1;
     return;
   }
 
@@ -971,6 +1022,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   // Reset state so render() reloads and repositions on the target spine.
   {
     RenderLock lock(*this);
+    clearDeferredReposition();
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     pendingPercentJump = true;
@@ -1089,9 +1141,16 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
 }
 
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
+  // Menu-launched sub-screens return one level to the reader menu when
+  // cancelled (Back button or back gesture, identical on touch and button
+  // devices), instead of dropping to the reading surface. Home-gesture exits
+  // never run these handlers (ActivityManager replaces the stack), so they
+  // cannot re-open the menu.
   auto progressChangeResultHandler = [this](const ActivityResult& result) {
     loadCachedBookmarks();
-    if (!result.isCancelled) {
+    if (result.isCancelled) {
+      openReaderMenu();
+    } else {
       const auto& sync = std::get<ProgressChangeResult>(result.data);
 
       // Preferred path: a bookmark carrying an exact content offset. It is immune to
@@ -1099,6 +1158,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // possibly-different settings.
       if (sync.hasVisibleTextOffset && sync.spineIndex >= 0 && sync.spineIndex < epub->getSpineItemsCount()) {
         RenderLock lock(*this);
+        clearDeferredReposition();
         if (section && currentSpineIndex == sync.spineIndex) {
           // Already in this chapter and laid out: resolve straight away, no reload.
           const auto page = section->getPageForVisibleTextOffset(sync.visibleTextOffset);
@@ -1130,8 +1190,12 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         targetPage = fallback.pageNumber;
       }
 
+      // Any explicit selection supersedes the session-start resume/reflow anchor,
+      // including a selection that is already active.
+      RenderLock lock(*this);
+      clearDeferredReposition();
+
       if (currentSpineIndex != targetSpineIndex) {
-        RenderLock lock(*this);
         currentSpineIndex = targetSpineIndex;
         nextPageNumber = targetPage;
         section.reset();
@@ -1140,7 +1204,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         RenderLock lock(*this);
         verticalSection->currentPage = std::max(0, targetPage);
       } else if (section && section->currentPage != targetPage) {
-        RenderLock lock(*this);
         const int clampedTargetPage = std::max(0, targetPage);
         section->currentPage = clampedTargetPage;
       } else if (!section && !verticalSection) {
@@ -1182,10 +1245,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       const int spineIdx = currentSpineIndex;
-      const std::string path = epub->getPath();
       startActivityForResult(
-          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx),
+          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, spineIdx),
           [this](const ActivityResult& result) {
+            if (result.isCancelled) {
+              openReaderMenu();
+              return;
+            }
             if (!result.isCancelled) {
               const auto& chapterResult = std::get<ChapterResult>(result.data);
               RenderLock lock(*this);
@@ -1201,6 +1267,19 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               section.reset();
               verticalSection.reset();
             }
+            const auto& chapterResult = std::get<ChapterResult>(result.data);
+            RenderLock lock(*this);
+
+            clearDeferredReposition();
+            currentSpineIndex = chapterResult.spineIndex;
+
+            // If anchor is not empty, it will be used later to calculate the page number.
+            pendingAnchor = chapterResult.anchor;
+
+            // Otherwise page 0 will be used.
+            nextPageNumber = 0;
+
+            section.reset();
           });
       break;
     }
@@ -1222,7 +1301,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startActivityForResult(
           std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
           [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
+            if (result.isCancelled) {
+              openReaderMenu();
+            } else {
               jumpToPercent(std::get<PercentResult>(result.data).percent);
             }
           });
@@ -1473,6 +1554,12 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 }
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn) {
+  // A page turn is authoritative: do not let a resume/reflow position captured
+  // at session start snap the reader back after the incremental build completes.
+  {
+    RenderLock lock(*this);
+    clearDeferredReposition();
+  }
   // Tilt- and auto-page-turn calls reach here without a button press, so the loop()-side stamp
   // bump didn't fire -- cancel a running image warm before the chapter-boundary branches below
   // block on the RenderLock it holds.
@@ -1582,11 +1669,23 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (currentSpineIndex == epub->getSpineItemsCount()) {
     // Save progress at spine=spineCount so the library shows 100%.
     saveProgress(currentSpineIndex, 0, 1, verticalOverride, furiganaOverride);
-    // Sole load site: runs on the render task (serialized by RenderLock); the main
-    // task only reads the suggestions once the loaded flag is published
-    endOfBookOptions.loadOnce(epub->getPath());
+    // Sole creation + load site: runs on the render task (serialized by
+    // RenderLock); the main task only reads the suggestions once the loaded
+    // flag is published. Created here so the app + theme tokens only exist
+    // while the end screen shows; on OOM the end screen renders empty.
+    if (!endOfBookOptions) {
+      endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
+      if (!endOfBookOptions) LOG_ERR("ERS", "OOM: EndOfBookOptions");
+      // Release-publish AFTER construction so the main task's acquire load
+      // can't observe a half-built object.
+      endOfBookOptionsReady.store(endOfBookOptions != nullptr, std::memory_order_release);
+    }
+    if (endOfBookOptions) endOfBookOptions->loadOnce(epub->getPath());
     renderer.clearScreen();
-    endOfBookOptions.render(renderer, mappedInput);
+    if (endOfBookOptions) {
+      endOfBookOptions->loadOnce(epub->getPath());
+      endOfBookOptions->render(renderer, mappedInput);
+    }
     renderer.displayBuffer();
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
@@ -2148,8 +2247,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // Otherwise fall back to the settings-change reposition: read after the cache-hit reset above,
     // a spec match means the saved page number still names the same content so there is nothing to
     // reposition, while a page jump or fragment anchor is a deliberate navigation that outranks it.
+    const bool explicitOffsetJump = pendingOffsetJump.has_value();
     const std::optional<uint32_t> offsetJump =
-        pendingOffsetJump.has_value() ? pendingOffsetJump
+        explicitOffsetJump ? pendingOffsetJump
         : (pendingPageJump.has_value() || !pendingAnchor.empty() || currentSpineIndex != cachedSpineIndex)
             ? std::nullopt
             : cachedVisibleTextOffset;
@@ -2332,7 +2432,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (offsetJump.has_value()) {
       if (const auto offsetPage = section->getPageForVisibleTextOffset(*offsetJump)) {
         section->currentPage = *offsetPage;
+        // This anchor has now established the landing page. It must not be
+        // applied again by applyDeferredReposition() after a background build
+        // finishes, or it would undo page turns made during that build.
+        clearDeferredReposition();
       }
+    }
+    if (explicitOffsetJump) {
+      // An explicit bookmark/sync target supersedes any stale session-start
+      // resume anchor even when its offset cannot be resolved (for example an
+      // empty chapter).
+      clearDeferredReposition();
     }
     pendingOffsetJump.reset();  // one-shot explicit jump: consumed on this render
 
@@ -2672,9 +2782,13 @@ bool EpubReaderActivity::applyDeferredReposition() {
     // superimposed under the new one (photographed on device); take the absolute HALF pass.
     pagesUntilFullRefresh = 1;
   }
-  cachedChapterTotalPageCount = 0;  // consumed; don't read cached progress again
-  cachedVisibleTextOffset.reset();
+  clearDeferredReposition();
   return changed;
+}
+
+void EpubReaderActivity::clearDeferredReposition() {
+  cachedChapterTotalPageCount = 0;
+  cachedVisibleTextOffset.reset();
 }
 
 // Speculative + bookkeeping work that runs while the finished page is on screen. Order and gating
@@ -3798,6 +3912,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
 
   {
     RenderLock lock(*this);
+    clearDeferredReposition();
     pendingAnchor = std::move(anchor);
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
@@ -3816,6 +3931,7 @@ void EpubReaderActivity::restoreSavedPosition() {
 
   {
     RenderLock lock(*this);
+    clearDeferredReposition();
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();

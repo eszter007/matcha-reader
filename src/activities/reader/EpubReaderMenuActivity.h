@@ -5,16 +5,16 @@
 #include <string>
 #include <vector>
 
-#include "activities/Activity.h"
+#include "activities/UiListActivity.h"
 #include "components/OptionPopup.h"
-#include "util/ButtonNavigator.h"
 
-class EpubReaderMenuActivity final : public Activity {
+class EpubReaderMenuActivity final : public UiListActivity {
  public:
   // Menu actions available from the reader menu.
   enum class MenuAction {
     SELECT_CHAPTER,
     FOOTNOTES,
+    TEXT_SETTINGS,
     GO_TO_PERCENT,
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
@@ -25,36 +25,15 @@ class EpubReaderMenuActivity final : public Activity {
     GO_HOME,
     SYNC,
     DELETE_CACHE,
+    DICTIONARY,
     WORD_LOOKUP,
     TRANSLATE_PAGE,
     TOGGLE_VERTICAL,
     TOGGLE_FURIGANA,
     TOGGLE_PANELS_ONLY,
-    READER_SETTINGS,
-    DICTIONARY
+    READER_SETTINGS
   };
 
-  // hasWordLookup gates whether Word Lookup appears at all (book-level: is
-  // there a dictionary + is this a supported language) -- stable across a
-  // book's pages, so hiding it doesn't shift other items around per-page.
-  // hasPageText reflects whether the CURRENT page/panel actually has text
-  // to act on; when false, Word Lookup/Translate/QR are dimmed (still
-  // shown, still navigable) rather than hidden, since that can change
-  // page-to-page (e.g. manga panels without OCR'd dialogue, image-only
-  // EPUB pages) and hiding/showing per-page would shift menu positions.
-  // mangaMode hides the generic Look Up dictionary entry (manga's Word Lookup already covers
-  // OCR'd text; unlike imageReaderMinimal, this keeps Word Lookup, Translate Page and Auto Page
-  // Turn, which manga does support). Reader Settings itself is always shown -- issue #44's fix
-  // is on the other end: MangaReaderActivity now routes READER_SETTINGS to a Settings screen
-  // filtered to what manga actually has (SettingsActivity's own mangaMode), rather than hiding
-  // the menu item, which used to do nothing when tapped.
-  // hideGenericLookup independently hides Look Up for a Japanese EPUB: free-form dictionary
-  // lookup doesn't apply to unsegmented Japanese text, where Word Lookup is the only
-  // sensible entry.
-  // verticalEnabled/furiganaEnabled seed this menu's own MenuResult (still read by the reader's
-  // apply-if-changed check) but no longer have an in-menu control to change them -- Vertical
-  // Text and Furigana moved into Reader Settings, gated there on the same condition
-  // (isJapaneseBook() || forced on) this menu used to gate its own now-removed toggle items.
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
                                   const uint8_t currentOrientation, const bool hasFootnotes,
@@ -64,9 +43,6 @@ class EpubReaderMenuActivity final : public Activity {
                                   const bool mangaMode = false, const bool hideGenericLookup = false,
                                   const bool showPanelsOnlyToggle = false, const bool panelsOnlyEnabled = false);
 
-  void onEnter() override;
-  void onExit() override;
-  void loop() override;
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
 
@@ -79,24 +55,53 @@ class EpubReaderMenuActivity final : public Activity {
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
                                               bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
                                               bool showPanelsOnlyToggle);
+
+  // Row storage: menuItems is at most MAX_MENU_ITEMS (1 fixed + FOOTNOTES +
+  // BOOKMARKS + 11 always-present rows in buildMenuItems()), so a
+  // fixed-capacity array avoids any heap allocation for the row list. Labels
+  // are set once in the constructor (buildMenuRowItems()); buildScreen()
+  // only refreshes the two rows whose value reflects live state (rotation,
+  // page-turn interval).
+  // 16 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
+  // Reader Settings on top of upstream's set); 18 leaves headroom for one more without a silent
+  // truncation, which a fixed-capacity array cannot report.
+  static constexpr size_t MAX_MENU_ITEMS = 18;
+  freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
+  void buildMenuRowItems();
+
+  int listCount() const override { return static_cast<int>(menuItems.size()); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  // Popup input/close-swallow runs before any button or touch handling.
+  bool handleCustomInput() override;
+  // Back closes on RELEASE and Confirm activates on RELEASE; everything else
+  // (row navigation, page jumps) falls through to the base handler.
+  bool handleButtons() override;
+  // Header via GUI.drawHeader inside the safe area for the battery indicator.
+  void drawChrome() override;
+
   void closeCancelled();
 
+  // Fixed menu layout
+  // Not const: the fork rebuilds the row set when a toggle changes what is shown.
   std::vector<MenuItem> menuItems;
+  // Whether the CURRENT page/panel has text to act on. Word Lookup / Translate / QR stay in the
+  // list but render with ListItem::enabled=false when it doesn't, so their positions never shift
+  // page-to-page (manga panels without OCR'd dialogue, image-only EPUB pages).
   bool hasPageText = true;
 
-  int selectedIndex = 0;
-
-  ButtonNavigator buttonNavigator;
   OptionPopup optionPopup;
   // True while the button press that closed the popup is still held; its release
   // must not fall through to the menu's own Back/Confirm handlers.
   bool popupClosing = false;
   std::string title = "Reader Menu";
   uint8_t pendingOrientation = 0;
-  uint8_t selectedPageTurnOption = 0;
+  // Seed this menu's MenuResult (still read by the reader's apply-if-changed check); the in-menu
+  // controls for vertical/furigana moved into Reader Settings.
   bool pendingVerticalEnabled = false;
   bool pendingFuriganaEnabled = true;
   bool panelsOnlyEnabled = false;
+  uint8_t selectedPageTurnOption = 0;
   const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
                                                 StrId::STR_LANDSCAPE_CCW};
   const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};

@@ -96,6 +96,11 @@ Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
+Version 76 merges upstream's v37 change into the fork's format: the fixed-size
+footnote href field grows from 96 to 256 bytes for long calibre paths, taking
+each serialized footnote record from 128 to 288 bytes. Older section caches
+cannot be read under the new framing and are rebuilt.
+
 Version 75 is binary-identical to version 74. The version was bumped because a
 `font-size` on `<html>` or `<body>` is no longer applied to layout: it restates
 the base text size, and the reader's own font already *is* that base (every
@@ -144,10 +149,10 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 35
+#define EXPECTED_VERSION 37
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
-#define FOOTNOTE_HREF_LEN 96
+#define FOOTNOTE_HREF_LEN 256
 
 struct String {
     u32 length [[hidden, comment("String byte length")]];

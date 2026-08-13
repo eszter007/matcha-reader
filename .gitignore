@@ -37,3 +37,4 @@ gemini.key
 /dependencies.lock
 /sdkconfig.*
 sdkconfig.sticky
+flake.*
