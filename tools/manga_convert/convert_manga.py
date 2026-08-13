@@ -1278,6 +1278,14 @@ def main():
             print(f"[{page_idx + 1}/{len(pages)}] {os.path.basename(src_path)}")
 
             img = Image.open(src_path)
+            # Re-encoding is a SIDE EFFECT of resizing here -- Pillow's JPEG writer emits baseline
+            # -- and that is the only reason running a book through this script fixes a
+            # progressive page the device decodes poorly or not at all (issue #16). A page that
+            # already fits the target is copied through verbatim below and keeps whatever encoding
+            # it arrived with, so a progressive JPEG small enough to skip the resize stays
+            # progressive even though the user passed --x4 precisely to avoid that. Note it here,
+            # while `img` is still the file as opened.
+            src_is_progressive = bool(img.info.get("progressive") or img.info.get("progression"))
             # Downscale FIRST, before panel detection: every coordinate downstream (panel boxes,
             # crop rects, OCR text boxes, the page dims in panels.idx) then lives in the resized
             # space, matching the page/crop files actually written -- nothing needs rescaling.
@@ -1309,9 +1317,14 @@ def main():
                     img.convert("RGB").save(
                         os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
                     )
-                elif was_resized:
+                elif was_resized or src_is_progressive:
                     # Resized: the source file no longer matches -- re-encode in the source's own
                     # format so the output keeps its extension (PNG stays PNG, JPEG stays JPEG).
+                    # Progressive: the bytes still match, but re-encode anyway so the page lands on
+                    # the device as baseline. The firmware decodes progressive JPEGs from their DC
+                    # coefficients alone -- a one-eighth-resolution preview scaled back up -- and
+                    # refuses the subsampled split-DC variant outright, so passing one through
+                    # costs detail at best and the whole page at worst.
                     if ext == ".png":
                         img.save(os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "PNG", optimize=True)
                     else:
