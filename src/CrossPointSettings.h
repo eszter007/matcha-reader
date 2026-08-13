@@ -269,7 +269,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t uiTheme = LYRA;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
-  // Power button return from footnotes (1 = enabled, 0 = disabled)
+  // Power button return from footnotes (1 = enabled, 0 = disabled). Read by
+  // EpubReaderActivity::loop, and only meaningful while shortPwrBtn == FOOTNOTES -- which is also
+  // the only time either settings UI offers it.
   uint8_t pwrBtnFootnoteBack = 1;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)
   uint8_t embeddedStyle = 1;

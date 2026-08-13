@@ -779,7 +779,12 @@ void EpubReaderActivity::loop() {
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
       mappedInput.wasReleased(MappedInputManager::Button::Power) &&
       !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    if (footnoteDepth > 0) {
+    // Inside a footnote the click is REPURPOSED: instead of opening the panel again it jumps back
+    // to the reference it was read from. That repurposing is the whole of what
+    // pwrBtnFootnoteBack ("Quick-return from footnotes") names, so it is what the setting gates --
+    // switched off, the click keeps one meaning everywhere and opens the panel, and Back (handled
+    // above) remains the way out of a footnote.
+    if (footnoteDepth > 0 && SETTINGS.pwrBtnFootnoteBack) {
       restoreSavedPosition();
     } else {
       openFootnotesPanel();
