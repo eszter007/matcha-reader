@@ -389,7 +389,10 @@ class EpubReaderActivity final : public Activity {
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();
-  void openDictionaryWordSelect();
+  // pageOnScreen: the framebuffer still holds the reader page, so the vertical word-lookup panel
+  // can draw its cursor straight onto it instead of paying for a page repaint first. False when
+  // something else was on screen (the reader menu).
+  void openDictionaryWordSelect(bool pageOnScreen);
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
   bool launchKOReaderSync();
@@ -403,7 +406,13 @@ class EpubReaderActivity final : public Activity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
-  void openWordLookupPanel();
+  void openWordLookupPanel(bool pageOnScreen);
+  // Repaints the current vertical page (body + status bar) for the word-lookup panel's select
+  // view, which owns no page of its own -- a VerticalPage copy would cost ~15KB, the same
+  // headroom the scan and the dictionary caches need. Called from the panel's render(), i.e.
+  // under the render lock, which is what the section's shared single-page slot requires.
+  static void repaintVerticalPageForPanelThunk(void* ctx);
+  void repaintVerticalPageForPanel();
   static constexpr uint16_t kSpineProbeFailed = 0xFFFF;  // session marker: cache probe failed, don't retry
   // Page numbering across the logical ToC chapter: spine files without their own ToC entry
   // (inline illustration files etc.) inherit the previous entry's tocIndex, so the "page X/Y"

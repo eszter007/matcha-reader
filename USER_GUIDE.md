@@ -709,6 +709,26 @@ toggle in place without leaving the menu, and both are remembered per book.
 
 Reader menu → **Word Lookup**.
 
+In **vertical text**, lookup opens on the page you were reading, with the current word highlighted in place:
+
+| Button | Action |
+| --- | --- |
+| Side buttons (Up / Down) | Move to the previous / next word, down the column |
+| Left / Right | Jump to the next / previous column (Left runs forward, with the text) |
+| Look Up | Open the definition of the highlighted word |
+| Back | Return to reading |
+| Power (short click) | Leave lookup, when **Short power button click** is set to **Word Lookup** |
+
+From the definition, **Back** returns to the highlighted page rather than to the book, so looking up several
+words on one page costs a couple of presses each.
+
+The page is mapped word by word in the background while you choose. Words the mapping has not reached yet can
+still be selected — the highlight waits for it and moves as soon as it arrives, showing **Scanning...** while
+you wait. A page you have looked at before is mapped instantly from its cache, and the cursor returns to the
+word you left it on.
+
+In **horizontal text** and in manga, lookup opens directly in the definition view:
+
 | Button | Action |
 | --- | --- |
 | Left / Right | Move between matched words on the page |

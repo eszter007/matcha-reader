@@ -12,6 +12,8 @@
 #include <WordLookup.h>
 
 #include <algorithm>
+#include <climits>
+#include <cstdlib>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
@@ -23,13 +25,21 @@
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
-                                                           const uint16_t spineIndex, const uint16_t pageIndex)
+                                                           const uint16_t spineIndex, const uint16_t pageIndex,
+                                                           const VerticalSelectContext& selectContext)
     : Activity("WordLookup", renderer, mappedInput),
+      selectCtx(selectContext),
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
   const size_t slash = this->scanCachePath.find_last_of('/');
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
+  if (selectCtx.valid()) {
+    mode = Mode::Select;
+    // Nothing has to be painted for the first frame when the reader's page is still on screen:
+    // the cursor is two XOR-ed rectangles over pixels that are already there.
+    selectPageDrawn = selectCtx.pageOnScreen;
+  }
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
   initScanFromCacheOrBurst("vertical");
@@ -143,9 +153,21 @@ void EpubReaderWordLookupActivity::onEnter() {
   LOG_INF("WLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // A scan-cache hit remembers the position the user was last at on this exact page -- resume
   // there instead of making them click back through every entry they've already seen.
-  if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
-      scan.restoredCursorIndex < scan.selectableGlyphs.size()) {
-    cursorIndex = scan.restoredCursorIndex;
+  const bool restored = scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
+                        scan.restoredCursorIndex < scan.selectableGlyphs.size();
+  if (restored) cursorIndex = scan.restoredCursorIndex;
+
+  // Select mode shows the page, not a definition, so opening it reads no dictionary entry at
+  // all: the constructor's burst already stopped at the first selectable word, and the cursor is
+  // drawn over pixels that are on screen. The definition read waits for Confirm.
+  if (mode == Mode::Select) {
+    if (!restored) cursorIndex = 0;
+    refreshCursorBoxes();
+    requestUpdate();
+    return;
+  }
+
+  if (restored) {
     performLookup();
     requestUpdate();
     return;
@@ -207,6 +229,294 @@ void EpubReaderWordLookupActivity::moveCursor(int delta) {
   }
   cursorIndex = newIndex;
   performLookup();
+}
+
+// --- Select mode ----------------------------------------------------------------------------
+
+// Index math for a reading-order step, without moveCursor()'s dictionary read: select mode shows
+// no definition, so a step costs two rectangle inverts and one fast refresh. Returns false when
+// the step would land past the scan frontier -- the word is probably there, it just has not been
+// segmented yet, and the caller parks the move rather than blocking on it.
+bool EpubReaderWordLookupActivity::stepCursor(const int delta, int& outIndex) {
+  outIndex = cursorIndex;
+  if (scan.selectableGlyphs.empty()) return scan.isDone();
+
+  const int maxIdx = static_cast<int>(scan.selectableGlyphs.size()) - 1;
+  int newIndex = cursorIndex + delta;
+  if (newIndex > maxIdx) {
+    if (!scan.isDone()) return false;
+    newIndex = 0;  // the whole page is mapped, so the end is real -- cycle round
+  }
+  if (newIndex < 0) newIndex = scan.isDone() ? maxIdx : 0;
+  outIndex = newIndex;
+  return true;
+}
+
+void EpubReaderWordLookupActivity::moveSelection(const int delta) {
+  int target = cursorIndex;
+  if (!stepCursor(delta, target)) {
+    // Keep counting presses while the walk catches up, so holding the button past the frontier
+    // lands where the user aimed instead of one word short of it.
+    if (pending.kind == PendingMove::Kind::Word && (pending.delta > 0) == (delta > 0)) {
+      pending.delta += delta;
+    } else {
+      pending = PendingMove{};
+      pending.kind = PendingMove::Kind::Word;
+      pending.delta = delta;
+      pending.requestedAt = millis();
+    }
+    return;
+  }
+  pending = PendingMove{};
+  if (target == cursorIndex) return;
+  cursorIndex = target;
+  refreshCursorBoxes();
+  requestUpdate();
+}
+
+// Jump to the neighbouring column. Vertical Japanese runs right to left, so direction +1 (the
+// Left button) moves FORWARD in the text. The target is spatial and known immediately -- every
+// cell's column comes from the page layout, not from the dictionary walk -- so the move is
+// accepted even when that part of the page has not been segmented yet, and completed by
+// resolvePendingMove() as the frontier reaches it.
+void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
+  if (cursorIndex < 0 || cursorIndex >= static_cast<int>(scan.selectableGlyphs.size())) return;
+  const auto& cur = scan.selectableGlyphs[static_cast<size_t>(cursorIndex)];
+  const int target = static_cast<int>(cur.column) + direction;
+  if (target < 0) return;
+
+  pending = PendingMove{};
+  pending.kind = PendingMove::Kind::Column;
+  pending.delta = direction;
+  pending.targetColumn = static_cast<uint16_t>(target);
+  pending.anchorRow = cur.row;
+  pending.requestedAt = millis();
+  resolvePendingMove();  // usually lands at once: the walk is normally well ahead of the reader
+}
+
+bool EpubReaderWordLookupActivity::columnRange(const uint16_t column, size_t& first, size_t& last) const {
+  bool found = false;
+  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+    if (scan.allGlyphs[i].column != column) continue;
+    if (!found) {
+      first = i;
+      found = true;
+    }
+    last = i;
+  }
+  return found;
+}
+
+int EpubReaderWordLookupActivity::selectableInColumn(const uint16_t column, const uint16_t anchorRow) const {
+  int best = -1;
+  int bestDistance = INT_MAX;
+  for (size_t i = 0; i < scan.selectableGlyphs.size(); i++) {
+    const auto& g = scan.selectableGlyphs[i];
+    if (g.column != column) continue;
+    const int distance = std::abs(static_cast<int>(g.row) - static_cast<int>(anchorRow));
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = static_cast<int>(i);
+    }
+  }
+  return best;
+}
+
+// Completes a parked move once the scan has mapped what it needs, and puts up the "Scanning..."
+// hint if the wait is long enough to be noticed. Called every tick while a move is parked.
+void EpubReaderWordLookupActivity::resolvePendingMove() {
+  if (pending.kind == PendingMove::Kind::None) return;
+
+  const bool hadNotice = pending.noticeShown;
+  bool moved = false;
+
+  bool stillWaiting = false;
+  if (pending.kind == PendingMove::Kind::Word) {
+    int target = cursorIndex;
+    if (stepCursor(pending.delta, target)) {
+      moved = target != cursorIndex;
+      cursorIndex = target;
+    } else {
+      stillWaiting = true;
+    }
+  } else {
+    // Walk in the jump's direction: a column can legitimately hold no selectable word (all
+    // particles, or a run of punctuation), and stopping there would strand the cursor. Running
+    // out of columns is a completed move that simply had nowhere to go -- the request is dropped
+    // either way, so a jump at the edge of the page can never leave a wait pending forever.
+    for (int column = pending.targetColumn; column >= 0; column += pending.delta) {
+      size_t first = 0;
+      size_t last = 0;
+      if (!columnRange(static_cast<uint16_t>(column), first, last)) break;  // past the page edge
+      if (!scan.isDone() && scan.scannedGlyphs() <= last) {
+        stillWaiting = true;  // this column is not mapped yet
+        break;
+      }
+      const int hit = selectableInColumn(static_cast<uint16_t>(column), pending.anchorRow);
+      if (hit >= 0) {
+        moved = hit != cursorIndex;
+        cursorIndex = hit;
+        break;
+      }
+    }
+  }
+  if (!stillWaiting) pending = PendingMove{};
+
+  if (pending.kind != PendingMove::Kind::None) {
+    if (!pending.noticeShown && millis() - pending.requestedAt >= kWaitNoticeMs) {
+      pending.noticeShown = true;
+      requestUpdate();
+    }
+    return;
+  }
+  if (moved) refreshCursorBoxes();
+  // Redraw on a resolved wait even when the cursor did not move: the hint bar is showing a
+  // "Scanning..." label that is no longer true.
+  if (moved || hadNotice) requestUpdate();
+}
+
+void EpubReaderWordLookupActivity::enterDefinition() {
+  mode = Mode::Definition;
+  pending = PendingMove{};
+  // The definition view paints over the page, so the highlight and the page pixels are both gone.
+  drawnBoxCount = 0;
+  selectPageDrawn = false;
+  selectHintsDrawn = false;
+  initialRenderDone = false;
+  performLookup();
+}
+
+void EpubReaderWordLookupActivity::returnToSelect() {
+  mode = Mode::Select;
+  selectPageDrawn = false;  // the definition overdrew the page; it has to be painted again
+  drawnBoxCount = 0;
+  // The definition view has its own word navigation, so the cursor may have moved while it was up.
+  refreshCursorBoxes();
+  selectHintsDrawn = false;
+  initialRenderDone = false;
+  fastRefreshCount = 0;
+  requestUpdate();
+}
+
+// Returns false when the activity is finishing or has switched view, so the caller stops touching
+// state this tick.
+bool EpubReaderWordLookupActivity::handleSelectInput() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return false;
+  }
+
+  // The panel is entered while Confirm is still held (the reader opens it on a long press), so
+  // the release that follows is not a selection -- wait for a fresh press first.
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmPressSeen) {
+    // While a move is parked the user is waiting to arrive somewhere; looking up the word they
+    // are leaving would be the wrong entry, and the wait is a few hundred ms at most.
+    if (pending.kind == PendingMove::Kind::None && !scan.selectableGlyphs.empty()) {
+      enterDefinition();
+      return false;
+    }
+    return true;
+  }
+
+  // Side buttons step word by word (down a column is the same gesture as a page turn), front
+  // Left/Right jump columns. Button::Up/Down are the physical side buttons whatever the page-turn
+  // layout setting is, so this mapping holds on every device that has them.
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] { moveSelection(1); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] { moveSelection(-1); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { jumpColumn(1); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { jumpColumn(-1); });
+  return true;
+}
+
+void EpubReaderWordLookupActivity::refreshCursorBoxes() {
+  cursorBoxCount = 0;
+  if (cursorIndex < 0 || static_cast<size_t>(cursorIndex) >= scan.selectToAllIdx.size()) return;
+  const size_t start = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
+  if (start >= scan.allGlyphs.size()) return;
+
+  const size_t span = std::max<size_t>(scan.selectableGlyphs[static_cast<size_t>(cursorIndex)].matchLen, 1);
+  const size_t end = std::min(start + span, scan.allGlyphs.size());
+  const int cellPx = selectCtx.cellPx;
+
+  size_t i = start;
+  while (i < end && cursorBoxCount < kMaxHighlightBoxes) {
+    const uint16_t column = scan.allGlyphs[i].column;
+    size_t j = i + 1;
+    while (j < end && scan.allGlyphs[j].column == column) j++;
+    const auto& firstCell = scan.allGlyphs[i];
+    const auto& lastCell = scan.allGlyphs[j - 1];
+    const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
+    const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
+    HighlightBox& box = cursorBoxes[cursorBoxCount++];
+    // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the neighbouring
+    // column's ink and of any ruby, which is drawn outside the cell.
+    box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
+    box.y = static_cast<int16_t>(top);
+    box.w = static_cast<int16_t>(cellPx);
+    box.h = static_cast<int16_t>(bottom - top);
+    i = j;
+  }
+}
+
+void EpubReaderWordLookupActivity::invertBoxes(const HighlightBox* boxes, const int count) const {
+  for (int i = 0; i < count; i++) renderer.invertRect(boxes[i].x, boxes[i].y, boxes[i].w, boxes[i].h);
+}
+
+void EpubReaderWordLookupActivity::drawSelectHints() {
+  const bool waiting = pending.kind != PendingMove::Kind::None && pending.noticeShown;
+  // Word stepping is on the side buttons, which the reader leaves unlabelled for page turns too.
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), waiting ? tr(STR_SCANNING) : tr(STR_LOOKUP), tr(STR_DIR_LEFT),
+                                            tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+void EpubReaderWordLookupActivity::renderSelect() {
+  const bool repaint = !selectPageDrawn;
+  if (repaint) {
+    renderer.clearScreen();
+    if (selectCtx.repaintPage) selectCtx.repaintPage(selectCtx.repaintCtx);
+    drawnBoxCount = 0;  // the repaint took the old highlight with it
+    selectHintsDrawn = false;
+    selectPageDrawn = true;
+  } else if (drawnBoxCount > 0) {
+    invertBoxes(drawnBoxes, drawnBoxCount);  // erase: inverting again restores what was under it
+    drawnBoxCount = 0;
+  }
+
+  // Hints are painted BETWEEN the erase and the redraw, never under a live box: the box XORs over
+  // whatever the band holds, so erasing it has to happen while those pixels are unchanged.
+  const bool waiting = pending.kind != PendingMove::Kind::None && pending.noticeShown;
+  if (!selectHintsDrawn || waiting != selectHintsShowWaiting) {
+    drawSelectHints();
+    selectHintsDrawn = true;
+    selectHintsShowWaiting = waiting;
+  }
+
+  // Copied before drawing, not read again afterwards: the main task may replace cursorBoxes with
+  // the next move at any point, and the erase above must always match these exact rectangles.
+  for (int i = 0; i < cursorBoxCount; i++) drawnBoxes[i] = cursorBoxes[i];
+  drawnBoxCount = cursorBoxCount;
+  invertBoxes(drawnBoxes, drawnBoxCount);
+
+  if (repaint) {
+    // A freshly painted page deserves a clean pass; the fast LUT would carry over the definition
+    // view's ghost.
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    fastRefreshCount = 0;
+    return;
+  }
+  fastRefreshCount++;
+  if (fastRefreshCount >= kFullRefreshInterval) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    fastRefreshCount = 0;
+  } else {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
 }
 
 std::string EpubReaderWordLookupActivity::buildLookupText(size_t startIdx) const {
@@ -500,18 +810,69 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 }
 
 void EpubReaderWordLookupActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+  if (mode == Mode::Select) {
+    if (!handleSelectInput()) return;
+  } else if (!handleDefinitionInput()) {
+    return;
+  }
+
+  // Progressive background scan: keep mapping the page's selectable words in small slices
+  // between input polls (skipLoopDelay() holds full CPU and fast ticks while this runs, so a
+  // slice never swallows a button press). Everything here runs on the main task -- the render
+  // task only ever reads counter sizes -- so no lock is needed and, unlike the abandoned
+  // reader-idle precompute, nothing can starve another activity's rendering.
+  // The render task's font decompressor can temporarily consume nearly the entire largest block.
+  // Do not overlap that transient allocation with dictionary reads/vector growth.
+  if (!scan.isDone() && !RenderLock::peek()) {
+    // A parked move is a user waiting on the frontier with nothing else to look at: spend longer
+    // slices so it arrives sooner. Ordinary background mapping keeps the small slice.
+    const bool done = stepScan(pending.kind != PendingMove::Kind::None ? 120 : 40);
+    if (mode == Mode::Definition) {
+      // The open can show "No match" if the initial burst found nothing yet -- promote the first
+      // word as soon as the background scan discovers it.
+      if (!hasResult && !scan.selectableGlyphs.empty()) {
+        performLookup();
+        requestUpdate();
+      }
+    } else if (cursorBoxCount == 0 && !scan.selectableGlyphs.empty()) {
+      refreshCursorBoxes();  // first word of a cold page found: draw the cursor onto it
+      requestUpdate();
+    }
+    if (done) {
+      DictIndex::logAndResetStats("progressive scan complete");
+      // Select mode shows no counter, so a redraw here would cost an e-ink flash for no change.
+      if (mode == Mode::Definition) requestUpdate();
+    }
+  }
+
+  if (mode == Mode::Select) resolvePendingMove();
+}
+
+bool EpubReaderWordLookupActivity::handleDefinitionInput() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    // Back steps out of the definition and onto the page it came from, keeping the scan, the
+    // cursor and the page pixels' place in the flow; only leaving select mode ends the panel.
+    if (selectCtx.valid()) {
+      returnToSelect();
+      return false;
+    }
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));
     finish();
-    return;
+    return false;
+  }
+  if (ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return false;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     performLookup();
-    return;
+    return false;
   }
 
   const bool sideButtonsForLookup =
@@ -541,27 +902,7 @@ void EpubReaderWordLookupActivity::loop() {
       requestUpdate();
     }
   });
-
-  // Progressive background scan: keep mapping the page's selectable words in small slices
-  // between input polls (skipLoopDelay() holds full CPU and fast ticks while this runs, so a
-  // slice never swallows a button press). Everything here runs on the main task -- the render
-  // task only ever reads counter sizes -- so no lock is needed and, unlike the abandoned
-  // reader-idle precompute, nothing can starve another activity's rendering.
-  // The render task's font decompressor can temporarily consume nearly the entire largest block.
-  // Do not overlap that transient allocation with dictionary reads/vector growth.
-  if (!scan.isDone() && !RenderLock::peek()) {
-    const bool done = stepScan(40);
-    // The open can show "No match" if the initial burst found nothing yet -- promote the first
-    // word as soon as the background scan discovers it.
-    if (!hasResult && !scan.selectableGlyphs.empty()) {
-      performLookup();
-      requestUpdate();
-    }
-    if (done) {
-      DictIndex::logAndResetStats("progressive scan complete");
-      requestUpdate();  // redraw the position counter with the final total
-    }
-  }
+  return true;
 }
 
 void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
@@ -645,6 +986,11 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
 }
 
 void EpubReaderWordLookupActivity::render(RenderLock&&) {
+  if (mode == Mode::Select) {
+    renderSelect();
+    return;
+  }
+
   auto& theme = UITheme::getInstance();
   auto metrics = theme.getMetrics();
   Rect screen = theme.getScreenSafeArea(renderer, true, false);

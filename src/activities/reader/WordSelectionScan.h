@@ -30,7 +30,11 @@ class WordSelectionScan {
     uint16_t row;
     uint32_t codepoint;
     uint32_t paragraphIndex;
-    bool rotated;
+    // Cells this entry's match covers, leading digits included (15人 = 3). Only meaningful in
+    // selectableGlyphs, where it is what lets a caller draw a highlight box over the word ON the
+    // page without a dictionary read per cursor move -- the scan already knew the length and
+    // used to discard it. 0 in allGlyphs; treat 0 as "one cell".
+    uint8_t matchLen;
   };
 
   // Populate allGlyphs from a page and reset the state machine. Vertical (tategaki) mode.
@@ -75,6 +79,12 @@ class WordSelectionScan {
   std::vector<GlyphRef> allGlyphs;         // Full glyph list for building lookup text
   std::vector<GlyphRef> selectableGlyphs;  // Positions with a dictionary match
   std::vector<size_t> selectToAllIdx;      // Maps selectableGlyphs index -> allGlyphs index
+
+  // How far the sequential walk has advanced through allGlyphs. Every cell's page position is
+  // known from initFrom*(), but only cells BELOW this frontier have been segmented -- so a
+  // caller offering spatial navigation (jump a column) can tell whether the place the user aimed
+  // at is already mapped, or whether the move has to wait for the walk to reach it.
+  size_t scannedGlyphs() const { return scanPos; }
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;

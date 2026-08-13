@@ -249,6 +249,12 @@ class GfxRenderer {
                        bool roundTopRight, bool roundBottomLeft, bool roundBottomRight, bool state) const;
   void maskRoundedRectOutsideCorners(int x, int y, int width, int height, int radius, Color color = Color::White) const;
   void fillRect(int x, int y, int width, int height, bool state = true) const;
+  // XOR-invert exactly the given logical rectangle, leaving what is under it legible in reverse
+  // video. Self-inverse: inverting the same rectangle a second time restores the original pixels
+  // bit for bit, so a moving selection cursor needs no saved copy of what it covered and no
+  // re-render of the content beneath it. Edge-exact (head/tail bit masks), unlike the 8px-aligned
+  // readFramebufferRegion/writeFramebufferRegion pair.
+  void invertRect(int x, int y, int width, int height) const;
   void fillRectDither(int x, int y, int width, int height, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
