@@ -386,8 +386,9 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
 void EpubReaderWordLookupActivity::enterDefinition() {
   mode = Mode::Definition;
   pending = PendingMove{};
-  // The definition view paints over the page, so the highlight and the page pixels are both gone.
-  drawnBoxCount = 0;
+  // The definition view paints over the page, so the highlight goes with it. Clearing the record
+  // of what is drawn is left to the render task, which owns it: selectPageDrawn = false already
+  // routes the next select render through the repaint branch, and that resets it there.
   selectPageDrawn = false;
   selectHintsDrawn = false;
   initialRenderDone = false;
@@ -397,7 +398,6 @@ void EpubReaderWordLookupActivity::enterDefinition() {
 void EpubReaderWordLookupActivity::returnToSelect() {
   mode = Mode::Select;
   selectPageDrawn = false;  // the definition overdrew the page; it has to be painted again
-  drawnBoxCount = 0;
   // The definition view has its own word navigation, so the cursor may have moved while it was up.
   refreshCursorBoxes();
   selectHintsDrawn = false;
@@ -442,33 +442,45 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
 }
 
 void EpubReaderWordLookupActivity::refreshCursorBoxes() {
-  cursorBoxCount = 0;
-  if (cursorIndex < 0 || static_cast<size_t>(cursorIndex) >= scan.selectToAllIdx.size()) return;
-  const size_t start = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
-  if (start >= scan.allGlyphs.size()) return;
+  // Built in locals first: the scan reads below are the slow part, and the render task must never
+  // observe a half-built set. Only the publish at the end runs with the render task locked out.
+  HighlightBox boxes[kMaxHighlightBoxes];
+  int count = 0;
 
-  const size_t span = std::max<size_t>(scan.selectableGlyphs[static_cast<size_t>(cursorIndex)].matchLen, 1);
-  const size_t end = std::min(start + span, scan.allGlyphs.size());
-  const int cellPx = selectCtx.cellPx;
+  if (cursorIndex >= 0 && static_cast<size_t>(cursorIndex) < scan.selectToAllIdx.size()) {
+    const size_t start = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
+    if (start < scan.allGlyphs.size()) {
+      const size_t span = std::max<size_t>(scan.selectableGlyphs[static_cast<size_t>(cursorIndex)].matchLen, 1);
+      const size_t end = std::min(start + span, scan.allGlyphs.size());
+      const int cellPx = selectCtx.cellPx;
 
-  size_t i = start;
-  while (i < end && cursorBoxCount < kMaxHighlightBoxes) {
-    const uint16_t column = scan.allGlyphs[i].column;
-    size_t j = i + 1;
-    while (j < end && scan.allGlyphs[j].column == column) j++;
-    const auto& firstCell = scan.allGlyphs[i];
-    const auto& lastCell = scan.allGlyphs[j - 1];
-    const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
-    const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
-    HighlightBox& box = cursorBoxes[cursorBoxCount++];
-    // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the neighbouring
-    // column's ink and of any ruby, which is drawn outside the cell.
-    box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
-    box.y = static_cast<int16_t>(top);
-    box.w = static_cast<int16_t>(cellPx);
-    box.h = static_cast<int16_t>(bottom - top);
-    i = j;
+      size_t i = start;
+      while (i < end && count < kMaxHighlightBoxes) {
+        const uint16_t column = scan.allGlyphs[i].column;
+        size_t j = i + 1;
+        while (j < end && scan.allGlyphs[j].column == column) j++;
+        const auto& firstCell = scan.allGlyphs[i];
+        const auto& lastCell = scan.allGlyphs[j - 1];
+        const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
+        const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
+        HighlightBox& box = boxes[count++];
+        // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the
+        // neighbouring column's ink and of any ruby, which is drawn outside the cell.
+        box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
+        box.y = static_cast<int16_t>(top);
+        box.w = static_cast<int16_t>(cellPx);
+        box.h = static_cast<int16_t>(bottom - top);
+        i = j;
+      }
+    }
   }
+
+  // Publish as one unit. The critical section spans a ~32-byte copy, which is what it takes to
+  // stop the render task from pairing this move's count with the previous move's rectangles.
+  portENTER_CRITICAL(&boxMux);
+  for (int i = 0; i < count; i++) cursorBoxes[i] = boxes[i];
+  cursorBoxCount = count;
+  portEXIT_CRITICAL(&boxMux);
 }
 
 void EpubReaderWordLookupActivity::invertBoxes(const HighlightBox* boxes, const int count) const {
@@ -505,10 +517,14 @@ void EpubReaderWordLookupActivity::renderSelect() {
     selectHintsShowWaiting = waiting;
   }
 
-  // Copied before drawing, not read again afterwards: the main task may replace cursorBoxes with
-  // the next move at any point, and the erase above must always match these exact rectangles.
-  for (int i = 0; i < cursorBoxCount; i++) drawnBoxes[i] = cursorBoxes[i];
-  drawnBoxCount = cursorBoxCount;
+  // Take the whole set in one go, count included, and draw only from the copy: reading the count
+  // a second time could pair it with rectangles this render never copied, XOR-ing a stale box
+  // onto the page. drawnBoxes is what the erase above will undo, so it must be exactly this.
+  portENTER_CRITICAL(&boxMux);
+  const int count = cursorBoxCount;
+  for (int i = 0; i < count; i++) drawnBoxes[i] = cursorBoxes[i];
+  portEXIT_CRITICAL(&boxMux);
+  drawnBoxCount = count;
   invertBoxes(drawnBoxes, drawnBoxCount);
 
   if (repaint) {

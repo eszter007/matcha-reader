@@ -2,6 +2,7 @@
 
 #include <Epub/VerticalParsedText.h>
 #include <GfxRenderer.h>
+#include <freertos/FreeRTOS.h>
 
 struct Rect;
 class Page;
@@ -97,9 +98,15 @@ class EpubReaderWordLookupActivity final : public Activity {
   static constexpr int kMaxHighlightBoxes = 4;
   HighlightBox cursorBoxes[kMaxHighlightBoxes];
   int cursorBoxCount = 0;
-  // What is XOR-ed into the framebuffer right now. Kept separate from cursorBoxes so the erase
-  // always matches what was actually drawn, even if the cursor moved while a render was in
-  // flight -- an erase against the wrong rectangle would leave inverted debris on the page.
+  // Guards cursorBoxes/cursorBoxCount only, and only for the copy in and the copy out: the two
+  // tasks must never pair one move's count with another move's rectangles. A ~32-byte copy is
+  // short enough for a critical section, and far cheaper than making the main loop wait on the
+  // render lock, which is held across a full e-ink refresh.
+  portMUX_TYPE boxMux = portMUX_INITIALIZER_UNLOCKED;
+  // What is XOR-ed into the framebuffer right now, owned by the render task alone. Kept separate
+  // from cursorBoxes so the erase always matches what was actually drawn, even if the cursor
+  // moved while a render was in flight -- an erase against the wrong rectangle would leave
+  // inverted debris on the page.
   HighlightBox drawnBoxes[kMaxHighlightBoxes];
   int drawnBoxCount = 0;
 
