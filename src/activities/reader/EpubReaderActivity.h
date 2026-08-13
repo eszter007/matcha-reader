@@ -5,6 +5,7 @@
 #include <Epub/VerticalSection.h>
 
 #include <atomic>
+#include <memory>
 #include <optional>
 
 #include "BookmarkEntry.h"
@@ -116,6 +117,11 @@ class EpubReaderActivity final : public Activity {
   std::optional<uint32_t> pendingOffsetJump;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
+  // A turn that arrived while a render was in flight (or inside the debounce
+  // gap), latched instead of dropped: -1 back, +1 forward, 0 none. Holds at
+  // most one turn — mashing collapses to the latest direction — and is
+  // executed by loop() once the render task is idle again.
+  int8_t pendingManualTurn = 0;
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;
@@ -156,8 +162,16 @@ class EpubReaderActivity final : public Activity {
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
   bool pendingReadFolderMove = false;
-  // Next-book suggestion menu for the End-of-Book screen
-  EndOfBookOptions endOfBookOptions;
+  // Next-book suggestion menu for the End-of-Book screen. Lazy: it embeds a
+  // GfxRendererTarget + FreeInkApp (theme tokens by value, ~2KB), so it only
+  // exists while the end screen is actually showing — created at the render
+  // path's sole load site, dropped by loop() when the user pages back in.
+  std::unique_ptr<EndOfBookOptions> endOfBookOptions;
+  // Publication flag for the pointer above: the render task creates the object
+  // and release-stores true; the main task acquire-loads before dereferencing,
+  // so it never sees a partially constructed object. Cleared (main task, under
+  // RenderLock) before reset.
+  std::atomic<bool> endOfBookOptionsReady{false};
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -365,6 +379,10 @@ class EpubReaderActivity final : public Activity {
   // settings change re-paginates a chapter). Returns true if currentPage moved.
   // No-op while the section is still building or when the pagination is unchanged (plain resume).
   bool applyDeferredReposition();
+  // The saved resume/reflow anchor is only valid until it has established the
+  // initial landing page. Later user navigation must never be overwritten when
+  // a background section build finishes.
+  void clearDeferredReposition();
   void rememberCurrentContentOffset();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
@@ -467,16 +485,19 @@ class EpubReaderActivity final : public Activity {
   // it from page 0. Reverts to normal power behavior the moment the build finishes,
   // and while the build is heap-paused (no work is happening, so spinning at full
   // speed would only burn battery; the paused gate still retries every loop pass).
-  // Full CPU only while the build is still near or behind the reader, where the wait is in front
-  // of the user. Once it is BUILD_WINDOW_AHEAD pages clear it keeps going (the chapter has to
-  // finalize, or the page total stays an estimate forever) but at the ordinary loop cadence, so
-  // the CPU can drop back to power saving. Pinning it for the whole chapter would cost battery
-  // for work nobody is waiting on.
+  // The watermark window below MUST mirror the background-build gate in loop() (the
+  // isPartial()/BUILD_WINDOW_AHEAD test): once a first-open build has laid out its
+  // look-ahead window it parks (isBuilding() stays true but loop() stops pumping it),
+  // so keying only on isBuilding() would spin at full clock indefinitely while idle on
+  // a page -- doing no build work and blocking idle light-sleep. Gate on "a build tick
+  // will actually run this pass" instead. Read unlocked like the other power heuristics
+  // (setPowerSaving/lightSleep): a stale read costs at most one loop pass either way.
   bool skipLoopDelay() override {
     return section && section->isBuilding() && !buildHeapPaused &&
-           static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD;
+           (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
   }
   bool isReaderActivity() const override { return true; }
+  bool appliesNightMode() const override { return true; }
   bool handleForcedRefresh() override {
     {
       RenderLock lock(*this);
