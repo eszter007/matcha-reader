@@ -17,6 +17,11 @@ void ButtonNavigator::onPressAndContinuous(const Buttons& buttons, const Callbac
   onContinuous(buttons, callback);
 }
 
+void ButtonNavigator::onPressAndContinuous(const MappedInputManager::Button button, const Callback& callback) {
+  onPress(button, callback);
+  onContinuous(button, callback);
+}
+
 void ButtonNavigator::onNextPress(const Callback& callback) { onPress(getNextButtons(), callback); }
 
 void ButtonNavigator::onPreviousPress(const Callback& callback) { onPress(getPreviousButtons(), callback); }
@@ -46,6 +51,13 @@ void ButtonNavigator::onPress(const Buttons& buttons, const Callback& callback) 
   }
 }
 
+void ButtonNavigator::onPress(const MappedInputManager::Button button, const Callback& callback) {
+  if (mappedInput != nullptr && mappedInput->wasPressed(button)) {
+    callback();
+    lastContinuousNavTime = millis();  // stamped after the callback -- see the Buttons overload
+  }
+}
+
 void ButtonNavigator::onRelease(const Buttons& buttons, const Callback& callback) {
   const bool wasReleased = std::any_of(buttons.begin(), buttons.end(), [](const MappedInputManager::Button button) {
     return mappedInput != nullptr && mappedInput->wasReleased(button);
@@ -66,6 +78,13 @@ void ButtonNavigator::onContinuous(const Buttons& buttons, const Callback& callb
   });
 
   if (isPressed) {
+    callback();
+    lastContinuousNavTime = millis();
+  }
+}
+
+void ButtonNavigator::onContinuous(const MappedInputManager::Button button, const Callback& callback) {
+  if (mappedInput != nullptr && mappedInput->isPressed(button) && shouldNavigateContinuously()) {
     callback();
     lastContinuousNavTime = millis();
   }

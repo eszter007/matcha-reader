@@ -63,9 +63,11 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Full CPU + fast main-loop ticks while the progressive scan is running, so the between-poll
   // scan slices stay short enough that button presses are never missed.
   bool skipLoopDelay() override { return !scan.isDone(); }
-  // Select mode draws the reader's own page, so it follows the reading surface's night-mode
-  // polarity; the definition view is an ordinary UI panel and keeps normal polarity.
-  bool appliesNightMode() const override { return mode == Mode::Select; }
+  // Part of the reading flow, opened from the page mid-read: both views keep the reading
+  // surface's night-mode polarity, exactly as the English word-select and definition activities
+  // do. Resolving it per mode instead would inflict a full-screen polarity change on every
+  // Confirm and every Back.
+  bool appliesNightMode() const override { return true; }
 
  private:
   WordSelectionScan scan;

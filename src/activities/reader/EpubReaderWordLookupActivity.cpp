@@ -434,10 +434,10 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
   // Side buttons step word by word (down a column is the same gesture as a page turn), front
   // Left/Right jump columns. Button::Up/Down are the physical side buttons whatever the page-turn
   // layout setting is, so this mapping holds on every device that has them.
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] { moveSelection(1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] { moveSelection(-1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { jumpColumn(1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { jumpColumn(-1); });
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Down, [this] { moveSelection(1); });
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Up, [this] { moveSelection(-1); });
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Left, [this] { jumpColumn(1); });
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Right, [this] { jumpColumn(-1); });
   return true;
 }
 
@@ -896,15 +896,15 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   const auto scrollUpButton =
       sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
                            : MappedInputManager::Button::Up;
-  buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
-  buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
-  buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
+  buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveCursor(1); });
+  buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveCursor(-1); });
+  buttonNavigator.onPressAndContinuous(scrollDownButton, [this] {
     if (hasResult && scrollOffset < maxScroll) {
       scrollOffset = std::min(maxScroll, scrollOffset + 5);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous({scrollUpButton}, [this] {
+  buttonNavigator.onPressAndContinuous(scrollUpButton, [this] {
     if (scrollOffset > 0) {
       scrollOffset = std::max(0, scrollOffset - 5);
       requestUpdate();
