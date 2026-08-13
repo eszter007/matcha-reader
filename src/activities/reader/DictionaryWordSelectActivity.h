@@ -17,11 +17,12 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        std::string folderName)
+                                        std::string folderName, int baseFontId)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         page(std::move(page)),
         marginLeft(marginLeft),
         marginTop(marginTop),
+        fontId(baseFontId),
         folderName(std::move(folderName)) {}
 
   void onEnter() override;
@@ -38,17 +39,18 @@ class DictionaryWordSelectActivity final : public Activity {
     uint16_t row;
     const char* text;
     EpdFontFamily::Style style;
-    // The font the line was laid out with: a block carrying a CSS font-size is drawn with its
-    // own (larger) font, and measuring its words with the reader's font would size the
-    // highlight box for text that is not there.
+    // The font this word was laid out AND drawn with by the page: the block's own font when it
+    // carries a CSS font-size, or an inline font-size on the word itself. Measuring the box with
+    // one font and repainting the word with another sizes the highlight for text that is not
+    // there -- see drawHighlightWithSnapshot.
     int fontId;
   };
 
   enum class Popup : uint8_t { None, Busy, NotFound, Error };
 
   void extractWords();
-  // Hit-test / highlight height for a word: its own line height when the block carries a CSS
-  // font-size, the page's otherwise.
+  // Hit-test / highlight height for a word: the line height of its own font when CSS gave it
+  // one, the page's otherwise.
   int wordHeight(const WordBox& word) const;
   int closestInRow(uint16_t row, int centerX) const;
   int wordAt(int x, int y) const;
@@ -60,6 +62,9 @@ class DictionaryWordSelectActivity final : public Activity {
   std::unique_ptr<Page> page;
   const int marginLeft;
   const int marginTop;
+  // The page's base font, as the reader laid it out: effectiveReaderFontId(), not the raw
+  // setting. A book whose script the selected family cannot carry is rendered with a
+  // substitute, and measuring the page here with the setting would disagree with the pixels.
   int fontId = 0;
   int lineHeight = 0;
 

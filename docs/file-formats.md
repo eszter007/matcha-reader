@@ -96,6 +96,12 @@ Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
+Version 75 is binary-identical to version 74. The version was bumped because a
+`font-size` on `<html>` or `<body>` is no longer applied to layout: it restates
+the base text size, and the reader's own font already *is* that base (every
+declaration resolves against it), so applying it sized whole books away from the
+user's setting. Pages cached by v74 hold the publisher-sized layout.
+
 Version 70 merges upstream's v35 change into the fork's format: the header
 gains a fifth `uint32_t` offset and a `uint32_t` entry per page for the
 visible-text offset LUT. The fork additionally appends a section-wide footnote

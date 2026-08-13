@@ -10,7 +10,6 @@
 #include <climits>
 #include <cstdlib>
 
-#include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
@@ -42,7 +41,6 @@ void indexBuildYield(void*) { vTaskDelay(1); }
 
 void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
-  fontId = SETTINGS.getReaderFontId();
   lineHeight = renderer.getLineHeight(fontId);
   // No null check: a failed allocation just disables the differential
   // fast path (drawHighlightWithSnapshot skips the read), keeping the
@@ -93,7 +91,10 @@ void DictionaryWordSelectActivity::extractWords() {
       box.width = 0;  // measured below, once the advance table is ready
       box.row = rowCount;
       box.text = text;
-      box.fontId = lineFontId;
+      // An inline font-size (a <span> inside the block) overrides the block's font for this
+      // word alone, exactly as TextBlock::render resolves it. 0 = no override.
+      const int32_t wordFont = block->wordFont(i);
+      box.fontId = wordFont != 0 ? static_cast<int>(wordFont) : lineFontId;
       words.push_back(box);
       rowHasWords = true;
 
@@ -329,7 +330,10 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   snapshotIdx = saved ? selected : -1;
 
   renderer.fillRect(hx, hy, hw, hh, true);
-  renderer.drawText(fontId, word.x, word.y, word.text, false, word.style);
+  // word.fontId, NOT the reader's font: the box was measured with the font the page laid this
+  // word out in, so drawing it in a different size spills white glyphs past the black panel and
+  // over the neighbouring words (the page's own ink is only erased inside the box).
+  renderer.drawText(word.fontId, word.x, word.y, word.text, false, word.style);
   return saved;
 }
 
@@ -362,7 +366,8 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     // The full path's PrewarmScope cleared the glyph cache on exit; batch-load
     // just the highlighted word's glyphs before drawing them white-on-black.
     renderer.getFontCacheManager()->prewarmCache(
-        fontId, words[selected].text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[selected].style) & 0x03)));
+        words[selected].fontId, words[selected].text,
+        static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[selected].style) & 0x03)));
     if (drawHighlightWithSnapshot()) {
       drawHints();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
