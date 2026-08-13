@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: patch <patch@local>
+Date: Thu, 13 Aug 2026 07:10:00 +0000
+Subject: [PATCH 3/3] Decode progressive JPEGs whose DC scan is non-interleaved
+
+A progressive JPEG may split its DC coefficients into one scan per component
+(SOS with a single component, Ss=0 Se=0) instead of one interleaved scan.
+MozJPEG and most web optimizers emit that layout, so it is common in scanned
+and ripped material -- see crosspoint issue #16.
+
+The MCU loop in DecodeJPEG always reads a Y block followed by two chroma
+blocks per MCU. In a non-interleaved scan the chroma bits are simply not
+there, so those two reads consume bits belonging to the following Y blocks;
+the bitstream desynchronizes and the next Huffman lookup fails, reported as a
+bare JPEG_DECODE_ERROR.
+
+Skip the chroma reads for such a scan. Without subsampling the component's
+block grid is the MCU grid, so the existing traversal is already correct once
+the extra reads are gone. Subsampled images (where a 2x2 MCU holds four Y
+blocks but the scan is raster order over the component) and non-luma output
+are refused with JPEG_UNSUPPORTED_FEATURE rather than rendered scrambled.
+---
+diff --git a/src/jpeg.inl b/src/jpeg.inl
+index 1bd38b2..2c59c58 100644
+--- a/src/jpeg.inl
++++ b/src/jpeg.inl
+@@ -5067,6 +5067,29 @@ static int DecodeJPEG(JPEGIMAGE *pJPEG)
+     iLum2 = MCU2;
+     iLum3 = MCU3;
+     iErr = 0;
++    // CrossPoint patch: a progressive JPEG may carry its DC coefficients in one scan PER
++    // COMPONENT rather than a single interleaved scan (SOS with one component, Ss=0, Se=0).
++    // MozJPEG and most web optimizers emit that layout, so it is common in ripped material.
++    // The MCU loop below always reads a Y block and then two chroma blocks per MCU; in a
++    // non-interleaved scan those two extra reads consume bits belonging to the FOLLOWING Y
++    // blocks. The bitstream desynchronizes and the next Huffman lookup fails, which surfaced
++    // as a bare JPEG_DECODE_ERROR that names nothing.
++    //
++    // Without subsampling the component's block grid IS the MCU grid -- cx/cy are computed as
++    // (width+7)>>3 for 0x00/0x01/0x11 above and mcuCX/mcuCY are 8 -- so decoding one block per
++    // MCU and skipping the chroma reads is exactly the right traversal. Under subsampling the
++    // two orders diverge (a 2x2 MCU holds four Y blocks, while the scan is raster order over
++    // the whole component), so that combination is refused rather than rendered scrambled.
++    //
++    // Luma-only output only: chroma is never read here, and JPEGPutMCU8BitGray uses the Y MCU
++    // alone. A colour caller would otherwise compose against stale chroma blocks.
++    const int bNonInterleavedDC = (pJPEG->ucMode == 0xc2 && pJPEG->ucComponentsInScan == 1 &&
++                                   pJPEG->ucNumComponents > 1);
++    if (bNonInterleavedDC && (pJPEG->ucSubSample > 0x11 || pJPEG->ucPixelType < EIGHT_BIT_GRAYSCALE))
++    {
++        pJPEG->iError = JPEG_UNSUPPORTED_FEATURE;
++        return 0;
++    }
+     pJPEG->iResCount = pJPEG->iResInterval;
+     // Calculate how many MCUs we can fit in the pixel buffer to maximize LCD drawing speed
+     iMCUCount = MAX_BUFFERED_PIXELS / (mcuCX * mcuCY);
+@@ -5227,7 +5250,9 @@ static int DecodeJPEG(JPEGIMAGE *pJPEG)
+                     }
+                 } // if 2:2 subsampling
+             } // if subsampling used
+-            if (pJPEG->ucSubSample && pJPEG->ucNumComponents == 3) // if color (not CMYK)
++            // CrossPoint patch: a non-interleaved DC scan carries no chroma bits at all, so these
++            // reads must not happen -- see bNonInterleavedDC above.
++            if (pJPEG->ucSubSample && pJPEG->ucNumComponents == 3 && !bNonInterleavedDC) // if color (not CMYK)
+             {
+                 // first chroma
+                 pJPEG->ucACTable = cACTable1;

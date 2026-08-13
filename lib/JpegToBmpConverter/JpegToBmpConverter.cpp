@@ -3,6 +3,7 @@
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
+#include <JpegDecodeError.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <freertos/FreeRTOS.h>
@@ -755,7 +756,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   }
 
   if (rc != 1 || ctx.error) {
-    LOG_ERR("JPG", "JPEG decode failed (rc=%d, err=%d)", rc, jpeg->getLastError());
+    const int err = jpeg->getLastError();
+    LOG_ERR("JPG", "JPEG decode failed (rc=%d, err=%d): %s", rc, err, jpegDecodeErrorText(err));
     return false;
   }
 
