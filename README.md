@@ -2,7 +2,7 @@
 
 A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for the Xteink X4 and X3, built for reading Japanese. Vertical text, instant dictionary lookup with verb deinflection, a manga panel reader, and page translation, all on e-ink.
 
-It merges cleanly with upstream CrossPoint and runs on any supported X4 or X3. You can try it first in the [emulator](https://github.com/eszter007/Crosspoint-Emulator-Matcha).
+It includes all features of upstream CrossPoint and runs on any supported X4 or X3. You can try it first in the [emulator](https://github.com/eszter007/Crosspoint-Emulator-Matcha).
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="200" alt="Vertical Japanese text">
