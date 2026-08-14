@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 
 #include <algorithm>
+#include <cstring>
 
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -13,8 +14,9 @@ namespace {
 // the page behind it is context.
 constexpr int SIDE_MARGIN = 8;
 
-// Inner padding from the frame to any text.
-constexpr int PADDING = 12;
+// Inner padding from the frame to any text. Deliberately tight: the panel is small and every
+// pixel spent on padding is a line of definition the reader does not get.
+constexpr int PADDING = 8;
 
 // Stroke of the frame and of the divider under the headword.
 constexpr int FRAME_STROKE = 2;
@@ -28,6 +30,27 @@ constexpr int HEIGHT_PERCENT = 66;
 constexpr int MIN_RADIUS = 6;
 
 int panelRadius(const ThemeMetrics& metrics) { return std::max(metrics.popupCornerRadius, MIN_RADIUS); }
+
+// Copy `text` into `out`, trimmed to maxWidth with a trailing ellipsis when it does not fit.
+// Cuts on UTF-8 codepoint boundaries so a multi-byte character is never split.
+void ellipsize(const GfxRenderer& renderer, const char* text, const int maxWidth, char* out, const size_t outSize) {
+  const size_t len = strlen(text);
+  if (len < outSize && renderer.getTextWidth(SMALL_FONT_ID, text) <= maxWidth) {
+    memcpy(out, text, len + 1);
+    return;
+  }
+  static constexpr char ELLIPSIS[] = "\xe2\x80\xa6";  // U+2026
+  const int ellipsisWidth = renderer.getTextWidth(SMALL_FONT_ID, ELLIPSIS);
+  size_t cut = std::min(len, outSize - sizeof(ELLIPSIS));
+  while (cut > 0) {
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) cut--;  // codepoint boundary
+    memcpy(out, text, cut);
+    out[cut] = '\0';
+    if (renderer.getTextWidth(SMALL_FONT_ID, out) + ellipsisWidth <= maxWidth) break;
+    cut--;
+  }
+  memcpy(out + cut, ELLIPSIS, sizeof(ELLIPSIS));
+}
 
 }  // namespace
 
@@ -43,11 +66,12 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.box.height = std::min(wanted, safe.height);
   layout.box.y = bottom - layout.box.height;
 
-  // Headword line, then the divider, then the body; the dictionary name closes the panel.
+  // Headword line, then the divider, then the body; a second divider and the dictionary name
+  // close the panel.
   const int headwordHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int footerHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int bodyTop = layout.box.y + PADDING + headwordHeight + PADDING / 2 + DIVIDER_STROKE + PADDING / 2;
-  const int bodyBottom = layout.box.y + layout.box.height - PADDING - footerHeight;
+  const int bodyBottom = layout.box.y + layout.box.height - PADDING - footerHeight - PADDING / 2 - DIVIDER_STROKE;
 
   layout.body.x = layout.box.x + PADDING;
   layout.body.width = std::max(0, layout.box.width - 2 * PADDING);
@@ -71,17 +95,25 @@ DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const
   if (headword && headword[0] != '\0') {
     renderer.drawText(UI_12_FONT_ID, textX, headwordY, headword, true, EpdFontFamily::BOLD);
   }
+  const int rightEdge = layout.box.x + layout.box.width - PADDING;
   if (counter && counter[0] != '\0') {
-    const int counterWidth = renderer.getTextWidth(UI_10_FONT_ID, counter);
-    renderer.drawText(UI_10_FONT_ID, layout.box.x + layout.box.width - PADDING - counterWidth, headwordY, counter);
+    // Baseline-aligned with the headword but a size down: the counter is a reference, not a label.
+    const int counterWidth = renderer.getTextWidth(SMALL_FONT_ID, counter);
+    const int counterY = headwordY + renderer.getLineHeight(UI_12_FONT_ID) - renderer.getLineHeight(SMALL_FONT_ID);
+    renderer.drawText(SMALL_FONT_ID, rightEdge - counterWidth, counterY, counter);
   }
 
   const int dividerY = headwordY + renderer.getLineHeight(UI_12_FONT_ID) + PADDING / 2;
-  renderer.drawLine(textX, dividerY, layout.box.x + layout.box.width - PADDING, dividerY, DIVIDER_STROKE, true);
+  renderer.drawLine(textX, dividerY, rightEdge, dividerY, DIVIDER_STROKE, true);
 
+  const int footerY = layout.box.y + layout.box.height - PADDING - renderer.getLineHeight(SMALL_FONT_ID);
+  renderer.drawLine(textX, footerY - PADDING / 2, rightEdge, footerY - PADDING / 2, DIVIDER_STROKE, true);
   if (dictName && dictName[0] != '\0') {
-    const int footerY = layout.box.y + layout.box.height - PADDING - renderer.getLineHeight(UI_10_FONT_ID);
-    renderer.drawText(UI_10_FONT_ID, textX, footerY, dictName);
+    // Dictionary titles run long ("English-Deutsch FreeDict+WikDict dictionary (en-de)"); clip to
+    // the panel with an ellipsis rather than letting the text run under the frame.
+    char buf[96];
+    ellipsize(renderer, dictName, layout.box.width - 2 * PADDING, buf, sizeof(buf));
+    renderer.drawText(SMALL_FONT_ID, textX, footerY, buf);
   }
   return layout;
 }

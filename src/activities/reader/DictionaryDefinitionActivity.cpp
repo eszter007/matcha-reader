@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include "CrossPointSettings.h"
+#include "DefinitionTextRenderer.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
@@ -30,6 +31,8 @@ constexpr size_t MAX_LINE_BYTES = 191;
 constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
 
 }  // namespace
+
+int DictionaryDefinitionActivity::definitionFontId() { return DefinitionText::wordLookupFontId(); }
 
 void DictionaryDefinitionActivity::onEnter() {
   Activity::onEnter();
@@ -55,7 +58,7 @@ bool DictionaryDefinitionActivity::layoutHtmlPages() {
   const BodyArea body = bodyArea();
   if (body.width <= 0 || body.height <= 0) return false;
   if (!buildDictionaryHtmlPages(renderer, definition, static_cast<uint16_t>(body.width),
-                                static_cast<uint16_t>(body.height), pages)) {
+                                static_cast<uint16_t>(body.height), definitionFontId(), pages)) {
     return false;
   }
   definition.clear();
@@ -81,7 +84,7 @@ void DictionaryDefinitionActivity::wrapText() {
   lines.clear();
   lines.reserve(definition.size() / 32 + 8);
 
-  const int fontId = SETTINGS.getReaderFontId();
+  const int fontId = definitionFontId();
   // SD-card fonts: merge every definition codepoint into the persistent
   // advance table up front. Otherwise each unseen codepoint measured below
   // falls back to an on-demand glyph load from SD (8-slot overflow ring).
@@ -256,7 +259,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
   // of one on-demand overflow read per character on every page turn.
-  const int fontId = SETTINGS.getReaderFontId();
+  const int fontId = definitionFontId();
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
   drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only

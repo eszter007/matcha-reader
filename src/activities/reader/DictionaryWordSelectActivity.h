@@ -49,7 +49,7 @@ class DictionaryWordSelectActivity final : public Activity {
     int fontId;
   };
 
-  enum class Popup : uint8_t { None, Busy, NotFound, Error };
+  enum class Popup : uint8_t { None, NotFound, Error };
 
   void extractWords();
   // Hit-test / highlight height for a word: the line height of its own font when CSS gave it

@@ -45,6 +45,11 @@ class DictionaryDefinitionActivity final : public Activity {
     int height;
   };
 
+  // The font the definition is laid out AND drawn with: the Word Lookup Font Size setting, not
+  // the reader's body font. A dictionary entry at reading size fills the panel in three lines,
+  // and the Japanese panels have always used this setting -- the English one now matches.
+  static int definitionFontId();
+
   BodyArea bodyArea() const;
   bool layoutHtmlPages();
   void wrapText();

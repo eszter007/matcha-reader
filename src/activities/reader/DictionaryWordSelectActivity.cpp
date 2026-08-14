@@ -160,7 +160,6 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
 }
 
 void DictionaryWordSelectActivity::performLookup() {
-  popup = Popup::Busy;
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
     dictOpenOk = dict.open(folderName.c_str());
@@ -169,9 +168,9 @@ void DictionaryWordSelectActivity::performLookup() {
     // the sidecar ourselves, which is handled below.
     dictNeedsIndex = dictOpenOk && dict.needsIndex();
   }
-  popupMsg = dictNeedsIndex ? StrId::STR_DICT_INDEXING : StrId::STR_DICT_LOOKING_UP;
-  requestUpdateAndWait();  // paint the page + busy popup before blocking on SD
-
+  // No busy popup: the lookup is fast enough that one only flashes, and the definition panel
+  // draws over the page without clearing it, so a popup painted here would survive underneath
+  // as debris. Failures still get their own popup below.
   {
     RenderLock lock;
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();

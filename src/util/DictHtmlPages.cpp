@@ -154,6 +154,35 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         i = j + 1;
         continue;
       }
+
+      // <font> is presentational and long dead in HTML, but StarDict dictionaries lean on it:
+      // FreeDict/WikDict marks pronunciation with <font color="gray"> and part-of-speech with
+      // <font class="grammar">. Translate both to a <span> the layout engine actually styles --
+      // pronunciation a size down, part-of-speech italic -- so an entry reads as an entry
+      // instead of one flat wall of body text.
+      if (nameLen == 4 && strncmp(nameBuf, "font", 4) == 0) {
+        if (closing) {
+          if (!out.append("</span>")) return false;
+        } else {
+          // Searched in place: a substr() here would heap-allocate once per <font> tag, and a
+          // definition carries one per pronunciation and one per part-of-speech.
+          const size_t grammarAt = html.find("grammar", nameEnd);
+          const bool isGrammar = grammarAt != std::string::npos && grammarAt < j;
+          if (!out.append(isGrammar ? "<span style=\"font-style:italic\">" : "<span style=\"font-size:0.75em\">")) {
+            return false;
+          }
+        }
+        i = j + 1;
+        continue;
+      }
+
+      // <li><div>text</div></li>: the inner block puts the item's text on the line BELOW its
+      // own number. Drop that wrapper so each sense reads as "1. Papier" on one line. The
+      // opening <li> itself is emitted normally below, attributes and all.
+      if (closing && nameLen == 3 && strncmp(nameBuf, "div", 3) == 0 && html.compare(j + 1, 5, "</li>") == 0) {
+        i = j + 1;
+        continue;
+      }
       if (!out.append('<')) return false;
       if (closing && !out.append('/')) return false;
       if (!out.append(nameBuf, nameLen)) return false;
@@ -161,6 +190,8 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       if (!closing && isVoid && html[j - 1] != '/' && !out.append('/')) return false;
       if (!out.append('>')) return false;
       i = j + 1;
+      // Paired with the </div></li> case above: skip the wrapper opening this list item.
+      if (!closing && nameLen == 2 && strncmp(nameBuf, "li", 2) == 0 && html.compare(i, 5, "<div>") == 0) i += 5;
       continue;
     }
     if (c == '<') {  // stray '<' in text ("x < y")
@@ -189,7 +220,8 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
 }  // namespace
 
 bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definition, const uint16_t viewportWidth,
-                              const uint16_t viewportHeight, std::vector<std::unique_ptr<Page>>& pagesOut) {
+                              const uint16_t viewportHeight, const int fontId,
+                              std::vector<std::unique_ptr<Page>>& pagesOut) {
   if (ESP.getFreeHeap() < MIN_STYLED_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
     LOG_ERR("DHTML", "Low heap for styled definition (%u free, %u max block)", ESP.getFreeHeap(),
             ESP.getMaxAllocHeap());
@@ -221,8 +253,10 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
     // a stack local. Null epub is safe: imageRendering=2 suppresses <img>
     // handling, the only path that dereferences it.
     auto parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
-        nullptr, tmpPath, renderer, SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-        SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+        // No extra paragraph spacing: a dictionary entry is a dense list of senses, and the
+        // reader's paragraph gap (tuned for prose) pushed a three-line entry over two pages.
+        nullptr, tmpPath, renderer, fontId, SETTINGS.getReaderLineCompression(),
+        /*extraParagraphSpacing=*/0, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
         SETTINGS.hyphenationEnabled, SETTINGS.focusReadingEnabled,
         // Furigana is per-book reader state (EpubReaderActivity::useFurigana), not a global
         // setting: a dictionary definition is not the book, so it renders without ruby.
