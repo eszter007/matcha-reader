@@ -183,9 +183,14 @@ class EpubReaderWordLookupActivity final : public Activity {
   // string: these are the dictionaries' own names, the same way the English panel shows the
   // .ifo's bookname. Null until a lookup lands.
   const char* resultSource = nullptr;
-  const char* dictionaryLabel() const { return resultSource; }
+  std::string resultDictionaryLabel;
+  const char* dictionaryLabel() const {
+    return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();
+  }
   std::string resultHeadword;
   std::string resultDefinition;
+  std::string resultReading;
+  std::string resultGrammar;
   int resultMatchLen = 0;
   bool hasGrammar = false;
   std::string grammarHeadword;
@@ -196,6 +201,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   // view here, which is what horizontal and manga use those buttons for.
   std::vector<std::string> sectionText;
   std::vector<std::string> sectionLabel;
+  std::vector<std::string> sectionReading;
+  std::vector<std::string> sectionGrammar;
   // Which Japanese index answered each piece: several can answer one lookup, so the panel names
   // it. StrId rather than a string: these are UI words, not the dictionaries' own titles.
   std::vector<StrId> sectionKind;
@@ -212,6 +219,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   const char* visibleLabel() const;
   const char* visibleKind() const;
   const char* visibleHeadword() const;
+  const char* visibleReading() const;
+  const char* visibleGrammar() const;
 
   int scrollOffset = 0;     // lines scrolled within current entry
   int totalLines = 0;       // total lines in current definition

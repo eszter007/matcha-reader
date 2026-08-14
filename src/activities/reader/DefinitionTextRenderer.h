@@ -7,6 +7,7 @@
 #include "fontIds.h"
 
 class GfxRenderer;
+struct Rect;
 
 // Shared dictionary-definition text wrapping/drawing for the word-lookup activities.
 //
@@ -19,6 +20,31 @@ class GfxRenderer;
 // This version slices the definition by index and reuses ONE line buffer whose single
 // guarded reserve happens up front: zero heap growth per line, per paragraph, or per frame.
 namespace DefinitionText {
+
+struct EntryMetadata {
+  std::string reading;
+  std::string grammar;
+  std::string source;
+};
+
+// Pull the compact dictionary header out of a plain entry so it can be drawn above the senses.
+// The dictionaries use `【reading】` followed by bracketed tags such as `[5-dan] [transitive]`.
+void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword, EntryMetadata& metadata);
+
+// Turn the dictionary's plain bullet stream into the compact entry layout: numbered gloss rows,
+// gray arrow notes, and indented example pairs. It is intentionally plain-text so the existing
+// low-allocation wrapper can keep ownership of scrolling and line measurement.
+void formatEntryBody(std::string& text, const std::string& omitLeading = {});
+
+// Draw the reading at the selected lookup size and the grammar tags at a compact 75% scale.
+// Metadata participates in the same scroll offset as the definition; the return value is the
+// unscrolled first y-coordinate available for the definition body.
+int drawEntryMetadata(GfxRenderer& renderer, const Rect& body, int fontId, uint16_t scale,
+                      const EntryMetadata& metadata, int scrollOffset = 0, int lineHeight = 0);
+
+inline int entryMetadataLineCount(const EntryMetadata& metadata) {
+  return (!metadata.reading.empty() ? 1 : 0) + (!metadata.grammar.empty() ? 1 : 0);
+}
 
 // Tiny keeps the compact, readable 8pt font. Larger options use native built-in fonts so their
 // glyphs stay sharp; CJK characters can be routed to a matching SD-card size by the activity.

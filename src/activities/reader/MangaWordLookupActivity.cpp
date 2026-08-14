@@ -165,6 +165,9 @@ void MangaWordLookupActivity::performLookupImpl() {
   resultHeadword.clear();
   resultSource = nullptr;
   resultDefinition.clear();
+  resultReading.clear();
+  resultGrammar.clear();
+  resultDictionaryLabel.clear();
   resultMatchLen = 0;
   scrollOffset = 0;
   totalLines = 9999;
@@ -178,7 +181,14 @@ void MangaWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
-    resultSource = "JMdict";
+    DefinitionText::EntryMetadata metadata;
+    DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
+    resultReading = std::move(metadata.reading);
+    resultGrammar = std::move(metadata.grammar);
+    resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
+                   : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
+                                                                        : "JMdict";
+    resultDictionaryLabel = std::move(metadata.source);
 
     int chars = 0;
     size_t pos = 0;
@@ -224,6 +234,11 @@ void MangaWordLookupActivity::performLookupImpl() {
         if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
+          DefinitionText::EntryMetadata grammarMetadata;
+          DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
+          resultReading = std::move(grammarMetadata.reading);
+          resultGrammar = std::move(grammarMetadata.grammar);
+          resultDictionaryLabel = std::move(grammarMetadata.source);
           resultSource = "Grammar";
         }
       }
@@ -296,6 +311,9 @@ void MangaWordLookupActivity::performLookupImpl() {
     }
   }
 
+  DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
+                                                        ? resultHeadword
+                                                        : std::string());
   requestUpdate();
 }
 
@@ -379,7 +397,10 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
       // page buffer (each style, plus one more per style if the font has a fallback), same trap
       // found and fixed for vertical-page rendering earlier this session.
       fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      renderer.prewarmText(defFont, resultReading.c_str(), 1 << EpdFontFamily::REGULAR);
+      renderer.prewarmText(defFont, resultGrammar.c_str(), 1 << EpdFontFamily::REGULAR);
+      renderer.prewarmText(defFont, resultDefinition.c_str(),
+                           (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
     }
   }
 
@@ -390,19 +411,26 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
     return;
   }
 
-  // The headword lives above the panel's divider, so the body is definition text only.
-  const int maxWidth = body.width;
-  const int textX = body.x;
-  const int defY = body.y;
-
+  DefinitionText::EntryMetadata metadata{resultReading, resultGrammar};
   const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-  const int maxDefY = body.y + body.height;
-  const int firstDefY = defY;
-  const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                maxDefY, scrollOffset, defScale);
+  const int metadataLines = DefinitionText::entryMetadataLineCount(metadata);
+  const int definitionScroll = std::max(0, scrollOffset - metadataLines);
+  Rect definitionBody = body;
+  const int metadataEndY =
+      DefinitionText::drawEntryMetadata(renderer, body, defFont, defScale, metadata, scrollOffset, defLineH);
+  definitionBody.y = metadataEndY - std::min(scrollOffset, metadataLines) * defLineH;
+  definitionBody.height = std::max(0, body.y + body.height - definitionBody.y);
 
-  totalLines = wrap.totalLines;
-  const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
+  const int maxWidth = definitionBody.width;
+  const int textX = definitionBody.x;
+  const int defY = definitionBody.y;
+
+  const int maxDefY = definitionBody.y + definitionBody.height;
+  const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
+                                                maxDefY, definitionScroll, defScale);
+
+  totalLines = metadataLines + wrap.totalLines;
+  const int visibleCapacity = body.height / defLineH;
   maxScroll = std::max(0, totalLines - visibleCapacity);
 }
 
@@ -413,6 +441,15 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   if (hasResult && !scan.selectableGlyphs.empty()) {
     counterText = std::to_string(cursorIndex + 1) + "/" +
                   (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+  }
+
+  if (hasResult) {
+    constexpr int kPanelHeaderFont = NOTOSERIF_12_FONT_ID;
+    sdFontSystem.ensureWordLookupFallback(renderer, kPanelHeaderFont, 12);
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+      fcm->prewarmCache(kPanelHeaderFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+    }
   }
 
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the

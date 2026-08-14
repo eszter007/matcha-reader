@@ -12,6 +12,7 @@
 #include <WordLookup.h>
 
 #include <algorithm>
+#include <cassert>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
@@ -786,9 +787,14 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   hasResult = false;
   resultHeadword.clear();
   resultDefinition.clear();
+  resultReading.clear();
+  resultGrammar.clear();
   resultSource = nullptr;
+  resultDictionaryLabel.clear();
   sectionText.clear();
   sectionLabel.clear();
+  sectionReading.clear();
+  sectionGrammar.clear();
   sectionKind.clear();
   sectionHead.clear();
   currentSection = 0;
@@ -883,7 +889,14 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
-    resultSource = "JMdict";
+    DefinitionText::EntryMetadata metadata;
+    DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
+    resultReading = std::move(metadata.reading);
+    resultGrammar = std::move(metadata.grammar);
+    resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
+                   : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
+                                                                        : "JMdict";
+    resultDictionaryLabel = std::move(metadata.source);
     prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;
     size_t pos = 0;
@@ -931,6 +944,11 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
+          DefinitionText::EntryMetadata grammarMetadata;
+          DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
+          resultReading = std::move(grammarMetadata.reading);
+          resultGrammar = std::move(grammarMetadata.grammar);
+          resultDictionaryLabel = std::move(grammarMetadata.source);
           resultSource = "Grammar";
         }
       }
@@ -1023,6 +1041,10 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   }
 
   splitDefinitionIntoSections();
+  if (sectionText.empty())
+    DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
+                                                          ? resultHeadword
+                                                          : std::string());
   requestUpdate();
 }
 
@@ -1149,6 +1171,8 @@ void EpubReaderWordLookupActivity::moveSection(const int delta) {
 void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
   sectionText.clear();
   sectionLabel.clear();
+  sectionReading.clear();
+  sectionGrammar.clear();
   sectionKind.clear();
   sectionHead.clear();
   currentSection = 0;
@@ -1156,6 +1180,28 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
 
   static constexpr char kEntrySep[] = "\n\n---\n";
   static constexpr char kGrammarSep[] = "\n\n— Grammar: ";
+  const auto coveredBy = [](const std::string& subset, const std::string& superset) {
+    size_t lineStart = 0;
+    while (lineStart <= subset.size()) {
+      const size_t lineEnd = subset.find('\n', lineStart);
+      const size_t length = lineEnd == std::string::npos ? subset.size() - lineStart : lineEnd - lineStart;
+      if (length > 0) {
+        size_t found = superset.find(subset.data() + lineStart, 0, length);
+        while (found != std::string::npos && ((found > 0 && superset[found - 1] != '\n') ||
+                                              (found + length < superset.size() && superset[found + length] != '\n'))) {
+          found = superset.find(subset.data() + lineStart, found + 1, length);
+        }
+        if (found == std::string::npos) return false;
+      }
+      if (lineEnd == std::string::npos) break;
+      lineStart = lineEnd + 1;
+    }
+    return true;
+  };
+#ifndef NDEBUG
+  assert(coveredBy("1. alpha", "1. alpha\n2. beta"));
+  assert(!coveredBy("1. alpha\n3. gamma", "1. alpha\n2. beta"));
+#endif
 
   // Vocab until the grammar separator is crossed; a name lookup has no separators at all, so its
   // single piece takes the kind the lookup itself resolved.
@@ -1210,15 +1256,49 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
     // Trim the blank lines the cut leaves behind so a page never opens on empty space.
     const size_t last = piece.find_last_not_of("\n \t");
     piece.erase(last == std::string::npos ? 0 : last + 1);
-    // JMdict merges every headword that spells the same reading -- 取っ手, 取手 and 把手 all come
-    // back for とって with the same glosses -- so identical pieces would page as separate,
-    // indistinguishable entries. Keep the first of each.
-    const bool duplicate = std::find(sectionText.begin(), sectionText.end(), piece) != sectionText.end();
-    if (!piece.empty() && !duplicate) {
-      sectionText.push_back(std::move(piece));
-      sectionLabel.push_back(std::move(label));
-      sectionKind.push_back(kind);
-      sectionHead.push_back(std::move(head));
+    if (!piece.empty()) {
+      DefinitionText::EntryMetadata metadata;
+      DefinitionText::extractEntryMetadata(piece, head.empty() ? resultHeadword : head, metadata);
+      if (!metadata.source.empty()) label = std::move(metadata.source);
+      if (sectionText.empty()) {
+        if (metadata.reading.empty()) metadata.reading = resultReading;
+        if (metadata.grammar.empty()) metadata.grammar = resultGrammar;
+      }
+      DefinitionText::formatEntryBody(piece, kind == StrId::STR_DICT_KIND_GRAMMAR ? head : std::string());
+
+      bool duplicate = false;
+      size_t replaceAt = sectionText.size();
+      for (size_t i = 0; i < sectionText.size(); i++) {
+        if (sectionText[i] == piece ||
+            (kind == StrId::STR_DICT_KIND_NAME && sectionKind[i] == kind && coveredBy(piece, sectionText[i]))) {
+          duplicate = true;
+          break;
+        }
+        if (kind == StrId::STR_DICT_KIND_NAME && sectionKind[i] == kind && coveredBy(sectionText[i], piece)) {
+          replaceAt = i;
+          break;
+        }
+      }
+
+      if (replaceAt < sectionText.size()) {
+        if (label.empty()) label = std::move(sectionLabel[replaceAt]);
+        if (metadata.reading.empty()) metadata.reading = std::move(sectionReading[replaceAt]);
+        if (metadata.grammar.empty()) metadata.grammar = std::move(sectionGrammar[replaceAt]);
+        if (head.empty()) head = std::move(sectionHead[replaceAt]);
+        sectionText[replaceAt] = std::move(piece);
+        sectionLabel[replaceAt] = std::move(label);
+        sectionReading[replaceAt] = std::move(metadata.reading);
+        sectionGrammar[replaceAt] = std::move(metadata.grammar);
+        sectionKind[replaceAt] = kind;
+        sectionHead[replaceAt] = std::move(head);
+      } else if (!duplicate) {
+        sectionText.push_back(std::move(piece));
+        sectionLabel.push_back(std::move(label));
+        sectionReading.push_back(std::move(metadata.reading));
+        sectionGrammar.push_back(std::move(metadata.grammar));
+        sectionKind.push_back(kind);
+        sectionHead.push_back(std::move(head));
+      }
     }
 
     if (cut == std::string::npos) break;
@@ -1259,11 +1339,24 @@ const char* EpubReaderWordLookupActivity::visibleKind() const {
   return I18N.get(sectionKind[currentSection]);
 }
 
+const char* EpubReaderWordLookupActivity::visibleReading() const {
+  if (!sectionReading.empty() && currentSection < static_cast<int>(sectionReading.size()))
+    return sectionReading[currentSection].c_str();
+  return resultReading.c_str();
+}
+
+const char* EpubReaderWordLookupActivity::visibleGrammar() const {
+  if (!sectionGrammar.empty() && currentSection < static_cast<int>(sectionGrammar.size()))
+    return sectionGrammar[currentSection].c_str();
+  return resultGrammar.c_str();
+}
+
 const char* EpubReaderWordLookupActivity::visibleLabel() const {
   if (!sectionLabel.empty() && currentSection < static_cast<int>(sectionLabel.size()) &&
       !sectionLabel[currentSection].empty()) {
     return sectionLabel[currentSection].c_str();
   }
+  if (!resultDictionaryLabel.empty()) return resultDictionaryLabel.c_str();
   return resultSource;
 }
 
@@ -1287,6 +1380,8 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
       fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      renderer.prewarmText(defFont, visibleReading(), 1 << EpdFontFamily::REGULAR);
+      renderer.prewarmText(defFont, visibleGrammar(), 1 << EpdFontFamily::REGULAR);
       // Prewarm only the ON-SCREEN slice of the definition, in ONE call. A merged 5-entry
       // definition can run to thousands of bytes, but only ~13 lines show; warming the whole
       // thing was the ~1s-per-step navigation cost (renders serialize on the RenderLock, so a
@@ -1300,9 +1395,9 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
         size_t cut = kVisiblePrewarmBytes;  // back up to a UTF-8 lead byte so the last char is whole
         while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) cut--;
         std::string head = shown.substr(0, cut);
-        renderer.prewarmText(defFont, head.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, head.c_str(), (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
       } else {
-        renderer.prewarmText(defFont, shown.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, shown.c_str(), (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
       }
     }
   }
@@ -1314,20 +1409,27 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
     UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2,
                               stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
   } else {
-    // The headword lives above the panel's divider, so the body is definition text only.
-    const int maxWidth = body.width;
-    const int textX = body.x;
-    const int defY = body.y;
-
+    DefinitionText::EntryMetadata metadata{visibleReading(), visibleGrammar()};
     const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-    const int maxDefY = body.y + body.height;
-    const int firstDefY = defY;
-    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, visibleDefinition(), textX, defY, defLineH,
-                                                  maxWidth, maxDefY, scrollOffset, defScale);
+    const int metadataLines = DefinitionText::entryMetadataLineCount(metadata);
+    const int definitionScroll = std::max(0, scrollOffset - metadataLines);
+    Rect definitionBody = body;
+    const int metadataEndY =
+        DefinitionText::drawEntryMetadata(renderer, body, defFont, defScale, metadata, scrollOffset, defLineH);
+    definitionBody.y = metadataEndY - std::min(scrollOffset, metadataLines) * defLineH;
+    definitionBody.height = std::max(0, body.y + body.height - definitionBody.y);
 
-    totalLines = wrap.totalLines;
+    const int maxWidth = definitionBody.width;
+    const int textX = definitionBody.x;
+    const int defY = definitionBody.y;
+
+    const int maxDefY = definitionBody.y + definitionBody.height;
+    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, visibleDefinition(), textX, defY, defLineH,
+                                                  maxWidth, maxDefY, definitionScroll, defScale);
+
+    totalLines = metadataLines + wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
-    visibleCapacity = std::max(1, (maxDefY - firstDefY) / defLineH);
+    visibleCapacity = std::max(1, body.height / defLineH);
     maxScroll = std::max(0, totalLines - visibleCapacity);
   }
 }
@@ -1352,6 +1454,18 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     } else {
       counterText = std::to_string(cursorIndex + 1) + "/" +
                     (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+    }
+  }
+
+  if (hasResult) {
+    // DictionaryPanel paints its fixed 12pt bold header before the body renderer runs. Warm that
+    // exact face first; otherwise the first CJK lookup can resolve through the fallback after the
+    // panel is already on screen, and only the next navigation appears in the right typeface.
+    constexpr int kPanelHeaderFont = NOTOSERIF_12_FONT_ID;
+    sdFontSystem.ensureWordLookupFallback(renderer, kPanelHeaderFont, 12);
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+      fcm->prewarmCache(kPanelHeaderFont, visibleHeadword(), 1 << EpdFontFamily::BOLD);
     }
   }
 

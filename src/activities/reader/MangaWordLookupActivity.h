@@ -35,6 +35,8 @@ class MangaWordLookupActivity final : public Activity {
   bool hasResult = false;
   std::string resultHeadword;
   std::string resultDefinition;
+  std::string resultReading;
+  std::string resultGrammar;
   int resultMatchLen = 0;
   int scrollOffset = 0;
   int totalLines = 0;
@@ -66,5 +68,8 @@ class MangaWordLookupActivity final : public Activity {
   // Which dictionary the shown entry came from, for the panel footer. Literals, not tr()
   // strings: these are the dictionaries' own names. Null until a lookup lands.
   const char* resultSource = nullptr;
-  const char* dictionaryLabel() const { return resultSource; }
+  std::string resultDictionaryLabel;
+  const char* dictionaryLabel() const {
+    return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();
+  }
 };
