@@ -110,8 +110,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   HighlightBox drawnBoxes[kMaxHighlightBoxes];
   int drawnBoxCount = 0;
 
-  bool selectHintsDrawn = false;
-  bool selectHintsShowWaiting = false;
   // The reader opens the panel on a long press, so the Confirm release that follows belongs to
   // that press, not to a selection. Ignore it until a fresh press is seen.
   bool confirmPressSeen = false;
@@ -129,7 +127,6 @@ class EpubReaderWordLookupActivity final : public Activity {
     uint16_t targetColumn = 0;  // Column: the column being entered
     uint16_t anchorRow = 0;     // Column: the row to land nearest to
     uint32_t requestedAt = 0;
-    bool noticeShown = false;
     // Column: last glyph of the column being waited on, remembered so each further tick of the
     // wait is one comparison. Finding it means walking the page's glyphs, and doing that on every
     // tick would steal the CPU from the walk the wait is waiting for -- loop() runs flat out
@@ -139,11 +136,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   };
   PendingMove pending;
   // Only announce a wait the user can actually perceive; shorter ones resolve before the panel
-  // could have drawn the notice, and an e-ink flash for them would be worse than the wait.
-  static constexpr uint32_t kWaitNoticeMs = 400;
 
   void renderSelect();
-  void drawSelectHints();
   // Rebuild cursorBoxes for the current cursor. Main task only (it reads the scan vectors).
   // A match that wraps from the foot of one column to the head of the next becomes one box per
   // column, so the highlight never covers the gutter between them.

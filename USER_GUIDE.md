@@ -722,10 +722,14 @@ In **vertical text**, lookup opens on the page you were reading, with the curren
 From the definition, **Back** returns to the highlighted page rather than to the book, so looking up several
 words on one page costs a couple of presses each.
 
-The page is mapped word by word in the background while you choose. Words the mapping has not reached yet can
-still be selected — the highlight waits for it and moves as soon as it arrives, showing **Scanning...** while
-you wait. A page you have looked at before is mapped instantly from its cache, and the cursor returns to the
+The cursor opens on the middle of the page, so any word is at most half a page of presses away, and the page is
+mapped starting from there — the half you are looking at is ready first. Mapping continues in the background
+while you choose: words it has not reached yet can still be selected, and the highlight moves as soon as it
+arrives. A page you have looked at before is mapped instantly from its cache, and the cursor returns to the
 word you left it on.
+
+No button labels are shown in this view: vertical text runs to the bottom of the screen, and a label bar there
+would cover the last line of every column. The buttons are the ones in the table above.
 
 In **horizontal text** and in manga, lookup opens directly in the definition view:
 

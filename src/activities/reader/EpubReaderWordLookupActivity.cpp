@@ -428,7 +428,6 @@ void EpubReaderWordLookupActivity::selectMiddleOfPage() {
 void EpubReaderWordLookupActivity::resolvePendingMove() {
   if (pending.kind == PendingMove::Kind::None) return;
 
-  const bool hadNotice = pending.noticeShown;
   bool moved = false;
 
   bool stillWaiting = false;
@@ -471,16 +470,12 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
   if (!stillWaiting) pending = PendingMove{};
 
   if (pending.kind != PendingMove::Kind::None) {
-    if (!pending.noticeShown && millis() - pending.requestedAt >= kWaitNoticeMs) {
-      pending.noticeShown = true;
-      requestUpdate();
-    }
     return;
   }
   if (moved) refreshCursorBoxes();
-  // Redraw on a resolved wait even when the cursor did not move: the hint bar is showing a
-  // "Scanning..." label that is no longer true.
-  if (moved || hadNotice) requestUpdate();
+  // Only a moved cursor changes what is on screen: select mode paints no hint bar, so a wait
+  // starting or ending has nothing to redraw (a repaint here would cost a refresh for nothing).
+  if (moved) requestUpdate();
 }
 
 void EpubReaderWordLookupActivity::enterDefinition() {
@@ -490,7 +485,6 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   // of what is drawn is left to the render task, which owns it: selectPageDrawn = false already
   // routes the next select render through the repaint branch, and that resets it there.
   selectPageDrawn = false;
-  selectHintsDrawn = false;
   initialRenderDone = false;
   performLookup();
 }
@@ -500,7 +494,6 @@ void EpubReaderWordLookupActivity::returnToSelect() {
   selectPageDrawn = false;  // the definition overdrew the page; it has to be painted again
   // The definition view has its own word navigation, so the cursor may have moved while it was up.
   refreshCursorBoxes();
-  selectHintsDrawn = false;
   initialRenderDone = false;
   fastRefreshCount = 0;
   requestUpdate();
@@ -590,35 +583,23 @@ void EpubReaderWordLookupActivity::invertBoxes(const HighlightBox* boxes, const 
   for (int i = 0; i < count; i++) renderer.invertRect(boxes[i].x, boxes[i].y, boxes[i].w, boxes[i].h);
 }
 
-void EpubReaderWordLookupActivity::drawSelectHints() {
-  const bool waiting = pending.kind != PendingMove::Kind::None && pending.noticeShown;
-  // Word stepping is on the side buttons, which the reader leaves unlabelled for page turns too.
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), waiting ? tr(STR_SCANNING) : tr(STR_LOOKUP), tr(STR_DIR_LEFT),
-                                            tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-}
-
 void EpubReaderWordLookupActivity::renderSelect() {
   const bool repaint = !selectPageDrawn;
   if (repaint) {
     renderer.clearScreen();
     if (selectCtx.repaintPage) selectCtx.repaintPage(selectCtx.repaintCtx);
     drawnBoxCount = 0;  // the repaint took the old highlight with it
-    selectHintsDrawn = false;
     selectPageDrawn = true;
   } else if (drawnBoxCount > 0) {
     invertBoxes(drawnBoxes, drawnBoxCount);  // erase: inverting again restores what was under it
     drawnBoxCount = 0;
   }
 
-  // Hints are painted BETWEEN the erase and the redraw, never under a live box: the box XORs over
-  // whatever the band holds, so erasing it has to happen while those pixels are unchanged.
-  const bool waiting = pending.kind != PendingMove::Kind::None && pending.noticeShown;
-  if (!selectHintsDrawn || waiting != selectHintsShowWaiting) {
-    drawSelectHints();
-    selectHintsDrawn = true;
-    selectHintsShowWaiting = waiting;
-  }
+  // No hint bar here. Vertical text is full-bleed -- the reader's page already occupies the
+  // bottom band -- so painting hints over it hides the last line of every column. The panel is
+  // drawn ON the page precisely so the text stays readable, and a label bar undoes that. The
+  // buttons are unchanged and documented in USER_GUIDE 6.2; only the on-screen labels are gone.
+  // Hints are still drawn in the definition view, which owns its whole screen.
 
   // Take the whole set in one go, count included, and draw only from the copy: reading the count
   // a second time could pair it with rectangles this render never copied, XOR-ing a stale box
