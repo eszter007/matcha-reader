@@ -27,4 +27,9 @@ Layout compute(const GfxRenderer& renderer);
 // Layout is the same one compute() gives, so the caller can draw its body straight after.
 Layout draw(const GfxRenderer& renderer, const char* headword, const char* dictName, const char* counter);
 
+// Blank the button-hint band before the panel's own hints are drawn into it. The panel does not
+// clear the screen, so without this the reader's labels stay in the framebuffer and the two sets
+// overprint each other.
+void clearButtonHints(const GfxRenderer& renderer);
+
 }  // namespace DictionaryPanel

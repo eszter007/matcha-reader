@@ -10,9 +10,10 @@
 
 namespace {
 
-// Gap between the panel and the screen edge. Small on purpose: the panel is the content,
-// the page behind it is context.
-constexpr int SIDE_MARGIN = 8;
+// Gap between the panel and the edges of the usable area. The bottom margin measures to the top
+// of the button hints, not to the physical edge, so the panel never crowds them.
+constexpr int SIDE_MARGIN = 10;
+constexpr int VERTICAL_MARGIN = 20;
 
 // Inner padding from the frame to any text. Deliberately tight: the panel is small and every
 // pixel spent on padding is a line of definition the reader does not get.
@@ -21,10 +22,6 @@ constexpr int PADDING = 8;
 // Stroke of the frame and of the divider under the headword.
 constexpr int FRAME_STROKE = 2;
 constexpr int DIVIDER_STROKE = 1;
-
-// Share of the screen height the panel occupies, bottom-anchored just above the button
-// hints. Matches the proportions of the reference design.
-constexpr int HEIGHT_PERCENT = 66;
 
 // Fallback radius for themes that draw square popups: the panel is always rounded.
 constexpr int MIN_RADIUS = 6;
@@ -61,10 +58,9 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.box.x = safe.x + SIDE_MARGIN;
   layout.box.width = std::max(0, safe.width - 2 * SIDE_MARGIN);
 
-  const int bottom = safe.y + safe.height;
-  const int wanted = renderer.getScreenHeight() * HEIGHT_PERCENT / 100;
-  layout.box.height = std::min(wanted, safe.height);
-  layout.box.y = bottom - layout.box.height;
+  // safe.height already stops at the button hints, so insetting it bottoms the panel above them.
+  layout.box.y = safe.y + VERTICAL_MARGIN;
+  layout.box.height = std::max(0, safe.height - 2 * VERTICAL_MARGIN);
 
   // Headword line, then the divider, then the body; a second divider and the dictionary name
   // close the panel.
@@ -78,6 +74,14 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.body.y = bodyTop;
   layout.body.height = std::max(0, bodyBottom - bodyTop);
   return layout;
+}
+
+void DictionaryPanel::clearButtonHints(const GfxRenderer& renderer) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  // Inverted portrait puts the front-button hints along the top edge instead of the bottom.
+  const bool isInverted = renderer.getOrientation() == GfxRenderer::Orientation::PortraitInverted;
+  const int bandY = isInverted ? 0 : renderer.getScreenHeight() - metrics.buttonHintsHeight;
+  renderer.fillRect(0, bandY, renderer.getScreenWidth(), metrics.buttonHintsHeight, false);
 }
 
 DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const char* headword, const char* dictName,
