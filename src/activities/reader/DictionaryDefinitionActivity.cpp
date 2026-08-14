@@ -224,10 +224,17 @@ void DictionaryDefinitionActivity::wrapText() {
 }
 
 void DictionaryDefinitionActivity::loop() {
-  // The power click steps back one screen, exactly like Back: from the definition to the word
-  // selection, and from there out to the page. Two clicks leave the dictionary entirely without
-  // the reading hand ever moving.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
+  // Back steps up to the word selection. The power click leaves the dictionary outright: from
+  // the selection it opened this view, so from here it closes the whole flow -- two clicks in
+  // and back out, without the reading hand moving.
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
   }

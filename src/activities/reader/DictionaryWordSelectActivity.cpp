@@ -194,7 +194,15 @@ void DictionaryWordSelectActivity::performLookup() {
     startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
                                renderer, mappedInput, std::move(headword), std::move(definition),
                                dict.definitionsAreHtml(), dict.getBookName()),
-                           [this](const ActivityResult&) { requestUpdate(); });
+                           [this](const ActivityResult& result) {
+                             // The definition view cancels when its power click asked to leave the dictionary
+                             // entirely, rather than step back to this selection.
+                             if (result.isCancelled) {
+                               finish();
+                               return;
+                             }
+                             requestUpdate();
+                           });
     return;
   }
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but
@@ -252,7 +260,18 @@ void DictionaryWordSelectActivity::loop() {
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
+  // The power click looks the highlighted word up rather than leaving, matching the vertical
+  // panel: while a word is selected the button means "show me this", and it only closes the
+  // dictionary from the definition itself. Two clicks still leave without the hand moving.
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    if (!words.empty()) {
+      performLookup();
+      return;
+    }
+    finish();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
   }
