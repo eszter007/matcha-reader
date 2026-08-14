@@ -164,6 +164,13 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool columnRange(uint16_t column, size_t& first, size_t& last) const;
   // Selectable entry in `column` nearest `anchorRow`; -1 when the column has none (mapped).
   int selectableInColumn(uint16_t column, uint16_t anchorRow) const;
+  // Open the cursor mid-page instead of at the first word, so any word on the page is at most
+  // half a page of presses away (the horizontal picker does the same). Parks as a pending column
+  // move when the walk has not reached the middle yet.
+  void selectMiddleOfPage();
+  // Middle column/row of the page and the allGlyphs index the walk must pass for that column to
+  // be fully mapped. False when the page has no glyphs. Layout data only -- no dictionary work.
+  bool middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outLastGlyph) const;
 
   int cursorIndex = 0;
 

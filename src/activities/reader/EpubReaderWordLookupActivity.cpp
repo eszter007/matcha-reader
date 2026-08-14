@@ -107,7 +107,24 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
   while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
     stepScan(50);
   }
-  LOG_INF("WLA", "progressive scan (%s): first word after %u ms", label, millis() - scanStart);
+  // Tategaki select mode opens the cursor mid-page, so stopping at the first word would show it
+  // on word one and hop it to the middle a moment later. Carry the walk to the middle column
+  // instead -- the list stays strictly sequential (indices, the cursor and the cache all depend
+  // on selectableGlyphs only ever growing at the end), the open just maps the first half up
+  // front. The budget is the same 1500ms ceiling: past it the cursor falls back to the parked
+  // move, which lands as the background walk arrives.
+  if (mode == Mode::Select) {
+    uint16_t midColumn = 0;
+    uint16_t midRow = 0;
+    size_t lastGlyph = 0;
+    if (middleTarget(midColumn, midRow, lastGlyph)) {
+      while (!scan.isDone() && scan.scannedGlyphs() <= lastGlyph && millis() - scanStart < 1500) {
+        stepScan(50);
+      }
+    }
+  }
+  LOG_INF("WLA", "progressive scan (%s): ready after %u ms (scanned %u/%u)", label, millis() - scanStart,
+          static_cast<unsigned>(scan.scannedGlyphs()), static_cast<unsigned>(scan.allGlyphs.size()));
 }
 
 // See the header: heal a low-heap-truncated scan once by freeing fonts and re-walking the intact
@@ -161,7 +178,11 @@ void EpubReaderWordLookupActivity::onEnter() {
   // all: the constructor's burst already stopped at the first selectable word, and the cursor is
   // drawn over pixels that are on screen. The definition read waits for Confirm.
   if (mode == Mode::Select) {
-    if (!restored) cursorIndex = 0;
+    // A restored position wins: it is where this reader actually was on this page.
+    if (!restored) {
+      cursorIndex = 0;
+      selectMiddleOfPage();
+    }
     refreshCursorBoxes();
     requestUpdate();
     return;
@@ -328,6 +349,58 @@ int EpubReaderWordLookupActivity::selectableInColumn(const uint16_t column, cons
     }
   }
   return best;
+}
+
+// Column/row come from the layout, so the middle of the page is known the moment it loads --
+// even while the dictionary walk is still working through it. Starting there rather than at word
+// one halves the worst-case number of presses to any word, the same reasoning as the horizontal
+// picker's "middle row nearest mid-screen".
+bool EpubReaderWordLookupActivity::middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outLastGlyph) const {
+  if (scan.allGlyphs.empty()) return false;
+
+  uint16_t minColumn = UINT16_MAX;
+  uint16_t maxColumn = 0;
+  uint16_t minRow = UINT16_MAX;
+  uint16_t maxRow = 0;
+  for (const auto& g : scan.allGlyphs) {
+    minColumn = std::min(minColumn, g.column);
+    maxColumn = std::max(maxColumn, g.column);
+    minRow = std::min(minRow, g.row);
+    maxRow = std::max(maxRow, g.row);
+  }
+  outColumn = static_cast<uint16_t>((minColumn + maxColumn) / 2);
+  outRow = static_cast<uint16_t>((minRow + maxRow) / 2);
+
+  size_t first = 0;
+  size_t last = 0;
+  outLastGlyph = columnRange(outColumn, first, last) ? last : scan.allGlyphs.size();
+  return true;
+}
+
+void EpubReaderWordLookupActivity::selectMiddleOfPage() {
+  if (scan.allGlyphs.empty() || scan.selectableGlyphs.empty()) return;
+
+  uint16_t midColumn = 0;
+  uint16_t midRow = 0;
+  size_t lastGlyph = 0;
+  if (!middleTarget(midColumn, midRow, lastGlyph)) return;
+
+  // Already walked that far -- the usual case, since the burst carries the walk to the middle.
+  const int target = selectableInColumn(midColumn, midRow);
+  if (target >= 0) {
+    cursorIndex = target;
+    return;
+  }
+  // Not yet mapped -- hand it to the same wait the user's own column jumps use, so the cursor
+  // lands as the walk arrives instead of blocking here. The cursor stays on word one until then,
+  // which is a valid position to look up or step away from.
+  pending = PendingMove{};
+  pending.kind = PendingMove::Kind::Column;
+  pending.delta = 1;
+  pending.targetColumn = midColumn;
+  pending.anchorRow = midRow;
+  pending.requestedAt = millis();
+  resolvePendingMove();
 }
 
 // Completes a parked move once the scan has mapped what it needs, and puts up the "Scanning..."
