@@ -82,24 +82,28 @@ class WordSelectionScan {
 
   // Where the walk currently sits in allGlyphs. Every cell's page position is known from
   // initFrom*(), but only segmented cells can be selected.
-  // NOT a "everything below this is mapped" frontier once startAtGlyph() has wrapped the walk,
-  // and not a processed count either (a wrapped walk starts mid-page). Ask isGlyphMapped() for
-  // mapping decisions; this is for progress logging and cheap "has the walk moved" checks.
+  // NOT a "everything below this is mapped" frontier, and not a processed count: the walk is
+  // re-aimed on demand (aimAtGlyph), so it can sit anywhere and cells on either side of it may
+  // already be done. Ask isGlyphMapped() for mapping decisions; this is for progress logging.
   size_t scannedGlyphs() const { return scanPos; }
 
-  // Start the walk at `glyphIndex` instead of 0, then wrap to cover [0, glyphIndex) once the
-  // tail is done. Vertical select mode opens its cursor mid-page, so the half the reader is
-  // looking at gets segmented first. Call right after initFrom*(), before any step(): the walk
-  // is still sequential WITHIN each region, so selectableGlyphs only ever grows at the end and
-  // stays self-consistent with selectToAllIdx -- but it is no longer in reading order, so a
-  // caller stepping word-by-word must order by selectToAllIdx (see isGlyphMapped()).
-  void startAtGlyph(size_t glyphIndex);
-  // True when the walk has segmented the cell at `glyphIndex`. Replaces comparing against
-  // scannedGlyphs(): with a wrapped walk there is no single frontier below which all is mapped.
+  // Point the walk at `glyphIndex`. The walk is free to start anywhere and to be re-aimed at any
+  // time: every segmented cell is recorded in a per-glyph bitmap, so positions are never scanned
+  // twice and the order they are visited in does not matter. Vertical select mode aims it at the
+  // middle column on open (the cursor opens there) and re-aims it at whatever column the reader
+  // jumps to, so a jump segments the ~20 cells asked for instead of everything in between.
+  //
+  // Scanning starts up to kMaxLookupChars BEFORE the target so a word overlapping the target is
+  // segmented with its real context; those earlier cells are read but not recorded, leaving them
+  // for whoever scans them properly. selectableGlyphs therefore grows out of reading order --
+  // callers stepping word by word must order by selectToAllIdx.
+  void aimAtGlyph(size_t glyphIndex);
+  // True when the cell at `glyphIndex` has been segmented. Exact for any walk order, which
+  // comparing against scannedGlyphs() cannot be once the walk is re-aimed.
   bool isGlyphMapped(size_t glyphIndex) const {
     if (phase == Phase::Done) return true;
-    if (glyphIndex >= startGlyph) return glyphIndex < scanPos;  // tail region, walked first
-    return wrapped && glyphIndex < scanPos;                     // head region, walked after
+    if (glyphIndex >= allGlyphs.size() || scannedBits.empty()) return false;
+    return (scannedBits[glyphIndex >> 3] >> (glyphIndex & 7)) & 1;
   }
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
@@ -131,10 +135,22 @@ class WordSelectionScan {
   enum class Phase : uint8_t { Scan, Done };
   Phase phase = Phase::Scan;
   size_t scanPos = 0;  // next allGlyphs index the scan will examine
-  // Wrapped-walk state (startAtGlyph): the walk runs [startGlyph, end) then [0, startGlyph).
-  // startGlyph 0 leaves the plain single-region walk, which is what horizontal and manga use.
-  size_t startGlyph = 0;
-  bool wrapped = false;  // true once the walk has turned round to the head region
+  // One bit per allGlyphs entry: set once that cell has been segmented. This is what lets the
+  // walk be re-aimed freely -- it replaces "everything below scanPos is done", which only held
+  // while the walk was a single sequential pass. 219 cells is 28 bytes.
+  std::vector<uint8_t> scannedBits;
+  // Cells before this are read for context only: their matches are not recorded and their bits
+  // are not set, so the walk that properly owns them still scans them.
+  size_t recordFrom = 0;
+  void markScanned(size_t glyphIndex) {
+    if (glyphIndex < allGlyphs.size() && !scannedBits.empty()) scannedBits[glyphIndex >> 3] |= (1u << (glyphIndex & 7));
+  }
+  // Next cell at or after `from` that has not been segmented; allGlyphs.size() when none remain.
+  size_t nextUnscanned(size_t from) const;
+  // Size the per-cell bitmap for the glyph list just built. Nothrow: on OOM the bitmap stays
+  // empty, isGlyphMapped() then reports nothing as mapped, and the walk still completes -- it
+  // just cannot skip work it has already done.
+  void allocScannedBits();
   size_t skipUntil = 0;  // characters inside an already-matched word are skipped
   // Set true when initFrom*() or step() had to abandon work because the heap couldn't grow a
   // vector (dropped glyphs / partial scan). A truncated scan finds too few (often zero)

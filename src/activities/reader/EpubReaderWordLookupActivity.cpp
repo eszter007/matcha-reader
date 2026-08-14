@@ -112,7 +112,7 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
     uint16_t midColumn = 0;
     uint16_t midRow = 0;
     size_t firstGlyph = 0;
-    if (middleTarget(midColumn, midRow, firstGlyph)) scan.startAtGlyph(firstGlyph);
+    if (middleTarget(midColumn, midRow, firstGlyph)) scan.aimAtGlyph(firstGlyph);
   }
   while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
     stepScan(50);
@@ -340,8 +340,18 @@ void EpubReaderWordLookupActivity::moveSelection(const int delta) {
 void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
   if (cursorIndex < 0 || cursorIndex >= static_cast<int>(scan.selectableGlyphs.size())) return;
   const auto& cur = scan.selectableGlyphs[static_cast<size_t>(cursorIndex)];
-  const int target = static_cast<int>(cur.column) + direction;
-  if (target < 0) return;
+  uint16_t minColumn = 0;
+  uint16_t maxColumn = 0;
+  if (!columnBounds(minColumn, maxColumn)) return;
+  // Round-trip at the page edges: stepping words already cycles at the ends, and a column jump
+  // stopping dead at the last column made the two navigations disagree. Bounds come from the
+  // layout, so this is right even before the walk has segmented that column.
+  int target = static_cast<int>(cur.column) + direction;
+  if (target > static_cast<int>(maxColumn)) {
+    target = minColumn;
+  } else if (target < static_cast<int>(minColumn)) {
+    target = maxColumn;
+  }
 
   pending = PendingMove{};
   pending.kind = PendingMove::Kind::Column;
@@ -349,6 +359,8 @@ void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
   pending.targetColumn = static_cast<uint16_t>(target);
   pending.anchorRow = cur.row;
   resolvePendingMove();  // usually lands at once: the walk is normally well ahead of the reader
+  // Landed: get the next column in this direction ready, so holding the button stays fluid.
+  if (pending.kind == PendingMove::Kind::None) prefetchColumn(static_cast<uint16_t>(target), direction);
 }
 
 bool EpubReaderWordLookupActivity::columnRange(const uint16_t column, size_t& first, size_t& last) const {
@@ -362,6 +374,46 @@ bool EpubReaderWordLookupActivity::columnRange(const uint16_t column, size_t& fi
     last = i;
   }
   return found;
+}
+
+bool EpubReaderWordLookupActivity::columnBounds(uint16_t& outMin, uint16_t& outMax) const {
+  if (scan.allGlyphs.empty()) return false;
+  outMin = UINT16_MAX;
+  outMax = 0;
+  for (const auto& g : scan.allGlyphs) {
+    outMin = std::min(outMin, g.column);
+    outMax = std::max(outMax, g.column);
+  }
+  return true;
+}
+
+bool EpubReaderWordLookupActivity::columnAnchorGlyph(const uint16_t column, const uint16_t row,
+                                                     size_t& outGlyph) const {
+  bool found = false;
+  int bestDistance = INT_MAX;
+  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+    const auto& g = scan.allGlyphs[i];
+    if (g.column != column) continue;
+    const int distance = std::abs(static_cast<int>(g.row) - static_cast<int>(row));
+    if (!found || distance < bestDistance) {
+      bestDistance = distance;
+      outGlyph = i;
+      found = true;
+    }
+  }
+  return found;
+}
+
+void EpubReaderWordLookupActivity::prefetchColumn(const uint16_t fromColumn, const int direction) {
+  uint16_t minColumn = 0;
+  uint16_t maxColumn = 0;
+  if (!columnBounds(minColumn, maxColumn)) return;
+  int next = static_cast<int>(fromColumn) + direction;
+  if (next > static_cast<int>(maxColumn)) next = minColumn;
+  if (next < static_cast<int>(minColumn)) next = maxColumn;
+  size_t first = 0;
+  size_t last = 0;
+  if (columnRange(static_cast<uint16_t>(next), first, last)) scan.aimAtGlyph(first);
 }
 
 int EpubReaderWordLookupActivity::selectableInColumn(const uint16_t column, const uint16_t anchorRow) const {
@@ -453,17 +505,33 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
     // particles, or a run of punctuation), and stopping there would strand the cursor. Running
     // out of columns is a completed move that simply had nowhere to go -- the request is dropped
     // either way, so a jump at the edge of the page can never leave a wait pending forever.
-    for (int column = pending.targetColumn; column >= 0; column += pending.delta) {
+    uint16_t minColumn = 0;
+    uint16_t maxColumn = 0;
+    const bool haveBounds = columnBounds(minColumn, maxColumn);
+    const int columnsOnPage = haveBounds ? (maxColumn - minColumn + 1) : 0;
+    int column = pending.targetColumn;
+    // At most one lap: a page whose every column is unselectable must end the search, not spin.
+    for (int visited = 0; visited < columnsOnPage; visited++, column += pending.delta) {
+      if (haveBounds) {
+        if (column > static_cast<int>(maxColumn)) column = minColumn;
+        if (column < static_cast<int>(minColumn)) column = maxColumn;
+      }
       size_t first = 0;
       size_t last = 0;
-      if (!columnRange(static_cast<uint16_t>(column), first, last)) break;  // past the page edge
-      if (!scan.isDone() && !scan.isGlyphMapped(last)) {
+      if (!columnRange(static_cast<uint16_t>(column), first, last)) continue;  // gap in the page
+      size_t anchorGlyph = last;
+      if (!columnAnchorGlyph(static_cast<uint16_t>(column), pending.anchorRow, anchorGlyph)) anchorGlyph = last;
+      if (!scan.isDone() && !scan.isGlyphMapped(anchorGlyph)) {
         // Park on THIS column: the walk only moves on once a column is mapped, so the range is
         // looked up once per column entered rather than once per tick of the wait.
         pending.targetColumn = static_cast<uint16_t>(column);
-        pending.waitUntilGlyph = last;
+        pending.waitUntilGlyph = anchorGlyph;
         pending.hasWaitTarget = true;
         stillWaiting = true;
+        // Segment what the reader asked for, not everything between here and there: aiming the
+        // walk at this column turns a wait for ~half a page into a wait for one column. Cells
+        // already done are skipped, so nothing is scanned twice.
+        scan.aimAtGlyph(anchorGlyph);
         break;
       }
       const int hit = selectableInColumn(static_cast<uint16_t>(column), pending.anchorRow);
@@ -511,13 +579,24 @@ void EpubReaderWordLookupActivity::returnToSelect() {
 // Returns false when the activity is finishing or has switched view, so the caller stops touching
 // state this tick.
 bool EpubReaderWordLookupActivity::handleSelectInput() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));
     finish();
     return false;
+  }
+
+  // On the page, a short power click SELECTS -- the same thing Look Up does. It is the one button
+  // reachable without moving the hand off the side buttons that step words, and this view draws
+  // no labels to say so. It only leaves the panel from the definition view (handleDefinitionInput),
+  // where a click closes the dictionary outright rather than stepping back to the page.
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    if (pending.kind == PendingMove::Kind::None) {
+      enterDefinition();
+      return false;
+    }
+    return true;
   }
 
   // The panel is entered while Confirm is still held (the reader opens it on a long press), so
@@ -982,7 +1061,7 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     finish();
     return false;
   }
-  if (ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));

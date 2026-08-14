@@ -156,6 +156,15 @@ class EpubReaderWordLookupActivity final : public Activity {
   void resolvePendingMove();
   // First and last allGlyphs index of a column, or false when the page has no such column.
   bool columnRange(uint16_t column, size_t& first, size_t& last) const;
+  // Lowest and highest column on the page. Layout data, known as soon as the page loads.
+  bool columnBounds(uint16_t& outMin, uint16_t& outMax) const;
+  // allGlyphs index of the cell in `column` nearest `row`. The cell a jump actually lands on, so
+  // it is what a parked jump waits for -- waiting for the column's LAST cell segments the whole
+  // column when only this part of it is needed. False when the page has no such column.
+  bool columnAnchorGlyph(uint16_t column, uint16_t row, size_t& outGlyph) const;
+  // Point the walk at the next column in `direction` so a second jump the same way finds it
+  // already segmented. Costs nothing when that column is done: aimAtGlyph() ignores it.
+  void prefetchColumn(uint16_t fromColumn, int direction);
   // Selectable entry in `column` nearest `anchorRow`; -1 when the column has none (mapped).
   int selectableInColumn(uint16_t column, uint16_t anchorRow) const;
   // Open the cursor mid-page instead of at the first word, so any word on the page is at most

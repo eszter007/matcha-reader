@@ -203,8 +203,8 @@ void WordSelectionScan::reset() {
   selectToAllIdx.clear();
   phase = Phase::Scan;
   scanPos = 0;
-  startGlyph = 0;
-  wrapped = false;
+  recordFrom = 0;
+  scannedBits.clear();
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
@@ -217,8 +217,9 @@ void WordSelectionScan::restartStepScan() {
   selectToAllIdx.clear();
   phase = Phase::Scan;
   scanPos = 0;
-  startGlyph = 0;
-  wrapped = false;
+  recordFrom = 0;
+  // Every cell is unsegmented again: the re-walk rebuilds selectableGlyphs from scratch.
+  std::fill(scannedBits.begin(), scannedBits.end(), 0);
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
@@ -240,6 +241,7 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  allocScannedBits();
 }
 
 void WordSelectionScan::initFromPage(const Page& page) {
@@ -305,6 +307,7 @@ void WordSelectionScan::initFromPage(const Page& page) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  allocScannedBits();
 }
 
 void WordSelectionScan::initFromUtf8Text(const std::string& text) {
@@ -339,34 +342,58 @@ void WordSelectionScan::initFromUtf8Text(const std::string& text) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  allocScannedBits();
 }
 
-void WordSelectionScan::startAtGlyph(const size_t glyphIndex) {
-  if (glyphIndex == 0 || glyphIndex >= allGlyphs.size()) return;  // nothing to wrap around
-  startGlyph = glyphIndex;
-  wrapped = false;
-  scanPos = glyphIndex;
-  skipUntil = glyphIndex;  // a word straddling the seam is re-read from the seam, never skipped
+void WordSelectionScan::allocScannedBits() {
+  scannedBits.clear();
+  if (allGlyphs.empty()) return;
+  const size_t bytes = (allGlyphs.size() + 7) / 8;
+  // Same nothrow discipline as the glyph vectors: a failure here costs efficiency, not results.
+  scannedBits.reserve(bytes);
+  if (scannedBits.capacity() < bytes) {
+    LOG_ERR("WLS", "OOM: scanned bitmap (%u bytes)", static_cast<unsigned>(bytes));
+    scannedBits.clear();
+    return;
+  }
+  scannedBits.assign(bytes, 0);
+}
+
+size_t WordSelectionScan::nextUnscanned(const size_t from) const {
+  for (size_t i = from; i < allGlyphs.size(); i++) {
+    if (!isGlyphMapped(i)) return i;
+  }
+  return allGlyphs.size();
+}
+
+void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
+  if (glyphIndex >= allGlyphs.size() || phase == Phase::Done) return;
+  // Already segmented: nothing to aim at, and re-reading it would only cost SD time.
+  if (isGlyphMapped(glyphIndex)) return;
+  recordFrom = glyphIndex;
+  // Back up for context so a word overlapping the target is segmented as that word rather than
+  // as a fragment starting mid-way through it. kMaxLookupChars bounds how far back a word can
+  // begin, so this is always far enough.
+  scanPos = glyphIndex > static_cast<size_t>(kMaxLookupChars) ? glyphIndex - kMaxLookupChars : 0;
+  skipUntil = scanPos;
 }
 
 bool WordSelectionScan::step(const uint32_t maxMillis) {
   const uint32_t start = millis();
   while (phase != Phase::Done) {
-    if (scanPos >= allGlyphs.size()) {
-      // Wrapped walk: the tail is done, turn round and cover the head region.
-      if (startGlyph != 0 && !wrapped) {
-        wrapped = true;
-        scanPos = 0;
-        skipUntil = 0;
-        continue;
+    // Walked off the end, or onto cells another pass already did: pick up the next unfinished
+    // cell wherever it is. Searching from 0 keeps the sweep in page order once the demand-driven
+    // jumps have filled in the parts the reader actually looked at.
+    if (scanPos >= allGlyphs.size() || (scanPos >= recordFrom && isGlyphMapped(scanPos))) {
+      const size_t resume = nextUnscanned(0);
+      if (resume >= allGlyphs.size()) {
+        phase = Phase::Done;
+        break;
       }
-      phase = Phase::Done;
-      break;
-    }
-    // Head region ends where the tail began -- the cells beyond are already segmented.
-    if (wrapped && scanPos >= startGlyph) {
-      phase = Phase::Done;
-      break;
+      recordFrom = resume;
+      scanPos = resume > static_cast<size_t>(kMaxLookupChars) ? resume - kMaxLookupChars : 0;
+      skipUntil = scanPos;
+      continue;
     }
     scanOnePosition();
     if (millis() - start >= maxMillis) break;
@@ -531,6 +558,9 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
 void WordSelectionScan::scanOnePosition() {
   const size_t i = scanPos;
   scanPos++;
+  // Cells before recordFrom are read for context only (see aimAtGlyph): whoever owns them still
+  // has to scan them, so neither their matches nor their bits are claimed here.
+  if (i >= recordFrom) markScanned(i);
 
   const auto& g = allGlyphs[i];
   if (i < skipUntil) return;
@@ -781,7 +811,7 @@ void WordSelectionScan::scanOnePosition() {
   // filter runs here (not as a later pass) so partial results shown during a progressive scan
   // never lose entries afterwards. Note the skipUntil bookkeeping above stays in effect for
   // filtered-out matches too, exactly like the previous scan-then-filter split behaved.
-  if (hasMatch && passesDisplayFilter(i)) {
+  if (hasMatch && passesDisplayFilter(i) && i >= recordFrom) {
     // The selectable entry starts at i (the digit run, when there is one), so its span is the
     // digits plus the dictionary match. Recorded now because the caller drawing a highlight over
     // the page must not have to repeat the lookup just to learn how many cells to cover.
