@@ -25,7 +25,10 @@ Layout compute(const GfxRenderer& renderer);
 // Paints the frame, `headword` above the divider, `dictName` in the footer, and `counter`
 // right-aligned on the headword line. `dictName` and `counter` may be null. The returned
 // Layout is the same one compute() gives, so the caller can draw its body straight after.
-Layout draw(const GfxRenderer& renderer, const char* headword, const char* dictName, const char* counter);
+// `footerRight` names the dictionary an entry came from where several can answer one lookup
+// (the Japanese vocab/grammar/name indexes); null when the source is unambiguous.
+Layout draw(const GfxRenderer& renderer, const char* headword, const char* dictName, const char* counter,
+            const char* footerRight = nullptr);
 
 // Blank the button-hint band before the panel's own hints are drawn into it. The panel does not
 // clear the screen, so without this the reader's labels stay in the framebuffer and the two sets

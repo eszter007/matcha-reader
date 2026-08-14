@@ -101,12 +101,25 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
   return &fontData->bitmap[glyph->dataOffset];
 }
 
-void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
+// The SD font whose advance table a string will actually be measured against: the font itself
+// when it is an SD font, otherwise the SD fallback registered for a built-in primary. A string
+// containing glyphs the primary lacks is redirected wholesale by resolveTextFontId, and it is
+// then the FALLBACK's table that must be warm -- left cold, those glyphs measure zero and draw
+// on top of one another.
+SdCardFont* GfxRenderer::sdFontForWarmup(const int fontId) const {
   auto it = sdCardFonts_.find(fontId);
-  if (it != sdCardFonts_.end()) {
+  if (it != sdCardFonts_.end()) return it->second;
+  const auto fb = fallbackFontMap_.find(fontId);
+  if (fb == fallbackFontMap_.end()) return nullptr;
+  it = sdCardFonts_.find(fb->second);
+  return it == sdCardFonts_.end() ? nullptr : it->second;
+}
+
+void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
+  if (const auto font = sdFontForWarmup(fontId)) {
     std::string shaped;
     appendShapedRtlTokens(utf8Text, shaped);
-    int missed = it->second->buildAdvanceTable(utf8Text, styleMask, shaped.empty() ? nullptr : shaped.c_str());
+    int missed = font->buildAdvanceTable(utf8Text, styleMask, shaped.empty() ? nullptr : shaped.c_str());
     if (missed > 0) {
       LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
     }
@@ -115,8 +128,7 @@ void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_
 
 void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string>& words, bool includeHyphen,
                                         uint8_t styleMask) const {
-  auto it = sdCardFonts_.find(fontId);
-  if (it != sdCardFonts_.end()) {
+  if (const auto font = sdFontForWarmup(fontId)) {
     // Augment the persistent advance-only table for layout measurement.
     // The table survives across paragraphs/sections (capped per font), so
     // repeated indexing of the same SD font amortizes glyph-metric SD reads.
@@ -124,8 +136,7 @@ void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string
     for (const auto& w : words) {
       appendShapedRtlTokens(w.c_str(), shaped);
     }
-    int missed =
-        it->second->buildAdvanceTable(words, includeHyphen, styleMask, shaped.empty() ? nullptr : shaped.c_str());
+    int missed = font->buildAdvanceTable(words, includeHyphen, styleMask, shaped.empty() ? nullptr : shaped.c_str());
     if (missed > 0) {
       LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
     }

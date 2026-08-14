@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
@@ -788,6 +789,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   resultSource = nullptr;
   sectionText.clear();
   sectionLabel.clear();
+  sectionKind.clear();
   currentSection = 0;
   resultMatchLen = 0;
   scrollOffset = 0;
@@ -1146,12 +1148,17 @@ void EpubReaderWordLookupActivity::moveSection(const int delta) {
 void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
   sectionText.clear();
   sectionLabel.clear();
+  sectionKind.clear();
   currentSection = 0;
   if (!pagedDefinition() || resultDefinition.empty()) return;
 
   static constexpr char kEntrySep[] = "\n\n---\n";
   static constexpr char kGrammarSep[] = "\n\n— Grammar: ";
 
+  // Vocab until the grammar separator is crossed; a name lookup has no separators at all, so its
+  // single piece takes the kind the lookup itself resolved.
+  StrId kind = resultSource != nullptr && strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
+                                                                                : StrId::STR_DICT_KIND_VOCAB;
   // Cut at whichever separator comes first, repeatedly.
   size_t pos = 0;
   while (pos <= resultDefinition.size()) {
@@ -1185,10 +1192,12 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
     if (!piece.empty() && !duplicate) {
       sectionText.push_back(std::move(piece));
       sectionLabel.push_back(std::move(label));
+      sectionKind.push_back(kind);
     }
 
     if (cut == std::string::npos) break;
     if (cut == grammarAt) {
+      kind = StrId::STR_DICT_KIND_GRAMMAR;  // everything from here on is the grammar entry
       // Keep the "— Grammar: <headword> —" heading with the grammar text it introduces.
       pos = cut + 2;  // step over the blank line, not the heading
       const size_t headingEnd = resultDefinition.find('\n', pos);
@@ -1209,6 +1218,11 @@ const std::string& EpubReaderWordLookupActivity::visibleDefinition() const {
     return sectionText[currentSection];
   }
   return resultDefinition;
+}
+
+const char* EpubReaderWordLookupActivity::visibleKind() const {
+  if (sectionKind.empty() || currentSection >= static_cast<int>(sectionKind.size())) return nullptr;
+  return I18N.get(sectionKind[currentSection]);
 }
 
 const char* EpubReaderWordLookupActivity::visibleLabel() const {
@@ -1310,7 +1324,7 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the reader's page stays visible around it instead of being cleared away.
   const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", visibleLabel(),
-                                            counterText.empty() ? nullptr : counterText.c_str());
+                                            counterText.empty() ? nullptr : counterText.c_str(), visibleKind());
   renderContentArea(layout.body);
 
   const bool sideButtonsForLookup =

@@ -100,7 +100,7 @@ void DictionaryPanel::clearButtonHints(const GfxRenderer& renderer) {
 }
 
 DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const char* headword, const char* dictName,
-                                              const char* counter) {
+                                              const char* counter, const char* footerRight) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Layout layout = compute(renderer);
   const int radius = panelRadius(metrics);
@@ -127,11 +127,17 @@ DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const
 
   const int footerY = layout.box.y + layout.box.height - PADDING - renderer.getLineHeight(SMALL_FONT_ID);
   renderer.drawLine(textX, footerY - PADDING / 2, rightEdge, footerY - PADDING / 2, DIVIDER_STROKE, true);
-  if (dictName && dictName[0] != '\0') {
+  int nameWidth = layout.box.width - 2 * PADDING;
+  if (footerRight && footerRight[0] != '\0') {
+    const int kindWidth = renderer.getTextWidth(SMALL_FONT_ID, footerRight);
+    renderer.drawText(SMALL_FONT_ID, rightEdge - kindWidth, footerY, footerRight);
+    nameWidth -= kindWidth + PADDING;  // the title clips before it can reach the kind
+  }
+  if (dictName && dictName[0] != '\0' && nameWidth > 0) {
     // Dictionary titles run long ("English-Deutsch FreeDict+WikDict dictionary (en-de)"); clip to
     // the panel with an ellipsis rather than letting the text run under the frame.
     char buf[96];
-    ellipsize(renderer, dictName, layout.box.width - 2 * PADDING, buf, sizeof(buf));
+    ellipsize(renderer, dictName, nameWidth, buf, sizeof(buf));
     renderer.drawText(SMALL_FONT_ID, textX, footerY, buf);
   }
   return layout;

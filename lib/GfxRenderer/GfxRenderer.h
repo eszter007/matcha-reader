@@ -57,6 +57,9 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  // The SD font a string measured under `fontId` actually resolves to: that font, or the SD
+  // fallback registered for a built-in primary. See the definition for why this matters.
+  SdCardFont* sdFontForWarmup(int fontId) const;
   SdCardFont* fallbackSdFont_ = nullptr;
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
 

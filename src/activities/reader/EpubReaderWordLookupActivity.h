@@ -2,6 +2,7 @@
 
 #include <Epub/VerticalParsedText.h>
 #include <GfxRenderer.h>
+#include <I18n.h>
 #include <freertos/FreeRTOS.h>
 
 struct Rect;
@@ -195,6 +196,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // view here, which is what horizontal and manga use those buttons for.
   std::vector<std::string> sectionText;
   std::vector<std::string> sectionLabel;
+  // Which Japanese index answered each piece: several can answer one lookup, so the panel names
+  // it. StrId rather than a string: these are UI words, not the dictionaries' own titles.
+  std::vector<StrId> sectionKind;
   int currentSection = 0;
   void splitDefinitionIntoSections();
   void moveSection(int delta);
@@ -202,6 +206,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   // merged definition otherwise.
   const std::string& visibleDefinition() const;
   const char* visibleLabel() const;
+  const char* visibleKind() const;
 
   int scrollOffset = 0;     // lines scrolled within current entry
   int totalLines = 0;       // total lines in current definition
