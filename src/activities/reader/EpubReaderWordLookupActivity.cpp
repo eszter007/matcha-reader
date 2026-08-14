@@ -1102,8 +1102,15 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   const auto scrollUpButton =
       sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
                            : MappedInputManager::Button::Up;
-  buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveCursor(1); });
-  buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveCursor(-1); });
+  if (pagedDefinition()) {
+    // Tategaki reached this view from the page itself, with the word already chosen, so these
+    // buttons walk the entry's sources instead of jumping to another word.
+    buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveSection(1); });
+    buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveSection(-1); });
+  } else {
+    buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveCursor(1); });
+    buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveCursor(-1); });
+  }
   // Paged mode moves a whole screenful per press; free scrolling keeps its 5-line nudge.
   const int step = pagedDefinition() ? std::max(1, visibleCapacity) : 5;
   buttonNavigator.onPressAndContinuous(scrollDownButton, [this, step] {
@@ -1119,6 +1126,16 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     }
   });
   return true;
+}
+
+void EpubReaderWordLookupActivity::moveSection(const int delta) {
+  const int count = static_cast<int>(sectionText.size());
+  if (count <= 1) return;
+  const int next = currentSection + delta;
+  if (next < 0 || next >= count) return;  // ends are hard stops: the entry is a list, not a ring
+  currentSection = next;
+  scrollOffset = 0;  // a new source starts at its top
+  requestUpdate();
 }
 
 // Split the merged definition into one piece per source. DictIndex joins the entries it merges
@@ -1288,7 +1305,7 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
 
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the reader's page stays visible around it instead of being cleared away.
-  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", visibleLabel(),
                                             counterText.empty() ? nullptr : counterText.c_str());
   renderContentArea(layout.body);
 

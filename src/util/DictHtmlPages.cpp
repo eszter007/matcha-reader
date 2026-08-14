@@ -265,7 +265,10 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
           senseCount++;
           // The item's own text is its gloss; bold it in its own block so the translations
           // beneath start on a fresh line without a blank one between.
-          if (!out.append("<div><b>")) return false;
+          // margin-bottom:0 as well as the list's margin-top:0 above: BOTH sides of that boundary
+          // carry a default block margin, and zeroing only one still left a blank line between a
+          // sense's gloss and its own translations.
+          if (!out.append("<div style=\"margin-bottom:0\"><b>")) return false;
           glossOpen = true;
         }
         i = j + 1;

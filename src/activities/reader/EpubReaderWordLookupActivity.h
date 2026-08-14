@@ -197,6 +197,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::vector<std::string> sectionLabel;
   int currentSection = 0;
   void splitDefinitionIntoSections();
+  void moveSection(int delta);
   // Text and footer label for what is on screen: the current section in tategaki, the whole
   // merged definition otherwise.
   const std::string& visibleDefinition() const;
