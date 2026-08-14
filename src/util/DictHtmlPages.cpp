@@ -240,6 +240,12 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
             i = j + 1;
             continue;
           }
+          // A translation list follows its sense's gloss directly. Left to its own block
+          // margins it opened with a blank line under the gloss, which read as a separator
+          // between the two halves of one sense.
+          if (!out.append("<ol style=\"margin-top:0;margin-bottom:0\">")) return false;
+          i = j + 1;
+          continue;
         }
       }
 
