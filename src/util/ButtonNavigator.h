@@ -25,10 +25,15 @@ class ButtonNavigator final {
   void onNext(const Callback& callback);
   void onPrevious(const Callback& callback);
   void onPressAndContinuous(const Buttons& buttons, const Callback& callback);
+  // Single-button overloads. The Buttons ones take a vector, so binding one button per tick from
+  // a loop() means a heap allocation and free on every tick -- churn this device does not need in
+  // its hottest path. These allocate nothing.
+  void onPressAndContinuous(MappedInputManager::Button button, const Callback& callback);
 
   void onNextPress(const Callback& callback);
   void onPreviousPress(const Callback& callback);
   void onPress(const Buttons& buttons, const Callback& callback);
+  void onPress(MappedInputManager::Button button, const Callback& callback);
 
   void onNextRelease(const Callback& callback);
   void onPreviousRelease(const Callback& callback);
@@ -37,6 +42,7 @@ class ButtonNavigator final {
   void onNextContinuous(const Callback& callback);
   void onPreviousContinuous(const Callback& callback);
   void onContinuous(const Buttons& buttons, const Callback& callback);
+  void onContinuous(MappedInputManager::Button button, const Callback& callback);
 
   [[nodiscard]] static int nextIndex(int currentIndex, int totalItems);
   [[nodiscard]] static int previousIndex(int currentIndex, int totalItems);

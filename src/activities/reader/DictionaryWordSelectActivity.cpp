@@ -253,8 +253,7 @@ void DictionaryWordSelectActivity::loop() {
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
     finish();
     return;
   }

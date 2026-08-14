@@ -31,6 +31,8 @@ Japanese books are detected from their metadata and set vertically: right-to-lef
 
 Look up any word on the page, vertically or horizontally. Conjugations resolve to the dictionary form on their own (読んで becomes 読む, 食べませんでした becomes 食べる), and the page is scanned first so you only land on words that actually have an entry.
 
+In vertical text, lookup opens on the page itself: the current word is highlighted where it stands, the side buttons step word by word down the column, Left and Right jump a column, and the definition opens only when you press Look Up. Back returns to the highlighted page, so several words on a page are a few presses apart. The cursor opens mid-page and the scan starts there too, so the half you are looking at is ready first; words it has not reached yet can still be selected, and the highlight moves as soon as the scan arrives. No button labels are drawn over the page — vertical text would be covered by them. Horizontal text opens straight into the definition view as before.
+
 Vocabulary, names and grammar each come from their own dictionary. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
 
 Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.

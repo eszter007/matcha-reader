@@ -446,9 +446,9 @@ void EpubReaderActivity::showBuildPopup() {
   buildPopupPending = false;
 }
 
-void EpubReaderActivity::openDictionaryWordSelect() {
+void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen) {
   if (isJapaneseBook()) {
-    openWordLookupPanel();
+    openWordLookupPanel(pageOnScreen);
     return;
   }
   std::string dictionaryFolder;
@@ -764,7 +764,7 @@ void EpubReaderActivity::loop() {
         // Hold ~0.4s starts dictionary word selection on the current page.
         if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showDictionaryMessage) {
           ignoreNextConfirmRelease = true;  // Prevent menu open on the release that follows
-          openDictionaryWordSelect();
+          openDictionaryWordSelect(/*pageOnScreen=*/true);
           return;
         }
         break;
@@ -828,7 +828,7 @@ void EpubReaderActivity::loop() {
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
       mappedInput.wasReleased(MappedInputManager::Button::Power) &&
       !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    openDictionaryWordSelect();
+    openDictionaryWordSelect(/*pageOnScreen=*/true);
     return;
   }
 
@@ -1310,7 +1310,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DICTIONARY: {
-      openDictionaryWordSelect();
+      // The menu was the last thing drawn, so the panel has to paint the page itself.
+      openDictionaryWordSelect(/*pageOnScreen=*/false);
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DISPLAY_QR: {
@@ -1375,7 +1376,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {
-      openWordLookupPanel();
+      openWordLookupPanel(/*pageOnScreen=*/false);
       break;
     }
     case EpubReaderMenuActivity::MenuAction::TRANSLATE_PAGE: {
@@ -3770,11 +3771,43 @@ int EpubReaderActivity::effectiveReaderFontId() const {
   return SETTINGS.getReaderFontId();
 }
 
-void EpubReaderActivity::openWordLookupPanel() {
+bool EpubReaderActivity::repaintVerticalPageForPanelThunk(void* ctx) {
+  return static_cast<EpubReaderActivity*>(ctx)->repaintVerticalPageForPanel();
+}
+
+bool EpubReaderActivity::repaintVerticalPageForPanel() {
+  if (!verticalSection) return false;
+  const VerticalPage* page = verticalSection->getPage();
+  if (!page) {
+    // The slot could not be re-faulted (low heap / read error). Report the failure so the panel
+    // retries rather than keeping a cursor on a blank screen.
+    LOG_ERR("ERS", "Word lookup: no page to repaint under the word cursor");
+    return false;
+  }
+  renderVerticalPageBody(*page);
+  renderStatusBar();
+  return true;
+}
+
+void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
   if (!epub || !DictIndex::isAvailable()) return;
   // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
   const std::string scanCachePath = epub->getCachePath() + "/wlscan.bin";
   if (verticalSection) {
+    // Page geometry for the panel's word cursor, captured BEFORE the font release below:
+    // verticalCellPx probes the reference glyph out of the reader font, and a released SD font
+    // answers with the line height instead -- a cell that disagrees with the pixels on screen.
+    VerticalSelectContext selectCtx;
+    int viewableRight = 0;
+    int viewableBottom = 0;
+    renderer.getOrientedViewableTRBL(&selectCtx.marginTop, &viewableRight, &viewableBottom, &selectCtx.marginLeft);
+    selectCtx.marginTop += SETTINGS.screenMargin;
+    selectCtx.marginLeft += SETTINGS.screenMargin;
+    selectCtx.cellPx = verticalCellPx(renderer, effectiveReaderFontId());
+    selectCtx.repaintPage = &EpubReaderActivity::repaintVerticalPageForPanelThunk;
+    selectCtx.repaintCtx = this;
+    selectCtx.pageOnScreen = pageOnScreen;
+
     // Built under the render lock, started after it: the constructor's scan copies every glyph
     // out of *page, and the pointer is only valid while nothing else re-faults the section's
     // single page slot -- which the render task's warm tail does, for seconds at a time. This
@@ -3796,9 +3829,9 @@ void EpubReaderActivity::openWordLookupPanel() {
     {
       RenderLock lock(*this);
       if (const VerticalPage* page = verticalSection->getPage()) {
-        panel = makeUniqueNoThrow<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
-                                                                static_cast<uint16_t>(currentSpineIndex),
-                                                                static_cast<uint16_t>(verticalSection->currentPage));
+        panel = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
+            renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
+            static_cast<uint16_t>(verticalSection->currentPage), selectCtx);
         if (!panel) LOG_ERR("ERS", "OOM: word lookup panel");
       }
     }
