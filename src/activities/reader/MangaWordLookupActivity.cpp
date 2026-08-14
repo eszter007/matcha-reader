@@ -297,7 +297,7 @@ void MangaWordLookupActivity::performLookupImpl() {
 
 void MangaWordLookupActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+      ReaderUtils::wordLookupPowerClick(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));

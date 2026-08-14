@@ -146,7 +146,10 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 // release that arrives in the SAME input update as a Down release is the Power+Down screenshot
 // combo being let go, not a request to leave, so the screen survives being screenshotted. Down held
 // on its own is not consulted -- only the two releases coinciding.
-inline bool powerClickLeavesWordLookup(const MappedInputManager& input) {
+// A short power click inside the word-lookup panel, when the user has bound the short click to
+// Word Lookup. What it DOES depends on the view: on the page it selects the highlighted word;
+// in the definition it closes the dictionary outright.
+inline bool wordLookupPowerClick(const MappedInputManager& input) {
   return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
          input.wasReleased(MappedInputManager::Button::Power) && !input.wasReleased(MappedInputManager::Button::Down);
 }

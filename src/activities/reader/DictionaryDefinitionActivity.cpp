@@ -196,7 +196,7 @@ void DictionaryDefinitionActivity::loop() {
   // selection, and from there out to the page. Two clicks leave the dictionary entirely without
   // the reading hand ever moving.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+      ReaderUtils::wordLookupPowerClick(mappedInput)) {
     finish();
     return;
   }
