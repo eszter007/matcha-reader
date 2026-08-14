@@ -195,8 +195,7 @@ void DictionaryDefinitionActivity::loop() {
   // The power click steps back one screen, exactly like Back: from the definition to the word
   // selection, and from there out to the page. Two clicks leave the dictionary entirely without
   // the reading hand ever moving.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::wordLookupPowerClick(mappedInput)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
     finish();
     return;
   }
