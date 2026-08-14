@@ -10,6 +10,7 @@
 
 #include "CrossPointSettings.h"
 #include "ReaderUtils.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/DictHtmlPages.h"
@@ -20,9 +21,6 @@ namespace {
 // Longest measurable/drawable span. Wrapped lines stay under the screen width
 // (far below this); only pathological unbreakable tokens are split at this cap.
 constexpr size_t MAX_LINE_BYTES = 191;
-
-// Body text left/right inset, matching the reader's default feel.
-constexpr int SIDE_PADDING = 20;
 
 // Styled-path ceiling: the laid-out Pages keep the whole definition resident
 // (TextBlock arenas ≈ text + ~7 bytes/word plus per-line objects), roughly
@@ -46,16 +44,8 @@ void DictionaryDefinitionActivity::onEnter() {
 }
 
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto orientation = renderer.getOrientation();
-  const bool isLandscape = orientation == GfxRenderer::Orientation::LandscapeClockwise ||
-                           orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = isLandscape ? metrics.sideButtonHintsWidth : 0;
-  const int topArea = (isInverted ? metrics.buttonHintsHeight : 0) + metrics.topPadding + metrics.headerHeight;
-  const int bottomArea = metrics.buttonHintsHeight + metrics.verticalSpacing;
-  return {renderer.getScreenWidth() - hintGutterWidth - 2 * SIDE_PADDING,
-          renderer.getScreenHeight() - topArea - bottomArea};
+  const auto body = DictionaryPanel::compute(renderer).body;
+  return {body.width, body.height};
 }
 
 // Styled path: lay the HTML definition out through the EPUB chapter parser
@@ -255,38 +245,23 @@ void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const
 }
 
 void DictionaryDefinitionActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto orientation = renderer.getOrientation();
-  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? metrics.sideButtonHintsWidth : 0;
-  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
-  const int contentWidth = renderer.getScreenWidth() - hintGutterWidth;
-  const int contentY = isInverted ? metrics.buttonHintsHeight : 0;
-
-  // Header: matched headword left, page counter right.
-  const int headerY = contentY + metrics.topPadding + 10;
-  renderer.drawText(UI_12_FONT_ID, contentX + SIDE_PADDING, headerY, headword.c_str(), true, EpdFontFamily::BOLD);
+  // No clearScreen: the panel floats over the page the word-select activity left in the
+  // framebuffer, and its own fill is opaque, so a re-render overwrites the previous one.
+  char counter[16] = "";
   if (totalPages > 1) {
-    char counter[16];
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
-    const int counterWidth = renderer.getTextWidth(UI_10_FONT_ID, counter);
-    renderer.drawText(UI_10_FONT_ID, contentX + contentWidth - SIDE_PADDING - counterWidth, headerY, counter);
   }
+  const auto layout = DictionaryPanel::draw(renderer, headword.c_str(), dictName.c_str(), counter);
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
   // of one on-demand overflow read per character on every page turn.
   const int fontId = SETTINGS.getReaderFontId();
-  const int bodyStartY = contentY + metrics.topPadding + metrics.headerHeight;
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  drawBody(fontId, contentX + SIDE_PADDING, bodyStartY);  // scan pass: records codepoints only
+  drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only
   scope.endScanAndPrewarm();
-  drawBody(fontId, contentX + SIDE_PADDING, bodyStartY);
+  drawBody(fontId, layout.body.x, layout.body.y);
 
   const auto labels =
       mappedInput.mapLabels(tr(STR_BACK), "", (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));

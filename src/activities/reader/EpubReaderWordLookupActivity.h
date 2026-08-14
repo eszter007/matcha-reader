@@ -178,15 +178,27 @@ class EpubReaderWordLookupActivity final : public Activity {
   int cursorIndex = 0;
 
   bool hasResult = false;
+  // Which dictionary the shown entry came from, for the panel footer. A literal, not a tr()
+  // string: these are the dictionaries' own names, the same way the English panel shows the
+  // .ifo's bookname. Null until a lookup lands.
+  const char* resultSource = nullptr;
+  const char* dictionaryLabel() const { return resultSource; }
   std::string resultHeadword;
   std::string resultDefinition;
   int resultMatchLen = 0;
   bool hasGrammar = false;
   std::string grammarHeadword;
   std::string grammarDefinition;
-  int scrollOffset = 0;  // lines scrolled within current entry
-  int totalLines = 0;    // total lines in current definition
-  int maxScroll = 0;     // max scroll offset (leaves a screenful visible)
+  int scrollOffset = 0;     // lines scrolled within current entry
+  int totalLines = 0;       // total lines in current definition
+  int maxScroll = 0;        // max scroll offset (leaves a screenful visible)
+  int visibleCapacity = 1;  // body lines that fit at once; the step size in paged mode
+
+  // Vertical (tategaki) reading pages the definition a screenful at a time and shows a page
+  // counter, instead of the free scrolling the horizontal and manga panels keep. scrollOffset
+  // is still the source of truth -- paging just quantizes it to whole screenfuls.
+  bool pagedDefinition() const { return selectCtx.valid(); }
+  int definitionPageCount() const;
 
   ButtonNavigator buttonNavigator;
 
@@ -223,5 +235,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   int fastRefreshCount = 0;
   static constexpr int kFullRefreshInterval = 10;
 
-  void renderContentArea(const Rect& screen, int contentTop);
+  // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
+  void renderContentArea(const Rect& body);
 };

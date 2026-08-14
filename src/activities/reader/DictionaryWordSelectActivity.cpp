@@ -192,10 +192,10 @@ void DictionaryWordSelectActivity::performLookup() {
 
   if (found) {
     popup = Popup::None;
-    startActivityForResult(
-        std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                       std::move(definition), dict.definitionsAreHtml()),
-        [this](const ActivityResult&) { requestUpdate(); });
+    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
+                               renderer, mappedInput, std::move(headword), std::move(definition),
+                               dict.definitionsAreHtml(), dict.getBookName()),
+                           [this](const ActivityResult&) { requestUpdate(); });
     return;
   }
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but

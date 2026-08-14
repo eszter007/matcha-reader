@@ -60,5 +60,11 @@ class MangaWordLookupActivity final : public Activity {
   int fastRefreshCount = 0;
   static constexpr int kFullRefreshInterval = 10;
 
-  void renderContentArea(const Rect& screen, int contentTop);
+  // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
+  void renderContentArea(const Rect& body);
+
+  // Which dictionary the shown entry came from, for the panel footer. Literals, not tr()
+  // strings: these are the dictionaries' own names. Null until a lookup lands.
+  const char* resultSource = nullptr;
+  const char* dictionaryLabel() const { return resultSource; }
 };

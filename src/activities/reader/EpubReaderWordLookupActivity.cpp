@@ -20,6 +20,7 @@
 #include "Epub/Page.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -784,6 +785,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   hasResult = false;
   resultHeadword.clear();
   resultDefinition.clear();
+  resultSource = nullptr;
   resultMatchLen = 0;
   scrollOffset = 0;
   totalLines = 9999;
@@ -858,6 +860,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       hasResult = true;
       resultHeadword = digitPrefix + text.substr(0, nb);
       resultDefinition = tr(STR_LOOKUP_NAME);  // no dictionary entry -- label it as a name
+      resultSource = "JMnedict";
       resultMatchLen = static_cast<int>(nameRun);
       // Names are the glossary's prime case: the book's own furigana is often the ONLY
       // source for a name's reading.
@@ -874,6 +877,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
+    resultSource = "JMdict";
     prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;
     size_t pos = 0;
@@ -921,6 +925,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
+          resultSource = "Grammar";
         }
       }
     }
@@ -1095,23 +1100,29 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
                            : MappedInputManager::Button::Up;
   buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveCursor(-1); });
-  buttonNavigator.onPressAndContinuous(scrollDownButton, [this] {
+  // Paged mode moves a whole screenful per press; free scrolling keeps its 5-line nudge.
+  const int step = pagedDefinition() ? std::max(1, visibleCapacity) : 5;
+  buttonNavigator.onPressAndContinuous(scrollDownButton, [this, step] {
     if (hasResult && scrollOffset < maxScroll) {
-      scrollOffset = std::min(maxScroll, scrollOffset + 5);
+      scrollOffset = std::min(maxScroll, scrollOffset + step);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous(scrollUpButton, [this] {
+  buttonNavigator.onPressAndContinuous(scrollUpButton, [this, step] {
     if (scrollOffset > 0) {
-      scrollOffset = std::max(0, scrollOffset - 5);
+      scrollOffset = std::max(0, scrollOffset - step);
       requestUpdate();
     }
   });
   return true;
 }
 
-void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
-  auto metrics = UITheme::getInstance().getMetrics();
+int EpubReaderWordLookupActivity::definitionPageCount() const {
+  const int capacity = std::max(1, visibleCapacity);
+  return std::max(1, (totalLines + capacity - 1) / capacity);
+}
+
+void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
   // Built-in font on purpose, NOT SETTINGS.getReaderFontId(): the lookup panel's definitions
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
@@ -1156,36 +1167,23 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
     // "No match found" is only the truth once nothing is still in flight; during fast
     // navigation or while the progressive scan is still mapping the page, show Loading.
     const bool stillWorking = lookupInFlight || !scan.isDone();
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2,
+    UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2,
                               stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
   } else {
-    const int maxWidth = screen.width - metrics.contentSidePadding * 2;
-    const int textX = screen.x + metrics.contentSidePadding;
-
-    int defY;
-
-    if (scrollOffset == 0) {
-      // Headword at the top (position counter is now in the header).
-      renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
-      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
-    } else {
-      // When scrolled, show a compact header line with the headword + scroll mark.
-      std::string scrollInfo = resultHeadword;
-      renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
-      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
-    }
+    // The headword lives above the panel's divider, so the body is definition text only.
+    const int maxWidth = body.width;
+    const int textX = body.x;
+    const int defY = body.y;
 
     const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-    // screen.height already excludes the button-hints band, so its bottom edge
-    // is the top of the buttons; stay a hair above it.
-    const int maxDefY = screen.y + screen.height - 2;
+    const int maxDefY = body.y + body.height;
     const int firstDefY = defY;
     const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
                                                   maxDefY, scrollOffset, defScale);
 
     totalLines = wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
-    const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
+    visibleCapacity = std::max(1, (maxDefY - firstDefY) / defLineH);
     maxScroll = std::max(0, totalLines - visibleCapacity);
   }
 }
@@ -1196,54 +1194,40 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     return;
   }
 
-  auto& theme = UITheme::getInstance();
-  auto metrics = theme.getMetrics();
-  Rect screen = theme.getScreenSafeArea(renderer, true, false);
-
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-
-  // Position counter (35/50) shown right-aligned on the header baseline.
-  std::string posText;
+  // Counter, right-aligned on the headword line. Paged mode counts pages of the definition;
+  // free-scrolling mode keeps the word position within the page (35/50), whose total is
+  // unknown until the progressive scan finishes -- an ellipsis stands in meanwhile.
+  std::string counterText;
   if (hasResult && !scan.selectableGlyphs.empty()) {
-    // Total is unknown until the progressive scan finishes; show an ellipsis meanwhile.
-    posText = std::to_string(cursorIndex + 1) + "/" +
-              (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+    if (pagedDefinition()) {
+      const int pageCount = definitionPageCount();
+      if (pageCount > 1) {
+        counterText = std::to_string(scrollOffset / std::max(1, visibleCapacity) + 1) + "/" + std::to_string(pageCount);
+      }
+    } else {
+      counterText = std::to_string(cursorIndex + 1) + "/" +
+                    (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+    }
   }
-  const Rect headerRect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight};
+
+  // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
+  // previous one; the reader's page stays visible around it instead of being cleared away.
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
+                                            counterText.empty() ? nullptr : counterText.c_str());
+  renderContentArea(layout.body);
+
+  const bool sideButtonsForLookup =
+      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
+                            sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (!initialRenderDone) {
-    renderer.clearScreen();
-
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-
-    renderContentArea(screen, contentTop);
-
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
     renderer.displayBuffer();
     initialRenderDone = true;
     fastRefreshCount = 0;
   } else {
-    // Clear from content top all the way to the physical bottom (including the
-    // button-hint band margins, which screen.height excludes), then redraw hints.
-    const int physBottom = renderer.getScreenHeight();
-    renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
-    // Redraw the header so the position counter updates (drawHeader clears it).
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels2 =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels2.btn1, labels2.btn2, labels2.btn3, labels2.btn4);
-
-    renderContentArea(screen, contentTop);
-
     fastRefreshCount++;
     if (fastRefreshCount >= kFullRefreshInterval) {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);

@@ -56,6 +56,10 @@ class Dictionary {
   // the viewer may lay them out through the EPUB rendering pipeline.
   bool definitionsAreHtml() const { return htmlDefinitions; }
 
+  // Title for the definition panel's footer: the .ifo's bookname when it has one,
+  // otherwise the dictionary's folder name. Empty only when no dictionary is open.
+  const std::string& getBookName() const { return bookName; }
+
   bool needsIndex();
 
   // Why an index build failed — the scan buffer is a heap allocation, so the
@@ -187,6 +191,8 @@ class Dictionary {
   bool hasPlainDict = false;
   bool hasSyn = false;  // a <stem>.syn synonym index exists next to the .idx
   bool htmlDefinitions = false;
+  // The .ifo's bookname=, or the folder name when the .ifo does not declare one.
+  std::string bookName;
 
   // Shared scan buffer: lookups are single-threaded and this avoids a
   // 256-byte array on the stack of every locate() call.

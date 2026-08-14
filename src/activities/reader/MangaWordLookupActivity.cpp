@@ -14,6 +14,7 @@
 #include "DefinitionTextRenderer.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -162,6 +163,7 @@ void MangaWordLookupActivity::performLookup() {
 void MangaWordLookupActivity::performLookupImpl() {
   hasResult = false;
   resultHeadword.clear();
+  resultSource = nullptr;
   resultDefinition.clear();
   resultMatchLen = 0;
   scrollOffset = 0;
@@ -176,6 +178,7 @@ void MangaWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
+    resultSource = "JMdict";
 
     int chars = 0;
     size_t pos = 0;
@@ -221,6 +224,7 @@ void MangaWordLookupActivity::performLookupImpl() {
         if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
+          resultSource = "Grammar";
         }
       }
     }
@@ -352,8 +356,7 @@ void MangaWordLookupActivity::loop() {
   }
 }
 
-void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
-  auto metrics = UITheme::getInstance().getMetrics();
+void MangaWordLookupActivity::renderContentArea(const Rect& body) {
   // Built-in font on purpose, NOT SETTINGS.getReaderFontId(): the lookup panel's definitions
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
@@ -382,26 +385,18 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
 
   if (scan.selectableGlyphs.empty() || !hasResult) {
     const bool stillWorking = lookupInFlight || !scan.isDone();
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2,
+    UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2,
                               stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
     return;
   }
 
-  const int maxWidth = screen.width - metrics.contentSidePadding * 2;
-  const int textX = screen.x + metrics.contentSidePadding;
-  int defY;
-
-  if (scrollOffset == 0) {
-    renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
-    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
-  } else {
-    std::string scrollInfo = resultHeadword;
-    renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
-    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
-  }
+  // The headword lives above the panel's divider, so the body is definition text only.
+  const int maxWidth = body.width;
+  const int textX = body.x;
+  const int defY = body.y;
 
   const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-  const int maxDefY = screen.y + screen.height - 2;
+  const int maxDefY = body.y + body.height;
   const int firstDefY = defY;
   const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
                                                 maxDefY, scrollOffset, defScale);
@@ -412,44 +407,32 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
 }
 
 void MangaWordLookupActivity::render(RenderLock&&) {
-  auto& theme = UITheme::getInstance();
-  auto metrics = theme.getMetrics();
-  Rect screen = theme.getScreenSafeArea(renderer, true, false);
-
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-
-  std::string posText;
+  // Manga keeps the free-scrolling definition, so the counter stays the word position within
+  // the page (35/50); its total is unknown until the progressive scan finishes.
+  std::string counterText;
   if (hasResult && !scan.selectableGlyphs.empty()) {
-    posText = std::to_string(cursorIndex + 1) + "/" +
-              (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+    counterText = std::to_string(cursorIndex + 1) + "/" +
+                  (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
   }
-  const Rect headerRect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight};
+
+  // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
+  // previous one; the manga page stays visible around it instead of being cleared away.
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
+                                            counterText.empty() ? nullptr : counterText.c_str());
+  renderContentArea(layout.body);
+
+  const bool sideButtonsForLookup =
+      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
+                            sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (!initialRenderDone) {
-    renderer.clearScreen();
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    renderContentArea(screen, contentTop);
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     initialRenderDone = true;
     fastRefreshCount = 0;
   } else {
-    const int physBottom = renderer.getScreenHeight();
-    renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels2 =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels2.btn1, labels2.btn2, labels2.btn3, labels2.btn4);
-    renderContentArea(screen, contentTop);
-
     fastRefreshCount++;
     if (fastRefreshCount >= kFullRefreshInterval) {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);

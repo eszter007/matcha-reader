@@ -17,11 +17,12 @@
 class DictionaryDefinitionActivity final : public Activity {
  public:
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
-                                        std::string definition, bool htmlDefinition = false)
+                                        std::string definition, bool htmlDefinition = false, std::string dictName = "")
       : Activity("DictionaryDefinition", renderer, mappedInput),
         headword(std::move(headword)),
         definition(std::move(definition)),
-        htmlDefinition(htmlDefinition) {}
+        htmlDefinition(htmlDefinition),
+        dictName(std::move(dictName)) {}
 
   void onEnter() override;
   void loop() override;
@@ -38,7 +39,7 @@ class DictionaryDefinitionActivity final : public Activity {
     uint16_t len;
   };
 
-  // Usable body-text area between the header and the button hints.
+  // Usable body-text area: the panel's inner rectangle.
   struct BodyArea {
     int width;
     int height;
@@ -55,6 +56,8 @@ class DictionaryDefinitionActivity final : public Activity {
   // separators) to newlines so C-string APIs see the whole text.
   std::string definition;
   const bool htmlDefinition;
+  // Shown in the panel footer; empty when the caller had no dictionary title.
+  const std::string dictName;
   // Styled path: reader-identical Pages laid out from the HTML definition.
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
