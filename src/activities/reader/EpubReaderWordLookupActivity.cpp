@@ -472,10 +472,12 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
   if (pending.kind != PendingMove::Kind::None) {
     return;
   }
-  if (moved) refreshCursorBoxes();
   // Only a moved cursor changes what is on screen: select mode paints no hint bar, so a wait
   // starting or ending has nothing to redraw (a repaint here would cost a refresh for nothing).
-  if (moved) requestUpdate();
+  if (moved) {
+    refreshCursorBoxes();
+    requestUpdate();
+  }
 }
 
 void EpubReaderWordLookupActivity::enterDefinition() {
