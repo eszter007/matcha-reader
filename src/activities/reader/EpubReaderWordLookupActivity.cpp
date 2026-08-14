@@ -681,6 +681,12 @@ void EpubReaderWordLookupActivity::renderSelect() {
     const bool drew = selectCtx.repaintPage && selectCtx.repaintPage(selectCtx.repaintCtx);
     drawnBoxCount = 0;  // the repaint took the old highlight with it
     selectPageDrawn = drew;
+    if (!drew) {
+      // The page could not be drawn. Drawing the cursor now would XOR it onto a cleared screen --
+      // the blank frame with a floating highlight this flag exists to avoid. Leave the frame
+      // unflushed and retry on the next render, when the slot may be faultable again.
+      return;
+    }
   } else if (drawnBoxCount > 0) {
     invertBoxes(drawnBoxes, drawnBoxCount);  // erase: inverting again restores what was under it
     drawnBoxCount = 0;

@@ -349,11 +349,13 @@ void WordSelectionScan::allocScannedBits() {
   scannedBits.clear();
   if (allGlyphs.empty()) return;
   const size_t bytes = (allGlyphs.size() + 7) / 8;
-  // Same nothrow discipline as the glyph vectors: a failure here costs efficiency, not results.
-  scannedBits.reserve(bytes);
-  if (scannedBits.capacity() < bytes) {
-    LOG_ERR("WLS", "OOM: scanned bitmap (%u bytes)", static_cast<unsigned>(bytes));
-    scannedBits.clear();
+  // Guard BEFORE growing, exactly as reserveGlyphsSafe() does: with -fno-exceptions a reserve
+  // that cannot be served aborts the device, so a capacity() check afterwards never runs. The
+  // bitmap is optional -- leaving it empty drops the walk to a strictly sequential pass (see
+  // aimAtGlyph() and step()), which is slower but complete.
+  if (ESP.getMaxAllocHeap() < bytes + SMALL_ALLOC_MARGIN) {
+    LOG_ERR("WLS", "Skipping scanned bitmap (%u bytes doesn't fit, maxAlloc=%u); walk stays sequential",
+            static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
     return;
   }
   scannedBits.assign(bytes, 0);
@@ -368,6 +370,10 @@ size_t WordSelectionScan::nextUnscanned(const size_t from) const {
 
 void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
   if (glyphIndex >= allGlyphs.size() || phase == Phase::Done) return;
+  // No bitmap (allocation failed): nothing records what has been done, so a jump would skip the
+  // cells it passed over and they would never be revisited. Stay sequential instead -- slower to
+  // reach the target, but complete.
+  if (scannedBits.empty()) return;
   // Already segmented: nothing to aim at, and re-reading it would only cost SD time.
   if (isGlyphMapped(glyphIndex)) return;
   recordFrom = glyphIndex;
@@ -385,6 +391,13 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
     // cell wherever it is. Searching from 0 keeps the sweep in page order once the demand-driven
     // jumps have filled in the parts the reader actually looked at.
     if (scanPos >= allGlyphs.size() || (scanPos >= recordFrom && isGlyphMapped(scanPos))) {
+      // Without the bitmap the walk is a single sequential pass, so the end of the page IS the
+      // end of the work. Consulting nextUnscanned() here would restart at 0 forever, since with
+      // no bits every cell reports unmapped.
+      if (scannedBits.empty()) {
+        phase = Phase::Done;
+        break;
+      }
       const size_t resume = nextUnscanned(0);
       if (resume >= allGlyphs.size()) {
         phase = Phase::Done;
