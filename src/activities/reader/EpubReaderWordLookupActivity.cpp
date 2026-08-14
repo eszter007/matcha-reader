@@ -117,7 +117,9 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
   while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
     stepScan(50);
   }
-  LOG_INF("WLA", "progressive scan (%s): ready after %u ms (scanned %u/%u)", label, millis() - scanStart,
+  // Walk POSITION, not a processed count: a wrapped walk starts mid-page, so this is where the
+  // frontier sits in allGlyphs, not how much of the page has been segmented.
+  LOG_INF("WLA", "progressive scan (%s): ready after %u ms (walk at %u/%u)", label, millis() - scanStart,
           static_cast<unsigned>(scan.scannedGlyphs()), static_cast<unsigned>(scan.allGlyphs.size()));
 }
 
@@ -295,8 +297,16 @@ bool EpubReaderWordLookupActivity::stepCursor(const int delta, int& outIndex) {
   // head region is segmented last, so "nothing before me" can also mean "not yet", and the same
   // park applies.
   if (!scan.isDone()) return false;
-  // Walk complete, so the end is real: a single step cycles round, as the definition view does.
-  outIndex = delta > 0 ? firstIdx : lastIdx;
+  // Walk complete, so the end is real, and what to do there depends on how the move got its size.
+  // A single step cycles round, as the definition view does. An accumulated multi-step move
+  // (presses that piled up while the walk caught up) stops at the end instead: wrapping would
+  // land on a word at the opposite end of the page, which is never where those presses aimed.
+  const bool singleStep = delta == 1 || delta == -1;
+  if (singleStep) {
+    outIndex = delta > 0 ? firstIdx : lastIdx;
+  } else {
+    outIndex = delta > 0 ? lastIdx : firstIdx;
+  }
   if (outIndex < 0) outIndex = cursorIndex;
   return true;
 }

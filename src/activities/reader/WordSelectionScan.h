@@ -80,10 +80,11 @@ class WordSelectionScan {
   std::vector<GlyphRef> selectableGlyphs;  // Positions with a dictionary match
   std::vector<size_t> selectToAllIdx;      // Maps selectableGlyphs index -> allGlyphs index
 
-  // How far the sequential walk has advanced through allGlyphs. Every cell's page position is
-  // known from initFrom*(), but only cells BELOW this frontier have been segmented -- so a
-  // caller offering spatial navigation (jump a column) can tell whether the place the user aimed
-  // at is already mapped, or whether the move has to wait for the walk to reach it.
+  // Where the walk currently sits in allGlyphs. Every cell's page position is known from
+  // initFrom*(), but only segmented cells can be selected.
+  // NOT a "everything below this is mapped" frontier once startAtGlyph() has wrapped the walk,
+  // and not a processed count either (a wrapped walk starts mid-page). Ask isGlyphMapped() for
+  // mapping decisions; this is for progress logging and cheap "has the walk moved" checks.
   size_t scannedGlyphs() const { return scanPos; }
 
   // Start the walk at `glyphIndex` instead of 0, then wrap to cover [0, glyphIndex) once the

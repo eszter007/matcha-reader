@@ -3779,8 +3779,8 @@ void EpubReaderActivity::repaintVerticalPageForPanel() {
   if (!verticalSection) return;
   const VerticalPage* page = verticalSection->getPage();
   if (!page) {
-    // The slot could not be re-faulted (low heap / read error). The panel keeps its hints and
-    // cursor on a blank screen rather than showing a stale page; the next reader render fixes it.
+    // The slot could not be re-faulted (low heap / read error). The panel keeps its cursor on a
+    // blank screen rather than showing a stale page; the next reader render fixes it.
     LOG_ERR("ERS", "Word lookup: no page to repaint under the word cursor");
     return;
   }
