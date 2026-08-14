@@ -230,13 +230,16 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   // which SdCardFontSystem::registerUiFallbacks wires up -- without it the miss falls through
   // to the global fallback, the companion loaded at the reader's point size, and a 12pt string
   // draws part of itself at 14pt.
+  // A non-CJK gap is worth redirecting too -- the IPA in a dictionary pronunciation is the case
+  // this exists for -- but only to a fallback that also carries Latin. The redirect is
+  // all-or-nothing, so sending a Latin string to a CJK-only companion because of one stray
+  // character would blank everything around it.
+  const bool fallbackHasLatin = fallback.hasCodepoint('a', style);
   const char* cursor = text;
   uint32_t cp;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
-    // Only redirect for CJK the primary font cannot draw but the fallback can.
-    if (utf8IsCjkCodepoint(cp) && !primary.hasCodepoint(cp, style) && fallback.hasCodepoint(cp, style)) {
-      return fallbackFontId;
-    }
+    if (primary.hasCodepoint(cp, style) || !fallback.hasCodepoint(cp, style)) continue;
+    if (utf8IsCjkCodepoint(cp) || fallbackHasLatin) return fallbackFontId;
   }
   return fontId;
 }

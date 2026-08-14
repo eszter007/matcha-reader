@@ -1178,7 +1178,11 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
     // Trim the blank lines the cut leaves behind so a page never opens on empty space.
     const size_t last = piece.find_last_not_of("\n \t");
     piece.erase(last == std::string::npos ? 0 : last + 1);
-    if (!piece.empty()) {
+    // JMdict merges every headword that spells the same reading -- 取っ手, 取手 and 把手 all come
+    // back for とって with the same glosses -- so identical pieces would page as separate,
+    // indistinguishable entries. Keep the first of each.
+    const bool duplicate = std::find(sectionText.begin(), sectionText.end(), piece) != sectionText.end();
+    if (!piece.empty() && !duplicate) {
       sectionText.push_back(std::move(piece));
       sectionLabel.push_back(std::move(label));
     }
