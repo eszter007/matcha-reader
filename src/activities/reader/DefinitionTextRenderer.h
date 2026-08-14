@@ -22,31 +22,33 @@ namespace DefinitionText {
 
 // Tiny keeps the compact, readable 8pt font. Larger options use native built-in fonts so their
 // glyphs stay sharp; CJK characters can be routed to a matching SD-card size by the activity.
+// Serif, matching the English definition panel: a dictionary entry reads as the same kind of
+// thing whatever the book's language. Japanese glyphs come from the SD-card fallback either way
+// (see SdCardFontSystem::ensureWordLookupFallback), so the face chosen here governs the Latin
+// text -- the readings, the glosses and the grammar notes.
 inline int wordLookupFontId() {
   switch (SETTINGS.wordLookupFontSize) {
-    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
-      return NOTOSANS_12_FONT_ID;
     case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
-      return NOTOSANS_14_FONT_ID;
+      return NOTOSERIF_14_FONT_ID;
     case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
-      return NOTOSANS_16_FONT_ID;
+      return NOTOSERIF_16_FONT_ID;
     case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
     default:
-      return SMALL_FONT_ID;
+      return NOTOSERIF_12_FONT_ID;
   }
 }
 
 inline uint8_t wordLookupFontPointSize() {
   switch (SETTINGS.wordLookupFontSize) {
-    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
-      return 12;
     case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
       return 14;
     case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
       return 16;
     case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
     default:
-      return 8;
+      return 12;
   }
 }
 

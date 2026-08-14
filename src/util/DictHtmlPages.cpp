@@ -1,6 +1,7 @@
 #include "DictHtmlPages.h"
 
 #include <Arduino.h>
+#include <Epub/css/CssParser.h>
 #include <Epub/parsers/ChapterHtmlSlimParser.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <functional>
 
 #include "CrossPointSettings.h"
 
@@ -126,7 +128,10 @@ bool liContentIsSingleDiv(const std::string& html, const size_t pos) {
 
 bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   BufferedFileWriter out(file);
-  if (!out.append("<html><body>")) return false;
+  // text-indent:0 on the root: an unstyled block falls back to a first-line indent, which set the
+  // entry's text in from the panel's edge while the headword above it sat flush, so the two did
+  // not line up. Inherited by every block below (getCombinedBlockStyle passes it down).
+  if (!out.append("<html><body><div style=\"text-indent:0\">")) return false;
 
   const size_t n = html.size();
   size_t i = 0;
@@ -306,7 +311,7 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
     i++;
   }
 
-  return out.append("</body></html>") && out.flush();
+  return out.append("</div></body></html>") && out.flush();
 }
 
 }  // namespace
@@ -341,6 +346,11 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
   size_t retainedElements = 0;
   {
     const std::string tmpPath = TMP_HTML_PATH;  // the parser stores a reference
+    // A rule-less parser, present only so the element handlers parse style="" attributes at all:
+    // they are guarded on cssParser being non-null, and the dictionary's normalized XHTML carries
+    // its whole presentation inline (the sense page breaks, the italic part of speech, the
+    // smaller pronunciation). Without it every one of those was silently dropped.
+    const CssParser inlineStyleParser{""};
     // Heap-allocated as Section does — the parser object is far too large for
     // a stack local. Null epub is safe: imageRendering=2 suppresses <img>
     // handling, the only path that dereferences it.
@@ -365,7 +375,8 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
           retainedElements += pageElements;
           pagesOut.push_back(std::move(page));
         },
-        /*embeddedStyle=*/false, /*contentBase=*/"", /*imageBasePath=*/"", /*imageRendering=*/2);
+        /*embeddedStyle=*/false, /*contentBase=*/"", /*imageBasePath=*/"", /*imageRendering=*/2,
+        /*tocAnchors=*/std::vector<std::string>{}, /*popupFn=*/std::function<void()>{}, &inlineStyleParser);
     if (!parser) {
       LOG_ERR("DHTML", "OOM: ChapterHtmlSlimParser");
     } else {

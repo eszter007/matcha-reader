@@ -16,15 +16,15 @@ constexpr int SIDE_MARGIN = 20;
 // Share of the screen height the panel occupies, bottom-anchored above the button hints.
 constexpr int HEIGHT_PERCENT = 66;
 
-// Floor under the gap above the panel, so it never reaches the top edge on a short screen.
+// Floor under the gap above and below the panel, so it never reaches an edge on a short screen.
 constexpr int MIN_TOP_MARGIN = 20;
 
 // Extra air between the headword and the divider under it, on top of the usual half-padding.
 constexpr int HEADWORD_GAP = 4;
 
-// Inner padding from the frame to any text. Deliberately tight: the panel is small and every
-// pixel spent on padding is a line of definition the reader does not get.
-constexpr int PADDING = 8;
+// Inner padding from the frame to any text. The headword and the entry share it, so the two
+// line up down the left edge and clear the frame by the same amount on the right.
+constexpr int PADDING = 14;
 
 // Stroke of the frame and of the divider under the headword.
 constexpr int FRAME_STROKE = 2;
@@ -69,11 +69,12 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.box.x = safe.x + SIDE_MARGIN;
   layout.box.width = std::max(0, safe.width - 2 * SIDE_MARGIN);
 
-  // safe.height already stops at the button hints, so bottom-anchoring inside it keeps the panel
-  // clear of them.
+  // Centred in the usable area. safe.height already stops at the button hints, so the panel is
+  // centred over the page rather than over the whole screen -- which is what reads as centred,
+  // since the hint band is chrome, not page.
   const int wanted = renderer.getScreenHeight() * HEIGHT_PERCENT / 100;
-  layout.box.height = std::min(wanted, std::max(0, safe.height - MIN_TOP_MARGIN));
-  layout.box.y = safe.y + safe.height - layout.box.height;
+  layout.box.height = std::min(wanted, std::max(0, safe.height - 2 * MIN_TOP_MARGIN));
+  layout.box.y = safe.y + (safe.height - layout.box.height) / 2;
 
   // Headword line, then the divider, then the body; a second divider and the dictionary name
   // close the panel.
