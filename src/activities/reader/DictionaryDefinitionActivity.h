@@ -49,6 +49,12 @@ class DictionaryDefinitionActivity final : public Activity {
   // the reader's body font. A dictionary entry at reading size fills the panel in three lines,
   // and the Japanese panels have always used this setting -- the English one now matches.
   static int definitionFontId();
+  // Point size matching definitionFontId(), for the SD-card glyph fallback.
+  static uint8_t definitionPointSize();
+  // Let the selected SD reader family fill glyphs the built-in serif lacks -- IPA in a
+  // pronunciation, above all. The Japanese panels have always done this; without it a reader
+  // who installs an IPA-bearing font still sees nothing for those codepoints.
+  void ensureGlyphFallback() const;
 
   BodyArea bodyArea() const;
   bool layoutHtmlPages();

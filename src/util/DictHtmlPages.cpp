@@ -102,12 +102,39 @@ bool isEntityRef(const std::string& html, const size_t pos, size_t* end) {
 // that are not part of markup. Structural damage this cannot repair
 // (mismatched tags, unquoted attribute values) surfaces as a parse error and
 // the caller falls back to the plain-text path.
+// True when everything between `pos` (just past a <li…> tag) and that item's </li> is a single
+// <div>…</div>. Only then is unwrapping that div safe: it is the item's whole content, so
+// removing the block cannot run the item's text together with a sibling.
+bool liContentIsSingleDiv(const std::string& html, const size_t pos) {
+  if (html.compare(pos, 5, "<div>") != 0) return false;
+  size_t depth = 1;
+  size_t k = pos + 5;
+  const size_t n = html.size();
+  while (k < n && depth > 0) {
+    if (html.compare(k, 5, "<div>") == 0) {
+      depth++;
+      k += 5;
+    } else if (html.compare(k, 6, "</div>") == 0) {
+      depth--;
+      k += 6;
+    } else {
+      k++;
+    }
+  }
+  return depth == 0 && html.compare(k, 5, "</li>") == 0;
+}
+
 bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   BufferedFileWriter out(file);
   if (!out.append("<html><body>")) return false;
 
   const size_t n = html.size();
   size_t i = 0;
+  // Nesting state for the sense list. The outermost <ol> holds one sense per <li>; nested lists
+  // hold that sense's sub-glosses and must not be treated the same way.
+  int listDepth = 0;
+  int boldDepth = 0;          // depth of the <li> whose gloss is currently wrapped in <b>, 0 = none
+  bool divUnwrapped = false;  // an item's sole <div> wrapper was dropped; drop its closer too
   while (i < n) {
     const char c = html[i];
     if (c == '<' && i + 1 < n && (html[i + 1] == '!' || html[i + 1] == '?')) {
@@ -176,28 +203,66 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         continue;
       }
 
-      // A list follows inline text ("person purchasing goods<ol>…"), and <ol> alone does not
-      // break the line, so the first item ran on from the gloss. Break before the list.
-      if (!closing && nameLen == 2 && (strncmp(nameBuf, "ol", 2) == 0 || strncmp(nameBuf, "ul", 2) == 0)) {
-        if (!out.append("<br/>")) return false;
+      const bool isList = nameLen == 2 && (strncmp(nameBuf, "ol", 2) == 0 || strncmp(nameBuf, "ul", 2) == 0);
+      const bool isLi = nameLen == 2 && strncmp(nameBuf, "li", 2) == 0;
+      const bool isDiv = nameLen == 3 && strncmp(nameBuf, "div", 3) == 0;
+
+      // A gloss ends where the item's first block child begins. Close the bold run there so the
+      // translations that follow stay upright.
+      if (boldDepth != 0 && !closing && (isList || isDiv)) {
+        if (!out.append("</b>")) return false;
+        boldDepth = 0;
+      }
+      if (boldDepth != 0 && closing && isLi) {
+        if (!out.append("</b>")) return false;
+        boldDepth = 0;
       }
 
-      // <li><div>text</div></li>: the inner block puts the item's text on the line BELOW its
-      // own number. Drop that wrapper so each sense reads as "1. Papier" on one line. The
-      // opening <li> itself is emitted normally below, attributes and all.
-      if (closing && nameLen == 3 && strncmp(nameBuf, "div", 3) == 0 && html.compare(j + 1, 5, "</li>") == 0) {
+      if (isList) {
+        if (closing) {
+          listDepth = std::max(0, listDepth - 1);
+        } else {
+          // A list can follow inline text ("person purchasing goods<ol>…") and <ol> does not
+          // break the line on its own, so the first item would run on from that gloss.
+          if (!out.append("<br/>")) return false;
+          listDepth++;
+        }
+      }
+
+      // <li><div>text</div></li>: the block wrapper puts the item's text on the line BELOW its
+      // own number. Unwrapping is only safe when that div is the item's entire content -- when
+      // the item also carries a gloss ("instance or occurrence<div>Mal</div>"), removing the
+      // block runs the two together.
+      if (closing && isDiv && divUnwrapped && html.compare(j + 1, 5, "</li>") == 0) {
+        divUnwrapped = false;
         i = j + 1;
         continue;
       }
-      if (!out.append('<')) return false;
-      if (closing && !out.append('/')) return false;
-      if (!out.append(nameBuf, nameLen)) return false;
-      if (!out.append(html.data() + nameEnd, j - nameEnd)) return false;  // attributes verbatim
-      if (!closing && isVoid && html[j - 1] != '/' && !out.append('/')) return false;
-      if (!out.append('>')) return false;
+      // One sense per page: every item of the OUTERMOST list starts a new page, so a lookup is
+      // read a definition at a time instead of as one long scroll. Nested items are that sense's
+      // own sub-glosses and stay with it.
+      if (!closing && isLi && listDepth == 1) {
+        if (!out.append("<li style=\"page-break-before:always\">")) return false;
+      } else {
+        if (!out.append('<')) return false;
+        if (closing && !out.append('/')) return false;
+        if (!out.append(nameBuf, nameLen)) return false;
+        if (!out.append(html.data() + nameEnd, j - nameEnd)) return false;  // attributes verbatim
+        if (!closing && isVoid && html[j - 1] != '/' && !out.append('/')) return false;
+        if (!out.append('>')) return false;
+      }
       i = j + 1;
-      // Paired with the </div></li> case above: skip the wrapper opening this list item.
-      if (!closing && nameLen == 2 && strncmp(nameBuf, "li", 2) == 0 && html.compare(i, 5, "<div>") == 0) i += 5;
+      if (!closing && isLi) {
+        // Paired with the </div></li> case above: drop the wrapper when it is the whole item.
+        if (liContentIsSingleDiv(html, i)) {
+          i += 5;
+          divUnwrapped = true;
+        }
+        // The item's own text is its gloss ("instance or occurrence"); its translations come
+        // in blocks after it. Bold the gloss so the two read apart at a glance.
+        if (!out.append("<b>")) return false;
+        boldDepth = listDepth;
+      }
       continue;
     }
     if (c == '<') {  // stray '<' in text ("x < y")

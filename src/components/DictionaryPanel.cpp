@@ -13,8 +13,11 @@ namespace {
 // Gap between the panel and the edges of the usable area. The bottom margin measures to the top
 // of the button hints, not to the physical edge, so the panel never crowds them.
 constexpr int SIDE_MARGIN = 20;
-constexpr int TOP_MARGIN = 40;
-constexpr int BOTTOM_MARGIN = 20;
+constexpr int TOP_MARGIN = 60;
+constexpr int BOTTOM_MARGIN = 40;
+
+// Extra air between the headword and the divider under it, on top of the usual half-padding.
+constexpr int HEADWORD_GAP = 4;
 
 // Inner padding from the frame to any text. Deliberately tight: the panel is small and every
 // pixel spent on padding is a line of definition the reader does not get.
@@ -26,6 +29,10 @@ constexpr int DIVIDER_STROKE = 1;
 
 // Fallback radius for themes that draw square popups: the panel is always rounded.
 constexpr int MIN_RADIUS = 6;
+
+// The headword is part of the entry, not part of the chrome, so it is set in the same serif the
+// definition uses. A CJK headword is routed to a CJK face by the renderer's own font resolution.
+constexpr int HEADWORD_FONT_ID = NOTOSERIF_12_FONT_ID;
 
 int panelRadius(const ThemeMetrics& metrics) { return std::max(metrics.popupCornerRadius, MIN_RADIUS); }
 
@@ -65,9 +72,10 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
 
   // Headword line, then the divider, then the body; a second divider and the dictionary name
   // close the panel.
-  const int headwordHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int headwordHeight = renderer.getLineHeight(HEADWORD_FONT_ID);
   const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int bodyTop = layout.box.y + PADDING + headwordHeight + PADDING / 2 + DIVIDER_STROKE + PADDING / 2;
+  const int bodyTop =
+      layout.box.y + PADDING + headwordHeight + HEADWORD_GAP + PADDING / 2 + DIVIDER_STROKE + PADDING / 2;
   const int bodyBottom = layout.box.y + layout.box.height - PADDING - footerHeight - PADDING / 2 - DIVIDER_STROKE;
 
   layout.body.x = layout.box.x + PADDING;
@@ -98,17 +106,17 @@ DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const
   const int textX = layout.box.x + PADDING;
   const int headwordY = layout.box.y + PADDING;
   if (headword && headword[0] != '\0') {
-    renderer.drawText(UI_12_FONT_ID, textX, headwordY, headword, true, EpdFontFamily::BOLD);
+    renderer.drawText(HEADWORD_FONT_ID, textX, headwordY, headword, true, EpdFontFamily::BOLD);
   }
   const int rightEdge = layout.box.x + layout.box.width - PADDING;
   if (counter && counter[0] != '\0') {
     // Baseline-aligned with the headword but a size down: the counter is a reference, not a label.
     const int counterWidth = renderer.getTextWidth(SMALL_FONT_ID, counter);
-    const int counterY = headwordY + renderer.getLineHeight(UI_12_FONT_ID) - renderer.getLineHeight(SMALL_FONT_ID);
+    const int counterY = headwordY + renderer.getLineHeight(HEADWORD_FONT_ID) - renderer.getLineHeight(SMALL_FONT_ID);
     renderer.drawText(SMALL_FONT_ID, rightEdge - counterWidth, counterY, counter);
   }
 
-  const int dividerY = headwordY + renderer.getLineHeight(UI_12_FONT_ID) + PADDING / 2;
+  const int dividerY = headwordY + renderer.getLineHeight(HEADWORD_FONT_ID) + HEADWORD_GAP + PADDING / 2;
   renderer.drawLine(textX, dividerY, rightEdge, dividerY, DIVIDER_STROKE, true);
 
   const int footerY = layout.box.y + layout.box.height - PADDING - renderer.getLineHeight(SMALL_FONT_ID);

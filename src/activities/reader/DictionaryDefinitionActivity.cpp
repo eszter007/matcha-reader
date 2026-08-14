@@ -9,8 +9,8 @@
 #include <cstdio>
 
 #include "CrossPointSettings.h"
-#include "DefinitionTextRenderer.h"
 #include "ReaderUtils.h"
+#include "SdCardFontSystem.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -32,9 +32,41 @@ constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
 
 }  // namespace
 
-int DictionaryDefinitionActivity::definitionFontId() { return DefinitionText::wordLookupFontId(); }
+// Serif at the Word Lookup Font Size. The Japanese panels stay on the sans faces -- their text
+// is CJK, which the Latin serif does not carry -- so only this path is remapped. There is no 8pt
+// serif, so Tiny lands on the 12pt face.
+int DictionaryDefinitionActivity::definitionFontId() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return NOTOSERIF_14_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return NOTOSERIF_16_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+    default:
+      return NOTOSERIF_12_FONT_ID;
+  }
+}
+
+uint8_t DictionaryDefinitionActivity::definitionPointSize() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return 14;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return 16;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+    default:
+      return 12;
+  }
+}
+
+void DictionaryDefinitionActivity::ensureGlyphFallback() const {
+  sdFontSystem.ensureWordLookupFallback(renderer, definitionFontId(), definitionPointSize());
+}
 
 void DictionaryDefinitionActivity::onEnter() {
+  ensureGlyphFallback();
   Activity::onEnter();
   // Normalize StarDict multi-type separators so the wrap loop and the
   // C-string font APIs below both see the whole definition.
