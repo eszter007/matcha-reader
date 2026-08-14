@@ -86,6 +86,21 @@ class WordSelectionScan {
   // at is already mapped, or whether the move has to wait for the walk to reach it.
   size_t scannedGlyphs() const { return scanPos; }
 
+  // Start the walk at `glyphIndex` instead of 0, then wrap to cover [0, glyphIndex) once the
+  // tail is done. Vertical select mode opens its cursor mid-page, so the half the reader is
+  // looking at gets segmented first. Call right after initFrom*(), before any step(): the walk
+  // is still sequential WITHIN each region, so selectableGlyphs only ever grows at the end and
+  // stays self-consistent with selectToAllIdx -- but it is no longer in reading order, so a
+  // caller stepping word-by-word must order by selectToAllIdx (see isGlyphMapped()).
+  void startAtGlyph(size_t glyphIndex);
+  // True when the walk has segmented the cell at `glyphIndex`. Replaces comparing against
+  // scannedGlyphs(): with a wrapped walk there is no single frontier below which all is mapped.
+  bool isGlyphMapped(size_t glyphIndex) const {
+    if (phase == Phase::Done) return true;
+    if (glyphIndex >= startGlyph) return glyphIndex < scanPos;  // tail region, walked first
+    return wrapped && glyphIndex < scanPos;                     // head region, walked after
+  }
+
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
   static void encodeUtf8(uint32_t cp, std::string& out);
@@ -114,7 +129,11 @@ class WordSelectionScan {
  private:
   enum class Phase : uint8_t { Scan, Done };
   Phase phase = Phase::Scan;
-  size_t scanPos = 0;    // next allGlyphs index the scan will examine
+  size_t scanPos = 0;  // next allGlyphs index the scan will examine
+  // Wrapped-walk state (startAtGlyph): the walk runs [startGlyph, end) then [0, startGlyph).
+  // startGlyph 0 leaves the plain single-region walk, which is what horizontal and manga use.
+  size_t startGlyph = 0;
+  bool wrapped = false;  // true once the walk has turned round to the head region
   size_t skipUntil = 0;  // characters inside an already-matched word are skipped
   // Set true when initFrom*() or step() had to abandon work because the heap couldn't grow a
   // vector (dropped glyphs / partial scan). A truncated scan finds too few (often zero)

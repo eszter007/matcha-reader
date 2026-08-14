@@ -203,6 +203,8 @@ void WordSelectionScan::reset() {
   selectToAllIdx.clear();
   phase = Phase::Scan;
   scanPos = 0;
+  startGlyph = 0;
+  wrapped = false;
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
@@ -215,6 +217,8 @@ void WordSelectionScan::restartStepScan() {
   selectToAllIdx.clear();
   phase = Phase::Scan;
   scanPos = 0;
+  startGlyph = 0;
+  wrapped = false;
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
@@ -337,10 +341,30 @@ void WordSelectionScan::initFromUtf8Text(const std::string& text) {
   // with guarded doubling instead.
 }
 
+void WordSelectionScan::startAtGlyph(const size_t glyphIndex) {
+  if (glyphIndex == 0 || glyphIndex >= allGlyphs.size()) return;  // nothing to wrap around
+  startGlyph = glyphIndex;
+  wrapped = false;
+  scanPos = glyphIndex;
+  skipUntil = glyphIndex;  // a word straddling the seam is re-read from the seam, never skipped
+}
+
 bool WordSelectionScan::step(const uint32_t maxMillis) {
   const uint32_t start = millis();
   while (phase != Phase::Done) {
     if (scanPos >= allGlyphs.size()) {
+      // Wrapped walk: the tail is done, turn round and cover the head region.
+      if (startGlyph != 0 && !wrapped) {
+        wrapped = true;
+        scanPos = 0;
+        skipUntil = 0;
+        continue;
+      }
+      phase = Phase::Done;
+      break;
+    }
+    // Head region ends where the tail began -- the cells beyond are already segmented.
+    if (wrapped && scanPos >= startGlyph) {
       phase = Phase::Done;
       break;
     }

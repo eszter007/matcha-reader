@@ -104,24 +104,18 @@ void EpubReaderWordLookupActivity::initScanFromCacheOrBurst(const char* label) {
 void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
   const uint32_t scanStart = millis();
   LOG_INF("WLA", "progressive scan (%s): %u characters", label, static_cast<unsigned>(scan.allGlyphs.size()));
-  while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
-    stepScan(50);
-  }
-  // Tategaki select mode opens the cursor mid-page, so stopping at the first word would show it
-  // on word one and hop it to the middle a moment later. Carry the walk to the middle column
-  // instead -- the list stays strictly sequential (indices, the cursor and the cache all depend
-  // on selectableGlyphs only ever growing at the end), the open just maps the first half up
-  // front. The budget is the same 1500ms ceiling: past it the cursor falls back to the parked
-  // move, which lands as the background walk arrives.
+  // Tategaki select mode opens its cursor mid-page, so segment the half the reader is looking at
+  // FIRST: the walk starts at the middle column and wraps to the head region afterwards. The
+  // burst below then stops at the first word as usual -- and that word is already a middle one,
+  // so the cursor lands in place with no hop and no extra work at open.
   if (mode == Mode::Select) {
     uint16_t midColumn = 0;
     uint16_t midRow = 0;
-    size_t lastGlyph = 0;
-    if (middleTarget(midColumn, midRow, lastGlyph)) {
-      while (!scan.isDone() && scan.scannedGlyphs() <= lastGlyph && millis() - scanStart < 1500) {
-        stepScan(50);
-      }
-    }
+    size_t firstGlyph = 0;
+    if (middleTarget(midColumn, midRow, firstGlyph)) scan.startAtGlyph(firstGlyph);
+  }
+  while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
+    stepScan(50);
   }
   LOG_INF("WLA", "progressive scan (%s): ready after %u ms (scanned %u/%u)", label, millis() - scanStart,
           static_cast<unsigned>(scan.scannedGlyphs()), static_cast<unsigned>(scan.allGlyphs.size()));
@@ -261,23 +255,49 @@ void EpubReaderWordLookupActivity::moveCursor(int delta) {
 bool EpubReaderWordLookupActivity::stepCursor(const int delta, int& outIndex) {
   outIndex = cursorIndex;
   if (scan.selectableGlyphs.empty()) return scan.isDone();
+  if (cursorIndex < 0 || cursorIndex >= static_cast<int>(scan.selectToAllIdx.size())) return scan.isDone();
 
-  const int maxIdx = static_cast<int>(scan.selectableGlyphs.size()) - 1;
-  int newIndex = cursorIndex + delta;
-  // Past an end the walk has not confirmed yet: park the move rather than pretend the page stops
-  // here. Once the walk is done the end is real, and what to do there depends on how the move
-  // got its size: a single step cycles round, as in the definition view, while a multi-step move
-  // (presses that piled up while the frontier caught up) stops at the last word instead of
-  // wrapping to an arbitrary one.
-  if (newIndex > maxIdx) {
-    if (!scan.isDone()) return false;
-    newIndex = delta == 1 ? 0 : maxIdx;
-  } else if (newIndex < 0) {
-    // The other end needs no waiting: everything before the cursor was mapped on the way here.
-    // Cycling back to the last word is only meaningful once the walk knows which word that is.
-    newIndex = scan.isDone() && delta == -1 ? maxIdx : 0;
+  // selectableGlyphs is in DISCOVERY order, which the wrapped vertical walk makes different from
+  // reading order (see WordSelectionScan::startAtGlyph). A reading-order step is therefore the
+  // entry with the nearest page position on the requested side, not index +/- 1.
+  const size_t here = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
+  int best = -1;
+  size_t bestPos = 0;
+  int firstIdx = -1;
+  size_t firstPos = 0;
+  int lastIdx = -1;
+  size_t lastPos = 0;
+  for (size_t i = 0; i < scan.selectToAllIdx.size(); i++) {
+    const size_t pos = scan.selectToAllIdx[i];
+    if (firstIdx < 0 || pos < firstPos) {
+      firstIdx = static_cast<int>(i);
+      firstPos = pos;
+    }
+    if (lastIdx < 0 || pos > lastPos) {
+      lastIdx = static_cast<int>(i);
+      lastPos = pos;
+    }
+    if (delta > 0 ? pos > here : pos < here) {
+      const bool better = best < 0 || (delta > 0 ? pos < bestPos : pos > bestPos);
+      if (better) {
+        best = static_cast<int>(i);
+        bestPos = pos;
+      }
+    }
   }
-  outIndex = newIndex;
+
+  if (best >= 0) {
+    outIndex = best;
+    return true;
+  }
+  // No neighbour on that side. Forward: the page may simply not be segmented that far yet, so
+  // park rather than pretend it ends here. Backward needs no wait -- with the wrapped walk the
+  // head region is segmented last, so "nothing before me" can also mean "not yet", and the same
+  // park applies.
+  if (!scan.isDone()) return false;
+  // Walk complete, so the end is real: a single step cycles round, as the definition view does.
+  outIndex = delta > 0 ? firstIdx : lastIdx;
+  if (outIndex < 0) outIndex = cursorIndex;
   return true;
 }
 
@@ -355,7 +375,7 @@ int EpubReaderWordLookupActivity::selectableInColumn(const uint16_t column, cons
 // even while the dictionary walk is still working through it. Starting there rather than at word
 // one halves the worst-case number of presses to any word, the same reasoning as the horizontal
 // picker's "middle row nearest mid-screen".
-bool EpubReaderWordLookupActivity::middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outLastGlyph) const {
+bool EpubReaderWordLookupActivity::middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outFirstGlyph) const {
   if (scan.allGlyphs.empty()) return false;
 
   uint16_t minColumn = UINT16_MAX;
@@ -373,7 +393,7 @@ bool EpubReaderWordLookupActivity::middleTarget(uint16_t& outColumn, uint16_t& o
 
   size_t first = 0;
   size_t last = 0;
-  outLastGlyph = columnRange(outColumn, first, last) ? last : scan.allGlyphs.size();
+  outFirstGlyph = columnRange(outColumn, first, last) ? first : 0;
   return true;
 }
 
@@ -382,8 +402,8 @@ void EpubReaderWordLookupActivity::selectMiddleOfPage() {
 
   uint16_t midColumn = 0;
   uint16_t midRow = 0;
-  size_t lastGlyph = 0;
-  if (!middleTarget(midColumn, midRow, lastGlyph)) return;
+  size_t firstGlyph = 0;
+  if (!middleTarget(midColumn, midRow, firstGlyph)) return;
 
   // Already walked that far -- the usual case, since the burst carries the walk to the middle.
   const int target = selectableInColumn(midColumn, midRow);
@@ -420,7 +440,7 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
     } else {
       stillWaiting = true;
     }
-  } else if (pending.hasWaitTarget && !scan.isDone() && scan.scannedGlyphs() <= pending.waitUntilGlyph) {
+  } else if (pending.hasWaitTarget && !scan.isDone() && !scan.isGlyphMapped(pending.waitUntilGlyph)) {
     stillWaiting = true;  // known-unreached column: one comparison, no re-walk
   } else {
     // Walk in the jump's direction: a column can legitimately hold no selectable word (all
@@ -431,7 +451,7 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
       size_t first = 0;
       size_t last = 0;
       if (!columnRange(static_cast<uint16_t>(column), first, last)) break;  // past the page edge
-      if (!scan.isDone() && scan.scannedGlyphs() <= last) {
+      if (!scan.isDone() && !scan.isGlyphMapped(last)) {
         // Park on THIS column: the walk only moves on once a column is mapped, so the range is
         // looked up once per column entered rather than once per tick of the wait.
         pending.targetColumn = static_cast<uint16_t>(column);

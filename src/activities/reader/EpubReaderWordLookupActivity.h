@@ -168,9 +168,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // half a page of presses away (the horizontal picker does the same). Parks as a pending column
   // move when the walk has not reached the middle yet.
   void selectMiddleOfPage();
-  // Middle column/row of the page and the allGlyphs index the walk must pass for that column to
-  // be fully mapped. False when the page has no glyphs. Layout data only -- no dictionary work.
-  bool middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outLastGlyph) const;
+  // Middle column/row of the page and the allGlyphs index that column starts at -- where the
+  // wrapped walk begins. False when the page has no glyphs. Layout data only, no dictionary work.
+  bool middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outFirstGlyph) const;
 
   int cursorIndex = 0;
 
