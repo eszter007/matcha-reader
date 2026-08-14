@@ -133,8 +133,10 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   // Nesting state for the sense list. The outermost <ol> holds one sense per <li>; nested lists
   // hold that sense's sub-glosses and must not be treated the same way.
   int listDepth = 0;
-  int boldDepth = 0;          // depth of the <li> whose gloss is currently wrapped in <b>, 0 = none
-  bool divUnwrapped = false;  // an item's sole <div> wrapper was dropped; drop its closer too
+  int senseCount = 0;           // top-level items seen; the first shares the page with the header
+  bool glossOpen = false;       // a sense's bold gloss block is open
+  bool divUnwrapped = false;    // an item's sole <div> wrapper was dropped; drop its closer too
+  bool grammarPending = false;  // inside the part-of-speech block; its closer gets a blank line
   while (i < n) {
     const char c = html[i];
     if (c == '<' && i + 1 < n && (html[i + 1] == '!' || html[i + 1] == '?')) {
@@ -198,6 +200,7 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
           if (!out.append(isGrammar ? "<span style=\"font-style:italic\">" : "<span style=\"font-size:0.75em\">")) {
             return false;
           }
+          if (isGrammar) grammarPending = true;
         }
         i = j + 1;
         continue;
@@ -207,26 +210,51 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       const bool isLi = nameLen == 2 && strncmp(nameBuf, "li", 2) == 0;
       const bool isDiv = nameLen == 3 && strncmp(nameBuf, "div", 3) == 0;
 
-      // A gloss ends where the item's first block child begins. Close the bold run there so the
-      // translations that follow stay upright.
-      if (boldDepth != 0 && !closing && (isList || isDiv)) {
-        if (!out.append("</b>")) return false;
-        boldDepth = 0;
-      }
-      if (boldDepth != 0 && closing && isLi) {
-        if (!out.append("</b>")) return false;
-        boldDepth = 0;
+      // A sense's gloss runs until its first block child (the translations) or the end of the
+      // item, whichever comes first.
+      if (glossOpen && ((!closing && (isList || isDiv)) || (closing && isLi))) {
+        if (!out.append("</b></div>")) return false;
+        glossOpen = false;
       }
 
+      // The outermost list holds one SENSE per item; the lists nested inside it hold that
+      // sense's translations. They are rendered differently, so they are rewritten differently:
+      // the outer list loses its markup entirely (a sense is titled by its gloss, not numbered),
+      // while nested lists stay real lists and keep their numbering.
       if (isList) {
         if (closing) {
+          const bool outermost = listDepth == 1;
           listDepth = std::max(0, listDepth - 1);
+          if (outermost) {
+            if (!out.append("</div>")) return false;
+            i = j + 1;
+            continue;
+          }
         } else {
-          // A list can follow inline text ("person purchasing goods<ol>…") and <ol> does not
-          // break the line on its own, so the first item would run on from that gloss.
-          if (!out.append("<br/>")) return false;
           listDepth++;
+          if (listDepth == 1) {
+            if (!out.append("<div>")) return false;
+            i = j + 1;
+            continue;
+          }
         }
+      }
+
+      if (isLi && listDepth == 1) {
+        if (closing) {
+          if (!out.append("</div>")) return false;  // closes the sense
+        } else {
+          // Every sense after the first starts its own page, so a lookup is read one definition
+          // at a time. The first stays with the pronunciation and part of speech above it.
+          if (!out.append(senseCount == 0 ? "<div>" : "<div style=\"page-break-before:always\">")) return false;
+          senseCount++;
+          // The item's own text is its gloss; bold it in its own block so the translations
+          // beneath start on a fresh line without a blank one between.
+          if (!out.append("<div><b>")) return false;
+          glossOpen = true;
+        }
+        i = j + 1;
+        continue;
       }
 
       // <li><div>text</div></li>: the block wrapper puts the item's text on the line BELOW its
@@ -238,30 +266,23 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         i = j + 1;
         continue;
       }
-      // One sense per page: every item of the OUTERMOST list starts a new page, so a lookup is
-      // read a definition at a time instead of as one long scroll. Nested items are that sense's
-      // own sub-glosses and stay with it.
-      if (!closing && isLi && listDepth == 1) {
-        if (!out.append("<li style=\"page-break-before:always\">")) return false;
-      } else {
-        if (!out.append('<')) return false;
-        if (closing && !out.append('/')) return false;
-        if (!out.append(nameBuf, nameLen)) return false;
-        if (!out.append(html.data() + nameEnd, j - nameEnd)) return false;  // attributes verbatim
-        if (!closing && isVoid && html[j - 1] != '/' && !out.append('/')) return false;
-        if (!out.append('>')) return false;
-      }
+
+      if (!out.append('<')) return false;
+      if (closing && !out.append('/')) return false;
+      if (!out.append(nameBuf, nameLen)) return false;
+      if (!out.append(html.data() + nameEnd, j - nameEnd)) return false;  // attributes verbatim
+      if (!closing && isVoid && html[j - 1] != '/' && !out.append('/')) return false;
+      if (!out.append('>')) return false;
       i = j + 1;
-      if (!closing && isLi) {
-        // Paired with the </div></li> case above: drop the wrapper when it is the whole item.
-        if (liContentIsSingleDiv(html, i)) {
-          i += 5;
-          divUnwrapped = true;
-        }
-        // The item's own text is its gloss ("instance or occurrence"); its translations come
-        // in blocks after it. Bold the gloss so the two read apart at a glance.
-        if (!out.append("<b>")) return false;
-        boldDepth = listDepth;
+      // Paired with the </div></li> case above: drop the wrapper when it is the whole item.
+      if (!closing && isLi && liContentIsSingleDiv(html, i)) {
+        i += 5;
+        divUnwrapped = true;
+      }
+      // The part of speech is a heading for everything under it; give it a blank line.
+      if (closing && isDiv && grammarPending) {
+        grammarPending = false;
+        if (!out.append("<br/>")) return false;
       }
       continue;
     }

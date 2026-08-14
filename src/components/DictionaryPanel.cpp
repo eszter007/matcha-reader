@@ -10,11 +10,14 @@
 
 namespace {
 
-// Gap between the panel and the edges of the usable area. The bottom margin measures to the top
-// of the button hints, not to the physical edge, so the panel never crowds them.
+// Gap between the panel and the side edges of the usable area.
 constexpr int SIDE_MARGIN = 20;
-constexpr int TOP_MARGIN = 60;
-constexpr int BOTTOM_MARGIN = 40;
+
+// Share of the screen height the panel occupies, bottom-anchored above the button hints.
+constexpr int HEIGHT_PERCENT = 66;
+
+// Floor under the gap above the panel, so it never reaches the top edge on a short screen.
+constexpr int MIN_TOP_MARGIN = 20;
 
 // Extra air between the headword and the divider under it, on top of the usual half-padding.
 constexpr int HEADWORD_GAP = 4;
@@ -66,9 +69,11 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.box.x = safe.x + SIDE_MARGIN;
   layout.box.width = std::max(0, safe.width - 2 * SIDE_MARGIN);
 
-  // safe.height already stops at the button hints, so insetting it bottoms the panel above them.
-  layout.box.y = safe.y + TOP_MARGIN;
-  layout.box.height = std::max(0, safe.height - TOP_MARGIN - BOTTOM_MARGIN);
+  // safe.height already stops at the button hints, so bottom-anchoring inside it keeps the panel
+  // clear of them.
+  const int wanted = renderer.getScreenHeight() * HEIGHT_PERCENT / 100;
+  layout.box.height = std::min(wanted, std::max(0, safe.height - MIN_TOP_MARGIN));
+  layout.box.y = safe.y + safe.height - layout.box.height;
 
   // Headword line, then the divider, then the body; a second divider and the dictionary name
   // close the panel.
