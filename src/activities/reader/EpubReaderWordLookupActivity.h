@@ -29,7 +29,9 @@ struct VerticalSelectContext {
   int cellPx = 0;
   // Repaints the reader's current page (body + status bar) into the framebuffer. Called from the
   // panel's render(), i.e. under the render lock, which is what the shared page slot requires.
-  void (*repaintPage)(void*) = nullptr;
+  // Returns false when the page could not be drawn (slot not re-faultable), so the panel can
+  // retry on the next render instead of leaving a blank frame with a cursor on it.
+  bool (*repaintPage)(void*) = nullptr;
   void* repaintCtx = nullptr;
   // The framebuffer already holds that page, so the first render can skip the repaint entirely
   // and just place the cursor -- this is what makes opening the panel feel instant. False when
@@ -126,7 +128,6 @@ class EpubReaderWordLookupActivity final : public Activity {
     int delta = 0;              // direction, in words or in columns
     uint16_t targetColumn = 0;  // Column: the column being entered
     uint16_t anchorRow = 0;     // Column: the row to land nearest to
-    uint32_t requestedAt = 0;
     // Column: last glyph of the column being waited on, remembered so each further tick of the
     // wait is one comparison. Finding it means walking the page's glyphs, and doing that on every
     // tick would steal the CPU from the walk the wait is waiting for -- loop() runs flat out
@@ -135,7 +136,6 @@ class EpubReaderWordLookupActivity final : public Activity {
     bool hasWaitTarget = false;
   };
   PendingMove pending;
-  // Only announce a wait the user can actually perceive; shorter ones resolve before the panel
 
   void renderSelect();
   // Rebuild cursorBoxes for the current cursor. Main task only (it reads the scan vectors).

@@ -3771,21 +3771,22 @@ int EpubReaderActivity::effectiveReaderFontId() const {
   return SETTINGS.getReaderFontId();
 }
 
-void EpubReaderActivity::repaintVerticalPageForPanelThunk(void* ctx) {
-  static_cast<EpubReaderActivity*>(ctx)->repaintVerticalPageForPanel();
+bool EpubReaderActivity::repaintVerticalPageForPanelThunk(void* ctx) {
+  return static_cast<EpubReaderActivity*>(ctx)->repaintVerticalPageForPanel();
 }
 
-void EpubReaderActivity::repaintVerticalPageForPanel() {
-  if (!verticalSection) return;
+bool EpubReaderActivity::repaintVerticalPageForPanel() {
+  if (!verticalSection) return false;
   const VerticalPage* page = verticalSection->getPage();
   if (!page) {
-    // The slot could not be re-faulted (low heap / read error). The panel keeps its cursor on a
-    // blank screen rather than showing a stale page; the next reader render fixes it.
+    // The slot could not be re-faulted (low heap / read error). Report the failure so the panel
+    // retries rather than keeping a cursor on a blank screen.
     LOG_ERR("ERS", "Word lookup: no page to repaint under the word cursor");
-    return;
+    return false;
   }
   renderVerticalPageBody(*page);
   renderStatusBar();
+  return true;
 }
 
 void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {

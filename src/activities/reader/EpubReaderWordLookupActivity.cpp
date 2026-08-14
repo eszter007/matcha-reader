@@ -322,7 +322,6 @@ void EpubReaderWordLookupActivity::moveSelection(const int delta) {
       pending = PendingMove{};
       pending.kind = PendingMove::Kind::Word;
       pending.delta = delta;
-      pending.requestedAt = millis();
     }
     return;
   }
@@ -349,7 +348,6 @@ void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
   pending.delta = direction;
   pending.targetColumn = static_cast<uint16_t>(target);
   pending.anchorRow = cur.row;
-  pending.requestedAt = millis();
   resolvePendingMove();  // usually lands at once: the walk is normally well ahead of the reader
 }
 
@@ -429,12 +427,11 @@ void EpubReaderWordLookupActivity::selectMiddleOfPage() {
   pending.delta = 1;
   pending.targetColumn = midColumn;
   pending.anchorRow = midRow;
-  pending.requestedAt = millis();
   resolvePendingMove();
 }
 
-// Completes a parked move once the scan has mapped what it needs, and puts up the "Scanning..."
-// hint if the wait is long enough to be noticed. Called every tick while a move is parked.
+// Completes a parked move once the scan has mapped what it needs. Called every tick while a move
+// is parked. Nothing is drawn for the wait itself: select mode has no hint bar to put it in.
 void EpubReaderWordLookupActivity::resolvePendingMove() {
   if (pending.kind == PendingMove::Kind::None) return;
 
@@ -599,9 +596,12 @@ void EpubReaderWordLookupActivity::renderSelect() {
   const bool repaint = !selectPageDrawn;
   if (repaint) {
     renderer.clearScreen();
-    if (selectCtx.repaintPage) selectCtx.repaintPage(selectCtx.repaintCtx);
+    // Only count the page as drawn when it actually was: a failed repaint (slot not re-faultable
+    // under low heap) would otherwise stick a blank frame for the rest of the panel's life, with
+    // the cursor XOR-ing over emptiness. Leaving the flag clear retries on the next render.
+    const bool drew = selectCtx.repaintPage && selectCtx.repaintPage(selectCtx.repaintCtx);
     drawnBoxCount = 0;  // the repaint took the old highlight with it
-    selectPageDrawn = true;
+    selectPageDrawn = drew;
   } else if (drawnBoxCount > 0) {
     invertBoxes(drawnBoxes, drawnBoxCount);  // erase: inverting again restores what was under it
     drawnBoxCount = 0;
