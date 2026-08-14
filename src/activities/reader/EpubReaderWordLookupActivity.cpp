@@ -1161,6 +1161,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
   // single piece takes the kind the lookup itself resolved.
   StrId kind = resultSource != nullptr && strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
                                                                                 : StrId::STR_DICT_KIND_VOCAB;
+  std::string grammarHead;  // the pattern named by the grammar heading, once it is seen
   // Cut at whichever separator comes first, repeatedly.
   size_t pos = 0;
   while (pos <= resultDefinition.size()) {
@@ -1184,6 +1185,12 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       const size_t tailSpace = head.find_last_not_of(" \t");
       head.erase(tailSpace == std::string::npos ? 0 : tailSpace + 1);
       piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
+      grammarHead = head;
+    } else if (kind == StrId::STR_DICT_KIND_GRAMMAR) {
+      // The heading is written once, but the grammar index can return several entries for that
+      // one pattern, separated like any others. They are all about the pattern, so they keep its
+      // name in the header rather than falling back to the surface word that was looked up.
+      head = grammarHead;
     }
 
     // The attribution is the last non-empty line; it names the source, so it belongs in the
