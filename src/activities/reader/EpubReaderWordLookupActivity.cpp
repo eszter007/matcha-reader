@@ -786,6 +786,9 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   resultHeadword.clear();
   resultDefinition.clear();
   resultSource = nullptr;
+  sectionText.clear();
+  sectionLabel.clear();
+  currentSection = 0;
   resultMatchLen = 0;
   scrollOffset = 0;
   totalLines = 9999;
@@ -1016,6 +1019,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     }
   }
 
+  splitDefinitionIntoSections();
   requestUpdate();
 }
 
@@ -1117,9 +1121,81 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   return true;
 }
 
-int EpubReaderWordLookupActivity::definitionPageCount() const {
-  const int capacity = std::max(1, visibleCapacity);
-  return std::max(1, (totalLines + capacity - 1) / capacity);
+// Split the merged definition into one piece per source. DictIndex joins the entries it merges
+// with "\n\n---\n", and the grammar entry is appended under its own "— Grammar: … —" heading;
+// each piece ends with the attribution line its converter wrote ("JMdict | Tatoeba"), which is
+// lifted out of the body and shown in the panel footer instead. Tategaki only -- horizontal and
+// manga keep the single scrolling blob, where Left/Right move the word cursor.
+void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
+  sectionText.clear();
+  sectionLabel.clear();
+  currentSection = 0;
+  if (!pagedDefinition() || resultDefinition.empty()) return;
+
+  static constexpr char kEntrySep[] = "\n\n---\n";
+  static constexpr char kGrammarSep[] = "\n\n— Grammar: ";
+
+  // Cut at whichever separator comes first, repeatedly.
+  size_t pos = 0;
+  while (pos <= resultDefinition.size()) {
+    const size_t entryAt = resultDefinition.find(kEntrySep, pos);
+    const size_t grammarAt = resultDefinition.find(kGrammarSep, pos);
+    const size_t cut = std::min(entryAt, grammarAt);
+    const size_t end = cut == std::string::npos ? resultDefinition.size() : cut;
+    std::string piece = resultDefinition.substr(pos, end - pos);
+
+    // The attribution is the last non-empty line; it names the source, so it belongs in the
+    // footer rather than dangling under the text.
+    std::string label;
+    size_t tail = piece.find_last_not_of("\n \t");
+    if (tail != std::string::npos) {
+      const size_t lineStart = piece.find_last_of('\n', tail);
+      const size_t from = lineStart == std::string::npos ? 0 : lineStart + 1;
+      const std::string lastLine = piece.substr(from, tail - from + 1);
+      if (lastLine.find("JMdict") != std::string::npos || lastLine.find("JMnedict") != std::string::npos ||
+          lastLine.find("Tatoeba") != std::string::npos) {
+        label = lastLine;
+        piece.erase(from);
+      }
+    }
+    // Trim the blank lines the cut leaves behind so a page never opens on empty space.
+    const size_t last = piece.find_last_not_of("\n \t");
+    piece.erase(last == std::string::npos ? 0 : last + 1);
+    if (!piece.empty()) {
+      sectionText.push_back(std::move(piece));
+      sectionLabel.push_back(std::move(label));
+    }
+
+    if (cut == std::string::npos) break;
+    if (cut == grammarAt) {
+      // Keep the "— Grammar: <headword> —" heading with the grammar text it introduces.
+      pos = cut + 2;  // step over the blank line, not the heading
+      const size_t headingEnd = resultDefinition.find('\n', pos);
+      if (headingEnd == std::string::npos) break;
+    } else {
+      pos = cut + sizeof(kEntrySep) - 1;
+    }
+  }
+  // Free the merged copy: the pieces own the text now.
+  if (!sectionText.empty()) {
+    resultDefinition.clear();
+    resultDefinition.shrink_to_fit();
+  }
+}
+
+const std::string& EpubReaderWordLookupActivity::visibleDefinition() const {
+  if (!sectionText.empty() && currentSection < static_cast<int>(sectionText.size())) {
+    return sectionText[currentSection];
+  }
+  return resultDefinition;
+}
+
+const char* EpubReaderWordLookupActivity::visibleLabel() const {
+  if (!sectionLabel.empty() && currentSection < static_cast<int>(sectionLabel.size()) &&
+      !sectionLabel[currentSection].empty()) {
+    return sectionLabel[currentSection].c_str();
+  }
+  return resultSource;
 }
 
 void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
@@ -1150,15 +1226,14 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
       // since its visible window is further in. ONE call, not per-line: the decompressor reuses
       // its 4 page-buffer slots within a call but not across calls.
       constexpr size_t kVisiblePrewarmBytes = 1024;
-      if (scrollOffset == 0 && resultDefinition.size() > kVisiblePrewarmBytes) {
+      const std::string& shown = visibleDefinition();
+      if (scrollOffset == 0 && shown.size() > kVisiblePrewarmBytes) {
         size_t cut = kVisiblePrewarmBytes;  // back up to a UTF-8 lead byte so the last char is whole
-        while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
-        const char saved = resultDefinition[cut];
-        resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
-        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
-        resultDefinition[cut] = saved;
+        while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) cut--;
+        std::string head = shown.substr(0, cut);
+        renderer.prewarmText(defFont, head.c_str(), 1 << EpdFontFamily::REGULAR);
       } else {
-        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, shown.c_str(), 1 << EpdFontFamily::REGULAR);
       }
     }
   }
@@ -1178,8 +1253,8 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
     const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
     const int maxDefY = body.y + body.height;
     const int firstDefY = defY;
-    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                  maxDefY, scrollOffset, defScale);
+    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, visibleDefinition(), textX, defY, defLineH,
+                                                  maxWidth, maxDefY, scrollOffset, defScale);
 
     totalLines = wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
@@ -1200,9 +1275,10 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   std::string counterText;
   if (hasResult && !scan.selectableGlyphs.empty()) {
     if (pagedDefinition()) {
-      const int pageCount = definitionPageCount();
-      if (pageCount > 1) {
-        counterText = std::to_string(scrollOffset / std::max(1, visibleCapacity) + 1) + "/" + std::to_string(pageCount);
+      // Which source you are on, not which word on the page -- the word count belongs to the
+      // selection view, and 1/834 says nothing about the entry you are reading.
+      if (sectionText.size() > 1) {
+        counterText = std::to_string(currentSection + 1) + "/" + std::to_string(sectionText.size());
       }
     } else {
       counterText = std::to_string(cursorIndex + 1) + "/" +

@@ -189,6 +189,19 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool hasGrammar = false;
   std::string grammarHeadword;
   std::string grammarDefinition;
+  // Tategaki shows ONE source per page: the merged definition is split at the separators the
+  // dictionaries put between entries, each piece keeping the attribution line it ended with as
+  // its footer label. Left/Right walk these; the word cursor does not move from the definition
+  // view here, which is what horizontal and manga use those buttons for.
+  std::vector<std::string> sectionText;
+  std::vector<std::string> sectionLabel;
+  int currentSection = 0;
+  void splitDefinitionIntoSections();
+  // Text and footer label for what is on screen: the current section in tategaki, the whole
+  // merged definition otherwise.
+  const std::string& visibleDefinition() const;
+  const char* visibleLabel() const;
+
   int scrollOffset = 0;     // lines scrolled within current entry
   int totalLines = 0;       // total lines in current definition
   int maxScroll = 0;        // max scroll offset (leaves a screenful visible)
@@ -198,7 +211,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   // counter, instead of the free scrolling the horizontal and manga panels keep. scrollOffset
   // is still the source of truth -- paging just quantizes it to whole screenfuls.
   bool pagedDefinition() const { return selectCtx.valid(); }
-  int definitionPageCount() const;
 
   ButtonNavigator buttonNavigator;
 
