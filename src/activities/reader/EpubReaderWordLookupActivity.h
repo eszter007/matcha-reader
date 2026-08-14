@@ -199,6 +199,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Which Japanese index answered each piece: several can answer one lookup, so the panel names
   // it. StrId rather than a string: these are UI words, not the dictionaries' own titles.
   std::vector<StrId> sectionKind;
+  // Headword to show for a piece when it is not the word that was looked up: the grammar index
+  // answers with a pattern of its own (なんて for a lookup of なんて言う), and naming it in the
+  // panel header is clearer than repeating the surface word above an entry about the pattern.
+  std::vector<std::string> sectionHead;
   int currentSection = 0;
   void splitDefinitionIntoSections();
   void moveSection(int delta);
@@ -207,6 +211,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   const std::string& visibleDefinition() const;
   const char* visibleLabel() const;
   const char* visibleKind() const;
+  const char* visibleHeadword() const;
 
   int scrollOffset = 0;     // lines scrolled within current entry
   int totalLines = 0;       // total lines in current definition

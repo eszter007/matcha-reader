@@ -790,6 +790,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   sectionText.clear();
   sectionLabel.clear();
   sectionKind.clear();
+  sectionHead.clear();
   currentSection = 0;
   resultMatchLen = 0;
   scrollOffset = 0;
@@ -1149,6 +1150,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
   sectionText.clear();
   sectionLabel.clear();
   sectionKind.clear();
+  sectionHead.clear();
   currentSection = 0;
   if (!pagedDefinition() || resultDefinition.empty()) return;
 
@@ -1167,6 +1169,22 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
     const size_t cut = std::min(entryAt, grammarAt);
     const size_t end = cut == std::string::npos ? resultDefinition.size() : cut;
     std::string piece = resultDefinition.substr(pos, end - pos);
+
+    // The grammar entry opens with its own "— Grammar: <pattern> —" heading. That pattern is
+    // what the page is about, so it becomes the panel's headword and leaves the body.
+    std::string head;
+    static constexpr char kGrammarHead[] = "\xe2\x80\x94 Grammar: ";
+    if (piece.compare(0, sizeof(kGrammarHead) - 1, kGrammarHead) == 0) {
+      const size_t lineEnd = piece.find('\n');
+      const size_t headEnd = lineEnd == std::string::npos ? piece.size() : lineEnd;
+      head = piece.substr(sizeof(kGrammarHead) - 1, headEnd - (sizeof(kGrammarHead) - 1));
+      // Trim the closing em dash and the space before it.
+      const size_t dash = head.rfind("\xe2\x80\x94");
+      if (dash != std::string::npos) head.erase(dash);
+      const size_t tailSpace = head.find_last_not_of(" \t");
+      head.erase(tailSpace == std::string::npos ? 0 : tailSpace + 1);
+      piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
+    }
 
     // The attribution is the last non-empty line; it names the source, so it belongs in the
     // footer rather than dangling under the text.
@@ -1193,6 +1211,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
       sectionText.push_back(std::move(piece));
       sectionLabel.push_back(std::move(label));
       sectionKind.push_back(kind);
+      sectionHead.push_back(std::move(head));
     }
 
     if (cut == std::string::npos) break;
@@ -1218,6 +1237,14 @@ const std::string& EpubReaderWordLookupActivity::visibleDefinition() const {
     return sectionText[currentSection];
   }
   return resultDefinition;
+}
+
+const char* EpubReaderWordLookupActivity::visibleHeadword() const {
+  if (!sectionHead.empty() && currentSection < static_cast<int>(sectionHead.size()) &&
+      !sectionHead[currentSection].empty()) {
+    return sectionHead[currentSection].c_str();
+  }
+  return resultHeadword.c_str();
 }
 
 const char* EpubReaderWordLookupActivity::visibleKind() const {
@@ -1323,7 +1350,7 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
 
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the reader's page stays visible around it instead of being cleared away.
-  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", visibleLabel(),
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? visibleHeadword() : "", visibleLabel(),
                                             counterText.empty() ? nullptr : counterText.c_str(), visibleKind());
   renderContentArea(layout.body);
 
