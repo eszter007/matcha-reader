@@ -57,6 +57,13 @@ DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() 
 bool DictionaryDefinitionActivity::layoutHtmlPages() {
   const BodyArea body = bodyArea();
   if (body.width <= 0 || body.height <= 0) return false;
+  // Warm the advance table for this exact text BEFORE the parser measures it. Layout prices
+  // non-resident glyphs at 0 (it reads advance tables and resident glyphs only, never the
+  // on-demand SD loader), while drawing resolves them for real -- so an entry carrying glyphs
+  // outside the resident set, such as the IPA in a pronunciation, measured as almost nothing,
+  // never wrapped, and drew its characters on top of each other. REGULAR|BOLD|ITALIC: the
+  // normalizer emits all three.
+  renderer.ensureSdCardFontReady(definitionFontId(), definition.c_str(), 0x07);
   if (!buildDictionaryHtmlPages(renderer, definition, static_cast<uint16_t>(body.width),
                                 static_cast<uint16_t>(body.height), definitionFontId(), pages)) {
     return false;

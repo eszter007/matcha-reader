@@ -176,6 +176,12 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         continue;
       }
 
+      // A list follows inline text ("person purchasing goods<ol>…"), and <ol> alone does not
+      // break the line, so the first item ran on from the gloss. Break before the list.
+      if (!closing && nameLen == 2 && (strncmp(nameBuf, "ol", 2) == 0 || strncmp(nameBuf, "ul", 2) == 0)) {
+        if (!out.append("<br/>")) return false;
+      }
+
       // <li><div>text</div></li>: the inner block puts the item's text on the line BELOW its
       // own number. Drop that wrapper so each sense reads as "1. Papier" on one line. The
       // opening <li> itself is emitted normally below, attributes and all.

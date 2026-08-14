@@ -12,8 +12,9 @@ namespace {
 
 // Gap between the panel and the edges of the usable area. The bottom margin measures to the top
 // of the button hints, not to the physical edge, so the panel never crowds them.
-constexpr int SIDE_MARGIN = 10;
-constexpr int VERTICAL_MARGIN = 20;
+constexpr int SIDE_MARGIN = 20;
+constexpr int TOP_MARGIN = 40;
+constexpr int BOTTOM_MARGIN = 20;
 
 // Inner padding from the frame to any text. Deliberately tight: the panel is small and every
 // pixel spent on padding is a line of definition the reader does not get.
@@ -59,8 +60,8 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.box.width = std::max(0, safe.width - 2 * SIDE_MARGIN);
 
   // safe.height already stops at the button hints, so insetting it bottoms the panel above them.
-  layout.box.y = safe.y + VERTICAL_MARGIN;
-  layout.box.height = std::max(0, safe.height - 2 * VERTICAL_MARGIN);
+  layout.box.y = safe.y + TOP_MARGIN;
+  layout.box.height = std::max(0, safe.height - TOP_MARGIN - BOTTOM_MARGIN);
 
   // Headword line, then the divider, then the body; a second divider and the dictionary name
   // close the panel.
