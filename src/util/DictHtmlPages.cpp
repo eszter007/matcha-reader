@@ -138,10 +138,9 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   // Nesting state for the sense list. The outermost <ol> holds one sense per <li>; nested lists
   // hold that sense's sub-glosses and must not be treated the same way.
   int listDepth = 0;
-  int senseCount = 0;           // top-level items seen; the first shares the page with the header
-  bool glossOpen = false;       // a sense's bold gloss block is open
-  bool divUnwrapped = false;    // an item's sole <div> wrapper was dropped; drop its closer too
-  bool grammarPending = false;  // inside the part-of-speech block; its closer gets a blank line
+  int senseCount = 0;         // top-level items seen; the first shares the page with the header
+  bool glossOpen = false;     // a sense's bold gloss block is open
+  bool divUnwrapped = false;  // an item's sole <div> wrapper was dropped; drop its closer too
   while (i < n) {
     const char c = html[i];
     if (c == '<' && i + 1 < n && (html[i + 1] == '!' || html[i + 1] == '?')) {
@@ -205,7 +204,6 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
           if (!out.append(isGrammar ? "<span style=\"font-style:italic\">" : "<span style=\"font-size:0.75em\">")) {
             return false;
           }
-          if (isGrammar) grammarPending = true;
         }
         i = j + 1;
         continue;
@@ -251,7 +249,13 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         } else {
           // Every sense after the first starts its own page, so a lookup is read one definition
           // at a time. The first stays with the pronunciation and part of speech above it.
-          if (!out.append(senseCount == 0 ? "<div>" : "<div style=\"page-break-before:always\">")) return false;
+          // The first sense follows the part of speech on the same page and is set off from it
+          // by a margin -- a <br/> between two blocks collapses to nothing here. Every later
+          // sense opens its own page instead.
+          if (!out.append(senseCount == 0 ? "<div style=\"margin-top:1em\">"
+                                          : "<div style=\"page-break-before:always\">")) {
+            return false;
+          }
           senseCount++;
           // The item's own text is its gloss; bold it in its own block so the translations
           // beneath start on a fresh line without a blank one between.
@@ -283,11 +287,6 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       if (!closing && isLi && liContentIsSingleDiv(html, i)) {
         i += 5;
         divUnwrapped = true;
-      }
-      // The part of speech is a heading for everything under it; give it a blank line.
-      if (closing && isDiv && grammarPending) {
-        grammarPending = false;
-        if (!out.append("<br/>")) return false;
       }
       continue;
     }
