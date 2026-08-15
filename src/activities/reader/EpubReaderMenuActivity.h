@@ -74,13 +74,14 @@ class EpubReaderMenuActivity final : public UiListActivity {
   void activateIndex(int index) override;
   // Popup input runs before any button or touch handling.
   bool handleCustomInput() override;
-  // Back closes on RELEASE and Confirm activates on RELEASE; everything else
-  // (row navigation, page jumps) falls through to the base handler.
+  // Back closes on RELEASE and Confirm activates on RELEASE.
   bool handleButtons() override;
+  void navigateButtons() override;
   // Header via GUI.drawHeader inside the safe area for the battery indicator.
   void drawChrome() override;
 
   void closeCancelled();
+  int enabledIndexFrom(int index, int direction) const;
 
   // Fixed menu layout
   // Not const: the fork rebuilds the row set when a toggle changes what is shown.
