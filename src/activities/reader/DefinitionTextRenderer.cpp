@@ -572,7 +572,7 @@ void prewarmStyledText(GfxRenderer& renderer, const int fontId, const std::strin
     pos = end + 1;
   }
 
-  auto* fcm = renderer.getFontCacheManager();
+  auto* const fcm = renderer.getFontCacheManager();
   const auto font = renderer.getFontMap().find(fontId);
   for (uint8_t style = 0; style <= EpdFontFamily::ITALIC; style++) {
     const uint8_t mask = 1 << style;
