@@ -389,7 +389,7 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
           pagesOut.push_back(std::move(page));
         },
         /*embeddedStyle=*/false, /*contentBase=*/"", /*imageBasePath=*/"", /*imageRendering=*/2,
-        /*tocAnchors=*/std::vector<std::string>{}, /*popupFn=*/std::function<void()>{}, &inlineStyleParser);
+        /*tocAnchors=*/std::vector<std::string>{}, /*popupFn=*/nullptr, &inlineStyleParser);
     if (!parser) {
       LOG_ERR("DHTML", "OOM: ChapterHtmlSlimParser");
     } else {
