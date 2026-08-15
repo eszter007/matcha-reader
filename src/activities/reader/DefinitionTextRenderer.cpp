@@ -65,17 +65,20 @@ bool isKanaOnly(const std::string& text) {
 }
 
 std::string uppercase(std::string text) {
-  for (char& c : text) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](const char c) { return static_cast<char>(std::toupper(static_cast<unsigned char>(c))); });
+  return text;
+}
+
+std::string lowercase(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](const char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
   return text;
 }
 
 std::string formatTag(std::string tag) {
   trim(tag);
-  const std::string lower = [&tag] {
-    std::string result = tag;
-    for (char& c : result) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return result;
-  }();
+  const std::string lower = lowercase(tag);
   if (!lower.empty() && std::all_of(lower.begin(), lower.end(), [](const unsigned char c) { return std::isdigit(c); }))
     return {};
   if (lower.rfind("5-dan", 0) == 0) return "5-DAN VERB" + uppercase(tag.substr(5));
