@@ -175,8 +175,8 @@ void MangaReaderActivity::onExit() {
   ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, book ? book->getFolder().c_str() : nullptr,
                                  book ? book->getLanguage().c_str() : nullptr);
 
-  // On the last page (currentPage never advances past pageCount-1 -- see
-  // nextPage()) regardless of how long this particular session lasted.
+  // On the last page or the end-screen sentinel, regardless of how long this
+  // particular session lasted.
   // Previously this was nested inside `minutes > 0` AND compared against
   // pageCount instead of pageCount-1, so it could never fire -- manga never
   // got marked finished even at 100% progress, unlike Epub/Txt readers.
@@ -188,6 +188,8 @@ void MangaReaderActivity::onExit() {
   }
 
   saveProgress();
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+  endOfBookOptions.reset();
   panels.clear();
   book.reset();
 
@@ -390,6 +392,12 @@ void MangaReaderActivity::nextPage(const bool keepPanelMode) {
     // In Panels Only a page with no detected crops still matters (cover, splash page, failed
     // detection): leave FullPage selected as the fallback, then resume crops on the next page.
     requestUpdate();
+  } else if (currentPage < book->getPageCount()) {
+    currentPage = book->getPageCount();
+    currentPanel = -1;
+    viewMode = ViewMode::FullPage;
+    automaticPageTurnActive = false;
+    requestUpdate();
   }
 }
 
@@ -412,6 +420,80 @@ void MangaReaderActivity::prevPage(const bool keepPanelMode) {
   }
 }
 
+bool MangaReaderActivity::isAtEndOfBook() const { return book && currentPage >= book->getPageCount(); }
+
+void MangaReaderActivity::clearEndOfBookOptionsIfNeeded() {
+  if (isAtEndOfBook() || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
+  RenderLock lock{RenderLock::Try{}};
+  if (!lock.held()) return;
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+  endOfBookOptions.reset();
+}
+
+void MangaReaderActivity::onReturnFromEndOfBook() {
+  currentPage = book && book->getPageCount() > 0 ? book->getPageCount() - 1 : 0;
+  currentPanel = -1;
+  viewMode = ViewMode::FullPage;
+  loadCurrentPagePanels();
+}
+
+bool MangaReaderActivity::handleEndOfBookMenu() {
+  if (!isAtEndOfBook() || !endOfBookOptionsReady.load(std::memory_order_acquire) || !endOfBookOptions->menuActive()) {
+    return false;
+  }
+
+  std::string openPath;
+  switch (endOfBookOptions->handleMenuInput(mappedInput, &openPath)) {
+    case EndOfBookOptions::Action::OpenBook:
+      activityManager.goToReader(openPath);
+      return true;
+    case EndOfBookOptions::Action::GoHome:
+      onGoHome();
+      return true;
+    case EndOfBookOptions::Action::LastPage:
+      onReturnFromEndOfBook();
+      requestUpdate();
+      return true;
+    case EndOfBookOptions::Action::Redraw:
+      requestUpdate();
+      return true;
+    case EndOfBookOptions::Action::None:
+      return false;
+  }
+  return false;
+}
+
+bool MangaReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const bool nextTriggered) {
+  if (!isAtEndOfBook()) return false;
+  if (endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions->menuActive()) return true;
+  if (nextTriggered) {
+    onGoHome();
+  } else if (prevTriggered) {
+    onReturnFromEndOfBook();
+    requestUpdate();
+  }
+  return true;
+}
+
+bool MangaReaderActivity::renderEndOfBook() {
+  if (!isAtEndOfBook()) return false;
+  if (!endOfBookOptions) {
+    endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
+    if (!endOfBookOptions) LOG_ERR("MRA", "OOM: EndOfBookOptions");
+    endOfBookOptionsReady.store(endOfBookOptions != nullptr, std::memory_order_release);
+  }
+  renderer.clearScreen();
+  if (endOfBookOptions) {
+    endOfBookOptions->loadOnce(book->getFolder());
+    endOfBookOptions->render(renderer, mappedInput);
+  } else {
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
+                              EpdFontFamily::BOLD);
+  }
+  renderer.displayBuffer();
+  return true;
+}
+
 void MangaReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
   if (selectedPageTurnOption == 0 || selectedPageTurnOption >= std::size(PAGE_TURN_RATES)) {
     automaticPageTurnActive = false;
@@ -432,6 +514,9 @@ void MangaReaderActivity::loop() {
   // task's normal locking rules. Runs before everything else so a completed warm is visible to
   // this very tick's input handling, and so the single job slot frees up for the next post.
   applyPrefetchResult();
+
+  clearEndOfBookOptionsIfNeeded();
+  if (handleEndOfBookMenu()) return;
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
@@ -544,6 +629,8 @@ void MangaReaderActivity::loop() {
     return;
   }
 
+  if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
+
   if (viewMode == ViewMode::PanelZoom) {
     if (nextTriggered) nextPanel();
     if (prevTriggered) prevPanel();
@@ -574,13 +661,7 @@ void MangaReaderActivity::loop() {
 void MangaReaderActivity::render(RenderLock&&) {
   if (!book) return;
 
-  if (currentPage >= book->getPageCount()) {
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_END_OF_BOOK), true,
-                              EpdFontFamily::BOLD);
-    renderer.displayBuffer();
-    return;
-  }
+  if (renderEndOfBook()) return;
 
   switch (viewMode) {
     case ViewMode::FullPage:
@@ -1516,11 +1597,12 @@ void MangaReaderActivity::saveProgress() const {
     Storage.mkdir(cachePath.c_str());
   }
 
+  const uint32_t savedPage = book->getPageCount() > 0 ? std::min(currentPage, book->getPageCount() - 1) : 0;
   uint8_t data[7];
-  data[0] = currentPage & 0xFF;
-  data[1] = (currentPage >> 8) & 0xFF;
-  data[2] = (currentPage >> 16) & 0xFF;
-  data[3] = (currentPage >> 24) & 0xFF;
+  data[0] = savedPage & 0xFF;
+  data[1] = (savedPage >> 8) & 0xFF;
+  data[2] = (savedPage >> 16) & 0xFF;
+  data[3] = (savedPage >> 24) & 0xFF;
   int16_t panelVal = static_cast<int16_t>(currentPanel);
   memcpy(data + 4, &panelVal, 2);
   data[6] = panelsOnlyMode ? 1 : 0;

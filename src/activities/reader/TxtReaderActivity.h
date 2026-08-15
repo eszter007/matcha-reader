@@ -46,6 +46,8 @@ class TxtReaderActivity final : public ReaderActivity {
   void onReaderEnter() override;
   void onReaderExit() override;
   void readerLoop() override;
+  bool isAtEndOfBook() const override;
+  void onReturnFromEndOfBook() override;
 
  public:
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,

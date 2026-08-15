@@ -9,7 +9,7 @@
 class GfxRenderer;
 class MappedInputManager;
 
-// Shared End-of-Book next-book menu for the EPUB and XTC readers. Collects up to
+// Shared End-of-Book next-book menu for the book readers. Collects up to
 // MAX_SUGGESTIONS sibling books once per reader session, handles the menu input, and
 // draws the end screen. With no suggestions the end screen keeps its historical
 // plain-title look and behavior.

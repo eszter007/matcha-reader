@@ -95,6 +95,7 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 - More of the book's own CSS respected: headings sized as headings, line spacing, page breaks, boxed asides, and rules written as `.callout p`
 - **Use Book Margins** (Text Settings > Layout, on by default) keeps the indents a book sets for itself, so epigraphs and long quotations stay inset. Turn it off and those blocks sit flush with the body text
 - Instant image page turns, since the next image decodes in the background
+- Next-book suggestions at the end of EPUB, TXT/Markdown, XTC and manga books
 - A file browser that shows everything on the card, with unsupported files greyed out rather than hidden
 - Fully localised, in all the languages CrossPoint ships
 
