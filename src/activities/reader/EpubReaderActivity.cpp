@@ -1207,21 +1207,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               openReaderMenu();
               return;
             }
-            if (!result.isCancelled) {
-              const auto& chapterResult = std::get<ChapterResult>(result.data);
-              RenderLock lock(*this);
-
-              currentSpineIndex = chapterResult.spineIndex;
-
-              // If anchor is not empty, it will be used later to calculate the page number.
-              pendingAnchor = chapterResult.anchor;
-
-              // Otherwise page 0 will be used.
-              nextPageNumber = 0;
-
-              section.reset();
-              verticalSection.reset();
-            }
             const auto& chapterResult = std::get<ChapterResult>(result.data);
             RenderLock lock(*this);
 
@@ -1235,6 +1220,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             nextPageNumber = 0;
 
             section.reset();
+            verticalSection.reset();
           });
       break;
     }
