@@ -124,6 +124,7 @@ void formatGrammarBody(std::string& text, const std::string& headword) {
     if (close == std::string::npos) return;
     line.erase(0, close + 2);
     trim(line);
+    while (line.rfind("\xe3\x80\x80", 0) == 0) line.erase(0, 3);  // Japanese full-width space.
   };
 
   size_t pos = 0;
@@ -580,9 +581,8 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
                             text[contentStart + 1] == ')';
     const bool indented = text.compare(contentStart, 3, "   ") == 0;
     const bool hangingSense = isNumberedSense(text, contentStart, paraEnd) || alphaLabel || indented;
-    // The example rule is drawn separately; measuring its font glyph makes the text offset
-    // depend on whichever fallback font happened to resolve `│` first.
-    const char* hangingPrefix = isExample ? "   " : alphaLabel ? "a)" : indented ? "   " : "1. ";
+    // Align the example rule with the body text after `1. `; its text starts one space farther in.
+    const char* hangingPrefix = isExample ? "1.  " : alphaLabel ? "a)" : indented ? "   " : "1. ";
     const int hangingIndent =
         (hangingSense || isNote || isExample)
             ? renderer.getTextWidthScaled(fontId, hangingPrefix, paragraphScale, EpdFontFamily::REGULAR)
@@ -595,7 +595,7 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
           isNote ? (firstLine ? hangingIndent : continuationIndent) : (firstLine ? 0 : continuationIndent);
       return std::max(1, maxWidth - indent);
     };
-    const int exampleRuleX = isExample ? textX + renderer.getTextWidthScaled(fontId, "  ", paragraphScale) : 0;
+    const int exampleRuleX = isExample ? textX + renderer.getTextWidthScaled(fontId, "1. ", paragraphScale) : 0;
     static constexpr char kExamplePrefix[] = "  │ ";
     const auto drawWrappedLine = [&](const char* line, const bool firstLine, const int y) {
       int lineX =
