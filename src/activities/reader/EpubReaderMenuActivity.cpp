@@ -130,7 +130,7 @@ bool EpubReaderMenuActivity::handleHomeGesture() {
 }
 
 void EpubReaderMenuActivity::activateIndex(const int index) {
-  if (optionPopup.isActive()) return;
+  if (optionPopup.isActive() || !menuRowItems[index].enabled) return;
   // The activated row leaves this screen (popup or finish); a lingering flash
   // would gray an unrelated element on the next render.
   app.clearTapFlash();
@@ -184,6 +184,29 @@ bool EpubReaderMenuActivity::handleButtons() {
   return false;
 }
 
+int EpubReaderMenuActivity::enabledIndexFrom(int index, const int direction) const {
+  const int count = listCount();
+  for (int checked = 0; checked < count; checked++) {
+    if (menuRowItems[index].enabled) return index;
+    index = direction > 0 ? ButtonNavigator::nextIndex(index, count) : ButtonNavigator::previousIndex(index, count);
+  }
+  return nav.selected;
+}
+
+void EpubReaderMenuActivity::navigateButtons() {
+  const int count = listCount();
+  buttonNavigator.onNextRelease(
+      [this, count] { moveSelectionTo(enabledIndexFrom(ButtonNavigator::nextIndex(nav.selected, count), 1)); });
+  buttonNavigator.onPreviousRelease(
+      [this, count] { moveSelectionTo(enabledIndexFrom(ButtonNavigator::previousIndex(nav.selected, count), -1)); });
+  buttonNavigator.onNextContinuous([this, count] {
+    moveSelectionTo(enabledIndexFrom(ButtonNavigator::nextPageIndex(nav.selected, count, nav.visibleRows), 1));
+  });
+  buttonNavigator.onPreviousContinuous([this, count] {
+    moveSelectionTo(enabledIndexFrom(ButtonNavigator::previousPageIndex(nav.selected, count, nav.visibleRows), -1));
+  });
+}
+
 void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
@@ -223,8 +246,29 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
+  const fui::Rect listRect = screen.body();
   syncListViewport(screen, props);
   screen.list(props);
+
+  // GfxRenderer's 1-bit text path cannot draw the list style's gray foreground,
+  // so thin disabled labels with the same checkerboard mask as the legacy themes.
+  const int16_t rowHeight = props.rowHeight > 0 ? props.rowHeight : screen.theme().rowHeight;
+  const int16_t rowGap = props.rowGap >= 0 ? props.rowGap : screen.theme().listRowGap;
+  const int16_t textX = static_cast<int16_t>(listRect.x + screen.theme().listInset + screen.theme().listSidePadding);
+  const int16_t textAvail =
+      static_cast<int16_t>(listRect.right() - screen.theme().listInset - screen.theme().listSidePadding - textX);
+  const int16_t lineHeight = screen.target().lineHeight(screen.theme().bodyText.font);
+  for (int i = props.topIndex; i < listCount() && i < props.topIndex + nav.visibleRows; i++) {
+    if (menuRowItems[i].enabled) continue;
+    int16_t textWidth =
+        screen.target().measureText(screen.theme().bodyText.font, menuRowItems[i].label, screen.theme().bodyText).width;
+    if (textWidth > textAvail) textWidth = textAvail;
+    const int16_t textY =
+        static_cast<int16_t>(listRect.y + (i - props.topIndex) * (rowHeight + rowGap) + (rowHeight - lineHeight) / 2);
+    for (int y = textY; y < textY + lineHeight; y++)
+      for (int x = textX; x < textX + textWidth; x++)
+        if ((x + y) % 2 == 0) renderer.drawPixel(x, y, false);
+  }
 }
 
 void EpubReaderMenuActivity::drawChrome() {
