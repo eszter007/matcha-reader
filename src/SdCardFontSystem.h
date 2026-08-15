@@ -55,6 +55,14 @@ class SdCardFontSystem {
   /// fallback instead of being selected directly.
   static bool isBuiltinJpExtension(const std::string& familyName);
 
+  /// True for SD families that only widen the coverage of a family the device already offers
+  /// (NotoSerifExtended over the built-in Noto Serif, PagellaIPA over an installed Pagella).
+  /// The picker shows the base alone and resolveSelectedFamily() decides which of the two is
+  /// resident, so one typeface is one row. A variant whose base is NOT installed stays
+  /// visible: collapsing a row must never make its glyphs unreachable. `registry` is where the
+  /// base is looked up; a null registry can only match the built-in bases.
+  static bool isCoverageVariant(const std::string& familyName, const SdCardFontRegistry* registry);
+
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
 
@@ -84,6 +92,19 @@ class SdCardFontSystem {
   ///    card (extension families first) at the reader size and use that
   ///  - no CJK family on the card -> the built-in jōyō-subset fallback captured at begin()
   void ensureSelectedLoaded(GfxRenderer& renderer);
+
+  /// Base family a coverage variant widens ("NotoSerifExtended" -> "NotoSerif"), or empty when
+  /// the name carries none of the known suffixes. Does not check that the base exists.
+  static std::string coverageVariantBase(const std::string& familyName);
+
+  /// Installed variant standing in for `baseName`, or nullptr when the card has none.
+  const SdCardFontFamilyInfo* findCoverageVariant(const std::string& baseName) const;
+
+  /// Family that should be resident for the current selection and reading context. Empty means
+  /// "the built-in reader font, nothing to load". This is a runtime substitution only —
+  /// SETTINGS.sdFontFamilyName keeps naming what the user actually picked.
+  std::string resolveSelectedFamily() const;
+
   void ensureJpFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);
   bool loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name, uint32_t cp) const;

@@ -372,8 +372,10 @@ int CrossPointSettings::getBuiltinSerifReaderFontId() const {
 }
 
 int CrossPointSettings::getReaderFontId() const {
-  // Check SD card font first
-  if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {
+  // Asked unconditionally, not just when an SD family is named: a built-in selection whose
+  // picker row collapsed a wider-coverage variant (NotoSerif + NotoSerifExtended) resolves to
+  // that variant, and the resolver answers 0 when nothing stands in.
+  if (sdFontIdResolver) {
     int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, fontPointSize);
     if (id != 0) return id;
   }

@@ -106,6 +106,10 @@ void TextSettingsActivity::rebuildFamilyList() {
       // companion logic in SdCardFontSystem::ensureJpFallback(). Hidden here for the
       // same reason the settings picker hides them -- see isBuiltinJpExtension.
       if (SdCardFontSystem::isBuiltinJpExtension(families[i].name)) continue;
+      // Same reasoning for a wider-coverage cut of a family already on this list
+      // (NotoSerifExtended over Noto Serif): one typeface is one row, and the base row's
+      // selection resolves to whichever of the two suits the book being opened.
+      if (SdCardFontSystem::isCoverageVariant(families[i].name, registry_)) continue;
       // settingIndex stays the REGISTRY index (what sdFontFamilyName resolves against);
       // the list position is separate now that the list is filtered.
       fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
