@@ -226,7 +226,16 @@ void ActivityManager::goToBrowser() {
 }
 
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
-  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh));
+  if (path.empty()) {
+    goToFileBrowser("/");
+    return;
+  }
+  auto activity = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: reader activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {

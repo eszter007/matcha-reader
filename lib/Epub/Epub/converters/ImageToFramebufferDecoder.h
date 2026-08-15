@@ -19,6 +19,9 @@ struct RenderConfig {
   bool useDithering = true;
   bool performanceMode = false;
   bool useExactDimensions = false;  // If true, use maxWidth/maxHeight as exact output size (no recalculation)
+  float sourceCropX = 0.0f;         // Fraction cropped equally from the left and right edges
+  float sourceCropY = 0.0f;         // Fraction cropped equally from the top and bottom edges
+  bool preserveAlpha = false;       // Skip transparent pixels instead of compositing them against white
   std::string cachePath;            // If non-empty, decoder will write pixel cache to this path
 
   // Aspect-fill ("cover") mode: scale by max(scaleX, scaleY) instead of
@@ -29,12 +32,6 @@ struct RenderConfig {
   bool fillCrop = false;
   int cropWidth = 0;   // If >0, clip final output width to this value
   int cropHeight = 0;  // If >0, clip final output height to this value
-
-  // Treat the source alpha channel as a hard mask (sleep-screen overlays): pixels with
-  // alpha < 128 are skipped so the retained framebuffer shows through, and every other
-  // pixel is written opaquely -- including white, which the normal BW path leaves
-  // untouched. Sources without an alpha channel render fully opaque. PNG only.
-  bool alphaMask = false;
 
   // Lifts the source tone before dithering (0 = off). The framebuffer path renders through a
   // 4-level Bayer screen, which on the 1-bit framebuffer reads noticeably darker than the

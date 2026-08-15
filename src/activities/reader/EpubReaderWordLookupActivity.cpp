@@ -1354,8 +1354,12 @@ const char* EpubReaderWordLookupActivity::visibleHeadword() const {
 }
 
 const char* EpubReaderWordLookupActivity::visibleKind() const {
-  if (sectionKind.empty() || currentSection >= static_cast<int>(sectionKind.size())) return nullptr;
-  return I18N.get(sectionKind[currentSection]);
+  if (!sectionKind.empty() && currentSection < static_cast<int>(sectionKind.size()))
+    return I18N.get(sectionKind[currentSection]);
+  if (resultSource == nullptr) return nullptr;
+  return I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
+                  : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
+                                                          : StrId::STR_DICT_KIND_VOCAB);
 }
 
 const char* EpubReaderWordLookupActivity::visibleReading() const {
@@ -1398,25 +1402,22 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
   if (hasResult) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
-      fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      renderer.prewarmText(defFont, visibleReading(), 1 << EpdFontFamily::REGULAR);
-      renderer.prewarmText(defFont, visibleGrammar(), 1 << EpdFontFamily::REGULAR);
-      // Prewarm only the ON-SCREEN slice of the definition, in ONE call. A merged 5-entry
+      // Prewarm only the ON-SCREEN slice of the definition. A merged 5-entry
       // definition can run to thousands of bytes, but only ~13 lines show; warming the whole
       // thing was the ~1s-per-step navigation cost (renders serialize on the RenderLock, so a
       // slow render stalls the next keypress). ~1KB covers a full screen of Latin OR CJK. Only
       // when scrollOffset==0 (navigating a new word); a scrolled view warms the whole definition
-      // since its visible window is further in. ONE call, not per-line: the decompressor reuses
-      // its 4 page-buffer slots within a call but not across calls.
+      // since its visible window is further in. Regular plus the exact bold lines use at most
+      // the decompressor's four slots; italic Latin translations load cheaply on demand.
       constexpr size_t kVisiblePrewarmBytes = 1024;
       const std::string& shown = visibleDefinition();
       if (scrollOffset == 0 && shown.size() > kVisiblePrewarmBytes) {
         size_t cut = kVisiblePrewarmBytes;  // back up to a UTF-8 lead byte so the last char is whole
         while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) cut--;
         std::string head = shown.substr(0, cut);
-        renderer.prewarmText(defFont, head.c_str(), (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
+        DefinitionText::prewarmStyledText(renderer, defFont, head);
       } else {
-        renderer.prewarmText(defFont, shown.c_str(), (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
+        DefinitionText::prewarmStyledText(renderer, defFont, shown);
       }
     }
   }
@@ -1484,7 +1485,7 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     sdFontSystem.ensureWordLookupFallback(renderer, kPanelHeaderFont, 12);
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
-      fcm->prewarmCache(kPanelHeaderFont, visibleHeadword(), 1 << EpdFontFamily::BOLD);
+      renderer.prewarmText(kPanelHeaderFont, visibleHeadword(), 1 << EpdFontFamily::BOLD);
     }
   }
 

@@ -244,18 +244,51 @@ void EpubReaderActivity::saveBookPrefs(const ReaderPrefs& prefs) const {
   f.write(reinterpret_cast<const uint8_t*>(&prefs), sizeof(prefs));
 }
 
-void EpubReaderActivity::onEnter() {
-  Activity::onEnter();
+bool EpubReaderActivity::loadBook() {
+  if (ESP.getMaxAllocHeap() < 64 * 1024) {
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      LOG_INF("READER", "Low heap before book load (maxAlloc=%u); releasing font memory", ESP.getMaxAllocHeap());
+      fcm->releaseAllFontMemory();
+      LOG_INF("READER", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
+    }
+  }
 
+  epub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
+  if (!epub) {
+    LOG_ERR("READER", "Failed to allocate EPUB object");
+    return false;
+  }
+
+  const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
+  if (uncached) {
+    disableFastInitialRefresh();
+    GUI.drawPopup(renderer, tr(STR_INDEXING));
+  }
+
+  bool loaded;
+  {
+    std::optional<GfxRenderer::FrameBufferLoan> loan;
+    if (uncached) loan.emplace(renderer);
+    loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
+  }
+  if (loaded) return true;
+
+  if (!epub->getAccessError().empty()) {
+    LOG_ERR("READER", "book unavailable: %s", epub->getAccessError().c_str());
+    renderer.clearScreen();
+    GUI.drawPopup(renderer, tr(STR_BOOK_NOT_READABLE));
+    delay(2500);
+  } else {
+    LOG_ERR("READER", "Failed to load epub");
+  }
+  epub.reset();
+  return false;
+}
+
+void EpubReaderActivity::onReaderEnter() {
   // Some entry screens open on Confirm press, others on release. Swallow only
   // a release that is still pending; otherwise the first real reader click vanished.
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-  readingSessionStartMs = millis();
-
-  if (!epub) {
-    return;
-  }
-
   ImageBlock::clearSessionRenderFailures();
   // Lazy image extraction: section builds only header-probe images, so the first
   // render of an image page pulls the file out of the EPUB through this hook.
@@ -337,33 +370,13 @@ void EpubReaderActivity::onEnter() {
   // Latin books must not pay its SD load / RAM (user-reported).
   sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
 
-  // Save current epub as last opened epub and add to recent books
-  APP_STATE.openEpubPath = epub->getPath();
-  APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
-  // One session per opening of the book. onEnter runs once per open -- the reader survives its
-  // own menus (startActivityForResult), so this does not fire again mid-chapter.
-  BookStats::recordOpen(epub->getPath().c_str());
-
   loadCachedBookmarks();
-
-  // Trigger first update
-  requestUpdate();
 }
 
-void EpubReaderActivity::onExit() {
-  Activity::onExit();
-
-  // Record the sub-interval tail of the session; whole minutes were already flushed
-  // periodically from loop() (see ReaderUtils::flushReadingStats).
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, epub ? epub->getPath().c_str() : nullptr,
-                                 epub ? epub->getLanguage().c_str() : nullptr);
+void EpubReaderActivity::onReaderExit() {
   // The extractor holds a raw pointer to this activity's epub; drop it before
   // the activity (and the shared_ptr) goes away.
   ImageBlock::setExtractor(nullptr, nullptr);
-
-  // Reset orientation back to portrait for the rest of the UI
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   // Record book completion if exiting at end-of-book (only once per book).
   const bool atEnd = currentSpineIndex > 0 && epub && currentSpineIndex >= epub->getSpineItemsCount();
@@ -372,9 +385,6 @@ void EpubReaderActivity::onExit() {
     READING_STATS_STORE.markBookFinished(epub->getPath());
     READING_STATS_STORE.saveToFile();
   }
-
-  APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
 
   // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist the
   // pre-footnote position so the book reopens at the link origin, not the footnote.
@@ -479,13 +489,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen) {
                          [this](const ActivityResult&) { requestUpdate(); });
 }
 
-void EpubReaderActivity::loop() {
-  if (!epub) {
-    // Should never happen
-    finish();
-    return;
-  }
-
+void EpubReaderActivity::readerLoop() {
   // Cancel any in-flight background image warm the moment the user touches a button -- BEFORE
   // any handler below can request a render, push a subactivity, or pop this activity (push/pop
   // block on the RenderLock the warm's render() call is still holding; the warm polls this
@@ -495,10 +499,6 @@ void EpubReaderActivity::loop() {
     pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   }
 
-  // Crash-proof stats: flush whole minutes every few minutes so an exit path that
-  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, epub ? epub->getPath().c_str() : nullptr,
-                                 epub ? epub->getLanguage().c_str() : nullptr);
   // A horizontal image is shown immediately in BW; refine it only after the reader
   // leaves the page idle. The render lock keeps this behind the foreground render,
   // and any input above cancels the pending refinement before it can be queued.
@@ -623,13 +623,7 @@ void EpubReaderActivity::loop() {
   // finished. Two independent finished-book features key off this same condition.
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
 
-  // Paged back into the book: drop the end screen's suggestion menu (its app +
-  // theme tokens, ~2KB) so long sessions read with the smaller footprint.
-  if (!atEndOfBook && endOfBookOptionsReady.load(std::memory_order_acquire)) {
-    RenderLock lock(*this);
-    endOfBookOptionsReady.store(false, std::memory_order_release);
-    endOfBookOptions.reset();
-  }
+  clearEndOfBookOptionsIfNeeded();
 
   // Drop this book from the Recent Books list; if the reader then pages back into the book,
   // re-add it. So removal only sticks if the reader leaves while still on the End-of-Book
@@ -700,29 +694,8 @@ void EpubReaderActivity::loop() {
   // through to the regular handlers below; page turns are absorbed by the end-of-book
   // block. A Confirm release after a long-press function (bookmark/sync) fired is left
   // to the regular Confirm handler below, which consumes it via ignoreNextConfirmRelease.
-  if (atEndOfBook && endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions->menuActive() &&
-      !(ignoreNextConfirmRelease && mappedInput.wasReleased(MappedInputManager::Button::Confirm))) {
-    std::string openPath;
-    switch (endOfBookOptions->handleMenuInput(mappedInput, &openPath)) {
-      case EndOfBookOptions::Action::OpenBook:
-        activityManager.goToReader(openPath);
-        return;
-      case EndOfBookOptions::Action::GoHome:
-        onGoHome();
-        return;
-      case EndOfBookOptions::Action::LastPage:
-        currentSpineIndex = std::max(epub->getSpineItemsCount() - 1, 0);
-        nextPageNumber = 0;
-        pendingPageJump = std::numeric_limits<uint16_t>::max();
-        requestUpdate();
-        return;
-      case EndOfBookOptions::Action::Redraw:
-        requestUpdate();
-        return;
-      case EndOfBookOptions::Action::None:
-        break;
-    }
-  }
+  if (handleEndOfBookMenu(ignoreNextConfirmRelease && mappedInput.wasReleased(MappedInputManager::Button::Confirm)))
+    return;
 
   // Enter reader menu activity on short-press Confirm, the board's menu edge-swipe, or a
   // middle-third tap (see ReaderUtils::isTouchMenuGesture). A long-press
@@ -781,10 +754,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, epub ? epub->getPath().c_str() : "",
-                                        {this, [](void* ctx) { static_cast<EpubReaderActivity*>(ctx)->onGoHome(); }})) {
-    return;
-  }
+  if (handleBackNavigation()) return;
 
   // auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
 
@@ -841,22 +811,7 @@ void EpubReaderActivity::loop() {
 
   // At end of the book with no suggestion menu, forward button goes home and back
   // button returns to last page
-  if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
-    if (endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions->menuActive()) {
-      // Selection movement was handled above; absorb leftover page-turn triggers so
-      // e.g. "previous" at the top of the list doesn't jump back into the book
-      return;
-    }
-    if (nextTriggered) {
-      onGoHome();
-    } else {
-      currentSpineIndex = epub->getSpineItemsCount() - 1;
-      nextPageNumber = 0;
-      pendingPageJump = std::numeric_limits<uint16_t>::max();
-      requestUpdate();
-    }
-    return;
-  }
+  if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
 
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
   const bool longPress = !fromTilt && heldMs > ReaderUtils::SKIP_HOLD_MS;
@@ -1636,6 +1591,14 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   requestUpdate();
 }
 
+bool EpubReaderActivity::isAtEndOfBook() const { return epub && currentSpineIndex >= epub->getSpineItemsCount(); }
+
+void EpubReaderActivity::onReturnFromEndOfBook() {
+  currentSpineIndex = std::max(epub->getSpineItemsCount() - 1, 0);
+  nextPageNumber = 0;
+  pendingPageJump = std::numeric_limits<uint16_t>::max();
+}
+
 // TODO: Failure handling
 void EpubReaderActivity::render(RenderLock&& lock) {
   if (!epub) {
@@ -1670,24 +1633,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (currentSpineIndex == epub->getSpineItemsCount()) {
     // Save progress at spine=spineCount so the library shows 100%.
     saveProgress(currentSpineIndex, 0, 1, verticalOverride, furiganaOverride);
-    // Sole creation + load site: runs on the render task (serialized by
-    // RenderLock); the main task only reads the suggestions once the loaded
-    // flag is published. Created here so the app + theme tokens only exist
-    // while the end screen shows; on OOM the end screen renders empty.
-    if (!endOfBookOptions) {
-      endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
-      if (!endOfBookOptions) LOG_ERR("ERS", "OOM: EndOfBookOptions");
-      // Release-publish AFTER construction so the main task's acquire load
-      // can't observe a half-built object.
-      endOfBookOptionsReady.store(endOfBookOptions != nullptr, std::memory_order_release);
-    }
-    if (endOfBookOptions) endOfBookOptions->loadOnce(epub->getPath());
-    renderer.clearScreen();
-    if (endOfBookOptions) {
-      endOfBookOptions->loadOnce(epub->getPath());
-      endOfBookOptions->render(renderer, mappedInput);
-    }
-    renderer.displayBuffer();
+    renderEndOfBook("ERS");
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
     return;

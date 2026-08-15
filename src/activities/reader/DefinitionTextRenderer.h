@@ -36,6 +36,10 @@ void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword
 // low-allocation wrapper can keep ownership of scrolling and line measurement.
 void formatEntryBody(std::string& text, const std::string& omitLeading = {});
 
+// Prewarm each paragraph in the style and fallback font the shared wrapper will use.
+// This keeps the compressed font below its four page-buffer-slot limit.
+void prewarmStyledText(GfxRenderer& renderer, int fontId, const std::string& text);
+
 // Draw the reading at the selected lookup size and the grammar tags at a compact 75% scale.
 // Metadata participates in the same scroll offset as the definition; the return value is the
 // unscrolled first y-coordinate available for the definition body.

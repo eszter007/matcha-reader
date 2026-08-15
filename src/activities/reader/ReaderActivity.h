@@ -1,47 +1,59 @@
 #pragma once
+
+#include <atomic>
 #include <memory>
+#include <string>
 
+#include "EndOfBookOptions.h"
 #include "activities/Activity.h"
-#include "activities/home/FileBrowserActivity.h"
 
-class Epub;
-class Xtc;
-class Txt;
-namespace manga {
-class MangaBook;
-}
+class ReaderActivity : public Activity {
+ protected:
+  const std::string bookPath;
+  int pagesUntilFullRefresh;
+  bool forcedRefreshPending = false;
 
-class ReaderActivity final : public Activity {
-  std::string initialBookPath;
-  std::string currentBookPath;  // Track current book path for navigation
-  bool allowFastInitialRefresh;
-  // Also releases font caches before the heap-hungry Epub::load().
-  // Non-static (unlike the other loaders): draws the first-open indexing popup, which needs the renderer.
-  std::unique_ptr<Epub> loadEpub(const std::string& path);
-  static std::unique_ptr<Xtc> loadXtc(const std::string& path);
-  static std::unique_ptr<Txt> loadTxt(const std::string& path);
-  static std::unique_ptr<manga::MangaBook> loadManga(const std::string& path);
-  static bool isXtcFile(const std::string& path);
-  static bool isTxtFile(const std::string& path);
-  static bool isBmpFile(const std::string& path);
-  static bool isMangaFolder(const std::string& path);
+  std::unique_ptr<EndOfBookOptions> endOfBookOptions;
+  std::atomic<bool> endOfBookOptionsReady{false};
 
-  void goToLibrary(const std::string& fromBookPath = "");
-  void onGoToEpubReader(std::unique_ptr<Epub> epub);
-  void onGoToXtcReader(std::unique_ptr<Xtc> xtc);
-  void onGoToTxtReader(std::unique_ptr<Txt> txt);
-  void onGoToBmpViewer(const std::string& path);
-  void onGoToMangaReader(std::unique_ptr<manga::MangaBook> manga);
+  explicit ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
+                          std::string bookPath, bool allowFastInitialRefresh);
 
-  void onGoBack();
-  int initialRefreshCountdown() const;
+  virtual bool loadBook() = 0;
+  virtual bool hasBook() const = 0;
+  virtual std::string getBookTitle() const = 0;
+  virtual std::string getBookAuthor() const { return ""; }
+  virtual std::string getBookThumbBmpPath() const { return ""; }
+  virtual const char* getBookLanguage() const { return nullptr; }
+  virtual void onReaderEnter() = 0;
+  virtual void onReaderExit() = 0;
+  virtual void readerLoop() = 0;
+
+  virtual bool isAtEndOfBook() const { return false; }
+  virtual void onReturnFromEndOfBook() {}
+
+  void clearEndOfBookOptionsIfNeeded();
+  bool handleBackNavigation();
+  bool endOfBookMenuActive() const;
+  bool handleEndOfBookMenu(bool suppressConfirmRelease = false);
+  bool handleEndOfBookPageTurn(bool prevTriggered, bool nextTriggered);
+  bool renderEndOfBook(const char* logTag);
+  void disableFastInitialRefresh() { pagesUntilFullRefresh = 0; }
 
  public:
-  explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath,
-                          bool allowFastInitialRefresh)
-      : Activity("Reader", renderer, mappedInput),
-        initialBookPath(std::move(initialBookPath)),
-        allowFastInitialRefresh(allowFastInitialRefresh) {}
-  void onEnter() override;
-  bool isReaderActivity() const override { return true; }
+  ~ReaderActivity() override = default;
+
+  static std::unique_ptr<Activity> create(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string path,
+                                          bool allowFastInitialRefresh);
+
+  void onEnter() final;
+  void onExit() final;
+  void loop() final;
+
+  bool isReaderActivity() const final { return true; }
+  bool appliesNightMode() const final { return true; }
+  bool handleForcedRefresh() final;
+
+ private:
+  unsigned long readingSessionStartMs = 0;
 };

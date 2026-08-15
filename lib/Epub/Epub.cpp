@@ -16,6 +16,8 @@
 #include "Epub/parsers/TocNcxParser.h"
 
 namespace {
+// Increment when generated cover BMPs must be regenerated.
+constexpr char coverBmpVersion[] = "_v2";
 constexpr size_t COVER_WRITE_BUFFER_SIZE = 16 * 1024;
 
 class BufferedFilePrint final : public Print {
@@ -641,7 +643,7 @@ const std::string& Epub::getLanguage() const {
 }
 
 std::string Epub::getCoverBmpPath(bool cropped) const {
-  const auto coverFileName = std::string("cover") + (cropped ? "_crop" : "");
+  const auto coverFileName = std::string("cover") + coverBmpVersion + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
 }
 

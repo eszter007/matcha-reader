@@ -255,6 +255,18 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   return fontId;
 }
 
+void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text, const EpdFontFamily::Style style,
+                                         const bool metadataOnly) const {
+  const auto sdIt = sdCardFonts_.find(fontId);
+  if (sdIt == sdCardFonts_.end()) {
+    return;
+  }
+  // SUP/SUB bits don't select a distinct .cpfont style bitstream — mask to the
+  // base style. resolveStyleMask() inside prewarm folds absent styles.
+  const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(style) & 0x03));
+  sdIt->second->prewarm(text, styleMask, metadataOnly);
+}
+
 // Translate logical (x,y) coordinates to physical panel coordinates based on current orientation
 // This should always be inlined for better performance
 static inline void rotateCoordinates(const GfxRenderer::Orientation orientation, const int x, const int y, int* phyX,
@@ -654,6 +666,9 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   std::string visual;
   const char* renderedText = resolveVisualText(text, visual, baseDir);
 
+  // Redirected SD fallback: batch-load before either advance-based or bounds-based measurement.
+  if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
+
   if (fontIt->second.getFallback() || letterSpacing != 0) {
     return getTextAdvanceX(fontId, renderedText, style, letterSpacing);
   }
@@ -700,6 +715,12 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   if (fontCacheManager_ && fontCacheManager_->isScanning()) {
     fontCacheManager_->recordText(renderedText, resolvedFontId, style);
     return;
+  }
+
+  // Redirected to the SD fallback: batch-load the string's glyphs so the draw
+  // loop below doesn't fault them in one SD read at a time (#2725).
+  if (resolvedFontId != fontId) {
+    ensureSdGlyphsResident(resolvedFontId, renderedText, style, false);
   }
 
   const auto fontIt = fontMap.find(resolvedFontId);
@@ -1556,6 +1577,10 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
         drawPixel(screenX, screenY, false);
       } else if (renderMode == GRAYSCALE_LSB && val == 1) {
         drawPixel(screenX, screenY, false);
+      } else if (renderMode == FACTORY_GRAY_LSB && !(val & 1)) {
+        drawPixel(screenX, screenY, false);
+      } else if (renderMode == FACTORY_GRAY_MSB && val < 2) {
+        drawPixel(screenX, screenY, false);
       }
     }
   }
@@ -1616,6 +1641,8 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
 
   const int screenW = getScreenWidth();
   const int screenH = getScreenHeight();
+  // Factory grayscale inverts the pixel values.
+  const bool full = !(renderMode == FACTORY_GRAY_LSB || renderMode == FACTORY_GRAY_MSB);
 
   for (int bmpY = 0; bmpY < srcH; bmpY++) {
     // Read rows sequentially using readNextRow
@@ -1682,7 +1709,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
       // draw it. This preserves thin manga lines during downscale instead of
       // letting white pixels overwrite them via nearest-neighbor.
       if (val < 3) {
-        drawPixel(screenX, screenY, true);
+        drawPixel(screenX, screenY, full);
       }
     }
   }
@@ -1898,8 +1925,15 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
     LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", millis() - start_ms);
     frameTimed = false;
   }
-  panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
-  display.displayBuffer(refreshMode, fadingFix);
+  // After a factory LUT render, RED RAM still contains the grayscale MSB plane.
+  // Promote the first normal FAST refresh to HALF so both RAM banks are rebased
+  // before differential updates resume.
+  const bool afterFactoryLut = displayState == DisplayState::FactoryLut;
+  const auto effectiveRefreshMode =
+      afterFactoryLut && refreshMode == HalDisplay::FAST_REFRESH ? HalDisplay::HALF_REFRESH : refreshMode;
+  panelResidue_ = effectiveRefreshMode == HalDisplay::FAST_REFRESH;
+  display.displayBuffer(effectiveRefreshMode, fadingFix);
+  displayState = DisplayState::BW;
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
@@ -2459,6 +2493,11 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
 
   // Route CJK-bearing strings to the fallback font (see resolveTextFontId).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  // Redirected to the SD fallback: batch-load the string's glyphs so the draw
+  // loop below doesn't fault them in one SD read at a time (#2725).
+  if (resolvedFontId != fontId) {
+    ensureSdGlyphsResident(resolvedFontId, text, style, false);
+  }
   const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", resolvedFontId);
@@ -2767,9 +2806,14 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
-void GfxRenderer::displayGrayBuffer() const {
+void GfxRenderer::displayGrayBuffer(const unsigned char* lut, const bool factoryMode) const {
   panelResidue_ = true;  // gray plane drive: charge a HALF alone cannot scrub
-  display.displayGrayBuffer(fadingFix);
+  display.displayGrayBuffer(fadingFix, lut, factoryMode);
+  if (factoryMode) {
+    displayState = DisplayState::FactoryLut;
+  } else {
+    displayState = DisplayState::BW;
+  }
 }
 
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {

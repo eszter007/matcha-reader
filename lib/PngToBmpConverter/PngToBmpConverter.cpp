@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "BitmapHelpers.h"
 
@@ -636,13 +637,43 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   FloydSteinbergDitherer* fsDitherer = nullptr;
   Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
 
+#if FREEINK_DRIVER_SSD1677
+  constexpr bool useOriginalThresholds = true;
+#else
+  constexpr bool useOriginalThresholds = false;
+#endif
+
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
+    atkinson1BitDitherer = new (std::nothrow) Atkinson1BitDitherer(outWidth);
+    if (!atkinson1BitDitherer || !atkinson1BitDitherer->valid()) {
+      LOG_ERR("PNG", "OOM: Atkinson1BitDitherer");
+      delete atkinson1BitDitherer;
+      free(rowBuffer);
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+      return false;
+    }
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(outWidth, useOriginalThresholds);
+      if (!atkinsonDitherer || !atkinsonDitherer->valid()) {
+        LOG_ERR("PNG", "OOM: AtkinsonDitherer");
+        delete atkinsonDitherer;
+        free(rowBuffer);
+        free(ctx.currentRow);
+        free(ctx.previousRow);
+        return false;
+      }
     } else if (USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(outWidth);
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(outWidth, useOriginalThresholds);
+      if (!fsDitherer || !fsDitherer->valid()) {
+        LOG_ERR("PNG", "OOM: FloydSteinbergDitherer");
+        delete fsDitherer;
+        free(rowBuffer);
+        free(ctx.currentRow);
+        free(ctx.previousRow);
+        return false;
+      }
     }
   }
 
