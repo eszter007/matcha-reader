@@ -58,13 +58,14 @@ std::vector<std::string> NextBookFinder::findNextBooks(const std::string& curren
     if (!SETTINGS.showHiddenFiles && nameBuffer[0] == '.') {
       continue;
     }
-    std::string name{nameBuffer.get()};
+    const std::string_view nameView{nameBuffer.get()};
     if (file.isDirectory()) {
-      const std::string fullPath = folder == "/" ? "/" + name : folder + "/" + name;
+      const std::string fullPath = folder == "/" ? "/" + std::string{nameView} : folder + "/" + std::string{nameView};
       if (!manga::MangaBook::isMangaFolder(fullPath)) continue;
-    } else if (!isSupportedBookFile(name)) {
+    } else if (!isSupportedBookFile(nameView)) {
       continue;
     }
+    std::string name{nameView};
     // Keep only files ordering strictly after the current one; equal names (the book
     // itself, or a case-variant of it) compare "not less" both ways and drop out here.
     if (!FsHelpers::naturalLess(currentName, name)) {

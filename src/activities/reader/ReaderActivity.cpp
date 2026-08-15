@@ -93,7 +93,8 @@ void ReaderActivity::loop() {
 
 void ReaderActivity::clearEndOfBookOptionsIfNeeded() {
   if (isAtEndOfBook() || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
-  RenderLock lock(*this);
+  RenderLock lock{RenderLock::Try{}};
+  if (!lock.held()) return;
   endOfBookOptionsReady.store(false, std::memory_order_release);
   endOfBookOptions.reset();
 }

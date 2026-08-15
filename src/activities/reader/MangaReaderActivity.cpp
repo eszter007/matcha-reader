@@ -424,7 +424,8 @@ bool MangaReaderActivity::isAtEndOfBook() const { return book && currentPage >= 
 
 void MangaReaderActivity::clearEndOfBookOptionsIfNeeded() {
   if (isAtEndOfBook() || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
-  RenderLock lock(*this);
+  RenderLock lock{RenderLock::Try{}};
+  if (!lock.held()) return;
   endOfBookOptionsReady.store(false, std::memory_order_release);
   endOfBookOptions.reset();
 }
@@ -485,6 +486,9 @@ bool MangaReaderActivity::renderEndOfBook() {
   if (endOfBookOptions) {
     endOfBookOptions->loadOnce(book->getFolder());
     endOfBookOptions->render(renderer, mappedInput);
+  } else {
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
+                              EpdFontFamily::BOLD);
   }
   renderer.displayBuffer();
   return true;
