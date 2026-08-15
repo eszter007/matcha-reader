@@ -17,6 +17,17 @@
 
 namespace {
 
+// Family names are compared case- and separator-insensitively: the same face reaches us as
+// "NotoSansJP", "notosans-jp" or "Noto Sans JP" depending on who wrote the directory.
+std::string normalizedFamilyKey(const std::string& familyName) {
+  std::string key;
+  key.reserve(familyName.size());
+  for (const char c : familyName) {
+    if (std::isalnum(static_cast<unsigned char>(c))) key.push_back(static_cast<char>(std::tolower(c)));
+  }
+  return key;
+}
+
 // Point the reader font size at a size the given family actually ships, and
 // persist the change so the settings UI and the loaded font never disagree.
 // Guarded by the value-change check: a no-op snap must not write SPIFFS.
@@ -102,11 +113,9 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
   // Latin books in the JP face. Revert it to the matching built-in and let
   // ensureJpFallback() bring the extension back as the companion where needed.
   if (SETTINGS.sdFontFamilyName[0] != '\0' && isBuiltinJpExtension(SETTINGS.sdFontFamilyName)) {
-    std::string norm;
-    for (const char* c = SETTINGS.sdFontFamilyName; *c; ++c) {
-      if (std::isalnum(static_cast<unsigned char>(*c))) norm.push_back(static_cast<char>(std::tolower(*c)));
-    }
-    SETTINGS.fontFamily = norm == "notoserifjp" ? CrossPointSettings::NOTOSERIF : CrossPointSettings::NOTOSANS;
+    SETTINGS.fontFamily = normalizedFamilyKey(SETTINGS.sdFontFamilyName) == "notoserifjp"
+                              ? CrossPointSettings::NOTOSERIF
+                              : CrossPointSettings::NOTOSANS;
     LOG_INF("SDFS", "Reverting hidden JP extension selection '%s' to built-in", SETTINGS.sdFontFamilyName);
     SETTINGS.sdFontFamilyName[0] = '\0';
   }
@@ -249,12 +258,8 @@ int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*
 }
 
 bool SdCardFontSystem::isBuiltinJpExtension(const std::string& familyName) {
-  std::string norm;
-  norm.reserve(familyName.size());
-  for (const char c : familyName) {
-    if (std::isalnum(static_cast<unsigned char>(c))) norm.push_back(static_cast<char>(std::tolower(c)));
-  }
-  return norm == "notosansjp" || norm == "notoserifjp";
+  const std::string key = normalizedFamilyKey(familyName);
+  return key == "notosansjp" || key == "notoserifjp";
 }
 
 bool SdCardFontSystem::loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name,
@@ -295,11 +300,7 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
   // built-in Noto face with its matching JP extension, then try the other extension.
   const bool preferSans = selected.empty() && SETTINGS.fontFamily == CrossPointSettings::NOTOSANS;
   auto extensionRank = [preferSans](const std::string& name) {
-    std::string norm;
-    for (const char c : name) {
-      if (std::isalnum(static_cast<unsigned char>(c))) norm.push_back(static_cast<char>(std::tolower(c)));
-    }
-    return norm == (preferSans ? "notosansjp" : "notoserifjp") ? 0 : 1;
+    return normalizedFamilyKey(name) == (preferSans ? "notosansjp" : "notoserifjp") ? 0 : 1;
   };
   std::vector<const SdCardFontFamilyInfo*> candidates;
   for (const auto& fam : registry_.getFamilies()) {
