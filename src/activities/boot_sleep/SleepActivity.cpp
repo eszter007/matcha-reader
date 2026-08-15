@@ -25,10 +25,10 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "GrayLogo.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "images/Logo120.h"
 #include "images/MoonIcon.h"
 
 namespace {
@@ -628,17 +628,17 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
+  const int logoX = (pageWidth - GrayLogo::SIZE) / 2;
+  const int logoY = (pageHeight - GrayLogo::SIZE) / 2 - 24;
+  const bool inverted = SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT;
   renderer.clearScreen();
-  renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
+  GrayLogo::drawBase(renderer, logoX, logoY, inverted);
   renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
 
-  // Make sleep screen dark unless light is selected in settings
-  if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
-    renderer.invertScreen();
-  }
-
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  if (inverted) renderer.invertScreen();
+  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  GrayLogo::flushGrayPasses(renderer, logoX, logoY, inverted);
 }
 
 void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool preserveBackground) const {
