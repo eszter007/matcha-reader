@@ -654,28 +654,32 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
     const int continuationIndent =
         isNote ? hangingIndent + renderer.getTextWidthScaled(fontId, "→ ", paragraphScale, EpdFontFamily::REGULAR)
                : hangingIndent;
-    const auto availableWidth = [&](const bool firstLine) {
-      const int indent =
-          isNote ? (firstLine ? hangingIndent : continuationIndent) : (firstLine ? 0 : continuationIndent);
-      return std::max(1, maxWidth - indent);
+    // An example is indented on every line, its first included: the marker is stripped before
+    // measuring, so there is no leading prefix to stand in for the indent the way "1. " does on a
+    // numbered sense.
+    const auto lineIndent = [&](const bool firstLine) {
+      return (isNote || isExample) ? (firstLine ? hangingIndent : continuationIndent)
+                                   : (firstLine ? 0 : continuationIndent);
     };
-    const int exampleRuleX = isExample ? textX + renderer.getTextWidthScaled(fontId, "1. ", paragraphScale) : 0;
+    const auto availableWidth = [&](const bool firstLine) { return std::max(1, maxWidth - lineIndent(firstLine)); };
+    const int exampleRuleX =
+        isExample ? textX + renderer.getTextWidthScaled(fontId, "1. ", paragraphScale, EpdFontFamily::REGULAR) : 0;
     static constexpr char kExamplePrefix[] = "  │ ";
     const auto drawWrappedLine = [&](const char* line, const bool firstLine, const int y) {
-      int lineX =
-          textX + (isNote ? (firstLine ? hangingIndent : continuationIndent) : (firstLine ? 0 : continuationIndent));
-      const char* visibleLine = line;
-      if (isExample && firstLine && std::strncmp(line, kExamplePrefix, sizeof(kExamplePrefix) - 1) == 0) {
-        // The marker identifies example paragraphs for layout; draw only the text and the one
-        // continuous rule below it. Rendering the UTF-8 `│` as well produced a double divider.
-        visibleLine += sizeof(kExamplePrefix) - 1;
-        lineX = textX + hangingIndent;
-      }
-      renderer.drawTextScaled(fontId, lineX, y, visibleLine, paragraphScale, paragraphBlack, paragraphStyle);
+      renderer.drawTextScaled(fontId, textX + lineIndent(firstLine), y, line, paragraphScale, paragraphBlack,
+                              paragraphStyle);
       if (isExample) renderer.drawLine(exampleRuleX, y, exampleRuleX, y + lineHeight - 1, 1, paragraphBlack);
     };
     bool firstParagraphLine = true;
     size_t remStart = contentStart;
+    // The marker only tags the paragraph as an example; the rule is drawn separately, and
+    // rendering the UTF-8 `│` as well produced a double divider. Dropping it here rather than at
+    // draw time keeps the wrapped width and the drawn width the same string -- measuring it would
+    // otherwise price the line by whichever fallback font happened to resolve `│`.
+    if (isExample && contentStart + sizeof(kExamplePrefix) - 1 <= paraEnd &&
+        text.compare(contentStart, sizeof(kExamplePrefix) - 1, kExamplePrefix) == 0) {
+      remStart += sizeof(kExamplePrefix) - 1;
+    }
     const size_t remEndFixed = paraEnd;
     nlPos = nextNl == std::string::npos ? text.size() + 1 : nextNl + 1;
 
@@ -736,11 +740,9 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
           }
           break;
         }
-        const size_t unbreakablePrefix = !firstParagraphLine ? 0
-                                         : isExample         ? sizeof(kExamplePrefix) - 1
-                                         : alphaLabel        ? 2
-                                         : indented          ? 3
-                                                             : 0;
+        // Labels that are still part of the text must not be split off it. An example's marker
+        // was dropped from `remStart`, so its first line starts at real text and needs no guard.
+        const size_t unbreakablePrefix = !firstParagraphLine ? 0 : alphaLabel ? 2 : indented ? 3 : 0;
         if (text[pos] == ' ' && pos >= remStart + unbreakablePrefix) {
           lastSpaceBreak = lineBuf.size();
         }
