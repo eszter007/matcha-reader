@@ -1,8 +1,10 @@
 #include "CalibreConnectActivity.h"
 
 #include <ESPmDNS.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Memory.h>
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
@@ -80,7 +82,26 @@ void CalibreConnectActivity::startWebServer() {
     LOG_DBG("CAL", "mDNS started: http://%s.local/", HOSTNAME);
   }
 
-  webServer.reset(new CrossPointWebServer());
+  // Heap-critical allocation: SD-font caches retained for the CJK UI fallback
+  // are rebuildable — release them (again: the WiFi selection screen may have
+  // repopulated them rendering a CJK SSID) so the server object doesn't abort
+  // on OOM. See CrossPointWebServerActivity::startWebServer().
+  {
+    RenderLock lock;
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      LOG_DBG("CAL", "Free heap before font cache release: %d bytes", ESP.getFreeHeap());
+      fcm->releaseAllFontMemory();
+      LOG_DBG("CAL", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
+    }
+  }
+
+  webServer = makeUniqueNoThrow<CrossPointWebServer>();
+  if (!webServer) {
+    LOG_ERR("CAL", "Not enough memory to start Calibre server");
+    state = CalibreConnectState::ERROR;
+    requestUpdate();
+    return;
+  }
   webServer->begin();
 
   if (webServer->isRunning()) {
