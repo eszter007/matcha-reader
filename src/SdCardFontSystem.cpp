@@ -24,7 +24,10 @@ std::string normalizedFamilyKey(const std::string& familyName) {
   std::string key;
   key.reserve(familyName.size());
   for (const char c : familyName) {
-    if (std::isalnum(static_cast<unsigned char>(c))) key.push_back(static_cast<char>(std::tolower(c)));
+    // Both <cctype> calls take the unsigned value: char is signed on this target, and passing a
+    // negative one is undefined. UTF-8 continuation bytes reach here for any non-ASCII name.
+    const auto byte = static_cast<unsigned char>(c);
+    if (std::isalnum(byte)) key.push_back(static_cast<char>(std::tolower(byte)));
   }
   return key;
 }
