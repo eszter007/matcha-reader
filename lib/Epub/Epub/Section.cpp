@@ -164,7 +164,11 @@ namespace {
 // v76: upstream merge (their v37): FootnoteEntry::href grew from 96 to 256 bytes for long
 //      calibre paths, so every cached footnote record shifts by 160 bytes and a v75 file
 //      mis-parses under v76 framing.
-constexpr uint8_t SECTION_FILE_VERSION = 76;
+// v77: upstream merge (their v38): Focus Reading line breaking changed — a visible hyphen/dash inside a word is now a
+//      break opportunity, and hyphenation of a focus-split word considers the whole word
+//      instead of only its regular-weight suffix. Pages cached by older versions were laid
+//      out with the previous, more restrictive break set and no longer match.
+constexpr uint8_t SECTION_FILE_VERSION = 77;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

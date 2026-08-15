@@ -258,8 +258,6 @@ void DictionaryWordSelectActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
-
   // The power click looks the highlighted word up rather than leaving, matching the vertical
   // panel: while a word is selected the button means "show me this", and it only closes the
   // dictionary from the definition itself. Two clicks still leave without the hand moving.
@@ -275,7 +273,7 @@ void DictionaryWordSelectActivity::loop() {
     finish();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmPressSeen && !words.empty()) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !words.empty()) {
     performLookup();
     return;
   }

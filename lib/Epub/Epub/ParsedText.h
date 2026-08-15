@@ -25,9 +25,14 @@ class ParsedText {
   // each, they never approach the contiguous-block ceiling.
   std::deque<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
-  std::vector<bool> wordContinues;      // true = word attaches to previous with no break
-  std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
-  std::vector<bool> wordIsFocusSuffix;  // true = token is the regular tail of a focus bold-prefix split
+  // Boundary flags use all four combinations:
+  //   false,false: ordinary gap; false,true: stretchable zero-width CJK gap;
+  //   true,false: unbreakable attachment; true,true: breakable, non-stretching attachment.
+  std::vector<bool> wordContinues;
+  std::vector<bool> wordNoSpaceBefore;
+  // Bytes [0, wordFocusBoundary) render bold; 0 means no Focus Reading emphasis.
+  // Keeping the original word as one token lets hyphenation consider the whole word.
+  std::vector<uint8_t> wordFocusBoundary;
   // Per-word font id from an inline font-size (span); 0 = the block's font. Lazily
   // materialized like rubyTexts: empty means "no word in this block has one", so the
   // common case (no sized spans) pays nothing. Once non-empty it is kept in lockstep
@@ -57,7 +62,7 @@ class ParsedText {
   std::vector<uint16_t> reorderedWidthsScratch;
   std::vector<bool> reorderedContinuesScratch;
   std::vector<bool> reorderedNoSpaceBeforeScratch;
-  std::vector<bool> reorderedFocusSuffixScratch;
+  std::vector<uint8_t> reorderedFocusBoundaryScratch;
   std::vector<uint16_t> visualOrderScratch;
 
   uint32_t visibleOffsetBaseAt(size_t wordIndex) const;
