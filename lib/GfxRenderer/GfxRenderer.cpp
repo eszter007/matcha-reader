@@ -1577,10 +1577,6 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
         drawPixel(screenX, screenY, false);
       } else if (renderMode == GRAYSCALE_LSB && val == 1) {
         drawPixel(screenX, screenY, false);
-      } else if (renderMode == FACTORY_GRAY_LSB && !(val & 1)) {
-        drawPixel(screenX, screenY, false);
-      } else if (renderMode == FACTORY_GRAY_MSB && val < 2) {
-        drawPixel(screenX, screenY, false);
       }
     }
   }
@@ -1641,8 +1637,6 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
 
   const int screenW = getScreenWidth();
   const int screenH = getScreenHeight();
-  // Factory grayscale inverts the pixel values.
-  const bool full = !(renderMode == FACTORY_GRAY_LSB || renderMode == FACTORY_GRAY_MSB);
 
   for (int bmpY = 0; bmpY < srcH; bmpY++) {
     // Read rows sequentially using readNextRow
@@ -1709,7 +1703,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
       // draw it. This preserves thin manga lines during downscale instead of
       // letting white pixels overwrite them via nearest-neighbor.
       if (val < 3) {
-        drawPixel(screenX, screenY, full);
+        drawPixel(screenX, screenY, true);
       }
     }
   }
@@ -1925,15 +1919,8 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
     LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", millis() - start_ms);
     frameTimed = false;
   }
-  // After a factory LUT render, RED RAM still contains the grayscale MSB plane.
-  // Promote the first normal FAST refresh to HALF so both RAM banks are rebased
-  // before differential updates resume.
-  const bool afterFactoryLut = displayState == DisplayState::FactoryLut;
-  const auto effectiveRefreshMode =
-      afterFactoryLut && refreshMode == HalDisplay::FAST_REFRESH ? HalDisplay::HALF_REFRESH : refreshMode;
-  panelResidue_ = effectiveRefreshMode == HalDisplay::FAST_REFRESH;
-  display.displayBuffer(effectiveRefreshMode, fadingFix);
-  displayState = DisplayState::BW;
+  panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
+  display.displayBuffer(refreshMode, fadingFix);
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
@@ -2806,14 +2793,9 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
-void GfxRenderer::displayGrayBuffer(const unsigned char* lut, const bool factoryMode) const {
+void GfxRenderer::displayGrayBuffer() const {
   panelResidue_ = true;  // gray plane drive: charge a HALF alone cannot scrub
-  display.displayGrayBuffer(fadingFix, lut, factoryMode);
-  if (factoryMode) {
-    displayState = DisplayState::FactoryLut;
-  } else {
-    displayState = DisplayState::BW;
-  }
+  display.displayGrayBuffer(fadingFix);
 }
 
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
