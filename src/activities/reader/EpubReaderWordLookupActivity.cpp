@@ -12,14 +12,17 @@
 #include <WordLookup.h>
 
 #include <algorithm>
+#include <cassert>
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "Epub/Page.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -784,6 +787,17 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   hasResult = false;
   resultHeadword.clear();
   resultDefinition.clear();
+  resultReading.clear();
+  resultGrammar.clear();
+  resultSource = nullptr;
+  resultDictionaryLabel.clear();
+  sectionText.clear();
+  sectionLabel.clear();
+  sectionReading.clear();
+  sectionGrammar.clear();
+  sectionKind.clear();
+  sectionHead.clear();
+  currentSection = 0;
   resultMatchLen = 0;
   scrollOffset = 0;
   totalLines = 9999;
@@ -858,6 +872,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       hasResult = true;
       resultHeadword = digitPrefix + text.substr(0, nb);
       resultDefinition = tr(STR_LOOKUP_NAME);  // no dictionary entry -- label it as a name
+      resultSource = "JMnedict";
       resultMatchLen = static_cast<int>(nameRun);
       // Names are the glossary's prime case: the book's own furigana is often the ONLY
       // source for a name's reading.
@@ -874,6 +889,14 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     hasResult = true;
     resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
+    DefinitionText::EntryMetadata metadata;
+    DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
+    resultReading = std::move(metadata.reading);
+    resultGrammar = std::move(metadata.grammar);
+    resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
+                   : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
+                                                                        : "JMdict";
+    resultDictionaryLabel = std::move(metadata.source);
     prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;
     size_t pos = 0;
@@ -921,6 +944,12 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
+          DefinitionText::EntryMetadata grammarMetadata;
+          DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
+          resultReading = std::move(grammarMetadata.reading);
+          resultGrammar = std::move(grammarMetadata.grammar);
+          resultDictionaryLabel = std::move(grammarMetadata.source);
+          resultSource = "Grammar";
         }
       }
     }
@@ -1011,6 +1040,11 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     }
   }
 
+  splitDefinitionIntoSections();
+  if (sectionText.empty())
+    DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
+                                                          ? resultHeadword
+                                                          : std::string());
   requestUpdate();
 }
 
@@ -1093,25 +1127,259 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   const auto scrollUpButton =
       sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
                            : MappedInputManager::Button::Up;
-  buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveCursor(1); });
-  buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveCursor(-1); });
-  buttonNavigator.onPressAndContinuous(scrollDownButton, [this] {
+  if (pagedDefinition()) {
+    // Tategaki reached this view from the page itself, with the word already chosen, so these
+    // buttons walk the entry's sources instead of jumping to another word.
+    buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveSection(1); });
+    buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveSection(-1); });
+  } else {
+    buttonNavigator.onPressAndContinuous(nextEntryButton, [this] { moveCursor(1); });
+    buttonNavigator.onPressAndContinuous(previousEntryButton, [this] { moveCursor(-1); });
+  }
+  // Paged mode moves a whole screenful per press; free scrolling keeps its 5-line nudge.
+  const int step = pagedDefinition() ? std::max(1, visibleCapacity) : 5;
+  buttonNavigator.onPressAndContinuous(scrollDownButton, [this, step] {
     if (hasResult && scrollOffset < maxScroll) {
-      scrollOffset = std::min(maxScroll, scrollOffset + 5);
+      scrollOffset = std::min(maxScroll, scrollOffset + step);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous(scrollUpButton, [this] {
+  buttonNavigator.onPressAndContinuous(scrollUpButton, [this, step] {
     if (scrollOffset > 0) {
-      scrollOffset = std::max(0, scrollOffset - 5);
+      scrollOffset = std::max(0, scrollOffset - step);
       requestUpdate();
     }
   });
   return true;
 }
 
-void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
-  auto metrics = UITheme::getInstance().getMetrics();
+void EpubReaderWordLookupActivity::moveSection(const int delta) {
+  const int count = static_cast<int>(sectionText.size());
+  if (count <= 1) return;
+  const int next = currentSection + delta;
+  if (next < 0 || next >= count) return;  // ends are hard stops: the entry is a list, not a ring
+  currentSection = next;
+  scrollOffset = 0;  // a new source starts at its top
+  requestUpdate();
+}
+
+// Split the merged definition into one piece per source. DictIndex joins the entries it merges
+// with "\n\n---\n", and the grammar entry is appended under its own "— Grammar: … —" heading;
+// each piece ends with the attribution line its converter wrote ("JMdict | Tatoeba"), which is
+// lifted out of the body and shown in the panel footer instead. Tategaki only -- horizontal and
+// manga keep the single scrolling blob, where Left/Right move the word cursor.
+void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
+  sectionText.clear();
+  sectionLabel.clear();
+  sectionReading.clear();
+  sectionGrammar.clear();
+  sectionKind.clear();
+  sectionHead.clear();
+  currentSection = 0;
+  if (!pagedDefinition() || resultDefinition.empty()) return;
+
+  static constexpr char kEntrySep[] = "\n\n---\n";
+  static constexpr char kGrammarSep[] = "\n\n— Grammar: ";
+
+  // Upper bound on the pieces: one per separator, plus the first. Duplicates are dropped later,
+  // so this over-reserves slightly rather than letting six vectors realloc in lockstep.
+  size_t pieceCount = 1;
+  for (size_t at = resultDefinition.find(kEntrySep); at != std::string::npos;
+       at = resultDefinition.find(kEntrySep, at + sizeof(kEntrySep) - 1)) {
+    pieceCount++;
+  }
+  for (size_t at = resultDefinition.find(kGrammarSep); at != std::string::npos;
+       at = resultDefinition.find(kGrammarSep, at + sizeof(kGrammarSep) - 1)) {
+    pieceCount++;
+  }
+  sectionText.reserve(pieceCount);
+  sectionLabel.reserve(pieceCount);
+  sectionReading.reserve(pieceCount);
+  sectionGrammar.reserve(pieceCount);
+  sectionKind.reserve(pieceCount);
+  sectionHead.reserve(pieceCount);
+
+  const auto coveredBy = [](const std::string& subset, const std::string& superset) {
+    size_t lineStart = 0;
+    while (lineStart <= subset.size()) {
+      const size_t lineEnd = subset.find('\n', lineStart);
+      const size_t length = lineEnd == std::string::npos ? subset.size() - lineStart : lineEnd - lineStart;
+      if (length > 0) {
+        size_t found = superset.find(subset.data() + lineStart, 0, length);
+        while (found != std::string::npos && ((found > 0 && superset[found - 1] != '\n') ||
+                                              (found + length < superset.size() && superset[found + length] != '\n'))) {
+          found = superset.find(subset.data() + lineStart, found + 1, length);
+        }
+        if (found == std::string::npos) return false;
+      }
+      if (lineEnd == std::string::npos) break;
+      lineStart = lineEnd + 1;
+    }
+    return true;
+  };
+#ifndef NDEBUG
+  assert(coveredBy("1. alpha", "1. alpha\n2. beta"));
+  assert(!coveredBy("1. alpha\n3. gamma", "1. alpha\n2. beta"));
+#endif
+
+  // Vocab until the grammar separator is crossed; a name lookup has no separators at all, so its
+  // single piece takes the kind the lookup itself resolved.
+  StrId kind = resultSource != nullptr && strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
+                                                                                : StrId::STR_DICT_KIND_VOCAB;
+  std::string grammarHead;  // the pattern named by the grammar heading, once it is seen
+  // Cut at whichever separator comes first, repeatedly.
+  size_t pos = 0;
+  while (pos <= resultDefinition.size()) {
+    const size_t entryAt = resultDefinition.find(kEntrySep, pos);
+    const size_t grammarAt = resultDefinition.find(kGrammarSep, pos);
+    const size_t cut = std::min(entryAt, grammarAt);
+    const size_t end = cut == std::string::npos ? resultDefinition.size() : cut;
+    std::string piece = resultDefinition.substr(pos, end - pos);
+
+    // The grammar entry opens with its own "— Grammar: <pattern> —" heading. That pattern is
+    // what the page is about, so it becomes the panel's headword and leaves the body.
+    std::string head;
+    static constexpr char kGrammarHead[] = "\xe2\x80\x94 Grammar: ";
+    if (piece.compare(0, sizeof(kGrammarHead) - 1, kGrammarHead) == 0) {
+      const size_t lineEnd = piece.find('\n');
+      const size_t headEnd = lineEnd == std::string::npos ? piece.size() : lineEnd;
+      head = piece.substr(sizeof(kGrammarHead) - 1, headEnd - (sizeof(kGrammarHead) - 1));
+      // Trim the closing em dash and the space before it.
+      const size_t dash = head.rfind("\xe2\x80\x94");
+      if (dash != std::string::npos) head.erase(dash);
+      const size_t tailSpace = head.find_last_not_of(" \t");
+      head.erase(tailSpace == std::string::npos ? 0 : tailSpace + 1);
+      piece.erase(0, lineEnd == std::string::npos ? piece.size() : lineEnd + 1);
+      grammarHead = head;
+    } else if (kind == StrId::STR_DICT_KIND_GRAMMAR) {
+      // The heading is written once, but the grammar index can return several entries for that
+      // one pattern, separated like any others. They are all about the pattern, so they keep its
+      // name in the header rather than falling back to the surface word that was looked up.
+      head = grammarHead;
+    }
+
+    // The attribution is the last non-empty line; it names the source, so it belongs in the
+    // footer rather than dangling under the text.
+    std::string label;
+    size_t tail = piece.find_last_not_of("\n \t");
+    if (tail != std::string::npos) {
+      const size_t lineStart = piece.find_last_of('\n', tail);
+      const size_t from = lineStart == std::string::npos ? 0 : lineStart + 1;
+      const std::string lastLine = piece.substr(from, tail - from + 1);
+      if (lastLine.find("JMdict") != std::string::npos || lastLine.find("JMnedict") != std::string::npos ||
+          lastLine.find("Tatoeba") != std::string::npos) {
+        label = lastLine;
+        piece.erase(from);
+      }
+    }
+    // Trim the blank lines the cut leaves behind so a page never opens on empty space.
+    const size_t last = piece.find_last_not_of("\n \t");
+    piece.erase(last == std::string::npos ? 0 : last + 1);
+    if (!piece.empty()) {
+      DefinitionText::EntryMetadata metadata;
+      DefinitionText::extractEntryMetadata(piece, head.empty() ? resultHeadword : head, metadata);
+      if (!metadata.source.empty()) label = std::move(metadata.source);
+      if (sectionText.empty()) {
+        if (metadata.reading.empty()) metadata.reading = resultReading;
+        if (metadata.grammar.empty()) metadata.grammar = resultGrammar;
+      }
+      DefinitionText::formatEntryBody(piece, kind == StrId::STR_DICT_KIND_GRAMMAR ? head : std::string());
+
+      bool duplicate = false;
+      size_t replaceAt = sectionText.size();
+      for (size_t i = 0; i < sectionText.size(); i++) {
+        if (sectionText[i] == piece ||
+            (kind == StrId::STR_DICT_KIND_NAME && sectionKind[i] == kind && coveredBy(piece, sectionText[i]))) {
+          duplicate = true;
+          break;
+        }
+        if (kind == StrId::STR_DICT_KIND_NAME && sectionKind[i] == kind && coveredBy(sectionText[i], piece)) {
+          replaceAt = i;
+          break;
+        }
+      }
+
+      if (replaceAt < sectionText.size()) {
+        if (label.empty()) label = std::move(sectionLabel[replaceAt]);
+        if (metadata.reading.empty()) metadata.reading = std::move(sectionReading[replaceAt]);
+        if (metadata.grammar.empty()) metadata.grammar = std::move(sectionGrammar[replaceAt]);
+        if (head.empty()) head = std::move(sectionHead[replaceAt]);
+        sectionText[replaceAt] = std::move(piece);
+        sectionLabel[replaceAt] = std::move(label);
+        sectionReading[replaceAt] = std::move(metadata.reading);
+        sectionGrammar[replaceAt] = std::move(metadata.grammar);
+        sectionKind[replaceAt] = kind;
+        sectionHead[replaceAt] = std::move(head);
+      } else if (!duplicate) {
+        sectionText.push_back(std::move(piece));
+        sectionLabel.push_back(std::move(label));
+        sectionReading.push_back(std::move(metadata.reading));
+        sectionGrammar.push_back(std::move(metadata.grammar));
+        sectionKind.push_back(kind);
+        sectionHead.push_back(std::move(head));
+      }
+    }
+
+    if (cut == std::string::npos) break;
+    if (cut == grammarAt) {
+      kind = StrId::STR_DICT_KIND_GRAMMAR;  // everything from here on is the grammar entry
+      // Keep the "— Grammar: <headword> —" heading with the grammar text it introduces.
+      pos = cut + 2;  // step over the blank line, not the heading
+      const size_t headingEnd = resultDefinition.find('\n', pos);
+      if (headingEnd == std::string::npos) break;
+    } else {
+      pos = cut + sizeof(kEntrySep) - 1;
+    }
+  }
+  // Free the merged copy: the pieces own the text now.
+  if (!sectionText.empty()) {
+    resultDefinition.clear();
+    resultDefinition.shrink_to_fit();
+  }
+}
+
+const std::string& EpubReaderWordLookupActivity::visibleDefinition() const {
+  if (!sectionText.empty() && currentSection < static_cast<int>(sectionText.size())) {
+    return sectionText[currentSection];
+  }
+  return resultDefinition;
+}
+
+const char* EpubReaderWordLookupActivity::visibleHeadword() const {
+  if (!sectionHead.empty() && currentSection < static_cast<int>(sectionHead.size()) &&
+      !sectionHead[currentSection].empty()) {
+    return sectionHead[currentSection].c_str();
+  }
+  return resultHeadword.c_str();
+}
+
+const char* EpubReaderWordLookupActivity::visibleKind() const {
+  if (sectionKind.empty() || currentSection >= static_cast<int>(sectionKind.size())) return nullptr;
+  return I18N.get(sectionKind[currentSection]);
+}
+
+const char* EpubReaderWordLookupActivity::visibleReading() const {
+  if (!sectionReading.empty() && currentSection < static_cast<int>(sectionReading.size()))
+    return sectionReading[currentSection].c_str();
+  return resultReading.c_str();
+}
+
+const char* EpubReaderWordLookupActivity::visibleGrammar() const {
+  if (!sectionGrammar.empty() && currentSection < static_cast<int>(sectionGrammar.size()))
+    return sectionGrammar[currentSection].c_str();
+  return resultGrammar.c_str();
+}
+
+const char* EpubReaderWordLookupActivity::visibleLabel() const {
+  if (!sectionLabel.empty() && currentSection < static_cast<int>(sectionLabel.size()) &&
+      !sectionLabel[currentSection].empty()) {
+    return sectionLabel[currentSection].c_str();
+  }
+  if (!resultDictionaryLabel.empty()) return resultDictionaryLabel.c_str();
+  return resultSource;
+}
+
+void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
   // Built-in font on purpose, NOT SETTINGS.getReaderFontId(): the lookup panel's definitions
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
@@ -1131,6 +1399,8 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
       fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      renderer.prewarmText(defFont, visibleReading(), 1 << EpdFontFamily::REGULAR);
+      renderer.prewarmText(defFont, visibleGrammar(), 1 << EpdFontFamily::REGULAR);
       // Prewarm only the ON-SCREEN slice of the definition, in ONE call. A merged 5-entry
       // definition can run to thousands of bytes, but only ~13 lines show; warming the whole
       // thing was the ~1s-per-step navigation cost (renders serialize on the RenderLock, so a
@@ -1139,15 +1409,14 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
       // since its visible window is further in. ONE call, not per-line: the decompressor reuses
       // its 4 page-buffer slots within a call but not across calls.
       constexpr size_t kVisiblePrewarmBytes = 1024;
-      if (scrollOffset == 0 && resultDefinition.size() > kVisiblePrewarmBytes) {
+      const std::string& shown = visibleDefinition();
+      if (scrollOffset == 0 && shown.size() > kVisiblePrewarmBytes) {
         size_t cut = kVisiblePrewarmBytes;  // back up to a UTF-8 lead byte so the last char is whole
-        while (cut > 0 && (static_cast<unsigned char>(resultDefinition[cut]) & 0xC0) == 0x80) cut--;
-        const char saved = resultDefinition[cut];
-        resultDefinition[cut] = '\0';  // safe: render task holds the lock, sole accessor here
-        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
-        resultDefinition[cut] = saved;
+        while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) cut--;
+        std::string head = shown.substr(0, cut);
+        renderer.prewarmText(defFont, head.c_str(), (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
       } else {
-        renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+        renderer.prewarmText(defFont, shown.c_str(), (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
       }
     }
   }
@@ -1156,36 +1425,30 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& screen, int con
     // "No match found" is only the truth once nothing is still in flight; during fast
     // navigation or while the progressive scan is still mapping the page, show Loading.
     const bool stillWorking = lookupInFlight || !scan.isDone();
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2,
+    UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2,
                               stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
   } else {
-    const int maxWidth = screen.width - metrics.contentSidePadding * 2;
-    const int textX = screen.x + metrics.contentSidePadding;
-
-    int defY;
-
-    if (scrollOffset == 0) {
-      // Headword at the top (position counter is now in the header).
-      renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
-      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
-    } else {
-      // When scrolled, show a compact header line with the headword + scroll mark.
-      std::string scrollInfo = resultHeadword;
-      renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
-      defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
-    }
-
+    DefinitionText::EntryMetadata metadata{visibleReading(), visibleGrammar()};
     const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-    // screen.height already excludes the button-hints band, so its bottom edge
-    // is the top of the buttons; stay a hair above it.
-    const int maxDefY = screen.y + screen.height - 2;
-    const int firstDefY = defY;
-    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                  maxDefY, scrollOffset, defScale);
+    const int metadataLines = DefinitionText::entryMetadataLineCount(metadata);
+    const int definitionScroll = std::max(0, scrollOffset - metadataLines);
+    Rect definitionBody = body;
+    const int metadataEndY =
+        DefinitionText::drawEntryMetadata(renderer, body, defFont, defScale, metadata, scrollOffset, defLineH);
+    definitionBody.y = metadataEndY - std::min(scrollOffset, metadataLines) * defLineH;
+    definitionBody.height = std::max(0, body.y + body.height - definitionBody.y);
 
-    totalLines = wrap.totalLines;
+    const int maxWidth = definitionBody.width;
+    const int textX = definitionBody.x;
+    const int defY = definitionBody.y;
+
+    const int maxDefY = definitionBody.y + definitionBody.height;
+    const auto wrap = DefinitionText::drawWrapped(renderer, defFont, visibleDefinition(), textX, defY, defLineH,
+                                                  maxWidth, maxDefY, definitionScroll, defScale);
+
+    totalLines = metadataLines + wrap.totalLines;
     // Leave at least a screenful visible: max scroll = total - capacity
-    const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
+    visibleCapacity = std::max(1, body.height / defLineH);
     maxScroll = std::max(0, totalLines - visibleCapacity);
   }
 }
@@ -1196,54 +1459,54 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     return;
   }
 
-  auto& theme = UITheme::getInstance();
-  auto metrics = theme.getMetrics();
-  Rect screen = theme.getScreenSafeArea(renderer, true, false);
-
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-
-  // Position counter (35/50) shown right-aligned on the header baseline.
-  std::string posText;
+  // Counter, right-aligned on the headword line. Paged mode counts pages of the definition;
+  // free-scrolling mode keeps the word position within the page (35/50), whose total is
+  // unknown until the progressive scan finishes -- an ellipsis stands in meanwhile.
+  std::string counterText;
   if (hasResult && !scan.selectableGlyphs.empty()) {
-    // Total is unknown until the progressive scan finishes; show an ellipsis meanwhile.
-    posText = std::to_string(cursorIndex + 1) + "/" +
-              (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+    if (pagedDefinition()) {
+      // Which source you are on, not which word on the page -- the word count belongs to the
+      // selection view, and 1/834 says nothing about the entry you are reading.
+      if (sectionText.size() > 1) {
+        counterText = std::to_string(currentSection + 1) + "/" + std::to_string(sectionText.size());
+      }
+    } else {
+      counterText = std::to_string(cursorIndex + 1) + "/" +
+                    (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+    }
   }
-  const Rect headerRect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight};
+
+  if (hasResult) {
+    // DictionaryPanel paints its fixed 12pt bold header before the body renderer runs. Warm that
+    // exact face first; otherwise the first CJK lookup can resolve through the fallback after the
+    // panel is already on screen, and only the next navigation appears in the right typeface.
+    constexpr int kPanelHeaderFont = NOTOSERIF_12_FONT_ID;
+    sdFontSystem.ensureWordLookupFallback(renderer, kPanelHeaderFont, 12);
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+      fcm->prewarmCache(kPanelHeaderFont, visibleHeadword(), 1 << EpdFontFamily::BOLD);
+    }
+  }
+
+  // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
+  // previous one; the reader's page stays visible around it instead of being cleared away.
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? visibleHeadword() : "", visibleLabel(),
+                                            counterText.empty() ? nullptr : counterText.c_str(), visibleKind());
+  renderContentArea(layout.body);
+
+  const bool sideButtonsForLookup =
+      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
+                            sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
+  DictionaryPanel::clearButtonHints(renderer);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (!initialRenderDone) {
-    renderer.clearScreen();
-
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-
-    renderContentArea(screen, contentTop);
-
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
     renderer.displayBuffer();
     initialRenderDone = true;
     fastRefreshCount = 0;
   } else {
-    // Clear from content top all the way to the physical bottom (including the
-    // button-hint band margins, which screen.height excludes), then redraw hints.
-    const int physBottom = renderer.getScreenHeight();
-    renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
-    // Redraw the header so the position counter updates (drawHeader clears it).
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels2 =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels2.btn1, labels2.btn2, labels2.btn3, labels2.btn4);
-
-    renderContentArea(screen, contentTop);
-
     fastRefreshCount++;
     if (fastRefreshCount >= kFullRefreshInterval) {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);

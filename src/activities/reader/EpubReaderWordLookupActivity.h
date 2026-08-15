@@ -2,6 +2,7 @@
 
 #include <Epub/VerticalParsedText.h>
 #include <GfxRenderer.h>
+#include <I18n.h>
 #include <freertos/FreeRTOS.h>
 
 struct Rect;
@@ -178,15 +179,58 @@ class EpubReaderWordLookupActivity final : public Activity {
   int cursorIndex = 0;
 
   bool hasResult = false;
+  // Which dictionary the shown entry came from, for the panel footer. A literal, not a tr()
+  // string: these are the dictionaries' own names, the same way the English panel shows the
+  // .ifo's bookname. Null until a lookup lands.
+  const char* resultSource = nullptr;
+  std::string resultDictionaryLabel;
+  const char* dictionaryLabel() const {
+    return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();
+  }
   std::string resultHeadword;
   std::string resultDefinition;
+  std::string resultReading;
+  std::string resultGrammar;
   int resultMatchLen = 0;
   bool hasGrammar = false;
   std::string grammarHeadword;
   std::string grammarDefinition;
-  int scrollOffset = 0;  // lines scrolled within current entry
-  int totalLines = 0;    // total lines in current definition
-  int maxScroll = 0;     // max scroll offset (leaves a screenful visible)
+  // Tategaki shows ONE source per page: the merged definition is split at the separators the
+  // dictionaries put between entries, each piece keeping the attribution line it ended with as
+  // its footer label. Left/Right walk these; the word cursor does not move from the definition
+  // view here, which is what horizontal and manga use those buttons for.
+  std::vector<std::string> sectionText;
+  std::vector<std::string> sectionLabel;
+  std::vector<std::string> sectionReading;
+  std::vector<std::string> sectionGrammar;
+  // Which Japanese index answered each piece: several can answer one lookup, so the panel names
+  // it. StrId rather than a string: these are UI words, not the dictionaries' own titles.
+  std::vector<StrId> sectionKind;
+  // Headword to show for a piece when it is not the word that was looked up: the grammar index
+  // answers with a pattern of its own (なんて for a lookup of なんて言う), and naming it in the
+  // panel header is clearer than repeating the surface word above an entry about the pattern.
+  std::vector<std::string> sectionHead;
+  int currentSection = 0;
+  void splitDefinitionIntoSections();
+  void moveSection(int delta);
+  // Text and footer label for what is on screen: the current section in tategaki, the whole
+  // merged definition otherwise.
+  const std::string& visibleDefinition() const;
+  const char* visibleLabel() const;
+  const char* visibleKind() const;
+  const char* visibleHeadword() const;
+  const char* visibleReading() const;
+  const char* visibleGrammar() const;
+
+  int scrollOffset = 0;     // lines scrolled within current entry
+  int totalLines = 0;       // total lines in current definition
+  int maxScroll = 0;        // max scroll offset (leaves a screenful visible)
+  int visibleCapacity = 1;  // body lines that fit at once; the step size in paged mode
+
+  // Vertical (tategaki) reading pages the definition a screenful at a time and shows a page
+  // counter, instead of the free scrolling the horizontal and manga panels keep. scrollOffset
+  // is still the source of truth -- paging just quantizes it to whole screenfuls.
+  bool pagedDefinition() const { return selectCtx.valid(); }
 
   ButtonNavigator buttonNavigator;
 
@@ -223,5 +267,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   int fastRefreshCount = 0;
   static constexpr int kFullRefreshInterval = 10;
 
-  void renderContentArea(const Rect& screen, int contentTop);
+  // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
+  void renderContentArea(const Rect& body);
 };

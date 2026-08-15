@@ -33,6 +33,8 @@ Look up any word on the page, vertically or horizontally. Conjugations resolve t
 
 In vertical text, lookup opens on the page itself: the current word is highlighted where it stands, the side buttons step word by word down the column, Left and Right jump a column, and the definition opens only when you press Look Up. Back returns to the highlighted page, so several words on a page are a few presses apart. The cursor opens mid-page and the scan starts there too, so the half you are looking at is ready first; words it has not reached yet can still be selected, and the highlight moves as soon as the scan arrives. No button labels are drawn over the page — vertical text would be covered by them. Horizontal text opens straight into the definition view as before.
 
+The definition itself opens as a panel floating over the page you were reading: the word sits above a divider at the top, the entry fills the middle, and the dictionary it came from is named along the bottom. In vertical text and in English books the entry is paged a screenful at a time with a page counter in the top right; horizontal Japanese and manga scroll the entry freely and show your position among the page's words instead.
+
 Vocabulary, names and grammar each come from their own dictionary. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
 
 Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.

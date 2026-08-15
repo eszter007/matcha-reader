@@ -76,6 +76,7 @@ void normalizeIndexHeadword(char* word) {
 struct IfoFacts {
   bool offsets64 = false;        // idxoffsetbits=64 (unsupported)
   bool htmlDefinitions = false;  // sametypesequence=h (definitions are HTML)
+  std::string bookName;          // bookname=, shown in the definition panel's footer
 };
 
 IfoFacts readIfoFacts(const std::string& ifoPath) {
@@ -96,6 +97,14 @@ IfoFacts readIfoFacts(const std::string& ifoPath) {
     // entries keep the plain-text viewing path.
     facts.htmlDefinitions = eq[1] == 'h' && (eq[2] == '\0' || eq[2] == '\r' || eq[2] == '\n');
   }
+  // bookname= is the dictionary's own title; the folder name is the fallback at the call site.
+  line = strstr(buf, "bookname");
+  eq = line ? strchr(line, '=') : nullptr;
+  if (eq) {
+    const char* end = eq + 1;
+    while (*end != '\0' && *end != '\r' && *end != '\n') end++;
+    facts.bookName.assign(eq + 1, static_cast<size_t>(end - (eq + 1)));
+  }
   return facts;
 }
 
@@ -105,6 +114,7 @@ bool Dictionary::open(const char* folderName) {
   basePath.clear();
   hasSyn = false;
   htmlDefinitions = false;
+  bookName.clear();
   std::string resolved;
   if (!DictionaryRegistry::resolveBasePath(folderName, resolved)) {
     LOG_ERR("DICT", "No dictionary found in folder '%s'", folderName ? folderName : "");
@@ -133,6 +143,7 @@ bool Dictionary::open(const char* folderName) {
   }
   hasSyn = Storage.exists((resolved + ".syn").c_str());
   htmlDefinitions = ifo.htmlDefinitions;
+  bookName = ifo.bookName.empty() ? (folderName ? folderName : "") : ifo.bookName;
 
   basePath = std::move(resolved);
   return true;

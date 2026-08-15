@@ -1,6 +1,7 @@
 #include "DictHtmlPages.h"
 
 #include <Arduino.h>
+#include <Epub/css/CssParser.h>
 #include <Epub/parsers/ChapterHtmlSlimParser.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <functional>
 
 #include "CrossPointSettings.h"
 
@@ -102,12 +104,44 @@ bool isEntityRef(const std::string& html, const size_t pos, size_t* end) {
 // that are not part of markup. Structural damage this cannot repair
 // (mismatched tags, unquoted attribute values) surfaces as a parse error and
 // the caller falls back to the plain-text path.
+// True when everything between `pos` (just past a <li…> tag) and that item's </li> is a single
+// <div>…</div>. Only then is unwrapping that div safe: it is the item's whole content, so
+// removing the block cannot run the item's text together with a sibling.
+bool liContentIsSingleDiv(const std::string& html, const size_t pos) {
+  if (html.compare(pos, 5, "<div>") != 0) return false;
+  size_t depth = 1;
+  size_t k = pos + 5;
+  const size_t n = html.size();
+  while (k < n && depth > 0) {
+    if (html.compare(k, 5, "<div>") == 0) {
+      depth++;
+      k += 5;
+    } else if (html.compare(k, 6, "</div>") == 0) {
+      depth--;
+      k += 6;
+    } else {
+      k++;
+    }
+  }
+  return depth == 0 && html.compare(k, 5, "</li>") == 0;
+}
+
 bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   BufferedFileWriter out(file);
-  if (!out.append("<html><body>")) return false;
+  // text-indent:0 on the root: an unstyled block falls back to a first-line indent, which set the
+  // entry's text in from the panel's edge while the headword above it sat flush, so the two did
+  // not line up. Inherited by every block below (getCombinedBlockStyle passes it down).
+  if (!out.append("<html><body><div style=\"text-indent:0\">")) return false;
 
   const size_t n = html.size();
   size_t i = 0;
+  // Nesting state for the sense list. The outermost <ol> holds one sense per <li>; nested lists
+  // hold that sense's sub-glosses and must not be treated the same way.
+  int listDepth = 0;
+  int senseCount = 0;           // top-level items seen; the first shares the page with the header
+  bool glossOpen = false;       // a sense's bold gloss block is open
+  bool divUnwrapped = false;    // an item's sole <div> wrapper was dropped; drop its closer too
+  bool grammarPending = false;  // inside the part-of-speech block; a spacer follows its closer
   while (i < n) {
     const char c = html[i];
     if (c == '<' && i + 1 < n && (html[i + 1] == '!' || html[i + 1] == '?')) {
@@ -154,6 +188,102 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         i = j + 1;
         continue;
       }
+
+      // <font> is presentational and long dead in HTML, but StarDict dictionaries lean on it:
+      // FreeDict/WikDict marks pronunciation with <font color="gray"> and part-of-speech with
+      // <font class="grammar">. Translate both to a <span> the layout engine actually styles --
+      // pronunciation a size down, part-of-speech italic -- so an entry reads as an entry
+      // instead of one flat wall of body text.
+      if (nameLen == 4 && strncmp(nameBuf, "font", 4) == 0) {
+        if (closing) {
+          if (!out.append("</span>")) return false;
+        } else {
+          // Searched in place: a substr() here would heap-allocate once per <font> tag, and a
+          // definition carries one per pronunciation and one per part-of-speech.
+          const size_t grammarAt = html.find("grammar", nameEnd);
+          const bool isGrammar = grammarAt != std::string::npos && grammarAt < j;
+          if (!out.append(isGrammar ? "<span style=\"font-style:italic\">" : "<span style=\"font-size:0.75em\">")) {
+            return false;
+          }
+          if (isGrammar) grammarPending = true;
+        }
+        i = j + 1;
+        continue;
+      }
+
+      const bool isList = nameLen == 2 && (strncmp(nameBuf, "ol", 2) == 0 || strncmp(nameBuf, "ul", 2) == 0);
+      const bool isLi = nameLen == 2 && strncmp(nameBuf, "li", 2) == 0;
+      const bool isDiv = nameLen == 3 && strncmp(nameBuf, "div", 3) == 0;
+
+      // A sense's gloss runs until its first block child (the translations) or the end of the
+      // item, whichever comes first.
+      if (glossOpen && ((!closing && (isList || isDiv)) || (closing && isLi))) {
+        if (!out.append("</b></div>")) return false;
+        glossOpen = false;
+      }
+
+      // The outermost list holds one SENSE per item; the lists nested inside it hold that
+      // sense's translations. They are rendered differently, so they are rewritten differently:
+      // the outer list loses its markup entirely (a sense is titled by its gloss, not numbered),
+      // while nested lists stay real lists and keep their numbering.
+      if (isList) {
+        if (closing) {
+          const bool outermost = listDepth == 1;
+          listDepth = std::max(0, listDepth - 1);
+          if (outermost) {
+            if (!out.append("</div>")) return false;
+            i = j + 1;
+            continue;
+          }
+        } else {
+          listDepth++;
+          if (listDepth == 1) {
+            if (!out.append("<div>")) return false;
+            i = j + 1;
+            continue;
+          }
+          // A translation list follows its sense's gloss directly. Left to its own block
+          // margins it opened with a blank line under the gloss, which read as a separator
+          // between the two halves of one sense.
+          if (!out.append("<ol style=\"margin-top:0;margin-bottom:0\">")) return false;
+          i = j + 1;
+          continue;
+        }
+      }
+
+      if (isLi && listDepth == 1) {
+        if (closing) {
+          if (!out.append("</div>")) return false;  // closes the sense
+        } else {
+          // Every sense after the first starts its own page, so a lookup is read one definition
+          // at a time. The first stays with the pronunciation and part of speech above it.
+          // Every sense is wrapped identically -- a margin here applied to the first sense alone
+          // reached its gloss and reopened the gap under it that the second sense did not have.
+          // The blank line under the part of speech is a spacer block of its own instead.
+          if (!out.append(senseCount == 0 ? "<div>" : "<div style=\"page-break-before:always\">")) return false;
+          senseCount++;
+          // The item's own text is its gloss; bold it in its own block so the translations
+          // beneath start on a fresh line without a blank one between.
+          // margin-bottom:0 as well as the list's margin-top:0 above: BOTH sides of that boundary
+          // carry a default block margin, and zeroing only one still left a blank line between a
+          // sense's gloss and its own translations.
+          if (!out.append("<div style=\"margin-bottom:0\"><b>")) return false;
+          glossOpen = true;
+        }
+        i = j + 1;
+        continue;
+      }
+
+      // <li><div>text</div></li>: the block wrapper puts the item's text on the line BELOW its
+      // own number. Unwrapping is only safe when that div is the item's entire content -- when
+      // the item also carries a gloss ("instance or occurrence<div>Mal</div>"), removing the
+      // block runs the two together.
+      if (closing && isDiv && divUnwrapped && html.compare(j + 1, 5, "</li>") == 0) {
+        divUnwrapped = false;
+        i = j + 1;
+        continue;
+      }
+
       if (!out.append('<')) return false;
       if (closing && !out.append('/')) return false;
       if (!out.append(nameBuf, nameLen)) return false;
@@ -161,6 +291,17 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       if (!closing && isVoid && html[j - 1] != '/' && !out.append('/')) return false;
       if (!out.append('>')) return false;
       i = j + 1;
+      // Paired with the </div></li> case above: drop the wrapper when it is the whole item.
+      if (!closing && isLi && liContentIsSingleDiv(html, i)) {
+        i += 5;
+        divUnwrapped = true;
+      }
+      // The part of speech heads everything under it, so it gets a blank line. A block holding a
+      // no-break space, because an empty block and a <br/> between blocks both collapse away.
+      if (closing && isDiv && grammarPending) {
+        grammarPending = false;
+        if (!out.append("<div>&#160;</div>")) return false;
+      }
       continue;
     }
     if (c == '<') {  // stray '<' in text ("x < y")
@@ -183,13 +324,14 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
     i++;
   }
 
-  return out.append("</body></html>") && out.flush();
+  return out.append("</div></body></html>") && out.flush();
 }
 
 }  // namespace
 
 bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definition, const uint16_t viewportWidth,
-                              const uint16_t viewportHeight, std::vector<std::unique_ptr<Page>>& pagesOut) {
+                              const uint16_t viewportHeight, const int fontId,
+                              std::vector<std::unique_ptr<Page>>& pagesOut) {
   if (ESP.getFreeHeap() < MIN_STYLED_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
     LOG_ERR("DHTML", "Low heap for styled definition (%u free, %u max block)", ESP.getFreeHeap(),
             ESP.getMaxAllocHeap());
@@ -217,12 +359,19 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
   size_t retainedElements = 0;
   {
     const std::string tmpPath = TMP_HTML_PATH;  // the parser stores a reference
+    // A rule-less parser, present only so the element handlers parse style="" attributes at all:
+    // they are guarded on cssParser being non-null, and the dictionary's normalized XHTML carries
+    // its whole presentation inline (the sense page breaks, the italic part of speech, the
+    // smaller pronunciation). Without it every one of those was silently dropped.
+    const CssParser inlineStyleParser{""};
     // Heap-allocated as Section does — the parser object is far too large for
     // a stack local. Null epub is safe: imageRendering=2 suppresses <img>
     // handling, the only path that dereferences it.
     auto parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
-        nullptr, tmpPath, renderer, SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-        SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+        // No extra paragraph spacing: a dictionary entry is a dense list of senses, and the
+        // reader's paragraph gap (tuned for prose) pushed a three-line entry over two pages.
+        nullptr, tmpPath, renderer, fontId, SETTINGS.getReaderLineCompression(),
+        /*extraParagraphSpacing=*/0, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
         SETTINGS.hyphenationEnabled, SETTINGS.focusReadingEnabled,
         // Furigana is per-book reader state (EpubReaderActivity::useFurigana), not a global
         // setting: a dictionary definition is not the book, so it renders without ruby.
@@ -239,7 +388,8 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
           retainedElements += pageElements;
           pagesOut.push_back(std::move(page));
         },
-        /*embeddedStyle=*/false, /*contentBase=*/"", /*imageBasePath=*/"", /*imageRendering=*/2);
+        /*embeddedStyle=*/false, /*contentBase=*/"", /*imageBasePath=*/"", /*imageRendering=*/2,
+        /*tocAnchors=*/std::vector<std::string>{}, /*popupFn=*/nullptr, &inlineStyleParser);
     if (!parser) {
       LOG_ERR("DHTML", "OOM: ChapterHtmlSlimParser");
     } else {

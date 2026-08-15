@@ -160,7 +160,6 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
 }
 
 void DictionaryWordSelectActivity::performLookup() {
-  popup = Popup::Busy;
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
     dictOpenOk = dict.open(folderName.c_str());
@@ -169,9 +168,9 @@ void DictionaryWordSelectActivity::performLookup() {
     // the sidecar ourselves, which is handled below.
     dictNeedsIndex = dictOpenOk && dict.needsIndex();
   }
-  popupMsg = dictNeedsIndex ? StrId::STR_DICT_INDEXING : StrId::STR_DICT_LOOKING_UP;
-  requestUpdateAndWait();  // paint the page + busy popup before blocking on SD
-
+  // No busy popup: the lookup is fast enough that one only flashes, and the definition panel
+  // draws over the page without clearing it, so a popup painted here would survive underneath
+  // as debris. Failures still get their own popup below.
   {
     RenderLock lock;
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
@@ -192,10 +191,18 @@ void DictionaryWordSelectActivity::performLookup() {
 
   if (found) {
     popup = Popup::None;
-    startActivityForResult(
-        std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                       std::move(definition), dict.definitionsAreHtml()),
-        [this](const ActivityResult&) { requestUpdate(); });
+    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
+                               renderer, mappedInput, std::move(headword), std::move(definition),
+                               dict.definitionsAreHtml(), dict.getBookName()),
+                           [this](const ActivityResult& result) {
+                             // The definition view cancels when its power click asked to leave the dictionary
+                             // entirely, rather than step back to this selection.
+                             if (result.isCancelled) {
+                               finish();
+                               return;
+                             }
+                             requestUpdate();
+                           });
     return;
   }
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but
@@ -253,7 +260,18 @@ void DictionaryWordSelectActivity::loop() {
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
+  // The power click looks the highlighted word up rather than leaving, matching the vertical
+  // panel: while a word is selected the button means "show me this", and it only closes the
+  // dictionary from the definition itself. Two clicks still leave without the hand moving.
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    if (!words.empty()) {
+      performLookup();
+      return;
+    }
+    finish();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
   }

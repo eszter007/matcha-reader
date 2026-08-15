@@ -10,6 +10,8 @@
 
 #include "CrossPointSettings.h"
 #include "ReaderUtils.h"
+#include "SdCardFontSystem.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/DictHtmlPages.h"
@@ -21,9 +23,6 @@ namespace {
 // (far below this); only pathological unbreakable tokens are split at this cap.
 constexpr size_t MAX_LINE_BYTES = 191;
 
-// Body text left/right inset, matching the reader's default feel.
-constexpr int SIDE_PADDING = 20;
-
 // Styled-path ceiling: the laid-out Pages keep the whole definition resident
 // (TextBlock arenas ≈ text + ~7 bytes/word plus per-line objects), roughly
 // doubling the string's footprint while this activity is stacked over the
@@ -33,7 +32,41 @@ constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
 
 }  // namespace
 
+// Serif at the Word Lookup Font Size. The Japanese panels stay on the sans faces -- their text
+// is CJK, which the Latin serif does not carry -- so only this path is remapped. There is no 8pt
+// serif, so Tiny lands on the 12pt face.
+int DictionaryDefinitionActivity::definitionFontId() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return NOTOSERIF_14_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return NOTOSERIF_16_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+    default:
+      return NOTOSERIF_12_FONT_ID;
+  }
+}
+
+uint8_t DictionaryDefinitionActivity::definitionPointSize() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return 14;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return 16;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+    default:
+      return 12;
+  }
+}
+
+void DictionaryDefinitionActivity::ensureGlyphFallback() const {
+  sdFontSystem.ensureWordLookupFallback(renderer, definitionFontId(), definitionPointSize());
+}
+
 void DictionaryDefinitionActivity::onEnter() {
+  ensureGlyphFallback();
   Activity::onEnter();
   // Normalize StarDict multi-type separators so the wrap loop and the
   // C-string font APIs below both see the whole definition.
@@ -46,16 +79,8 @@ void DictionaryDefinitionActivity::onEnter() {
 }
 
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto orientation = renderer.getOrientation();
-  const bool isLandscape = orientation == GfxRenderer::Orientation::LandscapeClockwise ||
-                           orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = isLandscape ? metrics.sideButtonHintsWidth : 0;
-  const int topArea = (isInverted ? metrics.buttonHintsHeight : 0) + metrics.topPadding + metrics.headerHeight;
-  const int bottomArea = metrics.buttonHintsHeight + metrics.verticalSpacing;
-  return {renderer.getScreenWidth() - hintGutterWidth - 2 * SIDE_PADDING,
-          renderer.getScreenHeight() - topArea - bottomArea};
+  const auto body = DictionaryPanel::compute(renderer).body;
+  return {body.width, body.height};
 }
 
 // Styled path: lay the HTML definition out through the EPUB chapter parser
@@ -64,8 +89,15 @@ DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() 
 bool DictionaryDefinitionActivity::layoutHtmlPages() {
   const BodyArea body = bodyArea();
   if (body.width <= 0 || body.height <= 0) return false;
+  // Warm the advance table for this exact text BEFORE the parser measures it. Layout prices
+  // non-resident glyphs at 0 (it reads advance tables and resident glyphs only, never the
+  // on-demand SD loader), while drawing resolves them for real -- so an entry carrying glyphs
+  // outside the resident set, such as the IPA in a pronunciation, measured as almost nothing,
+  // never wrapped, and drew its characters on top of each other. REGULAR|BOLD|ITALIC: the
+  // normalizer emits all three.
+  renderer.ensureSdCardFontReady(definitionFontId(), definition.c_str(), 0x07);
   if (!buildDictionaryHtmlPages(renderer, definition, static_cast<uint16_t>(body.width),
-                                static_cast<uint16_t>(body.height), pages)) {
+                                static_cast<uint16_t>(body.height), definitionFontId(), pages)) {
     return false;
   }
   definition.clear();
@@ -91,7 +123,7 @@ void DictionaryDefinitionActivity::wrapText() {
   lines.clear();
   lines.reserve(definition.size() / 32 + 8);
 
-  const int fontId = SETTINGS.getReaderFontId();
+  const int fontId = definitionFontId();
   // SD-card fonts: merge every definition codepoint into the persistent
   // advance table up front. Otherwise each unseen codepoint measured below
   // falls back to an on-demand glyph load from SD (8-slot overflow ring).
@@ -192,10 +224,17 @@ void DictionaryDefinitionActivity::wrapText() {
 }
 
 void DictionaryDefinitionActivity::loop() {
-  // The power click steps back one screen, exactly like Back: from the definition to the word
-  // selection, and from there out to the page. Two clicks leave the dictionary entirely without
-  // the reading hand ever moving.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
+  // Back steps up to the word selection. The power click leaves the dictionary outright: from
+  // the selection it opened this view, so from here it closes the whole flow -- two clicks in
+  // and back out, without the reading hand moving.
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
   }
@@ -255,41 +294,27 @@ void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const
 }
 
 void DictionaryDefinitionActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto orientation = renderer.getOrientation();
-  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? metrics.sideButtonHintsWidth : 0;
-  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
-  const int contentWidth = renderer.getScreenWidth() - hintGutterWidth;
-  const int contentY = isInverted ? metrics.buttonHintsHeight : 0;
-
-  // Header: matched headword left, page counter right.
-  const int headerY = contentY + metrics.topPadding + 10;
-  renderer.drawText(UI_12_FONT_ID, contentX + SIDE_PADDING, headerY, headword.c_str(), true, EpdFontFamily::BOLD);
+  // No clearScreen: the panel floats over the page the word-select activity left in the
+  // framebuffer, and its own fill is opaque, so a re-render overwrites the previous one.
+  char counter[16] = "";
   if (totalPages > 1) {
-    char counter[16];
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
-    const int counterWidth = renderer.getTextWidth(UI_10_FONT_ID, counter);
-    renderer.drawText(UI_10_FONT_ID, contentX + contentWidth - SIDE_PADDING - counterWidth, headerY, counter);
   }
+  const auto layout = DictionaryPanel::draw(renderer, headword.c_str(), dictName.c_str(), counter);
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
   // of one on-demand overflow read per character on every page turn.
-  const int fontId = SETTINGS.getReaderFontId();
-  const int bodyStartY = contentY + metrics.topPadding + metrics.headerHeight;
+  const int fontId = definitionFontId();
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  drawBody(fontId, contentX + SIDE_PADDING, bodyStartY);  // scan pass: records codepoints only
+  drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only
   scope.endScanAndPrewarm();
-  drawBody(fontId, contentX + SIDE_PADDING, bodyStartY);
+  drawBody(fontId, layout.body.x, layout.body.y);
 
   const auto labels =
       mappedInput.mapLabels(tr(STR_BACK), "", (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
+  DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }
