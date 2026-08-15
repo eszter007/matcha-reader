@@ -66,7 +66,10 @@ class TextSettingsActivity final : public UiTabListActivity {
   void activateRow(int row);
 
   std::string layoutValueText(int row) const;
-  std::string styleValueText(int row) const;
+  // On/off rows draw a switch in place of their value. `checked` is only read when the row is
+  // one; `row` is the visible index, so Layout goes through layoutRowAt() like its value text.
+  bool layoutRowIsSwitch(int row, bool& checked) const;
+  bool styleRowIsSwitch(int row, bool& checked) const;
   // Button-hint label for Confirm at the current ring position.
   const char* confirmLabelText() const;
   // True when the focused list row is a setting the preview cannot reflect.

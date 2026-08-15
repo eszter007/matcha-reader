@@ -11,6 +11,7 @@
 #include "MappedInputManager.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 
 namespace fui = freeink::ui;
 
@@ -127,6 +128,7 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
   // rowValues_ strings (no array growth) rather than building a new
   // items/values vector on every render.
   for (int i = 0; i < MENU_ITEMS; i++) {
+    rowItems_[i].toggle = false;
     if (i == 0) {
       const auto username = KOREADER_STORE.getUsername();
       rowValues_[i] = username.empty() ? tr(STR_NOT_SET) : username;
@@ -147,7 +149,11 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
       rowValues_[i] =
           KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME ? tr(STR_FILENAME) : tr(STR_BINARY);
     } else if (i == 4) {
-      rowValues_[i] = KOREADER_STORE.getSendMetadata() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+      // The only on/off row here: Match Method and Sync Behavior are two-state as well, but
+      // their words are the meaning, so they keep them.
+      rowItems_[i].toggle = true;
+      rowItems_[i].toggleChecked = KOREADER_STORE.getSendMetadata();
+      rowValues_[i].clear();
     } else if (i == 5) {
       rowValues_[i] =
           KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART ? tr(STR_SMART_SYNC) : tr(STR_ASK_EVERY_TIME);
@@ -163,6 +169,7 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
+  applySwitchStyle(props);
   syncListViewport(screen, props);
   screen.list(props);
 }

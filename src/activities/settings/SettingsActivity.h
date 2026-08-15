@@ -228,6 +228,11 @@ class SettingsActivity final : public UiTabListActivity {
   bool handleCustomInput() override;
 
   static std::string settingValueText(const SettingInfo& setting);
+  // True when the row is an on/off setting, so it draws a switch instead of a value string.
+  // Covers both TOGGLE forms and the two-value {OFF, ON} enums, which already flip in place
+  // rather than opening the option popup.
+  static bool settingIsSwitch(const SettingInfo& setting);
+  static bool settingSwitchState(const SettingInfo& setting);
   void selectCategory(int categoryIndex);
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
 

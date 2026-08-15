@@ -194,6 +194,10 @@ Books cannot be removed from your device through Calibre. Use the web interface 
 
 The Settings screen allows you to configure the device's behavior. There are a few settings you can adjust:
 
+Settings that are simply on or off show a switch on the right of their row instead of the words "ON" and "OFF" —
+selecting the row flips it in place. Settings with more than two choices still show their current value as text and
+open a list when selected.
+
 #### 3.6.1 Display
 
 - **Sleep Screen**: Which sleep screen to display when the device sleeps:
@@ -699,7 +703,7 @@ up the dictionaries, fonts, and API key they need.
 Copy a Japanese EPUB to the SD card and open it from the Library. Vertical text activates on its own when the
 book declares `<dc:language>ja</dc:language>`, with no setting to find.
 
-The reader menu (**Confirm**) gains **Vertical Text: ON/OFF** and **Furigana: ON/OFF** for Japanese books. Both
+The reader menu (**Confirm**) gains **Vertical Text** and **Furigana** switches for Japanese books. Both
 toggle in place without leaving the menu, and both are remembered per book.
 
 <p align="center">

@@ -127,6 +127,19 @@ inline freeink::ui::BitmapRef listIconFor(const UIIcon icon, const int size = 24
   }
 }
 
+// Give a list's on/off rows (fui::ListItem::toggle) their house style. The SDK ships square
+// switches -- ListProps::toggleRadius/toggleKnobRadius default to 0 and Screen::list() has no
+// theme token to substitute -- so the pill shape has to be set per list, and every settings
+// screen sets it through here rather than repeating the numbers.
+//
+// The radii are deliberately larger than any switch we draw: fui::toggle clamps the track to
+// height/2 and the knob to its own height/2, so an over-large value is the way to say "fully
+// round" without restating the geometry here.
+inline void applySwitchStyle(freeink::ui::ListProps& props) {
+  props.toggleRadius = 0xFF;      // clamped to height/2 -> pill ends
+  props.toggleKnobRadius = 0xFF;  // clamped to knobHeight/2 -> circular knob
+}
+
 // Bottom-anchored Cancel / OK pair for slider dialogs on touch devices, where
 // the physical Back/Confirm buttons (and their auto-hidden hints) may not
 // exist. Callers gate on hasTouch(): button boards keep the hint chrome and

@@ -12,6 +12,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
@@ -203,6 +204,24 @@ void StatusBarSettingsActivity::handleSelection() {
   SETTINGS.saveToFile();
 }
 
+bool StatusBarSettingsActivity::rowIsSwitch(const int index, bool& checked) {
+  // The three element-visibility rows. ITEM_CLOCK_SYNC is deliberately not here: it reports
+  // whether a sync has happened rather than setting anything, so it keeps its words.
+  switch (index) {
+    case ITEM_CHAPTER_PAGE_COUNT:
+      checked = SETTINGS.statusBarChapterPageCount != 0;
+      return true;
+    case ITEM_BOOK_PROGRESS_PERCENTAGE:
+      checked = SETTINGS.statusBarBookProgressPercentage != 0;
+      return true;
+    case ITEM_BATTERY:
+      checked = SETTINGS.statusBarBattery != 0;
+      return true;
+    default:
+      return false;
+  }
+}
+
 std::string StatusBarSettingsActivity::rowValueText(const int index) {
   switch (index) {
     case ITEM_CHAPTER_PAGE_COUNT:
@@ -252,7 +271,14 @@ void StatusBarSettingsActivity::buildScreen(UiScreen& screen) {
   // rowValues_ strings (no array growth) rather than building a new
   // items/values vector on every render.
   for (int i = 0; i < visibleItemCount; i++) {
-    rowValues_[i] = rowValueText(i);
+    bool checked = false;
+    rowItems_[i].toggle = rowIsSwitch(i, checked);
+    if (rowItems_[i].toggle) {
+      rowItems_[i].toggleChecked = checked;
+      rowValues_[i].clear();
+    } else {
+      rowValues_[i] = rowValueText(i);
+    }
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
   }
 
@@ -262,6 +288,7 @@ void StatusBarSettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
+  applySwitchStyle(props);
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;  // also the explicitly-set marker, see SettingsActivity
   syncListViewport(screen, props);

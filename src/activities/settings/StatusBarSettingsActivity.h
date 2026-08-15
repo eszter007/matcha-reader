@@ -28,6 +28,9 @@ class StatusBarSettingsActivity final : public UiListActivity {
   bool handleCustomInput() override;
 
   std::string rowValueText(int index);
+  // True when the row is an element-visibility switch, so it draws one in place of its value.
+  // `checked` is only written when it is.
+  static bool rowIsSwitch(int index, bool& checked);
 
   void handleSelection();
 
