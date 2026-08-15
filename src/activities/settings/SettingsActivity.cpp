@@ -289,6 +289,26 @@ void SettingsActivity::stepTab(const int direction) {
   requestUpdate();
 }
 
+void SettingsActivity::navigateButtons() {
+  if (!finishOnBack) {
+    UiTabListActivity::navigateButtons();
+    return;
+  }
+
+  // Embedded Reader Settings hides and locks the tab bar, so navigate only
+  // the visible rows (ring positions 1..N) instead of landing on hidden 0.
+  const int count = listCount();
+  if (count <= 0) return;
+  buttonNavigator.onNextRelease([this, count] { moveRingTo(ButtonNavigator::nextIndex(ringPos() - 1, count) + 1); });
+  buttonNavigator.onPreviousRelease(
+      [this, count] { moveRingTo(ButtonNavigator::previousIndex(ringPos() - 1, count) + 1); });
+  buttonNavigator.onNextContinuous(
+      [this, count] { moveRingTo(ButtonNavigator::nextPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1); });
+  buttonNavigator.onPreviousContinuous([this, count] {
+    moveRingTo(ButtonNavigator::previousPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1);
+  });
+}
+
 bool SettingsActivity::handleButtons() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (ringPos() == 0) {

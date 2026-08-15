@@ -139,12 +139,11 @@ int ButtonNavigator::previousPageIndex(const int currentIndex, const int totalIt
     return previousIndex(currentIndex, totalItems);
   }
 
-  const int lastPageIndex = (totalItems - 1) / itemsPerPage;
   const int currentPageIndex = currentIndex / itemsPerPage;
 
   if (currentPageIndex > 0) {
     return (currentPageIndex - 1) * itemsPerPage;
   }
 
-  return lastPageIndex * itemsPerPage;
+  return totalItems - 1;
 }

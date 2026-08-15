@@ -224,6 +224,7 @@ class SettingsActivity final : public UiTabListActivity {
   void activateIndex(int index) override;
   void onTabAction(int index) override;
   void stepTab(int direction) override;
+  void navigateButtons() override;
   bool handleButtons() override;
   bool handleCustomInput() override;
 
