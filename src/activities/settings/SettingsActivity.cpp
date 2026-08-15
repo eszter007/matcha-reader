@@ -521,16 +521,24 @@ void SettingsActivity::openSleepTimeoutPicker() {
       });
 }
 
+bool SettingsActivity::settingIsSwitch(const SettingInfo& setting) {
+  if (setting.type == SettingType::TOGGLE) return setting.valuePtr != nullptr || setting.valueGetter != nullptr;
+  // A two-value {OFF, ON} enum is a switch wearing an enum's clothes: activateSetting() cycles
+  // it in place (only sizes above two reach the popup). Any other pair keeps its words -- the
+  // labels are the meaning there (FILENAME/BINARY), which a bare switch would throw away.
+  if (setting.type != SettingType::ENUM) return false;
+  if (setting.enumValues.size() != 2 || !setting.enumStringValues.empty()) return false;
+  return setting.enumValues[0] == StrId::STR_STATE_OFF && setting.enumValues[1] == StrId::STR_STATE_ON;
+}
+
+bool SettingsActivity::settingSwitchState(const SettingInfo& setting) {
+  if (setting.valuePtr != nullptr) return SETTINGS.*(setting.valuePtr) != 0;
+  if (setting.valueGetter) return setting.valueGetter() != 0;
+  return false;
+}
+
 std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
-  if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
-    return SETTINGS.*(setting.valuePtr) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-  }
-  // DynamicToggle (Vertical Text, Furigana): per-book state that lives on the pushing reader
-  // activity, not in CrossPointSettings, so it has a getter instead of a member pointer. Without
-  // this branch the row renders with no value at all -- the ENUM path below has the same pair.
-  if (setting.type == SettingType::TOGGLE && setting.valueGetter) {
-    return setting.valueGetter() != 0 ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-  }
+  // On/off rows draw a switch instead of a value; buildScreen() skips this for them.
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch below: a corrupt/migrated settings
     // byte must not index past the enum table.
@@ -580,6 +588,13 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // render.
   const auto& settings = *currentSettings;
   for (size_t i = 0; i < settings.size(); i++) {
+    rowItems_[i].toggle = settingIsSwitch(settings[i]);
+    if (rowItems_[i].toggle) {
+      rowItems_[i].toggleChecked = settingSwitchState(settings[i]);
+      rowValues_[i].clear();
+      rowItems_[i].value = nullptr;
+      continue;
+    }
     rowValues_[i] = settingValueText(settings[i]);
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
   }
@@ -590,6 +605,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
+  applySwitchStyle(props);
   // Titles match the value's font size (smallText) so both sides of a row
   // read as one unit; labels that still don't fit wrap onto a second line.
   // maxLines=2 also marks the style explicitly set (an all-default smallText
