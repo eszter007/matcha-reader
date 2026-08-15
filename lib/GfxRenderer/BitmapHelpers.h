@@ -25,9 +25,9 @@ void createBmpHeader(BmpHeader* bmpHeader, int width, int height, BmpRowOrder ro
 class Atkinson1BitDitherer {
  public:
   explicit Atkinson1BitDitherer(int width) : width(width) {
-    errorRow0 = new int16_t[width + 4]();  // Current row
-    errorRow1 = new int16_t[width + 4]();  // Next row
-    errorRow2 = new int16_t[width + 4]();  // Row after next
+    errorRow0 = new (std::nothrow) int16_t[width + 4]();  // Current row
+    errorRow1 = new (std::nothrow) int16_t[width + 4]();  // Next row
+    errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
   }
 
   ~Atkinson1BitDitherer() {
@@ -35,6 +35,8 @@ class Atkinson1BitDitherer {
     delete[] errorRow1;
     delete[] errorRow2;
   }
+
+  bool valid() const { return errorRow0 && errorRow1 && errorRow2; }
 
   // EXPLICITLY DELETE THE COPY CONSTRUCTOR
   Atkinson1BitDitherer(const Atkinson1BitDitherer& other) = delete;

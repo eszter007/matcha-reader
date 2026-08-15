@@ -254,7 +254,8 @@ bool endsWithBreakableHyphen(const std::string& token) {
   return !token.empty() && TokenBoundary::allowsBreakAfterExplicitHyphen(lastCodepoint(token));
 }
 
-constexpr size_t FOCUS_PREFIX_BUF_SIZE = 40;
+// wordFocusBoundary is uint8_t, so 256 bytes cover every representable prefix plus the NUL.
+constexpr size_t FOCUS_PREFIX_BUF_SIZE = 256;
 
 uint16_t measureFocusPrefixAdvance(const GfxRenderer& renderer, const int fontId, const std::string& word,
                                    const EpdFontFamily::Style style, const uint8_t focusBoundary,

@@ -74,6 +74,7 @@ class DictionaryWordSelectActivity final : public Activity {
   std::vector<WordBox> words;
   int selected = 0;
   uint16_t rowCount = 0;
+  bool confirmPressSeen = false;
 
   Dictionary dict;
   bool dictOpenAttempted = false;

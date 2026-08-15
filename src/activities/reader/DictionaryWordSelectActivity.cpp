@@ -273,7 +273,10 @@ void DictionaryWordSelectActivity::loop() {
     finish();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !words.empty()) {
+  // The reader can enter this activity while Confirm is still held after a long press. Ignore
+  // that stale release until a fresh press has happened here.
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmPressSeen && !words.empty()) {
     performLookup();
     return;
   }
