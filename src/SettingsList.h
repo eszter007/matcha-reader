@@ -34,6 +34,9 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
     for (const auto& f : families) {
       // Hidden everywhere the picker hides them -- see SdCardFontSystem::isBuiltinJpExtension.
       if (SdCardFontSystem::isBuiltinJpExtension(f.name)) continue;
+      // Likewise for a wider-coverage cut of a family already listed: the base row stands for
+      // both -- see SdCardFontSystem::isCoverageVariant.
+      if (SdCardFontSystem::isCoverageVariant(f.name, registry)) continue;
       enumStringValues.push_back(f.name);
     }
   }

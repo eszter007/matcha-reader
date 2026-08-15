@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <iterator>
 
 #include "CrossPointSettings.h"
@@ -16,6 +17,31 @@
 #include "fontIds.h"
 
 namespace {
+
+// Family names are compared case- and separator-insensitively: the same face reaches us as
+// "NotoSansJP", "notosans-jp" or "Noto Sans JP" depending on who wrote the directory.
+std::string normalizedFamilyKey(const std::string& familyName) {
+  std::string key;
+  key.reserve(familyName.size());
+  for (const char c : familyName) {
+    // Both <cctype> calls take the unsigned value: char is signed on this target, and passing a
+    // negative one is undefined. UTF-8 continuation bytes reach here for any non-ASCII name.
+    const auto byte = static_cast<unsigned char>(c);
+    if (std::isalnum(byte)) key.push_back(static_cast<char>(std::tolower(byte)));
+  }
+  return key;
+}
+
+// Suffixes marking a family as a wider-coverage cut of another one, ordered widest-first:
+// a base with both variants installed resolves to the earlier entry. "Extended" adds Greek,
+// Cyrillic and the phonetic block on top of a Latin face; "IPA" adds the phonetic block alone.
+constexpr const char* kCoverageVariantSuffixes[] = {"Extended", "IPA"};
+
+// Directory name of a built-in reader family, so a variant can name one as its base even
+// though the built-ins are compiled in rather than discovered on the card.
+const char* builtinFamilyDirName(const uint8_t fontFamily) {
+  return fontFamily == CrossPointSettings::NOTOSANS ? "NotoSans" : "NotoSerif";
+}
 
 // Point the reader font size at a size the given family actually ships, and
 // persist the change so the settings UI and the loaded font never disagree.
@@ -55,23 +81,9 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   };
   SETTINGS.sdFontResolverCtx = this;
 
-  // If user has a saved SD font selection, load it
-  if (SETTINGS.sdFontFamilyName[0] != '\0') {
-    const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
-    if (family) {
-      if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {
-        snapFontPointSizeTo(manager_.currentPointSize());
-        setupUiFallbacks(renderer);
-        LOG_DBG("SDFS", "Loaded SD card font family: %s", SETTINGS.sdFontFamilyName);
-      } else {
-        LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", SETTINGS.sdFontFamilyName);
-        SETTINGS.clearSdFontFamily();
-      }
-    } else {
-      LOG_DBG("SDFS", "SD font family not found on card: %s (clearing)", SETTINGS.sdFontFamilyName);
-      SETTINGS.clearSdFontFamily();
-    }
-  }
+  // Load whatever the saved selection resolves to. Shared with ensureLoaded() so a selection
+  // written by an older build is migrated, and a coverage variant stands in, at boot too.
+  ensureSelectedLoaded(renderer);
 
   ensureJpFallback(renderer, SETTINGS.fontPointSize);
   updateGlobalFallback(renderer);
@@ -102,20 +114,45 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
   // Latin books in the JP face. Revert it to the matching built-in and let
   // ensureJpFallback() bring the extension back as the companion where needed.
   if (SETTINGS.sdFontFamilyName[0] != '\0' && isBuiltinJpExtension(SETTINGS.sdFontFamilyName)) {
-    std::string norm;
-    for (const char* c = SETTINGS.sdFontFamilyName; *c; ++c) {
-      if (std::isalnum(static_cast<unsigned char>(*c))) norm.push_back(static_cast<char>(std::tolower(*c)));
-    }
-    SETTINGS.fontFamily = norm == "notoserifjp" ? CrossPointSettings::NOTOSERIF : CrossPointSettings::NOTOSANS;
+    SETTINGS.fontFamily = normalizedFamilyKey(SETTINGS.sdFontFamilyName) == "notoserifjp"
+                              ? CrossPointSettings::NOTOSERIF
+                              : CrossPointSettings::NOTOSANS;
     LOG_INF("SDFS", "Reverting hidden JP extension selection '%s' to built-in", SETTINGS.sdFontFamilyName);
     SETTINGS.sdFontFamilyName[0] = '\0';
   }
 
-  const char* wantedFamily = SETTINGS.sdFontFamilyName;
+  // Likewise for a coverage variant: the picker no longer offers it, so a selection saved by an
+  // older build would name a row that is gone. Point the setting at the base it widens -- the
+  // row that now stands for both -- and let resolveSelectedFamily() bring the variant back where
+  // it fits.
+  if (SETTINGS.sdFontFamilyName[0] != '\0' && isCoverageVariant(SETTINGS.sdFontFamilyName, &registry_)) {
+    const std::string baseKey = coverageVariantBase(SETTINGS.sdFontFamilyName);
+    const SdCardFontFamilyInfo* base = nullptr;
+    for (const auto& fam : registry_.getFamilies()) {
+      if (normalizedFamilyKey(fam.name) == baseKey) {
+        base = &fam;
+        break;
+      }
+    }
+    LOG_INF("SDFS", "Migrating hidden variant selection '%s' to its base", SETTINGS.sdFontFamilyName);
+    if (base) {
+      strncpy(SETTINGS.sdFontFamilyName, base->name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
+      SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
+    } else {
+      SETTINGS.fontFamily = baseKey == "notosans" ? CrossPointSettings::NOTOSANS : CrossPointSettings::NOTOSERIF;
+      SETTINGS.sdFontFamilyName[0] = '\0';
+    }
+  }
+
+  // What the user picked stays in SETTINGS; what is resident may be the wider variant standing
+  // in for it. A stand-in that fails to load falls back to the base rather than clearing the
+  // selection -- the user never chose the variant, so it must not be able to unpick their font.
+  const std::string wantedFamily = resolveSelectedFamily();
+  const bool standingIn = wantedFamily != SETTINGS.sdFontFamilyName;
 
   const std::string& currentFamily = manager_.currentFamilyName();
 
-  if (wantedFamily[0] == '\0') {
+  if (wantedFamily.empty()) {
     if (!currentFamily.empty()) {
       manager_.unloadAll(renderer);
     }
@@ -133,9 +170,10 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
   if (familyMatches) {
     const auto* family = registry_.findFamily(wantedFamily);
     if (!family) {
-      LOG_DBG("SDFS", "SD font family disappeared: %s (clearing)", wantedFamily);
+      LOG_DBG("SDFS", "SD font family disappeared: %s%s", wantedFamily.c_str(),
+              standingIn ? " (keeping base selection)" : " (clearing)");
       manager_.unloadAll(renderer);
-      SETTINGS.clearSdFontFamily();
+      if (!standingIn) SETTINGS.clearSdFontFamily();
       return;
     }
     const auto* selected = family->findNearestSize(SETTINGS.fontPointSize);
@@ -144,7 +182,7 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
     // the setting still names a size this family does not ship.
     snapFontPointSizeTo(wantedPt);
     if (!registryWasDirty && wantedPt == manager_.currentPointSize()) return;
-    LOG_DBG("SDFS", "Reloading %s: size %u -> %u%s", wantedFamily, manager_.currentPointSize(), wantedPt,
+    LOG_DBG("SDFS", "Reloading %s: size %u -> %u%s", wantedFamily.c_str(), manager_.currentPointSize(), wantedPt,
             registryWasDirty ? " [registry dirty]" : "");
   }
 
@@ -169,14 +207,16 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
     if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {
       snapFontPointSizeTo(manager_.currentPointSize());
       setupUiFallbacks(renderer);
-      LOG_DBG("SDFS", "Loaded SD font family: %s", wantedFamily);
+      LOG_DBG("SDFS", "Loaded SD font family: %s", wantedFamily.c_str());
     } else {
-      LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", wantedFamily);
-      SETTINGS.clearSdFontFamily();
+      LOG_ERR("SDFS", "Failed to load SD font family: %s%s", wantedFamily.c_str(),
+              standingIn ? " (keeping base selection)" : " (clearing)");
+      if (!standingIn) SETTINGS.clearSdFontFamily();
     }
   } else {
-    LOG_DBG("SDFS", "SD font family not found: %s (clearing)", wantedFamily);
-    SETTINGS.clearSdFontFamily();
+    LOG_DBG("SDFS", "SD font family not found: %s%s", wantedFamily.c_str(),
+            standingIn ? " (keeping base selection)" : " (clearing)");
+    if (!standingIn) SETTINGS.clearSdFontFamily();
   }
 }
 
@@ -245,16 +285,70 @@ int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*
   // The manager holds exactly one reader-size font, already selected for
   // SETTINGS.fontPointSize, so the size argument is implicit — always return
   // that font's ID. ensureLoaded() must have run for the current settings first.
+  //
+  // An empty name is the built-in selection asking what stands in for it: the resident family,
+  // when a coverage variant was loaded in the built-in's place, and 0 (use the built-in) when
+  // nothing is. Runs in the page render loop via getReaderFontId(), so it must not allocate.
+  if (familyName == nullptr || familyName[0] == '\0') {
+    const std::string& resident = manager_.currentFamilyName();
+    return resident.empty() ? 0 : manager_.getFontId(resident);
+  }
   return manager_.getFontId(familyName);
 }
 
 bool SdCardFontSystem::isBuiltinJpExtension(const std::string& familyName) {
-  std::string norm;
-  norm.reserve(familyName.size());
-  for (const char c : familyName) {
-    if (std::isalnum(static_cast<unsigned char>(c))) norm.push_back(static_cast<char>(std::tolower(c)));
+  const std::string key = normalizedFamilyKey(familyName);
+  return key == "notosansjp" || key == "notoserifjp";
+}
+
+std::string SdCardFontSystem::coverageVariantBase(const std::string& familyName) {
+  const std::string key = normalizedFamilyKey(familyName);
+  for (const char* suffix : kCoverageVariantSuffixes) {
+    const std::string suffixKey = normalizedFamilyKey(suffix);
+    // Strictly longer: a family named exactly "IPA" is its own face, not a suffix on nothing.
+    if (key.size() <= suffixKey.size()) continue;
+    if (key.compare(key.size() - suffixKey.size(), suffixKey.size(), suffixKey) == 0) {
+      return key.substr(0, key.size() - suffixKey.size());
+    }
   }
-  return norm == "notosansjp" || norm == "notoserifjp";
+  return {};
+}
+
+const SdCardFontFamilyInfo* SdCardFontSystem::findCoverageVariant(const std::string& baseName) const {
+  const std::string baseKey = normalizedFamilyKey(baseName);
+  if (baseKey.empty()) return nullptr;
+  for (const char* suffix : kCoverageVariantSuffixes) {
+    const std::string wanted = baseKey + normalizedFamilyKey(suffix);
+    for (const auto& fam : registry_.getFamilies()) {
+      if (normalizedFamilyKey(fam.name) == wanted) return &fam;
+    }
+  }
+  return nullptr;
+}
+
+bool SdCardFontSystem::isCoverageVariant(const std::string& familyName, const SdCardFontRegistry* registry) {
+  const std::string baseKey = coverageVariantBase(familyName);
+  if (baseKey.empty()) return false;
+  // The base has to actually exist, otherwise the variant is the only carrier of its glyphs
+  // and hiding it would put them out of reach. Built-in bases are always present.
+  if (baseKey == "notoserif" || baseKey == "notosans") return true;
+  if (registry == nullptr) return false;
+  for (const auto& fam : registry->getFamilies()) {
+    if (normalizedFamilyKey(fam.name) == baseKey) return true;
+  }
+  return false;
+}
+
+std::string SdCardFontSystem::resolveSelectedFamily() const {
+  const std::string selected = SETTINGS.sdFontFamilyName;
+  // A book that needs Japanese keeps the base as-is. The companion ensureJpFallback() is about
+  // to load carries this book's text, so standing a coverage variant in here would only make it
+  // the second resident SD font -- the pairing that does not reliably fit this heap. Leaving the
+  // base built-in also keeps its `preferSans` ranking working, which reads an empty selection.
+  if (jpFallbackNeeded_) return selected;
+  const std::string base = selected.empty() ? builtinFamilyDirName(SETTINGS.fontFamily) : selected;
+  const auto* variant = findCoverageVariant(base);
+  return variant ? variant->name : selected;
 }
 
 bool SdCardFontSystem::loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name,
@@ -295,11 +389,7 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
   // built-in Noto face with its matching JP extension, then try the other extension.
   const bool preferSans = selected.empty() && SETTINGS.fontFamily == CrossPointSettings::NOTOSANS;
   auto extensionRank = [preferSans](const std::string& name) {
-    std::string norm;
-    for (const char c : name) {
-      if (std::isalnum(static_cast<unsigned char>(c))) norm.push_back(static_cast<char>(std::tolower(c)));
-    }
-    return norm == (preferSans ? "notosansjp" : "notoserifjp") ? 0 : 1;
+    return normalizedFamilyKey(name) == (preferSans ? "notosansjp" : "notoserifjp") ? 0 : 1;
   };
   std::vector<const SdCardFontFamilyInfo*> candidates;
   for (const auto& fam : registry_.getFamilies()) {
@@ -361,6 +451,10 @@ void SdCardFontSystem::setJpFallbackNeeded(GfxRenderer& renderer, const bool nee
   if (jpFallbackNeeded_ == needed) return;
   LOG_DBG("SDFS", "JP fallback needed: %d", needed);
   jpFallbackNeeded_ = needed;
+  // resolveSelectedFamily() reads this flag: a collapsed entry is the base plus a JP companion
+  // for a Japanese book and the wider variant for any other, so the selection is re-resolved
+  // here rather than only at book open. Called at book/activity boundaries, never mid-render.
+  ensureSelectedLoaded(renderer);
   ensureJpFallback(renderer, SETTINGS.fontPointSize);
   updateGlobalFallback(renderer);
 }
