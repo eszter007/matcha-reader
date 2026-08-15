@@ -310,7 +310,7 @@ void SettingsActivity::navigateButtons() {
 }
 
 bool SettingsActivity::handleButtons() {
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (ringPos() == 0) {
       // Embedded single-category mode (reader menu): the category row is locked.
       if (!finishOnBack) stepTab(1);
