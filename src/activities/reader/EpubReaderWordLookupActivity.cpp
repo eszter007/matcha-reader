@@ -1180,6 +1180,25 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
 
   static constexpr char kEntrySep[] = "\n\n---\n";
   static constexpr char kGrammarSep[] = "\n\n— Grammar: ";
+
+  // Upper bound on the pieces: one per separator, plus the first. Duplicates are dropped later,
+  // so this over-reserves slightly rather than letting six vectors realloc in lockstep.
+  size_t pieceCount = 1;
+  for (size_t at = resultDefinition.find(kEntrySep); at != std::string::npos;
+       at = resultDefinition.find(kEntrySep, at + sizeof(kEntrySep) - 1)) {
+    pieceCount++;
+  }
+  for (size_t at = resultDefinition.find(kGrammarSep); at != std::string::npos;
+       at = resultDefinition.find(kGrammarSep, at + sizeof(kGrammarSep) - 1)) {
+    pieceCount++;
+  }
+  sectionText.reserve(pieceCount);
+  sectionLabel.reserve(pieceCount);
+  sectionReading.reserve(pieceCount);
+  sectionGrammar.reserve(pieceCount);
+  sectionKind.reserve(pieceCount);
+  sectionHead.reserve(pieceCount);
+
   const auto coveredBy = [](const std::string& subset, const std::string& superset) {
     size_t lineStart = 0;
     while (lineStart <= subset.size()) {
