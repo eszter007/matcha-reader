@@ -17,6 +17,7 @@
 #include "SdCardFontSystem.h"
 #include "TextSettingsPreview.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
@@ -255,6 +256,10 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   // than building a new items/values vector on every render.
   const int count = listCount();
   for (int i = 0; i < count; i++) {
+    bool checked = false;
+    rowItems_[i].toggle = false;
+    // Cleared up front so a row that sets no value can't keep the previous tab's text.
+    rowValues_[i].clear();
     switch (tab_) {
       case Tab::Family:
         rowValues_[i] = (i == currentFamilyIndex_) ? tr(STR_SELECTED) : "";
@@ -262,15 +267,22 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
       case Tab::Size:
         rowValues_[i] = (i == currentSizeIndex_) ? tr(STR_SELECTED) : "";
         break;
-      case Tab::Layout:
-        rowValues_[i] = layoutValueText(i);
+      case Tab::Layout: {
+        // Visible position -> LayoutRow, as the labels do: a Japanese book hides three of the
+        // rows, so `i` is not the enum value (see layoutRowAt()).
+        const int layoutRow = static_cast<int>(layoutRowAt(i));
+        rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
+        if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
         break;
+      }
       case Tab::Style:
-        rowValues_[i] = styleValueText(i);
+        // Every Style row is on/off, so this tab is all switches and has no value text.
+        rowItems_[i].toggle = styleRowIsSwitch(i, checked);
         break;
       default:
         break;
     }
+    if (rowItems_[i].toggle) rowItems_[i].toggleChecked = checked;
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
   }
 
@@ -280,6 +292,7 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
+  applySwitchStyle(props);
   // Titles match the value's font size (smallText) so both sides of a row
   // read as one unit; labels that still don't fit wrap onto a second line.
   // maxLines=2 also marks the style explicitly set (see SettingsActivity).
@@ -454,23 +467,52 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
   }
 }
 
+bool TextSettingsActivity::layoutRowIsSwitch(const int row, bool& checked) const {
+  switch (static_cast<LayoutRow>(row)) {
+    case LayoutRow::ParaSpacing:
+      checked = SETTINGS.extraParagraphSpacing != 0;
+      return true;
+    case LayoutRow::BookSideMargins:
+      checked = SETTINGS.bookCssMargins != 0;
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool TextSettingsActivity::styleRowIsSwitch(const int row, bool& checked) const {
+  switch (static_cast<StyleRow>(row)) {
+    case StyleRow::FocusReading:
+      checked = SETTINGS.focusReadingEnabled != 0;
+      return true;
+    case StyleRow::Hyphenation:
+      checked = SETTINGS.hyphenationEnabled != 0;
+      return true;
+    case StyleRow::EmbeddedStyle:
+      checked = SETTINGS.embeddedStyle != 0;
+      return true;
+    case StyleRow::AntiAliasing:
+      checked = SETTINGS.textAntiAliasing != 0;
+      return true;
+    default:
+      return false;
+  }
+}
+
 std::string TextSettingsActivity::layoutValueText(int row) const {
   switch (static_cast<LayoutRow>(row)) {
     case LayoutRow::LineSpacing: {
       const uint8_t v = SETTINGS.lineSpacing;
       return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
     }
-    case LayoutRow::ParaSpacing:
-      return SETTINGS.extraParagraphSpacing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case LayoutRow::Alignment: {
       const uint8_t v = SETTINGS.paragraphAlignment;
       return v < std::size(ALIGNMENT_IDS) ? I18N.get(ALIGNMENT_IDS[v]) : I18N.get(StrId::STR_JUSTIFY);
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
-    case LayoutRow::BookSideMargins:
-      return SETTINGS.bookCssMargins ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
 
+    // ParaSpacing and BookSideMargins draw switches -- see layoutRowIsSwitch().
     default:
       return "";
   }
@@ -495,22 +537,6 @@ void TextSettingsActivity::confirmStyleRow(int row) {
       return;
   }
   requestUpdate();
-}
-
-std::string TextSettingsActivity::styleValueText(int row) const {
-  switch (static_cast<StyleRow>(row)) {
-    case StyleRow::FocusReading:
-      return SETTINGS.focusReadingEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case StyleRow::Hyphenation:
-      return SETTINGS.hyphenationEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case StyleRow::EmbeddedStyle:
-      return SETTINGS.embeddedStyle ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case StyleRow::AntiAliasing:
-      return SETTINGS.textAntiAliasing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-
-    default:
-      return "";
-  }
 }
 
 // Only Focus Reading shows in the preview (bold prefixes); the other Style rows
