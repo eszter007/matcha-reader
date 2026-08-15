@@ -59,6 +59,9 @@ void TxtReaderActivity::onReaderExit() {
 }
 
 void TxtReaderActivity::readerLoop() {
+  clearEndOfBookOptionsIfNeeded();
+  if (handleEndOfBookMenu()) return;
+
   if (handleBackNavigation()) return;
 
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
@@ -69,6 +72,8 @@ void TxtReaderActivity::readerLoop() {
     return;
   }
 
+  if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
+
   if (prevTriggered && currentPage > 0) {
     currentPage--;
     requestUpdate();
@@ -77,10 +82,17 @@ void TxtReaderActivity::readerLoop() {
       currentPage++;
       requestUpdate();
     } else {
-      onGoHome();
+      currentPage = totalPages;
+      requestUpdate();
     }
   }
 }
+
+bool TxtReaderActivity::isAtEndOfBook() const {
+  return initialized && !pageOffsets.empty() && currentPage >= totalPages;
+}
+
+void TxtReaderActivity::onReturnFromEndOfBook() { currentPage = totalPages > 0 ? totalPages - 1 : 0; }
 
 void TxtReaderActivity::initializeReader() {
   if (initialized) {
@@ -323,6 +335,8 @@ void TxtReaderActivity::render(RenderLock&&) {
     renderer.displayBuffer();
     return;
   }
+
+  if (renderEndOfBook("TRS")) return;
 
   // Bounds check
   if (currentPage < 0) currentPage = 0;

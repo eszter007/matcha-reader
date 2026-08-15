@@ -3,6 +3,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <MangaPanel.h>
 #include <Memory.h>
 
 #include <algorithm>
@@ -14,7 +15,7 @@ namespace {
 constexpr size_t NAME_BUFFER_SIZE = 500;
 
 bool isSupportedBookFile(const std::string_view name) {
-  // Formats ReaderActivity can open (bmp is a viewer, not a book, so it is excluded)
+  // File formats ReaderActivity can open (bmp is a viewer, not a book, so it is excluded)
   return FsHelpers::hasEpubExtension(name) || FsHelpers::hasXtcExtension(name) || FsHelpers::hasTxtExtension(name) ||
          FsHelpers::hasMarkdownExtension(name);
 }
@@ -53,17 +54,17 @@ std::vector<std::string> NextBookFinder::findNextBooks(const std::string& curren
   const auto less = [](const std::string& a, const std::string& b) { return FsHelpers::naturalLess(a, b); };
 
   for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
-    if (file.isDirectory()) {
-      continue;
-    }
     file.getName(nameBuffer.get(), NAME_BUFFER_SIZE);
     if (!SETTINGS.showHiddenFiles && nameBuffer[0] == '.') {
       continue;
     }
-    if (!isSupportedBookFile(nameBuffer.get())) {
+    std::string name{nameBuffer.get()};
+    if (file.isDirectory()) {
+      const std::string fullPath = folder == "/" ? "/" + name : folder + "/" + name;
+      if (!manga::MangaBook::isMangaFolder(fullPath)) continue;
+    } else if (!isSupportedBookFile(name)) {
       continue;
     }
-    std::string name{nameBuffer.get()};
     // Keep only files ordering strictly after the current one; equal names (the book
     // itself, or a case-variant of it) compare "not less" both ways and drop out here.
     if (!FsHelpers::naturalLess(currentName, name)) {

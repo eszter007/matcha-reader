@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../../BookmarkEntry.h"
+#include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
@@ -33,6 +34,8 @@ class MangaReaderActivity final : public Activity {
  private:
   std::string pendingBookPath;
   std::unique_ptr<manga::MangaBook> book;
+  std::unique_ptr<EndOfBookOptions> endOfBookOptions;
+  std::atomic<bool> endOfBookOptionsReady{false};
 
   uint32_t currentPage = 0;
   int currentPanel = -1;  // -1 = full page view, 0+ = zoomed panel
@@ -283,6 +286,12 @@ class MangaReaderActivity final : public Activity {
   void nextPage(bool keepPanelMode = false);
   void prevPage(bool keepPanelMode = false);
   int findPanelWithCrop(int start, int step) const;
+  bool isAtEndOfBook() const;
+  void clearEndOfBookOptionsIfNeeded();
+  bool handleEndOfBookMenu();
+  bool handleEndOfBookPageTurn(bool prevTriggered, bool nextTriggered);
+  void onReturnFromEndOfBook();
+  bool renderEndOfBook();
 
   void saveProgress() const;
   void loadProgress();
