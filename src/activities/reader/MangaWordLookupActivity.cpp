@@ -392,15 +392,9 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
   if (hasResult) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
-      // Scoped to the exact style each is drawn with below (headword: BOLD; definition: REGULAR)
-      // -- a blanket "all 4 styles" request can itself exhaust the font decompressor's 4-slot
-      // page buffer (each style, plus one more per style if the font has a fallback), same trap
-      // found and fixed for vertical-page rendering earlier this session.
-      fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      renderer.prewarmText(defFont, resultReading.c_str(), 1 << EpdFontFamily::REGULAR);
-      renderer.prewarmText(defFont, resultGrammar.c_str(), 1 << EpdFontFamily::REGULAR);
-      renderer.prewarmText(defFont, resultDefinition.c_str(),
-                           (1 << EpdFontFamily::REGULAR) | (1 << EpdFontFamily::ITALIC));
+      // Regular plus the exact bold lines use at most the compressed font's four page slots.
+      // Italic Latin translations are cheap to load on demand.
+      DefinitionText::prewarmStyledText(renderer, defFont, resultDefinition);
     }
   }
 
@@ -448,14 +442,19 @@ void MangaWordLookupActivity::render(RenderLock&&) {
     sdFontSystem.ensureWordLookupFallback(renderer, kPanelHeaderFont, 12);
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
-      fcm->prewarmCache(kPanelHeaderFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
+      renderer.prewarmText(kPanelHeaderFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
     }
   }
 
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the manga page stays visible around it instead of being cleared away.
+  const char* kind = resultSource == nullptr
+                         ? nullptr
+                         : I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
+                                    : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
+                                                                            : StrId::STR_DICT_KIND_VOCAB);
   const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
-                                            counterText.empty() ? nullptr : counterText.c_str());
+                                            counterText.empty() ? nullptr : counterText.c_str(), kind);
   renderContentArea(layout.body);
 
   const bool sideButtonsForLookup =

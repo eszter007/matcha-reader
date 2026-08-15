@@ -1,8 +1,11 @@
 #include "DefinitionTextRenderer.h"
 
 #include <Arduino.h>
+#include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <cassert>
@@ -124,6 +127,7 @@ void formatGrammarBody(std::string& text, const std::string& headword) {
     if (close == std::string::npos) return;
     line.erase(0, close + 2);
     trim(line);
+    while (line.rfind("\xe3\x80\x80", 0) == 0) line.erase(0, 3);  // Japanese full-width space.
   };
 
   size_t pos = 0;
@@ -521,6 +525,67 @@ void formatEntryBody(std::string& text, const std::string& omitLeading) {
   text = std::move(formatted);
 }
 
+void prewarmStyledText(GfxRenderer& renderer, const int fontId, const std::string& text) {
+  std::string cjk[3];
+  std::string latin[3];
+  const auto appendByScript = [&text](const size_t start, const size_t end, std::string& cjkOut,
+                                      std::string& latinOut) {
+    for (size_t i = start; i < end;) {
+      const auto c0 = static_cast<unsigned char>(text[i]);
+      size_t len = c0 >= 0xF0 ? 4 : c0 >= 0xE0 ? 3 : c0 >= 0xC0 ? 2 : 1;
+      len = std::min(len, end - i);
+      uint32_t cp = c0;
+      if (len == 2) {
+        cp = ((c0 & 0x1F) << 6) | (static_cast<unsigned char>(text[i + 1]) & 0x3F);
+      } else if (len == 3) {
+        cp = ((c0 & 0x0F) << 12) | ((static_cast<unsigned char>(text[i + 1]) & 0x3F) << 6) |
+             (static_cast<unsigned char>(text[i + 2]) & 0x3F);
+      } else if (len == 4) {
+        cp = ((c0 & 0x07) << 18) | ((static_cast<unsigned char>(text[i + 1]) & 0x3F) << 12) |
+             ((static_cast<unsigned char>(text[i + 2]) & 0x3F) << 6) | (static_cast<unsigned char>(text[i + 3]) & 0x3F);
+      }
+      (utf8IsCjkCodepoint(cp) ? cjkOut : latinOut).append(text, i, len);
+      i += len;
+    }
+  };
+
+  size_t pos = 0;
+  while (pos < text.size()) {
+    const size_t end = text.find('\n', pos);
+    const size_t lineEnd = end == std::string::npos ? text.size() : end;
+    const bool blockHeading = text.compare(pos, sizeof(kBlockHeadingPrefix) - 1, kBlockHeadingPrefix) == 0;
+    const bool boldLine = text.compare(pos, sizeof(kBoldLinePrefix) - 1, kBoldLinePrefix) == 0;
+    const bool italicLine = text.compare(pos, sizeof(kItalicLinePrefix) - 1, kItalicLinePrefix) == 0;
+    const size_t contentStart = pos + ((blockHeading || boldLine || italicLine) ? 2 : 0);
+    size_t visibleStart = contentStart;
+    while (visibleStart < lineEnd && (text[visibleStart] == ' ' || text[visibleStart] == '\t')) visibleStart++;
+    static constexpr char kArrow[] = "\xe2\x86\x92";
+    const bool note = text.compare(visibleStart, sizeof(kArrow) - 1, kArrow) == 0;
+    const bool example = text.compare(contentStart, 6, "  │ ") == 0;
+    const bool translation = italicLine || (example && !containsJapanese(text, contentStart, lineEnd));
+    const auto style = (blockHeading || boldLine) ? EpdFontFamily::BOLD
+                       : (translation || note)    ? EpdFontFamily::ITALIC
+                                                  : EpdFontFamily::REGULAR;
+    const auto styleIndex = static_cast<uint8_t>(style);
+    appendByScript(contentStart, lineEnd, cjk[styleIndex], latin[styleIndex]);
+    if (end == std::string::npos) break;
+    pos = end + 1;
+  }
+
+  auto* fcm = renderer.getFontCacheManager();
+  const auto font = renderer.getFontMap().find(fontId);
+  for (uint8_t style = 0; style <= EpdFontFamily::ITALIC; style++) {
+    const uint8_t mask = 1 << style;
+    renderer.prewarmText(fontId, cjk[style].c_str(), mask);
+    // Bold Latin is limited to short labels and patterns. Leaving it on demand keeps the
+    // no-SD-fallback path within four slots: CJK+Latin regular, CJK bold, Latin italic.
+    if (fcm && font != renderer.getFontMap().end() && style != EpdFontFamily::BOLD && !latin[style].empty()) {
+      const auto* data = font->second.getData(static_cast<EpdFontFamily::Style>(style));
+      if (auto* decompressor = fcm->getDecompressor()) decompressor->prewarmCache(data, latin[style].c_str());
+    }
+  }
+}
+
 int drawEntryMetadata(GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
                       const EntryMetadata& metadata, const int scrollOffset, const int lineHeight) {
   constexpr uint16_t COMPACT_SCALE = 192;  // 75% of the selected lookup size.
@@ -580,9 +645,8 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
                             text[contentStart + 1] == ')';
     const bool indented = text.compare(contentStart, 3, "   ") == 0;
     const bool hangingSense = isNumberedSense(text, contentStart, paraEnd) || alphaLabel || indented;
-    // The example rule is drawn separately; measuring its font glyph makes the text offset
-    // depend on whichever fallback font happened to resolve `│` first.
-    const char* hangingPrefix = isExample ? "   " : alphaLabel ? "a)" : indented ? "   " : "1. ";
+    // Align the example rule with the body text after `1. `; its text starts one space farther in.
+    const char* hangingPrefix = isExample ? "1.  " : alphaLabel ? "a)" : indented ? "   " : "1. ";
     const int hangingIndent =
         (hangingSense || isNote || isExample)
             ? renderer.getTextWidthScaled(fontId, hangingPrefix, paragraphScale, EpdFontFamily::REGULAR)
@@ -595,7 +659,7 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
           isNote ? (firstLine ? hangingIndent : continuationIndent) : (firstLine ? 0 : continuationIndent);
       return std::max(1, maxWidth - indent);
     };
-    const int exampleRuleX = isExample ? textX + renderer.getTextWidthScaled(fontId, "  ", paragraphScale) : 0;
+    const int exampleRuleX = isExample ? textX + renderer.getTextWidthScaled(fontId, "1. ", paragraphScale) : 0;
     static constexpr char kExamplePrefix[] = "  │ ";
     const auto drawWrappedLine = [&](const char* line, const bool firstLine, const int y) {
       int lineX =

@@ -5,16 +5,13 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
-#include "activities/Activity.h"
+#include "ReaderActivity.h"
 
-class TxtReaderActivity final : public Activity {
+class TxtReaderActivity final : public ReaderActivity {
   std::unique_ptr<Txt> txt;
 
   int currentPage = 0;
   int totalPages = 1;
-  int pagesUntilFullRefresh = 0;
-  // Session start for reading-stats recording (mirrors EpubReaderActivity).
-  unsigned long readingSessionStartMs = 0;
 
   // Streaming text reader - stores file offsets for each page
   std::vector<size_t> pageOffsets;  // File offset for start of each page
@@ -43,25 +40,17 @@ class TxtReaderActivity final : public Activity {
   void saveProgress() const;
   void loadProgress();
 
+  bool loadBook() override;
+  bool hasBook() const override { return txt != nullptr; }
+  std::string getBookTitle() const override;
+  void onReaderEnter() override;
+  void onReaderExit() override;
+  void readerLoop() override;
+
  public:
-  explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt,
-                             int initialRefreshCountdown)
-      : Activity("TxtReader", renderer, mappedInput),
-        txt(std::move(txt)),
-        pagesUntilFullRefresh(initialRefreshCountdown) {}
-  void onEnter() override;
-  void onExit() override;
-  void loop() override;
+  explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                             bool allowFastInitialRefresh)
+      : ReaderActivity("TxtReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   void render(RenderLock&&) override;
-  bool isReaderActivity() const override { return true; }
-  bool appliesNightMode() const override { return true; }
-  bool handleForcedRefresh() override {
-    {
-      RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
-    }
-    requestUpdate();
-    return true;
-  }
   ScreenshotInfo getScreenshotInfo() const override;
 };

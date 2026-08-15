@@ -1,241 +1,170 @@
 #include "ReaderActivity.h"
 
-#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
-#include <I18n.h>
 #include <MangaPanel.h>
 #include <Memory.h>
 
-#include <optional>
-
+#include "BookStats.h"
 #include "CrossPointSettings.h"
-#include "Epub.h"
+#include "CrossPointState.h"
 #include "EpubReaderActivity.h"
 #include "MangaReaderActivity.h"
+#include "ReaderUtils.h"
+#include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "Txt.h"
 #include "TxtReaderActivity.h"
-#include "Xtc.h"
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
-#include "activities/util/FullScreenMessageActivity.h"
-#include "components/UITheme.h"
 
-bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
-
-bool ReaderActivity::isTxtFile(const std::string& path) {
-  return FsHelpers::hasTxtExtension(path) ||
-         FsHelpers::hasMarkdownExtension(path);  // Treat .md as txt files (until we have a markdown reader)
+ReaderActivity::ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
+                               std::string bookPath, const bool allowFastInitialRefresh)
+    : Activity(name, renderer, mappedInput), bookPath(std::move(bookPath)), pagesUntilFullRefresh(0) {
+  if (allowFastInitialRefresh) {
+    const int refreshFrequency = SETTINGS.getRefreshFrequency();
+    pagesUntilFullRefresh = refreshFrequency > 1 ? refreshFrequency : 2;
+  }
 }
 
-bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
-
-bool ReaderActivity::isMangaFolder(const std::string& path) { return manga::MangaBook::isMangaFolder(path); }
-
-std::unique_ptr<manga::MangaBook> ReaderActivity::loadManga(const std::string& path) {
-  auto book = makeUniqueNoThrow<manga::MangaBook>(path);
-  if (!book) {
-    LOG_ERR("READER", "Failed to allocate MangaBook");
-    return nullptr;
-  }
-  if (!book->load()) {
-    LOG_ERR("READER", "Failed to load manga: %s", path.c_str());
-    return nullptr;
-  }
-  return book;
-}
-
-void ReaderActivity::onGoToMangaReader(std::unique_ptr<manga::MangaBook> manga) {
-  currentBookPath = manga->getFolder();
-  activityManager.replaceActivity(std::make_unique<MangaReaderActivity>(renderer, mappedInput, std::move(manga)));
-}
-
-std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
-  if (!Storage.exists(path.c_str())) {
-    LOG_ERR("READER", "File does not exist: %s", path.c_str());
-    return nullptr;
+std::unique_ptr<Activity> ReaderActivity::create(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                                 std::string path, bool allowFastInitialRefresh) {
+  if (manga::MangaBook::isMangaFolder(path)) {
+    return makeUniqueNoThrow<MangaReaderActivity>(renderer, mappedInput, std::move(path));
   }
 
-  // Coalesce the heap BEFORE Epub::load(): its CSS cache load aborts below 48KB contiguous and
-  // a CSS re-parse wants 64KB free. On the resume-from-sleep path the boot screen leaves font
-  // caches warm and an X3 arrives here at ~49KB maxAlloc -- just under the threshold -- which
-  // cascaded into a per-boot CSS re-parse + section-cache invalidation (reporter log). Fonts
-  // reload lazily; the reader re-warms them for the first page render anyway.
-  if (ESP.getMaxAllocHeap() < 64 * 1024) {
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      LOG_INF("READER", "Low heap before book load (maxAlloc=%u); releasing font memory", ESP.getMaxAllocHeap());
-      fcm->releaseAllFontMemory();
-      LOG_INF("READER", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
-    }
+  if (FsHelpers::hasBmpExtension(path) || FsHelpers::hasPngExtension(path)) {
+    return makeUniqueNoThrow<BmpViewerActivity>(renderer, mappedInput, std::move(path));
   }
 
-  auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");
-  if (!epub) {
-    LOG_ERR("READER", "Failed to allocate EPUB object");
-    return nullptr;
-  }
-  // First open: building the spine/TOC index (book.bin) takes a couple of seconds. Show the
-  // indexing popup so it isn't a silent wait on the home screen. The cachePath/hash is known at
-  // construction, so this check is valid before load(); a cached open loads in a blink -> no popup.
-  const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
-  if (uncached) {
-    // The popup replaces the restored Quick Resume frame, so the reader must clean it.
-    allowFastInitialRefresh = false;
-    GUI.drawPopup(renderer, tr(STR_INDEXING));
-  }
-  bool loaded;
-  {
-    // Lend the framebuffer's 48 KB to the container parse (expat + spine/TOC
-    // build). The popup just displayed stays on the panel; whichever reader
-    // activity follows redraws the full screen anyway.
-    std::optional<GfxRenderer::FrameBufferLoan> loan;
-    if (uncached) loan.emplace(renderer);
-    loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
-  }
-  if (loaded) {
-    return epub;
+  if (FsHelpers::hasXtcExtension(path)) {
+    return makeUniqueNoThrow<XtcReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   }
 
-  // A book load() refused because its content isn't readable on this device --
-  // tell the user instead of silently dropping back to the library.
-  if (!epub->getAccessError().empty()) {
-    LOG_ERR("READER", "book unavailable: %s", epub->getAccessError().c_str());
-    renderer.clearScreen();
-    GUI.drawPopup(renderer, tr(STR_BOOK_NOT_READABLE));
-    delay(2500);
-    return nullptr;
+  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
+    return makeUniqueNoThrow<TxtReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   }
 
-  LOG_ERR("READER", "Failed to load epub");
-  return nullptr;
-}
-
-int ReaderActivity::initialRefreshCountdown() const {
-  if (!allowFastInitialRefresh) return 0;
-
-  const int refreshFrequency = SETTINGS.getRefreshFrequency();
-  return refreshFrequency > 1 ? refreshFrequency : 2;
-}
-
-std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
-  if (!Storage.exists(path.c_str())) {
-    LOG_ERR("READER", "File does not exist: %s", path.c_str());
-    return nullptr;
-  }
-
-  auto xtc = makeUniqueNoThrow<Xtc>(path, "/.crosspoint");
-  if (!xtc) {
-    LOG_ERR("READER", "Failed to allocate XTC object");
-    return nullptr;
-  }
-  if (xtc->load()) {
-    return xtc;
-  }
-
-  LOG_ERR("READER", "Failed to load XTC");
-  return nullptr;
-}
-
-std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
-  if (!Storage.exists(path.c_str())) {
-    LOG_ERR("READER", "File does not exist: %s", path.c_str());
-    return nullptr;
-  }
-
-  auto txt = makeUniqueNoThrow<Txt>(path, "/.crosspoint");
-  if (!txt) {
-    LOG_ERR("READER", "Failed to allocate TXT object");
-    return nullptr;
-  }
-  if (txt->load()) {
-    return txt;
-  }
-
-  LOG_ERR("READER", "Failed to load TXT");
-  return nullptr;
-}
-
-void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
-  // If coming from a book, start in that book's folder; otherwise start from root
-  auto initialPath = fromBookPath.empty() ? "/" : FsHelpers::extractFolderPath(fromBookPath);
-  activityManager.goToFileBrowser(std::move(initialPath));
-}
-
-void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
-  const auto epubPath = epub->getPath();
-  currentBookPath = epubPath;
-  activityManager.replaceActivity(
-      std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub), initialRefreshCountdown()));
-}
-
-void ReaderActivity::onGoToBmpViewer(const std::string& path) {
-  activityManager.replaceActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, path));
-}
-
-void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
-  sdFontSystem.setJpFallbackNeeded(renderer, false);
-  const auto xtcPath = xtc->getPath();
-  currentBookPath = xtcPath;
-  activityManager.replaceActivity(
-      std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc), initialRefreshCountdown()));
-}
-
-void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
-  sdFontSystem.setJpFallbackNeeded(renderer, false);
-  const auto txtPath = txt->getPath();
-  currentBookPath = txtPath;
-  activityManager.replaceActivity(
-      std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt), initialRefreshCountdown()));
+  return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
 }
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
-
-  if (initialBookPath.empty()) {
-    goToLibrary();  // Start from root when entering via Browse
+  if (!Storage.exists(bookPath.c_str())) {
+    LOG_ERR("READER", "File does not exist: %s", bookPath.c_str());
+    finish();
+    return;
+  }
+  sdFontSystem.ensureLoaded(renderer);
+  if (!loadBook()) {
+    finish();
     return;
   }
 
-  sdFontSystem.ensureLoaded(renderer);
-
-  currentBookPath = initialBookPath;
-  if (isMangaFolder(initialBookPath)) {
-    // Manga page/panel pixels use no reader font. Keeping the selected SD family (including its
-    // UI fallback sizes) resident left only 25-29 KB in a device report, below the JPEG decoder's
-    // 36 KB and PNG decoder's 60 KB requirements. Preserve the setting but lend its RAM to images.
-    sdFontSystem.releaseForImageDecode(renderer);
-    auto manga = loadManga(initialBookPath);
-    if (!manga) {
-      sdFontSystem.ensureLoaded(renderer);
-      onGoBack();
-      return;
-    }
-    onGoToMangaReader(std::move(manga));
-  } else if (isBmpFile(initialBookPath)) {
-    onGoToBmpViewer(initialBookPath);
-  } else if (isXtcFile(initialBookPath)) {
-    auto xtc = loadXtc(initialBookPath);
-    if (!xtc) {
-      onGoBack();
-      return;
-    }
-    onGoToXtcReader(std::move(xtc));
-  } else if (isTxtFile(initialBookPath)) {
-    auto txt = loadTxt(initialBookPath);
-    if (!txt) {
-      onGoBack();
-      return;
-    }
-    onGoToTxtReader(std::move(txt));
-  } else {
-    auto epub = loadEpub(initialBookPath);
-    if (!epub) {
-      onGoBack();
-      return;
-    }
-    onGoToEpubReader(std::move(epub));
-  }
+  readingSessionStartMs = millis();
+  onReaderEnter();
+  APP_STATE.openEpubPath = bookPath;
+  APP_STATE.saveToFile();
+  RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
+  BookStats::recordOpen(bookPath.c_str());
+  requestUpdate();
 }
 
-void ReaderActivity::onGoBack() { finish(); }
+void ReaderActivity::onExit() {
+  Activity::onExit();
+  ReaderUtils::flushReadingStats(readingSessionStartMs, true, hasBook() ? bookPath.c_str() : nullptr,
+                                 hasBook() ? getBookLanguage() : nullptr);
+  onReaderExit();
+
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  APP_STATE.readerActivityLoadCount = 0;
+  APP_STATE.saveToFile();
+  endOfBookOptions.reset();
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+}
+
+void ReaderActivity::loop() {
+  if (!hasBook()) {
+    finish();
+    return;
+  }
+  ReaderUtils::flushReadingStats(readingSessionStartMs, false, bookPath.c_str(), getBookLanguage());
+  readerLoop();
+}
+
+void ReaderActivity::clearEndOfBookOptionsIfNeeded() {
+  if (isAtEndOfBook() || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
+  RenderLock lock(*this);
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+  endOfBookOptions.reset();
+}
+
+bool ReaderActivity::handleBackNavigation() {
+  return ReaderUtils::handleBackNavigation(mappedInput, activityManager, bookPath.c_str(),
+                                           {this, [](void* ctx) { static_cast<ReaderActivity*>(ctx)->onGoHome(); }});
+}
+
+bool ReaderActivity::endOfBookMenuActive() const {
+  return isAtEndOfBook() && endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions->menuActive();
+}
+
+bool ReaderActivity::handleEndOfBookMenu(const bool suppressConfirmRelease) {
+  if (!endOfBookMenuActive() || suppressConfirmRelease) return false;
+
+  std::string openPath;
+  switch (endOfBookOptions->handleMenuInput(mappedInput, &openPath)) {
+    case EndOfBookOptions::Action::OpenBook:
+      activityManager.goToReader(openPath);
+      return true;
+    case EndOfBookOptions::Action::GoHome:
+      onGoHome();
+      return true;
+    case EndOfBookOptions::Action::LastPage:
+      onReturnFromEndOfBook();
+      requestUpdate();
+      return true;
+    case EndOfBookOptions::Action::Redraw:
+      requestUpdate();
+      return true;
+    case EndOfBookOptions::Action::None:
+      return false;
+  }
+  return false;
+}
+
+bool ReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const bool nextTriggered) {
+  if (!isAtEndOfBook()) return false;
+  if (endOfBookMenuActive()) return true;
+  if (nextTriggered) {
+    onGoHome();
+  } else if (prevTriggered) {
+    onReturnFromEndOfBook();
+    requestUpdate();
+  }
+  return true;
+}
+
+bool ReaderActivity::renderEndOfBook(const char* logTag) {
+  if (!isAtEndOfBook()) return false;
+  if (!endOfBookOptions) {
+    endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
+    if (!endOfBookOptions) LOG_ERR(logTag, "OOM: EndOfBookOptions");
+    endOfBookOptionsReady.store(endOfBookOptions != nullptr, std::memory_order_release);
+  }
+  renderer.clearScreen();
+  if (endOfBookOptions) {
+    endOfBookOptions->loadOnce(bookPath);
+    endOfBookOptions->render(renderer, mappedInput);
+  }
+  renderer.displayBuffer();
+  return true;
+}
+
+bool ReaderActivity::handleForcedRefresh() {
+  {
+    RenderLock lock(*this);
+    pagesUntilFullRefresh = 1;
+    forcedRefreshPending = true;
+  }
+  requestUpdate();
+  return true;
+}

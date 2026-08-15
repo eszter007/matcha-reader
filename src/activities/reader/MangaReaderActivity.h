@@ -20,9 +20,8 @@ class Reader;
 
 class MangaReaderActivity final : public Activity {
  public:
-  explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                               std::unique_ptr<manga::MangaBook> book)
-      : Activity("MangaReader", renderer, mappedInput), book(std::move(book)) {}
+  explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath)
+      : Activity("MangaReader", renderer, mappedInput), pendingBookPath(std::move(bookPath)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -32,6 +31,7 @@ class MangaReaderActivity final : public Activity {
   ScreenshotInfo getScreenshotInfo() const override;
 
  private:
+  std::string pendingBookPath;
   std::unique_ptr<manga::MangaBook> book;
 
   uint32_t currentPage = 0;

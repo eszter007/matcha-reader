@@ -9,12 +9,11 @@
 #include <optional>
 
 #include "BookmarkEntry.h"
-#include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
-#include "activities/Activity.h"
+#include "ReaderActivity.h"
 
-class EpubReaderActivity final : public Activity {
+class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
   std::unique_ptr<VerticalSection> verticalSection = nullptr;
@@ -36,10 +35,6 @@ class EpubReaderActivity final : public Activity {
   // Set when navigating to a footnote href with a fragment (e.g. #note1).
   // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
-  int pagesUntilFullRefresh = 0;
-  // Image pages use a dedicated double-FAST refresh path, so retain a manual
-  // refresh request until renderContents can issue its clean base pass.
-  bool forcedRefreshPending = false;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
 
@@ -158,21 +153,9 @@ class EpubReaderActivity final : public Activity {
   // Per-book furigana override: -1 = auto (on by default), 0 = off, 1 = on
   int8_t furiganaOverride = -1;
   unsigned long bookmarkMessageTime = 0UL;
-  unsigned long readingSessionStartMs = 0UL;
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
   bool pendingReadFolderMove = false;
-  // Next-book suggestion menu for the End-of-Book screen. Lazy: it embeds a
-  // GfxRendererTarget + FreeInkApp (theme tokens by value, ~2KB), so it only
-  // exists while the end screen is actually showing — created at the render
-  // path's sole load site, dropped by loop() when the user pages back in.
-  std::unique_ptr<EndOfBookOptions> endOfBookOptions;
-  // Publication flag for the pointer above: the render task creates the object
-  // and release-stores true; the main task acquire-loads before dereferencing,
-  // so it never sees a partially constructed object. Cleared (main task, under
-  // RenderLock) before reset.
-  std::atomic<bool> endOfBookOptionsReady{false};
-
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
   // Chapter-wide footnote list from the section file's footnote table (v32+): the panel shows
@@ -478,15 +461,22 @@ class EpubReaderActivity final : public Activity {
   bool showVerticalToggle() const;
   void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
 
+  bool loadBook() override;
+  bool hasBook() const override { return epub != nullptr; }
+  std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }
+  std::string getBookAuthor() const override { return epub ? epub->getAuthor() : ""; }
+  std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : ""; }
+  const char* getBookLanguage() const override { return epub ? epub->getLanguage().c_str() : nullptr; }
+  void onReaderEnter() override;
+  void onReaderExit() override;
+  void readerLoop() override;
+  bool isAtEndOfBook() const override;
+  void onReturnFromEndOfBook() override;
+
  public:
-  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,
-                              int initialRefreshCountdown)
-      : Activity("EpubReader", renderer, mappedInput),
-        epub(std::move(epub)),
-        pagesUntilFullRefresh(initialRefreshCountdown) {}
-  void onEnter() override;
-  void onExit() override;
-  void loop() override;
+  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                              bool allowFastInitialRefresh)
+      : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   void render(RenderLock&& lock) override;
   // Full CPU speed + fast loop ticks while a section build runs: at the low-power
   // frequency a giant chapter's background rebuild stretches from ~40s to many
@@ -504,17 +494,6 @@ class EpubReaderActivity final : public Activity {
   bool skipLoopDelay() override {
     return section && section->isBuilding() && !buildHeapPaused &&
            (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
-  }
-  bool isReaderActivity() const override { return true; }
-  bool appliesNightMode() const override { return true; }
-  bool handleForcedRefresh() override {
-    {
-      RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
-      forcedRefreshPending = true;
-    }
-    requestUpdate();
-    return true;
   }
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;
