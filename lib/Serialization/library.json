@@ -1,0 +1,8 @@
+{
+  "name": "Serialization",
+  "version": "1.0.0",
+  "description": "Binary (de)serialization helpers plus the JSON-backed PersistableStore.",
+  "dependencies": {
+    "bblanchon/ArduinoJson": "7.4.2"
+  }
+}
