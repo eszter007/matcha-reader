@@ -349,10 +349,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
                           buildLongPressMenuValues(), "longPressMenuFunction", StrId::STR_CAT_CONTROLS),
-        // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
-        // Confirm is appended at 6 (upstream put it at 5) and only on touch boards, which is
-        // where a power-button Confirm earns its place.
 #if FREEINK_CAP_TOUCH
+        // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
+        // Confirm is appended at 6 (upstream put it at 5) and only offered here, on touch
+        // boards, which is where a power-button Confirm earns its place.
         SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
                           {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH,
                            StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM},
