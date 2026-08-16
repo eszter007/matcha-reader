@@ -8,6 +8,7 @@
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 
 namespace fui = freeink::ui;
 
@@ -51,6 +52,11 @@ void EpubReaderMenuActivity::buildMenuRowItems() {
       case MenuAction::TOGGLE_PANELS_ONLY:
         item.toggle = true;
         item.toggleChecked = panelsOnlyEnabled;
+        break;
+      // On/off rows carry a switch, like every on/off row in Settings. The state is refreshed
+      // in buildScreen(), since it changes without the menu closing.
+      case MenuAction::NIGHT_MODE:
+        item.toggle = true;
         break;
       default:
         break;
@@ -261,7 +267,8 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
     } else if (action == MenuAction::AUTO_PAGE_TURN) {
       menuRowItems[i].value = pageTurnLabels[selectedPageTurnOption];
     } else if (action == MenuAction::NIGHT_MODE) {
-      menuRowItems[i].value = I18N.get(SETTINGS.screenInverted ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
+      // A switch row draws its state in the switch, so the value slot stays empty.
+      menuRowItems[i].toggleChecked = SETTINGS.screenInverted != 0;
     } else if (action == MenuAction::FRONTLIGHT) {
       menuRowItems[i].value = I18N.get(Frontlight.isOn() ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
     }
@@ -273,6 +280,7 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
+  applySwitchStyle(props);            // pill switches, as everywhere else
   const fui::Rect listRect = screen.body();
   syncListViewport(screen, props);
   screen.list(props);
