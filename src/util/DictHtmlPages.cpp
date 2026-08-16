@@ -138,10 +138,16 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   // Nesting state for the sense list. The outermost <ol> holds one sense per <li>; nested lists
   // hold that sense's sub-glosses and must not be treated the same way.
   int listDepth = 0;
-  int senseCount = 0;           // top-level items seen; the first shares the page with the header
-  bool glossOpen = false;       // a sense's bold gloss block is open
-  bool divUnwrapped = false;    // an item's sole <div> wrapper was dropped; drop its closer too
-  bool grammarPending = false;  // inside the part-of-speech block; a spacer follows its closer
+  int senseCount = 0;            // top-level items seen; the first shares the page with the header
+  bool glossOpen = false;        // a sense's bold gloss block is open
+  bool divUnwrapped = false;     // an item's sole <div> wrapper was dropped; drop its closer too
+  bool grammarPending = false;   // inside the part-of-speech block; a spacer follows its closer
+  bool inPronunciation = false;  // inside the gray <font>: its text is buffered and cleaned
+  std::string pronunciation;     // that buffer; a transcription, so tens of bytes
+  // A block opening straight after inline text does not break the line by itself in this parser,
+  // so the text it follows would run into it ("outside layer of a grainKleie"). Tracks whether
+  // any text is pending since the last block boundary.
+  bool inlineTextPending = false;
   while (i < n) {
     const char c = html[i];
     if (c == '<' && i + 1 < n && (html[i + 1] == '!' || html[i + 1] == '?')) {
@@ -196,6 +202,19 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       // instead of one flat wall of body text.
       if (nameLen == 4 && strncmp(nameBuf, "font", 4) == 0) {
         if (closing) {
+          if (inPronunciation) {
+            // WikDict leaves source annotations in some transcriptions ("saɪən/<a:RP><ref:<<name:
+            // OED>>>"), escaped, so they reach the reader as literal text. They always trail the
+            // transcription, so cut at the first one -- along with the slash it was appended to,
+            // which would otherwise double the closing slash outside this span.
+            const size_t junk = pronunciation.find("&lt;");
+            if (junk != std::string::npos) pronunciation.erase(junk);
+            const size_t tail = pronunciation.find_last_not_of("/ \t");
+            pronunciation.erase(tail == std::string::npos ? 0 : tail + 1);
+            if (!out.append(pronunciation.c_str(), pronunciation.size())) return false;
+            pronunciation.clear();
+            inPronunciation = false;
+          }
           if (!out.append("</span>")) return false;
         } else {
           // Searched in place: a substr() here would heap-allocate once per <font> tag, and a
@@ -205,7 +224,11 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
           if (!out.append(isGrammar ? "<span style=\"font-style:italic\">" : "<span style=\"font-size:0.75em\">")) {
             return false;
           }
-          if (isGrammar) grammarPending = true;
+          if (isGrammar) {
+            grammarPending = true;
+          } else {
+            inPronunciation = true;
+          }
         }
         i = j + 1;
         continue;
@@ -214,6 +237,19 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       const bool isList = nameLen == 2 && (strncmp(nameBuf, "ol", 2) == 0 || strncmp(nameBuf, "ul", 2) == 0);
       const bool isLi = nameLen == 2 && strncmp(nameBuf, "li", 2) == 0;
       const bool isDiv = nameLen == 3 && strncmp(nameBuf, "div", 3) == 0;
+
+      // A block that opens straight after inline text does not break the line by itself in this
+      // parser, so a single-sense entry ran its gloss into its translation ("outside layer of a
+      // grainKleie"). Break first, then let the block do its own thing.
+      const bool isBr = nameLen == 2 && strncmp(nameBuf, "br", 2) == 0;
+      if (isList || isLi || isDiv || isBr) {
+        // A <br> already ends the line, so it only clears the pending text rather than earning
+        // another break -- without this the slash closing a transcription bought a blank line.
+        if (!closing && !isBr && inlineTextPending) {
+          if (!out.append("<br/>")) return false;
+        }
+        inlineTextPending = false;
+      }
 
       // A sense's gloss runs until its first block child (the translations) or the end of the
       // item, whichever comes first.
@@ -246,6 +282,7 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
           // margins it opened with a blank line under the gloss, which read as a separator
           // between the two halves of one sense.
           if (!out.append("<ol style=\"margin-top:0;margin-bottom:0\">")) return false;
+          inlineTextPending = false;
           i = j + 1;
           continue;
         }
@@ -304,23 +341,35 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       }
       continue;
     }
+    // Inside the transcription every character goes to the buffer instead, so the annotations
+    // trailing it can be cut before any of it is written (see the </font> branch above).
+    const auto emit = [&](const char* data, const size_t len) {
+      if (inPronunciation) {
+        pronunciation.append(data, len);
+        return true;
+      }
+      return out.append(data, len);
+    };
     if (c == '<') {  // stray '<' in text ("x < y")
-      if (!out.append("&lt;")) return false;
+      if (!emit("&lt;", 4)) return false;
+      inlineTextPending = true;
       i++;
       continue;
     }
     if (c == '&') {
       size_t entityEnd = 0;
       if (isEntityRef(html, i, &entityEnd)) {
-        if (!out.append(html.data() + i, entityEnd - i + 1)) return false;
+        if (!emit(html.data() + i, entityEnd - i + 1)) return false;
         i = entityEnd + 1;
       } else {  // bare ampersand ("Tom & Jerry")
-        if (!out.append("&amp;")) return false;
+        if (!emit("&amp;", 5)) return false;
         i++;
       }
+      inlineTextPending = true;
       continue;
     }
-    if (!out.append(c)) return false;
+    if (!emit(&c, 1)) return false;
+    if (!std::isspace(static_cast<unsigned char>(c))) inlineTextPending = true;
     i++;
   }
 
