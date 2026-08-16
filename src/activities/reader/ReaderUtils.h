@@ -166,14 +166,21 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
     return result;
   }
 
-  if (SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_SWIPE) {
+  const bool swipeMode = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_SWIPE ||
+                         SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_SWIPE;
+  if (swipeMode) {
     // Horizontal swipes turn pages; taps remain free for the centered reader-menu
     // zone. A slow swipe never becomes a long-press chapter skip.
+    // Inverted reverses which way advances, the same choice INVERTED_TAP offers for taps:
+    // vertical Japanese text reads right-to-left, so the advancing gesture runs the other way.
+    const bool invertedSwipe = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_SWIPE;
     const auto dir = input.wasSwipe();
     if (dir == MappedInputManager::SwipeDir::Left) {
-      result.next = true;
+      result.next = !invertedSwipe;
+      result.prev = invertedSwipe;
     } else if (dir == MappedInputManager::SwipeDir::Right) {
-      result.prev = true;
+      result.prev = !invertedSwipe;
+      result.next = invertedSwipe;
     }
     return result;
   }

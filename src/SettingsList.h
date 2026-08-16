@@ -335,10 +335,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             "wordLookupSideButtons", StrId::STR_CAT_CONTROLS),
         // Upstream widened this from {OFF, ON} to four modes. Index 1 stays the plain tap mode,
         // so a Matcha user who had it ON keeps the behaviour they had; 2 and 3 are new.
-        SettingInfo::Enum(
-            StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
-            {StrId::STR_STATE_OFF, StrId::STR_STATE_TAP, StrId::STR_STATE_SWIPE, StrId::STR_STATE_INVERTED_TAP},
-            "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
+                          {StrId::STR_STATE_OFF, StrId::STR_STATE_TAP, StrId::STR_STATE_SWIPE,
+                           StrId::STR_STATE_INVERTED_TAP, StrId::STR_STATE_INVERTED_SWIPE},
+                          "touchReaderControls", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_TAP_FOR_READER_MENU, &CrossPointSettings::tapForReaderMenu, "tapForReaderMenu",
                             StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,

@@ -328,6 +328,7 @@ open a list when selected.
   - "Tap" (default) - Tap the left third to go back, the right third to go forward
   - "Swipe" - Swipe horizontally to turn pages, leaving taps free for the reader menu
   - "Inverted Tap" - As "Tap", with the sides reversed. Useful for vertical Japanese text, which reads right-to-left
+  - "Inverted Swipe" - As "Swipe", with the directions reversed, for the same reason
 
 - **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
 

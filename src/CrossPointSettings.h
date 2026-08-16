@@ -183,6 +183,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     TOUCH_READER_ON = 1,
     TOUCH_READER_SWIPE = 2,
     TOUCH_READER_INVERTED_TAP = 3,
+    // Swipe with the page-turn directions reversed, as INVERTED_TAP is to ON. Vertical Japanese
+    // text reads right-to-left, so the gesture that advances a page runs the other way.
+    // Appended, not inserted: the value is persisted by index.
+    TOUCH_READER_INVERTED_SWIPE = 4,
     TOUCH_READER_CONTROLS_COUNT
   };
 
