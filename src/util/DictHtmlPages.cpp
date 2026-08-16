@@ -279,6 +279,9 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       // line: drawing both is the gap between a transcription and the part of speech below it.
       if (!closing && isBr && nextOpensBlock(html, j + 1)) {
         i = j + 1;
+        // Skip the newline the source writes between them too: with the <br> gone it is a text
+        // run of its own sitting between two blocks, which the layout gives a line to.
+        while (i < n && std::isspace(static_cast<unsigned char>(html[i]))) i++;
         continue;
       }
 
