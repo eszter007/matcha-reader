@@ -139,6 +139,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     FORCE_REFRESH = 3,
     FOOTNOTES = 4,
     WORD_LOOKUP = 5,
+    // Appended after WORD_LOOKUP, not at 5 as upstream has it: this value is persisted by
+    // index and Matcha already shipped WORD_LOOKUP there, so taking 5 would silently turn
+    // every existing Word Lookup setting into Confirm.
+    PWR_CONFIRM = 6,
     SHORT_PWRBTN_COUNT
   };
 
@@ -151,6 +155,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     LP_MENU_DISABLED = 1,
     LP_MENU_BOOKMARK = 2,
     LP_MENU_DICTIONARY = 3,
+    LP_MENU_READER_MENU = 4,
     LONG_PRESS_MENU_FUNCTION_COUNT
   };
 
@@ -173,7 +178,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 
   enum TILT_PAGE_TURN { TILT_OFF = 0, TILT_NORMAL = 1, TILT_NVERTED = 2, TILT_PAGE_TURN_COUNT };
 
-  enum TOUCH_READER_CONTROLS { TOUCH_READER_OFF = 0, TOUCH_READER_ON = 1, TOUCH_READER_CONTROLS_COUNT };
+  enum TOUCH_READER_CONTROLS {
+    TOUCH_READER_OFF = 0,
+    TOUCH_READER_ON = 1,
+    TOUCH_READER_SWIPE = 2,
+    TOUCH_READER_INVERTED_TAP = 3,
+    TOUCH_READER_CONTROLS_COUNT
+  };
 
   enum QUICK_RESUME_SLEEP_SCREEN {
     QUICK_RESUME_NEVER = 0,
@@ -310,6 +321,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     WORD_LOOKUP_FONT_SIZE_COUNT
   };
   uint8_t wordLookupFontSize = WORD_LOOKUP_FONT_SMALL;
+  // Center-third tap opens the reader menu (0 = disabled, 1 = enabled). Only
+  // surfaced on home-key boards, where the menu stays reachable without it.
+  uint8_t tapForReaderMenu = 1;
+  // Frontlight quick-panel state. Category-less SettingsList entries persist
+  // these without adding them to the regular Settings screen.
+  uint8_t frontlightBrightness = 60;
+  uint8_t frontlightWarmth = 50;  // 0 = cool .. 100 = warm
+  uint8_t frontlightOn = 0;
+  // Restore the saved on/off state after a normal boot or wake. Brightness and
+  // warmth are always remembered even when this is disabled.
+  uint8_t frontlightRestoreOnWake = 1;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.

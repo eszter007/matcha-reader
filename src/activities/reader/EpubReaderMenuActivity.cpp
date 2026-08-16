@@ -1,8 +1,10 @@
 #include "EpubReaderMenuActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalFrontlight.h>
 #include <I18n.h>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
@@ -61,7 +63,7 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
     bool hideGenericLookup, bool showPanelsOnlyToggle) {
   std::vector<MenuItem> items;
-  items.reserve(16);
+  items.reserve(MAX_MENU_ITEMS);
 
   // Minimal menu for the image readers (XTC): a page-based format has no text/footnotes/vertical
   // toggles, so only chapter select (when present), Go-to-page, bookmarks, screenshot and
@@ -96,11 +98,17 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+  items.push_back({MenuAction::NIGHT_MODE, StrId::STR_NIGHT_MODE});
+  if (Frontlight.present()) {
+    items.push_back({MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT});
+  }
   // Free-form dictionary lookup doesn't apply to manga (Word Lookup covers OCR'd text) or to
   // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense.
   if (!mangaMode && !hideGenericLookup) {
     items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
   }
+  // Text Settings is not re-added here even though upstream lists it: this fork reaches it
+  // through READER_SETTINGS above, which manga can open too.
   // Reading Orientation removed from this quick menu entirely; it's a proper setting under
   // Settings > Reader (SettingsList.h, tied to CrossPointSettings::orientation directly) for
   // every reader type now that Reader Settings is reachable from manga too (see above) --
@@ -158,6 +166,22 @@ void EpubReaderMenuActivity::activateIndex(const int index) {
                        selectedPageTurnOption = idx;
                        requestUpdate();
                      });
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::NIGHT_MODE) {
+    SETTINGS.screenInverted = SETTINGS.screenInverted == 0 ? 1 : 0;
+    SETTINGS.saveToFile();
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::FRONTLIGHT) {
+    const bool lightOn = !Frontlight.isOn();
+    Frontlight.setOn(lightOn);
+    SETTINGS.frontlightOn = lightOn ? 1 : 0;
+    SETTINGS.saveToFile();
     requestUpdate();
     return;
   }
@@ -229,14 +253,17 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // menuRowItems's labels/actionValue were set once in the constructor (see
-  // buildMenuRowItems()); only the two rows with a live value (orientation,
-  // page-turn interval) need refreshing here.
+  // buildMenuRowItems()); only rows with live values need refreshing here.
   for (size_t i = 0; i < menuItems.size(); i++) {
     const auto action = menuItems[i].action;
     if (action == MenuAction::ROTATE_SCREEN) {
       menuRowItems[i].value = I18N.get(orientationLabels[pendingOrientation]);
     } else if (action == MenuAction::AUTO_PAGE_TURN) {
       menuRowItems[i].value = pageTurnLabels[selectedPageTurnOption];
+    } else if (action == MenuAction::NIGHT_MODE) {
+      menuRowItems[i].value = I18N.get(SETTINGS.screenInverted ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
+    } else if (action == MenuAction::FRONTLIGHT) {
+      menuRowItems[i].value = I18N.get(Frontlight.isOn() ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
     }
   }
 

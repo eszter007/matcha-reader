@@ -506,8 +506,14 @@ void XtcReaderActivity::renderPage() {
       // Periodic ghost cleanup: scrub via the normal path, then run the
       // settle flavor of the grayscale base pass (DTM planes are equal after
       // the display sync, so only the gentle reinforcement cells fire).
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-      renderer.preconditionGrayscale();
+      // Combined-base panels (Paper Mono) instead defer the base so the gray
+      // planes below join it in one waveform.
+      if (renderer.combinesGrayscaleBase()) {
+        renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+      } else {
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        renderer.preconditionGrayscale();
+      }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {
       // OEM grayscale pipeline base: differential "AA-pre-BW(mid)" update as
