@@ -717,45 +717,37 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
   // them gives the PNG decoder the roughly 60 KB it needs.
   if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
 
-  ImageDimensions dimensions;
-  if (!PngToFramebufferConverter::getDimensionsStatic(path, dimensions)) return false;
+  ImageDimensions dims{};
+  if (!PngToFramebufferConverter::getDimensionsStatic(path, dims)) return false;
+  if (dims.width <= 0 || dims.height <= 0) return false;
 
-  const auto placement = calculateBitmapPlacement(dimensions.width, dimensions.height, renderer);
-  RenderConfig config;
-  config.x = placement.x;
-  config.y = placement.y;
-  config.maxWidth = renderer.getScreenWidth();
-  config.maxHeight = renderer.getScreenHeight();
-  config.useDithering = false;
-  config.sourceCropX = placement.cropX;
-  config.sourceCropY = placement.cropY;
-  config.useExactDimensions = placement.cropX > 0.0f || placement.cropY > 0.0f;
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  
+  float scale = 1.0f;
+  if (dims.width > 0 && dims.height > 0) {
+    const float widthScale = static_cast<float>(pageWidth) / static_cast<float>(dims.width);
+    const float heightScale = static_cast<float>(pageHeight) / static_cast<float>(dims.height);
+    scale = std::min(widthScale, heightScale);
+    if (scale > 1.0f) scale = 1.0f;
+  }
+  
+  const int dstWidth = static_cast<int>(dims.width * scale);
+  const int dstHeight = static_cast<int>(dims.height * scale);
+
+  RenderConfig config{};
+  config.x = (pageWidth - dstWidth) / 2;
+  config.y = (pageHeight - dstHeight) / 2;
+  config.maxWidth = pageWidth;
+  config.maxHeight = pageHeight;
+  config.useGrayscale = false;
   config.preserveAlpha = true;
 
   PngToFramebufferConverter converter;
-  LOG_DBG("SLP", "Rendering transparent PNG overlay: %s (%dx%d)", path.c_str(), dimensions.width, dimensions.height);
+  LOG_DBG("SLP", "Rendering transparent PNG overlay: %s (%dx%d)", path.c_str(), dims.width, dims.height);
 
   if (!converter.decodeToFramebuffer(path, renderer, config)) return false;
-  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
-
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!converter.decodeToFramebuffer(path, renderer, config)) {
-    renderer.setRenderMode(GfxRenderer::BW);
-    return true;
-  }
-  renderer.copyGrayscaleLsbBuffers();
-
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!converter.decodeToFramebuffer(path, renderer, config)) {
-    renderer.setRenderMode(GfxRenderer::BW);
-    return true;
-  }
-  renderer.copyGrayscaleMsbBuffers();
-
-  renderer.displayGrayBuffer();
-  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   return true;
 }
 
