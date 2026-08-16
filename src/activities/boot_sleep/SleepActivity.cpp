@@ -724,13 +724,10 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
 
-  float scale = 1.0f;
-  if (dims.width > 0 && dims.height > 0) {
-    const float widthScale = static_cast<float>(pageWidth) / static_cast<float>(dims.width);
-    const float heightScale = static_cast<float>(pageHeight) / static_cast<float>(dims.height);
-    scale = std::min(widthScale, heightScale);
-    if (scale > 1.0f) scale = 1.0f;
-  }
+  const float widthScale = static_cast<float>(pageWidth) / static_cast<float>(dims.width);
+  const float heightScale = static_cast<float>(pageHeight) / static_cast<float>(dims.height);
+  float scale = std::min(widthScale, heightScale);
+  if (scale > 1.0f) scale = 1.0f;
 
   const int dstWidth = static_cast<int>(dims.width * scale);
   const int dstHeight = static_cast<int>(dims.height * scale);
