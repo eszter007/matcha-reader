@@ -44,6 +44,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
       - [Custom images](#custom-images)
       - [Transparent sleep screen](#transparent-sleep-screen)
     - [3.8 Custom Fonts (SD Card)](#38-custom-fonts-sd-card)
+    - [3.9 Language Packs (SD Card)](#39-language-packs-sd-card)
   - [4. Reading Mode](#4-reading-mode)
     - [Page Turning](#page-turning)
     - [Chapter Navigation](#chapter-navigation)
@@ -320,6 +321,18 @@ open a list when selected.
   - "Footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
   - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
+  - "Confirm" - A short press acts as the Confirm button. Only offered on touch devices, which have no front Confirm key.
+
+- **Touch Reader Controls**: How the touchscreen turns pages while reading (touch devices only):
+  
+  - "Off" - The reading surface ignores touch entirely
+  - "Tap" (default) - Tap the left third to go back, the right third to go forward
+  - "Swipe" - Swipe horizontally to turn pages, leaving taps free for the reader menu
+  - "Inverted Tap" - As "Tap", with the sides reversed. Useful for vertical Japanese text, which reads right-to-left
+  - "Inverted Swipe" - As "Swipe", with the directions reversed, for the same reason
+
+- **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
+
 - **Quick-return from footnotes**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
 
 #### 3.6.4 System
@@ -336,7 +349,10 @@ open a list when selected.
 
 - **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi. Firmware can also be updated without a USB connection by placing a `firmware.bin` file on the SD card.
 
-- **Language**: Set the UI language. CrossPoint supports 24 languages: English, Spanish, French, German, Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish, Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, and Hebrew.
+- **Language**: Set the UI language. English, Japanese, Spanish, French and German are built into the firmware. The
+  rest — Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish,
+  Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew and more — are listed
+  too, but marked **Needs pack** until you install a language pack. See [Language Packs (SD Card)](#39-language-packs-sd-card).
 
 - **Manage Fonts**: Browse, download, and manage custom font families installed from the SD card. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card) for more information.
 
@@ -593,6 +609,23 @@ Once installed, custom fonts appear in **Settings → Reader → Font Family** a
 A font that only widens another one's character coverage does not get its own row. `NotoSerifExtended` is Noto Serif plus Greek, Cyrillic and phonetic characters, so it is folded into the **Noto Serif** entry rather than listed beside it; the same applies to any `…Extended` or `…IPA` font whose base font is present. Selecting the single row gives you the widest version installed, except in a Japanese book, where the base font is paired with the Japanese font instead — only one SD font is ever held in memory at a time. A variant whose base font is *not* installed keeps its own row, so its characters are always reachable.
 
 See [docs/sd-card-fonts.md](./docs/sd-card-fonts.md) for full installation details and SD card folder structure.
+
+### 3.9 Language Packs (SD Card)
+
+English, Japanese, Spanish, French and German are built into the firmware. Every other translation ships separately as
+a **language pack**, so the ~30 remaining languages do not have to occupy flash on a device that only ever displays one
+of them. All languages still appear in **Settings → System → Language**; the ones without a pack installed are marked
+**Needs pack** and selecting one leaves the interface as it was.
+
+To install one:
+
+1. Download `language-packs.zip` from the [release you are running](https://github.com/eszter007/matcha-reader/releases).
+2. Unzip it and copy the `.cplang` file for your language — for example `RU.cplang` — into `/.crosspoint/lang/` on the
+   SD card, creating the folder if it is not there. You can copy them all; only the selected one is ever loaded.
+3. Put the card back and pick the language in **Settings → System → Language**.
+
+A pack is tied to the firmware it was built with. After a firmware update, download the packs from the new release as
+well: a mismatched pack is refused and the language stays on English rather than showing wrong text.
 
 ---
 

@@ -1,23 +1,32 @@
-name: Compile Release Candidate
+name: Compile Release
+
+# Builds every board's release firmware on tag push, with the .bin named
+# exactly as OtaUpdater requests it from the GitHub release: plain
+# firmware.bin for the C3 X4/X3 binary, firmware-<board>.bin for every other
+# board. Attach the artifacts' .bin files to the release as-is.
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: read
 
 jobs:
-  build-release-candidate:
-    if: startsWith(github.ref_name, 'release/')
+  build-release:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - pio_env: gh_release_rc
+          - pio_env: gh_release
             asset: firmware.bin
-          - pio_env: sticky-gh_release_rc
+          - pio_env: sticky-gh_release
             asset: firmware-sticky.bin
-          - pio_env: x4pro-gh_release_rc
+          - pio_env: x4pro-gh_release
             asset: firmware-x4pro.bin
-          - pio_env: papermono-gh_release_rc
+          - pio_env: papermono-gh_release
             asset: firmware-papermono.bin
     steps:
       - uses: actions/checkout@v6
@@ -26,9 +35,6 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          # 3.13, not 3.14: PlatformIO Core 6.1.19 cannot build its penv on 3.14
-          # ("Failed to install Python dependencies into penv"), which fails every job
-          # before a single file is compiled. Raise only once pio can create its env there.
           python-version: '3.13'
 
       - name: Install uv
@@ -55,14 +61,7 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
-      - name: Extract env
-        run: |
-          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          echo "BRANCH_SUFFIX=${GITHUB_REF_NAME#release/}" >> $GITHUB_ENV
-
-      - name: Build CrossPoint Release Candidate
-        env:
-          CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
+      - name: Build CrossPoint
         run: pio run -e ${{ matrix.pio_env }} -j1
 
       - name: Name release asset
@@ -75,10 +74,53 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CrossPoint-RC-${{ env.BRANCH_SUFFIX }}-${{ matrix.pio_env }}
+          name: ${{ matrix.asset }}
           path: |
             .pio/build/${{ matrix.pio_env }}/bootloader.bin
             .pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}
             .pio/build/${{ matrix.pio_env }}/firmware.elf
             .pio/build/${{ matrix.pio_env }}/firmware.map
             .pio/build/${{ matrix.pio_env }}/partitions.bin
+
+  # Languages that are not compiled in ship as .cplang packs for the SD card. A pack is
+  # only valid for the firmware it was generated with -- it is indexed by string-key
+  # position and refuses to load when the count differs -- so it is built from the same
+  # tag as the .bin files and attached to the same release.
+  language-packs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Generate language packs
+        run: |
+          # Read the built-in set from platformio.ini so the packs are exactly the
+          # complement of what the firmware carries.
+          BUILTIN=$(sed -n 's/^custom_i18n_builtin_langs *= *//p' platformio.ini | head -1)
+          if [ -z "$BUILTIN" ]; then
+            echo "custom_i18n_builtin_langs missing from platformio.ini" >&2
+            exit 1
+          fi
+          echo "Built-in languages: $BUILTIN"
+          # --strip-unused matches the pre-build hook, so the key count agrees with the firmware.
+          python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ \
+            --strip-unused --builtin-langs "$BUILTIN" --pack-dir dist/lang
+
+      - name: Validate packs against the generated key table
+        run: python3 scripts/check_language_packs.py lib/I18n/I18nKeys.h dist/lang
+
+      - name: Bundle packs
+        run: |
+          cd dist
+          zip -r ../language-packs.zip lang
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: language-packs
+          path: |
+            language-packs.zip
+            dist/lang/*.cplang

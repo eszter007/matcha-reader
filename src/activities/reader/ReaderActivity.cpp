@@ -149,11 +149,13 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
   if (!endOfBookOptions) {
     endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
     if (!endOfBookOptions) LOG_ERR(logTag, "OOM: EndOfBookOptions");
-    endOfBookOptionsReady.store(endOfBookOptions != nullptr, std::memory_order_release);
   }
   renderer.clearScreen();
   if (endOfBookOptions) {
     endOfBookOptions->loadOnce(bookPath);
+    // Release-publish AFTER loadOnce() so the main task's acquire load can't
+    // observe an object whose names/selector are still being populated.
+    endOfBookOptionsReady.store(true, std::memory_order_release);
     endOfBookOptions->render(renderer, mappedInput);
   }
   renderer.displayBuffer();

@@ -15,6 +15,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
     SELECT_CHAPTER,
     FOOTNOTES,
     TEXT_SETTINGS,
+    NIGHT_MODE,
+    FRONTLIGHT,
     GO_TO_PERCENT,
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
@@ -56,16 +58,16 @@ class EpubReaderMenuActivity final : public UiListActivity {
                                               bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
                                               bool showPanelsOnlyToggle);
 
-  // Row storage: menuItems is at most MAX_MENU_ITEMS (1 fixed + FOOTNOTES +
-  // BOOKMARKS + 11 always-present rows in buildMenuItems()), so a
+  // Row storage: menuItems is at most MAX_MENU_ITEMS, so a
   // fixed-capacity array avoids any heap allocation for the row list. Labels
   // are set once in the constructor (buildMenuRowItems()); buildScreen()
-  // only refreshes the two rows whose value reflects live state (rotation,
-  // page-turn interval).
-  // 16 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
-  // Reader Settings on top of upstream's set); 18 leaves headroom for one more without a silent
-  // truncation, which a fixed-capacity array cannot report.
-  static constexpr size_t MAX_MENU_ITEMS = 18;
+  // only refreshes the rows whose value reflects live state (rotation,
+  // page-turn interval, night mode, frontlight).
+  // 18 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
+  // Reader Settings on top of upstream's set, plus upstream's Night Mode and Frontlight); 20
+  // leaves headroom for one more without a silent truncation, which a fixed-capacity array
+  // cannot report.
+  static constexpr size_t MAX_MENU_ITEMS = 20;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
   void buildMenuRowItems();
 
