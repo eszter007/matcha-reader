@@ -258,11 +258,19 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
 
       // A sense's gloss runs until its first block child (the translations) or the end of the
       // item, whichever comes first. Closing its block ends the line, so nothing is left pending.
-      if (glossOpen && ((!closing && (isList || isDiv)) || (closing && isLi))) {
+      if (glossOpen && ((!closing && (isList || isDiv)) || (closing && (isLi || isDiv)))) {
         if (!out.append("</b></div>")) return false;
         glossOpen = false;
         inlineTextPending = false;
       }
+
+      // The gloss is bare text between the part of speech and the next block. A block arriving
+      // first means this entry states no gloss there -- a single translation, or a list of
+      // senses that carry their own. Cancel it: left pending it fired later, inside whatever
+      // block did contain text, opening a bold block that nothing closed. Four of the entries
+      // tested (similarity, scion, pernicious, time) were malformed by exactly that, which made
+      // the parse fail and the whole entry fall back to unstyled plain text.
+      if (expectGloss && (isList || isLi || isDiv)) expectGloss = false;
 
       // A block that opens straight after inline text does not break the line by itself in this
       // parser, so a single-sense entry ran its gloss into its translation ("outside layer of a
