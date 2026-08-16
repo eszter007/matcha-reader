@@ -163,7 +163,8 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   // so the text it follows would run into it ("outside layer of a grainKleie"). Tracks whether
   // any text is pending since the last block boundary.
   bool inlineTextPending = false;
-  bool expectGloss = false;  // the next text run is a single-sense entry's gloss
+  bool expectGloss = false;    // the next text run is a single-sense entry's gloss
+  bool pronBlockOpen = false;  // inside the block holding the entry's transcriptions
   while (i < n) {
     const char c = html[i];
     if (c == '<' && i + 1 < n && (html[i + 1] == '!' || html[i + 1] == '?')) {
@@ -270,6 +271,13 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       // block did contain text, opening a bold block that nothing closed. Four of the entries
       // tested (similarity, scion, pernicious, time) were malformed by exactly that, which made
       // the parse fail and the whole entry fall back to unstyled plain text.
+      // The transcriptions end where the entry's first block begins.
+      if (pronBlockOpen && (isList || isLi || isDiv || isBr)) {
+        if (!out.append("</div>")) return false;
+        pronBlockOpen = false;
+        inlineTextPending = false;
+      }
+
       if (expectGloss && (isList || isLi || isDiv)) expectGloss = false;
 
       // A block that opens straight after inline text does not break the line by itself in this
@@ -425,6 +433,15 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       }
       inlineTextPending = true;
       continue;
+    }
+    // The transcriptions are the entry's opening line: "/x/, /y/, /z/". Justified, a line of two
+    // or three stretches the gaps between them across the whole panel, which reads as a layout
+    // fault rather than as text. Give just this line its own left-aligned block -- the rest of
+    // the entry keeps whatever alignment the reader chose for prose.
+    if (!pronBlockOpen && !inPronunciation && c == '/' && html.compare(i + 1, 5, "<font") == 0 &&
+        html.find("gray", i + 1) != std::string::npos && html.find("gray", i + 1) < html.find('>', i + 1)) {
+      if (!out.append("<div style=\"text-align:left;margin-top:0;margin-bottom:0\">")) return false;
+      pronBlockOpen = true;
     }
     if (std::isspace(static_cast<unsigned char>(c)) && expectGloss) {
       i++;  // leading whitespace belongs to neither block
