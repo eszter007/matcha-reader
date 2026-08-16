@@ -345,6 +345,18 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         continue;
       }
 
+      // Plain <div>s carry the engine's default vertical margins, which stack with the breaks and
+      // spacers this file emits: that margin is the space left between an entry's transcription
+      // and its part of speech even after the redundant <br> was dropped. Zero them so all
+      // spacing in an entry comes from something written here on purpose. Only for a bare <div>;
+      // one that already carries a style attribute is ours and says what it wants.
+      const bool bareDiv = isDiv && !closing && nameEnd == j;
+      if (bareDiv) {
+        if (!out.append("<div style=\"margin-top:0;margin-bottom:0\">")) return false;
+        i = j + 1;
+        continue;
+      }
+
       if (!out.append('<')) return false;
       if (closing && !out.append('/')) return false;
       if (!out.append(nameBuf, nameLen)) return false;
