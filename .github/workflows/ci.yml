@@ -159,6 +159,50 @@ jobs:
           path: .pio/build/${{ matrix.env }}/firmware.bin
           if-no-files-found: error
 
+  # Languages outside custom_i18n_builtin_langs ship as .cplang packs for the SD card, and a pack
+  # is only valid for the firmware it was generated with. Building them here keeps a translation
+  # change from reaching a release as a pack that no device will load, and puts a downloadable
+  # set on every PR for testing.
+  language-packs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Generate language packs
+        run: |
+          set -euo pipefail
+          # Read the built-in set from platformio.ini so the packs are exactly the complement
+          # of what the firmware carries.
+          BUILTIN=$(sed -n 's/^custom_i18n_builtin_langs *= *//p' platformio.ini | head -1)
+          if [ -z "$BUILTIN" ]; then
+            echo "custom_i18n_builtin_langs missing from platformio.ini" >&2
+            exit 1
+          fi
+          echo "Built-in languages: $BUILTIN"
+          # --strip-unused matches the pre-build hook, so the key count agrees with the firmware.
+          python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ \
+            --strip-unused --builtin-langs "$BUILTIN" --pack-dir dist/lang
+
+      - name: Validate packs against the generated key table
+        run: python3 scripts/check_language_packs.py lib/I18n/I18nKeys.h dist/lang
+
+      - name: Bundle packs
+        run: |
+          set -euo pipefail
+          cd dist
+          zip -r ../language-packs.zip lang
+
+      - name: Upload language packs
+        uses: actions/upload-artifact@v6
+        with:
+          name: language-packs
+          path: language-packs.zip
+          if-no-files-found: error
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -194,6 +238,7 @@ jobs:
       - build
       - clang-format
       - cppcheck
+      - language-packs
       - unit-tests
     if: always()
     runs-on: ubuntu-latest

@@ -109,6 +109,9 @@ jobs:
           python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ \
             --strip-unused --builtin-langs "$BUILTIN" --pack-dir dist/lang
 
+      - name: Validate packs against the generated key table
+        run: python3 scripts/check_language_packs.py lib/I18n/I18nKeys.h dist/lang
+
       - name: Bundle packs
         run: |
           cd dist
