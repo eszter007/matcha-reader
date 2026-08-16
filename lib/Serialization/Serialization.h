@@ -48,14 +48,27 @@ void writePod(HalFile& file, const T& value) {
   file.write(reinterpret_cast<const uint8_t*>(&value), sizeof(T));
 }
 
+// Every serialized string is preceded by its length, and that length is then handed to
+// std::string::resize(). A cache file truncated or misread -- an SD card failing mid-read is the
+// case seen in the wild -- yields a nonsense length, and resize() on it either throws
+// length_error or exhausts the heap. Under -fno-exceptions both end at abort(), taking the
+// device down while it was only trying to read a book's title. So: the readers below zero their
+// output before reading, report whether the read was complete, and refuse a length that cannot
+// be true. No string this format stores is anywhere near this size.
+constexpr uint32_t MAX_SERIALIZED_STRING = 64 * 1024;
+
+// Returns false on a short read, having left `value` zeroed rather than holding stack garbage.
 template <typename T>
-void readPod(std::istream& is, T& value) {
+bool readPod(std::istream& is, T& value) {
+  value = T{};
   is.read(reinterpret_cast<char*>(&value), sizeof(T));
+  return is.gcount() == static_cast<std::streamsize>(sizeof(T));
 }
 
 template <typename T>
-void readPod(HalFile& file, T& value) {
-  file.read(reinterpret_cast<uint8_t*>(&value), sizeof(T));
+bool readPod(HalFile& file, T& value) {
+  value = T{};
+  return file.read(reinterpret_cast<uint8_t*>(&value), sizeof(T)) == static_cast<int>(sizeof(T));
 }
 
 inline void writeString(std::ostream& os, const std::string& s) {
@@ -70,17 +83,25 @@ inline void writeString(HalFile& file, const std::string& s) {
   file.write(reinterpret_cast<const uint8_t*>(s.data()), len);
 }
 
-inline void readString(std::istream& is, std::string& s) {
-  uint32_t len;
-  readPod(is, len);
+inline bool readString(std::istream& is, std::string& s) {
+  s.clear();
+  uint32_t len = 0;
+  if (!readPod(is, len) || len > MAX_SERIALIZED_STRING) return false;
   s.resize(len);
+  if (len == 0) return true;
   is.read(&s[0], len);
+  return is.gcount() == static_cast<std::streamsize>(len);
 }
 
-inline void readString(HalFile& file, std::string& s) {
-  uint32_t len;
-  readPod(file, len);
+inline bool readString(HalFile& file, std::string& s) {
+  s.clear();
+  uint32_t len = 0;
+  if (!readPod(file, len) || len > MAX_SERIALIZED_STRING) return false;
+  // A length past the end of the file is corruption however plausible its size looks.
+  const int remaining = file.available();
+  if (remaining >= 0 && len > static_cast<uint32_t>(remaining)) return false;
   s.resize(len);
-  file.read(&s[0], len);
+  if (len == 0) return true;
+  return file.read(&s[0], len) == static_cast<int>(len);
 }
 }  // namespace serialization
