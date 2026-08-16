@@ -656,8 +656,12 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // common fits-on-one-line case takes the renderer's fast path anyway.
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;
+  const fui::Rect listRect = screen.body();
   syncTabListViewport(screen, props);
   screen.list(props);
+  // Reader Settings reports the applied dictionary without offering a choice; that row is
+  // disabled, and this is what makes it look it.
+  thinDisabledRows(renderer, screen, props, listRect, listCount(), activeNav().visibleRows);
 }
 
 void SettingsActivity::render(RenderLock&&) {
