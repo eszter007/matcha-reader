@@ -471,15 +471,21 @@ bool BookMetadataCache::load() {
     return false;
   }
 
-  serialization::readPod(bookFile, lutOffset);
-  serialization::readPod(bookFile, spineCount);
-  serialization::readPod(bookFile, tocCount);
-
-  serialization::readString(bookFile, coreMetadata.title);
-  serialization::readString(bookFile, coreMetadata.author);
-  serialization::readString(bookFile, coreMetadata.language);
-  serialization::readString(bookFile, coreMetadata.coverItemHref);
-  serialization::readString(bookFile, coreMetadata.textReferenceHref);
+  // A cache file that cannot be read through is treated as absent, not as a book with empty
+  // metadata: the caller rebuilds it, where a half-loaded cache would be believed and kept.
+  // This is the path that aborted on a device whose SD card was failing mid-read.
+  const bool headerOk = serialization::readPod(bookFile, lutOffset) && serialization::readPod(bookFile, spineCount) &&
+                        serialization::readPod(bookFile, tocCount) &&
+                        serialization::readString(bookFile, coreMetadata.title) &&
+                        serialization::readString(bookFile, coreMetadata.author) &&
+                        serialization::readString(bookFile, coreMetadata.language) &&
+                        serialization::readString(bookFile, coreMetadata.coverItemHref) &&
+                        serialization::readString(bookFile, coreMetadata.textReferenceHref);
+  if (!headerOk) {
+    LOG_ERR("BMC", "Cache header unreadable or corrupt; discarding");
+    bookFile.close();
+    return false;
+  }
 
   // Cache cumulative spine sizes in RAM. The progress bar (every render) and percent
   // jumps otherwise pay 2 seeks + a heap-allocating SpineEntry read per access. Spine

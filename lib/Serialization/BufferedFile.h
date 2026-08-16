@@ -1,6 +1,7 @@
 #pragma once
 #include <HalStorage.h>
 #include <Memory.h>
+#include <Serialization.h>
 
 #include <algorithm>
 #include <cstring>
@@ -138,9 +139,12 @@ void writePod(BufferedFileWriter& out, const T& value) {
   out.write(&value, sizeof(T));
 }
 
+// Zeroes `value` first and reports a short read, so a caller can never act on stack garbage --
+// see the note on MAX_SERIALIZED_STRING in Serialization.h for what that cost us.
 template <typename T>
-void readPod(BufferedFileReader& in, T& value) {
-  in.read(&value, sizeof(T));
+bool readPod(BufferedFileReader& in, T& value) {
+  value = T{};
+  return in.read(&value, sizeof(T)) == sizeof(T);
 }
 
 inline void writeString(BufferedFileWriter& out, const std::string& s) {
@@ -149,13 +153,13 @@ inline void writeString(BufferedFileWriter& out, const std::string& s) {
   out.write(s.data(), len);
 }
 
-inline void readString(BufferedFileReader& in, std::string& s) {
-  uint32_t len;
-  readPod(in, len);
+inline bool readString(BufferedFileReader& in, std::string& s) {
+  s.clear();
+  uint32_t len = 0;
+  if (!readPod(in, len) || len > MAX_SERIALIZED_STRING) return false;
   s.resize(len);
-  if (len > 0) {
-    in.read(&s[0], len);
-  }
+  if (len == 0) return true;
+  return in.read(&s[0], len) == len;
 }
 
 }  // namespace serialization
