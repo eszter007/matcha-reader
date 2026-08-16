@@ -320,6 +320,17 @@ open a list when selected.
   - "Footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
   - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
+  - "Confirm" - A short press acts as the Confirm button. Only offered on touch devices, which have no front Confirm key.
+
+- **Touch Reader Controls**: How the touchscreen turns pages while reading (touch devices only):
+  
+  - "Off" - The reading surface ignores touch entirely
+  - "Tap" (default) - Tap the left third to go back, the right third to go forward
+  - "Swipe" - Swipe horizontally to turn pages, leaving taps free for the reader menu
+  - "Inverted Tap" - As "Tap", with the sides reversed. Useful for vertical Japanese text, which reads right-to-left
+
+- **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
+
 - **Quick-return from footnotes**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
 
 #### 3.6.4 System
