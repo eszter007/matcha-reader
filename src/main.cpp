@@ -85,10 +85,12 @@ EpdFont notoserif16RegularFont(&notoserif_16_regular);
 EpdFont notoserif16BoldFont(&notoserif_16_bold);
 EpdFont notoserif16ItalicFont(&notoserif_16_italic);
 EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont);
+// 18pt ships regular only: its bold and italic cuts cost ~304 KB of flash between the two
+// families, and this is the one size where the C3 build has no room for them. EpdFontFamily::
+// getFont() resolves a missing style to regular, so emphasis flattens rather than breaking; an
+// installed SD family carries all four styles and restores it.
 EpdFont notoserif18RegularFont(&notoserif_18_regular);
-EpdFont notoserif18BoldFont(&notoserif_18_bold);
-EpdFont notoserif18ItalicFont(&notoserif_18_italic);
-EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont);
+EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont);
 
 EpdFont notosans12RegularFont(&notosans_12_regular);
 EpdFont notosans12BoldFont(&notosans_12_bold);
@@ -106,10 +108,9 @@ EpdFont notosans16RegularFont(&notosans_16_regular);
 EpdFont notosans16BoldFont(&notosans_16_bold);
 EpdFont notosans16ItalicFont(&notosans_16_italic);
 EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont);
+// Regular only, for the same reason as Noto Serif 18 above.
 EpdFont notosans18RegularFont(&notosans_18_regular);
-EpdFont notosans18BoldFont(&notosans_18_bold);
-EpdFont notosans18ItalicFont(&notosans_18_italic);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont);
+EpdFontFamily notosans18FontFamily(&notosans18RegularFont);
 
 #endif  // OMIT_FONTS
 
