@@ -135,6 +135,37 @@ inline freeink::ui::BitmapRef listIconFor(const UIIcon icon, const int size = 24
 // The radii are deliberately larger than any switch we draw: fui::toggle clamps the track to
 // height/2 and the knob to its own height/2, so an over-large value is the way to say "fully
 // round" without restating the geometry here.
+// Thin a disabled row's contents with a checkerboard mask, drawn over the finished list.
+//
+// The SDK marks a disabled row by giving it a dithered gray foreground, and GfxRenderer's 1-bit
+// text path cannot draw one -- FreeInkUIGfxRenderer::text reduces any paint to black or white,
+// so a non-solid one is ignored and the row draws exactly like an active one. Knocking out every
+// other pixel is how the legacy themes greyed text, and it is what the reader menu already does;
+// this is that loop, shared, so every list greys the same way.
+//
+// Masks the row's whole content band rather than the label alone, so a disabled row's value or
+// switch dims with its label. Only ever clears pixels, so it thins dark content and leaves the
+// background untouched.
+template <typename Screen>
+void thinDisabledRows(const GfxRenderer& renderer, Screen& screen, const freeink::ui::ListProps& props,
+                      const freeink::ui::Rect& listRect, const int count, const int visibleRows) {
+  if (props.items == nullptr) return;
+  const int16_t rowHeight = props.rowHeight > 0 ? props.rowHeight : screen.theme().rowHeight;
+  const int16_t rowGap = props.rowGap >= 0 ? props.rowGap : screen.theme().listRowGap;
+  const int16_t inset = static_cast<int16_t>(screen.theme().listInset + screen.theme().listSidePadding);
+  const int16_t left = static_cast<int16_t>(listRect.x + inset);
+  const int16_t right = static_cast<int16_t>(listRect.right() - inset);
+  for (int i = props.topIndex; i < count && i < props.topIndex + visibleRows; i++) {
+    if (props.items[i].enabled) continue;
+    const int16_t top = static_cast<int16_t>(listRect.y + (i - props.topIndex) * (rowHeight + rowGap));
+    for (int y = top; y < top + rowHeight; y++) {
+      for (int x = left; x < right; x++) {
+        if ((x + y) % 2 == 0) renderer.drawPixel(x, y, false);
+      }
+    }
+  }
+}
+
 inline void applySwitchStyle(freeink::ui::ListProps& props) {
   props.toggleRadius = 0xFF;      // clamped to height/2 -> pill ends
   props.toggleKnobRadius = 0xFF;  // clamped to knobHeight/2 -> circular knob

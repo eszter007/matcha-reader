@@ -285,25 +285,7 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   syncListViewport(screen, props);
   screen.list(props);
 
-  // GfxRenderer's 1-bit text path cannot draw the list style's gray foreground,
-  // so thin disabled labels with the same checkerboard mask as the legacy themes.
-  const int16_t rowHeight = props.rowHeight > 0 ? props.rowHeight : screen.theme().rowHeight;
-  const int16_t rowGap = props.rowGap >= 0 ? props.rowGap : screen.theme().listRowGap;
-  const int16_t textX = static_cast<int16_t>(listRect.x + screen.theme().listInset + screen.theme().listSidePadding);
-  const int16_t textAvail =
-      static_cast<int16_t>(listRect.right() - screen.theme().listInset - screen.theme().listSidePadding - textX);
-  const int16_t lineHeight = screen.target().lineHeight(screen.theme().bodyText.font);
-  for (int i = props.topIndex; i < listCount() && i < props.topIndex + nav.visibleRows; i++) {
-    if (menuRowItems[i].enabled) continue;
-    int16_t textWidth =
-        screen.target().measureText(screen.theme().bodyText.font, menuRowItems[i].label, screen.theme().bodyText).width;
-    if (textWidth > textAvail) textWidth = textAvail;
-    const int16_t textY =
-        static_cast<int16_t>(listRect.y + (i - props.topIndex) * (rowHeight + rowGap) + (rowHeight - lineHeight) / 2);
-    for (int y = textY; y < textY + lineHeight; y++)
-      for (int x = textX; x < textX + textWidth; x++)
-        if ((x + y) % 2 == 0) renderer.drawPixel(x, y, false);
-  }
+  thinDisabledRows(renderer, screen, props, listRect, listCount(), nav.visibleRows);
 }
 
 void EpubReaderMenuActivity::drawChrome() {

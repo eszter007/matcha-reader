@@ -234,6 +234,13 @@ class SettingsActivity final : public UiTabListActivity {
   // rather than opening the option popup.
   static bool settingIsSwitch(const SettingInfo& setting);
   static bool settingSwitchState(const SettingInfo& setting);
+  // A row the user cannot change: an enum with a getter but nothing to write through. Reader
+  // Settings shows the dictionary this way -- the book's language picks it, so the row reports
+  // the choice rather than offering one. Such rows draw disabled and the cursor steps over them.
+  static bool settingIsReadOnly(const SettingInfo& setting);
+  // First ring position at or after `ring` whose row is enabled, walking `direction`. Falls back
+  // to the current position when every row is disabled.
+  int enabledRingFrom(int ring, int direction) const;
   void selectCategory(int categoryIndex);
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
 

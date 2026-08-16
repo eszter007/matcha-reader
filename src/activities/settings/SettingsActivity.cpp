@@ -233,6 +233,7 @@ void SettingsActivity::rebuildRowItems() {
     fui::ListItem item;
     item.label = I18N.get(settings[i].nameId);
     item.actionValue = static_cast<int16_t>(i);
+    item.enabled = !settingIsReadOnly(settings[i]);
     rowItems_.push_back(item);
   }
 }
@@ -248,6 +249,7 @@ void SettingsActivity::onTabAction(const int index) {
 
 void SettingsActivity::activateIndex(const int index) {
   if (optionPopup.isActive()) return;
+  if (index >= 0 && index < static_cast<int>(rowItems_.size()) && !rowItems_[index].enabled) return;
   (void)index;  // toggleCurrentSetting reads the ring position
   // Most rows repaint a different surface (popup, sub-activity, new value);
   // a lingering tap flash would gray an unrelated element.
@@ -298,14 +300,28 @@ void SettingsActivity::navigateButtons() {
   // the visible rows (ring positions 1..N) instead of landing on hidden 0.
   const int count = listCount();
   if (count <= 0) return;
-  buttonNavigator.onNextRelease([this, count] { moveRingTo(ButtonNavigator::nextIndex(ringPos() - 1, count) + 1); });
+  buttonNavigator.onNextRelease(
+      [this, count] { moveRingTo(enabledRingFrom(ButtonNavigator::nextIndex(ringPos() - 1, count) + 1, 1)); });
   buttonNavigator.onPreviousRelease(
-      [this, count] { moveRingTo(ButtonNavigator::previousIndex(ringPos() - 1, count) + 1); });
-  buttonNavigator.onNextContinuous(
-      [this, count] { moveRingTo(ButtonNavigator::nextPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1); });
-  buttonNavigator.onPreviousContinuous([this, count] {
-    moveRingTo(ButtonNavigator::previousPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1);
+      [this, count] { moveRingTo(enabledRingFrom(ButtonNavigator::previousIndex(ringPos() - 1, count) + 1, -1)); });
+  buttonNavigator.onNextContinuous([this, count] {
+    moveRingTo(enabledRingFrom(ButtonNavigator::nextPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1, 1));
   });
+  buttonNavigator.onPreviousContinuous([this, count] {
+    moveRingTo(
+        enabledRingFrom(ButtonNavigator::previousPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1, -1));
+  });
+}
+
+int SettingsActivity::enabledRingFrom(int ring, const int direction) const {
+  const int count = listCount();
+  if (count <= 0) return ring;
+  for (int checked = 0; checked < count; checked++) {
+    const int row = ring - 1;
+    if (row < 0 || row >= static_cast<int>(rowItems_.size()) || rowItems_[row].enabled) return ring;
+    ring = (direction > 0 ? ButtonNavigator::nextIndex(row, count) : ButtonNavigator::previousIndex(row, count)) + 1;
+  }
+  return ringPos();
 }
 
 bool SettingsActivity::handleButtons() {
@@ -314,6 +330,8 @@ bool SettingsActivity::handleButtons() {
       // Embedded single-category mode (reader menu): the category row is locked.
       if (!finishOnBack) stepTab(1);
     } else {
+      const int row = ringPos() - 1;
+      if (row >= 0 && row < static_cast<int>(rowItems_.size()) && !rowItems_[row].enabled) return true;
       toggleCurrentSetting();
       requestUpdate();
     }
@@ -550,6 +568,12 @@ bool SettingsActivity::settingIsSwitch(const SettingInfo& setting) {
   return setting.enumValues[0] == StrId::STR_STATE_OFF && setting.enumValues[1] == StrId::STR_STATE_ON;
 }
 
+bool SettingsActivity::settingIsReadOnly(const SettingInfo& setting) {
+  // Actions carry no value but do something on Confirm, so they stay enabled; a value row with
+  // neither a settings field nor a setter has nothing Confirm could do.
+  return setting.type == SettingType::ENUM && setting.valuePtr == nullptr && !setting.valueSetter;
+}
+
 bool SettingsActivity::settingSwitchState(const SettingInfo& setting) {
   if (setting.valuePtr != nullptr) return SETTINGS.*(setting.valuePtr) != 0;
   if (setting.valueGetter) return setting.valueGetter() != 0;
@@ -632,8 +656,12 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // common fits-on-one-line case takes the renderer's fast path anyway.
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;
+  const fui::Rect listRect = screen.body();
   syncTabListViewport(screen, props);
   screen.list(props);
+  // Reader Settings reports the applied dictionary without offering a choice; that row is
+  // disabled, and this is what makes it look it.
+  thinDisabledRows(renderer, screen, props, listRect, listCount(), activeNav().visibleRows);
 }
 
 void SettingsActivity::render(RenderLock&&) {
