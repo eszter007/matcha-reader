@@ -104,6 +104,21 @@ bool isEntityRef(const std::string& html, const size_t pos, size_t* end) {
 // that are not part of markup. Structural damage this cannot repair
 // (mismatched tags, unquoted attribute values) surfaces as a parse error and
 // the caller falls back to the plain-text path.
+// True when the next markup after `pos`, ignoring whitespace, opens a block element. A <br>
+// sitting immediately before one is redundant -- the block starts its own line -- and drawing
+// both left a blank line between an entry's transcription and its part of speech.
+bool nextOpensBlock(const std::string& html, size_t pos) {
+  while (pos < html.size() && std::isspace(static_cast<unsigned char>(html[pos]))) pos++;
+  if (pos >= html.size() || html[pos] != '<') return false;
+  pos++;
+  size_t end = pos;
+  while (end < html.size() && std::isalnum(static_cast<unsigned char>(html[end]))) end++;
+  const size_t len = end - pos;
+  const char* name = html.data() + pos;
+  return (len == 3 && strncmp(name, "div", 3) == 0) || (len == 2 && strncmp(name, "ol", 2) == 0) ||
+         (len == 2 && strncmp(name, "ul", 2) == 0) || (len == 2 && strncmp(name, "li", 2) == 0);
+}
+
 // True when everything between `pos` (just past a <li…> tag) and that item's </li> is a single
 // <div>…</div>. Only then is unwrapping that div safe: it is the item's whole content, so
 // removing the block cannot run the item's text together with a sibling.
@@ -148,6 +163,7 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
   // so the text it follows would run into it ("outside layer of a grainKleie"). Tracks whether
   // any text is pending since the last block boundary.
   bool inlineTextPending = false;
+  bool expectGloss = false;  // the next text run is a single-sense entry's gloss
   while (i < n) {
     const char c = html[i];
     if (c == '<' && i + 1 < n && (html[i + 1] == '!' || html[i + 1] == '?')) {
@@ -238,10 +254,19 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       const bool isLi = nameLen == 2 && strncmp(nameBuf, "li", 2) == 0;
       const bool isDiv = nameLen == 3 && strncmp(nameBuf, "div", 3) == 0;
 
+      const bool isBr = nameLen == 2 && strncmp(nameBuf, "br", 2) == 0;
+
+      // A sense's gloss runs until its first block child (the translations) or the end of the
+      // item, whichever comes first. Closing its block ends the line, so nothing is left pending.
+      if (glossOpen && ((!closing && (isList || isDiv)) || (closing && isLi))) {
+        if (!out.append("</b></div>")) return false;
+        glossOpen = false;
+        inlineTextPending = false;
+      }
+
       // A block that opens straight after inline text does not break the line by itself in this
       // parser, so a single-sense entry ran its gloss into its translation ("outside layer of a
       // grainKleie"). Break first, then let the block do its own thing.
-      const bool isBr = nameLen == 2 && strncmp(nameBuf, "br", 2) == 0;
       if (isList || isLi || isDiv || isBr) {
         // A <br> already ends the line, so it only clears the pending text rather than earning
         // another break -- without this the slash closing a transcription bought a blank line.
@@ -250,12 +275,11 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         }
         inlineTextPending = false;
       }
-
-      // A sense's gloss runs until its first block child (the translations) or the end of the
-      // item, whichever comes first.
-      if (glossOpen && ((!closing && (isList || isDiv)) || (closing && isLi))) {
-        if (!out.append("</b></div>")) return false;
-        glossOpen = false;
+      // ...and a <br> the source put directly before a block is redundant with that block's own
+      // line: drawing both is the gap between a transcription and the part of speech below it.
+      if (!closing && isBr && nextOpensBlock(html, j + 1)) {
+        i = j + 1;
+        continue;
       }
 
       // The outermost list holds one SENSE per item; the lists nested inside it hold that
@@ -338,6 +362,10 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       if (closing && isDiv && grammarPending) {
         grammarPending = false;
         if (!out.append("<div>&#160;</div>")) return false;
+        // What follows the part of speech is the entry's gloss. In a multi-sense entry each
+        // sense carries its own inside an <li>; a single-sense entry states it here as bare
+        // text, and it deserves the same bold line above its translations.
+        expectGloss = true;
       }
       continue;
     }
@@ -347,6 +375,13 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
       if (inPronunciation) {
         pronunciation.append(data, len);
         return true;
+      }
+      // Opened lazily on the gloss's first character: the markup gives no element to hang it on,
+      // and opening it eagerly would wrap the whitespace between the blocks instead.
+      if (expectGloss) {
+        expectGloss = false;
+        glossOpen = true;
+        if (!out.append("<div style=\"margin-bottom:0\"><b>")) return false;
       }
       return out.append(data, len);
     };
@@ -366,6 +401,10 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
         i++;
       }
       inlineTextPending = true;
+      continue;
+    }
+    if (std::isspace(static_cast<unsigned char>(c)) && expectGloss) {
+      i++;  // leading whitespace belongs to neither block
       continue;
     }
     if (!emit(&c, 1)) return false;
