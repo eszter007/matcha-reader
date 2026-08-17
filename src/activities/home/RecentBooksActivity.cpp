@@ -22,6 +22,7 @@
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "XtcProgressUtil.h"
+#include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
