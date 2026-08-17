@@ -1213,7 +1213,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   }
                 }
 
-                (void)imageMarginTop;
                 (void)imageMarginBottom;
 
                 // Images get their own dedicated page. Complete the current page
@@ -1243,6 +1242,20 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 const bool viewportIsPortrait = self->viewportHeight > self->viewportWidth;
                 const bool imageIsLandscape = dims.width > dims.height;
                 const bool rotateImage = dims.width > 0 && dims.height > 0 && (viewportIsPortrait == imageIsLandscape);
+
+                // Apply top margin from container block. Clamp it so the image never
+                // overflows the page bottom: a full-viewport-height image leaves no room
+                // for the margin, and the break above only fires on non-empty pages, so a
+                // fresh page would otherwise place the image at y=marginTop and run
+                // marginTop pixels past viewportHeight. A large bottom reserve (status
+                // bar / big screen margin) absorbs that overflow silently, but with a
+                // thin reserve it crosses the physical screen edge and fails
+                // ImageBlock::render's bounds check, dropping the image entirely.
+                if (self->currentPageNextY + imageMarginTop + displayHeight > self->viewportHeight) {
+                  const int room = self->viewportHeight - displayHeight - self->currentPageNextY;
+                  imageMarginTop = static_cast<int16_t>(room > 0 ? room : 0);
+                }
+                self->currentPageNextY += imageMarginTop;
 
                 // nothrow: make_shared uses bare new, which aborts on OOM under
                 // -fno-exceptions; images arrive mid-parse when the heap is at its
