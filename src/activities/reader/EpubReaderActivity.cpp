@@ -2845,9 +2845,18 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
   // Horizontal reports estimatedTotalPages(), not pageCount: during a partial build the estimate
   // is the meaningful total, and it moving is itself worth persisting. Compare against the same
   // value that gets stored, or the guard never settles.
+  // Gated on footnoteDepth == 0: currentSpineIndex points at the footnote/endnote target
+  // while footnoteDepth > 0 (see navigateToHref), not the book position the reader should
+  // resume at. onExit() already special-cases this by saving the pre-footnote origin instead
+  // -- but this per-render autosave runs on every page turn, including turns taken while
+  // reading a multi-page endnote, and would otherwise overwrite that origin with the
+  // in-footnote position before onExit ever runs. If the device then crashes or loses power
+  // while still inside the footnote, the saved resume point is left pointing into the notes
+  // file instead of the book.
   const int page = vertical ? verticalSection->currentPage : section->currentPage;
   const int pageCount = vertical ? verticalSection->pageCount : section->estimatedTotalPages();
-  if (currentSpineIndex != lastSavedSpineIndex || page != lastSavedPage || pageCount != lastSavedPageCount) {
+  if (footnoteDepth == 0 &&
+      (currentSpineIndex != lastSavedSpineIndex || page != lastSavedPage || pageCount != lastSavedPageCount)) {
     if (saveProgress(currentSpineIndex, page, pageCount, verticalOverride, furiganaOverride)) {
       lastSavedSpineIndex = currentSpineIndex;
       lastSavedPage = page;
