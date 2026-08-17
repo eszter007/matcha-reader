@@ -58,7 +58,7 @@ struct PngContext {
 
   uint8_t* grayLineBuffer{nullptr};
   uint8_t* alphaLineBuffer{nullptr};  // Allocated only when the caller preserves source alpha.
-  uint32_t lastYieldMs{0};  // throttle state for yieldDuringDecode()
+  uint32_t lastYieldMs{0};            // throttle state for yieldDuringDecode()
 };
 
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
