@@ -807,8 +807,19 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
 
   // Swap into place. A crash between remove and rename loses the old file but keeps a
   // fully-committed tmp; the next build just removes it and rebuilds.
-  if (Storage.exists(filePath.c_str())) {
-    Storage.remove(filePath.c_str());
+  //
+  // remove()'s result must be checked: SdFat's rename() won't overwrite an existing
+  // destination, so falling through to rename() after a failed remove() would just fail
+  // rename() too -- and the failure branch below discards the freshly-built tmp as cleanup,
+  // silently throwing away a successful rebuild while leaving the old (usually already-corrupt,
+  // since that's typically why a rebuild was triggered) file in place. Every subsequent load
+  // would then re-detect the same corruption, retrigger the same rebuild, and hit the same
+  // stuck remove() again -- a loop that never makes progress. Bail out here instead so the
+  // failure is reported once rather than repeated forever.
+  if (Storage.exists(filePath.c_str()) && !Storage.remove(filePath.c_str())) {
+    LOG_ERR("SCT", "Failed to remove stale section before swap");
+    Storage.remove(binTmpPath().c_str());
+    return false;
   }
   if (!Storage.rename(binTmpPath().c_str(), filePath.c_str())) {
     LOG_ERR("SCT", "Failed to move built section into place");
