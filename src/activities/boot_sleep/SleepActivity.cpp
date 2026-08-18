@@ -479,6 +479,17 @@ bool drawSleepPopupPreservingFrame(GfxRenderer& renderer) {
   return true;
 }
 
+void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    LOG_DBG("SLP", "Free heap before SD font cache release: %d bytes", ESP.getFreeHeap());
+    // releaseSdFontCaches() was renamed/widened to releaseAllFontMemory() during the fork's
+    // font-cache work: same SD-cache release this call wants, plus the persistent advance
+    // tables and FontDecompressor glyph slab, which only helps an image-decode heap squeeze.
+    fcm->releaseAllFontMemory();
+    LOG_DBG("SLP", "Free heap before sleep image decode: %d bytes", ESP.getFreeHeap());
+  }
+}
+
 }  // namespace
 
 // Real hardware never reaches loop() while asleep: enterDeepSleep() ends by
@@ -551,6 +562,7 @@ void SleepActivity::onEnter() {
     if (APP_STATE.lastSleepFromReader) {
       renderer.setOrientation(GfxRenderer::Orientation::Portrait);
     }
+    releaseSdFontCachesForDecode(renderer);
     return renderTransparentCustomSleepScreen();
   }
 

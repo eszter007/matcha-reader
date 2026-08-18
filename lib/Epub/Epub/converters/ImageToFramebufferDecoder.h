@@ -2,6 +2,7 @@
 #include <HalStorage.h>
 #include <stdint.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -69,18 +70,27 @@ class ImageToFramebufferDecoder {
 
   virtual const char* getFormatName() const = 0;
 
- protected:
-  // Sanity cap on source image AREA, aligned with the BMP path's existing per-axis caps in
-  // Bitmap.cpp (2048 x 3072). The old 2048x1536-equivalent cap rejected completely ordinary
-  // manga page scans (observed on-device: a 1500x2250 PNG page -> blank page, since the decode
-  // failed after the geometry was already committed). Area is NOT what bounds memory in these
-  // streamed decoders -- their working set scales with WIDTH, and each converter has its own
-  // real guard for that (PNG: the PNG_MAX_BUFFERED_PIXELS runtime check against the source
-  // pitch; JPEG: JPEGDEC chunks MCU rows internally and our callback allocates nothing
-  // width-dependent; the pixel-cache band is destination-sized, <= screen). This cap only
-  // bounds worst-case decode TIME for pathological inputs.
-  static constexpr int32_t MAX_SOURCE_PIXELS = 2048 * 3072;
+  // Call from per-row/per-MCU decode callbacks (free functions, hence public):
+  // yields one tick at most every 250 ms so multi-second decodes keep the idle
+  // task (and its watchdog) fed. `lastYieldMs` is caller-held state,
+  // initialized to the decode start time.
+  static void yieldDuringDecode(uint32_t& lastYieldMs);
 
-  bool validateImageDimensions(int width, int height, const std::string& format);
+  // Validate decoder/header dimensions before narrowing them into the layout
+  // representation. Shared by header probing and decoder fallbacks.
+  static bool validateAndStoreDimensions(int64_t width, int64_t height, ImageDimensions& out, const char* format);
+
+ protected:
+  // Size validation helpers. The cap bounds decode TIME, not memory: both decoders
+  // stream (JPEG in MCU bands at 1/2..1/8 coarse scale, PNG scanline-by-scanline
+  // with its own width-based row-buffer guard), so RAM never scales with source
+  // area. 8 MP admits real-world ebook covers (KDP recommends 1600x2560 and
+  // 2000x3000) while keeping a worst-case single decode in single-digit seconds;
+  // the row callbacks yield periodically so a long decode cannot starve the idle
+  // task's watchdog. Also comfortably covers the on-device manga-scan case that
+  // motivated the fork's previous 2048x3072 area cap (e.g. a 1500x2250 page).
+  static constexpr int64_t MAX_SOURCE_DIMENSION = INT16_MAX;
+  static constexpr int64_t MAX_SOURCE_PIXELS = 8388608;  // 8 MP (e.g. 2048 * 4096)
+
   void warnUnsupportedFeature(const std::string& feature, const std::string& imagePath);
 };

@@ -1237,6 +1237,22 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       const int spineIdx = currentSpineIndex;
+      // Release the section while the chapter list is up (mirrors the
+      // TEXT_SETTINGS path): picking a chapter resets it anyway, and its
+      // tens-of-KB footprint is the difference between the chapter list
+      // holding its CJK glyph arena (RAM-only repaints) and re-reading
+      // glyphs from SD on every row step. Cancel restores via the same
+      // cached-position rebuild TEXT_SETTINGS uses.
+      {
+        RenderLock lock;
+        if (section) {
+          rememberCurrentContentOffset();
+          cachedSpineIndex = currentSpineIndex;
+          cachedChapterTotalPageCount = section->pageCount;
+          nextPageNumber = section->currentPage;
+        }
+        section.reset();
+      }
       startActivityForResult(
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, spineIdx),
           [this](const ActivityResult& result) {
@@ -3074,6 +3090,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (!grayscaleRefineOnly && !glyphsAlreadyWarm && fcm) {
     prewarm.emplace(fcm->createPrewarmScope());
     page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());  // scan pass
+    // Scan the status bar too: a CJK book/chapter title redirected to the SD
+    // fallback font joins the page's single batch prewarm instead of triggering
+    // its own SD pass after the scope ends.
+    renderStatusBar();
     prewarm->endScanAndPrewarm();
   }
   const auto tPrewarm = millis();
