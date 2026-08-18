@@ -71,6 +71,7 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
     return false;
   }
 
+  loaded_.reserve(4);
   if (loadFile(*selected, family.name.c_str(), renderer) == 0) {
     return false;
   }
