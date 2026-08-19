@@ -5,6 +5,7 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <MangaPanel.h>
@@ -468,9 +469,14 @@ void HomeActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  // Captured before lastRenderValid is set: it is this fork's firstRenderDone, and the
+  // clean-refresh test below needs the value from *before* this paint.
+  const bool firstPaint = !lastRenderValid;
   lastRenderValid = true;
   lastSelectorIndex = selectorIndex;
-  renderer.displayBuffer();
+  // Splashless wake with no retained Quick Resume frame leaves the sleep image on the glass;
+  // only a HALF pass scrubs it. FAST otherwise, which is what the bare call already defaulted to.
+  renderer.displayBuffer(cleanInitialRefresh && firstPaint ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
 
 void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path, true); }

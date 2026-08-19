@@ -133,12 +133,14 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 
   ScanEntry* entry = nullptr;
   for (auto& e : scanEntries_) {
-    if (e.fontId == fontId) {
+    if (e.used && e.fontId == fontId) {
       entry = &e;
       break;
     }
-    if (e.fontId < 0) {
+    if (!e.used) {
+      e.used = true;
       e.fontId = fontId;
+      e.text.clear();
       // Entry 0 typically accumulates the page body; later entries hold short
       // furniture strings (status bar, headers).
       e.text.reserve(&e == &scanEntries_[0] ? 2048 : 256);
@@ -156,7 +158,8 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 
 void FontCacheManager::resetScanEntries() {
   for (auto& e : scanEntries_) {
-    e.fontId = -1;
+    e.used = false;
+    e.fontId = 0;
     e.styleMask = 0;
     e.text.clear();
     e.text.shrink_to_fit();
@@ -176,7 +179,7 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
   manager_->scanMode_ = ScanMode::None;
 
   for (auto& e : manager_->scanEntries_) {
-    if (e.fontId < 0 || e.text.empty()) continue;
+    if (!e.used || e.text.empty()) continue;
     manager_->prewarmCache(e.fontId, e.text.c_str(), e.styleMask != 0 ? e.styleMask : 1);
   }
   manager_->resetScanEntries();

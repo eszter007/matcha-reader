@@ -171,7 +171,11 @@ namespace {
 // v78: upstream merge (their v39): image top margin is clamped so a full-viewport-height
 //      image cannot overflow the page bottom; older caches can hold placements that panels
 //      with no bottom inset refuse to draw.
-constexpr uint8_t SECTION_FILE_VERSION = 78;
+// v79: upstream merge (their v40): a group ruby no longer allows a break inside it
+//      (wordNoSpaceBefore cleared) and a text block no longer soft-flushes while the
+//      parser is inside <ruby>. Both change where lines break, so pages cached by
+//      older versions no longer match.
+constexpr uint8_t SECTION_FILE_VERSION = 79;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
