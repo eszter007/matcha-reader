@@ -527,11 +527,16 @@ void SleepActivity::onEnter() {
   // a scrubbed base. Still never the flashing GC waveform: the OEM X4 firmware's only clean
   // refresh in normal operation is the single-pass 0xD7 sequence, never the multi-flash GC
   // waveform (0xF7) that FULL_REFRESH selects (#2471's blinking complaint).
-  // preconditionGrayscale() settles the gray planes on X3 and is a documented no-op on X4.
+  // The scrub is the HALF pass alone. No preconditionGrayscale() here: that is the
+  // settle pass for an imminent grayscale plane write (see XtcReaderActivity), and
+  // every grayscale sleep screen below reaches the panel through
+  // displayGrayscaleBase(), which fires the same AA-pre-BW(mid) bank itself. Calling
+  // it here bought nothing on X4, where it is a documented no-op, and cost X3 a
+  // second full visible pass -- Uc8253X3Driver::preconditionGrayscale() ends in
+  // triggerRefresh() -- for every sleep, grayscale or not.
   // Costs one HALF (~1s) at sleep entry, and only when needed.
   if (renderer.panelHasResidue()) {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-    renderer.preconditionGrayscale();
   }
 
   const bool frameWasInverted = display.isInverted();
