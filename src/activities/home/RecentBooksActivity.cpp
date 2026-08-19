@@ -854,7 +854,7 @@ void RecentBooksActivity::loop() {
       renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
   if (openShelfIndex >= 0) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       openShelfIndex = -1;
       shelfBooks.clear();
       shelfBookProgress.clear();
@@ -969,7 +969,9 @@ void RecentBooksActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  // Release, not press: leaving on the press edge hands the release of the same
+  // physical click to whichever activity comes next, which then acts on it too.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (contentIndex > 0) {
       contentIndex = 0;
       scrollRow = 0;
