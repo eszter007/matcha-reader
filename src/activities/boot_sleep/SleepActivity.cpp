@@ -495,26 +495,6 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
-  // Whatever paints below freezes on the glass for the entire sleep. If the panel carries
-  // residue -- FAST-turn ghosts, gray charge from an image page, a popup's inverted remnant --
-  // the single sleep-time HALF pass cannot scrub it, and it stays visible for hours (grain
-  // across the page plus a negative ghost of the reader menu, photographed on device). Re-drive
-  // the current content with the clean single-pass waveform first, so the sleep frame lands on
-  // a scrubbed base. Still never the flashing GC waveform: the OEM X4 firmware's only clean
-  // refresh in normal operation is the single-pass 0xD7 sequence, never the multi-flash GC
-  // waveform (0xF7) that FULL_REFRESH selects (#2471's blinking complaint).
-  // The scrub is the HALF pass alone. No preconditionGrayscale() here: that is the
-  // settle pass for an imminent grayscale plane write (see XtcReaderActivity), and
-  // every grayscale sleep screen below reaches the panel through
-  // displayGrayscaleBase(), which fires the same AA-pre-BW(mid) bank itself. Calling
-  // it here bought nothing on X4, where it is a documented no-op, and cost X3 a
-  // second full visible pass -- Uc8253X3Driver::preconditionGrayscale() ends in
-  // triggerRefresh() -- for every sleep, grayscale or not.
-  // Costs one HALF (~1s) at sleep entry, and only when needed.
-  if (renderer.panelHasResidue()) {
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-  }
-
   const bool frameWasInverted = display.isInverted();
 
   // Sleep screens always use normal polarity. This activity draws directly
