@@ -45,9 +45,12 @@ void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, 
     if (out.size() < maxOut) out.push_back(token);
     token.clear();
   };
-  size_t n;
+  // Signed: HalFile::read() returns -1 on a read error, and an unsigned n would turn
+  // that into 0xFFFFFFFF -- passing the `> 0` test and sending the inner loop 4 GB
+  // past a 512-byte buffer.
+  int n;
   while ((n = f.read(buf.get(), READ_CHUNK)) > 0 && out.size() < maxOut) {
-    for (size_t i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++) {
       const char c = static_cast<char>(buf[i]);
       if (inValue) {
         if (c == '"') {
@@ -70,6 +73,13 @@ void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, 
         matched = (c == NEEDLE[0]) ? 1 : 0;
       }
     }
+  }
+  if (n < 0) {
+    // A partial list is worse than none: the caller filters the CSS cache on it, so
+    // missing classes drop rules and the chapter gets cached UNSTYLED -- one bad read
+    // frozen into a permanent layout. Fall back to unfiltered, as the OOM path does.
+    LOG_ERR("SCT", "class scan read failed, discarding partial list: %s", path.c_str());
+    out.clear();
   }
 }
 }  // namespace
