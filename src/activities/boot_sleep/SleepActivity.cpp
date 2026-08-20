@@ -492,52 +492,8 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 
 }  // namespace
 
-// Real hardware never reaches loop() while asleep: enterDeepSleep() ends by
-// calling powerManager.startDeepSleep(gpio), which is esp_deep_sleep_start()
-// on-device -- a no-return call, so wake only happens via a full chip reset
-// handled by main.cpp's boot routing. The emulator's startDeepSleep() is a
-// no-op (no real low-power state to enter), so execution falls through and
-// SleepActivity keeps running -- but with no loop() override, nothing could
-// ever exit it. This mirrors main.cpp's post-wake routing (resume the last
-// open book, or go home) so Confirm/Enter acts as a wake shortcut in the
-// emulator; it's unreachable on real hardware since loop() is never called
-// there while asleep.
-void SleepActivity::loop() {
-  if (!mappedInput.wasPressed(MappedInputManager::Button::Confirm)) return;
-
-  if (!APP_STATE.openEpubPath.empty() && APP_STATE.lastSleepFromReader) {
-    const auto path = APP_STATE.openEpubPath;
-    APP_STATE.openEpubPath = "";
-    APP_STATE.readerActivityLoadCount++;
-    APP_STATE.saveToFile();
-    activityManager.goToReader(path);
-  } else {
-    activityManager.goHome();
-  }
-}
-
 void SleepActivity::onEnter() {
   Activity::onEnter();
-
-  // Whatever paints below freezes on the glass for the entire sleep. If the panel carries
-  // residue -- FAST-turn ghosts, gray charge from an image page, a popup's inverted remnant --
-  // the single sleep-time HALF pass cannot scrub it, and it stays visible for hours (grain
-  // across the page plus a negative ghost of the reader menu, photographed on device). Re-drive
-  // the current content with the clean single-pass waveform first, so the sleep frame lands on
-  // a scrubbed base. Still never the flashing GC waveform: the OEM X4 firmware's only clean
-  // refresh in normal operation is the single-pass 0xD7 sequence, never the multi-flash GC
-  // waveform (0xF7) that FULL_REFRESH selects (#2471's blinking complaint).
-  // The scrub is the HALF pass alone. No preconditionGrayscale() here: that is the
-  // settle pass for an imminent grayscale plane write (see XtcReaderActivity), and
-  // every grayscale sleep screen below reaches the panel through
-  // displayGrayscaleBase(), which fires the same AA-pre-BW(mid) bank itself. Calling
-  // it here bought nothing on X4, where it is a documented no-op, and cost X3 a
-  // second full visible pass -- Uc8253X3Driver::preconditionGrayscale() ends in
-  // triggerRefresh() -- for every sleep, grayscale or not.
-  // Costs one HALF (~1s) at sleep entry, and only when needed.
-  if (renderer.panelHasResidue()) {
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-  }
 
   const bool frameWasInverted = display.isInverted();
 
