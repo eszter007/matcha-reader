@@ -9,7 +9,7 @@ class EpubReaderPercentSelectionActivity final : public Activity, private UiAppH
  public:
   // Slider-style percent selector for jumping within a book.
   explicit EpubReaderPercentSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                              int initialPercent);
+                                              int initialPercent, bool scrubOnEnter = false);
 
   void onEnter() override;
   void onExit() override;
@@ -17,6 +17,10 @@ class EpubReaderPercentSelectionActivity final : public Activity, private UiAppH
   void render(RenderLock&&) override;
 
  private:
+  // Set when the reader page underneath drew images: its gray charge survives a FAST
+  // diff and would show through this screen. Scrubbed once on the first paint.
+  const bool scrubOnEnter_;
+  bool firstPaint_ = true;
   // The UiAppHost app hosts the shared slider dialog (drag slider, -/+ zones,
   // touch Cancel/OK); the header stays on GUI.drawHeader.
   static void percentScreen(UiScreen& screen, void* user);

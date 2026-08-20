@@ -1741,7 +1741,8 @@ void MangaReaderActivity::launchMenu() {
                                                /*imageReaderMinimal=*/false, /*mangaMode=*/true,
                                                /*hideGenericLookup=*/false,
                                                /*showPanelsOnlyToggle=*/bookHasPanelCropCapability,
-                                               /*panelsOnlyEnabled=*/panelsOnlyMode),
+                                               /*panelsOnlyEnabled=*/panelsOnlyMode,
+                                               /*scrubOnEnter=*/true),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         // Apply orientation change
@@ -1768,7 +1769,8 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
     if (!book || book->getPageCount() == 0) return;
     const int totalPages = static_cast<int>(book->getPageCount());
     const int initialPercent = totalPages > 0 ? static_cast<int>((currentPage + 1) * 100 / totalPages) : 0;
-    startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
+    startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent,
+                                                                                /*scrubOnEnter=*/true),
                            [this](const ActivityResult& result) {
                              if (!result.isCancelled && book) {
                                const int percent = std::get<PercentResult>(result.data).percent;

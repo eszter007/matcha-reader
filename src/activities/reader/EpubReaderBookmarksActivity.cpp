@@ -18,8 +18,10 @@ constexpr int ENTER_DELETE_MODE_MS = 700;
 }  // namespace
 
 EpubReaderBookmarksActivity::EpubReaderBookmarksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                         const std::shared_ptr<Epub>& epub, const std::string& epubPath)
+                                                         const std::shared_ptr<Epub>& epub, const std::string& epubPath,
+                                                         const bool scrubOnEnter)
     : UiListActivity("EpubReaderBookmarks", renderer, mappedInput, /*wantsTouchLongPress=*/true),
+      scrubOnEnter_(scrubOnEnter),
       epub(epub),
       epubPath(epubPath) {}
 
@@ -258,5 +260,8 @@ void EpubReaderBookmarksActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  // See EpubReaderMenuActivity: scrub the image page's gray charge once on entry.
+  const bool scrub = scrubOnEnter_ && firstPaint_;
+  firstPaint_ = false;
+  renderer.displayBuffer(scrub ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }

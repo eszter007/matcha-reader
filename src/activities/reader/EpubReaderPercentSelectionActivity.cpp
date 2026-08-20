@@ -25,8 +25,12 @@ constexpr int kLargeStep = 10;
 
 EpubReaderPercentSelectionActivity::EpubReaderPercentSelectionActivity(GfxRenderer& renderer,
                                                                        MappedInputManager& mappedInput,
-                                                                       const int initialPercent)
-    : Activity("EpubReaderPercentSelection", renderer, mappedInput), UiAppHost(renderer), percent(initialPercent) {}
+                                                                       const int initialPercent,
+                                                                       const bool scrubOnEnter)
+    : Activity("EpubReaderPercentSelection", renderer, mappedInput),
+      UiAppHost(renderer),
+      scrubOnEnter_(scrubOnEnter),
+      percent(initialPercent) {}
 
 void EpubReaderPercentSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -190,5 +194,8 @@ void EpubReaderPercentSelectionActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "-", "+");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  // See EpubReaderMenuActivity: scrub the image page's gray charge once on entry.
+  const bool scrub = scrubOnEnter_ && firstPaint_;
+  firstPaint_ = false;
+  renderer.displayBuffer(scrub ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
