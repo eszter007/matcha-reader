@@ -459,6 +459,7 @@ bool FileBrowserActivity::handleButtons() {
 }
 
 std::string getFileName(std::string filename) {
+  if (filename.empty()) return filename;
   if (filename.back() == '/') {
     filename.pop_back();
     if (!UITheme::getInstance().getTheme().showsFileIcons()) {
@@ -467,14 +468,18 @@ std::string getFileName(std::string filename) {
     return filename;
   }
   const auto pos = filename.rfind('.');
+  if (pos == std::string::npos) return filename;
   return filename.substr(0, pos);
 }
 
 std::string getFileExtension(const std::string& filename) {
-  if (filename.back() == '/') {
+  if (filename.empty() || filename.back() == '/') {
     return "";
   }
   const auto pos = filename.rfind('.');
+  // A name without a dot has no extension. substr(npos) throws out_of_range,
+  // and with -fno-exceptions that lands in abort().
+  if (pos == std::string::npos) return "";
   return filename.substr(pos);
 }
 
