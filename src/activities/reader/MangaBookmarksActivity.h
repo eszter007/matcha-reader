@@ -31,6 +31,8 @@ class MangaBookmarksActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
+  // Scrubs the manga page's gray charge on the first paint; see the .cpp.
+  bool firstPaint_ = true;
   // Calculate the vertical space to reserve for button hints based on orientation
   int getGutterBottom(const GfxRenderer& renderer);
 
