@@ -1300,16 +1300,15 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         }
       }
       const int initialPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
-      startActivityForResult(
-          std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent,
-                                                               /*scrubOnEnter=*/shownPageHasImages_),
-          [this](const ActivityResult& result) {
-            if (result.isCancelled) {
-              openReaderMenu();
-            } else {
-              jumpToPercent(std::get<PercentResult>(result.data).percent);
-            }
-          });
+      startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent,
+                                                                                  /*scrubOnEnter=*/shownPageHasImages_),
+                             [this](const ActivityResult& result) {
+                               if (result.isCancelled) {
+                                 openReaderMenu();
+                               } else {
+                                 jumpToPercent(std::get<PercentResult>(result.data).percent);
+                               }
+                             });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DICTIONARY: {
@@ -1373,10 +1372,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
-      startActivityForResult(
-          std::make_unique<EpubReaderBookmarksActivity>(renderer, mappedInput, epub, epub->getPath(),
-                                                        /*scrubOnEnter=*/shownPageHasImages_),
-          progressChangeResultHandler);
+      startActivityForResult(std::make_unique<EpubReaderBookmarksActivity>(renderer, mappedInput, epub, epub->getPath(),
+                                                                           /*scrubOnEnter=*/shownPageHasImages_),
+                             progressChangeResultHandler);
       break;
     }
     case EpubReaderMenuActivity::MenuAction::WORD_LOOKUP: {

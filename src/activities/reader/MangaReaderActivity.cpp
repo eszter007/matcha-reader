@@ -1770,7 +1770,7 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
     const int totalPages = static_cast<int>(book->getPageCount());
     const int initialPercent = totalPages > 0 ? static_cast<int>((currentPage + 1) * 100 / totalPages) : 0;
     startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent,
-                                                                               /*scrubOnEnter=*/true),
+                                                                                /*scrubOnEnter=*/true),
                            [this](const ActivityResult& result) {
                              if (!result.isCancelled && book) {
                                const int percent = std::get<PercentResult>(result.data).percent;

@@ -18,8 +18,8 @@ constexpr int ENTER_DELETE_MODE_MS = 700;
 }  // namespace
 
 EpubReaderBookmarksActivity::EpubReaderBookmarksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                         const std::shared_ptr<Epub>& epub,
-                                                         const std::string& epubPath, const bool scrubOnEnter)
+                                                         const std::shared_ptr<Epub>& epub, const std::string& epubPath,
+                                                         const bool scrubOnEnter)
     : UiListActivity("EpubReaderBookmarks", renderer, mappedInput, /*wantsTouchLongPress=*/true),
       scrubOnEnter_(scrubOnEnter),
       epub(epub),
