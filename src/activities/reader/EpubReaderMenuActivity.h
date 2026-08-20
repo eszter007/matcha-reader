@@ -43,12 +43,17 @@ class EpubReaderMenuActivity final : public UiListActivity {
                                   const bool verticalEnabled = false, const bool furiganaEnabled = true,
                                   const bool hasPageText = true, const bool imageReaderMinimal = false,
                                   const bool mangaMode = false, const bool hideGenericLookup = false,
-                                  const bool showPanelsOnlyToggle = false, const bool panelsOnlyEnabled = false);
+                                  const bool showPanelsOnlyToggle = false, const bool panelsOnlyEnabled = false,
+                                  const bool scrubOnEnter = false);
 
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
 
  private:
+  // Set when the reader page underneath drew images: its gray charge survives a FAST
+  // diff and would show through this screen. Scrubbed once on the first paint.
+  const bool scrubOnEnter_;
+  bool firstPaint_ = true;
   struct MenuItem {
     MenuAction action;
     StrId labelId;

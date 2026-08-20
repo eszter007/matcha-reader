@@ -28,11 +28,16 @@ class EpubReaderBookmarksActivity final : public UiListActivity {
 
  public:
   explicit EpubReaderBookmarksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                       const std::shared_ptr<Epub>& epub, const std::string& epubPath);
+                                       const std::shared_ptr<Epub>& epub, const std::string& epubPath,
+                                       bool scrubOnEnter);
   void onEnter() override;
   void render(RenderLock&&) override;
 
  private:
+  // Set when the reader page underneath drew images: its gray charge survives a FAST
+  // diff and would show through this screen. Scrubbed once on the first paint.
+  const bool scrubOnEnter_;
+  bool firstPaint_ = true;
   int listCount() const override { return static_cast<int>(bookmarks.size()); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;

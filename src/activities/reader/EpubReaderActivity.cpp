@@ -1070,7 +1070,8 @@ void EpubReaderActivity::openReaderMenu() {
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !sectionFootnotes.empty() || !currentPageFootnotes.empty(), !cachedBookmarks.empty(), hasWordLookup,
           useVerticalText(), useFurigana(), hasPageText, /*imageReaderMinimal=*/false, /*mangaMode=*/false,
-          /*hideGenericLookup=*/isJapaneseBook()),
+          /*hideGenericLookup=*/isJapaneseBook(), /*showPanelsOnlyToggle=*/false, /*panelsOnlyEnabled=*/false,
+          /*scrubOnEnter=*/shownPageHasImages_),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
@@ -1300,7 +1301,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       }
       const int initialPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
       startActivityForResult(
-          std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
+          std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent,
+                                                               /*scrubOnEnter=*/shownPageHasImages_),
           [this](const ActivityResult& result) {
             if (result.isCancelled) {
               openReaderMenu();
@@ -1372,7 +1374,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
       startActivityForResult(
-          std::make_unique<EpubReaderBookmarksActivity>(renderer, mappedInput, epub, epub->getPath()),
+          std::make_unique<EpubReaderBookmarksActivity>(renderer, mappedInput, epub, epub->getPath(),
+                                                        /*scrubOnEnter=*/shownPageHasImages_),
           progressChangeResultHandler);
       break;
     }
@@ -2154,6 +2157,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // Contract: nothing between here and waitRefreshComplete() may touch the framebuffer. The tail
     // is safe (its glyph warm renders in scan mode, which draws nothing); popups, screenshots and
     // the image warm are not, and run after the wait.
+    shownPageHasImages_ = imagePageDisplayed;
     const bool overlapRefresh = !imagePageDisplayed && renderer.supportsAsyncRefresh();
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
@@ -3099,6 +3103,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
+  shownPageHasImages_ = pageHasImages;
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   const bool manualRefreshPending = !grayscaleRefineOnly && forcedRefreshPending;
   if (!grayscaleRefineOnly) forcedRefreshPending = false;

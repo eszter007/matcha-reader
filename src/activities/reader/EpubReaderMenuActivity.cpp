@@ -17,8 +17,9 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
     const bool hasBookmarks, const bool hasWordLookup, const bool verticalEnabled, const bool furiganaEnabled,
     const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup,
-    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled)
+    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled, const bool scrubOnEnter)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput),
+      scrubOnEnter_(scrubOnEnter),
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode,
                                hideGenericLookup, showPanelsOnlyToggle)),
       hasPageText(hasPageText),
@@ -307,5 +308,10 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   renderUi();
 
   drawFooter();
-  renderer.displayBuffer();
+  // A reader page with images leaves gray charge that a FAST diff cannot drive out,
+  // so the page shows through this screen. One HALF pass on entry scrubs it; moving
+  // the selection afterwards stays fast.
+  const bool scrub = scrubOnEnter_ && firstPaint_;
+  firstPaint_ = false;
+  renderer.displayBuffer(scrub ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
