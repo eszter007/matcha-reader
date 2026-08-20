@@ -492,30 +492,6 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 
 }  // namespace
 
-// Real hardware never reaches loop() while asleep: enterDeepSleep() ends by
-// calling powerManager.startDeepSleep(gpio), which is esp_deep_sleep_start()
-// on-device -- a no-return call, so wake only happens via a full chip reset
-// handled by main.cpp's boot routing. The emulator's startDeepSleep() is a
-// no-op (no real low-power state to enter), so execution falls through and
-// SleepActivity keeps running -- but with no loop() override, nothing could
-// ever exit it. This mirrors main.cpp's post-wake routing (resume the last
-// open book, or go home) so Confirm/Enter acts as a wake shortcut in the
-// emulator; it's unreachable on real hardware since loop() is never called
-// there while asleep.
-void SleepActivity::loop() {
-  if (!mappedInput.wasPressed(MappedInputManager::Button::Confirm)) return;
-
-  if (!APP_STATE.openEpubPath.empty() && APP_STATE.lastSleepFromReader) {
-    const auto path = APP_STATE.openEpubPath;
-    APP_STATE.openEpubPath = "";
-    APP_STATE.readerActivityLoadCount++;
-    APP_STATE.saveToFile();
-    activityManager.goToReader(path);
-  } else {
-    activityManager.goHome();
-  }
-}
-
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
