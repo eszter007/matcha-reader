@@ -21,7 +21,16 @@ void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, 
   if (!HalStorage::getInstance().openFileForRead("SCT", path, f)) return;
   constexpr char NEEDLE[] = "class=\"";
   constexpr size_t NLEN = sizeof(NEEDLE) - 1;
-  uint8_t buf[512];
+  constexpr size_t READ_CHUNK = 512;
+  // Heap, not stack: 512 bytes is twice the project's stack-local ceiling, and this
+  // runs on the ActivityManagerRender task, which also carries full page rendering
+  // (GfxRenderer, font cache, SD I/O) in the same 8 KB. A crash dump from a chapter
+  // build showed this buffer's contents live on that stack.
+  auto buf = makeUniqueNoThrow<uint8_t[]>(READ_CHUNK);
+  if (!buf) {
+    LOG_ERR("SCT", "OOM: %u bytes for class scan", static_cast<unsigned>(READ_CHUNK));
+    return;  // out stays empty: the caller then loads the CSS cache unfiltered, as before
+  }
   size_t matched = 0;
   bool inValue = false;
   std::string token;
@@ -37,7 +46,7 @@ void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, 
     token.clear();
   };
   size_t n;
-  while ((n = f.read(buf, sizeof(buf))) > 0 && out.size() < maxOut) {
+  while ((n = f.read(buf.get(), READ_CHUNK)) > 0 && out.size() < maxOut) {
     for (size_t i = 0; i < n; i++) {
       const char c = static_cast<char>(buf[i]);
       if (inValue) {
