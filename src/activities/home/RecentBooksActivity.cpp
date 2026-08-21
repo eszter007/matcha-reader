@@ -136,8 +136,9 @@ void RecentBooksActivity::runCoverJob() {
   const bool isXtc = FsHelpers::hasXtcExtension(result.book.path);
   if (!isEpub && !isXtc) {
     const manga::MangaBook mangaBook(result.book.path);
-    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
-    if (targetHeight > 0 && !thumbHeightValid(mangaBook.getThumbBmpPath(targetHeight), targetHeight)) {
+    for (const int targetHeight : coverJob_.targetHeights) {
+      if (targetHeight <= 0 || coverWorkerShouldCancel(this)) continue;
+      if (thumbHeightValid(mangaBook.getThumbBmpPath(targetHeight), targetHeight)) continue;
       Storage.remove(mangaBook.getThumbBmpPath(targetHeight).c_str());
       mangaBook.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
@@ -146,9 +147,12 @@ void RecentBooksActivity::runCoverJob() {
   } else if (isEpub) {
     Epub epub(result.book.path, "/.crosspoint");
     const bool loaded = epub.load(true, true, &coverWorkerShouldCancel, this);
-    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
-    if (loaded && !coverWorkerShouldCancel(this) && targetHeight > 0 &&
-        !thumbHeightValid(epub.getThumbBmpPath(targetHeight), targetHeight)) {
+    // Every requested height, off the one load. A cancel between sizes still leaves the ones
+    // already written on disk, so the next pass has less to do rather than starting over.
+    for (const int targetHeight : coverJob_.targetHeights) {
+      if (targetHeight <= 0) continue;
+      if (!loaded || coverWorkerShouldCancel(this)) break;
+      if (thumbHeightValid(epub.getThumbBmpPath(targetHeight), targetHeight)) continue;
       epub.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
     result.hasGridThumb = loaded && thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
@@ -160,15 +164,21 @@ void RecentBooksActivity::runCoverJob() {
     // low-heap moment costs the cover forever. Requires !cancelled: a cancelled load leaves the
     // metadata cache unpopulated, which hasCoverImage() cannot distinguish from a coverless book.
     result.coverKnownAbsent = loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && !epub.hasCoverImage();
+    // Deliberately NOT extended to a book that failed to OPEN. contentaccess::open() reports a
+    // missing credential and an OOM through the same channel as a bad container, and the index
+    // entry is keyed on size+stamp -- so recording "no cover" would outlive the credential being
+    // added and the cover would never come back. It stays retryable; what it must not do is
+    // stall the scan, which the completed flag below handles.
     if (loaded && !result.hasGridThumb && !result.coverKnownAbsent) {
       LOG_ERR("RBA", "Cover thumb failed for %s; will retry", result.book.path.c_str());
     }
   } else {
     Xtc xtc(result.book.path, "/.crosspoint");
     const bool loaded = xtc.load();
-    const int targetHeight = coverJob_.targetHeight > 0 ? coverJob_.targetHeight : coverJob_.gridHeight;
-    if (loaded && !coverWorkerShouldCancel(this) && targetHeight > 0 &&
-        !thumbHeightValid(xtc.getThumbBmpPath(targetHeight), targetHeight)) {
+    for (const int targetHeight : coverJob_.targetHeights) {
+      if (targetHeight <= 0) continue;
+      if (!loaded || coverWorkerShouldCancel(this)) break;
+      if (thumbHeightValid(xtc.getThumbBmpPath(targetHeight), targetHeight)) continue;
       xtc.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
     result.hasGridThumb = loaded && thumbHeightValid(xtc.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
@@ -176,13 +186,23 @@ void RecentBooksActivity::runCoverJob() {
     if (loaded && !xtc.getTitle().empty()) result.book.title = xtc.getTitle();
   }
 
-  result.completed = !coverWorkerCancelSeen_ && !coverWorkerExitRequested_ && !coverWorkerCancelRequested_;
+  // "Completed" must mean the job ran its course, not that nobody touched a button while it did.
+  // coverWorkerCancelSeen_ is the honest signal: shouldCancel() sets it only when the job
+  // actually consulted it and bailed. coverWorkerCancelRequested_ alone is just "a key went
+  // down", and including it stalled the cursor on any job that never consults shouldCancel --
+  // notably a contentaccess::open() failure, which gives up in ~380ms without asking. That book
+  // was then retried forever and every book behind it stayed coverless (device log: the same
+  // unopenable EPUB reloaded at [177406], [182039], [563346]).
+  result.completed = !coverWorkerCancelSeen_ && !coverWorkerExitRequested_;
   result.pending = true;
   coverResult_ = std::move(result);
 }
 
 bool RecentBooksActivity::postCoverJob(CoverJob&& job) {
   if (!coverWorkerTask_ || coverWorkerBusy_.load(std::memory_order_acquire) || coverResult_.pending) return false;
+  // Preserves the old "no explicit target means the grid height" fallback in one place, now that
+  // callers queue a set rather than picking a single size.
+  if (job.targetHeights[0] == 0) job.addTargetHeight(job.gridHeight);
   coverJob_ = std::move(job);
   coverResult_ = CoverResult{};
   coverWorkerCancelRequested_ = false;
@@ -514,10 +534,15 @@ bool RecentBooksActivity::stepLibraryScan() {
       CoverJob job;
       job.book = book;
       job.gridHeight = thumbH;
-      job.targetHeight =
-          coverIsMangaTemplate
-              ? (mangaGridMissing ? thumbH : (mangaHomeMissing ? metrics.homeCoverHeight : SHELF_THUMB_HEIGHT))
-              : thumbH;
+      // All three at once. Picking one meant the next pass came back for the next size and
+      // reopened the book to get it.
+      if (coverIsMangaTemplate) {
+        if (mangaGridMissing) job.addTargetHeight(thumbH);
+        if (mangaHomeMissing) job.addTargetHeight(metrics.homeCoverHeight);
+        if (mangaShelfMissing) job.addTargetHeight(SHELF_THUMB_HEIGHT);
+      } else {
+        job.addTargetHeight(thumbH);
+      }
       if (!postCoverJob(std::move(job))) scan_.thumbIndex++;
       return false;
     }
@@ -597,7 +622,11 @@ bool RecentBooksActivity::stepLibraryScan() {
     CoverJob job;
     job.book = book;
     job.gridHeight = thumbH;
-    job.targetHeight = gridThumbOk ? SHELF_THUMB_HEIGHT : thumbH;
+    // Both missing sizes off one open. This used to hand over whichever single height was
+    // outstanding, so a book needing the grid AND the shelf thumb was opened, parsed and its
+    // cover decoded twice -- the dominant cost in the whole scan.
+    if (!gridThumbOk) job.addTargetHeight(thumbH);
+    if (!shelfThumbOk) job.addTargetHeight(SHELF_THUMB_HEIGHT);
     job.fileSize = bookSize;
     job.modifiedStamp = bookStamp;
     if (!postCoverJob(std::move(job))) {
