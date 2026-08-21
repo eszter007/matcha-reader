@@ -67,19 +67,41 @@ bool UiListActivity::routeListTouch() {
   return static_cast<bool>(route);  // dispatched to the action handler
 }
 
+int UiListActivity::selectionCursor() { return pendingSelection_ >= 0 ? pendingSelection_ : activeNav().selected; }
+
 void UiListActivity::moveSelectionTo(const int index) {
   {
-    // The render task reads nav mid-build (syncToProps, layout feedback); a
-    // press landing during a render would otherwise tear selection/viewport.
-    RenderLock lock(*this);
+    // TRY the lock, never block on it. The render task holds it for the whole render INCLUDING
+    // the panel wait (~502ms for a FAST refresh), and buttons are polled -- InputManager::update()
+    // runs on this same loop -- so blocking here stops input being sampled at all, and a press
+    // that both starts and ends inside a refresh is lost outright. That is what made tapping
+    // through a list feel like it was ignoring presses.
+    //
+    // The lock itself is still required to mutate nav: the render task reads selection/viewport
+    // mid-build (syncToProps, layout feedback), so an unlocked write would tear them. When it is
+    // busy, park the target and let loop() apply it the moment the render finishes.
+    RenderLock lock{RenderLock::Try{}};
+    if (!lock.held()) {
+      pendingSelection_ = index;
+      return;
+    }
     auto& n = activeNav();
     n.selected = index;
     n.follow(listCount());
+    pendingSelection_ = -1;
   }
   requestUpdate();
 }
 
 void UiListActivity::loop() {
+  // Apply a move parked while the render task held the lock. Re-parks itself if the next render
+  // is already running, so it simply retries on the following tick.
+  if (pendingSelection_ >= 0) {
+    const int parked = pendingSelection_;
+    pendingSelection_ = -1;
+    moveSelectionTo(parked);
+  }
+
   if (handleCustomInput()) return;
   if (handleButtons()) return;
   if (routeListTouch()) return;
@@ -107,16 +129,18 @@ void UiListActivity::loop() {
 void UiListActivity::navigateButtons() {
   const int count = listCount();
   auto& n = activeNav();
-  buttonNavigator.onNextRelease([this, count, &n] { moveSelectionTo(ButtonNavigator::nextIndex(n.selected, count)); });
+  buttonNavigator.onNextRelease(
+      [this, count] { moveSelectionTo(ButtonNavigator::nextIndex(selectionCursor(), count)); });
   buttonNavigator.onPreviousRelease(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::previousIndex(n.selected, count)); });
+      [this, count] { moveSelectionTo(ButtonNavigator::previousIndex(selectionCursor(), count)); });
   // Page by the rows the last build actually drew (pageRows), not the
   // fixed-height visibleRows estimate: with wrapped labels the estimate
   // overshoots and rows between pages would never be shown.
   buttonNavigator.onNextContinuous(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, count, n.pageRows())); });
-  buttonNavigator.onPreviousContinuous(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.pageRows())); });
+      [this, count, &n] { moveSelectionTo(ButtonNavigator::nextPageIndex(selectionCursor(), count, n.pageRows())); });
+  buttonNavigator.onPreviousContinuous([this, count, &n] {
+    moveSelectionTo(ButtonNavigator::previousPageIndex(selectionCursor(), count, n.pageRows()));
+  });
 }
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle) {

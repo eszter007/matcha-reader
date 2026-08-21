@@ -82,7 +82,17 @@ class UiListActivity : public Activity, protected UiAppHost {
   freeink::ui::ListNav nav;
   ButtonNavigator buttonNavigator;
 
+  // Where the cursor is heading, including a move parked by moveSelectionTo() because the render
+  // task held the lock. Navigation must step from THIS, not from nav.selected: while a move is
+  // parked nav.selected still holds the old row, so two presses in one refresh would both compute
+  // the same target and the second would be swallowed.
+  int selectionCursor();
+
  private:
+  // A selection move that arrived while a render was in flight, applied by loop() as soon as the
+  // lock frees. -1 when nothing is parked. See moveSelectionTo().
+  int pendingSelection_ = -1;
+
   static void screenTrampoline(UiScreen& screen, void* user);
   static void rowActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
   // Named apart from UiAppHost::routeTouch so the host overload stays visible
