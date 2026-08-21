@@ -199,7 +199,10 @@ namespace {
 //      flushed at that element's close, so the annotation attaches to its own base instead of
 //      to the preceding word. Annotated words reserve leading for their ruby, so lines move and
 //      pages cached under v79 hold the wrong positions -- and the wrong furigana.
-constexpr uint8_t SECTION_FILE_VERSION = 80;
+// v81: upstream merge (their v41): simple HTML table rows are laid out as positioned columns
+//      instead of flattened paragraphs with synthetic row/cell labels, so any cached page
+//      holding a table has the wrong geometry.
+constexpr uint8_t SECTION_FILE_VERSION = 81;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

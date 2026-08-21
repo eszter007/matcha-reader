@@ -90,11 +90,16 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 70 (fork numbering)
+### Version 81 (fork numbering)
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 81 merges upstream's v41 change into the fork's format: simple HTML
+table rows are laid out as positioned columns rather than flattened paragraphs
+with synthetic row/cell labels, so any cached page holding a table has the wrong
+geometry.
 
 Version 76 merges upstream's v37 change into the fork's format: the fixed-size
 footnote href field grows from 96 to 256 bytes for long calibre paths, taking
@@ -106,6 +111,28 @@ Version 75 is binary-identical to version 74. The version was bumped because a
 the base text size, and the reader's own font already *is* that base (every
 declaration resolves against it), so applying it sized whole books away from the
 user's setting. Pages cached by v74 hold the publisher-sized layout.
+Version 41 keeps the version 40 serialized layout unchanged. It was bumped
+because simple HTML table rows are now laid out as positioned columns rather
+than flattened paragraphs with synthetic row/cell labels.
+
+Version 40 keeps the version 39 serialized layout unchanged. It was bumped
+because ruby groups now remain intact when large text blocks are soft-flushed.
+
+Version 39 keeps the version 38 serialized layout unchanged. It was bumped
+because image top margins are now clamped to keep full-height images within the
+page viewport.
+
+Version 38 keeps the version 37 serialized layout unchanged. It was bumped
+because Focus Reading now permits line breaks at visible hyphens and dashes
+and hyphenates focus-split words as a whole, changing cached page layout.
+
+Version 37 increases the fixed-size footnote href field from 96 to 256 bytes.
+This changes each serialized footnote record from 128 to 288 bytes, so older
+section caches must be discarded and rebuilt.
+
+Version 36 keeps the version 35 serialized layout unchanged. It was bumped
+because ruby and justified text positioning and CJK line breaking now use
+corrected word measurements, so version 35 cached page layouts no longer match.
 
 Version 70 merges upstream's v35 change into the fork's format: the header
 gains a fifth `uint32_t` offset and a `uint32_t` entry per page for the
@@ -149,7 +176,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 76
+#define EXPECTED_VERSION 81
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -231,6 +258,7 @@ struct TextBlock {
 
 struct ImageBlock {
     String imagePath;
+    String srcPath;
     s16 width;
     s16 height;
 };
