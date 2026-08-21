@@ -18,7 +18,10 @@ void EpubReaderFootnotesActivity::onEnter() {
   selectFootnote(startIndex);
 }
 
-void EpubReaderFootnotesActivity::onExit() { Activity::onExit(); }
+void EpubReaderFootnotesActivity::onExit() {
+  FootnoteText::releaseStaging();
+  Activity::onExit();
+}
 
 void EpubReaderFootnotesActivity::selectFootnote(const int index) {
   if (footnotes.empty()) return;

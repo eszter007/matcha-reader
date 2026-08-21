@@ -11,6 +11,14 @@ namespace {
 
 constexpr size_t PARSE_CHUNK = 1024;
 
+// Fallback staging, used only when the target chapter has no cached HTML. It costs a full ZIP
+// inflate plus an SD write of the WHOLE file (measured 1138ms against 406ms for the parse, which
+// stops the moment the anchor's text is collected), so a chapter's notes -- nearly all pointing
+// at one target -- would pay it per lookup. Keep the staged file and reuse it while the target
+// is unchanged; the panel drops it on exit via releaseStaging().
+std::string stagedPath;  // temp file currently holding a staged item ("" = nothing staged)
+std::string stagedItem;  // spine item href staged at stagedPath
+
 struct ExtractState {
   const char* anchor = nullptr;  // empty string = collect <body>
   std::string* out = nullptr;
@@ -109,18 +117,31 @@ bool extract(Epub& epub, const int currentSpineIndex, const std::string& href, s
   }
   const std::string itemHref = epub.getSpineItem(spineIdx).href;
 
-  // Stream the target item to a temp file (same pattern as Section's HTML staging).
-  const std::string tmpPath = epub.getCachePath() + "/fn_tmp.html";
-  {
+  // The section builder already keeps every chapter it has laid out as raw inflated HTML under
+  // <cache>/html/<spine>.html, keyed on the book alone and known-complete once it exists. A
+  // footnote target that has been read therefore needs no inflate at all -- which is also what
+  // makes the panel survive a tight heap, since the inflate is what fails first there.
+  // Otherwise stage the item ourselves, reusing the previous lookup's staging when the target
+  // is unchanged (a chapter's notes nearly all share one).
+  const std::string cachedHtml = epub.getCachePath() + "/html/" + std::to_string(spineIdx) + ".html";
+  const unsigned long stageStart = millis();
+  const bool cacheHit = Storage.exists(cachedHtml.c_str());
+  const std::string parsePath = cacheHit ? cachedHtml : epub.getCachePath() + "/fn_tmp.html";
+  const bool restaged = !cacheHit && (stagedPath != parsePath || stagedItem != itemHref);
+  if (restaged) {
+    releaseStaging();
     HalFile tmp;
-    if (!Storage.openFileForWrite("FNX", tmpPath, tmp)) return false;
+    if (!Storage.openFileForWrite("FNX", parsePath, tmp)) return false;
     if (!epub.readItemContentsToStream(itemHref, tmp, PARSE_CHUNK)) {
       tmp.close();
-      Storage.remove(tmpPath.c_str());
+      Storage.remove(parsePath.c_str());
       LOG_DBG("FNX", "Failed to stream %s", itemHref.c_str());
       return false;
     }
+    stagedPath = parsePath;
+    stagedItem = itemHref;
   }
+  const unsigned long stageMs = millis() - stageStart;
 
   ExtractState st;
   st.anchor = anchor.c_str();
@@ -129,7 +150,7 @@ bool extract(Epub& epub, const int currentSpineIndex, const std::string& href, s
 
   XML_Parser parser = XML_ParserCreate(nullptr);
   if (!parser) {
-    Storage.remove(tmpPath.c_str());
+    releaseStaging();
     return false;
   }
   st.parser = parser;
@@ -137,10 +158,11 @@ bool extract(Epub& epub, const int currentSpineIndex, const std::string& href, s
   XML_SetElementHandler(parser, startElement, endElement);
   XML_SetCharacterDataHandler(parser, characterData);
 
+  const unsigned long parseStart = millis();
   bool ok = true;
   {
     HalFile f;
-    if (!Storage.openFileForRead("FNX", tmpPath, f)) {
+    if (!Storage.openFileForRead("FNX", parsePath, f)) {
       ok = false;
     } else {
       char buf[PARSE_CHUNK];
@@ -160,10 +182,18 @@ bool extract(Epub& epub, const int currentSpineIndex, const std::string& href, s
     }
   }
   XML_ParserFree(parser);
-  Storage.remove(tmpPath.c_str());
+  const char* source = cacheHit ? "html cache" : (restaged ? "streamed" : "reused");
+  LOG_DBG("FNX", "Extract %s: stage=%lums (%s) parse=%lums", href.c_str(), stageMs, source, millis() - parseStart);
 
   while (!out.empty() && out.back() == ' ') out.pop_back();
   return ok && !out.empty();
+}
+
+void releaseStaging() {
+  if (stagedPath.empty()) return;
+  Storage.remove(stagedPath.c_str());
+  stagedPath.clear();
+  stagedItem.clear();
 }
 
 }  // namespace FootnoteText
