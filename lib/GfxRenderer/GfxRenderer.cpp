@@ -420,6 +420,11 @@ static AlignedMemRect screenRectToAlignedMemRect(GfxRenderer::Orientation orient
 //
 // The advance width is also halved in drawText() so layout reserves exactly the right
 // horizontal space for the scaled glyph.
+// Rotation mirrors renderCharImpl's Rotated90CCW mapping applied to the SCALED destination grid.
+// Without it a rotated SUP/SUB glyph has no renderer at all: drawCharVerticalRotatedInCell blits
+// through the UNSCALED path, so a half-size annotation glyph (vertical-text ruby containing a
+// chounpu or a bracket) came out at full size.
+template <TextRotation Rotation = TextRotation::None>
 static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                              const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                              const bool pixelState, const EpdFontFamily::Style style) {
@@ -438,6 +443,18 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   // pixel offset from the (already-shifted) cursor position.
   const int baseX = cursorX + glyph->left / 2;
   const int baseY = cursorY - glyph->top / 2;
+
+  // dstX/dstY index the scaled glyph grid; map them to the screen for the requested rotation.
+  // The bearings are halved for the same reason baseX/baseY halve them: the grid is half-size.
+  const int outerBase = cursorX + glyph->top / 2;
+  const int innerBase = cursorY + glyph->left / 2;
+  const auto plot = [&](const int dstX, const int dstY) {
+    if constexpr (Rotation == TextRotation::Rotated90CCW) {
+      renderer.drawPixel(outerBase - dstY, innerBase + dstX, pixelState);
+    } else {
+      renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+    }
+  };
 
   if (fontData->is2Bit) {
     // 2-bit packed format: 4 pixels per byte, MSB first, 2 bits per pixel.
@@ -458,7 +475,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (maxRaw >= 2 || coverage >= 2) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          plot(dstX, dstY);
         }
       }
     }
@@ -480,7 +497,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (hasInk) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          plot(dstX, dstY);
         }
       }
     }
@@ -2528,6 +2545,16 @@ int GfxRenderer::getLineHeight(const int fontId, const float compression) const 
   return static_cast<int>(getLineHeight(fontId) * compression + 0.5f);
 }
 
+int GfxRenderer::textBaselineOffset(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  // Mirrors drawText()'s own yPos derivation; keep the two in step.
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  int offset = getFontAscenderSize(resolvedFontId);
+  if (resolvedFontId != fontId) {
+    offset += (getLineHeight(fontId) - getLineHeight(resolvedFontId)) / 2;
+  }
+  return offset;
+}
+
 int GfxRenderer::getTextHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
@@ -2746,9 +2773,13 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   const EpdGlyph* glyph = font.getGlyph(cp, style);
   if (!glyph) return;
 
+  // SUP/SUB are rendered at 50% by the scaled path (see renderCharScaled); getGlyph returns the
+  // full-size glyph regardless, so the extents -- and the blit below -- have to halve to match
+  // or a ruby annotation's rotated glyph is drawn twice the size of the text around it.
+  const bool scaledStyle = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
   // After CCW rotation, glyph height maps to X extent and glyph width maps to Y extent.
-  const int rotatedW = glyph->height;
-  const int rotatedH = glyph->width;
+  const int rotatedW = scaledStyle ? (glyph->height + 1) / 2 : glyph->height;
+  const int rotatedH = scaledStyle ? (glyph->width + 1) / 2 : glyph->width;
 
   // Centre the rotated ink box in the cell -- the same rule the upright glyphs follow, so
   // punctuation lands on the column's axis by construction. Brackets override this below.
@@ -2798,6 +2829,14 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
   //   screenX in [cursorX + top - (height-1), cursorX + top]
   //   screenY in [cursorY + left, cursorY + left + (width-1)]
   // Solve for cursor so the rotated bbox starts at (drawX, drawY).
+  // Both renderers derive their origin from the glyph's own bearings, and the scaled one halves
+  // them -- so solve for the cursor with the same halving the chosen renderer will apply.
+  if (scaledStyle) {
+    const int cursorXs = (drawX + rotatedW - 1) - glyph->top / 2;
+    const int cursorYs = drawY - glyph->left / 2;
+    renderCharScaled<TextRotation::Rotated90CCW>(*this, renderMode, font, cp, cursorXs, cursorYs, black, style);
+    return;
+  }
   const int cursorX = (drawX + rotatedW - 1) - glyph->top;
   const int cursorY = drawY - glyph->left;
 

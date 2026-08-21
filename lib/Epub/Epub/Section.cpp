@@ -194,7 +194,12 @@ namespace {
 //      (wordNoSpaceBefore cleared) and a text block no longer soft-flushes while the
 //      parser is inside <ruby>. Both change where lines break, so pages cached by
 //      older versions no longer match.
-constexpr uint8_t SECTION_FILE_VERSION = 79;
+// v80: a ruby base wrapped in a styleless inline element (Calibre's
+//      <ruby><span class="xhtml_rb">base</span><rt>...</rt></ruby> rendering of <rb>) is now
+//      flushed at that element's close, so the annotation attaches to its own base instead of
+//      to the preceding word. Annotated words reserve leading for their ruby, so lines move and
+//      pages cached under v79 hold the wrong positions -- and the wrong furigana.
+constexpr uint8_t SECTION_FILE_VERSION = 80;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

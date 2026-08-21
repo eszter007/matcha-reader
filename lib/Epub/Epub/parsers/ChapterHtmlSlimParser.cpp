@@ -2096,7 +2096,16 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     // Flush if style will change OR if we're closing a block/structural element
     const bool isInlineTag = !headerOrBlockTag && !tableStructuralTag &&
                              !matches(name, IMAGE_TAGS, std::size(IMAGE_TAGS)) && self->depth != 1;
-    const bool shouldFlush = styleWillChange || headerOrBlockTag || matches(name, BOLD_TAGS, std::size(BOLD_TAGS)) ||
+    // A ruby base wrapped in a styleless inline element (Calibre writes
+    // <ruby><span class="xhtml_rb">心臓</span><rt>ハート</rt></ruby> for <rb>) would otherwise
+    // never be flushed: `span` is in none of the tag lists below, and with no CSS rule behind
+    // its class it pushes no style, so styleWillChange is false. The base then never becomes a
+    // word, and the </rt> handler sees baseWordCount == 0 and hangs the annotation on the
+    // PRECEDING word instead -- or drops it when the ruby opens a paragraph. Flushing here ends
+    // the base at its own closing tag, which is where it ends visually too.
+    const bool closingRubyBase = self->inRuby && !self->collectingRubyText;
+    const bool shouldFlush = closingRubyBase || styleWillChange || headerOrBlockTag ||
+                             matches(name, BOLD_TAGS, std::size(BOLD_TAGS)) ||
                              matches(name, ITALIC_TAGS, std::size(ITALIC_TAGS)) ||
                              matches(name, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS)) ||
                              matches(name, LINETHROUGH_TAGS, std::size(LINETHROUGH_TAGS)) || tableStructuralTag ||
