@@ -75,6 +75,10 @@ class VerticalSection {
   std::atomic<bool> backTurnDuringBuild_{false};
   void (*buildNoticeFn_)(void*) = nullptr;
   void* buildNoticeCtx_ = nullptr;
+  // See setBuildCancelHook().
+  bool (*cancelFn_)(const void*) = nullptr;
+  const void* cancelCtx_ = nullptr;
+  bool lastBuildCancelled_ = false;
 
  public:
   uint16_t pageCount = 0;
@@ -120,6 +124,18 @@ class VerticalSection {
     buildNoticeCtx_ = ctx;
     buildNoticeFn_ = fn;
   }
+
+  // Cooperative cancellation, polled once per laid-out page (~60ms apart). For SPECULATIVE
+  // builds only -- a build the reader is waiting on must never be cancelled, so the foreground
+  // path leaves this unset. A cancelled build writes no cache file at all: the partial layout is
+  // discarded rather than persisted, so the next attempt starts clean.
+  void setBuildCancelHook(const void* ctx, bool (*fn)(const void*)) {
+    cancelCtx_ = ctx;
+    cancelFn_ = fn;
+  }
+  // True when the last createSectionFile() returned false because the cancel hook fired, as
+  // opposed to a real failure. Lets a speculative caller back off quietly instead of logging.
+  bool lastBuildCancelled() const { return lastBuildCancelled_; }
 
   // furiganaEnabled is part of the cache key: the column gap only has to clear ruby when ruby is
   // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.

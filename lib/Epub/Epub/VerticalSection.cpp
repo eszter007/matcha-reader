@@ -978,6 +978,12 @@ struct LayoutPageSink final : ParagraphSink {
   std::atomic<bool>* backTurnFlag = nullptr;
   void (*buildNoticeFn)(void*) = nullptr;
   void* buildNoticeCtx = nullptr;
+  // Speculative-build cancellation; see VerticalSection::setBuildCancelHook(). Polled in
+  // writeOne, so once per laid-out page. `cancelled` rides alongside `failed` -- both stop the
+  // build, but only `failed` means something went wrong.
+  bool (*cancelFn)(const void*) = nullptr;
+  const void* cancelCtx = nullptr;
+  bool cancelled = false;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
   int fontReleasedForReq_ = -1;        // one font-cache release per starved request; see servePageRequest()
 
@@ -1118,8 +1124,20 @@ struct LayoutPageSink final : ParagraphSink {
   // BATCH_CHARS trigger below, onImage()'s pre-image flush) must pass false so a batch boundary
   // that lands mid-page continues that page on the next call instead of finalizing it early. See
   // VerticalParsedText::layoutPages()'s isFinalFlush doc comment for the full rationale.
+  // True once the cancel hook has fired; latches `cancelled`/`failed` so every guarded path
+  // (flushText, onImage, the parse loop) stops. Polled here as well as in writeOne because a
+  // page can take seconds to lay out, and a cancel that only lands on page boundaries makes the
+  // reader wait out the whole of the current page.
+  bool checkCancelled() {
+    if (failed) return true;
+    if (!cancelFn || !cancelFn(cancelCtx)) return false;
+    cancelled = true;
+    failed = true;
+    return true;
+  }
+
   void flushText(bool isFinalFlush = false) {
-    if (failed) return;
+    if (checkCancelled()) return;
     if (!isFinalFlush && layout.pendingCount() == 0) return;
     // Streaming pages out via callback as they're finalized keeps at most ~2 pages' worth of
     // glyph buffers resident at once instead of the whole batch's -- see PageReadyCallback in
@@ -1136,6 +1154,7 @@ struct LayoutPageSink final : ParagraphSink {
   static constexpr size_t kPageBufCap = 12 * 1024;
 
   void writeOne(const VerticalPage& p) {
+    if (failed) return;  // a cancel latched mid-batch: the rest of this batch is discarded too
     pageOffsets.push_back(static_cast<uint32_t>(out.position()));
     // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
     // Holding it resident across the whole build deepened the layout's low-heap dips by
@@ -1161,7 +1180,10 @@ struct LayoutPageSink final : ParagraphSink {
       failed = true;
     }
 
-    if (ok) servePageRequest(p, static_cast<int>(pageOffsets.size()) - 1);
+    if (!ok) return;
+    // Poll BEFORE serving: a cancelled speculative build has no reader waiting on its pages.
+    if (checkCancelled()) return;
+    servePageRequest(p, static_cast<int>(pageOffsets.size()) - 1);
   }
 
   // Show-the-page-during-the-build engine, shared by the initial early first render (the
@@ -1471,6 +1493,8 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   sink.backTurnFlag = &backTurnDuringBuild_;
   sink.buildNoticeFn = buildNoticeFn_;
   sink.buildNoticeCtx = buildNoticeCtx_;
+  sink.cancelFn = cancelFn_;
+  sink.cancelCtx = cancelCtx_;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
@@ -1561,6 +1585,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
       parseOk = false;
       break;
     }
+    // A cancelled or failed sink drops every page the rest of this file would produce, so
+    // parsing on is pure waste -- and for a cancel the whole point is to hand the task back.
+    if (sink.failed) break;
   } while (!done);
 
   htmlFile.close();
@@ -1572,6 +1599,11 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   extractor.flushParagraph();
   sink.flushText(/*isFinalFlush=*/true);
 
+  if (sink.cancelled) {
+    lastBuildCancelled_ = true;
+    LOG_INF("VSC", "Speculative build cancelled after %zu pages (spine=%d)", pageOffsets_.size(), spineIndex);
+    return false;
+  }
   if (sink.failed) return false;
 
   // OR, don't assign: the styled-block collect above may already have flagged this build
@@ -1606,6 +1638,7 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   pageOffsets_.clear();
   loadedPageIndex_ = -1;
   pageCount = 0;
+  lastBuildCancelled_ = false;
 
   HalFile file;
   if (!Storage.openFileForWrite("VSC", filePath, file)) {
