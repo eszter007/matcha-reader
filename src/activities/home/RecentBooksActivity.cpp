@@ -247,6 +247,32 @@ int RecentBooksActivity::getVisibleRows(int cellHeight, int contentHeight) const
   return std::max(1, (contentHeight + GRID_ROW_GAP) / (cellHeight + GRID_ROW_GAP));
 }
 
+int RecentBooksActivity::gridIndexAtPoint(const int x, const int y, const int contentTop, const int contentHeight,
+                                          const int scrollRowIn, const int itemCount) const {
+  if (itemCount <= 0) return -1;
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int cellWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / GRID_COLS;
+  if (cellWidth <= 0) return -1;
+  const int cellHeight = getCellHeight(cellWidth);
+  const int rowStride = cellHeight + GRID_ROW_GAP;
+  const int visibleRows = getVisibleRows(cellHeight, contentHeight);
+  if (cellHeight <= 0 || visibleRows <= 0) return -1;
+
+  const int localX = x - metrics.contentSidePadding;
+  if (localX < 0 || localX >= cellWidth * GRID_COLS) return -1;
+  const int localY = y - contentTop;
+  if (localY < 0) return -1;
+
+  const int row = localY / rowStride;
+  // Full rows only -- the peek row below them is a hint, not a target (see the header).
+  if (row >= visibleRows) return -1;
+  // The GRID_ROW_GAP band between two rows belongs to neither.
+  if (localY - row * rowStride >= cellHeight) return -1;
+
+  const int index = (scrollRowIn + row) * GRID_COLS + localX / cellWidth;
+  return index < itemCount ? index : -1;
+}
+
 int RecentBooksActivity::getContentItemCount() const {
   if (selectedTab == 0) return static_cast<int>(recentBooks.size());
   return static_cast<int>(shelves.size());
@@ -871,7 +897,42 @@ void RecentBooksActivity::loop() {
       return;
     }
 
-    if (shelfContentIndex < static_cast<int>(shelfBooks.size())) {
+    // Touch: same three gestures as the grid below. contentTop here is the loop-local one --
+    // the shelf detail view draws no tab bar, so its content starts higher than the tabbed views.
+    const int shelfCount = static_cast<int>(shelfBooks.size());
+    int shelfTouchX = 0;
+    int shelfTouchY = 0;
+    if (mappedInput.wasScreenLongPress(shelfTouchX, shelfTouchY)) {
+      const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      if (hit >= 0) {
+        shelfContentIndex = hit;
+        showBookStats(shelfBooks[hit].path, shelfBooks[hit].title);
+      }
+      return;
+    }
+    if (mappedInput.wasScreenTouchDown(shelfTouchX, shelfTouchY)) {
+      const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      if (hit >= 0 && hit != shelfContentIndex) {
+        shelfContentIndex = hit;
+        requestUpdate();
+      }
+      return;
+    }
+    if (mappedInput.wasScreenTapped(shelfTouchX, shelfTouchY)) {
+      const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      if (hit >= 0) {
+        shelfContentIndex = hit;
+        LOG_DBG("RBA", "Tapped shelf book: %s", shelfBooks[hit].path.c_str());
+        onSelectBook(shelfBooks[hit].path);
+      }
+      return;
+    }
+
+    // The click that opened this shelf is still down: only a press that STARTS here may act, or
+    // its release opens the focused book the instant the shelf appears (see shelfConfirmPressSeen).
+    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) shelfConfirmPressSeen = true;
+
+    if (shelfConfirmPressSeen && shelfContentIndex < static_cast<int>(shelfBooks.size())) {
       // Shelves are where manga folders are browsed; without this they had no route to stats.
       if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
         longPressFired = true;
@@ -919,6 +980,7 @@ void RecentBooksActivity::loop() {
         if (itemIdx < static_cast<int>(shelves.size())) {
           LOG_DBG("RBA", "Opening shelf: %s", shelves[itemIdx].folderPath.c_str());
           openShelfIndex = itemIdx;
+          shelfConfirmPressSeen = false;
           shelfContentIndex = 0;
           shelfScrollRow = 0;
           loadShelfBooks(shelves[itemIdx].folderPath);
@@ -967,6 +1029,76 @@ void RecentBooksActivity::loop() {
       requestUpdate();
     }
     return;
+  }
+
+  // --- Touch, main (tabbed) view ------------------------------------------------------------
+  // Without this the Library is button-only: covers, tabs and shelves have no tap target, which
+  // on a board with no front buttons leaves selecting a book to next/prev plus a remapped power
+  // click, and reaching the Shelves tab to holding next (#129).
+  {
+    const auto& m = UITheme::getInstance().getMetrics();
+    const int tabBarY = m.topPadding + m.headerHeight;
+    // The tabbed views start BELOW the tab bar, unlike the loop-local contentTop above.
+    const int gridTop = tabBarY + m.tabBarHeight + m.verticalSpacing;
+    const int gridHeight = renderer.getScreenHeight() - gridTop - m.buttonHintsHeight - m.verticalSpacing;
+    const int itemCount = getContentItemCount();
+
+    // Tab bar: two equal columns across the full width, matching GUI.drawTabBar's rect.
+    int tab = -1;
+    const auto tabTouch = mappedInput.colTouch(tab, 0, renderer.getScreenWidth() / TAB_COUNT, TAB_COUNT, tabBarY,
+                                               tabBarY + m.tabBarHeight);
+    if (tabTouch == MappedInputManager::RowTouch::Tap && tab >= 0 && tab != selectedTab) {
+      selectedTab = tab;
+      if (selectedTab == 1 && !shelvesLoaded) loadShelves();
+      contentIndex = 0;
+      scrollRow = 0;
+      requestUpdate();
+      return;
+    }
+    if (tabTouch != MappedInputManager::RowTouch::None) return;
+
+    int gx = 0;
+    int gy = 0;
+    // Long press first: wasScreenLongPress suppresses the rest of the contact, so the lift
+    // cannot also tap the screen this opens.
+    if (mappedInput.wasScreenLongPress(gx, gy)) {
+      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      // Stats are for books; a shelf has none.
+      if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
+        contentIndex = hit + 1;
+        showBookStats(recentBooks[hit].path, recentBooks[hit].title);
+      }
+      return;
+    }
+    if (mappedInput.wasScreenTouchDown(gx, gy)) {
+      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      if (hit >= 0 && contentIndex != hit + 1) {
+        contentIndex = hit + 1;  // index 0 is the tab bar
+        requestUpdate();
+      }
+      return;
+    }
+    if (mappedInput.wasScreenTapped(gx, gy)) {
+      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      if (hit >= 0) {
+        contentIndex = hit + 1;
+        if (selectedTab == 0) {
+          if (hit < static_cast<int>(recentBooks.size())) {
+            LOG_DBG("RBA", "Tapped recent book: %s", recentBooks[hit].path.c_str());
+            onSelectBook(recentBooks[hit].path);
+          }
+        } else if (hit < static_cast<int>(shelves.size())) {
+          LOG_DBG("RBA", "Tapped shelf: %s", shelves[hit].folderPath.c_str());
+          openShelfIndex = hit;
+          shelfConfirmPressSeen = false;
+          shelfContentIndex = 0;
+          shelfScrollRow = 0;
+          loadShelfBooks(shelves[hit].folderPath);
+          requestUpdate();
+        }
+      }
+      return;
+    }
   }
 
   // Release, not press: leaving on the press edge hands the release of the same

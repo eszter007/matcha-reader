@@ -139,6 +139,14 @@ class EpubReaderWordLookupActivity final : public Activity {
   PendingMove pending;
 
   void renderSelect();
+  // Screen boxes for one selectable word, written into `out` (at most kMaxHighlightBoxes),
+  // returning how many. The single source of truth for glyph->screen geometry: both the drawn
+  // highlight and the tap hit-test go through it, so they cannot drift apart. Main task only
+  // (it reads the scan vectors).
+  int buildBoxesFor(int selectableIndex, HighlightBox* out) const;
+  // Selectable index whose word covers the screen point, or -1 for a tap that missed every word
+  // (a gutter, a margin, unscanned text). Main task only.
+  int selectableIndexAtPoint(int x, int y) const;
   // Rebuild cursorBoxes for the current cursor. Main task only (it reads the scan vectors).
   // A match that wraps from the foot of one column to the head of the next becomes one box per
   // column, so the highlight never covers the gutter between them.

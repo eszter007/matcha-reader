@@ -518,6 +518,14 @@ void MangaReaderActivity::loop() {
   clearEndOfBookOptionsIfNeeded();
   if (handleEndOfBookMenu()) return;
 
+  // Same touch contract as every other reader (EpubReaderActivity, XtcReaderActivity,
+  // TxtReaderActivity): outer-third taps or horizontal swipes turn the page, a centre tap opens
+  // the menu. Both helpers gate on SETTINGS.touchReaderControls and hasTouch(), so tap-vs-swipe
+  // mode and the global opt-out are inherited and non-touch boards see no change. Read once per
+  // tick, before any early return can swallow the gesture.
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
     requestUpdate();
@@ -525,7 +533,7 @@ void MangaReaderActivity::loop() {
 
   if (automaticPageTurnActive) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        mappedInput.wasReleased(MappedInputManager::Button::Back) || touchMenu) {
       automaticPageTurnActive = false;
       requestUpdate();
       return;
@@ -561,7 +569,12 @@ void MangaReaderActivity::loop() {
       requestUpdate();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // A tap anywhere on the overlay looks the word up, matching Confirm: the overlay is a
+    // full-screen text panel, so there is no page-turn zone here to keep clear.
+    int overlayTapX = 0;
+    int overlayTapY = 0;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
+        (mappedInput.hasTouch() && mappedInput.wasScreenTapped(overlayTapX, overlayTapY))) {
       launchWordLookup();
       return;
     }
@@ -589,7 +602,7 @@ void MangaReaderActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else if (viewMode == ViewMode::PanelZoom || viewMode == ViewMode::FullPage) {
@@ -598,7 +611,9 @@ void MangaReaderActivity::loop() {
     }
   }
 
-  const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  prevTriggered = prevTriggered || touch.prev;
+  nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
     // Idle tick: after a dwell, warm the pixel cache the user is most likely to need next so the
     // render hits it instead of a fresh JPEG decode. Dwell gates and ordering rationale live with

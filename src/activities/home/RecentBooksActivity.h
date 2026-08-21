@@ -23,6 +23,12 @@ class RecentBooksActivity final : public Activity {
   int scrollRow = 0;
 
   bool longPressFired = false;
+  // A shelf opens on the Confirm PRESS, so the release of that same physical click arrives with
+  // the shelf's book list already on screen -- where it read as "open the focused book", opening
+  // one the moment a shelf was entered. Cleared on entry and set by a FRESH press, so only a
+  // click that both started and ended inside the shelf view can act. Same guard as
+  // EpubReaderWordLookupActivity::confirmPressSeen, which is entered mid-press the same way.
+  bool shelfConfirmPressSeen = false;
 
   // Books tab
   std::vector<RecentBook> recentBooks;
@@ -65,6 +71,13 @@ class RecentBooksActivity final : public Activity {
 
   int getVisibleRows(int cellHeight, int contentHeight) const;
   int getCellHeight(int cellWidth) const;
+  // Absolute grid item index under a screen point, or -1 for a miss. Derives the cell grid the
+  // same way renderBooksTab()/renderShelvesTab()/renderShelfBooksView() do, so the hit targets
+  // are exactly the drawn cells. Deliberately stops at visibleRows: those renderers draw one
+  // EXTRA "peek" row as a more-below hint, and it sits half-behind the button hints -- letting a
+  // tap land there would open a book the reader cannot actually see. contentTop differs between
+  // the tabbed views and the shelf detail view (no tab bar), so the caller passes it in.
+  int gridIndexAtPoint(int x, int y, int contentTop, int contentHeight, int scrollRowIn, int itemCount) const;
   // Cover height of one grid cell, published by the render task and read by the scan task.
   // The scan also derives the same geometry before the first render, so it never generates a
   // theme-sized thumb that the grid cannot draw.
