@@ -10,6 +10,22 @@
 #include <algorithm>
 
 namespace {
+// [HEIGHT] is the ONLY placeholder this build knows how to fill (UITheme::getCoverThumbPath).
+// Older firmware wrote a [WIDTH]x[HEIGHT] template; substituting just [HEIGHT] leaves a literal
+// "[WIDTH]" in the filename, so the path can never exist and every Home and Library pass re-probes
+// it forever (X3 device log: ".../epub_5391773237008108432/thumb_[WIDTH]x231.bmp", alongside a
+// 19-digit 64-bit hash this build also no longer produces).
+//
+// Only the PATH is dropped, never the book: with no cover path the ordinary generator writes a
+// current-format thumb on the next pass, which is also what repairs the stale directory name.
+bool coverPathResolvable(const std::string& coverBmpPath) {
+  std::string rest = coverBmpPath;
+  for (size_t at = rest.find("[HEIGHT]"); at != std::string::npos; at = rest.find("[HEIGHT]")) {
+    rest.erase(at, 8);
+  }
+  return rest.find('[') == std::string::npos && rest.find(']') == std::string::npos;
+}
+
 constexpr size_t LIBRARY_CACHE_MAX_BOOKS = 2048;
 
 class JsonFileReader {
@@ -71,6 +87,10 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
+    if (!coverPathResolvable(book.coverBmpPath)) {
+      LOG_DBG("RBS", "Dropping unresolvable cover path %s", book.coverBmpPath.c_str());
+      book.coverBmpPath.clear();
+    }
     recentBooks.push_back(std::move(book));
   }
 

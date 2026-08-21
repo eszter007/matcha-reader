@@ -36,6 +36,8 @@ class Epub {
   contentaccess::HandlePtr itemSource;
   // User-presentable reason load() refused the book (empty otherwise).
   std::string accessError;
+  // Set by generateThumbBmp() via the converter's outUnsupported flag; see coverUnsupported().
+  mutable bool coverUnsupported_ = false;
 
   bool findContentOpfFile(std::string* contentOpfFile, BmpConvertCancelFn shouldCancel = nullptr,
                           void* cancelCtx = nullptr) const;
@@ -61,6 +63,11 @@ class Epub {
   const std::string& getPath() const;
   // Empty unless load() refused the book because its content is not readable here.
   const std::string& getAccessError() const { return accessError; }
+  // True when the last generateThumbBmp() failed because the cover image itself can never be
+  // converted by this build (currently: beyond the JPEG decoder's dimension limits) -- as
+  // opposed to a low-heap moment, a cancellation, or a decode error, which are all retryable.
+  // Lets a caller record "no usable cover" instead of re-attempting it on every pass forever.
+  bool coverUnsupported() const { return coverUnsupported_; }
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;

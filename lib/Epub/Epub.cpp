@@ -830,7 +830,7 @@ bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* c
     int THUMB_TARGET_WIDTH = (height * 2) / 3;
     int THUMB_TARGET_HEIGHT = height;
     const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(
-        coverJpg, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT, shouldCancel, cancelCtx);
+        coverJpg, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT, shouldCancel, cancelCtx, &coverUnsupported_);
     // Explicitly close() files before calling Storage.remove()
     coverJpg.close();
     thumbBmp.close();
