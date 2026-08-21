@@ -531,7 +531,9 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
                                                      int targetHeight, bool oneBit, bool crop,
-                                                     BmpConvertCancelFn shouldCancel, void* cancelCtx) {
+                                                     BmpConvertCancelFn shouldCancel, void* cancelCtx,
+                                                     bool* outUnsupported) {
+  if (outUnsupported) *outUnsupported = false;
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
   if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
@@ -565,8 +567,12 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   constexpr int MAX_IMAGE_HEIGHT = 3072;
 
   if (srcWidth <= 0 || srcHeight <= 0 || srcWidth > MAX_IMAGE_WIDTH || srcHeight > MAX_IMAGE_HEIGHT) {
-    LOG_DBG("JPG", "Image too large or invalid (%dx%d), max supported: %dx%d", srcWidth, srcHeight, MAX_IMAGE_WIDTH,
+    // ERR, not DBG: this is permanent for this file and it is why a cover never appears, so a
+    // release build (LOG_LEVEL=1, no DBG) has to be able to say so. Every other failure here is
+    // transient and already logs at ERR or is a deliberate cancellation.
+    LOG_ERR("JPG", "Image too large or invalid (%dx%d), max supported: %dx%d", srcWidth, srcHeight, MAX_IMAGE_WIDTH,
             MAX_IMAGE_HEIGHT);
+    if (outUnsupported) *outUnsupported = true;
     return false;
   }
 
@@ -789,7 +795,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& b
 // Convert to 1-bit BMP (black and white only, no grays) for fast home screen rendering
 bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
                                                          int targetMaxHeight, BmpConvertCancelFn shouldCancel,
-                                                         void* cancelCtx) {
+                                                         void* cancelCtx, bool* outUnsupported) {
   return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, shouldCancel,
-                                     cancelCtx);
+                                     cancelCtx, outUnsupported);
 }

@@ -164,6 +164,15 @@ void RecentBooksActivity::runCoverJob() {
     // low-heap moment costs the cover forever. Requires !cancelled: a cancelled load leaves the
     // metadata cache unpopulated, which hasCoverImage() cannot distinguish from a coverless book.
     result.coverKnownAbsent = loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && !epub.hasCoverImage();
+    // The other permanent outcome: the book HAS a cover, but it can never be converted by this
+    // build (source beyond the JPEG decoder's dimension limits). Distinguished at the source by
+    // the converter -- a low-heap moment, a cancellation and a decode error all leave this false
+    // and stay retryable. Without it an unconvertible cover is re-extracted and re-decoded on
+    // every Library pass forever, which on a tight device is a hot loop of SD reads (X3 report).
+    if (loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && epub.coverUnsupported()) {
+      LOG_ERR("RBA", "Cover unconvertible for %s; recording as coverless", result.book.path.c_str());
+      result.coverKnownAbsent = true;
+    }
     // Deliberately NOT extended to a book that failed to OPEN. contentaccess::open() reports a
     // missing credential and an OOM through the same channel as a bad container, and the index
     // entry is keyed on size+stamp -- so recording "no cover" would outlive the credential being
