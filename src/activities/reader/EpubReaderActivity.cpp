@@ -1065,6 +1065,7 @@ void EpubReaderActivity::openReaderMenu() {
   } else if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
     hasPageText = !section->getTextFromSectionFile().empty();
   }
+  refreshSectionFootnotesIfBuilt();
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
@@ -3894,7 +3895,16 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
   }
 }
 
+void EpubReaderActivity::refreshSectionFootnotesIfBuilt() {
+  // Nothing to re-read while the build is still running (the table is written last), and a
+  // vertical section never has one. An empty list on a finished section is also the normal
+  // "chapter has no notes" case -- the retry costs one small read on menu/panel open.
+  if (!section || section->isBuilding() || !sectionFootnotes.empty()) return;
+  section->loadSectionFootnotes(sectionFootnotes);
+}
+
 void EpubReaderActivity::openFootnotesPanel() {
+  refreshSectionFootnotesIfBuilt();
   // Prefer the chapter-wide list (section file v32+); fall back to the current page's own
   // footnotes for sections built by older firmware. The panel opens at the footnote nearest
   // the current page: the first one ON the page, else the most recently passed one.
