@@ -23,6 +23,12 @@ class RecentBooksActivity final : public Activity {
   int scrollRow = 0;
 
   bool longPressFired = false;
+  // A shelf opens on the Confirm PRESS, so the release of that same physical click arrives with
+  // the shelf's book list already on screen -- where it read as "open the focused book", opening
+  // one the moment a shelf was entered. Cleared on entry and set by a FRESH press, so only a
+  // click that both started and ended inside the shelf view can act. Same guard as
+  // EpubReaderWordLookupActivity::confirmPressSeen, which is entered mid-press the same way.
+  bool shelfConfirmPressSeen = false;
 
   // Books tab
   std::vector<RecentBook> recentBooks;

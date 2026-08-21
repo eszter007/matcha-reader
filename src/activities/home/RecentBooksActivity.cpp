@@ -928,7 +928,11 @@ void RecentBooksActivity::loop() {
       return;
     }
 
-    if (shelfContentIndex < static_cast<int>(shelfBooks.size())) {
+    // The click that opened this shelf is still down: only a press that STARTS here may act, or
+    // its release opens the focused book the instant the shelf appears (see shelfConfirmPressSeen).
+    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) shelfConfirmPressSeen = true;
+
+    if (shelfConfirmPressSeen && shelfContentIndex < static_cast<int>(shelfBooks.size())) {
       // Shelves are where manga folders are browsed; without this they had no route to stats.
       if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
         longPressFired = true;
@@ -976,6 +980,7 @@ void RecentBooksActivity::loop() {
         if (itemIdx < static_cast<int>(shelves.size())) {
           LOG_DBG("RBA", "Opening shelf: %s", shelves[itemIdx].folderPath.c_str());
           openShelfIndex = itemIdx;
+          shelfConfirmPressSeen = false;
           shelfContentIndex = 0;
           shelfScrollRow = 0;
           loadShelfBooks(shelves[itemIdx].folderPath);
@@ -1085,6 +1090,7 @@ void RecentBooksActivity::loop() {
         } else if (hit < static_cast<int>(shelves.size())) {
           LOG_DBG("RBA", "Tapped shelf: %s", shelves[hit].folderPath.c_str());
           openShelfIndex = hit;
+          shelfConfirmPressSeen = false;
           shelfContentIndex = 0;
           shelfScrollRow = 0;
           loadShelfBooks(shelves[hit].folderPath);
