@@ -117,9 +117,8 @@ class Page {
     FootnoteEntry entry;
     strncpy(entry.number, number, sizeof(entry.number) - 1);
     entry.number[sizeof(entry.number) - 1] = '\0';
-    strncpy(entry.href, href, sizeof(entry.href) - 1);
-    entry.href[sizeof(entry.href) - 1] = '\0';
-    footnotes.push_back(entry);
+    entry.href.assign(href, strnlen(href, FOOTNOTE_HREF_LEN - 1));
+    footnotes.push_back(std::move(entry));
   }
 
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool skipRuby = false) const;

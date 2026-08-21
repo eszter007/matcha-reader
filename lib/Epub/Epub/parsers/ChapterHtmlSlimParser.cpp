@@ -1431,8 +1431,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       }
       self->insideFootnoteLink = true;
       self->footnoteLinkDepth = self->depth;
-      strncpy(self->currentFootnote.href, href, sizeof(self->currentFootnote.href) - 1);
-      self->currentFootnote.href[sizeof(self->currentFootnote.href) - 1] = '\0';
+      self->currentFootnote.href.assign(href, strnlen(href, FOOTNOTE_HREF_LEN - 1));
       self->currentFootnote.number[0] = '\0';
       self->currentFootnoteLinkTextLen = 0;
 
@@ -2125,15 +2124,14 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
   // Closing a footnote link — create entry from collected text and href
   if (self->insideFootnoteLink && self->depth == self->footnoteLinkDepth) {
-    if (self->currentFootnote.number[0] != '\0' && self->currentFootnote.href[0] != '\0') {
+    if (self->currentFootnote.number[0] != '\0' && !self->currentFootnote.href.empty()) {
       FootnoteEntry entry;
       strncpy(entry.number, self->currentFootnote.number, sizeof(entry.number) - 1);
       entry.number[sizeof(entry.number) - 1] = '\0';
-      strncpy(entry.href, self->currentFootnote.href, sizeof(entry.href) - 1);
-      entry.href[sizeof(entry.href) - 1] = '\0';
+      entry.href = self->currentFootnote.href;
       int wordIndex =
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
-      self->pendingFootnotes.push_back({wordIndex, entry});
+      self->pendingFootnotes.push_back({wordIndex, std::move(entry)});
     }
     self->insideFootnoteLink = false;
   }
@@ -2438,7 +2436,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   wordsExtractedInBlock += line->wordCount();
   auto footnoteIt = pendingFootnotes.begin();
   while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
-    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href.c_str());
     if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
       sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), footnoteIt->second});
     }
@@ -2531,7 +2529,7 @@ void ChapterHtmlSlimParser::makePages() {
   // edge cases where a footnote's word index equals the exact block size.
   if (!pendingFootnotes.empty() && currentPage) {
     for (const auto& [idx, fn] : pendingFootnotes) {
-      currentPage->addFootnote(fn.number, fn.href);
+      currentPage->addFootnote(fn.number, fn.href.c_str());
       if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
         sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), fn});
       }
