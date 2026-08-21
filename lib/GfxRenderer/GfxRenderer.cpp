@@ -1982,11 +1982,15 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
     frameTimed = false;
   }
   panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
+  // A HALF/FULL pass drives every pixel to its target, which re-establishes the B/W baseline in
+  // the controller's RED RAM. A FAST pass does not, so a gray plane sitting there survives it.
+  if (refreshMode != HalDisplay::FAST_REFRESH) grayPlanesResident_ = false;
   display.displayBuffer(refreshMode, fadingFix);
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
   panelResidue_ = refreshMode == HalDisplay::FAST_REFRESH;
+  if (refreshMode != HalDisplay::FAST_REFRESH) grayPlanesResident_ = false;
   // The async path has no turn-off-screen hook, which the sunlight fading fix
   // relies on; keep those users on the blocking path.
   if (fadingFix) {
@@ -2828,6 +2832,7 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
   // Grayscale pipeline in progress: the plane passes that follow leave gray
   // charge no single HALF scrubs (see panelResidue_), whatever the fallback.
   panelResidue_ = true;
+  grayPlanesResident_ = true;
   display.displayGrayscaleBase(fallback, fadingFix);
 }
 
@@ -2856,12 +2861,14 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
 void GfxRenderer::displayGrayBuffer() const {
-  panelResidue_ = true;  // gray plane drive: charge a HALF alone cannot scrub
+  panelResidue_ = true;        // gray plane drive: charge a HALF alone cannot scrub
+  grayPlanesResident_ = true;  // RED RAM now holds a gray plane, not the B/W baseline
   display.displayGrayBuffer(fadingFix);
 }
 
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
-  panelResidue_ = true;  // tiled gray planes (X4 image pages): same charge as displayGrayBuffer
+  panelResidue_ = true;        // tiled gray planes (X4 image pages): same charge as displayGrayBuffer
+  grayPlanesResident_ = true;  // RED RAM now holds a gray plane, not the B/W baseline
   // Guard the uint16_t casts below: a negative would wrap to a huge length.
   assert(yStart >= 0 && numRows > 0 && yStart <= static_cast<int>(panelHeight) - numRows);
   display.writeGrayscalePlaneStrip(lsbPlane, scratch, static_cast<uint16_t>(yStart), static_cast<uint16_t>(numRows));

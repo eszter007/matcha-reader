@@ -3111,7 +3111,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // image pages: a FAST refresh otherwise runs directly over the
   // retained frame after a silent restart (for example, when returning from
   // KOReader sync), leaving the old UI mixed with the image.
-  const bool cleanImageBasePending = !grayscaleRefineOnly && (manualRefreshPending || pagesUntilFullRefresh == 0);
+  // panelHasGrayPlanes(): the page we are leaving ran a grayscale pass, so the controller's RED
+  // RAM holds a gray plane rather than the previous B/W frame. A FAST refresh is a differential
+  // update against that RAM, so the incoming image would be diffed against a gray plane and the
+  // OLD picture stays visible under the new one (two image pages in a row -- a cover followed by
+  // an illustration -- overlaid). The `pagesUntilFullRefresh = 1` set below already routes the
+  // next ORDINARY page onto the HALF cleanup for the same reason; it cannot help here, because
+  // an image page reaching this branch reads that same counter as 1, not 0, and picks FAST.
+  const bool cleanImageBasePending =
+      !grayscaleRefineOnly && (manualRefreshPending || pagesUntilFullRefresh == 0 || renderer.panelHasGrayPlanes());
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   const bool tiledGrayscale = needsAnyGrayscale && renderer.supportsStripGrayscale();

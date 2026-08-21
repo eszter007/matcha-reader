@@ -77,6 +77,15 @@ class GfxRenderer {
   // display path is const).
   mutable bool panelResidue_ = false;
 
+  // Narrower than panelResidue_, and for a different failure: a grayscale pass leaves the
+  // controller's RED RAM holding a gray PLANE instead of the previous B/W frame (the SDK tracks
+  // the same thing as _redRamSynced). A FAST refresh is a differential update against that RAM,
+  // so the next one diffs against a gray plane and the old picture survives underneath the new
+  // one. Only a HALF/FULL pass, which drives every pixel to its target, restores a usable
+  // baseline. panelResidue_ cannot answer this: any FAST refresh sets it, so it is true almost
+  // always and would force a scrub on every image page.
+  mutable bool grayPlanesResident_ = false;
+
   // Tiled grayscale strip target. When active, drawPixel()/clearScreen()
   // operate on a caller-owned scratch holding one horizontal band of physical
   // rows [_stripY0, _stripY0 + _stripRows) (panelWidthBytes wide) instead of
@@ -224,6 +233,10 @@ class GfxRenderer {
   // writes) that a static screen -- the sleep image -- would freeze in place.
   // Cleared by any HALF or FULL pass. See panelResidue_.
   [[nodiscard]] bool panelHasResidue() const { return panelResidue_; }
+  // True while the controller's RED RAM still holds a grayscale plane rather than a B/W
+  // baseline, so a FAST (differential) refresh would diff against it. Callers that are about to
+  // put a fresh full-screen image up must take a HALF pass instead. See grayPlanesResident_.
+  [[nodiscard]] bool panelHasGrayPlanes() const { return grayPlanesResident_; }
   // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
   // grayscale strip rendering) can overlap the panel's refresh time. The
   // framebuffer must stay untouched until waitRefreshComplete(). Falls back to
