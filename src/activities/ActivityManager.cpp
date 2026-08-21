@@ -258,6 +258,14 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
 }
 
 void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefresh) {
+  // Home's first paint is FAST, which cannot clear what a reader leaves behind: dense text and
+  // grayscale image planes deposit charge (see GfxRenderer::panelResidue_), and it showed as the
+  // previous page ghosting through Home's cover tile. Scrub on the way out of a reader -- and
+  // ONLY then. The light list screens (FileBrowser, Settings, ReadingStats) leave nothing to
+  // clear, and scrubbing on every return made the most-visited screen the slowest one: 1690ms
+  // plus repaints, against 502ms everywhere else.
+  const bool leftReaderFrame = currentActivity && currentActivity->isReaderActivity();
+
   if (initialMenuItem == HomeMenuItem::NONE && currentActivity) {
     const auto& activityName = currentActivity->name;
     if (activityName == "FileBrowser") {
@@ -272,7 +280,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
   }
-  replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh));
+  replaceActivity(
+      std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh || leftReaderFrame));
 }
 void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<CrashActivity>(renderer, mappedInput)); }
 

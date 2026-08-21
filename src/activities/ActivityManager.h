@@ -92,6 +92,8 @@ class ActivityManager {
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
   void goToCrashReport();
+  // cleanInitialRefresh forces the scrubbing HALF pass on Home's first paint. goHome() also
+  // sets it on its own when the outgoing screen was a reader -- see the implementation.
   void goHome(HomeMenuItem initialMenuItem = HomeMenuItem::NONE, bool cleanInitialRefresh = false);
 
   // This will move current activity to stack instead of deleting it
