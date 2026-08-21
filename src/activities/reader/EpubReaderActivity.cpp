@@ -2723,8 +2723,23 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     silentIndexBackoffUntilMs_ = 0;
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
+    // This build owns the render task for as long as it runs -- up to 18s on a 282-page chapter,
+    // measured. Every OTHER tail task already yields the task back on a button press; without the
+    // same courtesy here a turn pressed during the build sat frozen for the whole of it, and the
+    // window fires on every chapter shorter than SILENT_INDEX_WINDOW_PAGES, which in a Japanese
+    // book is every one-page illustration spine at the front. Cancelling costs the partial layout
+    // (nothing is persisted), but the foreground build that then runs carries the early-render
+    // hook, so the reader sees the page in seconds instead of waiting out the whole chapter.
+    imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+    nextVSection.setBuildCancelHook(this, &EpubReaderActivity::imageWarmShouldCancel);
     if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana())) {
-      LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
+      if (nextVSection.lastBuildCancelled()) {
+        // Back off exactly as a heap skip does: without it a reader paging through a chapter's
+        // closing pages restarts the build on every turn and it never reaches the end.
+        silentIndexBackoffUntilMs_ = millis() + 1500;
+      } else {
+        LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
+      }
     }
     return;
   }
