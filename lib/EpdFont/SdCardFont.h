@@ -278,17 +278,41 @@ class SdCardFont {
   };
   OverflowContext overflowCtx_[MAX_STYLES] = {};
 
-  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler)
-  static constexpr uint32_t OVERFLOW_CAPACITY = 8;
+  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler).
+  //
+  // Sized against the working set, not "a few spare slots". A chapter build runs with the mini
+  // font cache deliberately released (the layout needs that heap), so EVERY glyph measurement
+  // during layout comes through here. At 8 slots a single line of Latin text overflows the ring,
+  // so each re-measure of the same run reloads every character from SD: measured on device while
+  // laying out one page, 548 loads for 82 distinct codepoints -- U+0020 alone read 164 times --
+  // costing ~6s of the ~7s before the page appeared.
+  //
+  // The larger ring also CHURNS LESS heap, not more: a miss on a full ring frees the evicted
+  // bitmap and allocates a new one, so 8 slots meant ~550 alloc/free pairs of similar sizes per
+  // page, which is exactly the pattern that shreds the largest contiguous block. Steady-state
+  // cost is 48 entries x 28 bytes = 1.3KB per loaded font (one or two are loaded) plus the
+  // resident bitmaps, which for a body-text size are tens to a few hundred bytes each.
+  static constexpr uint32_t OVERFLOW_CAPACITY = 48;
   struct OverflowEntry {
     EpdGlyph glyph;
     uint8_t* bitmap = nullptr;
     uint32_t codepoint = 0;
     uint8_t styleIdx = 0;
   };
+  // Hard ceiling on the bitmap bytes the ring may hold, independent of slot count: 48 slots of
+  // large CJK glyphs are several times 48 slots of Latin, and this cache fills during a chapter
+  // build, the tightest heap moment on the device.
+  //
+  // Set from what the measurement justified, not from what the slots could hold. The thrash this
+  // ring fixes was a Latin working set of ~48 glyphs totalling roughly 3KB, so 4KB keeps the
+  // whole win while capping growth over the old 8-slot ring at about 3KB per loaded font. A
+  // larger budget bought nothing measurable and cost headroom that an OOM abort was already
+  // using up elsewhere (freeink-sdk Credential.cpp allocates with bare `new`).
+  static constexpr uint32_t OVERFLOW_BYTE_BUDGET = 4 * 1024;
   OverflowEntry overflow_[OVERFLOW_CAPACITY] = {};
   uint32_t overflowCount_ = 0;
   uint32_t overflowNext_ = 0;
+  uint32_t overflowBytes_ = 0;  // sum of dataLength over the occupied slots
 
   // Compact advance-only table for layout measurement (per-style).
   // Built by buildAdvanceTable(), queried by getAdvance().

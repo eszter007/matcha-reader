@@ -817,11 +817,22 @@ void EpubReaderActivity::readerLoop() {
   // press itself shouldn't be lost: it's latched into pendingManualTurn and
   // executed here, on the first idle tick after the guard clears.
   constexpr unsigned long kMinManualTurnGapMs = 200;
-  const bool turnGuardActive = RenderLock::peek() || (millis() - lastPageTurnTime) < kMinManualTurnGapMs;
+  // A vertical chapter build holds the RenderLock for its whole duration (seconds), so the guard
+  // below would latch every press for that entire window and replay it only once the build ends.
+  // That shadowed the build's own mid-build page-request path -- reachable in principle from
+  // pageTurn(), but unreachable in practice for a button press, which is the only way a reader
+  // turns a page. Let presses through while a build runs; pageTurn() routes them to the build,
+  // which serves each page as it is laid out.
+  const bool buildServingTurns = verticalBuildInProgress_.load(std::memory_order_relaxed);
+  const bool turnGuardActive =
+      !buildServingTurns && (RenderLock::peek() || (millis() - lastPageTurnTime) < kMinManualTurnGapMs);
   if (pendingManualTurn != 0 && !turnGuardActive) {
-    if (!section) {
+    if (!section && !verticalSection) {
       // The section was dropped after the latch (re-layout, build failure,
-      // bookmark jump): the queued turn no longer names a page.
+      // bookmark jump): the queued turn no longer names a page. Both kinds must be
+      // tested -- a vertical book leaves `section` null always, so testing it alone
+      // discarded EVERY latched turn in vertical mode, which is every turn pressed
+      // while a render (or the chapter index that runs in its tail) was in flight.
       pendingManualTurn = 0;
       return;
     }
@@ -1558,17 +1569,6 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 }
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn) {
-  // A page turn is authoritative: do not let a resume/reflow position captured
-  // at session start snap the reader back after the incremental build completes.
-  {
-    RenderLock lock(*this);
-    clearDeferredReposition();
-  }
-  // Tilt- and auto-page-turn calls reach here without a button press, so the loop()-side stamp
-  // bump didn't fire -- cancel a running image warm before the chapter-boundary branches below
-  // block on the RenderLock it holds.
-  imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
-  pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   lastTurnForward_.store(isForwardTurn, std::memory_order_relaxed);
 
   // A vertical chapter is still building on the render task: pageCount is 0 until the build
@@ -1576,6 +1576,11 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   // on the RenderLock for the rest of the build, and then jump to the NEXT SPINE (observed on
   // device: one press during the build teleported the reader to the end of the book). Route
   // the turn to the build's page-request hook instead -- the page shows as soon as it exists.
+  //
+  // FIRST, ahead of the RenderLock below: the render task holds that lock for the whole build,
+  // so taking it here would freeze the loop task until the chapter finishes -- exactly the wait
+  // this branch exists to avoid. Nothing here needs it. The branch only writes atomics the build
+  // polls, and the section cannot be destroyed while its own build is running on it.
   if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
     const int shown = earlyDisplayedPage_.load(std::memory_order_relaxed);
     if (shown >= 0 && verticalSection) {
@@ -1592,6 +1597,18 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
     lastPageTurnTime = millis();
     return;
   }
+
+  // A page turn is authoritative: do not let a resume/reflow position captured
+  // at session start snap the reader back after the incremental build completes.
+  {
+    RenderLock lock(*this);
+    clearDeferredReposition();
+  }
+  // Tilt- and auto-page-turn calls reach here without a button press, so the loop()-side stamp
+  // bump didn't fire -- cancel a running image warm before the chapter-boundary branches below
+  // block on the RenderLock it holds.
+  imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
+  pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
 
   const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
   const int pgCount = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
@@ -2706,8 +2723,23 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     silentIndexBackoffUntilMs_ = 0;
 
     LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
+    // This build owns the render task for as long as it runs -- up to 18s on a 282-page chapter,
+    // measured. Every OTHER tail task already yields the task back on a button press; without the
+    // same courtesy here a turn pressed during the build sat frozen for the whole of it, and the
+    // window fires on every chapter shorter than SILENT_INDEX_WINDOW_PAGES, which in a Japanese
+    // book is every one-page illustration spine at the front. Cancelling costs the partial layout
+    // (nothing is persisted), but the foreground build that then runs carries the early-render
+    // hook, so the reader sees the page in seconds instead of waiting out the whole chapter.
+    imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+    nextVSection.setBuildCancelHook(this, &EpubReaderActivity::imageWarmShouldCancel);
     if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana())) {
-      LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
+      if (nextVSection.lastBuildCancelled()) {
+        // Back off exactly as a heap skip does: without it a reader paging through a chapter's
+        // closing pages restarts the build on every turn and it never reaches the end.
+        silentIndexBackoffUntilMs_ = millis() + 1500;
+      } else {
+        LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
+      }
     }
     return;
   }
