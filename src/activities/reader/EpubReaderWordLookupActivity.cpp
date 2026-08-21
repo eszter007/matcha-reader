@@ -618,6 +618,27 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
     return true;
   }
 
+  // A tap straight on a word selects it AND looks it up. On a board with no front buttons (X4
+  // Pro) the column jumps below are unreachable and Confirm may not exist either, which left the
+  // panel openable but not usable (#128). A direct tap needs neither axis: it reaches any word on
+  // the page in one gesture. A tap that hits no word is ignored rather than moving the cursor
+  // somewhere arbitrary.
+  int tapX = 0;
+  int tapY = 0;
+  if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
+    const int hit = selectableIndexAtPoint(tapX, tapY);
+    if (hit >= 0) {
+      // Straight to the definition, so the parked-move guard above does not apply: the tap names
+      // its own target, so there is no pending arrival whose word would be the wrong entry.
+      pending.kind = PendingMove::Kind::None;
+      cursorIndex = hit;
+      refreshCursorBoxes();
+      enterDefinition();
+      return false;
+    }
+    return true;
+  }
+
   // Side buttons step word by word (down a column is the same gesture as a page turn), front
   // Left/Right jump columns. Button::Up/Down are the physical side buttons whatever the page-turn
   // layout setting is, so this mapping holds on every device that has them.
@@ -628,39 +649,59 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
   return true;
 }
 
+int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, HighlightBox* out) const {
+  int count = 0;
+  if (selectableIndex < 0 || static_cast<size_t>(selectableIndex) >= scan.selectToAllIdx.size()) return 0;
+
+  const size_t start = scan.selectToAllIdx[static_cast<size_t>(selectableIndex)];
+  if (start >= scan.allGlyphs.size()) return 0;
+
+  const size_t span = std::max<size_t>(scan.selectableGlyphs[static_cast<size_t>(selectableIndex)].matchLen, 1);
+  const size_t end = std::min(start + span, scan.allGlyphs.size());
+  const int cellPx = selectCtx.cellPx;
+
+  size_t i = start;
+  while (i < end && count < kMaxHighlightBoxes) {
+    const uint16_t column = scan.allGlyphs[i].column;
+    size_t j = i + 1;
+    while (j < end && scan.allGlyphs[j].column == column) j++;
+    const auto& firstCell = scan.allGlyphs[i];
+    const auto& lastCell = scan.allGlyphs[j - 1];
+    const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
+    const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
+    HighlightBox& box = out[count++];
+    // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the
+    // neighbouring column's ink and of any ruby, which is drawn outside the cell.
+    box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
+    box.y = static_cast<int16_t>(top);
+    box.w = static_cast<int16_t>(cellPx);
+    box.h = static_cast<int16_t>(bottom - top);
+    i = j;
+  }
+  return count;
+}
+
+int EpubReaderWordLookupActivity::selectableIndexAtPoint(const int x, const int y) const {
+  // Linear over the page's selectable words, rebuilding each candidate's boxes through
+  // buildBoxesFor so the hit test and the drawn highlight can never disagree. A few hundred
+  // iterations of integer compares is nothing against the e-ink refresh a tap triggers.
+  HighlightBox boxes[kMaxHighlightBoxes];
+  const int total = static_cast<int>(scan.selectToAllIdx.size());
+  for (int idx = 0; idx < total; idx++) {
+    const int count = buildBoxesFor(idx, boxes);
+    for (int b = 0; b < count; b++) {
+      const HighlightBox& box = boxes[b];
+      if (x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h) return idx;
+    }
+  }
+  return -1;
+}
+
 void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   // Built in locals first: the scan reads below are the slow part, and the render task must never
   // observe a half-built set. Only the publish at the end runs with the render task locked out.
   HighlightBox boxes[kMaxHighlightBoxes];
-  int count = 0;
-
-  if (cursorIndex >= 0 && static_cast<size_t>(cursorIndex) < scan.selectToAllIdx.size()) {
-    const size_t start = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
-    if (start < scan.allGlyphs.size()) {
-      const size_t span = std::max<size_t>(scan.selectableGlyphs[static_cast<size_t>(cursorIndex)].matchLen, 1);
-      const size_t end = std::min(start + span, scan.allGlyphs.size());
-      const int cellPx = selectCtx.cellPx;
-
-      size_t i = start;
-      while (i < end && count < kMaxHighlightBoxes) {
-        const uint16_t column = scan.allGlyphs[i].column;
-        size_t j = i + 1;
-        while (j < end && scan.allGlyphs[j].column == column) j++;
-        const auto& firstCell = scan.allGlyphs[i];
-        const auto& lastCell = scan.allGlyphs[j - 1];
-        const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
-        const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
-        HighlightBox& box = boxes[count++];
-        // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the
-        // neighbouring column's ink and of any ruby, which is drawn outside the cell.
-        box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
-        box.y = static_cast<int16_t>(top);
-        box.w = static_cast<int16_t>(cellPx);
-        box.h = static_cast<int16_t>(bottom - top);
-        i = j;
-      }
-    }
-  }
+  const int count = buildBoxesFor(cursorIndex, boxes);
 
   // Publish as one unit. The critical section spans a ~32-byte copy, which is what it takes to
   // stop the render task from pairing this move's count with the previous move's rectangles.
