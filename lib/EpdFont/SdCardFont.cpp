@@ -224,6 +224,7 @@ void SdCardFont::clearOverflow() {
   }
   overflowCount_ = 0;
   overflowNext_ = 0;
+  overflowBytes_ = 0;
 }
 
 // --- Per-style kern/ligature ---
@@ -1790,12 +1791,26 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     }
   }
 
+  // Slot count alone does not bound the memory: a CJK bitmap is several times a Latin one, so a
+  // ring sized for a line of Latin text holds several times as many bytes in kanji. Over budget,
+  // drop the whole ring rather than evicting individual entries -- the lookup above scans the
+  // dense prefix 0..overflowCount_, so selective eviction would have to compact the array, and a
+  // full reset keeps that invariant free. Coarse, but it only triggers on large-glyph text, where
+  // the ring is refilling from a fresh working set anyway. Latin body text (~60 bytes a glyph)
+  // never reaches the budget.
+  if (self->overflowBytes_ + tempGlyph.dataLength > OVERFLOW_BYTE_BUDGET) {
+    self->clearOverflow();
+    slot = 0;
+    wasAtCapacity = false;
+  }
   // All reads succeeded — commit to slot and advance ring buffer
   if (wasAtCapacity) {
+    self->overflowBytes_ -= self->overflow_[slot].glyph.dataLength;
     delete[] self->overflow_[slot].bitmap;
   } else {
     self->overflowCount_++;
   }
+  self->overflowBytes_ += tempGlyph.dataLength;
   self->overflowNext_ = (slot + 1) % OVERFLOW_CAPACITY;
   self->overflow_[slot].glyph = tempGlyph;
   self->overflow_[slot].bitmap = tempBitmap;
