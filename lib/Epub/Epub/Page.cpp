@@ -252,8 +252,7 @@ bool Page::serialize(HalFile& file) const {
   serialization::writePod(file, fnCount);
   for (uint16_t i = 0; i < fnCount; i++) {
     const auto& fn = footnotes[i];
-    if (file.write(fn.number, sizeof(fn.number)) != sizeof(fn.number) ||
-        file.write(fn.href, sizeof(fn.href)) != sizeof(fn.href)) {
+    if (file.write(fn.number, sizeof(fn.number)) != sizeof(fn.number) || !writeFootnoteHref(file, fn.href)) {
       LOG_ERR("PGE", "Failed to write footnote");
       return false;
     }
@@ -322,13 +321,11 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
   page->footnotes.resize(fnCount);
   for (uint16_t i = 0; i < fnCount; i++) {
     auto& entry = page->footnotes[i];
-    if (file.read(entry.number, sizeof(entry.number)) != sizeof(entry.number) ||
-        file.read(entry.href, sizeof(entry.href)) != sizeof(entry.href)) {
+    if (file.read(entry.number, sizeof(entry.number)) != sizeof(entry.number) || !readFootnoteHref(file, entry.href)) {
       LOG_ERR("PGE", "Failed to read footnote %u", i);
       return nullptr;
     }
     entry.number[sizeof(entry.number) - 1] = '\0';
-    entry.href[sizeof(entry.href) - 1] = '\0';
   }
 
   return page;

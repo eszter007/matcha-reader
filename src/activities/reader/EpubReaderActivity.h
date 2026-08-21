@@ -161,6 +161,11 @@ class EpubReaderActivity final : public ReaderActivity {
   // Chapter-wide footnote list from the section file's footnote table (v32+): the panel shows
   // ALL of the chapter's notes, opening at the one nearest the current page.
   std::vector<std::pair<uint16_t, FootnoteEntry>> sectionFootnotes;
+  // The chapter-wide table only exists on disk once the build FINALIZES, so a visit that has to
+  // build the section loads nothing at chapter open and nothing re-reads it afterwards -- the
+  // whole chapter's notes silently vanish for that visit (menu entry included). Top the list up
+  // wherever it is consumed instead of trusting the one load.
+  void refreshSectionFootnotesIfBuilt();
   // Flattened entries handed to the footnote panel (must outlive the activity, which keeps a
   // reference); rebuilt on each open.
   std::vector<FootnoteEntry> footnotePanelEntries;

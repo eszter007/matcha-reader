@@ -811,7 +811,7 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
       if (asPartial && pageIdx >= builtPageCount_) continue;
       serialization::writePod(file, pageIdx);
       file.write(reinterpret_cast<const uint8_t*>(fn.number), sizeof(fn.number));
-      file.write(reinterpret_cast<const uint8_t*>(fn.href), sizeof(fn.href));
+      writeFootnoteHref(file, fn.href);
     }
     serialization::writePod(file, footnoteTableOffset);
   }
@@ -1257,13 +1257,12 @@ bool Section::loadSectionFootnotes(std::vector<std::pair<uint16_t, FootnoteEntry
     FootnoteEntry fn;
     serialization::readPod(f, pageIdx);
     if (f.read(reinterpret_cast<uint8_t*>(fn.number), sizeof(fn.number)) != sizeof(fn.number) ||
-        f.read(reinterpret_cast<uint8_t*>(fn.href), sizeof(fn.href)) != sizeof(fn.href)) {
+        !readFootnoteHref(f, fn.href)) {
       out.clear();
       return false;
     }
     fn.number[sizeof(fn.number) - 1] = '\0';
-    fn.href[sizeof(fn.href) - 1] = '\0';
-    out.push_back({pageIdx, fn});
+    out.push_back({pageIdx, std::move(fn)});
   }
   return true;
 }
