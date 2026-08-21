@@ -174,9 +174,25 @@ class RecentBooksActivity final : public Activity {
   struct CoverJob {
     RecentBook book;
     int gridHeight = 0;
-    int targetHeight = 0;
+    // Every thumb height this book still needs, generated in ONE job. Opening the book is what
+    // costs (measured on device: 213ms typical, 2347ms worst, against milliseconds to scale the
+    // cover once it is open), so a job per height paid that price again for each size. Unused
+    // slots are 0. Three: the grid cell, the home cover, and SHELF_THUMB_HEIGHT.
+    static constexpr int MAX_TARGET_HEIGHTS = 3;
+    int targetHeights[MAX_TARGET_HEIGHTS] = {0, 0, 0};
     uint32_t fileSize = 0;
     uint32_t modifiedStamp = 0;
+
+    void addTargetHeight(const int h) {
+      if (h <= 0) return;
+      for (int& slot : targetHeights) {
+        if (slot == h) return;  // already queued
+        if (slot == 0) {
+          slot = h;
+          return;
+        }
+      }
+    }
   };
   struct CoverResult {
     bool pending = false;
