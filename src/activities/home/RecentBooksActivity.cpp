@@ -164,6 +164,11 @@ void RecentBooksActivity::runCoverJob() {
     // low-heap moment costs the cover forever. Requires !cancelled: a cancelled load leaves the
     // metadata cache unpopulated, which hasCoverImage() cannot distinguish from a coverless book.
     result.coverKnownAbsent = loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && !epub.hasCoverImage();
+    // Deliberately NOT extended to a book that failed to OPEN. contentaccess::open() reports a
+    // missing credential and an OOM through the same channel as a bad container, and the index
+    // entry is keyed on size+stamp -- so recording "no cover" would outlive the credential being
+    // added and the cover would never come back. It stays retryable; what it must not do is
+    // stall the scan, which the completed flag below handles.
     if (loaded && !result.hasGridThumb && !result.coverKnownAbsent) {
       LOG_ERR("RBA", "Cover thumb failed for %s; will retry", result.book.path.c_str());
     }
@@ -181,7 +186,14 @@ void RecentBooksActivity::runCoverJob() {
     if (loaded && !xtc.getTitle().empty()) result.book.title = xtc.getTitle();
   }
 
-  result.completed = !coverWorkerCancelSeen_ && !coverWorkerExitRequested_ && !coverWorkerCancelRequested_;
+  // "Completed" must mean the job ran its course, not that nobody touched a button while it did.
+  // coverWorkerCancelSeen_ is the honest signal: shouldCancel() sets it only when the job
+  // actually consulted it and bailed. coverWorkerCancelRequested_ alone is just "a key went
+  // down", and including it stalled the cursor on any job that never consults shouldCancel --
+  // notably a contentaccess::open() failure, which gives up in ~380ms without asking. That book
+  // was then retried forever and every book behind it stayed coverless (device log: the same
+  // unopenable EPUB reloaded at [177406], [182039], [563346]).
+  result.completed = !coverWorkerCancelSeen_ && !coverWorkerExitRequested_;
   result.pending = true;
   coverResult_ = std::move(result);
 }
