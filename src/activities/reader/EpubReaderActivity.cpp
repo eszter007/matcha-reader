@@ -819,9 +819,12 @@ void EpubReaderActivity::readerLoop() {
   constexpr unsigned long kMinManualTurnGapMs = 200;
   const bool turnGuardActive = RenderLock::peek() || (millis() - lastPageTurnTime) < kMinManualTurnGapMs;
   if (pendingManualTurn != 0 && !turnGuardActive) {
-    if (!section) {
+    if (!section && !verticalSection) {
       // The section was dropped after the latch (re-layout, build failure,
-      // bookmark jump): the queued turn no longer names a page.
+      // bookmark jump): the queued turn no longer names a page. Both kinds must be
+      // tested -- a vertical book leaves `section` null always, so testing it alone
+      // discarded EVERY latched turn in vertical mode, which is every turn pressed
+      // while a render (or the chapter index that runs in its tail) was in flight.
       pendingManualTurn = 0;
       return;
     }
