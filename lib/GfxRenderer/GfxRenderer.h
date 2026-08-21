@@ -340,6 +340,12 @@ class GfxRenderer {
   bool getGlyphMetrics(int fontId, uint32_t cp, EpdFontFamily::Style style, int* left, int* width, int* top,
                        int* height) const;
   int getFontAscenderSize(int fontId) const;
+  // The y drawText() will put `text`'s baseline at, given the same `y`. Text containing CJK is
+  // routed to a registered SD fallback whose metrics differ from fontId's, and drawText adds a
+  // line-height correction on top -- so a caller that has to place something on the SAME line as
+  // drawn text (vertical-text ruby aligning a rotated mark with its upright neighbours) cannot
+  // get there from getFontAscenderSize(fontId) alone.
+  int textBaselineOffset(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getLineHeight(int fontId) const;
   int getLineHeightScaled(int fontId, uint16_t scale) const;
   int getLineHeight(int fontId, float compression) const;

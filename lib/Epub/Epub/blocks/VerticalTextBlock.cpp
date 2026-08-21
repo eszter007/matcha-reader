@@ -2,6 +2,7 @@
 
 #include <Utf8.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "GfxRenderer.h"
@@ -145,6 +146,11 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
     // reach. Every ruby character in the stack is drawn at the same x, so the widest one decides.
     size_t rubyCharCount = 0;
     int rubyInkRight = 0;
+    // Ink band of an UPRIGHT character in this annotation, so a rotated one can be put on the
+    // same line as its neighbours rather than on a band guessed from font metrics. -1 = none
+    // measured, e.g. an annotation that is entirely dashes.
+    int uprightInkTop = -1;
+    int uprightInkHeight = 0;
     {
       const auto* p = reinterpret_cast<const unsigned char*>(rubyText.c_str());
       while (*p) {
@@ -154,6 +160,10 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
         if (measureGlyphInk(renderer, rubyFontId, cp, static_cast<uint8_t>(rubyStyle), &ink) && ink.width > 0) {
           // SUP draws the glyph at 50%, so its metrics halve too.
           rubyInkRight = std::max(rubyInkRight, (ink.left + ink.width + 1) / 2);
+          if (uprightInkTop < 0 && ink.height > 0 && !Kinsoku::needsVerticalRotation(cp)) {
+            uprightInkTop = ink.top;
+            uprightInkHeight = ink.height;
+          }
         }
         rubyCharCount++;
       }
@@ -215,7 +225,39 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
       std::memcpy(buf, rubyText.data() + ri, charLen);
       buf[charLen] = '\0';
 
-      renderer.drawText(rubyFontId, rubyX, rubyY, buf, black, rubyStyle);
+      // Ruby runs down the column like the base text, so a chōonpu or bracket inside an
+      // annotation has to be turned on its side exactly as the main path turns it (see the
+      // RotatedPunct branch above). Drawing the annotation as plain text left ハート's ー
+      // lying horizontally across the column.
+      const auto* cursor = reinterpret_cast<const unsigned char*>(buf);
+      const uint32_t cp = utf8NextCodepoint(&cursor);
+      if (Kinsoku::needsVerticalRotation(cp)) {
+        // Put the mark on the line its upright neighbours sit on, so the stack stays evenly
+        // spaced. drawText() takes rubyY as a TOP and puts the baseline textBaselineOffset()
+        // below it; a SUP glyph's ink then spans [baseline - top/2, +height/2], its metrics
+        // halved by the 50% scale. Measuring a real upright neighbour above (rather than
+        // assuming a band from the ascender, which reaches well past where kana ink stops) gives
+        // that band, and its centre in THIS character's slot is the target.
+        //
+        // The cell must hold the ROTATED glyph in both axes: drawCharVerticalRotatedInCell
+        // centres ink at cellTop + cellSize/2 but derives its clamps from the same cellSize, so
+        // too small a cell clamps the y centring to the cell top -- which silently parked the
+        // mark low -- and can leave maxX below minX, which is UB in std::clamp. After CCW
+        // rotation the glyph's width becomes its height, and vice versa; both halve with SUP.
+        int cell = std::max(1, rubyLineH);
+        GlyphInk rot;
+        if (measureGlyphInk(renderer, rubyFontId, cp, static_cast<uint8_t>(rubyStyle), &rot) && rot.width > 0) {
+          cell = std::max({cell, (rot.width + 1) / 2, (rot.height + 1) / 2});
+        }
+        const int baseline = rubyY + renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle);
+        // No upright neighbour to measure (an all-dash annotation): fall back to the slot centre.
+        const int centre =
+            uprightInkTop >= 0 ? baseline - uprightInkTop / 2 + uprightInkHeight / 4 : rubyY + rubyLineH / 2;
+        renderer.drawCharVerticalRotatedInCell(rubyFontId, rubyX, centre - cell / 2, cell, cp,
+                                               Kinsoku::verticalShiftType(cp), black, rubyStyle);
+      } else {
+        renderer.drawText(rubyFontId, rubyX, rubyY, buf, black, rubyStyle);
+      }
       rubyY += rubyLineH;
       ri += charLen;
     }
