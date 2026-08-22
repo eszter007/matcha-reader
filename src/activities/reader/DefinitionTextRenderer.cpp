@@ -678,7 +678,7 @@ void prewarmStyledText(GfxRenderer& renderer, const int fontId, const std::strin
   }
 }
 
-int entryMetadataLineCount(GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
+int entryMetadataLineCount(const GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
                            const EntryMetadata& metadata) {
   int y = 0;
   int lines = layoutMetadataField(renderer, metadata.reading, fontId, scale, 0, y, body.width, 0, 0, false);
@@ -687,7 +687,7 @@ int entryMetadataLineCount(GfxRenderer& renderer, const Rect& body, const int fo
   return lines;
 }
 
-int drawEntryMetadata(GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
+int drawEntryMetadata(const GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
                       const EntryMetadata& metadata, const int scrollOffset, const int lineHeight) {
   if (metadata.reading.empty() && metadata.grammar.empty()) return body.y;
 
