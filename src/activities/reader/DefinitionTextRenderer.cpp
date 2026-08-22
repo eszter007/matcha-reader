@@ -377,7 +377,7 @@ size_t wrapMetadataLine(const GfxRenderer& renderer, const int fontId, const uin
 
 // Wrap one metadata field to `maxWidth`, drawing the lines inside [clipTop, clipBottom) when
 // `draw` is set. `y` advances past the field either way; the return value is its line count.
-int layoutMetadataField(GfxRenderer& renderer, const std::string& text, const int fontId, const uint16_t scale,
+int layoutMetadataField(const GfxRenderer& renderer, const std::string& text, const int fontId, const uint16_t scale,
                         const int x, int& y, const int maxWidth, const int clipTop, const int clipBottom,
                         const bool draw) {
   if (text.empty()) return 0;
