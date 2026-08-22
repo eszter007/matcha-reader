@@ -753,9 +753,10 @@ void EpubReaderWordLookupActivity::renderSelect() {
   invertBoxes(drawnBoxes, drawnBoxCount);
 
   if (repaint) {
-    // A freshly painted page deserves a clean pass; the fast LUT would carry over the definition
-    // view's ghost.
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    // Coming back from the definition view. A HALF here scrubs any ghost it left, but it is a
+    // 1.7s black flash on every close against the 0.5s FAST that opened it, which reads as the
+    // panel breaking rather than closing. Take the FAST and let the interval below scrub.
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     fastRefreshCount = 0;
     return;
   }
