@@ -43,12 +43,13 @@ void prewarmStyledText(GfxRenderer& renderer, int fontId, const std::string& tex
 // Draw the reading at the selected lookup size and the grammar tags at a compact 75% scale.
 // Metadata participates in the same scroll offset as the definition; the return value is the
 // unscrolled first y-coordinate available for the definition body.
-int drawEntryMetadata(GfxRenderer& renderer, const Rect& body, int fontId, uint16_t scale,
+int drawEntryMetadata(const GfxRenderer& renderer, const Rect& body, int fontId, uint16_t scale,
                       const EntryMetadata& metadata, int scrollOffset = 0, int lineHeight = 0);
 
-inline int entryMetadataLineCount(const EntryMetadata& metadata) {
-  return (!metadata.reading.empty() ? 1 : 0) + (!metadata.grammar.empty() ? 1 : 0);
-}
+// Reading and grammar tags wrap to the panel width, so their line count -- which the callers
+// use for scroll bookkeeping -- depends on the renderer's measurements, not just on presence.
+int entryMetadataLineCount(const GfxRenderer& renderer, const Rect& body, int fontId, uint16_t scale,
+                           const EntryMetadata& metadata);
 
 // Tiny keeps the compact, readable 8pt font. Larger options use native built-in fonts so their
 // glyphs stay sharp; CJK characters can be routed to a matching SD-card size by the activity.
