@@ -85,6 +85,11 @@ class GfxRenderer {
   // baseline. panelResidue_ cannot answer this: any FAST refresh sets it, so it is true almost
   // always and would force a scrub on every image page.
   mutable bool grayPlanesResident_ = false;
+  // True while the framebuffer's bytes do not hold what the panel is showing. A build lends those
+  // bytes out as inflate scratch (releaseFrameBufferForBuild), so after the loan the e-ink still
+  // displays the last page while the buffer behind it holds whatever the inflate left. Anything
+  // that composites onto the current frame instead of repainting it has to check this first.
+  mutable bool frameBufferContentsStale_ = false;
 
   // Tiled grayscale strip target. When active, drawPixel()/clearScreen()
   // operate on a caller-owned scratch holding one horizontal band of physical
@@ -435,6 +440,9 @@ class GfxRenderer {
   void releaseFrameBufferForBuild();
   bool restoreFrameBufferAfterBuild();
   bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+  // Whether the framebuffer's CONTENTS can be trusted -- hasFrameBuffer() only answers for the
+  // pointer, which comes back intact after a build loan even though the pixels did not.
+  bool frameBufferContentsStale() const { return frameBufferContentsStale_; }
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

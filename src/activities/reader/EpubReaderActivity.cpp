@@ -3866,7 +3866,11 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
     selectCtx.cellPx = verticalCellPx(renderer, effectiveReaderFontId());
     selectCtx.repaintPage = &EpubReaderActivity::repaintVerticalPageForPanelThunk;
     selectCtx.repaintCtx = this;
-    selectCtx.pageOnScreen = pageOnScreen;
+    // Only when the framebuffer really holds what the panel shows. It does not after a chapter
+    // build: the early render put the page on the e-ink, then the build borrowed the buffer's
+    // bytes as inflate scratch. Skipping the repaint there composites the cursor onto whatever
+    // the inflate left and flushes a blank page.
+    selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
 
     // Built under the render lock, started after it: the constructor's scan copies every glyph
     // out of *page, and the pointer is only valid while nothing else re-faults the section's

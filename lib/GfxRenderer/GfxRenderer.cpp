@@ -166,6 +166,7 @@ void GfxRenderer::releaseFrameBufferForBuild() {
   uint32_t size = 0;
   uint8_t* scratch = display.lendFrameBufferStorage(&size);
   frameBuffer = nullptr;
+  frameBufferContentsStale_ = true;  // the borrower writes over these bytes
   if (scratch) {
     buildscratch::lend(scratch, size);
   }
@@ -1946,6 +1947,7 @@ static bool frameTimed = false;
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
   frameTimed = true;
+  if (!_stripActive) frameBufferContentsStale_ = false;  // whatever draws next owns the frame
   if (_stripActive) {
     // Clear only the active band's scratch, not the shared framebuffer.
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
