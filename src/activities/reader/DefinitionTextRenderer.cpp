@@ -304,6 +304,98 @@ inline size_t utf8CharLen(const unsigned char c0) {
   if (c0 >= 0xC0) return 2;
   return 1;
 }
+
+// 75% of the selected lookup size: the grammar tags read as an annotation to the reading.
+constexpr uint16_t METADATA_COMPACT_SCALE = 192;
+
+// One wrapped metadata line is bounded by the panel width; 192 bytes covers a full line of kana
+// or of `·`-joined Latin tags, so the line buffer stays on the stack and costs no heap per render.
+constexpr size_t METADATA_LINE_CAP = 192;
+
+// Would breaking at `end` leave the tag separator alone at the start of the next line?
+bool orphansSeparator(const std::string& text, size_t end) {
+  static constexpr char kMiddot[] = "\xc2\xb7";
+  while (end < text.size() && text[end] == ' ') end++;
+  if (text.compare(end, sizeof(kMiddot) - 1, kMiddot) != 0) return false;
+  const size_t after = end + sizeof(kMiddot) - 1;
+  return after == text.size() || text[after] == ' ';
+}
+
+// Longest prefix of `text` from `start` that fits `maxWidth`, cut at the last fitting space so
+// the ` · `-joined tags stay whole. Text without a usable space break (a kana reading, or a tag
+// wider than the panel) breaks per character. `out` receives the drawable, null-terminated line;
+// the return value is where the next line starts.
+size_t wrapMetadataLine(const GfxRenderer& renderer, const int fontId, const uint16_t scale, const std::string& text,
+                        const size_t start, const int maxWidth, char* out, const size_t outCap) {
+  out[0] = '\0';
+  size_t bestEnd = std::string::npos;
+  size_t cleanEnd = std::string::npos;  // longest fitting break that keeps the separator at line end
+  size_t candidate = start;
+  while (candidate <= text.size()) {
+    const size_t space = text.find(' ', candidate);
+    const size_t end = space == std::string::npos ? text.size() : space;
+    if (end - start >= outCap) break;
+    if (end > start) {
+      memcpy(out, text.data() + start, end - start);
+      out[end - start] = '\0';
+      if (renderer.getTextWidthScaled(fontId, out, scale) > maxWidth) break;
+      bestEnd = end;
+      if (!orphansSeparator(text, end)) cleanEnd = end;
+    }
+    if (space == std::string::npos) break;
+    candidate = space + 1;
+  }
+  if (cleanEnd != std::string::npos) bestEnd = cleanEnd;
+
+  if (bestEnd != std::string::npos) {
+    memcpy(out, text.data() + start, bestEnd - start);
+    out[bestEnd - start] = '\0';
+    size_t next = bestEnd;
+    while (next < text.size() && text[next] == ' ') next++;
+    return next;
+  }
+
+  size_t len = 0;
+  size_t pos = start;
+  while (pos < text.size()) {
+    size_t charLen = utf8CharLen(static_cast<unsigned char>(text[pos]));
+    if (charLen > text.size() - pos) charLen = text.size() - pos;
+    if (len + charLen + 1 > outCap) break;
+    memcpy(out + len, text.data() + pos, charLen);
+    out[len + charLen] = '\0';
+    // The first character always goes on the line: a glyph wider than the panel would
+    // otherwise stall the caller's loop forever.
+    if (len > 0 && renderer.getTextWidthScaled(fontId, out, scale) > maxWidth) {
+      out[len] = '\0';
+      break;
+    }
+    len += charLen;
+    pos += charLen;
+  }
+  return pos;
+}
+
+// Wrap one metadata field to `maxWidth`, drawing the lines inside [clipTop, clipBottom) when
+// `draw` is set. `y` advances past the field either way; the return value is its line count.
+int layoutMetadataField(GfxRenderer& renderer, const std::string& text, const int fontId, const uint16_t scale,
+                        const int x, int& y, const int maxWidth, const int clipTop, const int clipBottom,
+                        const bool draw) {
+  if (text.empty()) return 0;
+  const int lineHeight = renderer.getLineHeightScaled(fontId, scale);
+  char line[METADATA_LINE_CAP];
+  int lines = 0;
+  size_t pos = 0;
+  while (pos < text.size()) {
+    const size_t next = wrapMetadataLine(renderer, fontId, scale, text, pos, maxWidth, line, sizeof(line));
+    if (next <= pos) break;
+    pos = next;
+    if (draw && line[0] != '\0' && y >= clipTop && y < clipBottom)
+      renderer.drawTextScaled(fontId, x, y, line, scale, true);
+    y += lineHeight;
+    lines++;
+  }
+  return lines;
+}
 }  // namespace
 
 void extractEntryMetadata(std::string& text, const std::string& fallbackHeadword, EntryMetadata& metadata) {
@@ -586,28 +678,33 @@ void prewarmStyledText(GfxRenderer& renderer, const int fontId, const std::strin
   }
 }
 
+int entryMetadataLineCount(GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
+                           const EntryMetadata& metadata) {
+  int y = 0;
+  int lines = layoutMetadataField(renderer, metadata.reading, fontId, scale, 0, y, body.width, 0, 0, false);
+  lines +=
+      layoutMetadataField(renderer, metadata.grammar, fontId, METADATA_COMPACT_SCALE, 0, y, body.width, 0, 0, false);
+  return lines;
+}
+
 int drawEntryMetadata(GfxRenderer& renderer, const Rect& body, const int fontId, const uint16_t scale,
                       const EntryMetadata& metadata, const int scrollOffset, const int lineHeight) {
-  constexpr uint16_t COMPACT_SCALE = 192;  // 75% of the selected lookup size.
-  const bool hasReading = !metadata.reading.empty();
-  const bool hasGrammar = !metadata.grammar.empty();
-  if (!hasReading && !hasGrammar) return body.y;
+  if (metadata.reading.empty() && metadata.grammar.empty()) return body.y;
 
   const int baseY = body.y;
-  int y = body.y - scrollOffset * lineHeight;
-  const auto drawVisible = [&body, &renderer](const int fontId, const int x, const int y, const char* text,
-                                              const uint16_t scale) {
-    if (y >= body.y && y < body.y + body.height) renderer.drawTextScaled(fontId, x, y, text, scale, true);
-  };
-  if (hasReading) {
-    drawVisible(fontId, body.x, y, metadata.reading.c_str(), scale);
-    y += renderer.getLineHeightScaled(fontId, scale) + 3;
+  const int startY = body.y - scrollOffset * lineHeight;
+  const int clipBottom = body.y + body.height;
+  int y = startY;
+  if (!metadata.reading.empty()) {
+    layoutMetadataField(renderer, metadata.reading, fontId, scale, body.x, y, body.width, body.y, clipBottom, true);
+    y += 3;
   }
-  if (hasGrammar) {
-    drawVisible(fontId, body.x, y, metadata.grammar.c_str(), COMPACT_SCALE);
-    y += renderer.getLineHeightScaled(fontId, COMPACT_SCALE) + 5;
+  if (!metadata.grammar.empty()) {
+    layoutMetadataField(renderer, metadata.grammar, fontId, METADATA_COMPACT_SCALE, body.x, y, body.width, body.y,
+                        clipBottom, true);
+    y += 5;
   }
-  return std::min(baseY + (y - (body.y - scrollOffset * lineHeight)), body.y + body.height);
+  return std::min(baseY + (y - startY), clipBottom);
 }
 
 WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,

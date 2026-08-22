@@ -1472,7 +1472,7 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
   } else {
     DefinitionText::EntryMetadata metadata{visibleReading(), visibleGrammar()};
     const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-    const int metadataLines = DefinitionText::entryMetadataLineCount(metadata);
+    const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, body, defFont, defScale, metadata);
     const int definitionScroll = std::max(0, scrollOffset - metadataLines);
     Rect definitionBody = body;
     const int metadataEndY =

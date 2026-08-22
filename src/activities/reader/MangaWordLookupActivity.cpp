@@ -407,7 +407,7 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
 
   DefinitionText::EntryMetadata metadata{resultReading, resultGrammar};
   const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-  const int metadataLines = DefinitionText::entryMetadataLineCount(metadata);
+  const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, body, defFont, defScale, metadata);
   const int definitionScroll = std::max(0, scrollOffset - metadataLines);
   Rect definitionBody = body;
   const int metadataEndY =
