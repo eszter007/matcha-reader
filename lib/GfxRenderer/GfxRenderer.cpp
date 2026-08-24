@@ -2813,8 +2813,11 @@ void GfxRenderer::drawCharVerticalRotatedInCell(const int fontId, const int cell
     if (!isSymmetricBracket(cp)) drawX = cellLeftX + cellSize - rotatedW;
   }
 
-  int minX = cellLeftX;
-  int maxX = cellLeftX + cellSize - rotatedW;
+  const int minX = cellLeftX;
+  // A rotated glyph wider than its cell leaves no room to slide in: without the max() the
+  // upper bound drops below the lower one, which is UB in std::clamp. Pin it flush left and
+  // let it overhang instead.
+  const int maxX = std::max(minX, cellLeftX + cellSize - rotatedW);
   const int minY = cellTopY;
   // An opening bracket is placed into the following cell on purpose, so the box spans two.
   const int maxY = cellTopY + cellSize * 2;
