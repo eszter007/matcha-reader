@@ -3,10 +3,10 @@
 #include <vector>
 
 #include "./FileBrowserActivity.h"
+#include "RecentBook.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-struct RecentBook;
 struct Rect;
 
 class HomeActivity final : public Activity {
