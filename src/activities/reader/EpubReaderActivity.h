@@ -469,6 +469,12 @@ class EpubReaderActivity final : public ReaderActivity {
   bool showVerticalToggle() const;
   void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
 
+  // The orientation the current layout was built for. The control center's
+  // orientation tile can move SETTINGS.orientation while this reader sits on
+  // the activity stack, and Pop restores it without onEnter(), so the drift has
+  // to be noticed here rather than assumed away.
+  uint8_t appliedOrientation = 0;
+
   bool loadBook() override;
   bool hasBook() const override { return epub != nullptr; }
   std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }

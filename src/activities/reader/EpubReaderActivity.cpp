@@ -320,6 +320,7 @@ void EpubReaderActivity::onReaderEnter() {
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  appliedOrientation = SETTINGS.orientation;
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -497,6 +498,15 @@ void EpubReaderActivity::readerLoop() {
   if (mappedInput.wasAnyPressed()) {
     imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
     pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+  }
+
+  // Someone else turned the screen while this reader was stacked (the control
+  // center's orientation tile). Reflow before the next render, or the page
+  // would be drawn with a layout built for the previous frame size.
+  if (appliedOrientation != SETTINGS.orientation) {
+    applyOrientation(SETTINGS.orientation);
+    requestUpdate();
+    return;
   }
 
   // A horizontal image is shown immediately in BW; refine it only after the reader
@@ -1505,8 +1515,9 @@ bool EpubReaderActivity::launchKOReaderSync() {
 }
 
 void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
-  // No-op if the selected orientation matches current settings.
-  if (SETTINGS.orientation == orientation) {
+  // Also runs when SETTINGS already holds the new value but this layout was
+  // built for the old one — that is what an external change looks like here.
+  if (SETTINGS.orientation == orientation && appliedOrientation == orientation) {
     return;
   }
 
@@ -1525,11 +1536,15 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
     }
 
     // Persist the selection so the reader keeps the new orientation on next launch.
-    SETTINGS.orientation = orientation;
-    SETTINGS.saveToFile();
+    // Already equal when an external change (the control center tile) got here first.
+    if (SETTINGS.orientation != orientation) {
+      SETTINGS.orientation = orientation;
+      SETTINGS.saveToFile();
+    }
 
     // Update renderer orientation to match the new logical coordinate system.
     ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+    appliedOrientation = orientation;
 
     // Reset section to force re-layout in the new orientation.
     section.reset();

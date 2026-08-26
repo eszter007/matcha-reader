@@ -1,6 +1,7 @@
 _language_code: "CS"
 _language_name: "Čeština"
 _order: "4"
+_bcp47: "cs"
 
 STR_CROSSPOINT: "Matcha"
 STR_BOOTING: "SPUŠTĚNÍ"
