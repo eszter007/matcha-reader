@@ -422,7 +422,9 @@ class EpubReaderActivity final : public ReaderActivity {
   void handleOverlayInput();
   void renderOverlay();
   std::string currentChapterTitle() const;
-  // Text panel rows (font, size, line spacing, alignment, focus reading).
+  // Text panel rows (font, size, line spacing, alignment, focus reading, and for
+  // Japanese content this fork's vertical text / furigana toggles).
+  int textRowCount() const;
   std::string textRowName(int row) const;
   std::string textRowValue(int row) const;
   void showTextRowPopup(int row);

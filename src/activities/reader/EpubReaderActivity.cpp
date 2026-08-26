@@ -4060,12 +4060,20 @@ void EpubReaderActivity::openFootnotesPanel() {
 // ---------------------------------------------------------------------------
 
 namespace {
-constexpr StrId kTextRowNames[] = {StrId::STR_FONT, StrId::STR_FONT_SIZE, StrId::STR_LINE_SPACING,
-                                   StrId::STR_PARA_ALIGNMENT, StrId::STR_FOCUS_READING};
+// The five upstream rows, then this fork's two. Vertical Text / Furigana are appended
+// rather than interleaved so a row index doubles as the table index, and they are shown
+// only for Japanese content (textRowCount()).
+constexpr StrId kTextRowNames[] = {StrId::STR_FONT,           StrId::STR_FONT_SIZE,     StrId::STR_LINE_SPACING,
+                                   StrId::STR_PARA_ALIGNMENT, StrId::STR_FOCUS_READING, StrId::STR_VERTICAL_TEXT_LABEL,
+                                   StrId::STR_FURIGANA_LABEL};
 constexpr StrId kSpacingIds[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};
 constexpr StrId kAlignIds[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                StrId::STR_BOOK_S_STYLE};
 constexpr int kTextRowCount = static_cast<int>(std::size(kTextRowNames));
+// Rows every book gets; the two beyond this are Japanese-only.
+constexpr int kBaseTextRowCount = 5;
+constexpr int kRowVerticalText = 5;
+constexpr int kRowFurigana = 6;
 static_assert(std::size(kSpacingIds) == CrossPointSettings::LINE_COMPRESSION_COUNT, "line spacing labels");
 static_assert(std::size(kAlignIds) == CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT, "alignment labels");
 }  // namespace
@@ -4083,8 +4091,12 @@ std::string EpubReaderActivity::currentChapterTitle() const {
   return tr(STR_UNNAMED);
 }
 
+// Vertical Text / Furigana only mean anything for Japanese content, so a Latin book
+// sees upstream's five rows and nothing dead.
+int EpubReaderActivity::textRowCount() const { return showVerticalToggle() ? kTextRowCount : kBaseTextRowCount; }
+
 std::string EpubReaderActivity::textRowName(int row) const {
-  return row >= 0 && row < kTextRowCount ? I18N.get(kTextRowNames[row]) : "";
+  return row >= 0 && row < textRowCount() ? I18N.get(kTextRowNames[row]) : "";
 }
 
 std::string EpubReaderActivity::textRowValue(int row) const {
@@ -4101,6 +4113,10 @@ std::string EpubReaderActivity::textRowValue(int row) const {
       return I18N.get(kAlignIds[SETTINGS.paragraphAlignment % CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT]);
     case 4:
       return SETTINGS.focusReadingEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    case kRowVerticalText:
+      return useVerticalText() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    case kRowFurigana:
+      return useFurigana() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     default:
       return "";
   }
@@ -4296,7 +4312,7 @@ void EpubReaderActivity::renderOverlay() {
     };
   } else if (overlay == Overlay::Text) {
     model.panelTitle = tr(STR_TOOL_TEXT);
-    model.itemCount = kTextRowCount;
+    model.itemCount = textRowCount();
     model.rowText = [this](int i) { return textRowName(i); };
     model.rowValue = [this](int i) { return textRowValue(i); };
   } else {
@@ -4422,7 +4438,7 @@ void EpubReaderActivity::handleOverlayInput() {
 
   // --- Panels (Contents / Text / More) ---
   const int count = overlay == Overlay::Contents ? epub->getTocItemsCount()
-                    : overlay == Overlay::Text   ? kTextRowCount
+                    : overlay == Overlay::Text   ? textRowCount()
                                                  : static_cast<int>(moreItems.size());
   const int pageRows = std::max(1, toolbarUi->visibleRows());
 
@@ -4450,6 +4466,19 @@ void EpubReaderActivity::handleOverlayInput() {
         // Focus Reading is a genuine on/off: a tap toggles and applies live.
         SETTINGS.focusReadingEnabled = SETTINGS.focusReadingEnabled ? 0 : 1;
         applyTextSettingLive();
+      } else if (panelIndex == kRowVerticalText || panelIndex == kRowFurigana) {
+        // This fork's per-book overrides, toggled in place like Focus Reading. Pass the
+        // other one's CURRENT state so applyVerticalFuriganaOverride() leaves it alone --
+        // it acts only on a value that differs from what is in effect.
+        const int8_t vertical =
+            panelIndex == kRowVerticalText ? (useVerticalText() ? 0 : 1) : (useVerticalText() ? 1 : 0);
+        const int8_t furigana = panelIndex == kRowFurigana ? (useFurigana() ? 0 : 1) : (useFurigana() ? 1 : 0);
+        applyVerticalFuriganaOverride(vertical, furigana);
+        // Toggling vertical drops the section; furigana is a section-cache layout
+        // parameter, so the next render rebuilds on the mismatch. Either way the stored
+        // page snapshot no longer matches what will be drawn.
+        discardOverlayPage();
+        requestUpdate();
       } else {
         // Enum rows open the Settings-style option picker.
         showTextRowPopup(panelIndex);
