@@ -44,10 +44,17 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
 // Ceilings for the flat pools, not up-front allocations: each doubles from a small start
-// and stops here. Larger than upstream's 32KB selector cap because this fork also stores
-// compound selectors ("blockquote>p", ".callout p"), whose keys run several characters
-// longer than the bare tag/class ones.
-constexpr size_t SELECTOR_POOL_CAP = 48 * 1024;
+// (4KB) and stops here, so a typical book never grows past a few KB.
+//
+// 32KB is a deliberate ceiling, not a guess at what fits. Two reasons it does not go higher
+// even though this fork's compound keys ("blockquote>p", ".callout p") run longer than bare
+// tag/class ones: the pool is ONE contiguous block, and a framebuffer-sized contiguous demand
+// is exactly what this device cannot reliably satisfy mid-session; and hitting a cap yields
+// Limit, which is a permanent design bound and stays cacheable, where a failed larger
+// allocation yields OutOfMemory, which is transient and suppresses the cache write. Capping
+// lower converts "this book is bigger than we store" into a stable, cached, partially-styled
+// result instead of a re-parse on every open.
+constexpr size_t SELECTOR_POOL_CAP = 32 * 1024;
 // Deduplicated style bodies. At RULE_FIXED_BYTES each this bounds them to about 22KB,
 // which is what makes a per-rule body affordable at all: 1500 undeduplicated bodies
 // would be ~132KB, well past the ceiling this whole parser exists to respect.
