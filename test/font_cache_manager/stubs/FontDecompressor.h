@@ -13,6 +13,7 @@ class FontDecompressor {
   };
 
   void clearCache() {}
+  void freeGlyphSlab() {}
   int prewarmCache(const EpdFontData* fontData, const char* text) {
     auto& call = prewarmCalls[prewarmCallCount++];
     call.fontData = fontData;
