@@ -1350,6 +1350,12 @@ CssStyle CssParser::parseInlineStyle(std::string_view styleValue) { return parse
 
 // Cache file name (version is CssParser::CSS_CACHE_VERSION)
 constexpr char rulesCache[] = "/css_rules.cache";
+// The incremental append writes here and only replaces rulesCache once the whole parse
+// has succeeded. A re-parse that runs out of heap partway therefore leaves the previous
+// cache intact instead of destroying a good one -- truncating rulesCache up front meant a
+// transient failure (an SD open that lost a race, a parse abandoned on low heap) left the
+// book permanently unstyled until some later open happened to complete a full parse.
+constexpr char rulesCacheTmp[] = "/css_rules.cache.tmp";
 
 bool CssParser::hasCache() const { return Storage.exists((cachePath + rulesCache).c_str()); }
 
@@ -1638,7 +1644,7 @@ bool CssParser::beginCacheAppend() {
   appendedRuleCount_ = 0;
   cacheAppendActive_ = false;
   if (cachePath.empty()) return false;
-  if (!Storage.openFileForWrite("CSS", cachePath + rulesCache, cacheAppendFile_)) return false;
+  if (!Storage.openFileForWrite("CSS", cachePath + rulesCacheTmp, cacheAppendFile_)) return false;
   cacheAppendFile_.write(CssParser::CSS_CACHE_VERSION);
   // Rule-count placeholder; patched by endCacheAppend (write mode is O_RDWR, not append, so the
   // seek-back write lands in place -- same pattern as VerticalSection's header patch).
@@ -1664,18 +1670,28 @@ bool CssParser::appendRulesToCache() {
 bool CssParser::endCacheAppend(const bool discard) {
   if (!cacheAppendActive_) return false;
   cacheAppendActive_ = false;
+  // Every failure path drops only the half-written temp file. Whatever rulesCache already held
+  // stays where it is: a partial parse is "could not produce it now", not "there is nothing to
+  // produce", so it must not take a good cache down with it.
   if (discard || appendedRuleCount_ == 0) {
     cacheAppendFile_.close();
-    Storage.remove((cachePath + rulesCache).c_str());
+    Storage.remove((cachePath + rulesCacheTmp).c_str());
     return false;
   }
   if (!cacheAppendFile_.seek(1)) {  // patch the rule-count placeholder after the version byte
     cacheAppendFile_.close();
-    Storage.remove((cachePath + rulesCache).c_str());
+    Storage.remove((cachePath + rulesCacheTmp).c_str());
     return false;
   }
   cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&appendedRuleCount_), sizeof(appendedRuleCount_));
-  cacheAppendFile_.close();
+  cacheAppendFile_.close();  // must close before renaming over the live path
+  // Publish: the temp file is complete and framed, so it can take over as the cache.
+  Storage.remove((cachePath + rulesCache).c_str());
+  if (!Storage.rename((cachePath + rulesCacheTmp).c_str(), (cachePath + rulesCache).c_str())) {
+    LOG_ERR("CSS", "Failed to publish rules cache; removing temp");
+    Storage.remove((cachePath + rulesCacheTmp).c_str());
+    return false;
+  }
   LOG_DBG("CSS", "Saved %u rules to cache (incremental)", appendedRuleCount_);
   return true;
 }
