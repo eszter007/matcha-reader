@@ -228,9 +228,9 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   int textX = rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection;
   int textWidth = contentWidth - LyraMetrics::values.contentSidePadding * 2 - hPaddingInSelection * 2;
-    constexpr int iconSize = mainMenuIconSize;
-    if (rowIcon != nullptr) {
-      textX += iconSize + hPaddingInSelection;
+  constexpr int iconSize = mainMenuIconSize;
+  if (rowIcon != nullptr) {
+    textX += iconSize + hPaddingInSelection;
     textWidth -= iconSize + hPaddingInSelection;
   }
 
