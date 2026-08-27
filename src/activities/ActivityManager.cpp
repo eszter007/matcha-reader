@@ -75,6 +75,8 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+  if (mappedInput.consumeSuppressedRelease()) return;
+
   if (currentActivity) {
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
@@ -153,9 +155,24 @@ void ActivityManager::loop() {
       }
 
     } else if (pendingActivity) {
-      // Current activity has requested a new activity to be launched
-      RenderLock lock;
+      // A pushed activity comes from the input loop. Do not stall that loop behind a long render
+      // tail (for example SD-backed glyph prewarming); leave the request pending and retry it on
+      // the next tick instead.
+      if (pendingAction == PendingAction::Push) {
+        RenderLock lock{RenderLock::Try{}};
+        if (!lock.held()) break;
 
+        stackActivities.push_back(std::move(currentActivity));
+        LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
+        pendingAction = PendingAction::None;
+        currentActivity = std::move(pendingActivity);
+
+        lock.unlock();  // onEnter may acquire its own lock
+        currentActivity->onEnter();
+        continue;
+      }
+
+      RenderLock lock;
       if (pendingAction == PendingAction::Replace) {
         // Destroy the current activity
         exitActivity(lock);
@@ -164,10 +181,6 @@ void ActivityManager::loop() {
           stackActivities.back()->onExit();
           stackActivities.pop_back();
         }
-      } else if (pendingAction == PendingAction::Push) {
-        // Move current activity to stack
-        stackActivities.push_back(std::move(currentActivity));
-        LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
       }
       pendingAction = PendingAction::None;
       currentActivity = std::move(pendingActivity);

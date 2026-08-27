@@ -315,6 +315,36 @@ bool EpubReaderWordLookupActivity::stepCursor(const int delta, int& outIndex) {
 }
 
 void EpubReaderWordLookupActivity::moveSelection(const int delta) {
+  if (provisionalGlyph < scan.allGlyphs.size()) {
+    const auto& current = scan.allGlyphs[provisionalGlyph];
+    size_t target = SIZE_MAX;
+    int bestDistance = INT_MAX;
+    size_t wrapped = SIZE_MAX;
+    uint16_t wrappedRow = delta > 0 ? UINT16_MAX : 0;
+    for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+      const auto& glyph = scan.allGlyphs[i];
+      if (glyph.column != current.column || !WordSelectionScan::isLookupableChar(glyph.codepoint)) continue;
+      const int distance = static_cast<int>(glyph.row) - static_cast<int>(current.row);
+      if ((delta > 0 ? distance > 0 : distance < 0) && std::abs(distance) < bestDistance) {
+        target = i;
+        bestDistance = std::abs(distance);
+      }
+      if ((delta > 0 && glyph.row < wrappedRow) || (delta < 0 && glyph.row > wrappedRow)) {
+        wrapped = i;
+        wrappedRow = glyph.row;
+      }
+    }
+    if (target == SIZE_MAX) target = wrapped;
+    if (target == SIZE_MAX || target == provisionalGlyph) return;
+    provisionalGlyph = target;
+    pending.kind = PendingMove::Kind::Column;
+    pending.targetColumn = current.column;
+    pending.anchorRow = scan.allGlyphs[target].row;
+    scan.aimAtGlyph(target);
+    refreshCursorBoxes();
+    requestUpdate();
+    return;
+  }
   int target = cursorIndex;
   if (!stepCursor(delta, target)) {
     // Keep counting presses while the walk catches up, so holding the button past the frontier
@@ -341,8 +371,9 @@ void EpubReaderWordLookupActivity::moveSelection(const int delta) {
 // accepted even when that part of the page has not been segmented yet, and completed by
 // resolvePendingMove() as the frontier reaches it.
 void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
-  if (cursorIndex < 0 || cursorIndex >= static_cast<int>(scan.selectableGlyphs.size())) return;
-  const auto& cur = scan.selectableGlyphs[static_cast<size_t>(cursorIndex)];
+  const size_t currentGlyph = currentAllGlyphIndex();
+  if (currentGlyph >= scan.allGlyphs.size()) return;
+  const auto& cur = scan.allGlyphs[currentGlyph];
   uint16_t minColumn = 0;
   uint16_t maxColumn = 0;
   if (!columnBounds(minColumn, maxColumn)) return;
@@ -361,9 +392,19 @@ void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
   pending.delta = direction;
   pending.targetColumn = static_cast<uint16_t>(target);
   pending.anchorRow = cur.row;
+  pending.startedAt = millis();
+  size_t targetGlyph = 0;
+  if (closestGlyphInColumn(static_cast<uint16_t>(target), cur.row, targetGlyph)) {
+    provisionalGlyph = targetGlyph;
+    refreshCursorBoxes();
+    requestUpdate();
+  }
   resolvePendingMove();  // usually lands at once: the walk is normally well ahead of the reader
   // Landed: get the next column in this direction ready, so holding the button stays fluid.
-  if (pending.kind == PendingMove::Kind::None) prefetchColumn(static_cast<uint16_t>(target), direction);
+  if (pending.kind == PendingMove::Kind::None) {
+    prefetchColumn(static_cast<uint16_t>(target), scan.selectableGlyphs[static_cast<size_t>(cursorIndex)].row,
+                   direction);
+  }
 }
 
 bool EpubReaderWordLookupActivity::columnRange(const uint16_t column, size_t& first, size_t& last) const {
@@ -379,6 +420,40 @@ bool EpubReaderWordLookupActivity::columnRange(const uint16_t column, size_t& fi
   return found;
 }
 
+bool EpubReaderWordLookupActivity::closestUnmappedInColumn(const uint16_t column, const uint16_t anchorRow,
+                                                           size_t& outGlyph, int& outDistance) const {
+  bool found = false;
+  outDistance = INT_MAX;
+  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+    const auto& glyph = scan.allGlyphs[i];
+    if (glyph.column != column || scan.isGlyphMapped(i)) continue;
+    const int distance = std::abs(static_cast<int>(glyph.row) - static_cast<int>(anchorRow));
+    if (!found || distance < outDistance) {
+      outGlyph = i;
+      outDistance = distance;
+      found = true;
+    }
+  }
+  return found;
+}
+
+bool EpubReaderWordLookupActivity::closestGlyphInColumn(const uint16_t column, const uint16_t anchorRow,
+                                                        size_t& outGlyph) const {
+  bool found = false;
+  int bestDistance = INT_MAX;
+  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+    const auto& glyph = scan.allGlyphs[i];
+    if (glyph.column != column || !WordSelectionScan::isLookupableChar(glyph.codepoint)) continue;
+    const int distance = std::abs(static_cast<int>(glyph.row) - static_cast<int>(anchorRow));
+    if (!found || distance < bestDistance) {
+      outGlyph = i;
+      bestDistance = distance;
+      found = true;
+    }
+  }
+  return found;
+}
+
 bool EpubReaderWordLookupActivity::columnBounds(uint16_t& outMin, uint16_t& outMax) const {
   if (scan.allGlyphs.empty()) return false;
   outMin = UINT16_MAX;
@@ -390,33 +465,17 @@ bool EpubReaderWordLookupActivity::columnBounds(uint16_t& outMin, uint16_t& outM
   return true;
 }
 
-bool EpubReaderWordLookupActivity::columnAnchorGlyph(const uint16_t column, const uint16_t row,
-                                                     size_t& outGlyph) const {
-  bool found = false;
-  int bestDistance = INT_MAX;
-  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
-    const auto& g = scan.allGlyphs[i];
-    if (g.column != column) continue;
-    const int distance = std::abs(static_cast<int>(g.row) - static_cast<int>(row));
-    if (!found || distance < bestDistance) {
-      bestDistance = distance;
-      outGlyph = i;
-      found = true;
-    }
-  }
-  return found;
-}
-
-void EpubReaderWordLookupActivity::prefetchColumn(const uint16_t fromColumn, const int direction) {
+void EpubReaderWordLookupActivity::prefetchColumn(const uint16_t fromColumn, const uint16_t anchorRow,
+                                                  const int direction) {
   uint16_t minColumn = 0;
   uint16_t maxColumn = 0;
   if (!columnBounds(minColumn, maxColumn)) return;
   int next = static_cast<int>(fromColumn) + direction;
   if (next > static_cast<int>(maxColumn)) next = minColumn;
   if (next < static_cast<int>(minColumn)) next = maxColumn;
-  size_t first = 0;
-  size_t last = 0;
-  if (columnRange(static_cast<uint16_t>(next), first, last)) scan.aimAtGlyph(first);
+  size_t glyph = 0;
+  int distance = 0;
+  if (closestUnmappedInColumn(static_cast<uint16_t>(next), anchorRow, glyph, distance)) scan.aimAtGlyph(glyph);
 }
 
 int EpubReaderWordLookupActivity::selectableInColumn(const uint16_t column, const uint16_t anchorRow) const {
@@ -489,6 +548,7 @@ void EpubReaderWordLookupActivity::selectMiddleOfPage() {
 // is parked. Nothing is drawn for the wait itself: select mode has no hint bar to put it in.
 void EpubReaderWordLookupActivity::resolvePendingMove() {
   if (pending.kind == PendingMove::Kind::None) return;
+  const uint32_t startedAt = pending.startedAt;
 
   bool moved = false;
 
@@ -501,8 +561,6 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
     } else {
       stillWaiting = true;
     }
-  } else if (pending.hasWaitTarget && !scan.isDone() && !scan.isGlyphMapped(pending.waitUntilGlyph)) {
-    stillWaiting = true;  // known-unreached column: one comparison, no re-walk
   } else {
     // Walk in the jump's direction: a column can legitimately hold no selectable word (all
     // particles, or a run of punctuation), and stopping there would strand the cursor. Running
@@ -522,25 +580,28 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
       size_t first = 0;
       size_t last = 0;
       if (!columnRange(static_cast<uint16_t>(column), first, last)) continue;  // gap in the page
-      size_t anchorGlyph = last;
-      if (!columnAnchorGlyph(static_cast<uint16_t>(column), pending.anchorRow, anchorGlyph)) anchorGlyph = last;
-      if (!scan.isDone() && !scan.isGlyphMapped(anchorGlyph)) {
-        // Park on THIS column: the walk only moves on once a column is mapped, so the range is
-        // looked up once per column entered rather than once per tick of the wait.
-        pending.targetColumn = static_cast<uint16_t>(column);
-        pending.waitUntilGlyph = anchorGlyph;
-        pending.hasWaitTarget = true;
-        stillWaiting = true;
-        // Segment what the reader asked for, not everything between here and there: aiming the
-        // walk at this column turns a wait for ~half a page into a wait for one column. Cells
-        // already done are skipped, so nothing is scanned twice.
-        scan.aimAtGlyph(anchorGlyph);
-        break;
-      }
       const int hit = selectableInColumn(static_cast<uint16_t>(column), pending.anchorRow);
-      if (hit >= 0) {
+      const int hitDistance = hit >= 0
+                                  ? std::abs(static_cast<int>(scan.selectableGlyphs[static_cast<size_t>(hit)].row) -
+                                             static_cast<int>(pending.anchorRow))
+                                  : INT_MAX;
+      size_t closestUnmapped = 0;
+      int unmappedDistance = 0;
+      const bool hasUnmapped =
+          !scan.isDone() &&
+          closestUnmappedInColumn(static_cast<uint16_t>(column), pending.anchorRow, closestUnmapped, unmappedDistance);
+      if (hit >= 0 && (!hasUnmapped || hitDistance <= unmappedDistance)) {
         moved = hit != cursorIndex;
         cursorIndex = hit;
+        provisionalGlyph = SIZE_MAX;
+        break;
+      }
+      if (hasUnmapped) {
+        // Search outwards from the row the cursor is leaving. This finds the spatially nearest
+        // word without paying to segment the whole cold column first.
+        pending.targetColumn = static_cast<uint16_t>(column);
+        stillWaiting = true;
+        scan.aimAtGlyph(closestUnmapped);
         break;
       }
     }
@@ -553,20 +614,23 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
   // Only a moved cursor changes what is on screen: select mode paints no hint bar, so a wait
   // starting or ending has nothing to redraw (a repaint here would cost a refresh for nothing).
   if (moved) {
+    if (startedAt != 0) LOG_INF("WLA", "Column jump ready after %u ms", millis() - startedAt);
     refreshCursorBoxes();
     requestUpdate();
   }
 }
 
 void EpubReaderWordLookupActivity::enterDefinition() {
-  mode = Mode::Definition;
   pending = PendingMove{};
   // The definition view paints over the page, so the highlight goes with it. Clearing the record
   // of what is drawn is left to the render task, which owns it: selectPageDrawn = false already
   // routes the next select render through the repaint branch, and that resets it there.
   selectPageDrawn = false;
   initialRenderDone = false;
-  performLookup();
+  lookupInFlight = true;
+  lookupPending = true;
+  loadingPopupDrawn.store(false, std::memory_order_release);
+  requestUpdate();
 }
 
 void EpubReaderWordLookupActivity::returnToSelect() {
@@ -595,7 +659,7 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
   // no labels to say so. It only leaves the panel from the definition view (handleDefinitionInput),
   // where a click closes the dictionary outright rather than stepping back to the page.
   if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
-    if (pending.kind == PendingMove::Kind::None) {
+    if (pending.kind == PendingMove::Kind::None || provisionalGlyph != SIZE_MAX) {
       enterDefinition();
       return false;
     }
@@ -611,7 +675,7 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
     // A page with nothing selectable still opens the definition view, which is where "No match
     // found" (or "Loading..." while the walk runs) lives -- otherwise Confirm would do nothing at
     // all and the page would look broken rather than empty.
-    if (pending.kind == PendingMove::Kind::None) {
+    if (pending.kind == PendingMove::Kind::None || provisionalGlyph != SIZE_MAX) {
       enterDefinition();
       return false;
     }
@@ -631,6 +695,7 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
       // Straight to the definition, so the parked-move guard above does not apply: the tap names
       // its own target, so there is no pending arrival whose word would be the wrong entry.
       pending.kind = PendingMove::Kind::None;
+      provisionalGlyph = SIZE_MAX;
       cursorIndex = hit;
       refreshCursorBoxes();
       enterDefinition();
@@ -701,7 +766,16 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   // Built in locals first: the scan reads below are the slow part, and the render task must never
   // observe a half-built set. Only the publish at the end runs with the render task locked out.
   HighlightBox boxes[kMaxHighlightBoxes];
-  const int count = buildBoxesFor(cursorIndex, boxes);
+  int count = 0;
+  if (provisionalGlyph < scan.allGlyphs.size()) {
+    const auto& glyph = scan.allGlyphs[provisionalGlyph];
+    boxes[0] = HighlightBox{static_cast<int16_t>(glyph.x + selectCtx.marginLeft),
+                            static_cast<int16_t>(glyph.y + selectCtx.marginTop), static_cast<int16_t>(selectCtx.cellPx),
+                            static_cast<int16_t>(selectCtx.cellPx)};
+    count = 1;
+  } else {
+    count = buildBoxesFor(cursorIndex, boxes);
+  }
 
   // Publish as one unit. The critical section spans a ~32-byte copy, which is what it takes to
   // stop the render task from pairing this move's count with the previous move's rectangles.
@@ -769,11 +843,16 @@ void EpubReaderWordLookupActivity::renderSelect() {
   }
 }
 
-std::string EpubReaderWordLookupActivity::buildLookupText(size_t startIdx) const {
-  std::string text;
-  if (startIdx >= scan.selectableGlyphs.size() || startIdx >= scan.selectToAllIdx.size()) return text;
+size_t EpubReaderWordLookupActivity::currentAllGlyphIndex() const {
+  if (provisionalGlyph < scan.allGlyphs.size()) return provisionalGlyph;
+  if (cursorIndex < 0 || static_cast<size_t>(cursorIndex) >= scan.selectToAllIdx.size()) return SIZE_MAX;
+  return scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
+}
 
-  const size_t allStart = scan.selectToAllIdx[startIdx];
+std::string EpubReaderWordLookupActivity::buildLookupText() const {
+  std::string text;
+  const size_t allStart = currentAllGlyphIndex();
+  if (allStart >= scan.allGlyphs.size()) return text;
   const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
   int charCount = 0;
 
@@ -844,7 +923,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   scrollOffset = 0;
   totalLines = 9999;
 
-  std::string text = buildLookupText(static_cast<size_t>(cursorIndex));
+  std::string text = buildLookupText();
   if (text.empty()) return;
 
   // If the text starts with digits (2年, １５人), look up the counter/word that
@@ -955,7 +1034,6 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       chars++;
     }
     resultMatchLen = chars;
-
     // For short hiragana-only matches (≤3 chars), check if the grammar dict
     // has a better entry and promote it to the main result. Functional words
     // like こと, もの, よう get unhelpful JMdict hits ("ancient capital").
@@ -1010,7 +1088,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   if (ESP.getMaxAllocHeap() < 16 * 1024) {
     LOG_ERR("WLA", "Skipping grammar scan, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
   } else if (Storage.exists(DictIndex::grammarIdxPath())) {
-    const size_t allStart = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
+    const size_t allStart = currentAllGlyphIndex();
+    if (allStart >= scan.allGlyphs.size()) return;
     const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
 
     // Try starting positions: cursor-3, cursor-2, cursor-1, cursor
@@ -1091,6 +1170,20 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 }
 
 void EpubReaderWordLookupActivity::loop() {
+  if (lookupPending) {
+    if (loadingPopupDrawn.exchange(false, std::memory_order_acq_rel)) {
+      lookupPending = false;
+      mode = Mode::Definition;
+      performLookup();
+      if (!hasResult) {
+        mode = Mode::Select;
+        noMatchPopupPending.store(true, std::memory_order_release);
+        selectPageDrawn = false;
+        requestUpdate();
+      }
+    }
+    return;
+  }
   if (mode == Mode::Select) {
     if (!handleSelectInput()) return;
   } else if (!handleDefinitionInput()) {
@@ -1498,7 +1591,17 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
 
 void EpubReaderWordLookupActivity::render(RenderLock&&) {
   if (mode == Mode::Select) {
+    if (lookupPending) {
+      GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+      loadingPopupDrawn.store(true, std::memory_order_release);
+      return;
+    }
     renderSelect();
+    if (noMatchPopupPending.exchange(false, std::memory_order_acq_rel)) {
+      GUI.drawPopup(renderer, tr(STR_NO_MATCH));
+      // The popup changed the page framebuffer. Repaint the page before the next cursor move.
+      selectPageDrawn = false;
+    }
     return;
   }
 

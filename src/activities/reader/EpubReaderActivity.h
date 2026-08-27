@@ -12,6 +12,8 @@
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
+#include "ReaderToolbarUi.h"
+#include "components/OptionPopup.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -156,6 +158,39 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
   bool pendingReadFolderMove = false;
+
+  // Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): drawn
+  // over the page instead of pushing the full-screen list menu. Select opens the
+  // Toolbar; its tools open the Contents/Text/More bottom-sheet panels.
+  enum class Overlay { None, Toolbar, Contents, Text, More };
+  Overlay overlay = Overlay::None;
+  int focusedTool = 0;     // toolbar tool focus: 0=Contents, 1=Text, 2=More
+  int toolbarControl = 2;  // 0=previous chapter, 1=next chapter, 2..4=tools
+  int panelIndex = 0;      // selected row within the active panel
+  // Panel list navigation: a tap steps one row, a hold jumps PANEL_HOLD_STEP rows in one go
+  // (a contents list runs to hundreds of chapters). One jump per hold, not a repeat -- every
+  // step repaints the panel, so repeating is bounded by the e-ink refresh anyway and reads as
+  // sluggish. True once a hold has jumped, so the release that ends it is swallowed.
+  static constexpr unsigned long PANEL_HOLD_MS = 1500;
+  static constexpr int PANEL_HOLD_STEP = 10;
+  bool panelHoldJumped = false;
+  // Whether the panel draws its cursor row. Button boards always do; touch
+  // boards only once a button has moved it, so a tapped row is not left inverted.
+  bool panelCursorShown = false;
+  // FreeInkUI chrome + tap targets for the overlay; created when it opens,
+  // released when it closes.
+  std::unique_ptr<ReaderToolbarUi> toolbarUi;
+  // Modal option picker over the panel (same component the Settings screens
+  // use), for enum rows: font size / line spacing / alignment / orientation /
+  // auto page turn. Toggle rows stay one-tap toggles, as in Settings.
+  OptionPopup overlayPopup;
+  // True while a clean-page snapshot (renderer.storeBwBuffer) backs the open
+  // overlay, letting panel->toolbar steps restore the page without a full
+  // re-render. Discarded on close / whenever the page under the overlay changes.
+  bool overlayPageStored = false;
+  int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
+  std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
+
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
   // Chapter-wide footnote list from the section file's footnote table (v32+): the panel shows
@@ -283,9 +318,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // seconds into a ~17s whole-chapter build and the user can keep turning pages while the
   // rest of the chapter builds.
   static void earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, int pageIndex);
-  // "Indexing" notice for a backward turn the running build cannot serve. Called between pages
-  // on the render task, so it shares the framebuffer with the page render rather than racing it.
+  // Loading notice for UI actions waiting behind a running build. Called between pages on the
+  // render task, so it shares the framebuffer with the page render rather than racing it.
   static void buildNoticeThunk(void* ctx);
+  void requestVerticalBuildNotice();
   void earlyRenderVerticalPage(const VerticalPage& page, int pageIndex);
   // True while a vertical chapter build runs on the render task. Read by pageTurn() on the
   // loop() task: while building, the section's pageCount is still 0, so the normal turn path
@@ -380,6 +416,32 @@ class EpubReaderActivity final : public ReaderActivity {
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();
+  // Toolbar reader menu (see Overlay above).
+  bool usesToolbarMenu() const;
+  void openOverlay(Overlay target);
+  void closeOverlayToPage();
+  void discardOverlayPage();
+  void handleOverlayInput();
+  void renderOverlay();
+  std::string currentChapterTitle() const;
+  // Text panel rows (font, size, line spacing, alignment, focus reading, and for
+  // Japanese content this fork's vertical text / furigana toggles).
+  int textRowCount() const;
+  std::string textRowName(int row) const;
+  std::string textRowValue(int row) const;
+  void showTextRowPopup(int row);
+  // Persist + re-paginate + re-render under the open panel (live preview).
+  void applyTextSettingLive();
+  void paintOverlayPopup();
+  // Persist the reader text settings, (re)load the selected SD font, and
+  // re-paginate the current chapter so changes apply without re-opening the book.
+  void applyReaderTextSettings();
+  // More panel rows.
+  void buildMoreActions();
+  std::string moreRowName(int row) const;
+  std::string moreRowValue(int row) const;
+  void activateMoreRow(int row);
+  unsigned long confirmLongPressThreshold() const;
   // pageOnScreen: the framebuffer still holds the reader page, so the vertical word-lookup panel
   // can draw its cursor straight onto it instead of paying for a page repaint first. False when
   // something else was on screen (the reader menu).
@@ -506,8 +568,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // will actually run this pass" instead. Read unlocked like the other power heuristics
   // (setPowerSaving/lightSleep): a stale read costs at most one loop pass either way.
   bool skipLoopDelay() override {
-    return section && section->isBuilding() && !buildHeapPaused &&
-           (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
+    return overlay != Overlay::None ||
+           (section && section->isBuilding() && !buildHeapPaused &&
+            (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD));
   }
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;

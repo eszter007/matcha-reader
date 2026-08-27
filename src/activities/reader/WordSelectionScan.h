@@ -163,5 +163,5 @@ class WordSelectionScan {
   void scanOnePosition();
   // The display filter (bare particles, conjugation fragments), applied to a matched position
   // before it is added to selectableGlyphs.
-  bool passesDisplayFilter(size_t allIdx) const;
+  bool passesDisplayFilter(size_t allIdx, int matchChars, const std::string& lookupText, size_t matchBytes) const;
 };

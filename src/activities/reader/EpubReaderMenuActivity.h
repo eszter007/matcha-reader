@@ -36,6 +36,15 @@ class EpubReaderMenuActivity final : public UiListActivity {
     READER_SETTINGS
   };
 
+  struct MenuItem {
+    MenuAction action;
+    StrId labelId;
+  };
+
+  static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
+                                              bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
+                                              bool showPanelsOnlyToggle);
+
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
                                   const uint8_t currentOrientation, const bool hasFootnotes,
@@ -54,15 +63,6 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // diff and would show through this screen. Scrubbed once on the first paint.
   const bool scrubOnEnter_;
   bool firstPaint_ = true;
-  struct MenuItem {
-    MenuAction action;
-    StrId labelId;
-  };
-
-  static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
-                                              bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
-                                              bool showPanelsOnlyToggle);
-
   // Row storage: menuItems is at most MAX_MENU_ITEMS, so a
   // fixed-capacity array avoids any heap allocation for the row list. Labels
   // are set once in the constructor (buildMenuRowItems()); buildScreen()

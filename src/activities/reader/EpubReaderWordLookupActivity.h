@@ -8,6 +8,7 @@
 struct Rect;
 class Page;
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -80,6 +81,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // --- Select mode state -------------------------------------------------------------------
   // The framebuffer holds the page, so a cursor move only has to XOR two boxes.
   bool selectPageDrawn = false;
+  // A column jump must be immediate even on a cold page. Until dictionary segmentation catches
+  // up, highlight the nearest raw text cell and allow it to be looked up directly.
+  size_t provisionalGlyph = SIZE_MAX;
 
   // Highlight geometry in screen coordinates. Computed on the main task whenever the cursor
   // moves and read by the render task: the render path deliberately does NOT index the scan's
@@ -124,12 +128,7 @@ class EpubReaderWordLookupActivity final : public Activity {
     int delta = 0;              // direction, in words or in columns
     uint16_t targetColumn = 0;  // Column: the column being entered
     uint16_t anchorRow = 0;     // Column: the row to land nearest to
-    // Column: last glyph of the column being waited on, remembered so each further tick of the
-    // wait is one comparison. Finding it means walking the page's glyphs, and doing that on every
-    // tick would steal the CPU from the walk the wait is waiting for -- loop() runs flat out
-    // while the scan is unfinished (see skipLoopDelay()).
-    size_t waitUntilGlyph = 0;
-    bool hasWaitTarget = false;
+    uint32_t startedAt = 0;     // Column: device timing for the cold-jump performance log
   };
   PendingMove pending;
 
@@ -160,15 +159,14 @@ class EpubReaderWordLookupActivity final : public Activity {
   void resolvePendingMove();
   // First and last allGlyphs index of a column, or false when the page has no such column.
   bool columnRange(uint16_t column, size_t& first, size_t& last) const;
+  // Unmapped cell in a column nearest the row where a jump wants to land.
+  bool closestUnmappedInColumn(uint16_t column, uint16_t anchorRow, size_t& outGlyph, int& outDistance) const;
+  bool closestGlyphInColumn(uint16_t column, uint16_t anchorRow, size_t& outGlyph) const;
   // Lowest and highest column on the page. Layout data, known as soon as the page loads.
   bool columnBounds(uint16_t& outMin, uint16_t& outMax) const;
-  // allGlyphs index of the cell in `column` nearest `row`. The cell a jump actually lands on, so
-  // it is what a parked jump waits for -- waiting for the column's LAST cell segments the whole
-  // column when only this part of it is needed. False when the page has no such column.
-  bool columnAnchorGlyph(uint16_t column, uint16_t row, size_t& outGlyph) const;
   // Point the walk at the next column in `direction` so a second jump the same way finds it
   // already segmented. Costs nothing when that column is done: aimAtGlyph() ignores it.
-  void prefetchColumn(uint16_t fromColumn, int direction);
+  void prefetchColumn(uint16_t fromColumn, uint16_t anchorRow, int direction);
   // Selectable entry in `column` nearest `anchorRow`; -1 when the column has none (mapped).
   int selectableInColumn(uint16_t column, uint16_t anchorRow) const;
   // Open the cursor mid-page instead of at the first word, so any word on the page is at most
@@ -264,7 +262,11 @@ class EpubReaderWordLookupActivity final : public Activity {
   // True while performLookup() is executing; render() shows "Loading..." instead of
   // "No match found" so fast navigation never flashes a false negative.
   bool lookupInFlight = false;
-  std::string buildLookupText(size_t startIdx) const;
+  bool lookupPending = false;
+  std::atomic<bool> loadingPopupDrawn{false};
+  std::atomic<bool> noMatchPopupPending{false};
+  size_t currentAllGlyphIndex() const;
+  std::string buildLookupText() const;
 
   bool initialRenderDone = false;
   int fastRefreshCount = 0;

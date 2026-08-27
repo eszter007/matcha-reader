@@ -824,7 +824,7 @@ void WordSelectionScan::scanOnePosition() {
   // filter runs here (not as a later pass) so partial results shown during a progressive scan
   // never lose entries afterwards. Note the skipUntil bookkeeping above stays in effect for
   // filtered-out matches too, exactly like the previous scan-then-filter split behaved.
-  if (hasMatch && passesDisplayFilter(i) && i >= recordFrom) {
+  if (hasMatch && passesDisplayFilter(i, matchChars, text, result.matchLength) && i >= recordFrom) {
     // The selectable entry starts at i (the digit run, when there is one), so its span is the
     // digits plus the dictionary match. Recorded now because the caller drawing a highlight over
     // the page must not have to repeat the lookup just to learn how many cells to cover.
@@ -899,7 +899,8 @@ bool isDisplayNoise(uint32_t cp) {
 
 // Examine a matched position the way performLookup() would display it; false = display noise
 // (bare particles, conjugation fragments) that should not become a selectable entry.
-bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
+bool WordSelectionScan::passesDisplayFilter(const size_t allIdx, const int matchChars, const std::string& lookupText,
+                                            const size_t matchBytes) const {
   const uint32_t paraIdx = allGlyphs[allIdx].paragraphIndex;
 
   // Multi-char conjugation suffixes that are never standalone words.
@@ -924,41 +925,15 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
     return false;
   };
 
-  // Build lookup text from this position
-  std::string ltext;
-  int lcount = 0;
-  for (size_t j = allIdx; j < allGlyphs.size() && lcount < kMaxLookupChars; j++) {
-    if (allGlyphs[j].paragraphIndex != paraIdx) break;
-    encodeUtf8(allGlyphs[j].codepoint, ltext);
-    lcount++;
-  }
-  WordLookupResult lr;
-  // Only the match length is consulted below -- skip definition fetches.
-  if (!ltext.empty() && WordLookup::lookup(ltext, 0, lr, /*needDefinition=*/false)) {
-    stripTrailingParticle(ltext, lr, /*needDefinition=*/false);
-    // Count matched chars
-    int mc = 0;
-    size_t p = 0;
-    while (p < lr.matchLength && p < ltext.size()) {
-      auto c = static_cast<unsigned char>(ltext[p]);
-      if (c < 0x80)
-        p += 1;
-      else if ((c & 0xE0) == 0xC0)
-        p += 2;
-      else if ((c & 0xF0) == 0xE0)
-        p += 3;
-      else
-        p += 4;
-      mc++;
-    }
+  if (!lookupText.empty() && matchBytes > 0) {
     // Filter: a SHORT match whose every char is an individually-noise kana (は, が, には, では)
     // is a stray particle / particle-combo, not a lookup-worthy word. Cap this at <=2 chars: the
     // noise list is a set of single kana, and many real 3-4 char words are built entirely from
     // them -- mimetics like ふんふん/きらきら and words like とても/ところ. Filtering those by the
     // per-char list dropped them from the page (reported: ふんふん skipped). A genuine 3+ char
     // dictionary match is kept.
-    bool allNoise = mc <= 2;
-    for (size_t ci = allIdx; allNoise && ci < allIdx + static_cast<size_t>(mc) && ci < allGlyphs.size(); ci++) {
+    bool allNoise = matchChars <= 2;
+    for (size_t ci = allIdx; allNoise && ci < allIdx + static_cast<size_t>(matchChars) && ci < allGlyphs.size(); ci++) {
       if (!isDisplayNoise(allGlyphs[ci].codepoint)) {
         allNoise = false;
         break;
@@ -972,7 +947,6 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
     // そうに/そうな/そうだ are the ～そう "seeming/appears" auxiliary (心配そうに); their only
     // dictionary hit is the rare homophone 僧尼 ("monks and nuns") and no grammar entry covers
     // them, so as standalone lookups they are just misleading -- filter them out.
-    const std::string matchedText = ltext.substr(0, lr.matchLength);
     static const char* const exactNoise[] = {"\xe3\x81\xa1\xe3\x82\x83",              // ちゃ
                                              "\xe3\x81\x98\xe3\x82\x83",              // じゃ
                                              "\xe3\x81\xa1\xe3\x82\x83\xe3\x81\x86",  // ちゃう
@@ -982,7 +956,8 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
                                              "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xa0",  // そうだ
                                              nullptr};
     for (int e = 0; exactNoise[e]; e++) {
-      if (matchedText == exactNoise[e]) return false;
+      const size_t noiseBytes = strlen(exactNoise[e]);
+      if (matchBytes == noiseBytes && lookupText.compare(0, matchBytes, exactNoise[e]) == 0) return false;
     }
   }
   if (isConjugationNoise()) {

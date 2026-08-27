@@ -2,10 +2,11 @@
 
 #include <HalStorage.h>
 
+#include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -108,17 +109,26 @@ class CssParser {
   /**
    * Check if any rules have been loaded
    */
-  [[nodiscard]] bool empty() const { return rulesBySelector_.empty(); }
+  [[nodiscard]] bool empty() const { return entryCount_ == 0; }
 
   /**
    * Get count of loaded rule sets
    */
-  [[nodiscard]] size_t ruleCount() const { return rulesBySelector_.size(); }
+  [[nodiscard]] size_t ruleCount() const { return entryCount_; }
 
   /**
    * Clear all loaded rules
    */
-  void clear() { rulesBySelector_.clear(); }
+  // Empties the table for reuse between stylesheets. The pool ALLOCATIONS are kept: they are
+  // reused by the next file instead of being freed and regrown, which is the whole point of
+  // parsing one file at a time. ruleGrowthStopped_ clears with them -- the next file gets a
+  // fair attempt at the capacity that just came free.
+  void clear() {
+    entryCount_ = 0;
+    selectorPoolSize_ = 0;
+    styleCount_ = 0;
+    ruleGrowthStopped_ = false;
+  }
 
   /**
    * True if a parse had to drop selectors because the heap ran low (transient condition, NOT
@@ -215,39 +225,53 @@ class CssParser {
   // a scratch buffer. The pieces are a caller-owned run (CssSelector::forEachCandidate fills
   // a stack array), which must outlive the find() call -- as a local array in the calling
   // scope always does.
-  struct CompositeKey {
-    const std::string_view* first;
-    size_t count;
-    CompositeKey(const std::string_view* p, const size_t n) noexcept : first(p), count(n) {}
-    [[nodiscard]] const std::string_view* begin() const noexcept { return first; }
-    [[nodiscard]] const std::string_view* end() const noexcept { return first + count; }
+  // Storage: selectors and styles in flat, bounded pools rather than a node-per-rule map.
+  // Every growth step is fallible (makeUniqueNoThrow) and capped, so a heavy stylesheet stops
+  // growing instead of fragmenting DRAM or aborting. entries_ is kept sorted by the stored
+  // selector so a lookup is a binary search; compound selectors live in the SAME array under
+  // their normalized key (".callout p", "blockquote>p") and cost no more than a simple one.
+  // Selectors are stored ASCII-lowercased, which is what makes matching case-insensitive.
+  struct SelectorEntry {
+    uint32_t offset;      // into selectorPool_
+    uint16_t styleIndex;  // into stylePool_
+    uint16_t length;
   };
+  static_assert(sizeof(SelectorEntry) == 8);
 
-  // ASCII-case-insensitive transparent hash/equal. Stored selectors and lookup
-  // keys are compared without regard to case, so callers may insert and look up
-  // using whatever case the CSS source or HTML element name happens to use.
-  // Bodies live in CssParser.cpp so they can share the file-local asciiToLower.
-  struct SvHash {
-    using is_transparent = void;
-    size_t operator()(std::string_view sv) const noexcept;
-    size_t operator()(const std::string& s) const noexcept;
-    size_t operator()(CompositeKey k) const noexcept;
-  };
-  struct SvEqual {
-    using is_transparent = void;
-    bool operator()(std::string_view a, std::string_view b) const noexcept;
-    bool operator()(const std::string& a, std::string_view b) const noexcept;
-    bool operator()(std::string_view a, const std::string& b) const noexcept;
-    bool operator()(const std::string& a, const std::string& b) const noexcept;
-    bool operator()(CompositeKey a, std::string_view b) const noexcept;
-    bool operator()(std::string_view a, CompositeKey b) const noexcept;
-  };
+  enum class PoolResult : uint8_t { Ready, Limit, OutOfMemory };
+  enum class RuleInsertResult : uint8_t { Inserted, Merged, Limit, OutOfMemory };
 
-  // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
-  // Compound selectors live in the SAME map under their normalized key (".callout p",
-  // "blockquote>p"), so a rule costs no more than a simple one -- only the key string is a
-  // few characters longer, which for real selectors still fits std::string's inline buffer.
-  std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
+  std::unique_ptr<SelectorEntry[]> entries_;
+  std::unique_ptr<char[]> selectorPool_;
+  std::unique_ptr<CssStyle[]> stylePool_;
+  // Style bodies are deduplicated: a template that repeats one declaration block across
+  // hundreds of utility classes stores it once and points every entry at it.
+  std::unique_ptr<uint32_t[]> styleHashes_;  // cheap reject before the byte compare
+  uint16_t entryCount_ = 0;
+  uint16_t entryCapacity_ = 0;
+  uint32_t selectorPoolSize_ = 0;
+  uint32_t selectorPoolCapacity_ = 0;
+  uint16_t styleCount_ = 0;
+  uint16_t styleCapacity_ = 0;
+  // Latched once a pool refuses to grow. Further rules stop being added, but the ones already
+  // stored keep resolving, so the page degrades rather than losing its cascade outright.
+  bool ruleGrowthStopped_ = false;
+
+  // Compare a stored entry against a run of pieces, as if the pieces were concatenated --
+  // a composite key is looked up without materializing the concatenation in a scratch buffer.
+  [[nodiscard]] int compareEntryToPieces(const SelectorEntry& entry, const std::string_view* pieces,
+                                         size_t count) const;
+  [[nodiscard]] size_t lowerBound(const std::string_view* pieces, size_t count, bool& exact) const;
+  // Lookup over a run of pieces (a simple selector is a run of one).
+  [[nodiscard]] const CssStyle* findStyle(const std::string_view* pieces, size_t count) const;
+  [[nodiscard]] std::string_view selectorAt(size_t index) const;
+  [[nodiscard]] const CssStyle& styleAt(size_t index) const;
+  PoolResult ensureEntryCapacity(size_t needed);
+  PoolResult ensureSelectorPoolCapacity(size_t needed);
+  PoolResult ensureStyleCapacity(size_t needed);
+  PoolResult internStyle(const CssStyle& style, uint16_t& indexOut);
+  RuleInsertResult insertOrMerge(std::string_view selector, const CssStyle& style);
+
   bool heapTruncated_ = false;           // see wasHeapTruncated()
   bool cacheLoadFailedForHeap_ = false;  // see cacheLoadFailedForHeap()
 
@@ -267,7 +291,9 @@ class CssParser {
   uint16_t appendedRuleCount_ = 0;
   bool cacheAppendActive_ = false;
 
-  static void writeRuleRecord(HalFile& file, const std::string& selector, const CssStyle& style);
+  static void writeRuleRecord(HalFile& file, std::string_view selector, const CssStyle& style);
+  // Fixed-size style body in the cache record's byte order; `out` must hold RULE_FIXED_BYTES.
+  static void encodeStyleWire(const CssStyle& style, uint8_t* out);
 
   std::string cachePath;
 
