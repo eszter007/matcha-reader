@@ -32,6 +32,7 @@ class ReaderToolbarUi : public UiAppHost {
     const char* chapterTitle = nullptr;
     const char* pageInfo = nullptr;  // "12/40   51%"
     int progressPermille = 0;        // 0..1000 book progress (scrub handle)
+    int activeChapterStep = 0;       // -1 = previous, 0 = none, 1 = next
     // Panel
     const char* panelTitle = nullptr;
     int itemCount = 0;

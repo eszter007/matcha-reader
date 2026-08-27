@@ -822,8 +822,7 @@ void EpubReaderActivity::readerLoop() {
 
   // Handle short power button press for footnotes
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power) &&
-      !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+      mappedInput.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN)) {
     // Inside a footnote the click is REPURPOSED: instead of opening the panel again it jumps back
     // to the reference it was read from. That repurposing is the whole of what
     // pwrBtnFootnoteBack ("Quick-return from footnotes") names, so it is what the setting gates --
@@ -869,8 +868,7 @@ void EpubReaderActivity::readerLoop() {
 
   // Handle short power button press for word lookup
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power) &&
-      !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+      mappedInput.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN)) {
     openDictionaryWordSelect(/*pageOnScreen=*/true);
     return;
   }
@@ -886,8 +884,7 @@ void EpubReaderActivity::readerLoop() {
   // button returns to last page
   if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Power) &&
-      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+  if (gpio.wasReleased(HalGPIO::BTN_POWER) && gpio.wasReleased(HalGPIO::BTN_DOWN)) {
     return;
   }
 
@@ -2037,7 +2034,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (earlyPageActuallyDisplayed_ &&
         earlyDisplayedPage_.exchange(-1, std::memory_order_relaxed) == verticalSection->currentPage) {
       earlyPageActuallyDisplayed_ = false;
-      lastRenderedVPage_ = verticalSection->currentPage;
       saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
                    furiganaOverride);
       LOG_DBG("ERS", "Keeping early-rendered page %d; skipping duplicate refresh", verticalSection->currentPage);
@@ -2908,35 +2904,16 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
   // the mini-font cache and would discard a warm done first.
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
 
-  // Warm the neighbouring page's glyphs so the next turn renders from RAM instead of paying the
-  // scan plus SD bulk load at button time. Direction-adaptive: the next page after a forward
-  // turn, the previous after a backward one, so sustained paging either way stays warm. The
-  // mini-font cache holds one page per style, so only the turn after a direction REVERSAL is
-  // cold; that is inherent, not a defect.
+  // Warm the neighbouring horizontal page's glyphs so the next turn renders from RAM. Vertical
+  // pages deliberately skip this speculative SD work: a Power-button Word Lookup waits for the
+  // render lock, and the long kern/ligature read can otherwise trip the watchdog before the
+  // activity switch. The real vertical page still prewarms normally when rendered.
   //
   // Gated on `skimming`: this prepares a page a rapidly-paging reader will skip past, and it runs
   // on the render task, so it delays the turn being waited on (~430ms, mostly the mini-kern
   // build).
-  //
-  // Runs only after a REAL page change -- warming the neighbour of a re-rendered page evicts
-  // glyphs that page still needs.
-  const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
-  if (vertical) {
-    // renderedVPage_, never currentPage: a render takes 100-700ms and a button press during it
-    // advances currentPage, so the target would overshoot by one -- loading a page the reader is
-    // not going to next and evicting the one they are.
-    const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
-    lastRenderedVPage_ = renderedVPage_;
-    const int warmTarget = forward ? renderedVPage_ + 1 : renderedVPage_ - 1;
-    if (!skimming && pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
-      prewarmedVPage_ = -1;
-      // getPage() also leaves the page in the section's single-page read cache, so the turn skips
-      // the SD page read as well.
-      if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
-        if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
-      }
-    }
-  } else {
+  if (!vertical) {
+    const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
     prewarmedHPage_ = -1;
     // Warming loads an extra page transiently, so take the classic cold turn when the largest
     // free block is tight.
@@ -4190,6 +4167,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   switch (target) {
     case Overlay::Toolbar:
       focusedTool = 0;
+      toolbarControl = 2;
       break;
     case Overlay::Contents:
       panelIndex = std::max(0, epub->getTocIndexForSpineIndex(currentSpineIndex));
@@ -4222,7 +4200,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   // Xteink-class panels, whose close path re-renders the page. If text or
   // images ever visibly ghost through the chrome, restore a HALF cleanup on
   // the first open (see #2190 for the mechanism).
-  if (section) {
+  if (section || verticalSection) {
     // Serialize against the render task: renderBook may be mid-page (status
     // bar included) in the shared framebuffer, and painting the chrome from
     // the loop task at the same time interleaves the two frames.
@@ -4268,23 +4246,25 @@ void EpubReaderActivity::closeOverlayToPage() {
 }
 
 void EpubReaderActivity::renderOverlay() {
-  if (!epub || !section || !toolbarUi) return;
+  if (!epub || (!section && !verticalSection) || !toolbarUi) return;
 
   ReaderToolbarUi::Model model;
   // The toolbar's tool pill is the button-navigation cursor: tap-first (same
   // convention as the panel lists), it only shows once a button has moved it.
   // Panels override below: there the pill marks the open panel on every board.
-  model.activeTool = (overlay == Overlay::Toolbar && !panelCursorShown) ? -1 : focusedTool;
+  model.activeTool = overlay == Overlay::Toolbar ? toolbarControl - 2 : focusedTool;
+  model.activeChapterStep = overlay == Overlay::Toolbar ? (toolbarControl == 0 ? -1 : toolbarControl == 1 ? 1 : 0) : 0;
   // Strings the model points at live here until render() returns.
   std::string chapterTitle, pageInfo;
 
   if (overlay == Overlay::Toolbar) {
     chapterTitle = currentChapterTitle();
-    const int pageCount = section->estimatedTotalPages();
+    const int pageCount = verticalSection ? verticalSection->pageCount : section->estimatedTotalPages();
+    const int currentPage = verticalSection ? verticalSection->currentPage : section->currentPage;
     const float chapterProgress =
-        pageCount > 0 ? static_cast<float>(section->currentPage + 1) / static_cast<float>(pageCount) : 0.0f;
+        pageCount > 0 ? static_cast<float>(currentPage + 1) / static_cast<float>(pageCount) : 0.0f;
     const float bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress);
-    pageInfo = std::to_string(section->currentPage + 1) + "/" + std::to_string(pageCount) + "   " +
+    pageInfo = std::to_string(currentPage + 1) + "/" + std::to_string(pageCount) + "   " +
                std::to_string(clampPercent(static_cast<int>(bookProgress * 100.0f + 0.5f))) + "%";
     model.chapterTitle = chapterTitle.c_str();
     model.pageInfo = pageInfo.c_str();
@@ -4326,7 +4306,7 @@ void EpubReaderActivity::renderOverlay() {
   toolbarUi->render();
 
   if (!mappedInput.hasTouch()) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 }
@@ -4391,6 +4371,7 @@ void EpubReaderActivity::handleOverlayInput() {
         return;
       case ReaderToolbarUi::Event::Tool:
         focusedTool = routed.value;
+        toolbarControl = focusedTool + 2;
         openOverlay(toolOverlay(focusedTool));
         return;
       case ReaderToolbarUi::Event::PrevChapter:
@@ -4409,30 +4390,30 @@ void EpubReaderActivity::handleOverlayInput() {
     }
     if (routed.routed) return;  // a touch frame the chrome consumed (or dead space)
 
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (mappedInput.wasLongPressed(MappedInputManager::Button::Back, 0)) {
       closeOverlayToPage();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-      focusedTool = (focusedTool + 2) % 3;
+    const bool previousControl = mappedInput.wasLongPressed(MappedInputManager::Button::Left, 0) ||
+                                 mappedInput.wasLongPressed(MappedInputManager::Button::Up, 0);
+    const bool nextControl = mappedInput.wasLongPressed(MappedInputManager::Button::Right, 0) ||
+                             mappedInput.wasLongPressed(MappedInputManager::Button::Down, 0);
+    if (previousControl || nextControl) {
+      toolbarControl = (toolbarControl + (nextControl ? 1 : 4)) % 5;
+      if (toolbarControl >= 2) focusedTool = toolbarControl - 2;
       panelCursorShown = true;
       fastRedraw();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-      focusedTool = (focusedTool + 1) % 3;
-      panelCursorShown = true;
-      fastRedraw();
+    if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, 0)) {
+      if (toolbarControl == 0) {
+        gotoSpine(currentSpineIndex - 1);
+      } else if (toolbarControl == 1) {
+        gotoSpine(currentSpineIndex + 1);
+      } else {
+        openOverlay(toolOverlay(focusedTool));
+      }
       return;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      openOverlay(toolOverlay(focusedTool));
-      return;
-    }
-    const bool prev = mappedInput.wasReleased(MappedInputManager::Button::Up);
-    const bool next = mappedInput.wasReleased(MappedInputManager::Button::Down);
-    if (prev || next) {
-      gotoSpine(currentSpineIndex + (next ? 1 : -1));
     }
     return;
   }
@@ -4506,6 +4487,7 @@ void EpubReaderActivity::handleOverlayInput() {
   // the sheet.
   const auto dismissPanel = [this, &fastRedraw] {
     overlay = Overlay::Toolbar;
+    toolbarControl = focusedTool + 2;
     // Restore the snapshotted page under the toolbar instead of re-rendering
     // it (2+ refreshes -> one FAST). Re-store right away so another panel
     // round-trip can restore again.
@@ -4576,26 +4558,43 @@ void EpubReaderActivity::handleOverlayInput() {
   }
   if (routed.routed) return;  // consumed by the chrome (title band, dead space)
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  if (mappedInput.wasLongPressed(MappedInputManager::Button::Back, 0)) {
     dismissPanel();
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  const bool previousPanel = mappedInput.wasLongPressed(MappedInputManager::Button::Left, 0);
+  const bool nextPanel = mappedInput.wasLongPressed(MappedInputManager::Button::Right, 0);
+  if (previousPanel || nextPanel) {
+    focusedTool = (focusedTool + (nextPanel ? 1 : 2)) % 3;
+    openOverlay(toolOverlay(focusedTool));
+    return;
+  }
+
+  if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, 0)) {
     activateRow();
     return;
   }
 
-  // Up/Down (side) and Left/Right (front) move the cursor: a tap steps one
-  // row, holding past PANEL_HOLD_MS jumps PANEL_HOLD_STEP rows in one go, which
+  // Up/Down (side) move the cursor; Left/Right switch panels above. A tap steps
+  // one row, holding past PANEL_HOLD_MS jumps PANEL_HOLD_STEP rows in one go, which
   // is how you cross a hundreds-of-chapters contents list without a press per
   // row. The jump fires once on the hold and swallows the release that ends it,
   // so it never doubles up with the tap step.
   if (count > 0) {
-    const bool up = mappedInput.isPressed(MappedInputManager::Button::Up) ||
-                    mappedInput.isPressed(MappedInputManager::Button::Left);
-    const bool down = mappedInput.isPressed(MappedInputManager::Button::Down) ||
-                      mappedInput.isPressed(MappedInputManager::Button::Right);
+    const bool pressedUp = mappedInput.wasLongPressed(MappedInputManager::Button::Up, 0);
+    const bool pressedDown = mappedInput.wasLongPressed(MappedInputManager::Button::Down, 0);
+    if (pressedUp || pressedDown) {
+      panelIndex =
+          pressedUp ? ButtonNavigator::previousIndex(panelIndex, count) : ButtonNavigator::nextIndex(panelIndex, count);
+      panelCursorShown = true;
+      fastRedraw();
+      return;
+    }
+
+    const bool up = mappedInput.isPressed(MappedInputManager::Button::Up);
+    const bool down = mappedInput.isPressed(MappedInputManager::Button::Down);
+    if (!up && !down) panelHoldJumped = false;
     if (!panelHoldJumped && (up || down) && mappedInput.getHeldTime() >= PANEL_HOLD_MS) {
       const int step = down ? PANEL_HOLD_STEP : -PANEL_HOLD_STEP;
       panelIndex = std::clamp(panelIndex + step, 0, count - 1);
@@ -4603,20 +4602,6 @@ void EpubReaderActivity::handleOverlayInput() {
       panelCursorShown = true;
       fastRedraw();
       return;
-    }
-
-    const bool releasedUp = mappedInput.wasReleased(MappedInputManager::Button::Up) ||
-                            mappedInput.wasReleased(MappedInputManager::Button::Left);
-    const bool releasedDown = mappedInput.wasReleased(MappedInputManager::Button::Down) ||
-                              mappedInput.wasReleased(MappedInputManager::Button::Right);
-    if (releasedUp || releasedDown) {
-      if (!panelHoldJumped) {
-        panelIndex = releasedUp ? ButtonNavigator::previousIndex(panelIndex, count)
-                                : ButtonNavigator::nextIndex(panelIndex, count);
-        panelCursorShown = true;
-        fastRedraw();
-      }
-      panelHoldJumped = false;
     }
   }
 }

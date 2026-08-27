@@ -164,8 +164,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // Toolbar; its tools open the Contents/Text/More bottom-sheet panels.
   enum class Overlay { None, Toolbar, Contents, Text, More };
   Overlay overlay = Overlay::None;
-  int focusedTool = 0;  // toolbar tool focus: 0=Contents, 1=Text, 2=More
-  int panelIndex = 0;   // selected row within the active panel
+  int focusedTool = 0;     // toolbar tool focus: 0=Contents, 1=Text, 2=More
+  int toolbarControl = 2;  // 0=previous chapter, 1=next chapter, 2..4=tools
+  int panelIndex = 0;      // selected row within the active panel
   // Panel list navigation: a tap steps one row, a hold jumps PANEL_HOLD_STEP rows in one go
   // (a contents list runs to hundreds of chapters). One jump per hold, not a repeat -- every
   // step repaints the panel, so repeating is bounded by the e-ink refresh anyway and reads as
@@ -307,7 +308,6 @@ class EpubReaderActivity final : public ReaderActivity {
   // cache holds exactly one page), so running that warm again after a re-render of the SAME
   // page -- status bar tick, closed menu, bookmark toast -- costs two bulk SD loads and buys
   // nothing. Device log: "idle warm page=20" twice around one re-render of page 19.
-  int lastRenderedVPage_ = -1;
   // Direction of the most recent page turn; the idle warm follows it (forward turns warm
   // the next page, backward turns the previous one) so sustained paging in EITHER
   // direction hits a warm cache. Written by pageTurn() on the loop() task.
@@ -566,8 +566,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // will actually run this pass" instead. Read unlocked like the other power heuristics
   // (setPowerSaving/lightSleep): a stale read costs at most one loop pass either way.
   bool skipLoopDelay() override {
-    return section && section->isBuilding() && !buildHeapPaused &&
-           (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
+    return overlay != Overlay::None ||
+           (section && section->isBuilding() && !buildHeapPaused &&
+            (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD));
   }
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;

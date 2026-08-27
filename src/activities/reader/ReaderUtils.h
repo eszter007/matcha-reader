@@ -151,7 +151,7 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 // in the definition it closes the dictionary outright.
 inline bool wordLookupPowerClick(const MappedInputManager& input) {
   return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
-         input.wasReleased(MappedInputManager::Button::Power) && !input.wasReleased(MappedInputManager::Button::Down);
+         input.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN);
 }
 
 struct TouchPageTurn {

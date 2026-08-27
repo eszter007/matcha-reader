@@ -162,11 +162,18 @@ void ReaderToolbarUi::buildToolbar(UiScreen& screen) {
     stepProps_.styles.active = stepProps_.styles.normal;
     stepProps_.styles.active.background = fui::Paint::solid(fui::Color::Black);
     stepProps_.styles.active.foreground = fui::Paint::solid(fui::Color::White);
-    screen.button(stepProps_, fui::Rect{band.x, band.y, kScrubButton, kScrubButton});
+    const fui::Rect previousRect{band.x, band.y, kScrubButton, kScrubButton};
+    screen.button(stepProps_, previousRect);
+    if (model_.activeChapterStep < 0) {
+      screen.target().stroke(previousRect, fui::Paint::solid(fui::Color::Black), 3, tokens.controlRadius);
+    }
     stepProps_.icon = fui::bitmapFromIcon(icon_reader_next_24);
     stepProps_.action = ACTION_NEXT;
-    screen.button(stepProps_,
-                  fui::Rect{static_cast<int16_t>(band.right() - kScrubButton), band.y, kScrubButton, kScrubButton});
+    const fui::Rect nextRect{static_cast<int16_t>(band.right() - kScrubButton), band.y, kScrubButton, kScrubButton};
+    screen.button(stepProps_, nextRect);
+    if (model_.activeChapterStep > 0) {
+      screen.target().stroke(nextRect, fui::Paint::solid(fui::Color::Black), 3, tokens.controlRadius);
+    }
 
     // Progress: a 2px track with a solid round knob at the book position (the
     // fill edge IS the handle, so nothing else is drawn), the scrub hit rect
