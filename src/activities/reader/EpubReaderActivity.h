@@ -308,6 +308,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // cache holds exactly one page), so running that warm again after a re-render of the SAME
   // page -- status bar tick, closed menu, bookmark toast -- costs two bulk SD loads and buys
   // nothing. Device log: "idle warm page=20" twice around one re-render of page 19.
+  int lastRenderedVPage_ = -1;
   // Direction of the most recent page turn; the idle warm follows it (forward turns warm
   // the next page, backward turns the previous one) so sustained paging in EITHER
   // direction hits a warm cache. Written by pageTurn() on the loop() task.

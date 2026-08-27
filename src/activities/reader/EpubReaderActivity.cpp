@@ -2034,6 +2034,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (earlyPageActuallyDisplayed_ &&
         earlyDisplayedPage_.exchange(-1, std::memory_order_relaxed) == verticalSection->currentPage) {
       earlyPageActuallyDisplayed_ = false;
+      lastRenderedVPage_ = verticalSection->currentPage;
       saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
                    furiganaOverride);
       LOG_DBG("ERS", "Keeping early-rendered page %d; skipping duplicate refresh", verticalSection->currentPage);
@@ -2904,16 +2905,25 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
   // the mini-font cache and would discard a warm done first.
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
 
-  // Warm the neighbouring horizontal page's glyphs so the next turn renders from RAM. Vertical
-  // pages deliberately skip this speculative SD work: a Power-button Word Lookup waits for the
-  // render lock, and the long kern/ligature read can otherwise trip the watchdog before the
-  // activity switch. The real vertical page still prewarms normally when rendered.
+  // Warm the neighbouring page's glyphs so the next turn renders from RAM instead of paying the
+  // scan plus SD bulk load at button time. Direction-adaptive: the next page after a forward
+  // turn, the previous after a backward one.
   //
   // Gated on `skimming`: this prepares a page a rapidly-paging reader will skip past, and it runs
   // on the render task, so it delays the turn being waited on (~430ms, mostly the mini-kern
   // build).
-  if (!vertical) {
-    const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
+  const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
+  if (vertical) {
+    const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
+    lastRenderedVPage_ = renderedVPage_;
+    const int warmTarget = forward ? renderedVPage_ + 1 : renderedVPage_ - 1;
+    if (!skimming && pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
+      prewarmedVPage_ = -1;
+      if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
+        if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
+      }
+    }
+  } else {
     prewarmedHPage_ = -1;
     // Warming loads an extra page transiently, so take the classic cold turn when the largest
     // free block is tight.
