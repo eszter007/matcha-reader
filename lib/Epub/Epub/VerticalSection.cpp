@@ -975,7 +975,7 @@ struct LayoutPageSink final : ParagraphSink {
   void (*earlyRenderFn)(void*, const VerticalPage&, int) = nullptr;
   void* earlyRenderCtx = nullptr;
   std::atomic<int>* pageRequest = nullptr;
-  std::atomic<bool>* backTurnFlag = nullptr;
+  std::atomic<bool>* noticeFlag = nullptr;
   void (*buildNoticeFn)(void*) = nullptr;
   void* buildNoticeCtx = nullptr;
   // Speculative-build cancellation; see VerticalSection::setBuildCancelHook(). Polled in
@@ -1155,6 +1155,20 @@ struct LayoutPageSink final : ParagraphSink {
 
   void writeOne(const VerticalPage& p) {
     if (failed) return;  // a cancel latched mid-batch: the rest of this batch is discarded too
+    if (pageOffsets.size() == pageOffsets.capacity()) {
+      // std::vector's automatic doubling throws/aborts when the heap is fragmented. Grow by a
+      // bounded step only when that exact contiguous block still leaves working headroom.
+      constexpr size_t kGrowth = 256;
+      constexpr size_t kHeadroom = 4 * 1024;
+      const size_t nextCapacity = pageOffsets.capacity() + kGrowth;
+      const size_t requestBytes = nextCapacity * sizeof(uint32_t);
+      if (ESP.getMaxAllocHeap() < requestBytes + kHeadroom || ESP.getFreeHeap() < requestBytes + kHeadroom) {
+        LOG_ERR("VSC", "OOM: page offset index (%zu pages, maxAlloc=%u)", pageOffsets.size(), ESP.getMaxAllocHeap());
+        failed = true;
+        return;
+      }
+      pageOffsets.reserve(nextCapacity);
+    }
     pageOffsets.push_back(static_cast<uint32_t>(out.position()));
     // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
     // Holding it resident across the whole build deepened the layout's low-heap dips by
@@ -1199,7 +1213,7 @@ struct LayoutPageSink final : ParagraphSink {
     if (!pageRequest || !earlyRenderFn) return;
     // A backward turn the build cannot serve. Drawn here rather than where the press is read:
     // the framebuffer has one owner, and mid-build that is this task.
-    if (backTurnFlag && backTurnFlag->exchange(false, std::memory_order_relaxed) && buildNoticeFn) {
+    if (noticeFlag && noticeFlag->exchange(false, std::memory_order_relaxed) && buildNoticeFn) {
       buildNoticeFn(buildNoticeCtx);
     }
     const int req = pageRequest->load(std::memory_order_relaxed);
@@ -1490,7 +1504,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // recorded while the build runs simply overwrite it (latest wins).
   buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
   sink.pageRequest = &buildPageRequest_;
-  sink.backTurnFlag = &backTurnDuringBuild_;
+  sink.noticeFlag = &buildNoticePending_;
   sink.buildNoticeFn = buildNoticeFn_;
   sink.buildNoticeCtx = buildNoticeCtx_;
   sink.cancelFn = cancelFn_;
@@ -1541,7 +1555,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   extractor.currentRuns.reserve(TextExtractor::SOFT_FLUSH_RUNS + 8);
   extractor.rubyBase.reserve(TextExtractor::RUBY_RESERVE_HINT);
   extractor.rubyAnnotation.reserve(TextExtractor::RUBY_RESERVE_HINT);
-  pageOffsets_.reserve(640);  // 2.5KB; a 240KB chapter yields ~500 pages
+  // Initial allocation is guarded for the same reason as LayoutPageSink::writeOne()'s growth.
+  constexpr size_t kInitialOffsetCapacity = 640;  // 2.5KB; a 240KB chapter yields ~500 pages
+  constexpr size_t kOffsetHeadroom = 4 * 1024;
+  constexpr size_t kInitialOffsetBytes = kInitialOffsetCapacity * sizeof(uint32_t);
+  if (pageOffsets_.capacity() < kInitialOffsetCapacity &&
+      ESP.getMaxAllocHeap() >= kInitialOffsetBytes + kOffsetHeadroom &&
+      ESP.getFreeHeap() >= kInitialOffsetBytes + kOffsetHeadroom) {
+    pageOffsets_.reserve(kInitialOffsetCapacity);
+  }
 
   XML_Parser parser = XML_ParserCreate(nullptr);
   if (!parser) {

@@ -1056,6 +1056,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
 }
 
 void EpubReaderActivity::openReaderMenu() {
+  requestVerticalBuildNotice();
   pendingManualTurn = 0;
   if (usesToolbarMenu()) {
     // Reached from a child activity's result handler (footnotes, bookmarks,
@@ -1647,7 +1648,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
       } else {
         // Backward needs a page already written, which means a cache read-back the build's own
         // working set cannot fund. Say so instead of ignoring the press.
-        verticalSection->noteBackTurnDuringBuild();
+        verticalSection->requestBuildNotice();
       }
     }
     lastPageTurnTime = millis();
@@ -2905,6 +2906,10 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
   // the mini-font cache and would discard a warm done first.
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
 
+  // The build above can run for seconds. Input may have arrived after the first sample, so check
+  // again before starting another speculative SD/font operation in front of that request.
+  const bool skipPrewarm = skimming || nextTurnAlreadyRequested();
+
   // Warm the neighbouring page's glyphs so the next turn renders from RAM instead of paying the
   // scan plus SD bulk load at button time. Direction-adaptive: the next page after a forward
   // turn, the previous after a backward one.
@@ -2917,7 +2922,7 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
     const bool pageChanged = renderedVPage_ != lastRenderedVPage_;
     lastRenderedVPage_ = renderedVPage_;
     const int warmTarget = forward ? renderedVPage_ + 1 : renderedVPage_ - 1;
-    if (!skimming && pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
+    if (!skipPrewarm && pageChanged && warmTarget >= 0 && warmTarget < verticalSection->pageCount) {
       prewarmedVPage_ = -1;
       if (const VerticalPage* np = verticalSection->getPage(warmTarget); np && !np->isImagePage()) {
         if (prewarmVerticalPageGlyphs(*np)) prewarmedVPage_ = warmTarget;
@@ -2929,8 +2934,9 @@ void EpubReaderActivity::runPostRenderTail(const uint16_t viewportWidth, const u
     // free block is tight.
     constexpr uint32_t IDLE_WARM_MIN_ALLOC = 32 * 1024;
     const int warmTarget = forward ? section->currentPage + 1 : section->currentPage - 1;
-    if (auto* fcm = renderer.getFontCacheManager(); fcm && !skimming && ESP.getMaxAllocHeap() >= IDLE_WARM_MIN_ALLOC &&
-                                                    warmTarget >= 0 && warmTarget < section->pageCount) {
+    if (auto* fcm = renderer.getFontCacheManager(); fcm && !skipPrewarm &&
+                                                    ESP.getMaxAllocHeap() >= IDLE_WARM_MIN_ALLOC && warmTarget >= 0 &&
+                                                    warmTarget < section->pageCount) {
       if (auto np = section->loadPageAt(warmTarget)) {
         // createPrewarmScope() clears the cache in its constructor, freeing the MAX_PAGE_SLOTS
         // page-buffer slots, so each warm REPLACES the previous page's glyphs -- slots do not
@@ -3752,13 +3758,19 @@ void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const
 void EpubReaderActivity::buildNoticeThunk(void* ctx) {
   auto* self = static_cast<EpubReaderActivity*>(ctx);
   // The framebuffer is lent away for the duration of the chapter extraction; drawing then would
-  // scribble on the bytes the inflate is using. Skipping simply drops the notice -- the press it
-  // answers is already lost either way.
+  // scribble on the bytes the inflate is using. The next page boundary retries naturally if a
+  // later request is made; during layout the framebuffer is available and this draws at once.
   if (!self->renderer.hasFrameBuffer()) return;
-  GUI.drawPopup(self->renderer, tr(STR_INDEXING));
+  GUI.drawPopup(self->renderer, tr(STR_LOADING_POPUP));
   // The page render that follows repaints the whole screen over this, and a plain FAST leaves
   // the popup's glyphs ghosting underneath; take the absolute pass.
   self->pagesUntilFullRefresh = 1;
+}
+
+void EpubReaderActivity::requestVerticalBuildNotice() {
+  if (verticalBuildInProgress_.load(std::memory_order_relaxed) && verticalSection) {
+    verticalSection->requestBuildNotice();
+  }
 }
 
 void EpubReaderActivity::earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, const int pageIndex) {
@@ -3911,6 +3923,7 @@ bool EpubReaderActivity::repaintVerticalPageForPanel() {
 }
 
 void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
+  requestVerticalBuildNotice();
   if (!epub || !DictIndex::isAvailable()) return;
   // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
   const std::string scanCachePath = epub->getCachePath() + "/wlscan.bin";
@@ -3924,15 +3937,12 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
     renderer.getOrientedViewableTRBL(&selectCtx.marginTop, &viewableRight, &viewableBottom, &selectCtx.marginLeft);
     selectCtx.marginTop += SETTINGS.screenMargin;
     selectCtx.marginLeft += SETTINGS.screenMargin;
-    selectCtx.cellPx = verticalCellPx(renderer, effectiveReaderFontId());
     selectCtx.repaintPage = &EpubReaderActivity::repaintVerticalPageForPanelThunk;
     selectCtx.repaintCtx = this;
     // Only when the framebuffer really holds what the panel shows. It does not after a chapter
     // build: the early render put the page on the e-ink, then the build borrowed the buffer's
     // bytes as inflate scratch. Skipping the repaint there composites the cursor onto whatever
     // the inflate left and flushes a blank page.
-    selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
-
     // Built under the render lock, started after it: the constructor's scan copies every glyph
     // out of *page, and the pointer is only valid while nothing else re-faults the section's
     // single page slot -- which the render task's warm tail does, for seconds at a time. This
@@ -3943,16 +3953,17 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
     // failed allocation (pushGlyphSafe -> scanTruncated) and shows whatever it had, which
     // surfaces as INCOMPLETE matches rather than none. Vertical has no incremental build to
     // suspend, but the glyph caches are the bulk of it and reload lazily on the next page.
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->releaseAllFontMemory();
-      prewarmedVPage_ = -1;  // the release emptied the mini font cache
-      prewarmedHPage_ = -1;
-    }
-    LOG_DBG("ERS", "Word lookup (vertical): maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
-
     std::unique_ptr<Activity> panel;
     {
       RenderLock lock(*this);
+      selectCtx.cellPx = verticalCellPx(renderer, effectiveReaderFontId());
+      selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        fcm->releaseAllFontMemory();
+        prewarmedVPage_ = -1;  // the release emptied the mini font cache
+        prewarmedHPage_ = -1;
+      }
+      LOG_DBG("ERS", "Word lookup (vertical): maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
       if (const VerticalPage* page = verticalSection->getPage()) {
         panel = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
             renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
@@ -3968,7 +3979,19 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
     // in the in-progress .part file, and loadPageAt() reads the COMMITTED file -- it returned
     // nullptr and Word Lookup silently did nothing in horizontal mode while vertical (which has
     // no incremental build) worked. loadPage() serves from the active build first.
-    auto page = section->loadPage(section->currentPage);
+    std::unique_ptr<Page> page;
+    {
+      RenderLock lock(*this);
+      page = section->loadPage(section->currentPage);
+      if (page && section->isBuilding()) section->suspendBuild();
+      if (page) {
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          fcm->releaseAllFontMemory();
+          prewarmedVPage_ = -1;
+          prewarmedHPage_ = -1;
+        }
+      }
+    }
     if (page) {
       // Hand the dictionary a heap it can work in. An incremental build keeps its parser,
       // BuildContext and page LUT resident for as long as the chapter is open -- the one-shot
@@ -3981,15 +4004,6 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
       // section file, so the pages already built stay readable and the rebuild resumes from
       // that watermark instead of starting over. The page above is already loaded, so nothing
       // here needs the build to still be live.
-      if (section->isBuilding()) {
-        RenderLock lock(*this);  // the render task may be inside the build; every other reset here takes it too
-        section->suspendBuild();
-      }
-      if (auto* fcm = renderer.getFontCacheManager()) {
-        fcm->releaseAllFontMemory();
-        prewarmedVPage_ = -1;  // the release emptied the mini font cache
-        prewarmedHPage_ = -1;
-      }
       LOG_DBG("ERS", "Word lookup: maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
 
       startActivityForResult(std::make_unique<EpubReaderWordLookupActivity>(
@@ -4168,6 +4182,7 @@ void EpubReaderActivity::discardOverlayPage() {
 }
 
 void EpubReaderActivity::openOverlay(Overlay target) {
+  requestVerticalBuildNotice();
   const Overlay previous = overlay;
   overlay = target;
   if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);

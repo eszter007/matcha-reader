@@ -318,9 +318,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // seconds into a ~17s whole-chapter build and the user can keep turning pages while the
   // rest of the chapter builds.
   static void earlyRenderVerticalPageThunk(void* ctx, const VerticalPage& page, int pageIndex);
-  // "Indexing" notice for a backward turn the running build cannot serve. Called between pages
-  // on the render task, so it shares the framebuffer with the page render rather than racing it.
+  // Loading notice for UI actions waiting behind a running build. Called between pages on the
+  // render task, so it shares the framebuffer with the page render rather than racing it.
   static void buildNoticeThunk(void* ctx);
+  void requestVerticalBuildNotice();
   void earlyRenderVerticalPage(const VerticalPage& page, int pageIndex);
   // True while a vertical chapter build runs on the render task. Read by pageTurn() on the
   // loop() task: while building, the section's pageCount is still 0, so the normal turn path
