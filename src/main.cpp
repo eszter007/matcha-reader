@@ -650,7 +650,9 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
-  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn !=
+                                                     CrossPointSettings::SHORT_PWRBTN::PWR_CONFIRM &&
+                                                 SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::IGNORE);
   mappedInputManager.update();
 
   if (activityManager.requiresExclusiveStorageLoop()) {

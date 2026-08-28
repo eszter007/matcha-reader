@@ -111,7 +111,11 @@ void ActivityManager::loop() {
       int ty = 0;
       statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44;
     }
-    if (currentActivity->name != "FrontlightPanel" && (statusBarTap || mappedInput.wasLightPanelGesture())) {
+    if (statusBarTap || mappedInput.wasLightPanelGesture()) {
+      if (currentActivity->name == "FrontlightPanel") {
+        popActivity();
+        return;
+      }
       pushActivity(std::make_unique<FrontlightPanelActivity>(renderer, mappedInput));
       return;
     }

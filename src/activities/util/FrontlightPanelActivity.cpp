@@ -255,7 +255,7 @@ void FrontlightPanelActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasLightPanelGesture()) {
     close();
     return;
   }
@@ -268,6 +268,13 @@ void FrontlightPanelActivity::loop() {
                                        [this] { adjustBrightness(-BRIGHTNESS_STEP); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right},
                                        [this] { adjustBrightness(BRIGHTNESS_STEP); });
+
+  const int upDelta = gpio.hasEdgeSideButtons() ? -BRIGHTNESS_STEP : BRIGHTNESS_STEP;
+  const int downDelta = gpio.hasEdgeSideButtons() ? BRIGHTNESS_STEP : -BRIGHTNESS_STEP;
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up, MappedInputManager::Button::PageBack},
+                                       [this, upDelta] { adjustBrightness(upDelta); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down, MappedInputManager::Button::PageForward},
+                                       [this, downDelta] { adjustBrightness(downDelta); });
 }
 
 int FrontlightPanelActivity::computePanelBottom() const {
