@@ -121,6 +121,12 @@ class DictIndex {
   // heavy operations right after a lookup session (e.g. horizontal re-pagination needs one
   // contiguous 32KB block for the zip inflate dictionary) fail if this memory lingers. The next
   // lookup transparently rebuilds everything (~0.5s).
+  // True when the most recent lookup found matching records but dropped one or more purely
+  // because the heap could not hold them (see the guard in lookupInFile). Lets a caller free
+  // memory and retry instead of presenting the empty result to the reader as "no definition".
+  // Reading the flag clears it.
+  static bool consumeHeapLimited();
+
   static void releaseCaches();
 
   // Diagnostic: logs and resets the running lookupExact()/record-cache counters. Call with a

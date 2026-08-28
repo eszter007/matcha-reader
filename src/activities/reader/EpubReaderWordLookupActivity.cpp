@@ -900,7 +900,23 @@ void EpubReaderWordLookupActivity::performLookup() {
   // runs -- fast navigation otherwise briefly flashes the no-match text in the window between
   // clearing the previous result and the next lookup (~100-300ms) completing.
   lookupInFlight = true;
+  DictIndex::consumeHeapLimited();  // drop any stale flag from an earlier lookup
   performLookupImpl();
+  // A definition that was FOUND and then dropped for want of heap is a transient failure, not an
+  // answer -- rendering it as an empty definition (or "No match found") states something untrue
+  // about the word. Free the font caches, which are the largest reclaimable block here, and ask
+  // once more; only a second failure is reported, and then as low memory rather than no match.
+  // Already holding the render lock, so release directly rather than via reclaimFontHeap().
+  if (DictIndex::consumeHeapLimited() && (!hasResult || resultDefinition.empty())) {
+    LOG_INF("WLA", "Definition dropped for heap (maxAlloc=%u); releasing fonts and retrying", ESP.getMaxAllocHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+    performLookupImpl();
+    lowMemoryResult = DictIndex::consumeHeapLimited() && (!hasResult || resultDefinition.empty());
+    if (lowMemoryResult)
+      LOG_ERR("WLA", "Definition still unloadable after reclaim (maxAlloc=%u)", ESP.getMaxAllocHeap());
+  } else {
+    lowMemoryResult = false;
+  }
   lookupInFlight = false;
 }
 
@@ -1561,8 +1577,12 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
     // "No match found" is only the truth once nothing is still in flight; during fast
     // navigation or while the progressive scan is still mapping the page, show Loading.
     const bool stillWorking = lookupInFlight || !scan.isDone();
-    UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2,
-                              stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
+    const char* message = tr(STR_NO_MATCH);
+    if (stillWorking)
+      message = tr(STR_LOADING);
+    else if (lowMemoryResult)
+      message = tr(STR_LOW_MEMORY_RETRY);
+    UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2, message, true);
   } else {
     DefinitionText::EntryMetadata metadata{visibleReading(), visibleGrammar()};
     const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
@@ -1598,7 +1618,7 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     }
     renderSelect();
     if (noMatchPopupPending.exchange(false, std::memory_order_acq_rel)) {
-      GUI.drawPopup(renderer, tr(STR_NO_MATCH));
+      GUI.drawPopup(renderer, lowMemoryResult ? tr(STR_LOW_MEMORY_RETRY) : tr(STR_NO_MATCH));
       // The popup changed the page framebuffer. Repaint the page before the next cursor move.
       selectPageDrawn = false;
     }
