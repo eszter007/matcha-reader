@@ -407,8 +407,12 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   // Narrow the [lo,hi) window with the two-tier sparse index when available -- turns the
   // ~log2(recordCount) scattered reads of the binary search below into a search over a single
   // SPX_STRIDE-record window (served from one block fetch). The window is guaranteed to contain
-  // the key if it exists (see scripts/gen_dict_spx.py + its validation), so the backward/forward
-  // collect walk below still gathers every same-headword record correctly.
+  // the key if it exists (see scripts/gen_dict_spx.py + its validation), but it does NOT pin down
+  // WHICH record of a duplicate-headword run the search lands on: the narrowed and full searches
+  // bisect different ranges and settle on different members of the same run. Everything the
+  // cmp==0 branch below derives from that match is therefore anchored on the run itself (walked
+  // back to its true first record), never on `mid` -- otherwise the two paths return different
+  // answers for the same headword.
   if (h.spxOk) {
     size_t wlo, whi;
     if (spxNarrow(h, key, recordCount, wlo, whi)) {
@@ -434,60 +438,85 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       // with posFlags==0 (no POS data, e.g. a pre-flags dict file) always counts. posMask==0
       // means the caller doesn't care (exact surface-form lookups).
       const auto posAccept = [posMask](uint8_t flags) { return posMask == 0 || flags == 0 || (flags & posMask) != 0; };
-      constexpr size_t kMaxSiblingScan = 32;  // bound the walks for a pathological reading
+      // Siblings retained for the priority ranking below (heap cost: 32 * 8 B).
+      constexpr size_t kMaxSiblingScan = 32;
+      // Hard bound on how far either walk below may travel, so a degenerate index (every record
+      // sharing one headword) can't turn a lookup into a full-file scan. Far above the longest
+      // run any real dictionary produces -- こう in the shipped jmdict is 54 records.
+      constexpr size_t kMaxRunScan = 512;
 
-      // Existence-only mode: the caller discards the definition (page scan), so skip the
-      // backward walk, the collect walk, and all .dat payload reads -- each is an SD transaction.
-      // With a POS mask, the record the binary search landed on may be the wrong homophone
-      // (しる could land on 汁 while the mask wants the verb 知る), so only take the fast path
-      // when that record already passes; otherwise fall through to the sibling walk below.
-      if (!needDefinition && posAccept(rec.posFlags)) {
-        out.headword = headword;
-        out.priority = rec.priority;
-        out.posFlags = rec.posFlags;
-        out.definition.clear();
-        return true;
-      }
-
-      // Found a match — scan backwards to find the first record with this headword. Bounded per
-      // direction so the sibling window is anchored on MID, not on the block start: real homophone
-      // blocks reach 54 records (こう), and a window of kMaxSiblingScan counted from `first` could
-      // push the compatible sibling past the cap when the binary search lands late in the block.
-      // Anchoring both bounds on mid guarantees mid±kMaxSiblingScan coverage (up to 65 records).
+      // Walk back to the FIRST record of this headword's run. `mid` is not a stable anchor: the
+      // full and .spx-narrowed searches bisect different ranges and land on different members of
+      // the same run, so any window measured from `mid` (as this used to be) selects a different
+      // slice of a long run on each path and returns different definitions for the same word.
+      // The run start is a property of the data, so both paths agree on it.
+      // Normal runs are short and the walk stays inside the block cache readIndexRecord() just
+      // centred on `mid` -- no extra SD reads. The binary-search fallback only runs when the
+      // linear budget is exhausted, and keeps `first` exact even then.
       size_t first = mid;
-      while (first > 0 && (mid - first) < kMaxSiblingScan) {
+      while (first > 0 && (mid - first) < kMaxRunScan) {
         DictIndexRecord prevRec;
         if (!readIndexRecord(h, first - 1, recordCount, prevRec)) break;
         if (std::memcmp(key, prevRec.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         first--;
       }
-      const size_t scanEnd = std::min(recordCount, mid + 1 + kMaxSiblingScan);
+      if (first > 0 && (mid - first) >= kMaxRunScan) {
+        // Records are sorted, so every record before the run compares != key: bisect [0, first)
+        // for the lowest index that still matches. ~log2(n) reads, for a run no real dict has.
+        size_t blo = 0, bhi = first;
+        while (blo < bhi) {
+          const size_t bmid = blo + (bhi - blo) / 2;
+          DictIndexRecord br;
+          if (!readIndexRecord(h, bmid, recordCount, br)) {
+            blo = first;  // read error: keep the linear result rather than guess
+            break;
+          }
+          if (std::memcmp(key, br.headword, DictIndexRecord::HEADWORD_SIZE) == 0) {
+            bhi = bmid;
+          } else {
+            blo = bmid + 1;
+          }
+        }
+        first = blo;
+      }
+      const size_t scanEnd = std::min(recordCount, first + kMaxRunScan);
 
-      // POS-filtered existence check: any sibling with compatible flags is a hit. Served almost
-      // entirely from the block cache (the backward walk above just fetched this block).
+      // POS-filtered existence check: report the HIGHEST-priority compatible sibling in the run.
+      // Reporting whichever record the search landed on was the other half of the path-dependence
+      // bug -- out.priority reaches WordSelectionScan's kana-reading suppression gate
+      // (WordSelectionScan.cpp:630), so a mid-dependent priority made a word's selectability
+      // differ between the two search paths. Taking the maximum also matches what the
+      // needDefinition=true path below reports (entries[0], the top-priority sibling).
       if (!needDefinition) {
+        bool found = false;
+        uint8_t bestPriority = 0;
+        uint8_t bestPosFlags = 0;
         for (size_t idx = first; idx < scanEnd; idx++) {
           DictIndexRecord r;
           if (!readIndexRecord(h, idx, recordCount, r)) break;
           if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
-          if (posAccept(r.posFlags)) {
-            out.headword = headword;
-            out.priority = r.priority;
-            out.posFlags = r.posFlags;
-            out.definition.clear();
-            return true;
+          if (!posAccept(r.posFlags)) continue;
+          if (!found || r.priority > bestPriority) {
+            bestPriority = r.priority;
+            bestPosFlags = r.posFlags;
+            found = true;
           }
         }
-        return false;
+        if (!found) return false;
+        out.headword = headword;
+        out.priority = bestPriority;
+        out.posFlags = bestPosFlags;
+        out.definition.clear();
+        return true;
       }
 
       // Two passes so the highest-priority senses win even when they sit past the first few in
       // storage order. The index groups all same-reading records together but NOT by priority, so
       // a reading with many homophones (ほう: 方/法/報/...袍) could bury the common word (方) behind
-      // rarer ones (袍) and the old "read the first 5, then sort those" lost it. Pass 1 walks every
-      // sibling reading ONLY the index record (priority + payload location, no .dat read); pass 2
-      // reads definitions for just the top-priority few. Pass 1 is cheap index-only SD reads; pass
-      // 2 does the same handful of .dat reads as before.
+      // rarer ones (袍) and the old "read the first 5, then sort those" lost it. Pass 1 walks the
+      // whole run reading ONLY the index record (priority + payload location, no .dat read) and
+      // ranks it; pass 2 reads definitions for just the top-priority few. Pass 1 is cheap
+      // index-only SD reads; pass 2 does the same handful of .dat reads as before.
       struct Sib {
         uint8_t priority;
         uint8_t posFlags;
@@ -496,22 +525,24 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       };
       std::vector<Sib> sibs;
       sibs.reserve(kMaxSiblingScan);
-      for (size_t idx = first; idx < scanEnd && sibs.size() < kMaxSiblingScan; idx++) {
+      for (size_t idx = first; idx < scanEnd; idx++) {
         DictIndexRecord r;
         if (!readIndexRecord(h, idx, recordCount, r)) break;
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         if (!posAccept(r.posFlags)) continue;  // wrong word class for this deinflection candidate
-        sibs.push_back({r.priority, r.posFlags, r.offset, r.length});
+        // Keep the top kMaxSiblingScan by PRIORITY across the whole run, inserting so the vector
+        // stays ordered (priority desc, index order for ties). Cutting the run off at the first
+        // kMaxSiblingScan records instead would reintroduce a position-dependent result on runs
+        // longer than the cap, and the ranking is what the merge below actually needs.
+        // Insert-into-sorted also removes the selection sort that used to follow this loop.
+        size_t p = 0;
+        while (p < sibs.size() && sibs[p].priority >= r.priority) p++;
+        if (p >= kMaxSiblingScan) continue;  // ranks below everything already retained
+        // pop first so the insert can never exceed the reserved capacity (no reallocation).
+        if (sibs.size() == kMaxSiblingScan) sibs.pop_back();
+        sibs.insert(sibs.begin() + static_cast<std::ptrdiff_t>(p), {r.priority, r.posFlags, r.offset, r.length});
       }
       if (sibs.empty()) return false;
-
-      // Selection sort by priority (highest first) -- <=32 uint8 compares, negligible.
-      for (size_t a = 0; a < sibs.size(); a++) {
-        size_t best = a;
-        for (size_t b = a + 1; b < sibs.size(); b++)
-          if (sibs[b].priority > sibs[best].priority) best = b;
-        if (best != a) std::swap(sibs[a], sibs[best]);
-      }
 
       // Read definitions for the top-priority siblings, already in priority order.
       struct Entry {
