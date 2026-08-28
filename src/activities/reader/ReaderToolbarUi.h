@@ -39,6 +39,8 @@ class ReaderToolbarUi : public UiAppHost {
     int selectedIndex = -1;  // row the buttons' cursor sits on; -1 = none shown
     std::function<std::string(int)> rowText;
     std::function<std::string(int)> rowValue;
+    // -1 = regular value row, 0 = unchecked switch, 1 = checked switch.
+    std::function<int(int)> rowToggleState;
     // Tile row: the tool in focus (toolbar) / the open panel (panel). 0..2.
     int activeTool = 0;
     // Pixels kept free along the screen's bottom edge under the panel sheet

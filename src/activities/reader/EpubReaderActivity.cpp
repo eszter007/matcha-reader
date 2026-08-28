@@ -4074,6 +4074,7 @@ constexpr StrId kAlignIds[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId:
 constexpr int kTextRowCount = static_cast<int>(std::size(kTextRowNames));
 // Rows every book gets; the two beyond this are Japanese-only.
 constexpr int kBaseTextRowCount = 5;
+constexpr int kRowFocusReading = 4;
 constexpr int kRowVerticalText = 5;
 constexpr int kRowFurigana = 6;
 static_assert(std::size(kSpacingIds) == CrossPointSettings::LINE_COMPRESSION_COUNT, "line spacing labels");
@@ -4329,11 +4330,34 @@ void EpubReaderActivity::renderOverlay() {
     model.itemCount = textRowCount();
     model.rowText = [this](int i) { return textRowName(i); };
     model.rowValue = [this](int i) { return textRowValue(i); };
+    model.rowToggleState = [this](int i) {
+      switch (textRowAt(i)) {
+        case kRowFocusReading:
+          return SETTINGS.focusReadingEnabled ? 1 : 0;
+        case kRowVerticalText:
+          return useVerticalText() ? 1 : 0;
+        case kRowFurigana:
+          return useFurigana() ? 1 : 0;
+        default:
+          return -1;
+      }
+    };
   } else {
     model.panelTitle = tr(STR_TOOL_MORE);
     model.itemCount = static_cast<int>(moreItems.size());
     model.rowText = [this](int i) { return moreRowName(i); };
     model.rowValue = [this](int i) { return moreRowValue(i); };
+    model.rowToggleState = [this](int i) {
+      if (i < 0 || i >= static_cast<int>(moreItems.size())) return -1;
+      switch (moreItems[i].action) {
+        case EpubReaderMenuActivity::MenuAction::NIGHT_MODE:
+          return SETTINGS.screenInverted ? 1 : 0;
+        case EpubReaderMenuActivity::MenuAction::FRONTLIGHT:
+          return Frontlight.isOn() ? 1 : 0;
+        default:
+          return -1;
+      }
+    };
   }
   toolbarUi->setModel(model);
   toolbarUi->render();
@@ -4480,7 +4504,7 @@ void EpubReaderActivity::handleOverlayInput() {
                                  if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
                                  requestUpdate();                    // re-render page + Text panel
                                });
-      } else if (row == 4) {
+      } else if (row == kRowFocusReading) {
         // Focus Reading is a genuine on/off: a tap toggles and applies live.
         SETTINGS.focusReadingEnabled = SETTINGS.focusReadingEnabled ? 0 : 1;
         applyTextSettingLive();

@@ -10,6 +10,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 #include "components/icons/readerToolbarIcons.h"
 
 namespace fui = freeink::ui;
@@ -260,11 +261,14 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   const int windowCount = std::min({nav_.visibleRows, count - nav_.top, kMaxWindow});
   for (int i = 0; i < windowCount; ++i) {
     const int index = nav_.top + i;
+    const int toggleState = model_.rowToggleState ? model_.rowToggleState(index) : -1;
     windowLabels_[i] = model_.rowText ? model_.rowText(index) : std::string();
-    windowValues_[i] = model_.rowValue ? model_.rowValue(index) : std::string();
+    windowValues_[i] = toggleState < 0 && model_.rowValue ? model_.rowValue(index) : std::string();
     fui::ListItem item;
     item.label = windowLabels_[i].c_str();
     item.value = windowValues_[i].empty() ? nullptr : windowValues_[i].c_str();
+    item.toggle = toggleState >= 0;
+    item.toggleChecked = toggleState > 0;
     item.actionValue = static_cast<int16_t>(index);
     windowItems_[i] = item;
   }
@@ -273,6 +277,7 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   listProps_.itemsWindowCount = static_cast<uint16_t>(std::max(0, windowCount));
   listProps_.valueText = tokens.bodyText;
   listProps_.valueText.bold = true;
+  applySwitchStyle(listProps_);
   if (count > 0) {
     screen.list(listProps_);
   }
