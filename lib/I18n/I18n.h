@@ -1,9 +1,9 @@
 #pragma once
 
+#include <I18nKeys.h>
+
 #include <cstdint>
 #include <memory>
-
-#include "I18nKeys.h"
 /**
  * Internationalization (i18n) system for CrossPoint Reader
  */
@@ -47,7 +47,7 @@ class I18n {
   static const char* getCharacterSet(Language lang);
 
  private:
-  I18n() : _language(Language::EN) {}
+  I18n() : _language(Language::EN) { i18n_strings::requireCurrentTable(); }
 
   // Reads PACK_DIR/<CODE>.cplang into _packBuffer and points _packStrings at it.
   // Leaves both untouched and returns false on any rejection.

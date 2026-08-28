@@ -1,14 +1,13 @@
 #include "I18n.h"
 
 #include <HalStorage.h>
+#include <I18nStrings.h>
 #include <Logging.h>
 #include <Memory.h>
 
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
-
-#include "I18nStrings.h"
 
 using namespace i18n_strings;
 
