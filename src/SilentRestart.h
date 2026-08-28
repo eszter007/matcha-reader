@@ -19,3 +19,7 @@ void silentRestartToTranslation();
 // setup(). On SD, not RTC_NOINIT: a page of CJK text (2-6KB) doesn't fit the
 // ~2.6KB of RTC slow memory left.
 constexpr const char* TRANSLATE_STASH_PATH = "/system/translate_pending.txt";
+
+// Reboots immediately after an activity releases exclusive raw storage. The
+// RTC target ensures setup() lands on Home instead of resuming a reader.
+void restartToHomeAfterStorageHandoff();
