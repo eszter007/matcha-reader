@@ -59,11 +59,13 @@ constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                           const SdCardFontRegistry* registry, Tab initialTab, const bool japaneseBook)
+                                           const SdCardFontRegistry* registry, Tab initialTab, const bool japaneseBook,
+                                           const bool verticalText)
     : UiTabListActivity("TextSettings", renderer, mappedInput),
       registry_(registry),
       tab_(initialTab),
-      japaneseBook_(japaneseBook) {}
+      japaneseBook_(japaneseBook),
+      verticalText_(verticalText) {}
 
 const char* TextSettingsActivity::tabLabel(const int index) const { return I18N.get(TAB_NAME_IDS[index]); }
 
@@ -142,7 +144,7 @@ void TextSettingsActivity::rebuildRowItems() {
         item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i))]);
         break;
       case Tab::Style:
-        item.label = I18N.get(STYLE_ROW_NAME_IDS[i]);
+        item.label = I18N.get(STYLE_ROW_NAME_IDS[static_cast<int>(styleRowAt(i))]);
         break;
       default:
         break;
@@ -258,8 +260,8 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
         break;
       }
       case Tab::Style:
-        // Every Style row is on/off, so this tab is all switches and has no value text.
-        rowItems_[i].toggle = styleRowIsSwitch(i, checked);
+        // Every visible Style row is on/off, so this tab is all switches and has no value text.
+        rowItems_[i].toggle = styleRowIsSwitch(static_cast<int>(styleRowAt(i)), checked);
         break;
       default:
         break;
@@ -395,7 +397,7 @@ void TextSettingsActivity::activateRow(int row) {
       confirmLayoutRow(static_cast<int>(layoutRowAt(row)));
       break;
     case Tab::Style:
-      confirmStyleRow(row);
+      confirmStyleRow(static_cast<int>(styleRowAt(row)));
       break;
     default:
       break;
@@ -525,13 +527,13 @@ void TextSettingsActivity::confirmStyleRow(int row) {
 // have no distinct preview.
 bool TextSettingsActivity::focusedRowHasNoPreview() const {
   if (ringPos() == 0 || tab_ != Tab::Style) return false;
-  const StyleRow row = static_cast<StyleRow>(ringPos() - 1);
+  const StyleRow row = styleRowAt(ringPos() - 1);
   return row == StyleRow::Hyphenation || row == StyleRow::EmbeddedStyle || row == StyleRow::AntiAliasing;
 }
 
 void TextSettingsActivity::switchTab(const int direction) {
   const bool onTabBar = ringPos() == 0;
-  const int count = tabCount();  // a Japanese book hides the Style tab
+  const int count = tabCount();
   tab_ = static_cast<Tab>((static_cast<int>(tab_) + direction + count) % count);
   rebuildRowItems();
   auto& n = activeNav();
@@ -551,17 +553,20 @@ int TextSettingsActivity::listCount() const {
       // layout inputs the vertical engine does not read.
       return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 3 : 0);
     case Tab::Style:
-      return static_cast<int>(StyleRow::Count);
+      return japaneseBook_ ? (verticalText_ ? 1 : 2) : static_cast<int>(StyleRow::Count);
     default:
       return 0;
   }
 }
 
-int TextSettingsActivity::tabCount() const {
-  return japaneseBook_ ? static_cast<int>(Tab::Style) : static_cast<int>(Tab::Count);
-}
+int TextSettingsActivity::tabCount() const { return static_cast<int>(Tab::Count); }
 
 TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {
   if (japaneseBook_ && visibleIndex > 0) return LayoutRow::ScreenMargin;
   return static_cast<LayoutRow>(visibleIndex);
+}
+
+TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {
+  if (!japaneseBook_) return static_cast<StyleRow>(visibleIndex);
+  return visibleIndex == 0 ? StyleRow::EmbeddedStyle : StyleRow::AntiAliasing;
 }

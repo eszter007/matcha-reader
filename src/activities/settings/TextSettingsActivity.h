@@ -30,7 +30,7 @@ class TextSettingsActivity final : public UiTabListActivity {
   };
 
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,
-                       Tab initialTab = Tab::Family, bool japaneseBook = false);
+                       Tab initialTab = Tab::Family, bool japaneseBook = false, bool verticalText = false);
 
   void onEnter() override;
   void render(RenderLock&&) override;
@@ -78,6 +78,8 @@ class TextSettingsActivity final : public UiTabListActivity {
   // Maps a visible list position to its LayoutRow: a Japanese book hides ParaSpacing,
   // Alignment and BookSideMargins, so position and enum value diverge.
   LayoutRow layoutRowAt(int visibleIndex) const;
+  // Japanese books hide FocusReading/Hyphenation; vertical Japanese also hides AntiAliasing.
+  StyleRow styleRowAt(int visibleIndex) const;
   // Sentinel settingIndex for the "Manage Fonts" row appended to the family list. It opens
   // FontDownloadActivity instead of selecting a font -- the shortcut the pre-1.5.0 font
   // picker had at the bottom of its list, so "the font I want isn't here" is one press away.
@@ -88,6 +90,7 @@ class TextSettingsActivity final : public UiTabListActivity {
   // Rebuilds fonts_ (families installed on the card can change while this screen is open).
   void rebuildFamilyList();
   const bool japaneseBook_ = false;
+  const bool verticalText_ = false;
 
   // Row storage for the active tab: rowItems_ (label/actionValue) is
   // rebuilt only when the tab or its backing data changes (rebuildRowItems(),

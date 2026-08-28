@@ -4093,16 +4093,24 @@ std::string EpubReaderActivity::currentChapterTitle() const {
   return tr(STR_UNNAMED);
 }
 
-// Vertical Text / Furigana only mean anything for Japanese content, so a Latin book
-// sees upstream's five rows and nothing dead.
-int EpubReaderActivity::textRowCount() const { return showVerticalToggle() ? kTextRowCount : kBaseTextRowCount; }
+// Japanese books omit Paragraph Alignment and Focus Reading; Vertical Text / Furigana
+// take their place. Latin books keep the upstream rows.
+int EpubReaderActivity::textRowCount() const {
+  return isJapaneseBook() ? kBaseTextRowCount : showVerticalToggle() ? kTextRowCount : kBaseTextRowCount;
+}
+
+int EpubReaderActivity::textRowAt(const int visibleIndex) const {
+  return isJapaneseBook() && visibleIndex >= 3 ? visibleIndex + 2 : visibleIndex;
+}
 
 std::string EpubReaderActivity::textRowName(int row) const {
-  return row >= 0 && row < textRowCount() ? I18N.get(kTextRowNames[row]) : "";
+  if (row < 0 || row >= textRowCount()) return "";
+  return I18N.get(kTextRowNames[textRowAt(row)]);
 }
 
 std::string EpubReaderActivity::textRowValue(int row) const {
   static constexpr StrId kFamily[] = {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS};
+  row = textRowAt(row);
   switch (row) {
     case 0:
       if (SETTINGS.sdFontFamilyName[0] != '\0') return SETTINGS.sdFontFamilyName;
@@ -4455,14 +4463,16 @@ void EpubReaderActivity::handleOverlayInput() {
   const auto activateRow = [this, count, &fastRedraw] {
     if (panelIndex < 0 || panelIndex >= count) return;
     if (overlay == Overlay::Text) {
-      if (panelIndex == 0) {
+      const int row = textRowAt(panelIndex);
+      if (row == 0) {
         // Full font picker (built-in + SD fonts, live preview) -- the same
         // screen Settings uses; a popup cannot scroll a long font list.
         overlay = Overlay::None;
         overlayPopup.dismiss();
         discardOverlayPage();
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                      TextSettingsActivity::Tab::Family),
+                                                                      TextSettingsActivity::Tab::Family,
+                                                                      isJapaneseBook(), useVerticalText()),
                                [this](const ActivityResult&) {
                                  applyReaderTextSettings();
                                  overlay = Overlay::Text;  // back to the Text panel
@@ -4470,17 +4480,16 @@ void EpubReaderActivity::handleOverlayInput() {
                                  if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
                                  requestUpdate();                    // re-render page + Text panel
                                });
-      } else if (panelIndex == 4) {
+      } else if (row == 4) {
         // Focus Reading is a genuine on/off: a tap toggles and applies live.
         SETTINGS.focusReadingEnabled = SETTINGS.focusReadingEnabled ? 0 : 1;
         applyTextSettingLive();
-      } else if (panelIndex == kRowVerticalText || panelIndex == kRowFurigana) {
+      } else if (row == kRowVerticalText || row == kRowFurigana) {
         // This fork's per-book overrides, toggled in place like Focus Reading. Pass the
         // other one's CURRENT state so applyVerticalFuriganaOverride() leaves it alone --
         // it acts only on a value that differs from what is in effect.
-        const int8_t vertical =
-            panelIndex == kRowVerticalText ? (useVerticalText() ? 0 : 1) : (useVerticalText() ? 1 : 0);
-        const int8_t furigana = panelIndex == kRowFurigana ? (useFurigana() ? 0 : 1) : (useFurigana() ? 1 : 0);
+        const int8_t vertical = row == kRowVerticalText ? (useVerticalText() ? 0 : 1) : (useVerticalText() ? 1 : 0);
+        const int8_t furigana = row == kRowFurigana ? (useFurigana() ? 0 : 1) : (useFurigana() ? 1 : 0);
         applyVerticalFuriganaOverride(vertical, furigana);
         // Toggling vertical drops the section; furigana is a section-cache layout
         // parameter, so the next render rebuilds on the mismatch. Either way the stored
@@ -4489,7 +4498,7 @@ void EpubReaderActivity::handleOverlayInput() {
         requestUpdate();
       } else {
         // Enum rows open the Settings-style option picker.
-        showTextRowPopup(panelIndex);
+        showTextRowPopup(row);
       }
     } else if (overlay == Overlay::Contents) {
       const auto item = epub->getTocItem(panelIndex);
