@@ -494,12 +494,13 @@ void SettingsActivity::toggleCurrentSetting() {
                                });
         break;
       case SettingAction::TextSettings:
-        startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                      TextSettingsActivity::Tab::Family, japaneseBook),
-                               [this](const ActivityResult&) {
-                                 saveSettings();
-                                 rebuildSettingsLists();
-                               });
+        startActivityForResult(
+            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                   TextSettingsActivity::Tab::Family, japaneseBook, verticalTextState),
+            [this](const ActivityResult&) {
+              saveSettings();
+              rebuildSettingsLists();
+            });
         break;
       case SettingAction::Language:
         // Row labels are translated once in rebuildRowItems() and don't
