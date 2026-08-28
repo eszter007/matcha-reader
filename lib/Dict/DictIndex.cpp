@@ -54,6 +54,10 @@ struct CoarseEntry {
 // Diagnostic counters (declared before the spx helpers that touch them). Temporary instrumentation
 // for the Word Lookup slowness investigation; see DictIndex::logAndResetStats().
 uint32_t g_lookupExactCalls = 0;
+// Set when an entry (or a merge) was dropped purely because the heap could not hold it, so a
+// caller can tell "this word has no definition" apart from "we could not load it right now".
+bool g_heapLimited = false;
+static uint32_t g_missMemoHits = 0;  // lookups answered from the negative memo (no SD traffic)
 uint32_t g_recordCacheHits = 0;
 uint32_t g_recordCacheMisses = 0;
 uint32_t g_fineReads = 0;  // fine-window SD reads (spx tier)
@@ -528,6 +532,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         // rejects a corrupt/misread record length before it becomes a huge allocation request.
         constexpr uint32_t MAX_DEF_BYTES = 16 * 1024;
         if (sibs[s].length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < sibs[s].length + 8 * 1024) {
+          g_heapLimited = true;
           LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(sibs[s].length),
                   ESP.getMaxAllocHeap());
           if (entries.empty()) continue;  // keep trying: a lower-priority sibling may be smaller
@@ -556,6 +561,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         size_t mergedLen = 0;
         for (const auto& en : entries) mergedLen += en.def.size() + 8;
         if (ESP.getMaxAllocHeap() < mergedLen + 8 * 1024) {
+          g_heapLimited = true;
           LOG_ERR("DICT", "Skipping entry merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
           out.definition = std::move(entries[0].def);
         } else {
@@ -574,9 +580,57 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   return false;
 }
 
+namespace {
+// --- Negative lookup memo ---------------------------------------------------------------------
+// A page scan asks lookupExact() the same question over and over: WordLookup walks 8 window
+// lengths per position and up to 64 deinflection candidates per window, and a position that
+// matches nothing pays every one of them. Measured on one 125-character vertical page: 75,831
+// lookupExact and 32,460 SD reads, ~230 s, during which the reader is unusable.
+//
+// Misses dominate that traffic, and a miss is stable for as long as the dictionary files stay
+// open, so remembering one is free in correctness terms. Direct-mapped, one 64-bit fingerprint
+// per slot over (headword, dictMask, posMask). needDefinition is deliberately NOT in the key: it
+// changes what a HIT returns, never whether the headword exists.
+//
+// The 64-bit tag is what makes this safe. A tag collision would silently hide a real word; at
+// this table's occupancy that is ~1e-10 across a whole page, where a 32-bit tag would be a
+// near-certainty. The table is freed by releaseCaches() with the rest of the lookup state, so it
+// never outlives a lookup session, and it is allocated lazily -- if the allocation fails under
+// pressure the memo simply stays off.
+constexpr size_t kMissMemoSlots = 1024;
+std::unique_ptr<uint64_t[]> g_missMemo;
+
+uint64_t missTagFor(const char* headword, const uint8_t dictMask, const uint8_t posMask) {
+  uint64_t h = 1469598103934665603ull;
+  for (const char* p = headword; *p; ++p) {
+    h ^= static_cast<unsigned char>(*p);
+    h *= 1099511628211ull;
+  }
+  h ^= dictMask;
+  h *= 1099511628211ull;
+  h ^= posMask;
+  h *= 1099511628211ull;
+  return h ? h : 1;  // 0 marks an empty slot, so no real key may be 0
+}
+
+void rememberMiss(const uint64_t tag) {
+  if (!g_missMemo) {
+    g_missMemo = makeUniqueNoThrow<uint64_t[]>(kMissMemoSlots);
+    if (!g_missMemo) return;  // no memo under pressure; results are unaffected either way
+    std::fill_n(g_missMemo.get(), kMissMemoSlots, 0ull);
+  }
+  g_missMemo[tag % kMissMemoSlots] = tag;
+}
+}  // namespace
+
 bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMask, bool needDefinition,
                             uint8_t posMask) {
   g_lookupExactCalls++;
+  const uint64_t missTag = missTagFor(headword, dictMask, posMask);
+  if (g_missMemo && g_missMemo[missTag % kMissMemoSlots] == missTag) {
+    g_missMemoHits++;
+    return false;
+  }
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
@@ -594,10 +648,18 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
     out.sourceDict = DICT_NAMES;
     return true;
   }
+  rememberMiss(missTag);
   return false;
 }
 
+bool DictIndex::consumeHeapLimited() {
+  const bool limited = g_heapLimited;
+  g_heapLimited = false;
+  return limited;
+}
+
 void DictIndex::releaseCaches() {
+  g_missMemo.reset();
   g_vocabHandles.release();
   g_grammarHandles.release();
   g_namesHandles.release();
@@ -609,10 +671,12 @@ void DictIndex::releaseCaches() {
 }
 
 void DictIndex::logAndResetStats(const char* label) {
-  LOG_INF("DICT", "%s: %u lookupExact, idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)", label,
-          g_lookupExactCalls, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
+  LOG_INF("DICT",
+          "%s: %u lookupExact (%u memoized misses), idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)",
+          label, g_lookupExactCalls, g_missMemoHits, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
           g_recordCacheMisses + g_fineReads);
   g_lookupExactCalls = 0;
+  g_missMemoHits = 0;
   g_recordCacheHits = 0;
   g_recordCacheMisses = 0;
   g_fineReads = 0;
