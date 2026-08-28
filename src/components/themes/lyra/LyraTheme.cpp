@@ -18,19 +18,14 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/book.h"
-#include "components/icons/book24.h"
 #include "components/icons/bookmark.h"
 #include "components/icons/cover.h"
-#include "components/icons/file24.h"
 #include "components/icons/folder.h"
-#include "components/icons/folder24.h"
 #include "components/icons/hotspot.h"
-#include "components/icons/image24.h"
 #include "components/icons/library.h"
 #include "components/icons/recent.h"
 #include "components/icons/settings2.h"
 #include "components/icons/stats_icons.h"
-#include "components/icons/text24.h"
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
 #include "fontIds.h"
@@ -42,53 +37,34 @@ constexpr int cornerRadius = 6;
 constexpr int topHintButtonY = 345;
 constexpr int maxListValueWidth = 200;
 constexpr int mainMenuIconSize = 32;
-constexpr int listIconSize = 24;
 constexpr int mainMenuColumns = 2;
 int coverWidth = 0;
 
-const uint8_t* iconForName(UIIcon icon, int size) {
-  if (size == 24) {
-    switch (icon) {
-      case UIIcon::Folder:
-        return Folder24Icon;
-      case UIIcon::Text:
-        return Text24Icon;
-      case UIIcon::Image:
-        return Image24Icon;
-      case UIIcon::Book:
-        return Book24Icon;
-      case UIIcon::File:
-        return File24Icon;
-      default:
-        return nullptr;
-    }
-  } else if (size == 32) {
-    switch (icon) {
-      case UIIcon::Folder:
-        return FolderIcon;
-      case UIIcon::Book:
-        return BookIcon;
-      case UIIcon::Recent:
-        return RecentIcon;
-      case UIIcon::Settings:
-        return Settings2Icon;
-      case UIIcon::Transfer:
-        return TransferIcon;
-      case UIIcon::Library:
-        return LibraryIcon;
-      case UIIcon::Stats:
-        return ChartBarIcon;
-      case UIIcon::Wifi:
-        return WifiIcon;
-      case UIIcon::Hotspot:
-        return HotspotIcon;
-      case UIIcon::Bookmark:
-        return BookmarkIcon;
-      default:
-        return nullptr;
-    }
+const uint8_t* iconForName(UIIcon icon) {
+  switch (icon) {
+    case UIIcon::Folder:
+      return FolderIcon;
+    case UIIcon::Book:
+      return BookIcon;
+    case UIIcon::Recent:
+      return RecentIcon;
+    case UIIcon::Settings:
+      return Settings2Icon;
+    case UIIcon::Transfer:
+      return TransferIcon;
+    case UIIcon::Library:
+      return LibraryIcon;
+    case UIIcon::Stats:
+      return ChartBarIcon;
+    case UIIcon::Wifi:
+      return WifiIcon;
+    case UIIcon::Hotspot:
+      return HotspotIcon;
+    case UIIcon::Bookmark:
+      return BookmarkIcon;
+    default:
+      return nullptr;
   }
-  return nullptr;
 }
 }  // namespace
 
@@ -252,9 +228,8 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   int textX = rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection;
   int textWidth = contentWidth - LyraMetrics::values.contentSidePadding * 2 - hPaddingInSelection * 2;
-  int iconSize;
+  constexpr int iconSize = mainMenuIconSize;
   if (rowIcon != nullptr) {
-    iconSize = (rowSubtitle != nullptr) ? mainMenuIconSize : listIconSize;
     textX += iconSize + hPaddingInSelection;
     textWidth -= iconSize + hPaddingInSelection;
   }
@@ -302,7 +277,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
     if (rowIcon != nullptr) {
       UIIcon icon = rowIcon(i);
-      const uint8_t* iconBitmap = iconForName(icon, iconSize);
+      const uint8_t* iconBitmap = iconForName(icon);
       if (iconBitmap != nullptr) {
         renderer.drawIcon(iconBitmap, rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection,
                           itemY + iconY, iconSize);
@@ -583,7 +558,7 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
 
     if (rowIcon != nullptr) {
       UIIcon icon = rowIcon(i);
-      const uint8_t* iconBitmap = iconForName(icon, mainMenuIconSize);
+      const uint8_t* iconBitmap = iconForName(icon);
       if (iconBitmap != nullptr) {
         const int iconY = tileRect.y + (LyraMetrics::values.menuRowHeight - mainMenuIconSize) / 2;
         renderer.drawIcon(iconBitmap, textX, iconY, mainMenuIconSize);

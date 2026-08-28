@@ -76,12 +76,8 @@ int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader
   const ThemeMetrics metrics = UITheme::getInstance().getMetrics();
   auto orientation = renderer.getOrientation();
   int reservedHeight = metrics.topPadding;
-  if (hasHeader) {
-    reservedHeight += metrics.headerHeight + metrics.verticalSpacing;
-  }
-  if (hasTabBar) {
-    reservedHeight += metrics.tabBarHeight;
-  }
+  if (hasHeader) reservedHeight += metrics.headerHeight + metrics.verticalSpacing;
+  if (hasTabBar) reservedHeight += metrics.tabBarHeight;
   if (hasButtonHints && orientation != GfxRenderer::Orientation::LandscapeClockwise &&
       orientation != GfxRenderer::Orientation::LandscapeCounterClockwise) {
     reservedHeight += metrics.verticalSpacing + metrics.buttonHintsHeight;
