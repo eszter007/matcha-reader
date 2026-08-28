@@ -4377,6 +4377,7 @@ void EpubReaderActivity::handleOverlayInput() {
       nextPageNumber = 0;
       currentSpineIndex = target;
       section.reset();
+      verticalSection.reset();
     }
     requestUpdate();
   };
@@ -4499,6 +4500,7 @@ void EpubReaderActivity::handleOverlayInput() {
         pendingAnchor = item.anchor;
         nextPageNumber = 0;
         section.reset();
+        verticalSection.reset();
       }
       overlay = Overlay::None;
       discardOverlayPage();
