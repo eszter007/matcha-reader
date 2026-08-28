@@ -80,6 +80,10 @@ class EpubReaderWordLookupActivity final : public Activity {
 
   // --- Select mode state -------------------------------------------------------------------
   // The framebuffer holds the page, so a cursor move only has to XOR two boxes.
+  // The last lookup found entries but could not load them for want of contiguous heap, even
+  // after a font-cache reclaim. Reported as low memory instead of "no match", which would be a
+  // false statement about the word.
+  bool lowMemoryResult = false;
   bool selectPageDrawn = false;
   // A column jump must be immediate even on a cold page. Until dictionary segmentation catches
   // up, highlight the nearest raw text cell and allow it to be looked up directly.
