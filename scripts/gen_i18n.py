@@ -31,6 +31,7 @@ Examples:
     python gen_i18n.py --strip-unused --src-dirs src lib/EpdFont
 """
 
+import hashlib
 import struct
 import sys
 import os
@@ -448,6 +449,7 @@ def generate_keys_header(
     language_names: List[str],
     language_bcp47: List[str],
     string_keys: List[str],
+    table_fingerprint: str,
     output_path: str,
     verbose: bool = False,
     builtin: Optional[Set[str]] = None,
@@ -470,6 +472,10 @@ def generate_keys_header(
             continue
         lines.append(f"extern const char STRINGS_{code}_DATA[];")
         lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+    lines.append(f"void requireTable_{table_fingerprint}();")
+    lines.append(
+        f"inline void requireCurrentTable() {{ requireTable_{table_fingerprint}(); }}"
+    )
 
     lines.append("}  // namespace i18n_strings")
     lines.append("")
@@ -639,6 +645,7 @@ def generate_strings_cpp(
     language_names: List[str],
     string_keys: List[str],
     translations: Dict[str, List[str]],
+    table_fingerprint: str,
     output_path: str,
     verbose: bool = False,
     builtin: Optional[Set[str]] = None,
@@ -753,6 +760,8 @@ def generate_strings_cpp(
         lines.append("};")
         lines.append("")
 
+    lines.append(f"void requireTable_{table_fingerprint}() {{}}")
+    lines.append("")
     lines.append("}  // namespace i18n_strings")
     lines.append("")
 
@@ -862,10 +871,27 @@ def _append_string_entry(lines: List[str], text: str, comment: str = "") -> None
     lines.extend(formatted)
 
 
+def _table_fingerprint(
+    languages: List[str],
+    language_names: List[str],
+    string_keys: List[str],
+    translations: Dict[str, List[str]],
+    builtin: Set[str],
+) -> str:
+    values = [*languages, *language_names, *sorted(builtin), *string_keys]
+    for key in string_keys:
+        values.extend(translations[key])
+    return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()[:16]
+
+
 def _write_file(path: str, lines: List[str], verbose: bool = False) -> None:
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines))
-        f.write("\n")
+    content = ("\n".join(lines) + "\n").encode("utf-8")
+    output = Path(path)
+    if output.is_file() and output.read_bytes() == content:
+        if verbose:
+            print(f"Unchanged: {path}")
+        return
+    output.write_bytes(content)
     if verbose:
         print(f"Generated: {path}")
 
@@ -1062,10 +1088,14 @@ def main(
             print(f"  Stripping {len(unused_set)} unused string(s) from output.")
 
         builtin = resolve_builtin_langs(builtin_langs, languages)
+        table_fingerprint = _table_fingerprint(
+            languages, language_names, string_keys, translations, builtin
+        )
 
         out = Path(output_dir)
         generate_keys_header(
-            languages, language_names, language_bcp47, string_keys, str(out / "I18nKeys.h"), verbose,
+            languages, language_names, language_bcp47, string_keys, table_fingerprint,
+            str(out / "I18nKeys.h"), verbose,
             builtin,
         )
         generate_strings_header(
@@ -1076,6 +1106,7 @@ def main(
             language_names,
             string_keys,
             translations,
+            table_fingerprint,
             str(out / "I18nStrings.cpp"),
             verbose,
             builtin,
