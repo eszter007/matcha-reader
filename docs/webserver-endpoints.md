@@ -78,8 +78,9 @@ Response:
 ]
 ```
 
-Hidden dotfiles are omitted unless the device setting `showHiddenFiles` is
-enabled. `System Volume Information` and `XTCache` are always hidden/protected.
+Hidden dotfiles, `System Volume Information` and `XTCache` are all omitted
+unless the device setting `showHiddenFiles` is enabled. Everything the listing
+shows can be deleted.
 
 ### `GET /download`
 
@@ -178,7 +179,8 @@ cleared before the move.
 
 ### `POST /delete`
 
-Deletes one or more files or empty folders.
+Deletes one or more files or folders. A folder is removed with everything
+inside it.
 
 ```bash
 curl -X POST -d "path=/Books/mybook.epub" http://crosspoint.local/delete
@@ -192,8 +194,8 @@ Form parameters:
 | `path` | Yes, unless `paths` is provided | Single path to delete |
 | `paths` | Yes, unless `path` is provided | JSON array of paths to delete |
 
-Protected items cannot be deleted. Non-empty folders are rejected. EPUB cache
-data for deleted files is cleared.
+Only the card root is refused. EPUB cache data for deleted files is cleared as
+the folder is walked.
 
 ## Settings API
 
