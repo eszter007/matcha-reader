@@ -471,11 +471,11 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     file.getName(name, sizeof(name));
     auto fileName = String(name);
 
-    // Dot entries and the filesystem's own bookkeeping folders are both hidden
-    // by default and both revealed by "Show hidden files" -- listing an item is
-    // what makes it deletable, so nothing is permanently out of reach.
+    // Dot entries are a display preference and come back with "Show hidden
+    // files"; the filesystem's own bookkeeping folders stay out of the listing
+    // either way.
     bool shouldHide = !SETTINGS.showHiddenFiles && fileName.startsWith(".");
-    if (!shouldHide && !SETTINGS.showHiddenFiles) {
+    if (!shouldHide) {
       for (const auto* item : HIDDEN_ITEMS) {
         if (fileName.equals(item)) {
           shouldHide = true;
@@ -1119,10 +1119,17 @@ void CrossPointWebServer::handleDelete() const {
       itemPath = "/" + itemPath;
     }
 
-    // Anything the listing shows can be deleted. The card is the user's, and a
-    // name-based veto here is what stranded the folders macOS leaves behind
-    // (.Spotlight-V100, .Trashes) with no way to remove them from either
-    // browser. Only the root above is refused, since it is the mount point.
+    // Anything the listing shows can be deleted -- vetoing every dot entry is
+    // what stranded the folders macOS leaves behind (.Spotlight-V100,
+    // .Trashes). Only the filesystem's own bookkeeping is still refused, and it
+    // never lists in the first place; /delete is a public endpoint, so the
+    // check stays here rather than resting on the UI not offering it.
+    const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
+    if (isProtectedItemName(itemName)) {
+      failedItems += itemPath + " (protected file); ";
+      allSuccess = false;
+      continue;
+    }
 
     // Check if item exists
     if (!Storage.exists(itemPath.c_str())) {

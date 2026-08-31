@@ -57,11 +57,11 @@ void FileBrowserActivity::loadFiles() {
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
     file.getName(fileNameBuffer.get(), NAME_BUFFER_SIZE);
     const bool isDirectory = file.isDirectory();
-    // "System Volume Information" is hidden alongside the dot entries rather
-    // than unconditionally: an item that never lists can never be deleted, and
-    // the filesystem leftovers are exactly what users want to clear off a card.
-    if (!SETTINGS.showHiddenFiles &&
-        (fileNameBuffer[0] == '.' || strcmp(fileNameBuffer.get(), "System Volume Information") == 0)) {
+    // Dot entries are a display preference and come back with Show Hidden
+    // Files; "System Volume Information" is the filesystem's own bookkeeping
+    // and stays out of the listing either way.
+    if ((!SETTINGS.showHiddenFiles && fileNameBuffer[0] == '.') ||
+        strcmp(fileNameBuffer.get(), "System Volume Information") == 0) {
       continue;
     }
 

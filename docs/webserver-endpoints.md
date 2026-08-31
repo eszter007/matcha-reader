@@ -78,9 +78,9 @@ Response:
 ]
 ```
 
-Hidden dotfiles, `System Volume Information` and `XTCache` are all omitted
-unless the device setting `showHiddenFiles` is enabled. Everything the listing
-shows can be deleted.
+Hidden dotfiles are omitted unless the device setting `showHiddenFiles` is
+enabled. `System Volume Information` and `XTCache` are always hidden and
+protected. Everything else the listing shows can be deleted.
 
 ### `GET /download`
 
@@ -194,8 +194,8 @@ Form parameters:
 | `path` | Yes, unless `paths` is provided | Single path to delete |
 | `paths` | Yes, unless `path` is provided | JSON array of paths to delete |
 
-Only the card root is refused. EPUB cache data for deleted files is cleared as
-the folder is walked.
+The card root and protected items are refused; dotfiles are not. EPUB cache
+data for deleted files is cleared as the folder is walked.
 
 ## Settings API
 
