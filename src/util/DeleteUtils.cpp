@@ -1,5 +1,6 @@
 #include "DeleteUtils.h"
 
+#include <Arduino.h>  // yield()
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -45,8 +46,6 @@ bool deletePathRecursive(const std::string& path) {
   stack.push_back({path, false});
 
   while (!stack.empty()) {
-    // A deep tree (macOS Spotlight indexes hold thousands of entries) can run
-    // long enough to trip the watchdog on whichever task is deleting.
     resetTaskWatchdogIfSubscribed();
 
     auto [currentPath, postOrder] = std::move(stack.back());
@@ -96,6 +95,14 @@ bool deletePathRecursive(const std::string& path) {
           return false;
         }
       }
+
+      // Per entry, matching scanFiles(): a macOS Spotlight index holds
+      // thousands, and this walk runs on the web server task as well as the
+      // activity task. Without the yield a long delete starves Wi-Fi and the
+      // HTTP reply never lands; without the watchdog reset it trips the 5s
+      // task WDT and resets the device on a half-deleted tree.
+      yield();
+      resetTaskWatchdogIfSubscribed();
     }
   }
 
