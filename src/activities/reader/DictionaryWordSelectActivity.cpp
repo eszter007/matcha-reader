@@ -162,7 +162,7 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
 void DictionaryWordSelectActivity::performLookup() {
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
-    dictOpenOk = dict.open(folderName.c_str());
+    dictOpenOk = dict.open(folderName.c_str(), language.c_str());
     // needsIndex() opens and validates the .qidx sidecar, so ask it once per
     // open rather than once per word: the answer only changes when we build
     // the sidecar ourselves, which is handled below.

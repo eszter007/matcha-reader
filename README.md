@@ -37,6 +37,8 @@ The definition itself opens as a panel floating over the page you were reading: 
 
 Vocabulary, names and grammar each come from their own dictionary. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
 
+Other languages get the same treatment from their StarDict dictionaries. A word at the start of a sentence keeps its accents and still resolves (`École` finds `école`), and French adds its own rules: `l'eau` looks up `eau`, `journaux` finds `journal`, `heureuse` finds `heureux`, and the regular conjugations resolve to the infinitive (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`). English and everything else fall back to plurals and verb endings. Irregular verbs that share no stem with their infinitive need a `.syn` file in the dictionary folder — see [docs/dictionary.md](docs/dictionary.md).
+
 Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.
 
 <p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup with reading, part of speech, definitions and an example sentence"></p>

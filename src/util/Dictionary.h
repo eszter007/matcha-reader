@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "InflectionRules.h"
+
 // Result of an index search — file location of a definition without reading it.
 struct DictLocation {
   uint32_t offset = 0;  // byte offset in .dict data
@@ -45,7 +47,13 @@ class Dictionary {
 
   // Resolve the dictionary folder and validate its files. Rejects
   // dictionaries with 64-bit index offsets (idxoffsetbits=64 in .ifo).
-  bool open(const char* folderName);
+  //
+  // languageTag is the book's EPUB language ("fr", "fr-FR"), and selects the
+  // inflection rules a missed lookup retries. When it names no rule set the
+  // folder's own language prefix is used instead, so a dictionary the user
+  // picked as the global fallback still inflects for an untagged book
+  // (/dictionaries/fr/<name> → French).
+  bool open(const char* folderName, const char* languageTag = nullptr);
   bool isOpen() const { return !basePath.empty(); }
 
   // True when the .qidx sidecar (or the .sidx sidecar of a present .syn) is
@@ -80,7 +88,7 @@ class Dictionary {
   bool buildIndex(void (*yieldFn)(void*) = nullptr, void* ctx = nullptr, IndexResult* outResult = nullptr);
 
   // Clean the word, look it up, and on a miss retry dictionary-authored
-  // synonyms then mini stem variants (-'s/-s/-es/-ies/-ed/-ing). On a hit fills
+  // synonyms then the open language's inflection variants. On a hit fills
   // the definition text (capped at MAX_DEFINITION_BYTES) and the headword as
   // stored in the index. Returns true on a hit. *outResult (if provided)
   // reports the precise outcome so the UI can distinguish a genuine miss from a
@@ -109,17 +117,19 @@ class Dictionary {
   // Compose "<basePath><suffix>" into a caller-supplied stack buffer. The
   // lookup path runs this instead of `basePath + suffix` so path construction
   // costs no transient heap — see LookupSession. (A lookup still allocates
-  // elsewhere: cleanWord(), stemVariants() and the matched headword.) False
-  // (and logs) when the path would not fit, which open() has already ruled out.
+  // elsewhere: cleanWord(), the inflection variants and the matched
+  // headword.) False (and logs) when the path would not fit, which open() has
+  // already ruled out.
   bool buildPath(char* buf, size_t bufSize, const char* suffix) const;
 
   // The .idx / .qidx handles shared by every locate() call in one lookup. A
-  // lookup probes up to ~5 stem variants; opening the two files per probe cost
-  // ~10 SD opens and ~10 std::string path temporaries per word, churning the
-  // same heap whose fragmentation makes lookups fail mid-session. Opened once
-  // per lookup instead, with the paths built via buildPath(). The .syn / .sidx
-  // handles are opened lazily by locateSynonym() — only an exact miss consults
-  // them, so a hit never pays for two extra SD opens.
+  // lookup probes up to InflectionRules::MAX_VARIANTS candidates; opening the
+  // two files per probe cost two SD opens and two std::string path temporaries
+  // each, churning the same heap whose fragmentation makes lookups fail
+  // mid-session. Opened once per lookup instead, with the paths built via
+  // buildPath(). The .syn / .sidx handles are opened lazily by
+  // locateSynonym() — only an exact miss consults them, so a hit never pays for
+  // two extra SD opens.
   struct LookupSession {
     HalFile idx;
     HalFile qidx;
@@ -180,7 +190,6 @@ class Dictionary {
   // Read the definition at location. On failure returns false and, if outResult
   // is given, sets it to the specific reason (Decompress / LowMemory / ReadError).
   bool readDefinition(const DictLocation& location, std::string& out, LookupResult* outResult = nullptr);
-  static void stemVariants(const std::string& word, std::vector<std::string>& out);
 
   // Read a null-terminated word from an open file into buf (max bufSize-1
   // chars). Returns the number of characters read (excluding null), or -1 on
@@ -188,6 +197,8 @@ class Dictionary {
   static int readWordInto(HalFile& file, char* buf, size_t bufSize);
 
   std::string basePath;  // "/dictionaries/<folder>/<stem>", empty when not open
+  // Rule set the miss path retries, resolved once by open().
+  InflectionRules::Language language = InflectionRules::Language::Generic;
   bool hasPlainDict = false;
   bool hasSyn = false;  // a <stem>.syn synonym index exists next to the .idx
   bool htmlDefinitions = false;

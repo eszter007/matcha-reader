@@ -476,8 +476,8 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen) {
     return;
   }
   std::string dictionaryFolder;
-  DictionaryRegistry::folderForLanguageOrFallback(epub ? epub->getLanguage() : std::string{}, SETTINGS.dictionaryName,
-                                                  dictionaryFolder);
+  const std::string bookLanguage = epub ? epub->getLanguage() : std::string{};
+  DictionaryRegistry::folderForLanguageOrFallback(bookLanguage, SETTINGS.dictionaryName, dictionaryFolder);
   if (dictionaryFolder.empty()) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
@@ -499,7 +499,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen) {
   // long-press): the user is mid-reading, not mid-menu.
   startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(
                              renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop,
-                             std::move(dictionaryFolder), effectiveReaderFontId()),
+                             std::move(dictionaryFolder), bookLanguage, effectiveReaderFontId()),
                          [this](const ActivityResult&) { requestUpdate(); });
 }
 

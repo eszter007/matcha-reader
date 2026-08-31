@@ -868,6 +868,28 @@ dictionary a book actually ended up with, which is the quickest way to check a t
 
 A flat pile of dictionary files directly under `dictionaries/`, and the older `dict/` folder, both still work.
 
+**Word forms.** A word on the page is rarely in the shape the dictionary lists it under, so a lookup that misses
+is retried before it gives up. The dictionary's own `.syn` file is consulted first if it has one, then the rules
+for the book's language. A word at the start of a sentence keeps its accented capital and is folded either way, in
+every language, so `École` finds `école` and `Über` finds `über`.
+
+French then gets its own rules:
+
+| On the page | Looks up |
+| --- | --- |
+| `l'eau`, `qu'il`, `jusqu'ici` | `eau`, `il`, `ici` — the elided article or pronoun is dropped |
+| `journaux`, `bijoux`, `livres` | `journal`, `bijou`, `livre` |
+| `heureuse`, `chanteuse`, `nouvelle`, `première` | `heureux`, `chanteur`, `nouveau`, `premier` |
+| `parlaient`, `parlé`, `mangeons`, `commençait` | `parler`, `manger`, `commencer` |
+| `finissent`, `choisirait`, `vendu`, `attendait` | `finir`, `choisir`, `vendre`, `attendre` |
+
+English, and any language without rules of its own, falls back to plurals, possessives and verb endings (`dogs` →
+`dog`, `stories` → `story`, `running` → `run`).
+
+The rules cover regular word forms. French verbs that share no stem with their infinitive — `est` and `fut` for
+*être*, `ont` and `eut` for *avoir*, `vais` for *aller* — cannot be reached by any rule, and need a `.syn` file
+in the dictionary folder instead. Many dictionaries ship one; see [docs/dictionary.md](docs/dictionary.md).
+
 ## 7. Reading Stats
 
 Reading time is recorded as you go, every few minutes and again when you close a book, so a flat battery or a
