@@ -110,11 +110,12 @@ IfoFacts readIfoFacts(const std::string& ifoPath) {
 
 }  // namespace
 
-bool Dictionary::open(const char* folderName) {
+bool Dictionary::open(const char* folderName, const char* languageTag) {
   basePath.clear();
   hasSyn = false;
   htmlDefinitions = false;
   bookName.clear();
+  language = InflectionRules::Language::Generic;
   std::string resolved;
   if (!DictionaryRegistry::resolveBasePath(folderName, resolved)) {
     LOG_ERR("DICT", "No dictionary found in folder '%s'", folderName ? folderName : "");
@@ -144,6 +145,12 @@ bool Dictionary::open(const char* folderName) {
   hasSyn = Storage.exists((resolved + ".syn").c_str());
   htmlDefinitions = ifo.htmlDefinitions;
   bookName = ifo.bookName.empty() ? (folderName ? folderName : "") : ifo.bookName;
+
+  // The book's own tag wins; an untagged book falls back to the language folder
+  // the dictionary lives in ("fr/<name>"), which languageFromCode reads as the
+  // primary subtag up to the '/'.
+  language = InflectionRules::languageFromCode(languageTag);
+  if (language == InflectionRules::Language::Generic) language = InflectionRules::languageFromCode(folderName);
 
   basePath = std::move(resolved);
   return true;
@@ -620,36 +627,6 @@ std::string Dictionary::cleanWord(const char* word) {
   return result;
 }
 
-void Dictionary::stemVariants(const std::string& word, std::vector<std::string>& out) {
-  out.clear();
-  out.reserve(6);
-  const size_t n = word.size();
-  const auto add = [&out](std::string v) {
-    if (std::find(out.begin(), out.end(), v) == out.end()) out.push_back(std::move(v));
-  };
-  // endsWith requires a non-empty remainder so variants never come out empty.
-  const auto endsWith = [&word, n](const char* suffix) {
-    const size_t len = strlen(suffix);
-    return n > len && word.compare(n - len, len, suffix) == 0;
-  };
-
-  if (endsWith("'s")) add(word.substr(0, n - 2));
-  if (endsWith("\xE2\x80\x99s")) add(word.substr(0, n - 4));  // U+2019 apostrophe
-  if (endsWith("ies")) add(word.substr(0, n - 3) + "y");      // stories -> story
-  if (endsWith("es")) add(word.substr(0, n - 2));             // boxes -> box
-  if (endsWith("s")) add(word.substr(0, n - 1));              // dogs -> dog
-  if (endsWith("ed")) {
-    add(word.substr(0, n - 2));                                            // walked -> walk
-    add(word.substr(0, n - 1));                                            // loved -> love
-    if (n >= 4 && word[n - 3] == word[n - 4]) add(word.substr(0, n - 3));  // stopped -> stop
-  }
-  if (endsWith("ing")) {
-    add(word.substr(0, n - 3));                                            // walking -> walk
-    add(word.substr(0, n - 3) + "e");                                      // making -> make
-    if (n >= 5 && word[n - 4] == word[n - 5]) add(word.substr(0, n - 4));  // running -> run
-  }
-}
-
 bool Dictionary::lookup(const char* word, std::string& definitionOut, std::string& matchedHeadwordOut,
                         LookupResult* outResult) {
   const auto setResult = [outResult](LookupResult r) {
@@ -677,7 +654,8 @@ bool Dictionary::lookup(const char* word, std::string& definitionOut, std::strin
     searchFailed = location.readError;
 
     // Dictionary-authored synonyms (alternate spellings, irregular forms) take
-    // precedence over the English-only stemmer, and are language-agnostic.
+    // precedence over the rule-based variants: they are exact, language-agnostic
+    // and cost one probe, where the rules cost one probe each.
     if (!location.found && hasSyn) {
       location = locateSynonym(session, cleaned.c_str(), &matchedHeadwordOut);
       searchFailed = searchFailed || location.readError;
@@ -685,7 +663,7 @@ bool Dictionary::lookup(const char* word, std::string& definitionOut, std::strin
 
     if (!location.found) {
       std::vector<std::string> variants;
-      stemVariants(cleaned, variants);
+      InflectionRules::variants(language, cleaned, variants);
       for (const auto& variant : variants) {
         location = locate(session, variant.c_str(), &matchedHeadwordOut);
         searchFailed = searchFailed || location.readError;

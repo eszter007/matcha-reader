@@ -17,13 +17,14 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        std::string folderName, int baseFontId)
+                                        std::string folderName, std::string language, int baseFontId)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         page(std::move(page)),
         marginLeft(marginLeft),
         marginTop(marginTop),
         fontId(baseFontId),
-        folderName(std::move(folderName)) {}
+        folderName(std::move(folderName)),
+        language(std::move(language)) {}
 
   void onEnter() override;
   void loop() override;
@@ -77,6 +78,9 @@ class DictionaryWordSelectActivity final : public Activity {
   bool dictOpenAttempted = false;
   bool dictOpenOk = false;
   std::string folderName;
+  // The book's EPUB language tag, selecting the dictionary's inflection rules.
+  // Empty for an untagged book, which leaves the folder to decide.
+  std::string language;
   bool dictNeedsIndex = false;
 
   Popup popup = Popup::None;

@@ -42,8 +42,13 @@ On the very first lookup with a dictionary (and again whenever the `.idx` or `.s
 
 1. **Direct match** — the word is found as-is (case-insensitive) in the dictionary index. Surrounding punctuation is ignored.
 2. **Synonyms** — on a miss, if the dictionary ships a `.syn` file, alternate spellings and irregular forms recorded there are resolved to their headword (e.g. `oxen` → `ox`, `colour` → `color`). This step is skipped if the `.sidx` sidecar could not be built (e.g. transient low memory during indexing); the dictionary otherwise stays usable, and the build is retried the next time it is opened.
-3. **Stemming** — still no match: common English word forms are retried automatically: possessives and plurals (`dogs` → `dog`, `stories` → `story`) and verb endings (`walked` → `walk`, `running` → `run`, `making` → `make`).
+3. **Inflection** — still no match: word forms are retried automatically, using the rules for the book's language.
+   - Accented capitals are folded first, in every language, so a word at the start of a sentence (`École`, `Être`, `Über`) reaches its lowercase headword.
+   - **English**, and any language without its own rules: possessives and plurals (`dogs` → `dog`, `stories` → `story`) and verb endings (`walked` → `walk`, `running` → `run`, `making` → `make`).
+   - **French**: elision (`l'eau` → `eau`, `qu'il` → `il`), plurals and feminines (`journaux` → `journal`, `heureuse` → `heureux`, `nouvelle` → `nouveau`), and the three regular conjugations across their tenses (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`, `vendu` → `vendre`).
 4. **Not found** — a short popup appears and you return to word selection.
+
+The rules are selected by the book's language tag, falling back to the language folder the dictionary sits in (`/dictionaries/fr/...`) for a book with no tag. They cover regular morphology only: irregular verbs that share no stem with their lemma (French `est`, `ont`, `fut`, `vais`) are not rule-reachable and need a `.syn`, which resolves them in one step and works in any language.
 
 ## The Definition Screen
 
