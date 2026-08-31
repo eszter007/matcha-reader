@@ -921,6 +921,41 @@ def write_meta(output_dir: str, title: str, author: str, language: str = "") -> 
     print(f"  {meta_path}: title={title!r}, author={author!r}, language={language!r}")
 
 
+_XML_ENTITIES = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'"}
+_XML_ENTITY_RE = re.compile(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);")
+
+
+def xml_unescape(text: str) -> str:
+    """Decode the five predefined XML entities plus numeric character references.
+
+    Metadata and chapter titles are pulled out of XML with regexes rather than a
+    parser, so whatever the file escaped arrives still escaped: a ComicInfo
+    <Title>Tom &amp; Jerry</Title> would otherwise reach meta.bin -- and the output
+    folder name -- as the literal "Tom &amp; Jerry".
+
+    Deliberately NOT html.unescape's full HTML5 named-entity set: matcha-reader-tools'
+    JS port decodes exactly this set, and the two have to agree byte for byte. A
+    single pass is what makes "&amp;lt;" come back as "&lt;" rather than "<".
+    Mirror of matcha-reader-tools js/manga-core.js:xmlUnescape.
+    """
+    def _sub(m):
+        ent = m.group(1)
+        if ent[0] == "#":
+            try:
+                cp = int(ent[2:], 16) if ent[1] in "xX" else int(ent[1:])
+            except ValueError:
+                return m.group(0)
+            if 0 <= cp <= 0x10FFFF:
+                try:
+                    return chr(cp)
+                except (ValueError, OverflowError):
+                    return m.group(0)
+            return m.group(0)
+        return _XML_ENTITIES.get(ent, m.group(0))
+
+    return _XML_ENTITY_RE.sub(_sub, text)
+
+
 def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
     """Best-effort extraction of (title, author, language) from EPUB OPF, CBZ ComicInfo.xml, or PDF metadata.
 
@@ -938,13 +973,13 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
                     opf = zf.read(m.group(1)).decode("utf-8", "ignore")
                     t = re.search(r'<dc:title[^>]*>([^<]+)</dc:title>', opf)
                     if t:
-                        title = t.group(1).strip()
+                        title = xml_unescape(t.group(1)).strip()
                     a = re.search(r'<dc:creator[^>]*>([^<]+)</dc:creator>', opf)
                     if a:
-                        author = a.group(1).strip()
+                        author = xml_unescape(a.group(1)).strip()
                     lang = re.search(r'<dc:language[^>]*>([^<]+)</dc:language>', opf)
                     if lang:
-                        language = lang.group(1).strip()
+                        language = xml_unescape(lang.group(1)).strip()
         except Exception:
             pass
 
@@ -956,13 +991,13 @@ def extract_metadata(input_path: str, work_dir: str) -> tuple[str, str, str]:
                     xml = zf.read(names[0]).decode("utf-8", "ignore")
                     t = re.search(r'<Title>([^<]+)</Title>', xml)
                     if t:
-                        title = t.group(1).strip()
+                        title = xml_unescape(t.group(1)).strip()
                     a = re.search(r'<Writer>([^<]+)</Writer>', xml)
                     if a:
-                        author = a.group(1).strip()
+                        author = xml_unescape(a.group(1)).strip()
                     lang = re.search(r'<LanguageISO>([^<]+)</LanguageISO>', xml)
                     if lang:
-                        language = lang.group(1).strip()
+                        language = xml_unescape(lang.group(1)).strip()
         except Exception:
             pass
 
@@ -1061,7 +1096,7 @@ def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) ->
                 if toc_m:
                     for a_m in re.finditer(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', toc_m.group(1), re.DOTALL):
                         href = os.path.normpath(os.path.join(nav_dir, a_m.group(1))).replace(os.sep, "/")
-                        title = re.sub(r'<[^>]+>', '', a_m.group(2)).strip()
+                        title = xml_unescape(re.sub(r'<[^>]+>', '', a_m.group(2))).strip()
                         if title:
                             toc_entries_raw.append((href, title))
             else:
@@ -1082,7 +1117,7 @@ def _extract_epub_native_toc(epub_path: str, pages: list[str], work_dir: str) ->
                             src_m = re.search(r'<content[^>]*src="([^"]+)"', block)
                             if text_m and src_m:
                                 href = os.path.normpath(os.path.join(ncx_dir, src_m.group(1))).replace(os.sep, "/")
-                                title = text_m.group(1).strip()
+                                title = xml_unescape(text_m.group(1)).strip()
                                 if title:
                                     toc_entries_raw.append((href, title))
 
