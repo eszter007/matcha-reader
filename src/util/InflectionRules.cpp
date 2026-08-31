@@ -1,5 +1,6 @@
 #include "InflectionRules.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 
@@ -295,9 +296,7 @@ bool stripElision(const std::string& word, std::string& out) {
 // already reached.
 void addVariant(const std::string& surface, std::string candidate, std::vector<std::string>& out) {
   if (out.size() >= MAX_VARIANTS || candidate.empty() || candidate == surface) return;
-  for (const auto& existing : out) {
-    if (existing == candidate) return;
-  }
+  if (std::find(out.begin(), out.end(), candidate) != out.end()) return;
   out.push_back(std::move(candidate));
 }
 
