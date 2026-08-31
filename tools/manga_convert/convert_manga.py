@@ -170,43 +170,101 @@ def _natural_sort_key(path: str):
         return [(-2, 0, '')]
     if 'copyright' in lower:
         return [(-1, 0, '')]
+    # Built from the WHOLE path given, not just the basename: archives that put each
+    # chapter in its own folder restart page numbering inside it, so "ch01/001.jpg" and
+    # "ch08/001.jpg" share a basename and sorting on that interleaves the chapters.
+    # Callers pass a path relative to the extraction root, which for a flat book is
+    # exactly the basename -- so nothing changes for those.
     parts: list[tuple] = []
     i = 0
-    while i < len(name):
-        if name[i].isdigit():
+    while i < len(path):
+        if path[i].isdigit():
             j = i
-            while j < len(name) and name[j].isdigit():
+            while j < len(path) and path[j].isdigit():
                 j += 1
-            num_str = name[i:j].lstrip("0") or ""
+            num_str = path[i:j].lstrip("0") or ""
             parts.append((0, len(num_str), num_str))
             i = j
         else:
-            parts.append((1, 0, name[i].lower()))
+            parts.append((1, 0, path[i].lower()))
             i += 1
     return parts
+
+
+def _safe_archive_path(name: str) -> str | None:
+    """An archive member's path as a relative POSIX path, or None if it escapes.
+
+    Preserving the archive's folder structure means the member name now reaches the
+    filesystem, so absolute paths and ".." components have to be rejected here (zip
+    slip). The old basename-only extraction was inherently safe and needed no check.
+    """
+    norm = name.replace("\\", "/")
+    if norm.startswith("/") or (len(norm) > 1 and norm[1] == ":"):
+        return None
+    parts = []
+    for seg in norm.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            return None
+        parts.append(seg)
+    return "/".join(parts) if parts else None
+
+
+def _sort_path(img: str, root: str | None) -> str:
+    """The path to sort an image by: relative to its extraction root, POSIX separators.
+
+    For a flat book this is just the basename, so ordering is unchanged; for a
+    chapter-foldered one it keeps the folder in the key, which is what puts ch01's
+    pages before ch02's.
+    """
+    if root:
+        try:
+            rel = os.path.relpath(img, root)
+        except ValueError:
+            rel = os.path.basename(img)
+        if not rel.startswith(".."):
+            return rel.replace(os.sep, "/")
+    return os.path.basename(img)
 
 
 def collect_pages(input_path: str, work_dir: str, page_order_file: str | None) -> list[str]:
     """Return an ordered list of source page image paths."""
     p = Path(input_path)
 
+    sort_root: str | None = None
+
     if p.is_dir():
-        images = [str(f) for f in p.iterdir() if f.is_file() and is_image(str(f))]
+        # Recursive: a folder of chapter subfolders used to yield nothing at all.
+        images = [str(f) for f in p.rglob("*") if f.is_file() and is_image(str(f))]
+        sort_root = str(p)
     elif p.suffix.lower() in (".cbz", ".zip"):
         extract_dir = os.path.join(work_dir, "extracted")
         os.makedirs(extract_dir, exist_ok=True)
+        # The archive's folders are preserved. Extracting everything into one directory
+        # by basename silently dropped pages: a chapter-foldered book repeats 001.jpg in
+        # every chapter, so each one overwrote the last and only the final chapter's
+        # numbering survived, interleaved into what reads as jumbled chapters.
         with zipfile.ZipFile(str(p), "r") as zf:
             for info in zf.infolist():
                 if info.is_dir() or not is_image(info.filename):
                     continue
-                target = os.path.join(extract_dir, os.path.basename(info.filename))
+                rel = _safe_archive_path(info.filename)
+                if rel is None:
+                    print(f"Warning: skipping unsafe archive path {info.filename!r}", file=sys.stderr)
+                    continue
+                target = os.path.join(extract_dir, *rel.split("/"))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
                 with zf.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
-        images = [str(f) for f in Path(extract_dir).iterdir() if is_image(str(f))]
+        images = [str(f) for f in Path(extract_dir).rglob("*") if f.is_file() and is_image(str(f))]
+        sort_root = extract_dir
     elif p.suffix.lower() == ".epub":
         images = _extract_epub_pages(str(p), work_dir)
+        sort_root = os.path.join(work_dir, "epub_extracted")
     elif p.suffix.lower() == ".pdf":
         images = _extract_pdf_pages(str(p), work_dir)
+        sort_root = os.path.dirname(images[0]) if images else None
     else:
         print(f"Error: unsupported input: {p}", file=sys.stderr)
         sys.exit(1)
@@ -218,19 +276,30 @@ def collect_pages(input_path: str, work_dir: str, page_order_file: str | None) -
     if page_order_file:
         with open(page_order_file, "r", encoding="utf-8") as f:
             order_names = [line.strip() for line in f if line.strip()]
-        by_name = {os.path.basename(img): img for img in images}
+        # Listed by path relative to the archive root, so a chapter-foldered book can
+        # name "ch01/001.jpg". A bare basename still works when it is unambiguous.
+        by_rel = {_sort_path(img, sort_root): img for img in images}
+        base_counts: dict[str, int] = {}
+        for img in images:
+            base_counts[os.path.basename(img)] = base_counts.get(os.path.basename(img), 0) + 1
+        by_base = {os.path.basename(img): img for img in images
+                   if base_counts[os.path.basename(img)] == 1}
         ordered = []
+        used = set()
         for name in order_names:
-            if name not in by_name:
+            key = name.replace(os.sep, "/")
+            img = by_rel.get(key) or by_base.get(key)
+            if img is None:
                 print(f"Warning: {name} from --page-order-file not found among extracted images", file=sys.stderr)
                 continue
-            ordered.append(by_name[name])
-        missing = [img for img in images if os.path.basename(img) not in order_names]
+            ordered.append(img)
+            used.add(img)
+        missing = [img for img in images if img not in used]
         if missing:
             print(f"Warning: {len(missing)} images not listed in --page-order-file are dropped", file=sys.stderr)
         return ordered
 
-    images.sort(key=_natural_sort_key)
+    images.sort(key=lambda img: _natural_sort_key(_sort_path(img, sort_root)))
     return images
 
 
