@@ -13,9 +13,6 @@ class FileBrowserActivity final : public UiListActivity {
   enum class Mode { Books, PickFirmware };
 
  private:
-  // Deletion
-  bool removeDirFile(const std::string& fullPath);
-
   Mode mode = Mode::Books;
 
   // Files state

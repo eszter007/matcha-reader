@@ -18,6 +18,7 @@
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/DeleteUtils.h"
 
 namespace fui = freeink::ui;
 
@@ -56,6 +57,9 @@ void FileBrowserActivity::loadFiles() {
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
     file.getName(fileNameBuffer.get(), NAME_BUFFER_SIZE);
     const bool isDirectory = file.isDirectory();
+    // Dot entries are a display preference and come back with Show Hidden
+    // Files; "System Volume Information" is the filesystem's own bookkeeping
+    // and stays out of the listing either way.
     if ((!SETTINGS.showHiddenFiles && fileNameBuffer[0] == '.') ||
         strcmp(fileNameBuffer.get(), "System Volume Information") == 0) {
       continue;
@@ -208,87 +212,6 @@ void FileBrowserActivity::onExit() {
   fileNameBuffer.reset();
 }
 
-// To avoid traversing directories twice (once for cache clearing, once for deletion),
-// we do both in one pass here, instead of using Storage.removeDir
-bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
-  auto file = Storage.open(fullPath.c_str());
-  if (!file) {
-    LOG_ERR("FileBrowser", "Failed to open for metadata clearing: %s", fullPath.c_str());
-    return false;
-  }
-
-  if (!file.isDirectory()) {
-    file.close();
-    clearBookCache(fullPath);
-    return Storage.remove(fullPath.c_str());
-  }
-  file.close();
-
-  if (!fileNameBuffer) {
-    LOG_ERR("FileBrowser", "fileNameBuffer not allocated");
-    return false;
-  }
-
-  // Stack of (dirPath, postOrder): postOrder=true means rmdir this path after children are processed.
-  std::vector<std::pair<std::string, bool>> stack;
-  stack.reserve(16);
-  stack.push_back({fullPath, false});
-
-  while (!stack.empty()) {
-    auto [currentPath, postOrder] = std::move(stack.back());
-    stack.pop_back();
-
-    if (postOrder) {
-      if (!Storage.rmdir(currentPath.c_str())) {
-        LOG_ERR("FileBrowser", "Failed to rmdir: %s", currentPath.c_str());
-        return false;
-      }
-      continue;
-    }
-
-    auto dir = Storage.open(currentPath.c_str());
-    if (!dir) {
-      LOG_ERR("FileBrowser", "Failed to open dir: %s", currentPath.c_str());
-      return false;
-    }
-    if (!dir.isDirectory()) {
-      LOG_ERR("FileBrowser", "Not a directory: %s", currentPath.c_str());
-      return false;
-    }
-
-    // Push this dir for post-order rmdir (after all children are processed).
-    stack.push_back({currentPath, true});
-
-    dir.rewindDirectory();
-    for (auto entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
-      entry.getName(fileNameBuffer.get(), NAME_BUFFER_SIZE);
-      if (strcmp(fileNameBuffer.get(), ".") == 0 || strcmp(fileNameBuffer.get(), "..") == 0) {
-        continue;
-      }
-      std::string entryPath = currentPath;
-      if (entryPath.back() != '/') {
-        entryPath += "/";
-      }
-      entryPath += fileNameBuffer.get();
-
-      const bool isDir = entry.isDirectory();
-      entry.close();
-
-      if (isDir) {
-        stack.push_back({std::move(entryPath), false});
-      } else {
-        clearBookCache(entryPath);
-        if (!Storage.remove(entryPath.c_str())) {
-          LOG_ERR("FileBrowser", "Failed to remove file: %s", entryPath.c_str());
-          return false;
-        }
-      }
-    }
-  }
-
-  return true;
-}
-
 void FileBrowserActivity::activateIndex(const int index) {
   (void)index;  // base already synced nav.selected to the tapped row
   // Activation navigates or opens; a lingering flash would gray an unrelated
@@ -334,7 +257,7 @@ void FileBrowserActivity::activateSelected(const bool forceDelete) {
     auto handler = [this, fullPath](const ActivityResult& res) {
       if (!res.isCancelled) {
         LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
-        if (removeDirFile(fullPath)) {
+        if (deletePathRecursive(fullPath)) {
           LOG_DBG("FileBrowser", "Deleted successfully");
           {
             // buildScreen() reads the row caches on the render task; see loop().

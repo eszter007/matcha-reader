@@ -5,6 +5,7 @@
 #include <Logging.h>
 
 #include "util/BookCacheUtils.h"
+#include "util/DeleteUtils.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -418,16 +419,10 @@ void WebDAVHandler::handleDelete(WebServer& s) {
   }
 
   if (file.isDirectory()) {
-    // Check if directory is empty
-    HalFile entry = file.openNextFile();
-    if (entry) {
-      entry.close();
-      file.close();
-      s.send(409, "text/plain", "Directory not empty");
-      return;
-    }
+    // RFC 4918 §9.6.1: DELETE on a collection removes the whole tree. Refusing
+    // a non-empty one left clients unable to delete a folder at all.
     file.close();
-    if (Storage.rmdir(path.c_str())) {
+    if (deletePathRecursive(std::string(path.c_str()))) {
       s.send(204);
     } else {
       s.send(500, "text/plain", "Failed to remove directory");

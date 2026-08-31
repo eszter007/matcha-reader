@@ -28,6 +28,7 @@
 #include "html/SettingsPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
+#include "util/DeleteUtils.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -72,10 +73,13 @@ String normalizeWebPath(const String& inputPath) {
   return result;
 }
 
+// Only the filesystem's own bookkeeping is off-limits. A dot prefix is not a
+// protection marker: macOS strews `.Spotlight-V100`, `.Trashes` and `.fseventsd`
+// over the card, the listing already shows them when "Show hidden files" is on,
+// and treating every dot entry as protected is what made them undeletable.
+// Matches the on-device browser, which only ever special-cases
+// "System Volume Information".
 bool isProtectedItemName(const String& name) {
-  if (name.startsWith(".")) {
-    return true;
-  }
   for (const auto* item : HIDDEN_ITEMS) {
     if (name.equals(item)) {
       return true;
@@ -467,10 +471,10 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     file.getName(name, sizeof(name));
     auto fileName = String(name);
 
-    // Skip hidden items (starting with ".")
+    // Dot entries are a display preference and come back with "Show hidden
+    // files"; the filesystem's own bookkeeping folders stay out of the listing
+    // either way.
     bool shouldHide = !SETTINGS.showHiddenFiles && fileName.startsWith(".");
-
-    // Check against explicitly hidden items list
     if (!shouldHide) {
       for (const auto* item : HIDDEN_ITEMS) {
         if (fileName.equals(item)) {
@@ -1115,25 +1119,13 @@ void CrossPointWebServer::handleDelete() const {
       itemPath = "/" + itemPath;
     }
 
-    // Security check: prevent deletion of protected items
+    // Anything the listing shows can be deleted -- vetoing every dot entry is
+    // what stranded the folders macOS leaves behind (.Spotlight-V100,
+    // .Trashes). Only the filesystem's own bookkeeping is still refused, and it
+    // never lists in the first place; /delete is a public endpoint, so the
+    // check stays here rather than resting on the UI not offering it.
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-
-    // Hidden/system files are protected
-    if (itemName.startsWith(".")) {
-      failedItems += itemPath + " (hidden/system file); ";
-      allSuccess = false;
-      continue;
-    }
-
-    // Check against explicitly protected items
-    bool isProtected = false;
-    for (const auto* item : HIDDEN_ITEMS) {
-      if (itemName.equals(item)) {
-        isProtected = true;
-        break;
-      }
-    }
-    if (isProtected) {
+    if (isProtectedItemName(itemName)) {
       failedItems += itemPath + " (protected file); ";
       allSuccess = false;
       continue;
@@ -1146,27 +1138,9 @@ void CrossPointWebServer::handleDelete() const {
       continue;
     }
 
-    // Decide whether it's a directory or file by opening it
-    bool success = false;
-    HalFile f = Storage.open(itemPath.c_str());
-    if (f && f.isDirectory()) {
-      // For folders, ensure empty before removing
-      HalFile entry = f.openNextFile();
-      if (entry) {
-        entry.close();
-        f.close();
-        failedItems += itemPath + " (folder not empty); ";
-        allSuccess = false;
-        continue;
-      }
-      f.close();
-      success = Storage.rmdir(itemPath.c_str());
-    } else {
-      // It's a file (or couldn't open as dir) — remove file
-      if (f) f.close();
-      success = Storage.remove(itemPath.c_str());
-      clearBookCache(itemPath.c_str());
-    }
+    // Folders are removed with their contents, the same walk the on-device
+    // browser uses -- it clears each book's reading cache as it goes.
+    const bool success = deletePathRecursive(std::string(itemPath.c_str()));
 
     if (!success) {
       failedItems += itemPath + " (deletion failed); ";
