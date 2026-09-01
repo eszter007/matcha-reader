@@ -2593,7 +2593,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->blockStyleStack.pop_back();
       // Start a new text block with the parent style to prevent subsequent bare text
       // from inheriting the closed block style (e.g. alignment or margins).
-      self->startNewTextBlock(self->blockStyleStack.back());
+      // Vertical margins and paddings are stripped
+      self->startNewTextBlock(self->blockStyleStack.back().withoutTop().withoutBottom());
       // After startNewTextBlock: it flushes this element's own last block, which belongs on the
       // page it is already on. The break applies to whatever comes next.
       if (breakAfterElement) self->pendingForcedBreak = true;

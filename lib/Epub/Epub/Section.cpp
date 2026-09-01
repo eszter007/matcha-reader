@@ -202,7 +202,10 @@ namespace {
 // v81: upstream merge (their v41): simple HTML table rows are laid out as positioned columns
 //      instead of flattened paragraphs with synthetic row/cell labels, so any cached page
 //      holding a table has the wrong geometry.
-constexpr uint8_t SECTION_FILE_VERSION = 81;
+// v82: upstream merge (their v42): a text block restarted at a block element's close drops the
+//      parent style's top and bottom margins, so paragraph positions shift on any page whose
+//      blocks nest.
+constexpr uint8_t SECTION_FILE_VERSION = 82;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
