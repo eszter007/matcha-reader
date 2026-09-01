@@ -344,7 +344,12 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
   }
 
   uint16_t linkCount;
-  serialization::readPod(file, linkCount);
+  // readPod zeroes on a short read, so an unchecked result would turn a file truncated
+  // at this field into a valid page carrying no links at all.
+  if (!serialization::readPod(file, linkCount)) {
+    LOG_ERR("PGE", "Failed to read link count");
+    return nullptr;
+  }
   if (linkCount > MAX_LINKS_PER_PAGE) {
     LOG_ERR("PGE", "Invalid link count %u", linkCount);
     return nullptr;
