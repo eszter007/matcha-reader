@@ -7,6 +7,7 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include "Epub/FootnoteHrefIo.h"
 #include "Epub/RubyGlossary.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
@@ -205,7 +206,11 @@ namespace {
 // v82: upstream merge (their v42): a text block restarted at a block element's close drops the
 //      parent style's top and bottom margins, so paragraph positions shift on any page whose
 //      blocks nest.
-constexpr uint8_t SECTION_FILE_VERSION = 82;
+// v83: upstream merge (their v43 and v44): paragraph base direction no longer follows a
+//      direction change on an inline element, and each page now stores the internal-link
+//      rectangles touch navigation taps. The first moves RTL lines, the second extends the
+//      serialized page body, so older caches neither match nor parse.
+constexpr uint8_t SECTION_FILE_VERSION = 83;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

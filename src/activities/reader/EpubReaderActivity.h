@@ -1,6 +1,7 @@
 #pragma once
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
+#include <Epub/PageLink.h>
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
 
@@ -204,6 +205,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // Flattened entries handed to the footnote panel (must outlive the activity, which keeps a
   // reference); rebuilt on each open.
   std::vector<FootnoteEntry> footnotePanelEntries;
+  std::vector<PageLink> currentPageLinks;
+  int currentPageLinkMarginLeft = 0;
+  int currentPageLinkMarginTop = 0;
   struct SavedPosition {
     int spineIndex;
     int pageNumber;

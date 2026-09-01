@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <new>
 
+#include "FootnoteHrefIo.h"
 #include "css/CssStyle.h"
 
 namespace {
@@ -258,6 +259,20 @@ bool Page::serialize(HalFile& file) const {
     }
   }
 
+  const uint16_t linkCount = std::min<uint16_t>(links.size(), MAX_LINKS_PER_PAGE);
+  serialization::writePod(file, linkCount);
+  for (uint16_t i = 0; i < linkCount; i++) {
+    const auto& link = links[i];
+    if (file.write(link.href, sizeof(link.href)) != sizeof(link.href)) {
+      LOG_ERR("PGE", "Failed to write link %u", i);
+      return false;
+    }
+    serialization::writePod(file, link.x);
+    serialization::writePod(file, link.y);
+    serialization::writePod(file, link.width);
+    serialization::writePod(file, link.height);
+  }
+
   return true;
 }
 
@@ -326,6 +341,35 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
       return nullptr;
     }
     entry.number[sizeof(entry.number) - 1] = '\0';
+  }
+
+  uint16_t linkCount;
+  // readPod zeroes on a short read, so an unchecked result would turn a file truncated
+  // at this field into a valid page carrying no links at all.
+  if (!serialization::readPod(file, linkCount)) {
+    LOG_ERR("PGE", "Failed to read link count");
+    return nullptr;
+  }
+  if (linkCount > MAX_LINKS_PER_PAGE) {
+    LOG_ERR("PGE", "Invalid link count %u", linkCount);
+    return nullptr;
+  }
+  page->links.resize(linkCount);
+  for (uint16_t i = 0; i < linkCount; i++) {
+    auto& link = page->links[i];
+    if (file.read(link.href, sizeof(link.href)) != sizeof(link.href)) {
+      LOG_ERR("PGE", "Failed to read link %u", i);
+      return nullptr;
+    }
+    link.href[sizeof(link.href) - 1] = '\0';
+    serialization::readPod(file, link.x);
+    serialization::readPod(file, link.y);
+    serialization::readPod(file, link.width);
+    serialization::readPod(file, link.height);
+    if (link.href[0] == '\0' || link.width <= 0 || link.height <= 0) {
+      LOG_ERR("PGE", "Invalid link geometry %u", i);
+      return nullptr;
+    }
   }
 
   return page;

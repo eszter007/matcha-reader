@@ -34,8 +34,8 @@
 #include <builtinFonts/notosans_18_italic.h>
 #include <builtinFonts/notosans_18_regular.h>
 #include <builtinFonts/ubuntu_10_bold.h>
-#include <builtinFonts/ubuntu_10_medium.h>
+#include <builtinFonts/ubuntu_10_regular.h>
 #include <builtinFonts/ubuntu_12_bold.h>
-#include <builtinFonts/ubuntu_12_medium.h>
+#include <builtinFonts/ubuntu_12_regular.h>
 #include <builtinFonts/notosansjp_joyo_8_regular.h>
 #include <builtinFonts/notosansjp_joyo_12_regular.h>

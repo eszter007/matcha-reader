@@ -73,6 +73,7 @@ class DictionaryWordSelectActivity final : public Activity {
   int selected = 0;
   uint16_t rowCount = 0;
   bool confirmPressSeen = false;
+  unsigned long lastHorizontalMoveTime = 0;
 
   Dictionary dict;
   bool dictOpenAttempted = false;
