@@ -78,6 +78,13 @@ void DictionaryDefinitionActivity::onEnter() {
   requestUpdate();
 }
 
+void DictionaryDefinitionActivity::onExit() {
+  Activity::onExit();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+  }
+}
+
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
   const auto body = DictionaryPanel::compute(renderer).body;
   return {body.width, body.height};

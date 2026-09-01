@@ -63,11 +63,11 @@
 #include "util/ScreenshotUtil.h"
 
 namespace {
-// The X4 Pro carries the X4's panel but sits outside isXteinkDevice() (that
-// helper also gates power management). Overlay refresh choices are per-panel:
+// The X4 Pro and X4 Classic carry the X4's panel but sit outside isXteinkDevice()
+// (that helper also gates power management). Overlay refresh choices are per-panel:
 // this family runs the grayscale anti-aliasing pass, so chrome painted over a
 // fresh page needs the HALF ghost-cleanup and closing re-renders the page.
-bool xteinkClassPanel() { return gpio.isXteinkDevice() || BoardConfig::isX4Pro(); }
+bool xteinkClassPanel() { return gpio.isXteinkDevice() || BoardConfig::isX4Pro() || BoardConfig::isX4Classic(); }
 
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 // pages per minute, first item is 1 to prevent division by zero if accessed
@@ -675,6 +675,35 @@ void EpubReaderActivity::readerLoop() {
 
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
 
+  if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
+    showBookmarkMessage = false;
+    requestUpdate();
+  }
+
+  if (showDictionaryMessage && (millis() - dictionaryMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
+    showDictionaryMessage = false;
+    requestUpdate();
+  }
+
+  // The toolbar reader menu owns all input while shown, ahead of the automatic page turn
+  // below: the More panel's rate popup switches automatic turning on and leaves the panel
+  // open, so the timer must neither flip the page under it nor eat the panel's next
+  // Confirm/Back release.
+  if (overlay != Overlay::None) {
+    if (usesToolbarMenu()) {
+      // Hold the interval at zero elapsed so closing the panel starts a fresh one.
+      lastPageTurnTime = millis();
+      handleOverlayInput();
+      return;
+    }
+    // The style was switched off while an overlay was up (Settings reached via
+    // the More panel); fall back to the clean page.
+    overlay = Overlay::None;
+    discardOverlayPage();
+    requestUpdate();
+    return;
+  }
+
   if (automaticPageTurnActive) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
         mappedInput.wasReleased(MappedInputManager::Button::Back) ||
@@ -702,33 +731,21 @@ void EpubReaderActivity::readerLoop() {
     }
   }
 
-  if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
-    showBookmarkMessage = false;
-    requestUpdate();
-  }
-
-  if (showDictionaryMessage && (millis() - dictionaryMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
-    showDictionaryMessage = false;
-    requestUpdate();
-  }
-
-  // The toolbar reader menu owns all input while shown.
-  if (overlay != Overlay::None) {
-    if (usesToolbarMenu()) {
-      handleOverlayInput();
-      return;
-    }
-    // The style was switched off while an overlay was up (Settings reached via
-    // the More panel); fall back to the clean page.
-    overlay = Overlay::None;
-    discardOverlayPage();
-    requestUpdate();
+  // While the end-of-book suggestion menu is up it owns Confirm/Back/navigation, so it
+  // gets this tick's input first and the long-press shortcuts below stay inert behind it
+  // -- a hold there must not drop a bookmark onto the suggestion screen or paint the
+  // dictionary word picker over it. Anything the menu does not handle (long-press Back to
+  // the file browser, say) still falls through to the regular handlers.
+  if (handleEndOfBookMenu()) {
     return;
   }
+  const bool endOfBookMenuOpen = endOfBookMenuActive();
 
   const unsigned long confirmHoldMs = confirmLongPressThreshold();
-  const bool confirmLongPressed =
-      confirmHoldMs != 0 && mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, confirmHoldMs);
+  // wasLongPressed() suppresses the release that follows it, so leave it unpolled while
+  // the end-of-book menu owns Confirm -- otherwise the menu never sees that release.
+  const bool confirmLongPressed = !endOfBookMenuOpen && confirmHoldMs != 0 &&
+                                  mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, confirmHoldMs);
   const bool confirmReleased = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
   if (confirmLongPressed) {
     switch (SETTINGS.longPressMenuFunction) {
@@ -756,7 +773,7 @@ void EpubReaderActivity::readerLoop() {
   // Home-key boards have no front Confirm button, so a Home-key hold runs the
   // same user-selected long-press action. The SDK emits this event once per
   // hold and suppresses the short Home tap for the same contact.
-  if (mappedInput.wasHomeKeyHold()) {
+  if (mappedInput.wasHomeKeyHold() && !endOfBookMenuOpen) {
     switch (SETTINGS.longPressMenuFunction) {
       case CrossPointSettings::LP_MENU_BOOKMARK:
         if (!showBookmarkMessage) {
@@ -788,10 +805,6 @@ void EpubReaderActivity::readerLoop() {
       default:
         break;
     }
-  }
-
-  if (handleEndOfBookMenu()) {
-    return;
   }
 
   if (confirmReleased || ReaderUtils::isTouchMenuGesture(renderer, mappedInput)) {
@@ -2682,6 +2695,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               currentPageFootnotes[0].number);
     }
 
+    // The overlay and non-tiled grayscale renderer share the renderer's single
+    // stored-BW slot. Release the old page snapshot before renderContents()
+    // needs that slot, then snapshot the newly rendered page below.
+    discardOverlayPage();
+
     const auto start = millis();
     const uint32_t currentKey =
         (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
@@ -2717,15 +2735,16 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (overlay != Overlay::None && usesToolbarMenu()) {
     // The page just re-rendered under the overlay: refresh the snapshot that
     // backs panel->toolbar restores (any previous copy is stale).
-    discardOverlayPage();
     overlayPageStored = renderer.storeBwBuffer();
     renderOverlay();
     // An open option picker rides on top of the freshly drawn panel.
     if (overlayPopup.isActive()) overlayPopup.render(renderer);
-    // HALF on the Xteink grayscale panels: the page render above just ran the
-    // anti-aliasing waveform, and a FAST differential leaves the covered text
-    // ghosting gray through the chrome background (see openOverlay).
-    renderer.displayBuffer(xteinkClassPanel() ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+    // FAST, same as openOverlay: HALF's inverting pass flashes the sheet
+    // (white, in night mode) on every repaint under an open panel. Any AA
+    // residue a FAST differential leaves under the chrome has not shown in
+    // practice; restore a HALF cleanup here if text ever visibly ghosts
+    // through the sheet (see #2190 for the mechanism).
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   }
 }
 
@@ -4082,7 +4101,9 @@ static_assert(std::size(kAlignIds) == CrossPointSettings::PARAGRAPH_ALIGNMENT_CO
 }  // namespace
 
 bool EpubReaderActivity::usesToolbarMenu() const {
-  return SETTINGS.readerMenuStyle == CrossPointSettings::READER_MENU_TOOLBAR;
+  // Touch-first chrome: button boards always get the classic list menu, even
+  // if a settings file (e.g. an SD card moved from a touch board) says Toolbar.
+  return mappedInput.hasTouch() && SETTINGS.readerMenuStyle == CrossPointSettings::READER_MENU_TOOLBAR;
 }
 
 std::string EpubReaderActivity::currentChapterTitle() const {
