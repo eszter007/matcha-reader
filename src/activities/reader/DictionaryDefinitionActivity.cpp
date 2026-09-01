@@ -81,7 +81,7 @@ void DictionaryDefinitionActivity::onEnter() {
 void DictionaryDefinitionActivity::onExit() {
   Activity::onExit();
   if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseSdFontCaches();
+    fcm->releaseAllFontMemory();
   }
 }
 
