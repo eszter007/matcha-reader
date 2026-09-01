@@ -90,11 +90,17 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 81 (fork numbering)
+### Version 83 (fork numbering)
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 83 merges upstream's v43 and v44 changes into the fork's format:
+paragraph base direction no longer follows a direction change on an inline
+element, and each serialized page now carries the internal-link rectangles the
+reader uses for touch navigation. Older caches neither match the new line
+positions nor parse the extended page body.
 
 Version 81 merges upstream's v41 change into the fork's format: simple HTML
 table rows are laid out as positioned columns rather than flattened paragraphs
@@ -111,6 +117,7 @@ Version 75 is binary-identical to version 74. The version was bumped because a
 the base text size, and the reader's own font already *is* that base (every
 declaration resolves against it), so applying it sized whole books away from the
 user's setting. Pages cached by v74 hold the publisher-sized layout.
+
 Version 41 keeps the version 40 serialized layout unchanged. It was bumped
 because simple HTML table rows are now laid out as positioned columns rather
 than flattened paragraphs with synthetic row/cell labels.

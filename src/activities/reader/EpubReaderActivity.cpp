@@ -807,6 +807,20 @@ void EpubReaderActivity::readerLoop() {
     }
   }
 
+  // Link taps take priority over the reader-menu and page-turn zones.
+  if (!atEndOfBook && !currentPageLinks.empty() && SETTINGS.touchReaderControls && mappedInput.hasTouch()) {
+    int touchX = 0;
+    int touchY = 0;
+    if (mappedInput.wasScreenTapped(touchX, touchY)) {
+      const auto* link = EpubReaderUtils::linkAtPoint(currentPageLinks, touchX, touchY, currentPageLinkMarginLeft,
+                                                      currentPageLinkMarginTop);
+      if (link) {
+        navigateToHref(link->href, true);
+        return;
+      }
+    }
+  }
+
   if (confirmReleased || ReaderUtils::isTouchMenuGesture(renderer, mappedInput)) {
     if (ignoreNextConfirmRelease) {
       // Entered the reader with Confirm still held (opened from the file browser); the
@@ -1736,6 +1750,9 @@ void EpubReaderActivity::onReturnFromEndOfBook() {
 
 // TODO: Failure handling
 void EpubReaderActivity::render(RenderLock&& lock) {
+  // Cleared before the epub guard: a page without links must not leave the previous
+  // page's rectangles tappable.
+  currentPageLinks.clear();
   if (!epub) {
     return;
   }
@@ -2694,6 +2711,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Page footnotes: %u (first '%s')", static_cast<unsigned>(currentPageFootnotes.size()),
               currentPageFootnotes[0].number);
     }
+    currentPageLinks = std::move(p->links);
+    currentPageLinkMarginLeft = orientedMarginLeft;
+    currentPageLinkMarginTop = orientedMarginTop;
 
     // The overlay and non-tiled grayscale renderer share the renderer's single
     // stored-BW slot. Release the old page snapshot before renderContents()
