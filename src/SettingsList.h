@@ -105,7 +105,8 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
 inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
   // Captured by copy: getSettingsList() returns by value and the lambdas outlive
   // this call, so they must not reference the registry.
-  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName);
+  const std::vector<uint8_t> sizes = readerFontPointSizes(
+      registry, SETTINGS.sdFontFamilyName, SdCardFontSystem::builtinJpCompanion(registry, SETTINGS.fontFamily));
 
   // "pt" is deliberately not translated — see the matching note in
   // TextSettingsActivity::rebuildSizeList().

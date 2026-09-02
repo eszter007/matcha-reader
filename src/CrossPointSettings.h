@@ -382,10 +382,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   int getBuiltinReaderFontId() const;
   int getRubyFontId() const;
 
-  // Drop the SD font selection and fall back to the built-in family. The reader
-  // point size comes back into BUILTIN_READER_POINT_SIZES with it, since that is
-  // the only set a built-in family ships — otherwise the settings UI would keep
-  // offering a size nothing renders at. Both fields are persisted in one write.
+  // Drop the SD font selection and fall back to the built-in family, persisting the change.
+  // The reader point size is deliberately left alone: which sizes a built-in row offers depends
+  // on the JP companion installed on the card, which only SdCardFontSystem can see. It snaps the
+  // size into that set on the next ensureLoaded(); until then getBuiltinReaderFontId() renders at
+  // the nearest built-in size, so nothing draws at a size no face exists at.
   void clearSdFontFamily();
 
   // Resolved status-bar composition. Consumers read the spec; only settings

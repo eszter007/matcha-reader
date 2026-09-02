@@ -156,10 +156,12 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
     if (!currentFamily.empty()) {
       manager_.unloadAll(renderer);
     }
-    // Back on a built-in family, which exists only at BUILTIN_READER_POINT_SIZES:
-    // a size inherited from an SD family has to come back into that set.
-    snapFontPointSizeTo(snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES),
-                                               SETTINGS.fontPointSize));
+    // Back on a built-in family: a size inherited from an SD family has to come back into the
+    // set that row offers. That set is BUILTIN_READER_POINT_SIZES widened by the JP companion's
+    // sizes, not the built-in set alone -- snapping to the latter would undo, on every reload, a
+    // companion-only size the picker legitimately offers.
+    snapFontPointSizeTo(
+        snapToBuiltinPointSize(builtinJpCompanion(&registry_, SETTINGS.fontFamily), SETTINGS.fontPointSize));
     return;
   }
 
@@ -299,6 +301,18 @@ int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*
 bool SdCardFontSystem::isBuiltinJpExtension(const std::string& familyName) {
   const std::string key = normalizedFamilyKey(familyName);
   return key == "notosansjp" || key == "notoserifjp";
+}
+
+const SdCardFontFamilyInfo* SdCardFontSystem::builtinJpCompanion(const SdCardFontRegistry* registry,
+                                                                 const uint8_t fontFamily) {
+  if (!registry) return nullptr;
+  // Matched on the normalized key, like every other family comparison here, so a folder named
+  // "noto sans jp" or "NotoSansJP" is the same companion.
+  const char* wanted = fontFamily == CrossPointSettings::NOTOSANS ? "notosansjp" : "notoserifjp";
+  for (const auto& fam : registry->getFamilies()) {
+    if (normalizedFamilyKey(fam.name) == wanted) return &fam;
+  }
+  return nullptr;
 }
 
 std::string SdCardFontSystem::coverageVariantBase(const std::string& familyName) {

@@ -55,6 +55,12 @@ class SdCardFontSystem {
   /// fallback instead of being selected directly.
   static bool isBuiltinJpExtension(const std::string& familyName);
 
+  /// The JP extension installed for a built-in reader family (NotoSansJP for Noto Sans,
+  /// NotoSerifJP for Noto Serif), or nullptr when the card carries neither. `fontFamily` is a
+  /// CrossPointSettings built-in index. Static and registry-driven so the settings UI can ask
+  /// which sizes a built-in row offers without owning a font system.
+  static const SdCardFontFamilyInfo* builtinJpCompanion(const SdCardFontRegistry* registry, uint8_t fontFamily);
+
   /// True for SD families that only widen the coverage of a family the device already offers
   /// (NotoSerifExtended over the built-in Noto Serif, PagellaIPA over an installed Pagella).
   /// The picker shows the base alone and resolveSelectedFamily() decides which of the two is

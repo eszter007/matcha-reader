@@ -135,7 +135,9 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dictionaries/jp/    # add --name names / --name grammar for the others
 ```
 
-**3. Install a Japanese font** (optional). The built-in Noto handles Japanese, but a dedicated font looks better. Convert any TTF or OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/regular.cpfont`. An SD card Japanese font also fills in rare kanji elsewhere, such as dictionary entries and book titles.
+**3. Install a Japanese font** (optional). The built-in Noto handles Japanese, but a dedicated font looks better. Convert any TTF or OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/<Family>_<size>.cpfont` — one file per point size, and the size in the filename is the size offered in Text Settings. An SD card Japanese font also fills in rare kanji elsewhere, such as dictionary entries and book titles.
+
+Name the folder `NotoSansJP` or `NotoSerifJP` and it pairs with the matching built-in font instead of appearing as its own entry. Its sizes are then offered under **Noto Sans** / **Noto Serif** alongside the built-in 12, 14, 16 and 18 pt, so a Japanese book can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears. A non-Japanese book renders at the nearest built-in size instead, since the built-in faces only exist at those four.
 
 **4. Set up translation** (optional). Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and save it as `/system/gemini.key` on the card.
 
