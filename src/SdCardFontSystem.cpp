@@ -322,14 +322,17 @@ uint8_t SdCardFontSystem::readerStandInFamilies(const SdCardFontRegistry* regist
   const std::string base = builtinRow ? builtinFamilyDirName(fontFamily) : sdFamilyName;
   if (const auto* variant = findCoverageVariant(registry, base)) out[count++] = variant;
 
-  // The JP companion renders a Japanese book whole whenever the row's own face has no CJK,
-  // which is every built-in row and every Latin-only SD family. Matched on the normalized key,
-  // like every other family comparison here, so a folder named "noto sans jp" also pairs.
-  if (count < cap) {
-    // Same first choice ensureJpFallback() ranks highest, so the size offered is the size that
-    // will actually load: the sans extension only for a built-in Noto Sans row.
-    const bool preferSans = builtinRow && fontFamily == CrossPointSettings::NOTOSANS;
-    const char* wanted = preferSans ? "notosansjp" : "notoserifjp";
+  // Built-in rows only. ensureJpFallback() loads the companion for a Japanese book just when the
+  // row's own face lacks CJK, which is true of the built-ins by definition (selectedFontCovers
+  // treats them as Latin-complete and CJK-less) but unknowable here for an SD family: coverage
+  // lives in its .cpfont interval table and is only readable once resident. An SD row would
+  // otherwise offer sizes that a self-sufficient CJK family never renders at.
+  //
+  // Matched on the normalized key, like every other family comparison here, so a folder named
+  // "noto sans jp" also pairs, and on the extension ensureJpFallback() ranks first, so the size
+  // offered is the size that loads.
+  if (builtinRow && count < cap) {
+    const char* wanted = fontFamily == CrossPointSettings::NOTOSANS ? "notosansjp" : "notoserifjp";
     for (const auto& fam : registry->getFamilies()) {
       if (normalizedFamilyKey(fam.name) == wanted) {
         out[count++] = &fam;

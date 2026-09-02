@@ -57,9 +57,9 @@ class SdCardFontSystem {
 
   /// Families hidden from the picker that can nonetheless end up rendering the row named by
   /// `sdFamilyName` (empty for the built-in family `fontFamily`): the coverage variant that
-  /// stands in for it (resolveSelectedFamily) and the JP companion that carries a Japanese book
-  /// (ensureJpFallback + EpubReaderActivity::effectiveReaderFontId). Their installed sizes are
-  /// therefore selectable on that row -- see readerFontPointSizes().
+  /// stands in for it (resolveSelectedFamily), and on a built-in row the JP companion that
+  /// carries a Japanese book (ensureJpFallback + EpubReaderActivity::effectiveReaderFontId).
+  /// Their installed sizes are therefore selectable on that row -- see readerFontPointSizes().
   ///
   /// Writes up to `cap` entries into `out` and returns how many. Static and registry-driven so
   /// the settings UI can ask without owning a font system.
