@@ -165,7 +165,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
             ESP.getMaxAllocHeap());
     // ArduinoJson reports an exhausted heap as NoMemory rather than aborting, so
     // name it: "invalid manifest" would send the user hunting a server-side fault.
-    errorMessage_ = err == DeserializationError::NoMemory ? tr(STR_LOW_MEMORY_RETRY) : "Invalid font manifest";
+    errorMessage_ = err == DeserializationError::NoMemory ? tr(STR_LOW_MEMORY_RETRY) : tr(STR_INVALID_FONT_MANIFEST);
     return false;
   }
 
@@ -206,7 +206,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     const char* label = groupObj["label"] | "";
     if (*tag == '\0' || *label == '\0') {
       LOG_ERR("FONT", "Malformed script group at index %zu", groupIndex);
-      errorMessage_ = "Invalid font manifest";
+      errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
       return false;
     }
     scriptGroupLabels_.push_back(label);
@@ -246,7 +246,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
 
       if (!fileObj["crc32"].is<uint32_t>()) {
         LOG_ERR("FONT", "Malformed manifest file entry: missing or invalid crc32 for %s", file.name.c_str());
-        errorMessage_ = "Invalid font manifest";
+        errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
         return false;
       }
       file.crc32 = fileObj["crc32"].as<uint32_t>();
