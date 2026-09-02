@@ -1,5 +1,6 @@
 #include "FontDownloadActivity.h"
 
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -21,6 +22,17 @@
 #include "network/HttpDownloader.h"
 
 namespace fui = freeink::ui;
+
+namespace {
+// Entry gate for the families_ build, sized against the published manifest:
+// 21 families / 84 files in ~17KB of JSON, whose parsed document stays live
+// while families_ and its per-family strings and vectors are allocated beside
+// it. That peaks around 40KB, so require a little over it, plus a contiguous
+// block for the one big allocation (families_.reserve). Same shape and the same
+// reasoning as the styled-definition gate in DictHtmlPages.cpp.
+constexpr size_t MANIFEST_BUILD_MIN_FREE_HEAP = 48 * 1024;
+constexpr size_t MANIFEST_BUILD_MIN_MAX_ALLOC = 12 * 1024;
+}  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : UiListActivity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
@@ -149,8 +161,11 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   Storage.remove(MANIFEST_TMP);
 
   if (err) {
-    LOG_ERR("FONT", "Manifest parse error: %s", err.c_str());
-    errorMessage_ = "Invalid font manifest";
+    LOG_ERR("FONT", "Manifest parse error: %s (%u free, %u max block)", err.c_str(), ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
+    // ArduinoJson reports an exhausted heap as NoMemory rather than aborting, so
+    // name it: "invalid manifest" would send the user hunting a server-side fault.
+    errorMessage_ = err == DeserializationError::NoMemory ? tr(STR_LOW_MEMORY_RETRY) : tr(STR_INVALID_FONT_MANIFEST);
     return false;
   }
 
@@ -158,6 +173,18 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   if (version != FONTS_MANIFEST_VERSION) {
     LOG_ERR("FONT", "Unsupported manifest version: %d", version);
     errorMessage_ = "Unsupported manifest version";
+    return false;
+  }
+
+  // Everything below builds std::string/std::vector members while the parsed
+  // document stays live -- the heap peak of the whole screen, reached on a heap
+  // the TLS teardown just fragmented. Those allocations go through the throwing
+  // operator new, which under -fno-exceptions calls abort() instead of returning
+  // null, so exhausting the heap here panics to the boot screen instead of
+  // reporting a failure. Refuse up front, while refusing is still possible.
+  if (ESP.getFreeHeap() < MANIFEST_BUILD_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < MANIFEST_BUILD_MIN_MAX_ALLOC) {
+    LOG_ERR("FONT", "Low heap for manifest (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
     return false;
   }
 
@@ -179,7 +206,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     const char* label = groupObj["label"] | "";
     if (*tag == '\0' || *label == '\0') {
       LOG_ERR("FONT", "Malformed script group at index %zu", groupIndex);
-      errorMessage_ = "Invalid font manifest";
+      errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
       return false;
     }
     scriptGroupLabels_.push_back(label);
@@ -219,7 +246,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
 
       if (!fileObj["crc32"].is<uint32_t>()) {
         LOG_ERR("FONT", "Malformed manifest file entry: missing or invalid crc32 for %s", file.name.c_str());
-        errorMessage_ = "Invalid font manifest";
+        errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
         return false;
       }
       file.crc32 = fileObj["crc32"].as<uint32_t>();
