@@ -4,40 +4,34 @@
 #include <iterator>
 
 std::vector<uint8_t> readerFontPointSizes(const SdCardFontRegistry* registry, const char* sdFamilyName,
-                                          const SdCardFontFamilyInfo* companion) {
-  if (registry && sdFamilyName && sdFamilyName[0] != '\0') {
-    if (const auto* family = registry->findFamily(sdFamilyName)) {
-      auto sizes = family->availableSizes();
-      if (!sizes.empty()) return sizes;
-    }
+                                          const SdCardFontFamilyInfo* const* standIns, const size_t standInCount) {
+  std::vector<uint8_t> sizes;
+  size_t extra = 0;
+  for (size_t i = 0; i < standInCount; i++) {
+    if (standIns[i]) extra += standIns[i]->files.size();
   }
 
-  std::vector<uint8_t> sizes;
-  sizes.reserve(std::size(BUILTIN_READER_POINT_SIZES) + (companion ? companion->files.size() : 0));
-  sizes.assign(std::begin(BUILTIN_READER_POINT_SIZES), std::end(BUILTIN_READER_POINT_SIZES));
-  if (!companion) return sizes;
+  const SdCardFontFamilyInfo* own = nullptr;
+  if (registry && sdFamilyName && sdFamilyName[0] != '\0') own = registry->findFamily(sdFamilyName);
+  if (own && !own->files.empty()) {
+    // Copied element-wise, not move-assigned: assigning the temporary would swap in its buffer
+    // and throw away the reservation the stand-in loop below depends on.
+    const std::vector<uint8_t> ownSizes = own->availableSizes();
+    sizes.reserve(ownSizes.size() + extra);
+    sizes.assign(ownSizes.begin(), ownSizes.end());
+  } else {
+    sizes.reserve(std::size(BUILTIN_READER_POINT_SIZES) + extra);
+    sizes.assign(std::begin(BUILTIN_READER_POINT_SIZES), std::end(BUILTIN_READER_POINT_SIZES));
+  }
 
-  for (const auto& file : companion->files) {
-    if (std::find(sizes.begin(), sizes.end(), file.pointSize) == sizes.end()) sizes.push_back(file.pointSize);
+  for (size_t i = 0; i < standInCount; i++) {
+    if (!standIns[i]) continue;
+    for (const auto& file : standIns[i]->files) {
+      if (std::find(sizes.begin(), sizes.end(), file.pointSize) == sizes.end()) sizes.push_back(file.pointSize);
+    }
   }
   std::sort(sizes.begin(), sizes.end());
   return sizes;
-}
-
-uint8_t snapToBuiltinPointSize(const SdCardFontFamilyInfo* companion, const uint8_t pt) {
-  uint8_t best = snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), pt);
-  if (!companion) return best;
-
-  uint8_t bestDelta = best > pt ? best - pt : pt - best;
-  for (const auto& file : companion->files) {
-    const uint8_t delta = file.pointSize > pt ? file.pointSize - pt : pt - file.pointSize;
-    // Ties resolve to the smaller size, matching snapToNearestPointSize().
-    if (delta < bestDelta || (delta == bestDelta && file.pointSize < best)) {
-      best = file.pointSize;
-      bestDelta = delta;
-    }
-  }
-  return best;
 }
 
 uint8_t snapToNearestPointSize(const uint8_t* sizes, const size_t count, const uint8_t pt) {

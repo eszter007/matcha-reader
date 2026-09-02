@@ -157,11 +157,9 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
       manager_.unloadAll(renderer);
     }
     // Back on a built-in family: a size inherited from an SD family has to come back into the
-    // set that row offers. That set is BUILTIN_READER_POINT_SIZES widened by the JP companion's
-    // sizes, not the built-in set alone -- snapping to the latter would undo, on every reload, a
-    // companion-only size the picker legitimately offers.
-    snapFontPointSizeTo(
-        snapToBuiltinPointSize(builtinJpCompanion(&registry_, SETTINGS.fontFamily), SETTINGS.fontPointSize));
+    // set that row offers -- BUILTIN_READER_POINT_SIZES widened by its stand-ins, not the
+    // built-in set alone, which would undo a stand-in size the picker legitimately offers.
+    snapFontPointSizeTo(snapToNearestPointSize(rowPointSizes(), SETTINGS.fontPointSize));
     return;
   }
 
@@ -181,8 +179,14 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
     const auto* selected = family->findNearestSize(SETTINGS.fontPointSize);
     const uint8_t wantedPt = selected ? selected->pointSize : 0;
     // Snap before the early return: the wanted size can already be loaded while
-    // the setting still names a size this family does not ship.
-    snapFontPointSizeTo(wantedPt);
+    // the setting still names a size this family does not ship. Only persist it when the ROW
+    // does not offer the size either -- `family` may be a stand-in that happens to lack a size
+    // another family for this row can render, and writing its nearest down would silently
+    // demote the user's choice the first time a book pulled the stand-in in.
+    const auto rowSizes = rowPointSizes();
+    if (std::find(rowSizes.begin(), rowSizes.end(), SETTINGS.fontPointSize) == rowSizes.end()) {
+      snapFontPointSizeTo(wantedPt);
+    }
     if (!registryWasDirty && wantedPt == manager_.currentPointSize()) return;
     LOG_DBG("SDFS", "Reloading %s: size %u -> %u%s", wantedFamily.c_str(), manager_.currentPointSize(), wantedPt,
             registryWasDirty ? " [registry dirty]" : "");
@@ -207,7 +211,12 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
   const auto* family = registry_.findFamily(wantedFamily);
   if (family) {
     if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {
-      snapFontPointSizeTo(manager_.currentPointSize());
+      // Persisted only when the row cannot offer the setting at all — see the matching guard on
+      // the already-resident path above.
+      const auto rowSizes = rowPointSizes();
+      if (std::find(rowSizes.begin(), rowSizes.end(), SETTINGS.fontPointSize) == rowSizes.end()) {
+        snapFontPointSizeTo(manager_.currentPointSize());
+      }
       setupUiFallbacks(renderer);
       LOG_DBG("SDFS", "Loaded SD font family: %s", wantedFamily.c_str());
     } else {
@@ -303,16 +312,32 @@ bool SdCardFontSystem::isBuiltinJpExtension(const std::string& familyName) {
   return key == "notosansjp" || key == "notoserifjp";
 }
 
-const SdCardFontFamilyInfo* SdCardFontSystem::builtinJpCompanion(const SdCardFontRegistry* registry,
-                                                                 const uint8_t fontFamily) {
-  if (!registry) return nullptr;
-  // Matched on the normalized key, like every other family comparison here, so a folder named
-  // "noto sans jp" or "NotoSansJP" is the same companion.
-  const char* wanted = fontFamily == CrossPointSettings::NOTOSANS ? "notosansjp" : "notoserifjp";
-  for (const auto& fam : registry->getFamilies()) {
-    if (normalizedFamilyKey(fam.name) == wanted) return &fam;
+uint8_t SdCardFontSystem::readerStandInFamilies(const SdCardFontRegistry* registry, const char* sdFamilyName,
+                                                const uint8_t fontFamily, const SdCardFontFamilyInfo** out,
+                                                const uint8_t cap) {
+  if (!registry || !out || cap == 0) return 0;
+  uint8_t count = 0;
+
+  const bool builtinRow = sdFamilyName == nullptr || sdFamilyName[0] == '\0';
+  const std::string base = builtinRow ? builtinFamilyDirName(fontFamily) : sdFamilyName;
+  if (const auto* variant = findCoverageVariant(registry, base)) out[count++] = variant;
+
+  // The JP companion renders a Japanese book whole whenever the row's own face has no CJK,
+  // which is every built-in row and every Latin-only SD family. Matched on the normalized key,
+  // like every other family comparison here, so a folder named "noto sans jp" also pairs.
+  if (count < cap) {
+    // Same first choice ensureJpFallback() ranks highest, so the size offered is the size that
+    // will actually load: the sans extension only for a built-in Noto Sans row.
+    const bool preferSans = builtinRow && fontFamily == CrossPointSettings::NOTOSANS;
+    const char* wanted = preferSans ? "notosansjp" : "notoserifjp";
+    for (const auto& fam : registry->getFamilies()) {
+      if (normalizedFamilyKey(fam.name) == wanted) {
+        out[count++] = &fam;
+        break;
+      }
+    }
   }
-  return nullptr;
+  return count;
 }
 
 std::string SdCardFontSystem::coverageVariantBase(const std::string& familyName) {
@@ -328,12 +353,14 @@ std::string SdCardFontSystem::coverageVariantBase(const std::string& familyName)
   return {};
 }
 
-const SdCardFontFamilyInfo* SdCardFontSystem::findCoverageVariant(const std::string& baseName) const {
+const SdCardFontFamilyInfo* SdCardFontSystem::findCoverageVariant(const SdCardFontRegistry* registry,
+                                                                  const std::string& baseName) {
+  if (!registry) return nullptr;
   const std::string baseKey = normalizedFamilyKey(baseName);
   if (baseKey.empty()) return nullptr;
   for (const char* suffix : kCoverageVariantSuffixes) {
     const std::string wanted = baseKey + normalizedFamilyKey(suffix);
-    for (const auto& fam : registry_.getFamilies()) {
+    for (const auto& fam : registry->getFamilies()) {
       if (normalizedFamilyKey(fam.name) == wanted) return &fam;
     }
   }
@@ -353,6 +380,13 @@ bool SdCardFontSystem::isCoverageVariant(const std::string& familyName, const Sd
   return false;
 }
 
+std::vector<uint8_t> SdCardFontSystem::rowPointSizes() const {
+  const SdCardFontFamilyInfo* standIns[MAX_STAND_INS];
+  const uint8_t count =
+      readerStandInFamilies(&registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, MAX_STAND_INS);
+  return readerFontPointSizes(&registry_, SETTINGS.sdFontFamilyName, standIns, count);
+}
+
 std::string SdCardFontSystem::resolveSelectedFamily() const {
   const std::string selected = SETTINGS.sdFontFamilyName;
   // A book that needs Japanese keeps the base as-is. The companion ensureJpFallback() is about
@@ -361,7 +395,7 @@ std::string SdCardFontSystem::resolveSelectedFamily() const {
   // base built-in also keeps its `preferSans` ranking working, which reads an empty selection.
   if (jpFallbackNeeded_) return selected;
   const std::string base = selected.empty() ? builtinFamilyDirName(SETTINGS.fontFamily) : selected;
-  const auto* variant = findCoverageVariant(base);
+  const auto* variant = findCoverageVariant(&registry_, base);
   return variant ? variant->name : selected;
 }
 
