@@ -26,7 +26,9 @@ std::vector<uint8_t> readerFontPointSizes(const SdCardFontRegistry* registry, co
 
   for (size_t i = 0; i < standInCount; i++) {
     if (!standIns[i]) continue;
-    for (const auto& file : standIns[i]->files) sizes.push_back(file.pointSize);
+    const auto& files = standIns[i]->files;
+    std::transform(files.begin(), files.end(), std::back_inserter(sizes),
+                   [](const SdCardFontFileInfo& file) { return file.pointSize; });
   }
   // A family lists one file per (size, style), so its own sizes repeat before this runs.
   std::sort(sizes.begin(), sizes.end());
