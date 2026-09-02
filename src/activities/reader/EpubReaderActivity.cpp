@@ -4187,8 +4187,13 @@ void EpubReaderActivity::applyTextSettingLive() {
 void EpubReaderActivity::showTextRowPopup(const int row) {
   switch (row) {
     case 1: {
-      // The point sizes the active family actually ships.
-      const auto sizes = readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName);
+      // The point sizes this row can render: the active family's, plus its stand-ins'.
+      const SdCardFontFamilyInfo* standIns[SdCardFontSystem::MAX_STAND_INS];
+      const uint8_t standInCount =
+          SdCardFontSystem::readerStandInFamilies(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName,
+                                                  SETTINGS.fontFamily, standIns, SdCardFontSystem::MAX_STAND_INS);
+      const auto sizes =
+          readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, standIns, standInCount);
       if (sizes.empty()) return;
       std::vector<std::string> labels;
       labels.reserve(sizes.size());

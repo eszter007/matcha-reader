@@ -96,16 +96,19 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   return s;
 }
 
-// Build the font size setting dynamically: the options are the point sizes the
-// active family actually ships, so an SD family built at 10/12/14 offers three
-// sizes and a family built at 8..18 offers six. The selected point size persists
-// in SETTINGS.fontPointSize (saved/loaded manually in CrossPointSettings::
-// toJson/fromJson — the generic loop skips dynamic entries), while the ENUM
-// contract shared with the web UI stays index-based.
+// Build the font size setting dynamically: the options are the point sizes this row can
+// actually be rendered at — the active family's, plus those of the hidden families that stand
+// in for it — so an SD family built at 10/12/14 offers three sizes and a family built at 8..18
+// offers six. The selected point size persists in SETTINGS.fontPointSize (saved/loaded manually
+// in CrossPointSettings::toJson/fromJson — the generic loop skips dynamic entries), while the
+// ENUM contract shared with the web UI stays index-based.
 inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
-  // Captured by copy: getSettingsList() returns by value and the lambdas outlive
-  // this call, so they must not reference the registry.
-  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName);
+  // `sizes` is captured by copy below: getSettingsList() returns by value and the lambdas
+  // outlive this call, so they must not reference the registry.
+  const SdCardFontFamilyInfo* standIns[SdCardFontSystem::MAX_STAND_INS];
+  const uint8_t standInCount = SdCardFontSystem::readerStandInFamilies(
+      registry, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, SdCardFontSystem::MAX_STAND_INS);
+  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName, standIns, standInCount);
 
   // "pt" is deliberately not translated — see the matching note in
   // TextSettingsActivity::rebuildSizeList().

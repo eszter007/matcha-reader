@@ -55,6 +55,18 @@ class SdCardFontSystem {
   /// fallback instead of being selected directly.
   static bool isBuiltinJpExtension(const std::string& familyName);
 
+  /// Families hidden from the picker that can nonetheless end up rendering the row named by
+  /// `sdFamilyName` (empty for the built-in family `fontFamily`): the coverage variant that
+  /// stands in for it (resolveSelectedFamily), and on a built-in row the JP companion that
+  /// carries a Japanese book (ensureJpFallback + EpubReaderActivity::effectiveReaderFontId).
+  /// Their installed sizes are therefore selectable on that row -- see readerFontPointSizes().
+  ///
+  /// Writes up to `cap` entries into `out` and returns how many. Static and registry-driven so
+  /// the settings UI can ask without owning a font system.
+  static constexpr uint8_t MAX_STAND_INS = 2;
+  static uint8_t readerStandInFamilies(const SdCardFontRegistry* registry, const char* sdFamilyName, uint8_t fontFamily,
+                                       const SdCardFontFamilyInfo** out, uint8_t cap);
+
   /// True for SD families that only widen the coverage of a family the device already offers
   /// (NotoSerifExtended over the built-in Noto Serif, PagellaIPA over an installed Pagella).
   /// The picker shows the base alone and resolveSelectedFamily() decides which of the two is
@@ -98,7 +110,13 @@ class SdCardFontSystem {
   static std::string coverageVariantBase(const std::string& familyName);
 
   /// Installed variant standing in for `baseName`, or nullptr when the card has none.
-  const SdCardFontFamilyInfo* findCoverageVariant(const std::string& baseName) const;
+  static const SdCardFontFamilyInfo* findCoverageVariant(const SdCardFontRegistry* registry,
+                                                         const std::string& baseName);
+
+  /// Point sizes the current reader row offers: its own family's sizes widened by its
+  /// stand-ins'. The same set the pickers show, so a size the user can select is never snapped
+  /// away by a load.
+  std::vector<uint8_t> rowPointSizes() const;
 
   /// Family that should be resident for the current selection and reading context. Empty means
   /// "the built-in reader font, nothing to load". This is a runtime substitution only —
