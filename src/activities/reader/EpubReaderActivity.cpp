@@ -2668,7 +2668,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // otherwise the on-disk file (finalized section, or a partial from a previous session).
     auto p = section->loadPage(section->currentPage);
     if (!p) {
-      LOG_ERR("ERS", "Failed to load page from SD - clearing section cache");
+      LOG_ERR("ERS", "Failed to load page %d of %u from SD - clearing section cache", section->currentPage,
+              static_cast<unsigned>(section->pageCount));
       automaticPageTurnActive = false;
       // Retrying rebuilds a transiently corrupt section and usually recovers, but a page that keeps
       // failing would loop forever on a blank screen, so bound the retries before giving up.

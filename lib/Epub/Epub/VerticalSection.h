@@ -57,6 +57,10 @@ class VerticalSection {
   // file with version 0 so the next open sees a version mismatch and rebuilds the chapter --
   // instead of the truncation living on disk as a permanently sparse chapter.
   bool lastBuildDroppedForHeap_ = false;
+  // Set when only the styled-block table was skipped. The chapter's TEXT is complete; the book's
+  // own block styling is not. Kept apart from lastBuildDroppedForHeap_ because the two differ in
+  // kind: this one is cosmetic and must not be reported, or cached, as lost content.
+  bool lastBuildUnstyledForHeap_ = false;
   // Set by loadSectionFile when the on-disk cache carried the version-0 stale stamp (a prior
   // build dropped glyphs). If THIS build drops again, createSectionFile keeps the best-effort
   // cache valid instead of re-stamping: the drop conditions are deterministic per book, so

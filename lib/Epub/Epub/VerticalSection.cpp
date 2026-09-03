@@ -1156,18 +1156,32 @@ struct LayoutPageSink final : ParagraphSink {
   void writeOne(const VerticalPage& p) {
     if (failed) return;  // a cancel latched mid-batch: the rest of this batch is discarded too
     if (pageOffsets.size() == pageOffsets.capacity()) {
-      // std::vector's automatic doubling throws/aborts when the heap is fragmented. Grow by a
-      // bounded step only when that exact contiguous block still leaves working headroom.
-      constexpr size_t kGrowth = 256;
-      constexpr size_t kHeadroom = 4 * 1024;
-      const size_t nextCapacity = pageOffsets.capacity() + kGrowth;
-      const size_t requestBytes = nextCapacity * sizeof(uint32_t);
-      if (ESP.getMaxAllocHeap() < requestBytes + kHeadroom || ESP.getFreeHeap() < requestBytes + kHeadroom) {
-        LOG_ERR("VSC", "OOM: page offset index (%zu pages, maxAlloc=%u)", pageOffsets.size(), ESP.getMaxAllocHeap());
+      // std::vector's automatic doubling throws/aborts when the heap is fragmented, so grow by a
+      // bounded step that still leaves working headroom. Step down through smaller ones rather
+      // than giving up on the first refusal: a smaller step costs extra reallocations, while
+      // giving up costs the whole chapter -- every page after this one is lost and the reader
+      // shows a page-load error. A long chapter of early-broken pages reaches this with the
+      // generous step unaffordable and a modest one perfectly affordable.
+      static constexpr size_t kGrowthSteps[] = {256, 64, 16};
+      static constexpr uint32_t kHeadrooms[] = {4 * 1024, 1024, 512};
+      static constexpr size_t kStepCount = sizeof(kGrowthSteps) / sizeof(kGrowthSteps[0]);
+      bool grew = false;
+      for (size_t i = 0; i < kStepCount; i++) {
+        const size_t nextCapacity = pageOffsets.capacity() + kGrowthSteps[i];
+        const size_t requestBytes = nextCapacity * sizeof(uint32_t);
+        if (ESP.getMaxAllocHeap() >= requestBytes + kHeadrooms[i] &&
+            ESP.getFreeHeap() >= requestBytes + kHeadrooms[i]) {
+          pageOffsets.reserve(nextCapacity);
+          grew = true;
+          break;
+        }
+      }
+      if (!grew) {
+        LOG_ERR("VSC", "OOM: page offset index (%zu pages, maxAlloc=%u, free=%u)", pageOffsets.size(),
+                ESP.getMaxAllocHeap(), ESP.getFreeHeap());
         failed = true;
         return;
       }
-      pageOffsets.reserve(nextCapacity);
     }
     pageOffsets.push_back(static_cast<uint32_t>(out.position()));
     // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
@@ -1409,10 +1423,17 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
 
 }  // namespace
 
+// Largest block the styled-block table needs before it is attempted. The table is all-or-nothing
+// (a partial one silently drops whichever selectors sit late in the file), so it is skipped rather
+// than truncated. See the collect site: it logs what the table actually costs, because this figure
+// predates SD CJK fonts and a resident one can hold maxAlloc below it for a whole session.
+constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS = 48 * 1024;
+
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
                                            const uint16_t viewportHeight, const uint8_t lineSpacing,
                                            const bool furiganaEnabled) {
   lastBuildDroppedForHeap_ = false;
+  lastBuildUnstyledForHeap_ = false;
   // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
   // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
   // whether that low contiguous budget is a fresh drop from THIS chapter's own parsing, or whether
@@ -1527,12 +1548,12 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     // Binary decision, no partial cap: the collector fills in CACHE order, so a reduced cap
     // silently drops whichever selectors happen to sit late in the file (confirmed earlier:
     // .k-solid boxes vanishing at a 64-entry cap). Either the full table fits, or the build
-    // runs unstyled AND is stamped stale so a later, roomier open rebuilds it properly.
+    // runs unstyled -- text-complete and still cached, see lastBuildUnstyledForHeap_.
     const uint32_t maxAllocNow = ESP.getMaxAllocHeap();
-    if (maxAllocNow < 48 * 1024) {
-      LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u); building unstyled, marked for rebuild",
-              maxAllocNow);
-      lastBuildDroppedForHeap_ = true;  // reuse the stale-stamp path: version 0 -> rebuild next open
+    if (maxAllocNow < MIN_MAX_ALLOC_FOR_STYLED_BLOCKS) {
+      LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u, need %u); building unstyled", maxAllocNow,
+              static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));
+      lastBuildUnstyledForHeap_ = true;
     } else {
       epub->getCssParser()->collectVerticalStyles(blockStyles);
       if (!blockStyles.empty()) {
@@ -1704,6 +1725,14 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   }
   serialization::writePod(file, pageCount);
   serialization::writePod(file, indexOffset);
+  // Styling was skipped but every character is present, so the file is correct as text and is
+  // kept valid. Restamping it stale would rebuild the chapter on every open for a cosmetic
+  // difference -- and while a large SD CJK font is resident the condition never clears, so the
+  // rebuild would never win. Reported apart from a content drop because the two are not alike.
+  if (lastBuildUnstyledForHeap_ && !lastBuildDroppedForHeap_) {
+    LOG_INF("VSC", "Chapter cached without block styling (text complete)");
+  }
+
   // A build that dropped content on low heap produced sparse pages. Keep the file usable for
   // THIS session (offsets are in RAM, pages read back fine) but stamp version 0 so the next
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
