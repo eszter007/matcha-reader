@@ -1,11 +1,13 @@
 #include "SdCardFont.h"
 
+#include <HalMemoryProbe.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
 
 #include <algorithm>
 #include <climits>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 
@@ -576,6 +578,7 @@ bool SdCardFont::load(const char* path) {
     LOG_ERR("SDCF", "Failed to open .cpfont: %s", path);
     return false;
   }
+  HalMemoryProbe::sample("load-file-opened");
 
   // Read and validate global header
   uint8_t headerBuf[HEADER_SIZE];
@@ -670,6 +673,12 @@ bool SdCardFont::load(const char* path) {
   styleCount_ = styleCount;
   contentHash_ = hash;
 
+  {
+    char label[28];
+    snprintf(label, sizeof(label), "load-toc-read-styles%u", styleCount);
+    HalMemoryProbe::sample(label);
+  }
+
   // Load full intervals into RAM for each present style. BMP-only fonts with
   // fewer than 65536 glyphs use a compact 6-byte interval table instead of the
   // on-disk 12-byte table; large sparse CJK subsets otherwise keep tens of KB
@@ -731,6 +740,12 @@ bool SdCardFont::load(const char* path) {
     s.tailIntervalFileOffset =
         s.intervalsFileOffset + s.residentIntervalCount * static_cast<uint32_t>(sizeof(EpdUnicodeInterval));
 
+    {
+      char label[28];
+      snprintf(label, sizeof(label), "pre-iv-alloc-s%u-n%u", i, s.residentIntervalCount);
+      HalMemoryProbe::sample(label);
+    }
+
     if (!file.seekSet(s.intervalsFileOffset)) {
       LOG_ERR("SDCF", "Failed to seek back to intervals for style %u", i);
       freeAll();
@@ -775,6 +790,12 @@ bool SdCardFont::load(const char* path) {
               s.tailIntervalCount);
     }
 
+    {
+      char label[28];
+      snprintf(label, sizeof(label), "post-iv-alloc-s%u", i);
+      HalMemoryProbe::sample(label);
+    }
+
     // Initialize stub data
     memset(&s.stubData, 0, sizeof(s.stubData));
     s.stubData.advanceY = s.header.advanceY;
@@ -787,6 +808,7 @@ bool SdCardFont::load(const char* path) {
   }
 
   loaded_ = true;
+  HalMemoryProbe::sample("load-done");
 
   LOG_DBG("SDCF", "Loaded: %s (v%u, %u styles)", path, CPFONT_VERSION, styleCount_);
   for (uint8_t i = 0; i < MAX_STYLES; i++) {

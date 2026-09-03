@@ -9,7 +9,7 @@
 namespace HalMemoryProbe {
 
 namespace {
-constexpr uint8_t MAX_SAMPLES = 16;
+constexpr uint8_t MAX_SAMPLES = 32;
 struct Sample {
   char label[28];
   uint32_t freeHeap;
