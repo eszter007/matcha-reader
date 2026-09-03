@@ -7,6 +7,7 @@
 #include <climits>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <initializer_list>
 #include <memory>
@@ -27,11 +28,19 @@
 
 namespace {
 
+// A hardcoded "/tmp" isn't portable (Windows runners, sandboxes without a writable /tmp) --
+// mirrors the css_parser test's use of std::filesystem::temp_directory_path().
+std::string cssCacheDir() {
+  const auto dir = std::filesystem::temp_directory_path() / "chapter-html-slim-parser-test";
+  std::filesystem::create_directories(dir);
+  return dir.string();
+}
+
 class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
  protected:
   std::string filepath = "unused.xhtml";
   GfxRenderer renderer;
-  CssParser cssParser{"/tmp"};
+  CssParser cssParser{cssCacheDir()};
   ChapterHtmlSlimParser parser{nullptr,
                                filepath,
                                renderer,
