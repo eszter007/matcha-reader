@@ -155,12 +155,42 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWhenUpperc
   EXPECT_EQ(parser->currentTextBlock->words[2], "IL");
 }
 
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsWithTrailingPunctuation) {
+  makeParser("fr");
+  // The tokenizer only splits on whitespace, so punctuation right after the inversion (a
+  // comma before a dialogue tag, a question mark) stays glued to the buffered word.
+  feedWord("songeai-je,");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 3u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "songeai");
+  EXPECT_EQ(parser->currentTextBlock->words[1], "-");
+  EXPECT_EQ(parser->currentTextBlock->words[2], "je,");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWithTrailingPunctuation) {
+  makeParser("fr");
+  feedWord("pense-t-il?");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 3u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "pense");
+  EXPECT_EQ(parser->currentTextBlock->words[1], "-t-");
+  EXPECT_EQ(parser->currentTextBlock->words[2], "il?");
+}
+
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWhole) {
   makeParser("fr");
   feedWord("rendez-vous");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 1u);
   EXPECT_EQ(parser->currentTextBlock->words[0], "rendez-vous");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWholeWithTrailingPunctuation) {
+  makeParser("fr");
+  feedWord("rendez-vous.");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 1u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "rendez-vous.");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsSecondLexicalizedCompoundWhole) {

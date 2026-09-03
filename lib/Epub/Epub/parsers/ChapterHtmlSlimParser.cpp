@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <iterator>
 #include <new>
@@ -426,18 +427,41 @@ static bool asciiEndsWithCi(const char* word, const int wordLen, const char* suf
   return asciiEqualsCi(word + (wordLen - suffixLen), suffixLen, suffix);
 }
 
+// Mirrors Dictionary::cleanWord()'s trailing trim (a byte is "word" if it's ASCII alnum or any
+// non-ASCII byte, with the 3-byte E2 80/81 xx General Punctuation sequences -- curly quotes,
+// dashes -- stripped as a unit) so "songeai-je," and "pense-t-il?" match the same as the bare
+// forms. Only shrinks the length used for matching: the buffer itself is untouched, so the
+// trimmed punctuation still renders as part of the pronoun's token in flushPartWordBuffer().
+static int trimmedLengthForFrenchInversionMatch(const char* word, int wordLen) {
+  const auto* bytes = reinterpret_cast<const unsigned char*>(word);
+  while (wordLen > 0) {
+    if (std::isalnum(bytes[wordLen - 1]) || bytes[wordLen - 1] >= 0x80) {
+      if (wordLen >= 3 && bytes[wordLen - 3] == 0xE2 && (bytes[wordLen - 2] == 0x80 || bytes[wordLen - 2] == 0x81)) {
+        wordLen -= 3;
+        continue;
+      }
+      break;
+    }
+    wordLen--;
+  }
+  return wordLen;
+}
+
 // On a match, word[0, verbLen) is the verb and word[verbLen, verbLen + connectorLen) is the
-// literal "-" or "-t-" connector; the pronoun runs from there to the end. Returns false when
-// `word` does not end in a hyphenated subject pronoun, or is one of kFrenchInversionExceptions.
+// literal "-" or "-t-" connector; the pronoun runs from there to the end of `word` (including
+// any trailing punctuation ignored for matching). Returns false when `word`, ignoring trailing
+// punctuation, does not end in a hyphenated subject pronoun, or is one of
+// kFrenchInversionExceptions.
 static bool findFrenchInversionSplit(const char* word, const int wordLen, int& verbLen, int& connectorLen) {
   if (!memchr(word, '-', static_cast<size_t>(wordLen))) return false;
+  const int matchLen = trimmedLengthForFrenchInversionMatch(word, wordLen);
   for (const char* exception : kFrenchInversionExceptions) {
-    if (asciiEqualsCi(word, wordLen, exception)) return false;
+    if (asciiEqualsCi(word, matchLen, exception)) return false;
   }
   for (const char* pronoun : kFrenchInversionPronouns) {
-    if (!asciiEndsWithCi(word, wordLen, pronoun)) continue;
+    if (!asciiEndsWithCi(word, matchLen, pronoun)) continue;
     const int pronounLen = static_cast<int>(strlen(pronoun));
-    const int hyphenIndex = wordLen - pronounLen - 1;
+    const int hyphenIndex = matchLen - pronounLen - 1;
     if (hyphenIndex <= 0 || word[hyphenIndex] != '-') continue;
     // Euphonic "-t-", inserted only before il/elle/on to avoid a vowel hiatus: "pense-t-il".
     const bool takesEuphonicT =
