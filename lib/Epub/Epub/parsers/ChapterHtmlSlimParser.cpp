@@ -442,7 +442,7 @@ bool findFrenchInversionSplit(const char* word, const int wordLen, int& verbLen,
     // Euphonic "-t-", inserted only before il/elle/on to avoid a vowel hiatus: "pense-t-il".
     const bool takesEuphonicT =
         strcmp(pronoun, "il") == 0 || strcmp(pronoun, "elle") == 0 || strcmp(pronoun, "on") == 0;
-    if (takesEuphonicT && hyphenIndex >= 2 && word[hyphenIndex - 1] == 't' && word[hyphenIndex - 2] == '-' &&
+    if (takesEuphonicT && hyphenIndex >= 2 && (word[hyphenIndex - 1] | 0x20) == 't' && word[hyphenIndex - 2] == '-' &&
         hyphenIndex - 2 > 0) {
       verbLen = hyphenIndex - 2;
       connectorLen = 3;
