@@ -29,6 +29,7 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
                                static_cast<uint16_t>(renderer.getScreenHeight()),
                                false,
                                false,
+                               false,
                                {},
                                true,
                                "",
@@ -60,7 +61,7 @@ TEST_P(ChapterHtmlSlimParserTest, KeepsCssVerticalAlignAndInternalLinkMetadata) 
 
   ASSERT_EQ(parser.pendingFootnotes.size(), 1u);
   const FootnoteEntry& footnote = parser.pendingFootnotes.front().second;
-  EXPECT_STREQ(footnote.href, expectedHref);
+  EXPECT_EQ(footnote.href, expectedHref);
   ASSERT_EQ(parser.currentTextBlock->wordLinkIds.size(), 1u);
   EXPECT_EQ(parser.currentTextBlock->wordLinkIds.front(), linkId);
   EXPECT_TRUE(parser.currentTextBlock->linkTargetMatches(linkId, expectedHref));
