@@ -2,9 +2,23 @@
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
+#include <climits>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <initializer_list>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+// ChapterHtmlSlimParser.h and its own includes' STL dependencies, explicit here so the
+// macro below never rewrites an as-yet-unincluded header's own `template <class T>` into
+// invalid `template <struct T>` -- relying on transitive include order from gtest/Page.h
+// would be fragile.
 #define class struct
 #define private public
 #include "Epub/parsers/ChapterHtmlSlimParser.h"
