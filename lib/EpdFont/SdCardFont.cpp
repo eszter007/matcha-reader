@@ -807,6 +807,23 @@ bool SdCardFont::load(const char* path) {
     applyGlyphMissCallback(i);
   }
 
+  // TEMPORARY diagnostic (font-investigation): do styles with matching resident interval
+  // counts actually cover the same codepoints? If so, sharing one table across styles
+  // instead of duplicating it could roughly halve this font's interval-table cost.
+  for (uint8_t i = 1; i < MAX_STYLES; i++) {
+    if (!styles_[i].present || !styles_[0].present) continue;
+    if (styles_[i].residentIntervalCount != styles_[0].residentIntervalCount) continue;
+    if (styles_[i].intervalsAreBmp16 != styles_[0].intervalsAreBmp16) continue;
+    const bool identical = styles_[i].intervalsAreBmp16
+                               ? memcmp(styles_[i].bmpIntervals, styles_[0].bmpIntervals,
+                                        styles_[i].residentIntervalCount * sizeof(PerStyle::BmpInterval16)) == 0
+                               : memcmp(styles_[i].fullIntervals, styles_[0].fullIntervals,
+                                        styles_[i].residentIntervalCount * sizeof(EpdUnicodeInterval)) == 0;
+    char label[28];
+    snprintf(label, sizeof(label), "iv-s%u-eq-s0=%d", i, identical ? 1 : 0);
+    HalMemoryProbe::sample(label);
+  }
+
   loaded_ = true;
   HalMemoryProbe::sample("load-done");
 
