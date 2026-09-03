@@ -187,10 +187,15 @@ void SdCardFont::freeStyleMiniKern(PerStyle& s) {
 
 void SdCardFont::freeStyleAll(PerStyle& s) {
   freeStyleMiniData(s);
-  delete[] s.fullIntervals;
+  // A shared table is owned by the style it was copied from -- that style's own
+  // freeStyleAll() call frees it. Deleting it here too would double-free.
+  if (!s.intervalsShared) {
+    delete[] s.fullIntervals;
+    delete[] s.bmpIntervals;
+  }
   s.fullIntervals = nullptr;
-  delete[] s.bmpIntervals;
   s.bmpIntervals = nullptr;
+  s.intervalsShared = false;
   s.intervalsAreBmp16 = false;
   s.residentIntervalCount = 0;
   s.tailIntervalCount = 0;
@@ -807,21 +812,41 @@ bool SdCardFont::load(const char* path) {
     applyGlyphMissCallback(i);
   }
 
-  // TEMPORARY diagnostic (font-investigation): do styles with matching resident interval
-  // counts actually cover the same codepoints? If so, sharing one table across styles
-  // instead of duplicating it could roughly halve this font's interval-table cost.
+  // Regular/bold/italic weights of the same family almost always cover the identical
+  // codepoint set (confirmed on-device: a 2-style CJK companion font's styles carried
+  // byte-identical 4432-entry tables). That interval table is tens of KB per style for a
+  // broad-coverage CJK font, so once a later style matches an earlier one exactly, drop its
+  // own copy and alias the earlier style's table instead of paying for it twice.
+  // freeStyleAll() skips delete[] for a style with intervalsShared set, so only the style
+  // that originally allocated the table ever frees it.
   for (uint8_t i = 1; i < MAX_STYLES; i++) {
-    if (!styles_[i].present || !styles_[0].present) continue;
-    if (styles_[i].residentIntervalCount != styles_[0].residentIntervalCount) continue;
-    if (styles_[i].intervalsAreBmp16 != styles_[0].intervalsAreBmp16) continue;
-    const bool identical = styles_[i].intervalsAreBmp16
-                               ? memcmp(styles_[i].bmpIntervals, styles_[0].bmpIntervals,
-                                        styles_[i].residentIntervalCount * sizeof(PerStyle::BmpInterval16)) == 0
-                               : memcmp(styles_[i].fullIntervals, styles_[0].fullIntervals,
-                                        styles_[i].residentIntervalCount * sizeof(EpdUnicodeInterval)) == 0;
-    char label[28];
-    snprintf(label, sizeof(label), "iv-s%u-eq-s0=%d", i, identical ? 1 : 0);
-    HalMemoryProbe::sample(label);
+    auto& s = styles_[i];
+    if (!s.present || s.intervalsShared) continue;
+    for (uint8_t k = 0; k < i; k++) {
+      auto& owner = styles_[k];
+      if (!owner.present || owner.residentIntervalCount != s.residentIntervalCount ||
+          owner.intervalsAreBmp16 != s.intervalsAreBmp16) {
+        continue;
+      }
+      const bool identical =
+          s.intervalsAreBmp16
+              ? memcmp(s.bmpIntervals, owner.bmpIntervals, s.residentIntervalCount * sizeof(PerStyle::BmpInterval16)) ==
+                    0
+              : memcmp(s.fullIntervals, owner.fullIntervals, s.residentIntervalCount * sizeof(EpdUnicodeInterval)) == 0;
+      if (!identical) continue;
+      if (s.intervalsAreBmp16) {
+        delete[] s.bmpIntervals;
+        s.bmpIntervals = owner.bmpIntervals;
+      } else {
+        delete[] s.fullIntervals;
+        s.fullIntervals = owner.fullIntervals;
+      }
+      s.intervalsShared = true;
+      char label[28];
+      snprintf(label, sizeof(label), "iv-s%u-shares-s%u", i, k);
+      HalMemoryProbe::sample(label);
+      break;
+    }
   }
 
   loaded_ = true;

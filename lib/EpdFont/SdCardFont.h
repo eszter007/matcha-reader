@@ -180,6 +180,12 @@ class SdCardFont {
     static_assert(sizeof(BmpInterval16) == 6, "BmpInterval16 must remain compact");
     BmpInterval16* bmpIntervals = nullptr;
     bool intervalsAreBmp16 = false;
+    // True when bmpIntervals/fullIntervals above points at another style's table instead of
+    // this style's own allocation (see the sharing check at the end of the interval-loading
+    // loop in load()). Regular/bold/italic weights of the same family almost always cover the
+    // identical codepoint set, so a CJK font's multi-KB-per-style interval table is otherwise
+    // paid once per style for no reason. freeStyleAll() must not delete[] a borrowed pointer.
+    bool intervalsShared = false;
     // Codepoints above the BMP (rare kanji from JIS X 0213 plane 2) sort after every BMP
     // interval, so they form a tail of the on-disk table. Keeping that tail resident cost
     // ~3.5KB per style -- it also forces every interval to the 12-byte form -- on a heap
