@@ -412,7 +412,7 @@ constexpr const char* kFrenchInversionPronouns[] = {"je", "tu", "il", "elle", "o
 // today ("un rendez-vous", "le qu'en-dira-t-on"), so the whole word must stay one token.
 constexpr const char* kFrenchInversionExceptions[] = {"rendez-vous", "qu'en-dira-t-on"};
 
-bool asciiEqualsCi(const char* a, const int aLen, const char* b) {
+static bool asciiEqualsCi(const char* a, const int aLen, const char* b) {
   if (static_cast<size_t>(aLen) != strlen(b)) return false;
   for (int i = 0; i < aLen; i++) {
     if ((a[i] | 0x20) != (b[i] | 0x20)) return false;
@@ -420,7 +420,7 @@ bool asciiEqualsCi(const char* a, const int aLen, const char* b) {
   return true;
 }
 
-bool asciiEndsWithCi(const char* word, const int wordLen, const char* suffix) {
+static bool asciiEndsWithCi(const char* word, const int wordLen, const char* suffix) {
   const int suffixLen = static_cast<int>(strlen(suffix));
   if (wordLen < suffixLen) return false;
   return asciiEqualsCi(word + (wordLen - suffixLen), suffixLen, suffix);
@@ -429,7 +429,7 @@ bool asciiEndsWithCi(const char* word, const int wordLen, const char* suffix) {
 // On a match, word[0, verbLen) is the verb and word[verbLen, verbLen + connectorLen) is the
 // literal "-" or "-t-" connector; the pronoun runs from there to the end. Returns false when
 // `word` does not end in a hyphenated subject pronoun, or is one of kFrenchInversionExceptions.
-bool findFrenchInversionSplit(const char* word, const int wordLen, int& verbLen, int& connectorLen) {
+static bool findFrenchInversionSplit(const char* word, const int wordLen, int& verbLen, int& connectorLen) {
   if (!memchr(word, '-', static_cast<size_t>(wordLen))) return false;
   for (const char* exception : kFrenchInversionExceptions) {
     if (asciiEqualsCi(word, wordLen, exception)) return false;
