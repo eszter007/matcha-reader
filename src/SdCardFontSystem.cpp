@@ -4,7 +4,6 @@
 #include <EpdFontFamily.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
-#include <HalMemoryProbe.h>
 #include <Logging.h>
 #include <SdCardFont.h>
 
@@ -437,8 +436,6 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
     return;
   }
 
-  HalMemoryProbe::sample("ensureJpFallback-start");
-
   // Selected font (built-in, or a Latin-only SD font) can't render Japanese: pair a
   // built-in Noto face with its matching JP extension, then try the other extension.
   const bool preferSans = selected.empty() && SETTINGS.fontFamily == CrossPointSettings::NOTOSANS;
@@ -463,28 +460,19 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
     // Already loaded at the right size? Keep it.
     if (fallbackManager_.currentFamilyName() == fam->name) {
       const auto* wanted = fam->findNearestSize(pointSize);
-      if (wanted && wanted->pointSize == fallbackManager_.currentPointSize()) {
-        HalMemoryProbe::sample("ensureJpFallback-already-loaded");
-        HalMemoryProbe::flush("ensureJpFallback");
-        return;
-      }
+      if (wanted && wanted->pointSize == fallbackManager_.currentPointSize()) return;
     }
     if (!fallbackManager_.loadFamily(*fam, renderer, pointSize)) continue;
     if (loadedFamilyCovers(fallbackManager_, fam->name, 0x3042) &&
         loadedFamilyCovers(fallbackManager_, fam->name, 'a')) {
       LOG_DBG("SDFS", "Companion fallback font: %s", fam->name.c_str());
-      HalMemoryProbe::sample("ensureJpFallback-settled");
-      HalMemoryProbe::flush("ensureJpFallback");
       return;
     }
     // Loaded fine but doesn't cover both scripts -- not a useful companion.
     fallbackManager_.unloadAll(renderer);
-    HalMemoryProbe::sample("after-reject-unload");
   }
 
   if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
-  HalMemoryProbe::sample("ensureJpFallback-none-settled");
-  HalMemoryProbe::flush("ensureJpFallback");
 }
 
 void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {

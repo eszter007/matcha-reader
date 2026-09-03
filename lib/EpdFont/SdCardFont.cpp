@@ -1,13 +1,11 @@
 #include "SdCardFont.h"
 
-#include <HalMemoryProbe.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
 
 #include <algorithm>
 #include <climits>
-#include <cstdio>
 #include <cstring>
 #include <memory>
 
@@ -583,7 +581,6 @@ bool SdCardFont::load(const char* path) {
     LOG_ERR("SDCF", "Failed to open .cpfont: %s", path);
     return false;
   }
-  HalMemoryProbe::sample("load-file-opened");
 
   // Read and validate global header
   uint8_t headerBuf[HEADER_SIZE];
@@ -678,12 +675,6 @@ bool SdCardFont::load(const char* path) {
   styleCount_ = styleCount;
   contentHash_ = hash;
 
-  {
-    char label[28];
-    snprintf(label, sizeof(label), "load-toc-read-styles%u", styleCount);
-    HalMemoryProbe::sample(label);
-  }
-
   // Load full intervals into RAM for each present style. BMP-only fonts with
   // fewer than 65536 glyphs use a compact 6-byte interval table instead of the
   // on-disk 12-byte table; large sparse CJK subsets otherwise keep tens of KB
@@ -745,12 +736,6 @@ bool SdCardFont::load(const char* path) {
     s.tailIntervalFileOffset =
         s.intervalsFileOffset + s.residentIntervalCount * static_cast<uint32_t>(sizeof(EpdUnicodeInterval));
 
-    {
-      char label[28];
-      snprintf(label, sizeof(label), "pre-iv-alloc-s%u-n%u", i, s.residentIntervalCount);
-      HalMemoryProbe::sample(label);
-    }
-
     if (!file.seekSet(s.intervalsFileOffset)) {
       LOG_ERR("SDCF", "Failed to seek back to intervals for style %u", i);
       freeAll();
@@ -795,12 +780,6 @@ bool SdCardFont::load(const char* path) {
               s.tailIntervalCount);
     }
 
-    {
-      char label[28];
-      snprintf(label, sizeof(label), "post-iv-alloc-s%u", i);
-      HalMemoryProbe::sample(label);
-    }
-
     // Initialize stub data
     memset(&s.stubData, 0, sizeof(s.stubData));
     s.stubData.advanceY = s.header.advanceY;
@@ -813,12 +792,11 @@ bool SdCardFont::load(const char* path) {
   }
 
   // Regular/bold/italic weights of the same family almost always cover the identical
-  // codepoint set (confirmed on-device: a 2-style CJK companion font's styles carried
-  // byte-identical 4432-entry tables). That interval table is tens of KB per style for a
-  // broad-coverage CJK font, so once a later style matches an earlier one exactly, drop its
-  // own copy and alias the earlier style's table instead of paying for it twice.
-  // freeStyleAll() skips delete[] for a style with intervalsShared set, so only the style
-  // that originally allocated the table ever frees it.
+  // codepoint set. That interval table is tens of KB per style for a broad-coverage CJK
+  // font, so once a later style matches an earlier one exactly, drop its own copy and alias
+  // the earlier style's table instead of paying for it twice. freeStyleAll() skips delete[]
+  // for a style with intervalsShared set, so only the style that originally allocated the
+  // table ever frees it.
   for (uint8_t i = 1; i < MAX_STYLES; i++) {
     auto& s = styles_[i];
     if (!s.present || s.intervalsShared) continue;
@@ -842,15 +820,11 @@ bool SdCardFont::load(const char* path) {
         s.fullIntervals = owner.fullIntervals;
       }
       s.intervalsShared = true;
-      char label[28];
-      snprintf(label, sizeof(label), "iv-s%u-shares-s%u", i, k);
-      HalMemoryProbe::sample(label);
       break;
     }
   }
 
   loaded_ = true;
-  HalMemoryProbe::sample("load-done");
 
   LOG_DBG("SDCF", "Loaded: %s (v%u, %u styles)", path, CPFONT_VERSION, styleCount_);
   for (uint8_t i = 0; i < MAX_STYLES; i++) {

@@ -2,12 +2,9 @@
 
 #include <EpdFontFamily.h>
 #include <GfxRenderer.h>
-#include <HalMemoryProbe.h>
 #include <Logging.h>
 #include <SdCardFont.h>
 #include <SdCardFontRegistry.h>
-
-#include <cstdio>
 
 SdCardFontManager::~SdCardFontManager() {
   for (auto& lf : loaded_) {
@@ -38,13 +35,7 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
     return 0;
   }
 
-  char probeLabel[28];
-  snprintf(probeLabel, sizeof(probeLabel), "before-load-%s", familyName);
-  HalMemoryProbe::sample(probeLabel);
-  const bool loaded = font->load(file.path.c_str());
-  snprintf(probeLabel, sizeof(probeLabel), "after-load-%s", familyName);
-  HalMemoryProbe::sample(probeLabel);
-  if (!loaded) {
+  if (!font->load(file.path.c_str())) {
     LOG_ERR("SDMGR", "Failed to load %s", file.path.c_str());
     delete font;
     return 0;
