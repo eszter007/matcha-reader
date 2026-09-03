@@ -16,7 +16,11 @@ class HalFile {
     file_ = std::fopen(path, mode);
     return file_ != nullptr;
   }
-  int available() const { return file_ ? static_cast<int>(size() - position()) : 0; }
+  int available() const {
+    const size_t total = size();
+    const size_t pos = position();
+    return (file_ && pos < total) ? static_cast<int>(total - pos) : 0;
+  }
   size_t read(void* buffer, size_t count) { return file_ ? std::fread(buffer, 1, count, file_) : 0; }
   size_t write(const void* buffer, size_t count) { return file_ ? std::fwrite(buffer, 1, count, file_) : 0; }
   size_t write(uint8_t byte) { return write(&byte, 1); }
