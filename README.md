@@ -39,6 +39,8 @@ Vocabulary, names and grammar each come from their own dictionary. If the book i
 
 Other languages get the same treatment from their StarDict dictionaries. A word at the start of a sentence keeps its accents and still resolves (`École` finds `école`), and French adds its own rules: `l'eau` looks up `eau`, `journaux` finds `journal`, `heureuse` finds `heureux`, and the regular conjugations resolve to the infinitive (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`). English and everything else fall back to plurals and verb endings. Irregular verbs that share no stem with their infinitive need a `.syn` file in the dictionary folder — see [docs/dictionary.md](docs/dictionary.md).
 
+In French books, a literary verb-subject inversion like `songeai-je` or `pense-t-il` splits into two selectable words (`songeai`/`je`, `pense`/`il`), so both the verb and the pronoun look up on their own. A genuine compound like `rendez-vous` or `grand-mère` still selects as one word.
+
 Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.
 
 <p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup with reading, part of speech, definitions and an example sentence"></p>

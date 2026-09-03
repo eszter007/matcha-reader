@@ -11,10 +11,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <iterator>
 #include <new>
 
 #include "../../../../src/fontIds.h"
+#include "../../../../src/util/InflectionRules.h"
 #include "Epub.h"
 #include "Epub/AsciiTextTransform.h"
 #include "Epub/Page.h"
@@ -398,6 +400,61 @@ void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
   currentPageVisibleOffsetSet = true;
 }
 
+// French verb-subject inversion (literary narration register): "songeai-je", "pense-t-il",
+// "dit-elle". The verb and the clitic subject pronoun are each meaningful dictionary headwords
+// on their own, unlike a genuine hyphenated compound (kFrenchInversionExceptions below), so
+// flushPartWordBuffer() below splits the buffered word into extra addWord() tokens glued
+// together with attachToPrevious -- the same "extra token, no gap" technique the U+00A0 handling
+// above uses to keep a non-breaking pair visually joined while giving each half its own token.
+constexpr const char* kFrenchInversionPronouns[] = {"je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles"};
+
+// Nouns that are historically verb-pronoun inversions but are lexicalized as a single headword
+// today ("un rendez-vous", "le qu'en-dira-t-on"), so the whole word must stay one token.
+constexpr const char* kFrenchInversionExceptions[] = {"rendez-vous", "qu'en-dira-t-on"};
+
+bool asciiEqualsCi(const char* a, const int aLen, const char* b) {
+  if (static_cast<size_t>(aLen) != strlen(b)) return false;
+  for (int i = 0; i < aLen; i++) {
+    if ((a[i] | 0x20) != (b[i] | 0x20)) return false;
+  }
+  return true;
+}
+
+bool asciiEndsWithCi(const char* word, const int wordLen, const char* suffix) {
+  const int suffixLen = static_cast<int>(strlen(suffix));
+  if (wordLen < suffixLen) return false;
+  return asciiEqualsCi(word + (wordLen - suffixLen), suffixLen, suffix);
+}
+
+// On a match, word[0, verbLen) is the verb and word[verbLen, verbLen + connectorLen) is the
+// literal "-" or "-t-" connector; the pronoun runs from there to the end. Returns false when
+// `word` does not end in a hyphenated subject pronoun, or is one of kFrenchInversionExceptions.
+bool findFrenchInversionSplit(const char* word, const int wordLen, int& verbLen, int& connectorLen) {
+  if (!memchr(word, '-', static_cast<size_t>(wordLen))) return false;
+  for (const char* exception : kFrenchInversionExceptions) {
+    if (asciiEqualsCi(word, wordLen, exception)) return false;
+  }
+  for (const char* pronoun : kFrenchInversionPronouns) {
+    if (!asciiEndsWithCi(word, wordLen, pronoun)) continue;
+    const int pronounLen = static_cast<int>(strlen(pronoun));
+    const int hyphenIndex = wordLen - pronounLen - 1;
+    if (hyphenIndex <= 0 || word[hyphenIndex] != '-') continue;
+    // Euphonic "-t-", inserted only before il/elle/on to avoid a vowel hiatus: "pense-t-il".
+    const bool takesEuphonicT =
+        strcmp(pronoun, "il") == 0 || strcmp(pronoun, "elle") == 0 || strcmp(pronoun, "on") == 0;
+    if (takesEuphonicT && hyphenIndex >= 2 && word[hyphenIndex - 1] == 't' && word[hyphenIndex - 2] == '-' &&
+        hyphenIndex - 2 > 0) {
+      verbLen = hyphenIndex - 2;
+      connectorLen = 3;
+      return true;
+    }
+    verbLen = hyphenIndex;
+    connectorLen = 1;
+    return true;
+  }
+  return false;
+}
+
 // flush the contents of partWordBuffer to currentTextBlock
 void ChapterHtmlSlimParser::flushPartWordBuffer() {
   if (!currentTextBlock) {
@@ -450,8 +507,46 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
     }
     linkId = currentFootnoteLinkId;
   }
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, wordFontId, partWordVisibleOffset,
-                            linkId);
+  if (frenchBookCache < 0) {
+    frenchBookCache =
+        (epub && InflectionRules::languageFromCode(epub->getLanguage().c_str()) == InflectionRules::Language::French)
+            ? 1
+            : 0;
+  }
+  int frenchVerbLen = 0;
+  int frenchConnectorLen = 0;
+  if (frenchBookCache &&
+      findFrenchInversionSplit(partWordBuffer, partWordBufferIndex, frenchVerbLen, frenchConnectorLen)) {
+    const int pronounStart = frenchVerbLen + frenchConnectorLen;
+
+    // The connector and pronoun are always plain ASCII, so only the verb needs counting.
+    uint32_t verbVisibleLen = 0;
+    const auto* verbPtr = reinterpret_cast<const unsigned char*>(partWordBuffer);
+    const unsigned char* const verbEnd = verbPtr + frenchVerbLen;
+    while (verbPtr < verbEnd) {
+      utf8NextCodepoint(&verbPtr);
+      verbVisibleLen++;
+    }
+
+    const char savedAtVerbEnd = partWordBuffer[frenchVerbLen];
+    partWordBuffer[frenchVerbLen] = '\0';
+    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, wordFontId, partWordVisibleOffset,
+                              linkId);
+    partWordBuffer[frenchVerbLen] = savedAtVerbEnd;
+
+    const char savedAtPronounStart = partWordBuffer[pronounStart];
+    partWordBuffer[pronounStart] = '\0';
+    currentTextBlock->addWord(partWordBuffer + frenchVerbLen, fontStyle, false, true, wordFontId,
+                              partWordVisibleOffset + verbVisibleLen, linkId);
+    partWordBuffer[pronounStart] = savedAtPronounStart;
+
+    currentTextBlock->addWord(partWordBuffer + pronounStart, fontStyle, false, true, wordFontId,
+                              partWordVisibleOffset + verbVisibleLen + static_cast<uint32_t>(frenchConnectorLen),
+                              linkId);
+  } else {
+    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, wordFontId, partWordVisibleOffset,
+                              linkId);
+  }
   if (insideTableCell && !tableRowStacked) {
     tableCellTextBytes += wordBytes;
     if (currentTextBlock->size() > MAX_GRID_TABLE_CELL_WORDS) {

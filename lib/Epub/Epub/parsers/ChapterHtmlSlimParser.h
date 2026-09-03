@@ -41,6 +41,10 @@ class ChapterHtmlSlimParser {
   char partWordBuffer[MAX_WORD_SIZE + 1] = {};
   int partWordBufferIndex = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
+  // French verb-subject inversion splitting (flushPartWordBuffer): -1 = not yet computed,
+  // 0 = no, 1 = yes. Cached lazily so epub->getLanguage() is looked up once per chapter
+  // instead of once per flushed word.
+  int8_t frenchBookCache = -1;
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   // Ruby text state
   bool inRuby = false;
