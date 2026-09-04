@@ -152,14 +152,24 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
 // --- Manifest fetching ---
 
 bool FontDownloadActivity::fetchAndParseManifest() {
+  // Rebuildable SD-font caches can hold tens of KB the TLS session needs;
+  // release them before the heap gate below, not after, so a low-heap entry
+  // caused by those very caches (issue #191: a book open on a large SD-card
+  // font) still gets a chance to pass instead of failing before reclaiming
+  // anything.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+  }
+
   // Refuse before even opening the connection: the WiFi/TLS handshake and the
   // manual HTTP client (SecureClient/SecureHttpClient) run their own
-  // std::string/std::vector growth with no heap gate of their own, on
-  // whatever the reader left behind -- entering this screen from inside a
-  // book on a large SD-card font can leave too little of it (issue #191).
-  // Failing fast here also skips a WiFi/TLS round trip that would only end in
-  // the same low-memory error once the build gate below is reached anyway.
-  if (ESP.getFreeHeap() < FONT_SCREEN_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < FONT_SCREEN_MIN_MAX_ALLOC) {
+  // std::string/std::vector growth with no heap gate of their own. Failing
+  // fast here also skips a WiFi/TLS round trip that would only end in the
+  // same low-memory error once the build gate below is reached anyway. Uses
+  // the stricter of the screen's own floor and the TLS floor, since this one
+  // check now covers both the connection and the transfer.
+  if (ESP.getFreeHeap() < std::max<size_t>(FONT_SCREEN_MIN_FREE_HEAP, HttpDownloader::MIN_TLS_FREE_HEAP) ||
+      ESP.getMaxAllocHeap() < std::max<size_t>(FONT_SCREEN_MIN_MAX_ALLOC, HttpDownloader::MIN_TLS_MAX_ALLOC)) {
     LOG_ERR("FONT", "Low heap before manifest fetch (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
     return false;
@@ -168,16 +178,6 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // Download manifest to a temp file on SD card to avoid holding both
   // TLS buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
-
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseAllFontMemory();
-  }
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
-    LOG_ERR("FONT", "Low heap for manifest (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
-    return false;
-  }
 
   auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
   if (result != HttpDownloader::OK) {
