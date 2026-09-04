@@ -501,7 +501,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   // refuse to start below the floor — a doomed transfer otherwise dies
   // mid-stream with MEMORY_E, or abort()s on an interior allocation.
   if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseSdFontCaches();
+    fcm->releaseAllFontMemory();
   }
   LOG_DBG("OPDS", "Download heap: %u free, %u max block", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||

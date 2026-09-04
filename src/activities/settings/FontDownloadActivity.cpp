@@ -170,7 +170,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
 
   if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseSdFontCaches();
+    fcm->releaseAllFontMemory();
   }
   if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
       ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
@@ -498,7 +498,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   // hold tens of KB the TLS session needs; release them up front rather than
   // starving the transfer. They repopulate on demand after the download.
   if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseSdFontCaches();
+    fcm->releaseAllFontMemory();
     LOG_DBG("FONT", "Free heap after SD font cache release: %d bytes", ESP.getFreeHeap());
   }
 
