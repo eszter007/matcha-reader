@@ -303,8 +303,16 @@ constexpr Rule kFrenchRules[] = {
     // ── -uire verbs (conduire, construire, cuire, produire, traduire) ─
     // Future/conditional already resolve through the generic "-re" rules
     // above, same reasoning as -eindre/-aindre/-oindre.
+    // The bare "uit" suffix is deliberately not covered: it is too broad and
+    // wrongly claims common non-verb words like "nuit" (night) and "bruit"
+    // (noise), whose "wrong" reading ("nuire", "bruire") also happens to be a
+    // real, rarer verb — the same table-order collision class as the -aître
+    // "ais" case above. Narrowed to the "-duire"/"-truire" subfamilies plus
+    // "cuire" itself, which still covers every verb this PR targets.
     {"uis", "uire"},         // conduis → conduire
-    {"uit", "uire"},         // conduit → conduire (present il, and the participle)
+    {"duit", "duire"},       // conduit → conduire (present il, and the participle)
+    {"truit", "truire"},     // construit → construire
+    {"cuit", "cuire"},       // cuit → cuire
     {"uisons", "uire"},
     {"uisez", "uire"},
     {"uisent", "uire"},

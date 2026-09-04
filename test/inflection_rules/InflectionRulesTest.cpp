@@ -132,8 +132,21 @@ TEST(French, UireVerbs) {
   EXPECT_TRUE(contains(french("conduisons"), "conduire"));
   EXPECT_TRUE(contains(french("construisait"), "construire"));
   EXPECT_TRUE(contains(french("conduisit"), "conduire"));
+  EXPECT_TRUE(contains(french("construit"), "construire"));
+  // "cuit" alone has no room for a stem (the rule needs a strictly longer
+  // word — see endsWith()), so it is reachable only through a compound.
+  EXPECT_TRUE(contains(french("recuit"), "recuire"));
   // Future/conditional already resolve through the generic "-re" rules.
   EXPECT_TRUE(contains(french("conduira"), "conduire"));
+}
+
+TEST(French, UireDoesNotClaimCommonNonVerbWords) {
+  // The bare "uit" suffix is not covered: "nuit" (night) and "bruit" (noise)
+  // are common nouns whose "wrong" verb reading ("nuire", "bruire") is also
+  // a real, rarer headword — the lookup would stop there before ever trying
+  // the noun. Narrowed to "-duire"/"-truire"/"cuire" instead (see UireVerbs).
+  EXPECT_FALSE(contains(french("nuit"), "nuire"));
+  EXPECT_FALSE(contains(french("bruit"), "bruire"));
 }
 
 TEST(French, MentAdverbs) {
