@@ -175,7 +175,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
       ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
     LOG_ERR("FONT", "Low heap for manifest (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    errorMessage_ = tr(STR_MEMORY_ERROR);
+    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
     return false;
   }
 
@@ -509,7 +509,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     RenderLock lock(*this);
     state_ = ERROR;
-    errorMessage_ = tr(STR_MEMORY_ERROR);
+    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
     return;
   }
 
@@ -554,11 +554,13 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
           }
           requestUpdate(true);
         },
-        // Bulk font transfers follow GitHub's release-asset redirect over plain
-        // HTTP: the CRC check below (manifest fetched over TLS) covers
-        // integrity, and skipping the second TLS session keeps the C3 heap out
-        // of MEMORY_E territory.
-        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/true);
+        // Redirects stay on HTTPS: CRC32 (below) catches transmission errors
+        // but not a deliberate substitution by an on-path attacker, who could
+        // serve a malicious .cpfont over a downgraded HTTP hop with a forged
+        // CRC32 to match. HAVE_MAX_FRAGMENT's 2KB TLS records already remove
+        // most of the second TLS session's heap cost, so the C3 doesn't need
+        // the HTTP downgrade to stay out of MEMORY_E territory here.
+        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/false);
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(family.name.c_str());
