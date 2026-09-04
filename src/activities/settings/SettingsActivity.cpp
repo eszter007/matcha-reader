@@ -36,9 +36,6 @@
 
 namespace fui = freeink::ui;
 
-const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
-                                                              StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
-
 void SettingsActivity::saveSettings() {
   // Reader Settings keeps the EPUB, laid-out page and SD fonts resident. A font
   // preview can leave less contiguous heap than settings JSON needs, so reclaim
