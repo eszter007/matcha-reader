@@ -50,7 +50,9 @@ class HttpDownloader {
    *
    * downgradeRedirectsToHttp rewrites followed redirect targets from https to
    * http so the bulk transfer skips a second TLS session (and its ~17KB record
-   * buffer — the OOM site on low-heap C3 boards).
+   * buffer — the OOM site on low-heap C3 boards). Never applied when
+   * username/password are set, so Basic Auth credentials never go out over
+   * the downgraded hop.
    */
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr, bool* cancelFlag = nullptr,

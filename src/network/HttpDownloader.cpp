@@ -110,7 +110,13 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
         LOG_ERR("HTTP", "wolfSSL bad redirect: %d", status);
         return HttpDownloader::HTTP_ERROR;
       }
-      if (downgradeRedirectsToHttp && url.rfind("https://", 0) == 0) {
+      // Credentials never travel over the downgraded hop: the next loop
+      // iteration re-adds the Authorization header from `username`/`password`
+      // unconditionally, and there's no way to withhold it from just this
+      // one request without changing that header logic. Skipping the
+      // downgrade instead keeps Basic Auth on TLS, at the cost of the
+      // second TLS session's ~17KB record buffer on this hop.
+      if (downgradeRedirectsToHttp && username.empty() && password.empty() && url.rfind("https://", 0) == 0) {
         // Fetch the redirect target over plain HTTP. GitHub's release-asset
         // CDN serves its signed URLs on both schemes, and skipping the second
         // TLS session removes its ~17KB record buffer — the MEMORY_E /

@@ -499,7 +499,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   // starving the transfer. They repopulate on demand after the download.
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseAllFontMemory();
-    LOG_DBG("FONT", "Free heap after SD font cache release: %d bytes", ESP.getFreeHeap());
+    LOG_DBG("FONT", "Free heap after SD font cache release: %u bytes", ESP.getFreeHeap());
   }
 
   // Check before touching the family directory so a failed update leaves the

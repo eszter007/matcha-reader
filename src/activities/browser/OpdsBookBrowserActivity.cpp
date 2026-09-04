@@ -508,7 +508,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
       ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
     LOG_ERR("OPDS", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     state = BrowserState::ERROR;
-    errorMessage = tr(STR_DOWNLOAD_FAILED);
+    errorMessage = tr(STR_LOW_MEMORY_RETRY);
     requestUpdate();
     return;
   }
@@ -548,6 +548,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
     clearBookCache(filename);
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
+    requestUpdate();
     fetchFeed(currentPath);
     return;
   } else if (result == HttpDownloader::ABORTED) {
@@ -560,6 +561,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
     }
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
+    requestUpdate();
     fetchFeed(currentPath);
     return;
   } else {
