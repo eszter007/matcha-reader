@@ -32,10 +32,13 @@ struct Rule {
 // (0xC3, 0xC5) can ever be the tail of a longer sequence, and every match
 // therefore lands on a codepoint boundary.
 //
-// Coverage is the three regular conjugations plus productive noun/adjective
-// morphology. Suppletive verbs (être, avoir, aller, faire, pouvoir, vouloir,
-// savoir, prendre, voir, dire) are not rule-reachable — "est", "ont", "fut",
-// "vais", "peut" share no stem with their lemma — and belong in a .syn.
+// Coverage is the three regular conjugations, the productive stem-alternating
+// families built on them (-eindre/-aindre/-oindre, -aître, -uire), adjective
+// -> adverb (-ment), and productive noun/adjective morphology. Suppletive
+// verbs (être, avoir, aller, faire, pouvoir, vouloir, savoir, prendre, voir,
+// dire) are not rule-reachable — "est", "ont", "fut", "vais", "peut" share no
+// stem with their lemma — and belong in a .syn, same as the irregular passé
+// simple of -aître verbs ("connus", "naquit").
 // clang-format off
 constexpr Rule kFrenchRules[] = {
     // ── Noun and adjective plurals ──────────────────────────────────
@@ -212,13 +215,133 @@ constexpr Rule kFrenchRules[] = {
     {"us", "re"},
     {"ues", "re"},
     {"ant", "re"},      // vendant → vendre
+
+    // ── Third conjugation, stem-changing (-eindre/-aindre/-oindre) ──
+    // craindre, peindre, joindre, éteindre, atteindre, plaindre and their
+    // compounds swap the infinitive's "eind/aind/oind" for "eign/aign/oign"
+    // everywhere except the singular present, the past participle, and the
+    // future/conditional (whose stem is the plain infinitive minus "e", so
+    // the generic "-re" rules above already resolve them: éteindra → éteindre).
+    {"eins", "eindre"},      // peins → peindre
+    {"eint", "eindre"},      // peint → peindre (present il, and the participle)
+    {"eignons", "eindre"},
+    {"eignez", "eindre"},
+    {"eignent", "eindre"},   // peignent → peindre
+    {"eignais", "eindre"},
+    {"eignait", "eindre"},
+    {"eignions", "eindre"},
+    {"eigniez", "eindre"},
+    {"eignaient", "eindre"},
+    {"eignis", "eindre"},
+    {"eignit", "eindre"},    // éteignit → éteindre
+    {"eignîmes", "eindre"},
+    {"eignîtes", "eindre"},
+    {"eignirent", "eindre"},
+    {"eigne", "eindre"},
+    {"eignes", "eindre"},
+    {"eignant", "eindre"},
+
+    {"ains", "aindre"},      // crains → craindre
+    {"aint", "aindre"},
+    {"aignons", "aindre"},
+    {"aignez", "aindre"},
+    {"aignent", "aindre"},
+    {"aignais", "aindre"},
+    {"aignait", "aindre"},
+    {"aignions", "aindre"},
+    {"aigniez", "aindre"},
+    {"aignaient", "aindre"},
+    {"aignis", "aindre"},
+    {"aignit", "aindre"},
+    {"aignîmes", "aindre"},
+    {"aignîtes", "aindre"},
+    {"aignirent", "aindre"},
+    {"aigne", "aindre"},
+    {"aignes", "aindre"},
+    {"aignant", "aindre"},
+
+    {"oins", "oindre"},      // joins → joindre
+    {"oint", "oindre"},
+    {"oignons", "oindre"},
+    {"oignez", "oindre"},
+    {"oignent", "oindre"},
+    {"oignais", "oindre"},
+    {"oignait", "oindre"},
+    {"oignions", "oindre"},
+    {"oigniez", "oindre"},
+    {"oignaient", "oindre"},
+    {"oignis", "oindre"},
+    {"oignit", "oindre"},
+    {"oignîmes", "oindre"},
+    {"oignîtes", "oindre"},
+    {"oignirent", "oindre"},
+    {"oigne", "oindre"},
+    {"oignes", "oindre"},
+    {"oignant", "oindre"},
+
+    // ── -aître verbs (connaître, paraître, naître, and compounds) ───
+    // Passé simple is genuinely suppletive per verb ("connus", "naquit"
+    // share no stem with "connaître"/"naître") and belongs in a .syn like
+    // the verbs in the file header comment, not a rule here. Present
+    // singular ("connais"/"parais") is deliberately not covered either:
+    // "ais" is a 3-byte suffix that the generic {"ais","er"} rule (First
+    // conjugation, above) already claims, and addRuleVariants() emits
+    // same-length candidates in table order, so a later "ais"->"aître"
+    // entry here would always lose to it for a common collision like
+    // "parais" -> wrongly "parer" instead of "paraître".
+    {"aît", "aître"},        // connaît → connaître
+    {"aissons", "aître"},
+    {"aissez", "aître"},
+    {"aissent", "aître"},
+    {"aissais", "aître"},
+    {"aissait", "aître"},
+    {"aissions", "aître"},
+    {"aissiez", "aître"},
+    {"aissaient", "aître"},
+    {"aissant", "aître"},
+
+    // ── -uire verbs (conduire, construire, cuire, produire, traduire) ─
+    // Future/conditional already resolve through the generic "-re" rules
+    // above, same reasoning as -eindre/-aindre/-oindre.
+    // The bare "uit" suffix is deliberately not covered: it is too broad and
+    // wrongly claims common non-verb words like "nuit" (night) and "bruit"
+    // (noise), whose "wrong" reading ("nuire", "bruire") also happens to be a
+    // real, rarer verb — the same table-order collision class as the -aître
+    // "ais" case above. Narrowed to the "-duire"/"-truire" subfamilies plus
+    // "cuire" itself, which still covers every verb this PR targets.
+    {"uis", "uire"},         // conduis → conduire
+    {"duit", "duire"},       // conduit → conduire (present il, and the participle)
+    {"truit", "truire"},     // construit → construire
+    {"cuit", "cuire"},       // cuit → cuire
+    {"uisons", "uire"},
+    {"uisez", "uire"},
+    {"uisent", "uire"},
+    {"uisais", "uire"},
+    {"uisait", "uire"},
+    {"uisions", "uire"},
+    {"uisiez", "uire"},
+    {"uisaient", "uire"},
+    {"uisis", "uire"},
+    {"uisit", "uire"},       // conduisit → conduire
+    {"uisîmes", "uire"},
+    {"uisîtes", "uire"},
+    {"uisirent", "uire"},
+    {"uisant", "uire"},
+
+    // ── Adjective → adverb (-ment) ───────────────────────────────────
+    // Only the consonant-stem pattern ("lent" -> feminine "lente" -> "lentement").
+    // The vowel-stem pattern ("rapide" -> "rapidement") would need a bare
+    // "ment" suffix, which at the same probe length shadows the third-person
+    // plural of every -mer verb ("ils aiment" -> wrongly "ai", not "aimer").
+    {"ement", ""},           // lentement → lent
 };
 // clang-format on
 
-// Longest `from` in kFrenchRules, in bytes ("issaient", "assions", "geâmes"
-// at 8). The probe loop counts down from here, so it only has to be an upper
-// bound; a rule longer than this would simply never fire.
-constexpr uint8_t FRENCH_MAX_SUFFIX = 8;
+// Longest `from` in kFrenchRules, in bytes ("aissaient", "eignaient" and
+// siblings, "eignîmes" and siblings, at 9). The probe loop counts down from
+// here, so it only has to be an upper bound; a rule longer than this would
+// simply never fire.
+constexpr uint8_t FRENCH_MAX_SUFFIX = 9;
 
 // Clitics that elide before a vowel. The layout engine treats the apostrophe as
 // a word character (ParsedText.cpp isWordCharacter), so the page token for
