@@ -117,6 +117,16 @@ TEST(French, AitreVerbs) {
   EXPECT_TRUE(contains(french("naissant"), "naître"));
 }
 
+TEST(French, AitreDoesNotClaimTheAmbiguousPresentSingular) {
+  // "ais" (present singular: "connais", "parais") is not rule-reachable: it is
+  // the same 3-byte suffix the generic First-conjugation {"ais","er"} rule
+  // already claims, and same-length candidates are emitted in table order, so
+  // a lookup would stop at "parer" (a real, common headword) before ever
+  // trying "paraître" if both were candidates. Leaving "ais" uncovered avoids
+  // that wrong lemma winning.
+  EXPECT_FALSE(contains(french("parais"), "paraître"));
+}
+
 TEST(French, UireVerbs) {
   EXPECT_TRUE(contains(french("conduit"), "conduire"));
   EXPECT_TRUE(contains(french("conduisons"), "conduire"));

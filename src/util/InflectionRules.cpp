@@ -282,8 +282,13 @@ constexpr Rule kFrenchRules[] = {
     // ── -aître verbs (connaître, paraître, naître, and compounds) ───
     // Passé simple is genuinely suppletive per verb ("connus", "naquit"
     // share no stem with "connaître"/"naître") and belongs in a .syn like
-    // the verbs in the file header comment, not a rule here.
-    {"ais", "aître"},        // connais → connaître
+    // the verbs in the file header comment, not a rule here. Present
+    // singular ("connais"/"parais") is deliberately not covered either:
+    // "ais" is a 3-byte suffix that the generic {"ais","er"} rule (First
+    // conjugation, above) already claims, and addRuleVariants() emits
+    // same-length candidates in table order, so a later "ais"->"aître"
+    // entry here would always lose to it for a common collision like
+    // "parais" -> wrongly "parer" instead of "paraître".
     {"aît", "aître"},        // connaît → connaître
     {"aissons", "aître"},
     {"aissez", "aître"},
