@@ -182,7 +182,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
-    errorMessage_ = "Failed to fetch font list";
+    errorMessage_ = tr(STR_FONT_LIST_FETCH_FAILED);
     Storage.remove(MANIFEST_TMP);
     return false;
   }

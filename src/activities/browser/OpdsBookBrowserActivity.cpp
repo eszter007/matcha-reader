@@ -493,8 +493,14 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 
   // The selected book data is now copied into the download URL, filename, and
   // status line. Reclaim the catalog while TLS owns its record buffers; reload
-  // the current feed when the transfer finishes.
-  releaseEntries();
+  // the current feed when the transfer finishes. Clear the vectors directly
+  // rather than calling releaseEntries(): the requestUpdate(true) above
+  // already rendered the DOWNLOADING screen (and its Cancel button) over the
+  // old catalog rows, so closeRouting() here would only block taps on that
+  // Cancel button until the first progress update, not protect against any
+  // stale row target.
+  std::vector<OpdsEntry>().swap(entries);
+  std::vector<fui::ListItem>().swap(rowItems);
 
   // Rebuildable SD-font caches can hold tens of KB the TLS session needs for
   // a multi-MB book; release them up front (they repopulate on demand) and
