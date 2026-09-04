@@ -1,3 +1,4 @@
+#include <Epub.h>
 #include <Epub/Page.h>
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
@@ -6,6 +7,7 @@
 #include <array>
 #include <climits>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -92,5 +94,128 @@ TEST_P(ChapterHtmlSlimParserTest, KeepsCssVerticalAlignAndInternalLinkMetadata) 
 
 INSTANTIATE_TEST_SUITE_P(CssVerticalAlign, ChapterHtmlSlimParserTest,
                          ::testing::Values("vertical-align: super", "vertical-align: sub"));
+
+class ChapterHtmlSlimParserFrenchInversionTest : public ::testing::Test {
+ protected:
+  std::string filepath = "unused.xhtml";
+  GfxRenderer renderer;
+  CssParser cssParser{cssCacheDir()};
+  std::shared_ptr<Epub> epub = std::make_shared<Epub>();
+  std::unique_ptr<ChapterHtmlSlimParser> parser;
+
+  void makeParser(const char* language) {
+    epub->language = language;
+    parser = std::make_unique<ChapterHtmlSlimParser>(
+        epub, filepath, renderer, 0, 1.0f, false, 0, static_cast<uint16_t>(renderer.getScreenWidth()),
+        static_cast<uint16_t>(renderer.getScreenHeight()), false, false, false,
+        std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>{}, true, "", "", 0,
+        std::vector<std::string>{}, std::function<void()>{}, &cssParser);
+    parser->currentTextBlock = std::make_unique<ParsedText>(false);
+  }
+
+  // Feeds `text` and forces a flush, as if it were followed by whitespace.
+  void feedWord(const char* text) {
+    ChapterHtmlSlimParser::characterData(parser.get(), text, static_cast<int>(strlen(text)));
+    parser->flushPartWordBuffer();
+  }
+};
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsVerbAndPronoun) {
+  makeParser("fr");
+  feedWord("songeai-je");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 3u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "songeai");
+  EXPECT_EQ(parser->currentTextBlock->words[1], "-");
+  EXPECT_EQ(parser->currentTextBlock->words[2], "je");
+  // The connector and pronoun stay glued to the verb: no rendered gap, matching the source.
+  EXPECT_TRUE(parser->currentTextBlock->wordContinues[1]);
+  EXPECT_TRUE(parser->currentTextBlock->wordContinues[2]);
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicT) {
+  makeParser("fr");
+  feedWord("pense-t-il");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 3u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "pense");
+  EXPECT_EQ(parser->currentTextBlock->words[1], "-t-");
+  EXPECT_EQ(parser->currentTextBlock->words[2], "il");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWhenUppercased) {
+  makeParser("fr");
+  // Simulates the buffer after a CSS text-transform: uppercase run has already applied --
+  // the euphonic "-t-" check must fold case, not just match lowercase 't'.
+  feedWord("PENSE-T-IL");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 3u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "PENSE");
+  EXPECT_EQ(parser->currentTextBlock->words[1], "-T-");
+  EXPECT_EQ(parser->currentTextBlock->words[2], "IL");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsWithTrailingPunctuation) {
+  makeParser("fr");
+  // The tokenizer only splits on whitespace, so punctuation right after the inversion (a
+  // comma before a dialogue tag, a question mark) stays glued to the buffered word.
+  feedWord("songeai-je,");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 3u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "songeai");
+  EXPECT_EQ(parser->currentTextBlock->words[1], "-");
+  EXPECT_EQ(parser->currentTextBlock->words[2], "je,");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWithTrailingPunctuation) {
+  makeParser("fr");
+  feedWord("pense-t-il?");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 3u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "pense");
+  EXPECT_EQ(parser->currentTextBlock->words[1], "-t-");
+  EXPECT_EQ(parser->currentTextBlock->words[2], "il?");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWhole) {
+  makeParser("fr");
+  feedWord("rendez-vous");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 1u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "rendez-vous");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWholeWithTrailingPunctuation) {
+  makeParser("fr");
+  feedWord("rendez-vous.");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 1u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "rendez-vous.");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsSecondLexicalizedCompoundWhole) {
+  makeParser("fr");
+  // Would otherwise match the euphonic "-t-on" pattern (verb "dira" + pronoun "on").
+  feedWord("qu'en-dira-t-on");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 1u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "qu'en-dira-t-on");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsOrdinaryCompoundsWhole) {
+  makeParser("fr");
+  feedWord("grand-mère");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 1u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "grand-mère");
+}
+
+TEST_F(ChapterHtmlSlimParserFrenchInversionTest, DoesNotSplitInNonFrenchBooks) {
+  makeParser("en");
+  feedWord("songeai-je");
+
+  ASSERT_EQ(parser->currentTextBlock->size(), 1u);
+  EXPECT_EQ(parser->currentTextBlock->words[0], "songeai-je");
+}
 
 }  // namespace

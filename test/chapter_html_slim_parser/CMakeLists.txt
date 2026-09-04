@@ -8,6 +8,7 @@ add_executable(ChapterHtmlSlimParserTest
   ${REPO_ROOT}/lib/Epub/Epub/RubyGlossary.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageDimsProbe.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
+  ${REPO_ROOT}/src/util/InflectionRules.cpp
 )
 
 target_include_directories(ChapterHtmlSlimParserTest PRIVATE

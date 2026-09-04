@@ -90,11 +90,19 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 83 (fork numbering)
+### Version 84 (fork numbering)
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 84 keeps the version 83 serialized layout unchanged. It was bumped
+because, in French books, a word ending in a hyphenated subject pronoun
+("songeai-je", "pense-t-il", "dit-elle") is now split into extra word tokens
+so the verb and the pronoun are each independently selectable for dictionary
+lookup, while a lexicalized compound like "rendez-vous" stays one token. This
+changes the token count and positions on any page cached under v83 that
+contains such a word.
 
 Version 83 merges upstream's v43 and v44 changes into the fork's format:
 paragraph base direction no longer follows a direction change on an inline
