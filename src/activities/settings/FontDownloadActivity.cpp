@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -24,14 +25,19 @@
 namespace fui = freeink::ui;
 
 namespace {
-// Entry gate for the families_ build, sized against the published manifest:
-// 21 families / 84 files in ~17KB of JSON, whose parsed document stays live
-// while families_ and its per-family strings and vectors are allocated beside
-// it. That peaks around 40KB, so require a little over it, plus a contiguous
-// block for the one big allocation (families_.reserve). Same shape and the same
-// reasoning as the styled-definition gate in DictHtmlPages.cpp.
-constexpr size_t MANIFEST_BUILD_MIN_FREE_HEAP = 48 * 1024;
-constexpr size_t MANIFEST_BUILD_MIN_MAX_ALLOC = 12 * 1024;
+// Entry gate for the whole manifest screen, sized against the published
+// manifest: 21 families / 84 files in ~17KB of JSON, whose parsed document
+// stays live while families_ and its per-family strings and vectors are
+// allocated beside it. That build peaks around 40KB, so require a little over
+// it, plus a contiguous block for the one big allocation (families_.reserve).
+// Same shape and the same reasoning as the styled-definition gate in
+// DictHtmlPages.cpp. Checked both before the fetch (issue #191: a book open on
+// a large SD-card font can leave too little heap for the WiFi/TLS connect
+// itself, which -- like the JSON build below -- runs std::string/std::vector
+// growth through the throwing operator new) and again before the build (the
+// TLS teardown in between fragments the heap further).
+constexpr size_t FONT_SCREEN_MIN_FREE_HEAP = 48 * 1024;
+constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 12 * 1024;
 }  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -108,6 +114,18 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
   }
   requestUpdateAndWait();
 
+  // The reader that opened this screen keeps its EPUB, layout and SD-font caches
+  // resident underneath (activities are pushed on a stack, not replaced -- see
+  // ActivityManager), and the WiFi selection screen just shown may have rendered
+  // a CJK SSID and repopulated them further. That is exactly the setup
+  // CrossPointWebServerActivity and CalibreConnectActivity already release
+  // before their own WiFi-heavy work, for the same reason: reclaim what a
+  // Japanese book's SD font caches hold (tens of KB at a large size) before the
+  // TLS handshake and manifest build below, both of which run
+  // std::string/std::vector growth that aborts on OOM (issue #191). Fonts
+  // reload lazily once the reader resumes.
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+
   if (!fetchAndParseManifest()) {
     {
       RenderLock lock(*this);
@@ -134,6 +152,19 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
 // --- Manifest fetching ---
 
 bool FontDownloadActivity::fetchAndParseManifest() {
+  // Refuse before even opening the connection: the WiFi/TLS handshake and the
+  // manual HTTP client (SecureClient/SecureHttpClient) run their own
+  // std::string/std::vector growth with no heap gate of their own, on
+  // whatever the reader left behind -- entering this screen from inside a
+  // book on a large SD-card font can leave too little of it (issue #191).
+  // Failing fast here also skips a WiFi/TLS round trip that would only end in
+  // the same low-memory error once the build gate below is reached anyway.
+  if (ESP.getFreeHeap() < FONT_SCREEN_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < FONT_SCREEN_MIN_MAX_ALLOC) {
+    LOG_ERR("FONT", "Low heap before manifest fetch (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
+    return false;
+  }
+
   // Download manifest to a temp file on SD card to avoid holding both
   // TLS buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
@@ -182,8 +213,8 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // operator new, which under -fno-exceptions calls abort() instead of returning
   // null, so exhausting the heap here panics to the boot screen instead of
   // reporting a failure. Refuse up front, while refusing is still possible.
-  if (ESP.getFreeHeap() < MANIFEST_BUILD_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < MANIFEST_BUILD_MIN_MAX_ALLOC) {
-    LOG_ERR("FONT", "Low heap for manifest (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  if (ESP.getFreeHeap() < FONT_SCREEN_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < FONT_SCREEN_MIN_MAX_ALLOC) {
+    LOG_ERR("FONT", "Low heap for manifest build (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
     return false;
   }
