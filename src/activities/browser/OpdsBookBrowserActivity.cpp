@@ -243,7 +243,8 @@ void OpdsBookBrowserActivity::buildBrowsingScreen(UiScreen& screen) {
   // Transient per-render: sized once via reserve, points into `entries`
   // strings, freed on scope exit.
   // rowItems is built whenever entries changes (see rebuildRowItems(), called
-  // from fetchFeed()/releaseEntries()) and reused here on every repaint.
+  // from fetchFeed(); releaseEntries() clears it directly) and reused here on
+  // every repaint.
   fui::ListProps props;
   props.items = rowItems.data();
   props.count = static_cast<uint16_t>(rowItems.size());
