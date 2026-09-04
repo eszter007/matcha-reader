@@ -152,14 +152,24 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
 // --- Manifest fetching ---
 
 bool FontDownloadActivity::fetchAndParseManifest() {
+  // Rebuildable SD-font caches can hold tens of KB the TLS session needs;
+  // release them before the heap gate below, not after, so a low-heap entry
+  // caused by those very caches (issue #191: a book open on a large SD-card
+  // font) still gets a chance to pass instead of failing before reclaiming
+  // anything.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+  }
+
   // Refuse before even opening the connection: the WiFi/TLS handshake and the
   // manual HTTP client (SecureClient/SecureHttpClient) run their own
-  // std::string/std::vector growth with no heap gate of their own, on
-  // whatever the reader left behind -- entering this screen from inside a
-  // book on a large SD-card font can leave too little of it (issue #191).
-  // Failing fast here also skips a WiFi/TLS round trip that would only end in
-  // the same low-memory error once the build gate below is reached anyway.
-  if (ESP.getFreeHeap() < FONT_SCREEN_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < FONT_SCREEN_MIN_MAX_ALLOC) {
+  // std::string/std::vector growth with no heap gate of their own. Failing
+  // fast here also skips a WiFi/TLS round trip that would only end in the
+  // same low-memory error once the build gate below is reached anyway. Uses
+  // the stricter of the screen's own floor and the TLS floor, since this one
+  // check now covers both the connection and the transfer.
+  if (ESP.getFreeHeap() < std::max<size_t>(FONT_SCREEN_MIN_FREE_HEAP, HttpDownloader::MIN_TLS_FREE_HEAP) ||
+      ESP.getMaxAllocHeap() < std::max<size_t>(FONT_SCREEN_MIN_MAX_ALLOC, HttpDownloader::MIN_TLS_MAX_ALLOC)) {
     LOG_ERR("FONT", "Low heap before manifest fetch (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
     return false;
@@ -172,7 +182,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
-    errorMessage_ = "Failed to fetch font list";
+    errorMessage_ = tr(STR_FONT_LIST_FETCH_FAILED);
     Storage.remove(MANIFEST_TMP);
     return false;
   }
@@ -484,6 +494,25 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   }
   requestUpdateAndWait();
 
+  // Rebuildable SD-font caches (glyph/kern arenas, CJK fallback tables) can
+  // hold tens of KB the TLS session needs; release them up front rather than
+  // starving the transfer. They repopulate on demand after the download.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+    LOG_DBG("FONT", "Free heap after SD font cache release: %u bytes", ESP.getFreeHeap());
+  }
+
+  // Check before touching the family directory so a failed update leaves the
+  // installed family unchanged.
+  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
+      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
+    LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    RenderLock lock(*this);
+    state_ = ERROR;
+    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
+    return;
+  }
+
   if (!fontInstaller_.ensureFamilyDir(family.name.c_str())) {
     RenderLock lock(*this);
     state_ = ERROR;
@@ -525,7 +554,13 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
           }
           requestUpdate(true);
         },
-        &cancelRequested_);
+        // Redirects stay on HTTPS: CRC32 (below) catches transmission errors
+        // but not a deliberate substitution by an on-path attacker, who could
+        // serve a malicious .cpfont over a downgraded HTTP hop with a forged
+        // CRC32 to match. HAVE_MAX_FRAGMENT's 2KB TLS records already remove
+        // most of the second TLS session's heap cost, so the C3 doesn't need
+        // the HTTP downgrade to stay out of MEMORY_E territory here.
+        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/false);
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(family.name.c_str());
