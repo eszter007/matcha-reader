@@ -95,6 +95,47 @@ TEST(French, SecondAndThirdConjugation) {
   EXPECT_TRUE(contains(french("attendait"), "attendre"));
 }
 
+TEST(French, EindreAindreOindreStemAlternation) {
+  // Passé simple: the case that motivated this rule set (s'éteindre).
+  EXPECT_TRUE(contains(french("éteignit"), "éteindre"));
+  // Present singular / past participle use "eins"/"eint", not "eign".
+  EXPECT_TRUE(contains(french("peins"), "peindre"));
+  EXPECT_TRUE(contains(french("peint"), "peindre"));
+  // Present plural, imperfect and present participle use "eign"/"aign"/"oign".
+  EXPECT_TRUE(contains(french("atteignent"), "atteindre"));
+  EXPECT_TRUE(contains(french("craignait"), "craindre"));
+  EXPECT_TRUE(contains(french("craignant"), "craindre"));
+  EXPECT_TRUE(contains(french("rejoignirent"), "rejoindre"));
+  // Future/conditional already resolve through the generic "-re" rules.
+  EXPECT_TRUE(contains(french("éteindra"), "éteindre"));
+}
+
+TEST(French, AitreVerbs) {
+  EXPECT_TRUE(contains(french("connaît"), "connaître"));
+  EXPECT_TRUE(contains(french("connaissons"), "connaître"));
+  EXPECT_TRUE(contains(french("paraissait"), "paraître"));
+  EXPECT_TRUE(contains(french("naissant"), "naître"));
+}
+
+TEST(French, UireVerbs) {
+  EXPECT_TRUE(contains(french("conduit"), "conduire"));
+  EXPECT_TRUE(contains(french("conduisons"), "conduire"));
+  EXPECT_TRUE(contains(french("construisait"), "construire"));
+  EXPECT_TRUE(contains(french("conduisit"), "conduire"));
+  // Future/conditional already resolve through the generic "-re" rules.
+  EXPECT_TRUE(contains(french("conduira"), "conduire"));
+}
+
+TEST(French, MentAdverbs) {
+  EXPECT_TRUE(contains(french("lentement"), "lent"));
+  EXPECT_TRUE(contains(french("grandement"), "grand"));
+  // The bare "ment" pattern (rapide -> rapidement) is deliberately not
+  // covered: it would shadow "ils aiment" -> "aimer" at the same probe
+  // length (see the comment on the "ement" rule).
+  EXPECT_TRUE(contains(french("aiment"), "aimer"));
+  EXPECT_FALSE(contains(french("aiment"), "ai"));
+}
+
 TEST(French, NounAndAdjectiveMorphology) {
   EXPECT_TRUE(contains(french("livres"), "livre"));
   EXPECT_TRUE(contains(french("journaux"), "journal"));
