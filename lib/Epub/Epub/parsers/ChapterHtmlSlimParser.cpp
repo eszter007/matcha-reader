@@ -1599,6 +1599,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   displayHeight = static_cast<int>(dims.height * scale + 0.5f);
                   if (displayWidth < 1) displayWidth = 1;
                   if (displayHeight < 1) displayHeight = 1;
+                  // Rounding can push the result a pixel past the box; clamp to honor
+                  // the "fit within the box" contract exactly.
+                  if (displayWidth > boxWidth) displayWidth = boxWidth;
+                  if (displayHeight > boxHeight) displayHeight = boxHeight;
                   LOG_DBG("EHP", "Display size from CSS height+width (aspect preserved): %dx%d", displayWidth,
                           displayHeight);
                 } else if (hasCssHeight && !hasCssWidth && dims.width > 0 && dims.height > 0) {
