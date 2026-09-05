@@ -714,10 +714,25 @@ namespace {
 // A drop cap is only meaningful on a letter. Digits and punctuation are excluded because a
 // stylesheet applies `::first-letter` to whole classes of paragraph, and one that happens to
 // open with a quote mark or a numeral would otherwise blow that character up to four lines
-// tall. Non-ASCII is assumed to be a letter (accented capitals, Cyrillic, Greek).
+// tall. The punctuation that actually opens a paragraph is mostly NON-ASCII -- the curly
+// quotes and guillemets EPUBs set dialogue with -- so the ranges holding it are named here and
+// anything outside them is taken to be a letter (accented capitals, Cyrillic, Greek, kana).
+// Same ranges isWordCharacter() rejects, minus its allowance for the apostrophes U+2018/U+2019,
+// which open a quotation as often as they sit inside a word.
 bool isDropCapLetter(const uint32_t cp) {
-  if (cp >= 0x80) return true;
-  return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
+  if (cp < 0x80) return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
+  // Latin-1 punctuation and symbols (« » ¡ ¿ §), keeping the three that are letters.
+  if (cp >= 0x00A0 && cp <= 0x00BF) return cp == 0x00AA || cp == 0x00B5 || cp == 0x00BA;
+  if (cp == 0x00D7 || cp == 0x00F7) return false;  // × ÷
+  // General punctuation through the symbol blocks: “ ” ‘ ’ — dashes, the zero-width format
+  // characters, arrows and maths.
+  if (cp >= 0x2000 && cp <= 0x2BFF) return false;
+  if (cp >= 0x2E00 && cp <= 0x2E7F) return false;  // supplemental punctuation
+  if (cp >= 0x3000 && cp <= 0x303F) return false;  // CJK punctuation 、。「」『』
+  if (cp >= 0xFF01 && cp <= 0xFF20) return false;  // fullwidth punctuation and digits
+  if (cp >= 0xFF3B && cp <= 0xFF40) return false;
+  if (cp >= 0xFF5B && cp <= 0xFF65) return false;
+  return true;
 }
 
 }  // namespace
@@ -1686,11 +1701,15 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         xpos = (effectivePageWidth - contentWidth) / 2;
       }
     } else {
+      // effectivePageWidth is already reduced by the indent, so the aligned positions below are
+      // measured from the indented origin and must be shifted back onto it. That matters only
+      // for a drop cap: resolveLineIndent reserves its column whatever the alignment, while a
+      // first-line text-indent resolves to 0 unless the alignment is the natural one.
       xpos = firstLineIndent;
       if (effectiveAlignment == CssTextAlign::Right) {
-        xpos = effectivePageWidth - contentWidth;
+        xpos = firstLineIndent + effectivePageWidth - contentWidth;
       } else if (effectiveAlignment == CssTextAlign::Center) {
-        xpos = (effectivePageWidth - contentWidth) / 2;
+        xpos = firstLineIndent + (effectivePageWidth - contentWidth) / 2;
       }
     }
 
@@ -1777,11 +1796,13 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
       }
     } else {
       // LTR: position words from left to right
+      // See the reordered branch above: effectivePageWidth is measured from the indented
+      // origin, so an aligned line has to be shifted back onto it to clear a drop cap column.
       int xpos = firstLineIndent + extraStartOffset;
       if (effectiveAlignment == CssTextAlign::Right) {
-        xpos = effectivePageWidth - lineWordWidthSum - totalNaturalGaps;
+        xpos = firstLineIndent + effectivePageWidth - lineWordWidthSum - totalNaturalGaps;
       } else if (effectiveAlignment == CssTextAlign::Center) {
-        xpos = (effectivePageWidth - lineWordWidthSum - totalNaturalGaps) / 2;
+        xpos = firstLineIndent + (effectivePageWidth - lineWordWidthSum - totalNaturalGaps) / 2;
       }
 
       for (size_t wordIdx = 0; wordIdx < lineWordCount; wordIdx++) {

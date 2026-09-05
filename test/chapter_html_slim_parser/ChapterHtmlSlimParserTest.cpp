@@ -251,12 +251,12 @@ class DropCapTest : public ::testing::Test {
     return dir.string();
   }
 
-  void makeParser(const std::string& css) {
+  void makeParser(const std::string& css, const CssTextAlign alignment = CssTextAlign::Justify) {
     ASSERT_TRUE(loadCss(css));
     parser = std::make_unique<ChapterHtmlSlimParser>(
-        nullptr, filepath, renderer, 0, 1.0f, false, 0, static_cast<uint16_t>(renderer.getScreenWidth()),
-        static_cast<uint16_t>(renderer.getScreenHeight()), false, false, false,
-        std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>{}, true, "", "", 0,
+        nullptr, filepath, renderer, 0, 1.0f, false, static_cast<uint8_t>(alignment),
+        static_cast<uint16_t>(renderer.getScreenWidth()), static_cast<uint16_t>(renderer.getScreenHeight()), false,
+        false, false, std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>{}, true, "", "", 0,
         std::vector<std::string>{}, std::function<void()>{}, &cssParser);
     parser->currentTextBlock = std::make_unique<ParsedText>(false);
     // The root entry beginParse() would have pushed: block elements read the enclosing style
@@ -382,6 +382,46 @@ TEST_F(DropCapTest, DropsDecorationAndScriptBitsFromTheDropCapFace) {
   const auto& cap = lines[0]->getDropCap();
   ASSERT_TRUE(cap.present());
   EXPECT_EQ(cap.style, static_cast<uint8_t>(EpdFontFamily::BOLD));
+}
+
+// The reserved column is an obstruction, not a text-indent: every alignment has to clear it.
+// extractLine's right/center paths derive x from effectivePageWidth, which is already reduced by
+// the indent, so without adding it back the line slides left into the drop cap.
+TEST_F(DropCapTest, RightAndCentreAlignedLinesStayClearOfTheColumn) {
+  for (const auto alignment : {CssTextAlign::Right, CssTextAlign::Center}) {
+    lines.clear();
+    makeParser("p::first-letter { font-size: 300%; }\n", alignment);
+    openParagraph();
+    feedParagraph(60);
+    layout();
+
+    ASSERT_FALSE(lines.empty());
+    const auto& cap = lines[0]->getDropCap();
+    ASSERT_TRUE(cap.present());
+    const int expectedIndent = GLYPH_INK * cap.scale + SPACE_WIDTH;
+    ASSERT_GE(stubLineXPos.size(), 3u);
+    for (size_t i = 0; i < 3; ++i) {
+      ASSERT_FALSE(stubLineXPos[i].empty());
+      EXPECT_GE(stubLineXPos[i][0], expectedIndent)
+          << "alignment " << static_cast<int>(alignment) << ", line " << i << " overlaps the drop cap";
+    }
+  }
+}
+
+// `::first-letter` is applied across whole classes of paragraph, so the guard has to hold for the
+// quote marks EPUBs actually open dialogue with -- not just the ASCII one.
+TEST_F(DropCapTest, LeavesAParagraphOpeningWithANonAsciiQuoteAlone) {
+  for (const char* opening : {"\xE2\x80\x9CLe", "\xC2\xABLe"}) {  // U+201C left double quote, U+00AB «
+    lines.clear();
+    makeParser("p::first-letter { font-size: 300%; }\n");
+    openParagraph();
+    feedWord(opening);
+    for (int i = 0; i < 20; ++i) feedWord("syndicat");
+    layout();
+
+    ASSERT_FALSE(lines.empty());
+    EXPECT_FALSE(lines[0]->getDropCap().present()) << "opening " << opening << " became a drop cap";
+  }
 }
 
 TEST_F(DropCapTest, IgnoresARuleThatOnlyMildlyEnlargesTheLetter) {
