@@ -24,6 +24,14 @@
 
 namespace fui = freeink::ui;
 
+#if defined(FREEINK_MCU_C3)
+// On ESP32-C3 devices, enable HTTP downgrade for GitHub redirects to avoid
+// a second TLS session that can cause MEMORY_E/OOM due to heap fragmentation.
+constexpr bool ALLOW_HTTP_DOWNGRADE = true;
+#else
+constexpr bool ALLOW_HTTP_DOWNGRADE = false;
+#endif
+
 namespace {
 // Entry gate for the whole manifest screen, sized against the published
 // manifest: 21 families / 84 files in ~17KB of JSON, whose parsed document
@@ -182,12 +190,13 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // TLS buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
 
-  // GitHub's release assets redirect via short-lived JWT tokens. On ESP32-C3,
-  // the second TLS session for the redirect can cause MEMORY_E. Enable HTTP
-  // downgrade for the manifest fetch as well. The manifest is JSON and its
-  // integrity is verified by the parser; a corrupted download fails safely.
+  // On ESP32-C3: GitHub's release assets redirect via short-lived JWT tokens.
+  // A second TLS session for the redirect can cause MEMORY_E/OOM. Enable HTTP
+  // downgrade for C3 only; the manifest is JSON and its integrity is verified
+  // by the parser, so a corrupted download fails safely. Non-C3 boards keep
+  // full HTTPS for manifest fetch.
   auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr,
-                nullptr, "", "", true);
+                nullptr, "", "", ALLOW_HTTP_DOWNGRADE);
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
     errorMessage_ = tr(STR_FONT_LIST_FETCH_FAILED);
@@ -566,15 +575,12 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
           }
           requestUpdate(true);
         },
-        // Redirects stay on HTTPS: CRC32 (below) catches transmission errors
-        // but not a deliberate substitution by an on-path attacker, who could
-        // serve a malicious .cpfont over a downgraded HTTP hop with a forged
-        // CRC32 to match. However, on ESP32-C3 devices, the second TLS session
-        // for GitHub's release asset redirect can cause MEMORY_E / OOM errors
-        // due to heap fragmentation. The cpfont CRC32 + format validation
-        // provides some protection even over HTTP. Enable downgrade for C3
-        // compatibility while the manifest (small, no redirect chain) stays on HTTPS.
-        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/ true);
+        // On ESP32-C3: GitHub's release asset URLs redirect via short-lived JWT tokens.
+        // A second TLS session for the redirect can cause MEMORY_E/OOM due to heap
+        // fragmentation. Enable HTTP downgrade for C3 only, trading transport
+        // authenticity for memory safety. CRC32 + cpfont format validation still
+        // protect against corruption. Non-C3 boards keep full HTTPS.
+        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/ ALLOW_HTTP_DOWNGRADE);
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(family.name.c_str());
