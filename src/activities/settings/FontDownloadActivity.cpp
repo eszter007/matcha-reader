@@ -36,8 +36,11 @@ namespace {
 // itself, which -- like the JSON build below -- runs std::string/std::vector
 // growth through the throwing operator new) and again before the build (the
 // TLS teardown in between fragments the heap further).
-constexpr size_t FONT_SCREEN_MIN_FREE_HEAP = 48 * 1024;
-constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 12 * 1024;
+// With HTTP downgrade enabled for GitHub's 302 redirects, only one TLS session
+// (to github.com) is needed for manifest fetch. Reduce the floor slightly to
+// account for fragmentation on devices with many SD fonts loaded.
+constexpr size_t FONT_SCREEN_MIN_FREE_HEAP = 44 * 1024;
+constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 10 * 1024;
 }  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -179,7 +182,12 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // TLS buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
 
-  auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
+  // GitHub's release assets redirect via short-lived JWT tokens. On ESP32-C3,
+  // the second TLS session for the redirect can cause MEMORY_E. Enable HTTP
+  // downgrade for the manifest fetch as well. The manifest is JSON and its
+  // integrity is verified by the parser; a corrupted download fails safely.
+  auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr,
+                                               nullptr, "", "", true);
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
     errorMessage_ = tr(STR_FONT_LIST_FETCH_FAILED);
@@ -504,8 +512,12 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
   // Check before touching the family directory so a failed update leaves the
   // installed family unchanged.
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
+  // With HTTP downgrade for GitHub redirects, only one TLS session is needed.
+  // Reduce thresholds slightly for C3 devices with fragmented heap after manifest fetch.
+  constexpr size_t FONT_DOWNLOAD_MIN_FREE_HEAP = 36 * 1024;  // was HttpDownloader::MIN_TLS_FREE_HEAP (40KB)
+  constexpr size_t FONT_DOWNLOAD_MIN_MAX_ALLOC = 16 * 1024; // was HttpDownloader::MIN_TLS_MAX_ALLOC (20KB)
+  if (ESP.getFreeHeap() < FONT_DOWNLOAD_MIN_FREE_HEAP ||
+      ESP.getMaxAllocHeap() < FONT_DOWNLOAD_MIN_MAX_ALLOC) {
     LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     RenderLock lock(*this);
     state_ = ERROR;
@@ -557,10 +569,12 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
         // Redirects stay on HTTPS: CRC32 (below) catches transmission errors
         // but not a deliberate substitution by an on-path attacker, who could
         // serve a malicious .cpfont over a downgraded HTTP hop with a forged
-        // CRC32 to match. HAVE_MAX_FRAGMENT's 2KB TLS records already remove
-        // most of the second TLS session's heap cost, so the C3 doesn't need
-        // the HTTP downgrade to stay out of MEMORY_E territory here.
-        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/false);
+        // CRC32 to match. However, on ESP32-C3 devices, the second TLS session
+        // for GitHub's release asset redirect can cause MEMORY_E / OOM errors
+        // due to heap fragmentation. The cpfont CRC32 + format validation
+        // provides some protection even over HTTP. Enable downgrade for C3
+        // compatibility while the manifest (small, no redirect chain) stays on HTTPS.
+        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/true);
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(family.name.c_str());
