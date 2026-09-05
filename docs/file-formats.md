@@ -98,7 +98,8 @@ current reader settings, the section is discarded and rebuilt.
 
 Version 85 extends each text block's record with a drop cap trailer — the
 enlarged letter's codepoint (u32), its ink origin relative to the block (two
-i16) and its glyph magnification (u8), all zero on the lines that have none.
+i16), its glyph magnification (u8) and the face it is drawn in (u8, bits 0-1),
+all zero on the lines that have none.
 The layout changes with it: a paragraph whose stylesheet declares
 `::first-letter { font-size: ... }` at 2x or more now takes that letter out of
 the text flow and reserves a column for it, so the opening lines are broken to

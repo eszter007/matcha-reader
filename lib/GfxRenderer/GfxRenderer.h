@@ -396,8 +396,11 @@ class GfxRenderer {
   void drawTextRotated90CCW(int fontId, int x, int y, const char* text, bool black = true,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   // Renders one codepoint magnified by an integer factor, its INK box placed at
-  // (inkLeftX, inkTopY) -- the glyph's own bearings are applied internally, so the caller
-  // positions the visible mark and never has to reason about them. Used for drop caps.
+  // (inkLeftX, inkTopY): the glyph bitmap's top-left lands exactly there, and the glyph's own
+  // left/top bearings are deliberately NOT added. The caller is positioning the visible mark
+  // directly, so a caller that wants the glyph on a baseline applies the bearings itself (see
+  // ParsedText::prepareDropCap, which derives inkTop from the ascender and the top bearing) --
+  // adding them here as well would shift every drop cap by its own bearing twice.
   //
   // Integer nearest-neighbour block replication: each source pixel becomes a scale x scale
   // square. It needs no intermediate buffer (a 4x 18pt capital would be a ~5KB one) and, on a

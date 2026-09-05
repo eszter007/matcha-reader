@@ -731,11 +731,16 @@ bool ParsedText::prepareDropCap(const GfxRenderer& renderer, const int fontId, c
   if (cp == 0 || !isDropCapLetter(cp)) return false;
   const size_t letterBytes = static_cast<size_t>(ptr - start);
 
+  // The face of the word the letter comes from -- an italic chapter opening keeps an italic
+  // initial. Read before the peel below, which can drop the token entirely.
+  const auto style = static_cast<EpdFontFamily::Style>(
+      wordStyles.empty() ? 0 : static_cast<uint8_t>(wordStyles[0]) & TextBlock::DROP_CAP_STYLE_MASK);
+
   int glyphLeft = 0;
   int glyphWidth = 0;
   int glyphTop = 0;
   int glyphHeight = 0;
-  if (!renderer.getGlyphMetrics(fontId, cp, EpdFontFamily::REGULAR, &glyphLeft, &glyphWidth, &glyphTop, &glyphHeight)) {
+  if (!renderer.getGlyphMetrics(fontId, cp, style, &glyphLeft, &glyphWidth, &glyphTop, &glyphHeight)) {
     return false;
   }
   if (glyphWidth <= 0 || glyphHeight <= 0) return false;
@@ -759,6 +764,7 @@ bool ParsedText::prepareDropCap(const GfxRenderer& renderer, const int fontId, c
 
   dropCap.cp = cp;
   dropCap.scale = static_cast<uint8_t>(scale);
+  dropCap.style = static_cast<uint8_t>(style);
   // Ink box origin relative to the block's, on the side the reserved column sits.
   dropCap.inkLeft = blockStyle.isRtl ? static_cast<int16_t>(pageWidth - glyphWidth * scale) : 0;
   // Align the enlarged letter's ink top with where the first line's own capitals start, so the

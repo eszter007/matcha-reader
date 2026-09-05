@@ -172,7 +172,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
   // its column at layout time, so it only has to be drawn. Both offsets are relative to the
   // block's origin and were resolved against the same font metrics the layout used.
   if (dropCap.present()) {
-    renderer.drawCharUpscaled(fontId, dropCap.cp, dropCap.scale, x + dropCap.inkLeft, y + dropCap.inkTop, inkBlack);
+    renderer.drawCharUpscaled(fontId, dropCap.cp, dropCap.scale, x + dropCap.inkLeft, y + dropCap.inkTop, inkBlack,
+                              static_cast<EpdFontFamily::Style>(dropCap.style));
   }
 
   // Resolve ruby collisions left-to-right to prevent adjacent ruby texts from overlapping
@@ -457,6 +458,7 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, dropCap.inkLeft);
   serialization::writePod(file, dropCap.inkTop);
   serialization::writePod(file, dropCap.scale);
+  serialization::writePod(file, dropCap.style);
 
   return true;
 }
@@ -572,6 +574,8 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, block->dropCap.inkLeft);
   serialization::readPod(file, block->dropCap.inkTop);
   serialization::readPod(file, block->dropCap.scale);
+  serialization::readPod(file, block->dropCap.style);
+  block->dropCap.style &= DROP_CAP_STYLE_MASK;
   // Bound what a corrupt record can ask the glyph scaler for: an absurd scale would blow up
   // the block-replication loop (and paint over the page) rather than fail. The cap matches the
   // ceiling ParsedText applies when it chooses the scale.

@@ -352,6 +352,38 @@ TEST_F(DropCapTest, TheLetterLeavesTheTextFlow) {
   EXPECT_EQ(stubLineWords[0][0], "e");
 }
 
+TEST_F(DropCapTest, KeepsTheFaceOfTheWordTheLetterCameFrom) {
+  // An italic chapter opening must not get a regular initial: the glyph is measured and drawn
+  // with the first word's own face, or the reserved column does not match what lands in it.
+  makeParser("p::first-letter { font-size: 300%; }\n");
+  openParagraph();
+  parser->currentTextBlock->addWord("Le", EpdFontFamily::BOLD_ITALIC);
+  for (int i = 0; i < 20; ++i) parser->currentTextBlock->addWord("syndicat", EpdFontFamily::BOLD_ITALIC);
+  layout();
+
+  ASSERT_FALSE(lines.empty());
+  const auto& cap = lines[0]->getDropCap();
+  ASSERT_TRUE(cap.present());
+  EXPECT_EQ(cap.style, static_cast<uint8_t>(EpdFontFamily::BOLD_ITALIC));
+}
+
+TEST_F(DropCapTest, DropsDecorationAndScriptBitsFromTheDropCapFace) {
+  // An underlined or superscripted opening word must not carry that into a letter drawn three
+  // lines tall and outside the text flow -- only the face bits survive.
+  makeParser("p::first-letter { font-size: 300%; }\n");
+  openParagraph();
+  const auto decorated =
+      static_cast<EpdFontFamily::Style>(EpdFontFamily::BOLD | EpdFontFamily::UNDERLINE | EpdFontFamily::SUP);
+  parser->currentTextBlock->addWord("Le", decorated);
+  for (int i = 0; i < 20; ++i) parser->currentTextBlock->addWord("syndicat", decorated);
+  layout();
+
+  ASSERT_FALSE(lines.empty());
+  const auto& cap = lines[0]->getDropCap();
+  ASSERT_TRUE(cap.present());
+  EXPECT_EQ(cap.style, static_cast<uint8_t>(EpdFontFamily::BOLD));
+}
+
 TEST_F(DropCapTest, IgnoresARuleThatOnlyMildlyEnlargesTheLetter) {
   // Under 2x there is no room beside the letter to wrap into, so the paragraph stays ordinary
   // and the letter keeps its place in the text.

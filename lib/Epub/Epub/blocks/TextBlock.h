@@ -62,13 +62,22 @@ class TextBlock final : public Block {
   // inkLeft/inkTop are the ink box's origin relative to the block's, resolved at layout time
   // against the same font metrics that positioned the words: RTL puts the column on the
   // trailing edge, and render() must not have to re-derive that (or re-measure the glyph).
+  //
+  // `style` is the FACE (bits 0-1: regular/bold/italic) of the word the letter was taken from,
+  // so an italic chapter opening keeps its italic initial. Measuring and drawing must use the
+  // same one, or the reserved column does not match the glyph that lands in it.
   struct DropCap {
     uint32_t cp = 0;
     int16_t inkLeft = 0;
     int16_t inkTop = 0;
     uint8_t scale = 0;
+    uint8_t style = 0;
     [[nodiscard]] bool present() const { return cp != 0 && scale > 0; }
   };
+
+  // Decoration and sup/sub bits are dropped: an underlined or superscripted opening word must
+  // not carry that into a letter drawn four lines tall and outside the text flow.
+  static constexpr uint8_t DROP_CAP_STYLE_MASK = 0x03;
 
   // Ceiling on the glyph magnification, applied where the scale is CHOSEN and again where a
   // cached one is read back. A drop cap spans at most a few lines, so nothing legitimate comes
