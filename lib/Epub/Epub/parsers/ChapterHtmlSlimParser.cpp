@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <new>
@@ -879,6 +880,29 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
   updateEffectiveInlineStyle();
+}
+
+void ChapterHtmlSlimParser::applyDropCap(const char* tagName, const std::string& classAttr) {
+  if (!cssParser || !currentTextBlock || !currentTextBlock->isEmpty()) return;
+
+  CssLength firstLetterSize;
+  if (!cssParser->resolveFirstLetterFontSize(tagName, classAttr, &cssPath, firstLetterSize)) return;
+
+  // Reuse the block ladder's own unit handling (%, em, rem, pt) instead of re-deriving it:
+  // `font-size: 300%` means the same multiple of the reader's size on a pseudo-element as it
+  // does anywhere else, and cssFontSizeScale already clamps the result to 0.5x..4x.
+  CssStyle sized;
+  sized.fontSize = firstLetterSize;
+  sized.defined.fontSize = 1;
+  const auto lines = static_cast<int>(std::lround(cssFontSizeScale(sized)));
+
+  // Under 2x the letter fits within its own line, so there is nothing to wrap around: leave it
+  // in the text, where it renders inline at the block's size.
+  if (lines < 2) return;
+
+  BlockStyle style = currentTextBlock->getBlockStyle();
+  style.dropCapLines = static_cast<uint8_t>(std::min(lines, MAX_DROP_CAP_LINES));
+  currentTextBlock->setBlockStyle(style);
 }
 
 void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
@@ -2050,6 +2074,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                                                                                   BlockStyle::CombineAxis::Horizontal);
       self->blockStyleStack.push_back(accumulated);
       self->startNewTextBlock(accumulated.withoutBottom());
+      // On the block itself, never on the style stack: a drop cap belongs to this one
+      // paragraph, and the stack is what every nested and sibling block inherits from.
+      self->applyDropCap(name, classAttr);
       // See the header branch above: raised only once the previous block has been flushed.
       if (cssStyle.pageBreakBefore() == CssPageBreak::Always) self->pendingForcedBreak = true;
       self->updateEffectiveInlineStyle();

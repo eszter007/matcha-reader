@@ -2683,6 +2683,58 @@ void GfxRenderer::drawTextRotated90CCW(const int fontId, const int x, const int 
   }
 }
 
+bool GfxRenderer::drawCharUpscaled(const int fontId, const uint32_t cp, const int scale, const int inkLeftX,
+                                   const int inkTopY, const bool black, const EpdFontFamily::Style style,
+                                   int* inkWidthOut, int* inkHeightOut) const {
+  if (scale < 1) return false;
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return false;
+  }
+  const auto& font = fontIt->second;
+  const EpdGlyph* glyph = font.getGlyph(cp, style);
+  if (!glyph) return false;
+
+  const EpdFontData* fontData = font.getDataForGlyph(cp, style);
+  const uint8_t* bitmap = getGlyphBitmap(fontData, glyph);
+  if (!bitmap) return false;
+
+  const int srcW = glyph->width;
+  const int srcH = glyph->height;
+  if (inkWidthOut) *inkWidthOut = srcW * scale;
+  if (inkHeightOut) *inkHeightOut = srcH * scale;
+
+  // Each source pixel fills a scale x scale block; the ink box origin is the caller's, so no
+  // bearing arithmetic leaks out of here.
+  for (int srcY = 0; srcY < srcH; srcY++) {
+    for (int srcX = 0; srcX < srcW; srcX++) {
+      const int pos = srcY * srcW + srcX;
+      bool hasInk;
+      if (fontData->is2Bit) {
+        // 2-bit coverage: 4 px per byte, MSB first. Treat the two darker levels as ink, the
+        // same threshold the 50% path uses, so a magnified glyph keeps the stroke weight the
+        // font intends rather than growing a light antialiasing fringe into solid black.
+        const uint8_t byte = bitmap[pos >> 2];
+        const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
+        hasInk = raw >= 2;
+      } else {
+        const uint8_t byte = bitmap[pos >> 3];
+        hasInk = ((byte >> (7 - (pos & 7))) & 1) != 0;
+      }
+      if (!hasInk) continue;
+      const int dstX = inkLeftX + srcX * scale;
+      const int dstY = inkTopY + srcY * scale;
+      for (int dy = 0; dy < scale; dy++) {
+        for (int dx = 0; dx < scale; dx++) {
+          drawPixel(dstX + dx, dstY + dy, black);
+        }
+      }
+    }
+  }
+  return true;
+}
+
 void GfxRenderer::drawCharVerticalCornerTopRight(const int fontId, const int cellLeftX, const int cellTopY,
                                                  const int cellSize, const uint32_t cp, const bool black,
                                                  const EpdFontFamily::Style style) const {

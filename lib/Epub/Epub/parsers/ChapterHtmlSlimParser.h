@@ -257,6 +257,14 @@ class ChapterHtmlSlimParser {
 
   void updateEffectiveInlineStyle();
   void startNewTextBlock(const BlockStyle& blockStyle);
+  // Tallest drop cap this engine will lay out. Beyond four lines the enlarged letter starts
+  // to dominate a 480px-tall page, and every line beside it is one more line broken to a
+  // narrowed width by the greedy fill rather than the optimal one.
+  static constexpr int MAX_DROP_CAP_LINES = 4;
+  // Turn the block just opened into a drop cap paragraph if CSS asked for one. Decides only
+  // the line COUNT; ParsedText resolves the glyph, its magnification and the column width,
+  // where the font metrics and the line height are known.
+  void applyDropCap(const char* tagName, const std::string& classAttr);
   void flushPendingAnchor();
   void flushPartWordBuffer();
   void fallbackTableRowToStacked();

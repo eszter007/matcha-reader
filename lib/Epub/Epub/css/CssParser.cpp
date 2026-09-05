@@ -1216,7 +1216,10 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         std::string builtKey;
         if (scopedSelector) {
           builtKey += iequalsAscii(parsed.ancestor.cls, "hltr") ? "h|" : "v|";
-          const CssSelector::Selector subjectOnly{{}, parsed.subject, 0};
+          // The pseudo-element travels with the subject. Dropping it here would store
+          // `.hltr p::first-letter` under the plain key "h|p", where resolveStyle's own "h|"
+          // twin lookup finds it -- applying a drop cap's font-size to the whole paragraph.
+          const CssSelector::Selector subjectOnly{{}, parsed.subject, 0, parsed.firstLetter};
           CssSelector::forEachKeyPiece(
               subjectOnly, [&builtKey](const std::string_view piece) { builtKey.append(piece.data(), piece.size()); });
           sel = builtKey;
@@ -1267,6 +1270,9 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
 void CssParser::noteCombinatorsIn(const std::string_view key) {
   if (key.find(CssSelector::DESCENDANT_COMBINATOR) != std::string_view::npos) hasDescendantRules_ = true;
   if (key.find(CssSelector::CHILD_COMBINATOR) != std::string_view::npos) hasChildRules_ = true;
+  bool firstLetter = false;
+  CssSelector::withoutFirstLetterPseudo(key, firstLetter);
+  if (firstLetter) hasFirstLetterRules_ = true;
 }
 
 // Main parsing entry point
@@ -1498,6 +1504,54 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
   CssStyle result;
   for (size_t i = 0; i < candidateCount; ++i) result.applyOver(*candidates[i].style);
   return result;
+}
+
+bool CssParser::resolveFirstLetterFontSize(const std::string_view tagName, const std::string_view classAttr,
+                                           const CssElementPath* path, CssLength& out) const {
+  if (!hasFirstLetterRules_) return false;
+
+  // Same candidate enumeration and cascade as resolveStyle(), with the pseudo-element suffix
+  // appended to every key tried -- which is what makes these rules reachable at all, since
+  // forEachCandidate only ever spells ordinary element keys. Tracking the winner by specificity
+  // as we go (rather than collecting and sorting) is enough here: one property, so a
+  // higher-specificity match simply replaces the previous one and there is nothing to merge.
+  // Ties keep the LATER match, matching resolveStyle's stable-sort tie-break.
+  const CssStyle* best = nullptr;
+  uint8_t bestSpec = 0;
+
+  const auto consider = [&](const std::string_view* keyed, const size_t count, const uint8_t spec) {
+    const CssStyle* style = findStyle(keyed, count);
+    if (style != nullptr && style->hasFontSize() && (best == nullptr || spec >= bestSpec)) {
+      best = style;
+      bestSpec = spec;
+    }
+  };
+
+  const auto emit = [&](const std::string_view* pieces, const size_t count, const uint8_t spec, const bool simple) {
+    // Room for the "h|" scope prefix, the key itself and the pseudo-element suffix.
+    std::string_view keyed[CssSelector::MAX_KEY_PIECES + 2];
+    for (size_t i = 0; i < count; ++i) keyed[i] = pieces[i];
+    keyed[count] = CssSelector::FIRST_LETTER_PSEUDO;
+    consider(keyed, count + 1, spec);
+
+    // The EBPAJ horizontal-mode twin, exactly as resolveStyle tries it for simple selectors:
+    // `.hltr p::first-letter` is stored as "h|p::first-letter" and is unreachable without this.
+    if (!simple) return;
+    keyed[0] = "h|";
+    for (size_t i = 0; i < count; ++i) keyed[i + 1] = pieces[i];
+    keyed[count + 1] = CssSelector::FIRST_LETTER_PSEUDO;
+    consider(keyed, count + 2, spec);
+  };
+
+  const bool walkAncestors = path != nullptr && (hasDescendantRules_ || hasChildRules_);
+  const size_t ancestorCount = walkAncestors ? path->ancestorCount() : 0;
+  CssSelector::forEachCandidate(
+      CssSelector::ElementRef{tagName, classAttr}, [path](const size_t i) { return path->ancestor(i); }, ancestorCount,
+      walkAncestors && path->parentRecorded(), hasDescendantRules_, hasChildRules_, emit);
+
+  if (best == nullptr) return false;
+  out = best->fontSize;
+  return true;
 }
 
 // Inline style parsing (static - doesn't need rule database)
@@ -2153,6 +2207,12 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     if (usedClasses != nullptr) {
       std::string_view sel(selector);
       if (sel.size() >= 2 && sel[0] == 'h' && sel[1] == '|') sel.remove_prefix(2);
+      // The pseudo-element hangs off the SUBJECT compound with no separator, so it would
+      // otherwise be read as part of that compound's class name (".dropcap::first-letter"
+      // tests the class "dropcap::first-letter", which no chapter can ever list, and every
+      // class-based drop cap rule would be dropped on each cache-loaded open).
+      bool selHadPseudo = false;
+      sel = CssSelector::withoutFirstLetterPseudo(sel, selHadPseudo);
       bool allClassesUsed = true;
       while (!sel.empty()) {
         const size_t end = sel.find_first_of(" >");
