@@ -234,13 +234,22 @@ class DropCapTest : public ::testing::Test {
  protected:
   std::string filepath = "unused.xhtml";
   GfxRenderer renderer;
-  CssParser cssParser{cssCacheDir()};
+  CssParser cssParser{caseDir()};
   std::unique_ptr<ChapterHtmlSlimParser> parser;
   std::vector<std::shared_ptr<TextBlock>> lines;
 
   static constexpr int LINE_HEIGHT = 16;
   static constexpr int GLYPH_INK = 8;
   static constexpr int SPACE_WIDTH = 4;
+
+  // Its own directory per test: ctest runs these as CONCURRENT PROCESSES (`ctest -j` in
+  // ci.yml), so a shared stylesheet path lets one case read the CSS another just wrote.
+  std::string caseDir() const {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("matcha-dropcap-" + std::string(::testing::UnitTest::GetInstance()->current_test_info()->name()));
+    std::filesystem::create_directories(dir);
+    return dir.string();
+  }
 
   void makeParser(const std::string& css) {
     ASSERT_TRUE(loadCss(css));
@@ -258,7 +267,7 @@ class DropCapTest : public ::testing::Test {
   }
 
   bool loadCss(const std::string& css) {
-    const auto path = std::filesystem::path(cssCacheDir()) / "dropcap.css";
+    const auto path = std::filesystem::path(caseDir()) / "dropcap.css";
     std::FILE* f = std::fopen(path.string().c_str(), "wb");
     if (f == nullptr) return false;
     std::fwrite(css.data(), 1, css.size(), f);
