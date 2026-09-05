@@ -39,8 +39,8 @@ namespace {
 // With HTTP downgrade enabled for GitHub's 302 redirects, only one TLS session
 // (to github.com) is needed for manifest fetch. Reduce the floor slightly to
 // account for fragmentation on devices with many SD fonts loaded.
-constexpr size_t FONT_SCREEN_MIN_FREE_HEAP = 44 * 1024;
-constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 10 * 1024;
+  constexpr size_t FONT_SCREEN_MIN_FREE_HEAP = 44 * 1024;
+  constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 10 * 1024;
 }  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -187,7 +187,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // downgrade for the manifest fetch as well. The manifest is JSON and its
   // integrity is verified by the parser; a corrupted download fails safely.
   auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr,
-                                               nullptr, "", "", true);
+                nullptr, "", "", true);
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
     errorMessage_ = tr(STR_FONT_LIST_FETCH_FAILED);
@@ -514,8 +514,8 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   // installed family unchanged.
   // With HTTP downgrade for GitHub redirects, only one TLS session is needed.
   // Reduce thresholds slightly for C3 devices with fragmented heap after manifest fetch.
-  constexpr size_t FONT_DOWNLOAD_MIN_FREE_HEAP = 36 * 1024;  // was HttpDownloader::MIN_TLS_FREE_HEAP (40KB)
-  constexpr size_t FONT_DOWNLOAD_MIN_MAX_ALLOC = 16 * 1024; // was HttpDownloader::MIN_TLS_MAX_ALLOC (20KB)
+    constexpr size_t FONT_DOWNLOAD_MIN_FREE_HEAP = 36 * 1024;  // was HttpDownloader::MIN_TLS_FREE_HEAP (40KB)
+    constexpr size_t FONT_DOWNLOAD_MIN_MAX_ALLOC = 16 * 1024; // was HttpDownloader::MIN_TLS_MAX_ALLOC (20KB)
   if (ESP.getFreeHeap() < FONT_DOWNLOAD_MIN_FREE_HEAP ||
       ESP.getMaxAllocHeap() < FONT_DOWNLOAD_MIN_MAX_ALLOC) {
     LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -574,7 +574,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
         // due to heap fragmentation. The cpfont CRC32 + format validation
         // provides some protection even over HTTP. Enable downgrade for C3
         // compatibility while the manifest (small, no redirect chain) stays on HTTPS.
-        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/true);
+        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/ true);
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(family.name.c_str());
