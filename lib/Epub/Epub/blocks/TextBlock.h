@@ -1,4 +1,5 @@
 #pragma once
+
 #include <EpdFontFamily.h>
 #include <HalStorage.h>
 
@@ -8,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "../../../../src/fontIds.h"
 #include "Block.h"
 #include "BlockStyle.h"
 #include "Epub/FootnoteEntry.h"
@@ -68,6 +70,11 @@ class TextBlock final : public Block {
   // same one, or the reserved column does not match the glyph that lands in it.
   struct DropCap {
     uint32_t cp = 0;
+    // Punctuation the paragraph opens with, drawn at BODY size immediately left of the enlarged
+    // letter. CSS says `::first-letter` covers the punctuation preceding the letter, and a
+    // French chapter opens dialogue with an em dash; leaving it in the text flow would put it
+    // after the initial, since the flow starts where the reserved column ends. 0 for none.
+    uint32_t prefixCp = 0;
     int16_t inkLeft = 0;
     int16_t inkTop = 0;
     uint8_t scale = 0;
@@ -143,8 +150,40 @@ class TextBlock final : public Block {
   int16_t wordXpos(const uint16_t i) const { return xposArr[i]; }
   EpdFontFamily::Style wordStyle(const uint16_t i) const { return static_cast<EpdFontFamily::Style>(stylesArr[i]); }
   bool hasWordFonts() const { return fontsPresent; }
-  // Per-word font override; 0 = the block's font (also for blocks without the array).
-  int32_t wordFont(const uint16_t i) const { return fontsPresent ? wordFontArr[i] : 0; }
+  // Per-word font slot. It is a tagged value, and has been since it carried "0 = the block's
+  // font": a NEGATIVE value inside the scale-tag range is not a font id at all but a 256-based
+  // bitmap scale for the block's own font, used where no resident size can serve the ask (a
+  // single-size SD-card reader font has no ladder to snap to). Reusing the slot keeps the whole
+  // per-word pipeline -- arena, serialization, per-line slicing -- untouched; a parallel array
+  // would have to stay in lockstep with words[] across eighteen separate edit sites.
+  static constexpr int32_t MIN_WORD_SCALE_TAG = -512;  // 2x
+  static constexpr int32_t MAX_WORD_SCALE_TAG = -32;   // 1/8
+  static constexpr uint16_t WORD_SCALE_ONE = 256;
+  static bool isWordScaleTag(const int32_t slot) { return slot >= MIN_WORD_SCALE_TAG && slot <= MAX_WORD_SCALE_TAG; }
+  // Font ids are hashes; none may land in the tag range or a real font would decode as a scale.
+  static_assert(!(NOTOSERIF_12_FONT_ID >= -512 && NOTOSERIF_12_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(NOTOSERIF_14_FONT_ID >= -512 && NOTOSERIF_14_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(NOTOSERIF_16_FONT_ID >= -512 && NOTOSERIF_16_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(NOTOSERIF_18_FONT_ID >= -512 && NOTOSERIF_18_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(NOTOSANS_12_FONT_ID >= -512 && NOTOSANS_12_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(NOTOSANS_14_FONT_ID >= -512 && NOTOSANS_14_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(NOTOSANS_16_FONT_ID >= -512 && NOTOSANS_16_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(NOTOSANS_18_FONT_ID >= -512 && NOTOSANS_18_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(UI_10_FONT_ID >= -512 && UI_10_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(UI_12_FONT_ID >= -512 && UI_12_FONT_ID <= -32), "font id in scale-tag range");
+  static_assert(!(SMALL_FONT_ID >= -512 && SMALL_FONT_ID <= -32), "font id in scale-tag range");
+
+  // Per-word font override; 0 = the block's font (also for blocks without the array, and for a
+  // word carrying a scale tag instead of an id).
+  int32_t wordFont(const uint16_t i) const {
+    const int32_t slot = fontsPresent ? wordFontArr[i] : 0;
+    return isWordScaleTag(slot) ? 0 : slot;
+  }
+  // 256 = unscaled. Only ever non-256 when the slot carries a tag.
+  uint16_t wordFontScale(const uint16_t i) const {
+    const int32_t slot = fontsPresent ? wordFontArr[i] : 0;
+    return isWordScaleTag(slot) ? static_cast<uint16_t>(-slot) : WORD_SCALE_ONE;
+  }
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSuffixX(const uint16_t i) const { return focusPresent ? focusSuffixXArr[i] : 0; }
   bool hasRuby() const;

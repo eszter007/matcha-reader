@@ -885,6 +885,12 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
   int lastBaseWidth = 0;
   int lastBaseTop = 0;
   int32_t prevAdvanceFP = 0;
+  // Advance is accumulated UNSCALED and the running total scaled once per glyph, so the pen ends
+  // at exactly x + scalePositive(total) -- the value getTextWidthScaled reports. Scaling each
+  // delta instead rounds every glyph independently, and those errors accumulate: a long word
+  // drawn that way is several pixels wider than it was measured, which is fine for a standalone
+  // string but silently overlaps the next word once scaled text goes through paragraph layout.
+  int unscaledAdvance = 0;
 
   if (fontCacheManager_ && fontCacheManager_->isScanning()) {
     fontCacheManager_->recordText(renderedText, resolvedFontId, style);
@@ -918,8 +924,8 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
     cp = font.applyLigatures(cp, textCursor, style);
     if (prevCp != 0) {
       const auto kernFP = font.getKerning(prevCp, cp, style);
-      const int advance = textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
-      lastBaseX += scalePositive(advance, scale);
+      unscaledAdvance += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
+      lastBaseX = x + scalePositive(unscaledAdvance, scale);
     }
 
     const EpdGlyph* glyph = font.getGlyph(cp, style);

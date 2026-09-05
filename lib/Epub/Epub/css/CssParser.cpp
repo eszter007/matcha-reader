@@ -1223,9 +1223,13 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
           CssSelector::forEachKeyPiece(
               subjectOnly, [&builtKey](const std::string_view piece) { builtKey.append(piece.data(), piece.size()); });
           sel = builtKey;
-        } else if (parsed.combinator != 0) {
+        } else if (parsed.combinator != 0 || parsed.firstLetter) {
           // Normalized compound key: `.callout   p` and `blockquote > p` both collapse to the
           // single-character-combinator form, so the two spellings share one rule.
+          // A simple selector would otherwise be stored under its RAW text, which is only the
+          // normalized key when the author happened to write the two-colon pseudo -- the CSS 2.1
+          // `p:first-letter` would land under a key no lookup ever spells, and would not even
+          // set hasFirstLetterRules_.
           builtKey.reserve(sel.size());
           CssSelector::forEachKeyPiece(
               parsed, [&builtKey](const std::string_view piece) { builtKey.append(piece.data(), piece.size()); });

@@ -85,6 +85,10 @@ class ParsedText {
   void pushVisibleOffset(uint32_t offset);
   void insertVisibleOffset(size_t wordIndex, uint32_t offset);
   void eraseVisibleOffsetPrefix(size_t count);
+  // Drop ONE word's offset entry, keeping every other word's absolute offset. Erasing the drop
+  // cap's token is not always a prefix erase: a paragraph can open with punctuation before the
+  // initial (`--<nbsp><span class="let">L</span>`, the French dialogue opening).
+  void eraseVisibleOffsetAt(size_t wordIndex);
   int calculateRubyExtraStartOffset(size_t wordIdx, size_t maxWordIdx, const GfxRenderer& renderer, int fontId) const;
   int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
                                   int fontId) const;
@@ -98,6 +102,10 @@ class ParsedText {
   // removes the letter from the text flow. Returns false (leaving the text untouched, so the
   // letter simply renders inline) when the paragraph cannot carry one.
   bool prepareDropCap(const GfxRenderer& renderer, int fontId, int pageWidth);
+  // Word holding the drop cap's letter. 0 for a `::first-letter` rule, which by definition
+  // styles the paragraph's first character; an enlarged span names its own word, because the
+  // punctuation a paragraph opens with is tokenized ahead of it.
+  uint8_t dropCapWordIndex = 0;
   // Greedy line breaks for the lines beside the drop cap. See the implementation for why these
   // do not go through computeLineBreaks' optimal DP.
   std::vector<size_t> computeDropCapLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
@@ -138,7 +146,15 @@ class ParsedText {
                int32_t wordFontId = 0, uint32_t visibleTextOffset = 0, uint8_t linkId = 0);
   // The font a word measures and draws with (block font unless an inline font-size overrode it).
   int effectiveWordFont(size_t index, int blockFontId) const {
-    return (index < wordFonts.size() && wordFonts[index] != 0) ? wordFonts[index] : blockFontId;
+    const int32_t slot = index < wordFonts.size() ? wordFonts[index] : 0;
+    return (slot != 0 && !TextBlock::isWordScaleTag(slot)) ? slot : blockFontId;
+  }
+  // Bitmap scale for a word whose size the font ladder could not serve; 256 = unscaled. Widths
+  // MUST be scaled by it wherever they are measured -- the drawn word is scaled, and a width
+  // measured unscaled would put the next word straight through it.
+  uint16_t effectiveWordScale(const size_t index) const {
+    const int32_t slot = index < wordFonts.size() ? wordFonts[index] : 0;
+    return TextBlock::isWordScaleTag(slot) ? static_cast<uint16_t>(-slot) : TextBlock::WORD_SCALE_ONE;
   }
   uint8_t addLinkTarget(const char* href);
   bool linkTargetMatches(uint8_t linkId, const char* href) const;
@@ -164,6 +180,7 @@ class ParsedText {
   std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
   void ensureRubyCapacity();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
+  void setDropCapWordIndex(const uint8_t wordIndex) { dropCapWordIndex = wordIndex; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }

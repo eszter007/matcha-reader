@@ -265,14 +265,54 @@ TEST_F(CssParserTest, FirstLetterMatchesClassAndCompoundSelectors) {
   EXPECT_FLOAT_EQ(descendant.value, 4.0f);
 }
 
+// CSS 2.1 spelled pseudo-elements with one colon and EPUB toolchains still emit that form, so
+// both spellings have to reach the same stored rule.
+TEST_F(CssParserTest, FirstLetterAcceptsTheCss2OneColonSpelling) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser,
+                      "p:first-letter { font-size: 300%; }\n"
+                      "p.opener:first-letter { font-size: 4em; }\n"));
+
+  const CssStyle block = parser.resolveStyle("p", "");
+  EXPECT_FALSE(block.defined.fontSize) << "the pseudo-element rule leaked into the block cascade";
+
+  CssLength size;
+  ASSERT_TRUE(parser.resolveFirstLetterFontSize("p", "", nullptr, size));
+  EXPECT_FLOAT_EQ(size.value, 300.0f);
+
+  CssLength scoped;
+  ASSERT_TRUE(parser.resolveFirstLetterFontSize("p", "opener", nullptr, scoped));
+  EXPECT_FLOAT_EQ(scoped.value, 4.0f);
+}
+
+// Both spellings normalize to ONE key, so a stylesheet using both (they routinely coexist in the
+// same file) cascades them against each other rather than stashing two unrelated rules.
+TEST_F(CssParserTest, BothFirstLetterSpellingsShareOneStoredKey) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser,
+                      "p::first-letter { font-size: 300%; }\n"
+                      "p:first-letter { font-size: 4em; }\n"));
+  EXPECT_EQ(parser.ruleCount(), 1u);
+
+  CssLength size;
+  ASSERT_TRUE(parser.resolveFirstLetterFontSize("p", "", nullptr, size));
+  EXPECT_EQ(size.unit, CssUnit::Em) << "the later rule should win, as it would in a browser";
+  EXPECT_FLOAT_EQ(size.value, 4.0f);
+}
+
 // Everything else with a colon stays rejected, and a mid-selector spelling is not a suffix.
+// The bare forms need the universal selector this engine does not implement; the one-colon
+// strip must not turn `::first-letter` into a compound with a stray leading ':'.
 TEST_F(CssParserTest, OtherPseudoSelectorsAreStillRejected) {
   CssParser parser(cachePath());
   ASSERT_TRUE(loadCss(parser,
                       "p:hover { font-size: 300%; }\n"
                       "p::before { font-size: 300%; }\n"
+                      "p:first-line { font-size: 300%; }\n"
                       "p::first-letter span { font-size: 300%; }\n"
-                      "::first-letter { font-size: 300%; }\n"));
+                      "p:first-letter span { font-size: 300%; }\n"
+                      "::first-letter { font-size: 300%; }\n"
+                      ":first-letter { font-size: 300%; }\n"));
   EXPECT_EQ(parser.ruleCount(), 0u);
 
   CssLength size;

@@ -261,10 +261,27 @@ class ChapterHtmlSlimParser {
   // to dominate a 480px-tall page, and every line beside it is one more line broken to a
   // narrowed width by the greedy fill rather than the optimal one.
   static constexpr int MAX_DROP_CAP_LINES = 4;
+  // Tokens a paragraph may already hold and still have its next span treated as an initial.
+  // Two covers the real openings (`--` + no-break space, guillemet + space); the bound is what
+  // keeps a large span in mid-sentence from ever being considered.
+  static constexpr size_t MAX_DROP_CAP_PREFIX_WORDS = 3;
   // Turn the block just opened into a drop cap paragraph if CSS asked for one. Decides only
   // the line COUNT; ParsedText resolves the glyph, its magnification and the column width,
   // where the font metrics and the line height are known.
   void applyDropCap(const char* tagName, const std::string& classAttr);
+  // The other way books spell a drop cap: markup rather than a pseudo-element, an enlarged
+  // `<span class="lettrine">L</span>` opening the paragraph. Claimed when the span opens (the
+  // block must still be empty) and released at its close unless it turned out to hold exactly
+  // one character -- see dropCapSpanDepth.
+  void applyInlineDropCap(const CssStyle& style);
+  void releaseInlineDropCapIfNotSingleLetter();
+  // Depth of the inline element that claimed a drop cap, or -1. A span is only a drop cap if it
+  // wraps ONE character: an enlarged span opening a paragraph is otherwise just big text, and
+  // blowing its first letter up four lines tall would wreck the page. The count is not knowable
+  // when the span opens, so the claim is provisional until the close tag confirms it.
+  int dropCapSpanDepth = -1;
+  uint32_t dropCapSpanStartOffset = 0;
+
   void flushPendingAnchor();
   void flushPartWordBuffer();
   void fallbackTableRowToStacked();

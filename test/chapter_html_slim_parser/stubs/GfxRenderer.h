@@ -18,8 +18,12 @@ class GfxRenderer {
   int getFontAscenderSize(int) const { return 12; }
   int getSpaceWidth(int, EpdFontFamily::Style, int8_t = 0) const { return 4; }
   int getTextAdvanceX(int, const char* text, EpdFontFamily::Style, int8_t = 0) const {
+    // Per CHARACTER, not per byte: the real renderer advances once per glyph, so counting bytes
+    // would measure any non-ASCII text (an em dash, a guillemet) two or three times too wide.
     int width = 0;
-    while (*text++) width += 8;
+    for (const char* p = text; *p != '\0'; ++p) {
+      if ((static_cast<unsigned char>(*p) & 0xC0) != 0x80) width += 8;  // skip continuation bytes
+    }
     return width;
   }
   int getKerning(int, uint32_t, uint32_t, EpdFontFamily::Style) const { return 0; }

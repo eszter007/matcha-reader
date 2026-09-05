@@ -292,6 +292,15 @@ class DropCapTest : public ::testing::Test {
     parser->flushPartWordBuffer();
   }
 
+  // `<span class="...">text</span>`, driven through the real element callbacks so the inline
+  // drop cap claim and its release at the close tag both run.
+  void feedSpan(const char* classAttr, const char* text) {
+    const XML_Char* attributes[] = {"class", classAttr, nullptr};
+    ChapterHtmlSlimParser::startElement(parser.get(), "span", attributes);
+    ChapterHtmlSlimParser::characterData(parser.get(), text, static_cast<int>(strlen(text)));
+    ChapterHtmlSlimParser::endElement(parser.get(), "span");
+  }
+
   // Enough words that the drop cap's lines fill and the paragraph runs past them.
   void feedParagraph(const size_t wordCount) {
     feedWord("Le");
@@ -338,6 +347,151 @@ TEST_F(DropCapTest, WrapsTheOpeningLinesAroundAnEnlargedFirstLetter) {
   for (size_t i = 1; i < lines.size(); ++i) {
     EXPECT_FALSE(lines[i]->getDropCap().present()) << "line " << i << " redraws the drop cap";
   }
+}
+
+// The CSS 2.1 one-colon spelling is what a good many EPUB toolchains emit -- often beside the
+// two-colon one in the same stylesheet -- so it has to reach the layout the same way.
+TEST_F(DropCapTest, AcceptsTheCss2OneColonSpelling) {
+  makeParser("p.opener:first-letter { font-size: 300%; }\n");
+  openParagraph("opener");
+  ASSERT_EQ(parser->currentTextBlock->getBlockStyle().dropCapLines, 3u);
+
+  feedParagraph(20);
+  layout();
+  ASSERT_FALSE(lines.empty());
+  const auto& cap = lines[0]->getDropCap();
+  ASSERT_TRUE(cap.present());
+  EXPECT_EQ(cap.cp, static_cast<uint32_t>('L'));
+}
+
+// Plenty of books never write the pseudo-element at all: the initial is marked up as an enlarged
+// span opening the paragraph (`class="lettrine"` / `class="let"` in French trade EPUBs). Sizing
+// that span through the font ladder cannot produce a drop cap -- 270% of an 18pt reader font
+// snaps back to the largest resident size, i.e. no change -- so it has to reach the same
+// magnified-glyph path the pseudo-element takes.
+TEST_F(DropCapTest, ClaimsADropCapFromAnEnlargedOpeningSpan) {
+  makeParser(".let { font-size: 270%; }\n");
+  parser->insideBody = true;
+  openParagraph();
+  feedSpan("let", "L");
+  ASSERT_EQ(parser->currentTextBlock->getBlockStyle().dropCapLines, 3u);
+
+  for (int i = 0; i < 40; ++i) feedWord("syndicat");
+  layout();
+
+  ASSERT_FALSE(lines.empty());
+  const auto& cap = lines[0]->getDropCap();
+  ASSERT_TRUE(cap.present());
+  EXPECT_EQ(cap.cp, static_cast<uint32_t>('L'));
+}
+
+// An enlarged span holding a WORD is big text, not an initial. The count is unknowable when the
+// span opens, so the claim is provisional and has to be given back at the close tag.
+TEST_F(DropCapTest, ReleasesAnEnlargedOpeningSpanThatHoldsMoreThanOneLetter) {
+  makeParser(".let { font-size: 270%; }\n");
+  parser->insideBody = true;
+  openParagraph();
+  feedSpan("let", "Le");
+  EXPECT_EQ(parser->currentTextBlock->getBlockStyle().dropCapLines, 0u);
+
+  for (int i = 0; i < 40; ++i) feedWord("syndicat");
+  layout();
+
+  ASSERT_FALSE(lines.empty());
+  EXPECT_FALSE(lines[0]->getDropCap().present());
+}
+
+// A paragraph does not have to open with the initial: a French chapter opens dialogue with an em
+// dash and a no-break space, so both are already tokenized when the lettrine span arrives.
+TEST_F(DropCapTest, ClaimsADropCapAfterTheEmDashAFrenchChapterOpensWith) {
+  makeParser(".let { font-size: 270%; }\n");
+  parser->insideBody = true;
+  openParagraph();
+  feedWord("\xE2\x80\x94");  // U+2014 em dash
+  feedSpan("let", "L");
+  ASSERT_EQ(parser->currentTextBlock->getBlockStyle().dropCapLines, 3u);
+
+  for (int i = 0; i < 40; ++i) feedWord("syndicat");
+  layout();
+
+  ASSERT_FALSE(lines.empty());
+  const auto& cap = lines[0]->getDropCap();
+  ASSERT_TRUE(cap.present());
+  EXPECT_EQ(cap.cp, static_cast<uint32_t>('L'));
+  // The dash leaves the flow WITH the initial and is drawn at body size beside it. Left in the
+  // text it would land to the right of the letter, since the flow starts past the column.
+  EXPECT_EQ(cap.prefixCp, 0x2014u);
+  ASSERT_FALSE(stubLineWords.empty());
+  ASSERT_FALSE(stubLineWords[0].empty());
+  EXPECT_EQ(stubLineWords[0][0], "syndicat") << "the dash should no longer be in the text flow";
+  // The column holds the mark, a gap, the magnified glyph and the gap before the text.
+  const int markAdvance = GLYPH_INK + SPACE_WIDTH;  // stub: one glyph advance per character
+  ASSERT_FALSE(stubLineXPos.empty());
+  ASSERT_FALSE(stubLineXPos[0].empty());
+  EXPECT_EQ(stubLineXPos[0][0], markAdvance + GLYPH_INK * cap.scale + SPACE_WIDTH);
+  EXPECT_EQ(cap.inkLeft, markAdvance) << "the enlarged letter should start after the mark";
+}
+
+// Mid-sentence emphasis must not blow its first letter up four lines tall. The word count alone
+// cannot tell the two apart when the span opens, so the claim is provisional: prepareDropCap
+// rejects it once it can see a LETTER sitting ahead of the initial.
+TEST_F(DropCapTest, IgnoresAnEnlargedSpanThatIsNotTheParagraphOpening) {
+  makeParser(".let { font-size: 270%; }\n");
+  parser->insideBody = true;
+  openParagraph();
+  feedWord("Le");
+  feedSpan("let", "S");
+
+  for (int i = 0; i < 40; ++i) feedWord("syndicat");
+  layout();
+
+  ASSERT_FALSE(lines.empty());
+  EXPECT_FALSE(lines[0]->getDropCap().present());
+  // ...and the letter stays where the author put it.
+  ASSERT_GE(stubLineWords[0].size(), 2u);
+  EXPECT_EQ(stubLineWords[0][0], "Le");
+  EXPECT_EQ(stubLineWords[0][1], "S");
+}
+
+// The sub-2x gate is the same one the pseudo-element path applies.
+TEST_F(DropCapTest, IgnoresAMildlyEnlargedOpeningSpan) {
+  makeParser(".let { font-size: 130%; }\n");
+  parser->insideBody = true;
+  openParagraph();
+  feedSpan("let", "L");
+  EXPECT_EQ(parser->currentTextBlock->getBlockStyle().dropCapLines, 0u);
+}
+
+// A single-size reader font (an SD-card font) has no 12/14/16/18pt ladder to snap to, so
+// cssBlockFontId can only answer "no change" and an inline font-size is silently lost. A book
+// that sets its small caps as `<small>` over literal capitals then renders them at FULL size,
+// i.e. as plain capitals. Scaling the glyph bitmap is the only way to honour it.
+TEST_F(DropCapTest, ScalesAnInlineFontSizeTheLadderCannotServe) {
+  makeParser("small { font-size: 77%; }\n");
+  parser->insideBody = true;
+  openParagraph();
+  feedWord("Le");
+
+  const XML_Char* none[] = {nullptr};
+  ChapterHtmlSlimParser::startElement(parser.get(), "small", none);
+  feedWord("ORSQUE");
+  ChapterHtmlSlimParser::endElement(parser.get(), "small");
+
+  ASSERT_GE(parser->currentTextBlock->wordFonts.size(), 2u);
+  EXPECT_EQ(parser->currentTextBlock->wordFonts[0], 0) << "an unsized word must carry no tag";
+  // 77% snaps to the nearest eighth: 3/4, which decimates a 1-bit glyph on a clean period
+  // instead of beating against the stem spacing.
+  EXPECT_EQ(parser->currentTextBlock->wordFonts[1], -192);
+  EXPECT_EQ(parser->currentTextBlock->effectiveWordScale(1), 192);
+  EXPECT_EQ(parser->currentTextBlock->effectiveWordFont(1, 7), 7) << "a scale tag is not a font id";
+
+  // The measured width has to follow the drawn size, or the next word lands inside this one.
+  layout();
+  ASSERT_FALSE(stubLineWords.empty());
+  ASSERT_GE(stubLineWords[0].size(), 2u);
+  ASSERT_GE(stubLineXPos[0].size(), 2u);
+  const int leWidth = stubLineXPos[0][1] - stubLineXPos[0][0] - SPACE_WIDTH;
+  EXPECT_EQ(leWidth, 2 * GLYPH_INK) << "the unscaled word keeps its full advance";
 }
 
 TEST_F(DropCapTest, TheLetterLeavesTheTextFlow) {

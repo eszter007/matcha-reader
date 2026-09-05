@@ -66,7 +66,9 @@ class CssParser {
   //      Framing is unchanged; the bump exists for the same reason v16's did -- a v21 cache
   //      was written by a parser that dropped every such rule, so reusing it would silently
   //      leave drop caps off with no way to notice.
-  static constexpr uint8_t CSS_CACHE_VERSION = 22;
+  // v23: the CSS 2.1 one-colon spelling `X:first-letter` is accepted too. Framing is unchanged;
+  //      same reason as v22 -- a v22 cache was written by a parser that dropped those rules.
+  static constexpr uint8_t CSS_CACHE_VERSION = 23;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

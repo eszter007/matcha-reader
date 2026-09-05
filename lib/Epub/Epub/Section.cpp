@@ -218,7 +218,28 @@ namespace {
 //      zeroed on every line that has none), and a paragraph whose CSS declares
 //      `::first-letter { font-size: ... }` now reserves a column for the enlarged letter, so
 //      its opening lines are broken to a narrower width and their words sit at new positions.
-constexpr uint8_t SECTION_FILE_VERSION = 85;
+// v86: `::first-letter` is now also recognised in its CSS 2.1 one-colon spelling, so a book that
+//      uses it gains drop caps -- and with them the reserved column and the reflowed opening
+//      lines a v85 cache was built without.
+// v90: an inline font-size the font ladder cannot serve (a single-size SD-card reader font has
+//      no 12/14/16/18pt siblings) is now honoured by scaling the glyph bitmap, snapped to an
+//      eighth. `<small>` runs that used to render at body size are narrower, so every line
+//      holding one breaks and positions differently. The per-word font slot carries the scale as
+//      a negative tag, so the framing is unchanged.
+// v89: the drop cap record gains the opening mark's codepoint (u32, 0 when there is none), so
+//      the record grew by 4 bytes and a v88 record cannot be read with the v89 framing. The mark
+//      a paragraph opens with (`--` before a lettrine) now leaves the text flow WITH the initial
+//      and is drawn at body size beside it, so those opening lines are broken differently too.
+// v88: the initial no longer has to be the paragraph's FIRST token -- a French chapter opening
+//      (`--<nbsp><span class="let">L</span>`) tokenizes the dash and the space ahead of it, and
+//      those paragraphs now get the reserved column and reflowed opening lines too.
+// v87: a paragraph opened by an enlarged single-letter span (`<p><span class="let">L</span>...`)
+//      is treated as an initial too, which is how many trade EPUBs mark one up instead of using
+//      a pseudo-element at all. Its own version rather than an amendment to v86: v86 was already
+//      built and run, so a v86 section on disk was laid out by a parser that did not know about
+//      the span form, and reusing it would leave those books looking exactly as unfixed as
+//      before -- with nothing to indicate why.
+constexpr uint8_t SECTION_FILE_VERSION = 90;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

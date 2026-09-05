@@ -18,8 +18,9 @@
  *   compound compound     descendant .callout p        (B anywhere inside A)
  *   compound > compound   child      blockquote > p    (B a direct child of A)
  *
- * Any of those may carry a trailing `::first-letter`, the one pseudo-element this engine
- * implements (it is how every EPUB spells a drop cap). It is recorded on the selector and
+ * Any of those may carry a trailing `::first-letter` (or its CSS 2.1 one-colon spelling),
+ * the one pseudo-element this engine implements -- it is how EPUBs spell a drop cap. Both
+ * spellings normalize to the same key. It is recorded on the selector and
  * stored under a key ending in the literal suffix, which no ordinary key can collide with
  * because ':' is rejected everywhere else. Nothing else about matching changes: an element
  * lookup never generates the suffix, so these rules are invisible to resolveStyle().
@@ -50,6 +51,10 @@ inline constexpr std::string_view UNSUPPORTED_CHARS = "+[]:#~*|";
 // The only pseudo-element that is parsed, stored and matched. Doubles as the storage-key
 // suffix; lowercase because keys are stored ASCII-lowercased.
 inline constexpr std::string_view FIRST_LETTER_PSEUDO = "::first-letter";
+// CSS 2.1 spelled pseudo-elements with one colon, and EPUB toolchains still emit that form
+// (often in the same stylesheet as the two-colon one). Both spellings mean the same thing and
+// normalize to the same stored key, so a book gets its drop cap whichever way it is written.
+inline constexpr std::string_view FIRST_LETTER_PSEUDO_CSS2 = ":first-letter";
 
 // Specificity weights. The real cascade orders by the (ids, classes, types) triple; with
 // no id support and at most two compounds, one class can never be outranked by any number
@@ -138,11 +143,16 @@ inline bool parseCompound(const std::string_view s, Compound& out) {
 inline bool parse(std::string_view sel, Selector& out) {
   // Strip the pseudo-element FIRST, and only where CSS can put it: at the very end. A
   // mid-selector spelling (`p::first-letter span`) keeps its colons and is then rejected by
-  // parseCompound, exactly as before. The strict `>` also rejects a bare `::first-letter`,
-  // which would need the universal selector this engine does not implement.
+  // parseCompound, exactly as before. The strict `>` also rejects a bare `::first-letter` or
+  // `:first-letter`, which would need the universal selector this engine does not implement.
+  // Two-colon first: `X::first-letter` also ends with the one-colon spelling, so testing that
+  // one first would leave a stray ':' on the compound.
   bool firstLetter = false;
   if (sel.size() > FIRST_LETTER_PSEUDO.size() && endsWithPseudoIgnoreCase(sel, FIRST_LETTER_PSEUDO)) {
     sel.remove_suffix(FIRST_LETTER_PSEUDO.size());
+    firstLetter = true;
+  } else if (sel.size() > FIRST_LETTER_PSEUDO_CSS2.size() && endsWithPseudoIgnoreCase(sel, FIRST_LETTER_PSEUDO_CSS2)) {
+    sel.remove_suffix(FIRST_LETTER_PSEUDO_CSS2.size());
     firstLetter = true;
   }
 

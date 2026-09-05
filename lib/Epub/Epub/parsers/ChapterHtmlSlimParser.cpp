@@ -883,10 +883,14 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
 }
 
 void ChapterHtmlSlimParser::applyDropCap(const char* tagName, const std::string& classAttr) {
-  if (!cssParser || !currentTextBlock || !currentTextBlock->isEmpty()) return;
+  if (!cssParser || !currentTextBlock || !currentTextBlock->isEmpty()) {
+    return;
+  }
 
   CssLength firstLetterSize;
-  if (!cssParser->resolveFirstLetterFontSize(tagName, classAttr, &cssPath, firstLetterSize)) return;
+  if (!cssParser->resolveFirstLetterFontSize(tagName, classAttr, &cssPath, firstLetterSize)) {
+    return;
+  }
 
   // Reuse the block ladder's own unit handling (%, em, rem, pt) instead of re-deriving it:
   // `font-size: 300%` means the same multiple of the reader's size on a pseudo-element as it
@@ -898,11 +902,56 @@ void ChapterHtmlSlimParser::applyDropCap(const char* tagName, const std::string&
 
   // Under 2x the letter fits within its own line, so there is nothing to wrap around: leave it
   // in the text, where it renders inline at the block's size.
-  if (lines < 2) return;
+  if (lines < 2) {
+    return;
+  }
 
   BlockStyle style = currentTextBlock->getBlockStyle();
   style.dropCapLines = static_cast<uint8_t>(std::min(lines, MAX_DROP_CAP_LINES));
   currentTextBlock->setBlockStyle(style);
+}
+
+void ChapterHtmlSlimParser::applyInlineDropCap(const CssStyle& style) {
+  // Only the first inline element of an otherwise-empty paragraph: an enlarged span mid-sentence
+  // is emphasis, not an initial.
+  if (!currentTextBlock) return;
+  if (currentTextBlock->getBlockStyle().hasDropCap()) return;  // a ::first-letter rule got there first
+  if (dropCapSpanDepth >= 0) return;                           // one claim per paragraph
+  if (!style.hasFontSize()) return;
+  // Not necessarily the paragraph's FIRST token: a French chapter opens dialogue with an em dash
+  // and a no-break space, both already tokenized by the time the lettrine span arrives. A short
+  // prefix is allowed and prepareDropCap has the last word -- it rejects the claim if anything
+  // ahead of the initial turns out to contain a letter.
+  const size_t wordsSoFar = currentTextBlock->size() + (partWordBufferIndex > 0 ? 1 : 0);
+  if (wordsSoFar > MAX_DROP_CAP_PREFIX_WORDS) return;
+
+  // Same ladder the block path uses, so `font-size: 270%` means the same multiple of the
+  // reader's size here as it does on a pseudo-element.
+  const auto lines = static_cast<int>(std::lround(cssFontSizeScale(style)));
+  if (lines < 2) return;
+
+  BlockStyle blockStyle = currentTextBlock->getBlockStyle();
+  blockStyle.dropCapLines = static_cast<uint8_t>(std::min(lines, MAX_DROP_CAP_LINES));
+  currentTextBlock->setBlockStyle(blockStyle);
+  // The span's text lands in the next token: the caller flushes any pending part-word right
+  // after this, and the flush makes the span's own content a token of its own.
+  currentTextBlock->setDropCapWordIndex(static_cast<uint8_t>(wordsSoFar));
+  dropCapSpanDepth = depth;
+  dropCapSpanStartOffset = visibleTextOffset;
+}
+
+// The provisional claim above, resolved once the span's content is known.
+void ChapterHtmlSlimParser::releaseInlineDropCapIfNotSingleLetter() {
+  if (dropCapSpanDepth < 0 || depth != dropCapSpanDepth) return;
+  dropCapSpanDepth = -1;
+
+  const uint32_t chars = visibleTextOffset - dropCapSpanStartOffset;
+  if (chars == 1) return;  // exactly one character: a real initial
+
+  if (!currentTextBlock) return;
+  BlockStyle blockStyle = currentTextBlock->getBlockStyle();
+  blockStyle.dropCapLines = 0;
+  currentTextBlock->setBlockStyle(blockStyle);
 }
 
 void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
@@ -2223,6 +2272,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
         cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || cssStyle.hasTextEmphasis() ||
         cssStyle.hasFontVariant() || cssStyle.hasTextTransform() || cssStyle.hasFontSize() || inheritedTableTextAlign) {
+      // Before the flush below, which would make an empty block look non-empty.
+      self->applyInlineDropCap(cssStyle);
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -2261,6 +2312,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         // reader's font as the em base): the ladder snaps to a resident 12/14/16/18pt size.
         // 0 = no distinct size resident (or SD-card base font) -> the block font is kept.
         entry.fontIdOverride = cssBlockFontId(cssStyle, self->fontId);
+        if (entry.fontIdOverride == 0) {
+          // No resident size can serve the ask: the reader font is a single-size SD-card font
+          // with no ladder, or the nearest step IS the base. Scale the block font's bitmap
+          // instead, so `<small>` really is small rather than silently rendering at body size.
+          entry.fontIdOverride = cssFontScaleTag(cssStyle);
+        }
       }
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -2739,6 +2796,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   if (self->italicUntilDepth == self->depth) {
     self->italicUntilDepth = INT_MAX;
   }
+
+  self->releaseInlineDropCapIfNotSingleLetter();
 
   // Pop from inline style stack if we pushed an entry at this depth
   // This handles all inline elements: b, i, u, span, etc.
