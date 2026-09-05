@@ -113,6 +113,21 @@ struct BlockStyle {
   // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
   bool fromBrElement = false;
 
+  // Drop cap (CSS `::first-letter` with an enlarged font-size). The enlarged letter occupies a
+  // column on the leading edge of the block's first `dropCapLines` lines, and those lines are
+  // laid out `dropCapIndent` px narrower so the text wraps around it -- see
+  // ParsedText::resolveLineIndent, which is the single place both the reduced width and the
+  // shifted x origin come from, so measurement and drawing cannot disagree.
+  //
+  // Build-only, like lineHeightPct: the indent is baked into the cached word x positions, and
+  // the enlarged glyph itself travels on the first line's TextBlock. Never inherited -- a drop
+  // cap belongs to exactly one block, and getCombinedBlockStyle starts from the child, so an
+  // ancestor's never reaches a nested paragraph.
+  uint8_t dropCapLines = 0;
+  int16_t dropCapIndent = 0;
+
+  [[nodiscard]] bool hasDropCap() const { return dropCapLines > 0 && dropCapIndent > 0; }
+
   // The font this block is laid out AND drawn with. Single source of truth; see fontId.
   [[nodiscard]] int resolveFontId(const int baseFontId) const { return fontId != 0 ? fontId : baseFontId; }
 

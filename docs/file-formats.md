@@ -90,11 +90,55 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 84 (fork numbering)
+### Version 90 (fork numbering)
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 90 keeps the version 89 framing unchanged. An inline `font-size`
+that the built-in font ladder cannot serve — a single-size SD-card reader font
+has no 12/14/16/18pt siblings to snap to — is now honoured by scaling the
+glyph bitmap instead of being dropped, at a scale snapped to an eighth. The
+per-word font slot carries that scale as a negative tag rather than a font id.
+`<small>` runs that previously rendered at body size are now narrower, so any
+line containing one breaks and positions differently.
+
+Version 89 extends the drop cap trailer with the opening mark's codepoint
+(u32, zero when there is none), so the record is 4 bytes longer than version
+88's and the two framings are not interchangeable. Punctuation a paragraph
+opens with before its initial — the em dash of a French chapter opening —
+now leaves the text flow together with the letter and is drawn at body size
+immediately left of it. Left in the flow it appeared to the *right* of the
+initial, because the flow begins where the reserved column ends.
+
+Version 88 keeps the version 85 serialized layout unchanged. It was bumped
+because the initial no longer has to be the paragraph's first token: a French
+chapter opening (`—&#160;<span class="let">L</span>…`) tokenizes the em dash
+and the no-break space ahead of the lettrine, and those paragraphs now get the
+reserved column and reflowed opening lines as well.
+
+Version 87 keeps the version 85 serialized layout unchanged. It was bumped
+because a paragraph opened by an enlarged single-letter span
+(`<p><span class="lettrine">L</span>…`) is now treated as an initial as well,
+which is how many trade EPUBs mark a drop cap up instead of using a
+pseudo-element at all. Those paragraphs gain the reserved column and the
+reflowed opening lines a version 86 cache was built without.
+
+Version 86 keeps the version 85 serialized layout unchanged. It was bumped
+because the drop cap selector is now also recognised in its CSS 2.1 one-colon
+spelling (`p:first-letter`, alongside `p::first-letter`), so a book written
+that way gains drop caps — and with them the reserved column and the reflowed
+opening lines a version 85 cache was built without.
+
+Version 85 extends each text block's record with a drop cap trailer — the
+enlarged letter's codepoint (u32), its ink origin relative to the block (two
+i16), its glyph magnification (u8) and the face it is drawn in (u8, bits 0-1),
+all zero on the lines that have none.
+The layout changes with it: a paragraph whose stylesheet declares
+`::first-letter { font-size: ... }` at 2x or more now takes that letter out of
+the text flow and reserves a column for it, so the opening lines are broken to
+a narrower width and their words sit at new x positions.
 
 Version 84 keeps the version 83 serialized layout unchanged. It was bumped
 because, in French books, a word ending in a hyphenated subject pronoun

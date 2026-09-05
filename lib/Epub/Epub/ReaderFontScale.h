@@ -30,6 +30,17 @@ float cssFontSizeScale(const CssStyle& style);
  */
 int cssBlockFontId(const CssStyle& style, int baseFontId);
 
+// Bitmap scale for an inline font-size the LADDER cannot serve -- a single-size reader font (an
+// SD-card font has no 12/14/16/18pt siblings), or an ask that snaps back to the base. Returns a
+// NEGATIVE tag for the per-word font slot (see TextBlock::wordFontScale) carrying a 256-based
+// scale, or 0 when the text should simply render at the block's own size.
+//
+// The scale is snapped to a multiple of 32/256 (1/8 steps: 50%, 62.5%, 75%, 87.5%, ...). A 1-bit
+// glyph is resampled by nearest neighbour, so a clean ratio drops or repeats whole pixels on a
+// short, regular period -- 3/4 keeps three of every four rows -- while an arbitrary factor like
+// 77% beats against the stem spacing and breaks strokes unevenly.
+int32_t cssFontScaleTag(const CssStyle& style);
+
 /**
  * CSS line-height -> a PERCENTAGE of the leading the reader would have used anyway.
  *
