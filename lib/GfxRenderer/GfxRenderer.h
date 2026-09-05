@@ -395,6 +395,21 @@ class GfxRenderer {
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void drawTextRotated90CCW(int fontId, int x, int y, const char* text, bool black = true,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // Renders one codepoint magnified by an integer factor, its INK box placed at
+  // (inkLeftX, inkTopY) -- the glyph's own bearings are applied internally, so the caller
+  // positions the visible mark and never has to reason about them. Used for drop caps.
+  //
+  // Integer nearest-neighbour block replication: each source pixel becomes a scale x scale
+  // square. It needs no intermediate buffer (a 4x 18pt capital would be a ~5KB one) and, on a
+  // 1-bit panel, cannot introduce the half-lit edge pixels a resampling filter would, which
+  // would just be dithered back to hard black or white anyway.
+  //
+  // Reports the ink size actually drawn so layout can reserve exactly that column; drawing is
+  // skipped and false returned when the font or the glyph is missing.
+  bool drawCharUpscaled(int fontId, uint32_t cp, int scale, int inkLeftX, int inkTopY, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR, int* inkWidthOut = nullptr,
+                        int* inkHeightOut = nullptr) const;
+
   // Renders a single upright codepoint flush to the top-right corner of the
   // cell box [cellLeftX, cellLeftX+cellSize] × [cellTopY, cellTopY+cellSize],
   // using the glyph's own metrics. Used for vertical-text small kana.

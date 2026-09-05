@@ -97,6 +97,7 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 - A built-in CJK fallback font, so the odd kanji in a non-Japanese book still renders
 - **Optimize EPUB** on upload: splits single-file Japanese novels into real chapters with a working table of contents, and fits images to the screen as dithered 1-bit BMPs
 - More of the book's own CSS respected: headings sized as headings, line spacing, page breaks, boxed asides, and rules written as `.callout p`
+- Drop caps: a chapter opening styled with `::first-letter { font-size: … }` gets the enlarged initial the book asked for, with the first few lines wrapping around it
 - **Use Book Margins** (Text Settings > Layout, on by default) keeps the indents a book sets for itself, so epigraphs and long quotations stay inset. Turn it off and those blocks sit flush with the body text
 - Instant image page turns, since the next image decodes in the background
 - Next-book suggestions at the end of EPUB, TXT/Markdown, XTC and manga books

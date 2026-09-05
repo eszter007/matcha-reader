@@ -61,6 +61,16 @@ class ParsedText {
   bool focusReadingEnabled;
   bool isNaturalAlign;
   bool hasRtlWord;
+  // The enlarged first letter, once prepareDropCap() has claimed it. Attached to the first
+  // line this ParsedText emits and cleared with blockStyle.dropCapLines once the lines beside
+  // it are out, so a soft flush mid-paragraph cannot start a second one.
+  TextBlock::DropCap dropCap;
+  bool dropCapResolved = false;
+  // Set once the lines beside the enlarged letter are out. The paragraph tail then re-enters
+  // line breaking as break index 0, which is otherwise how "this is the paragraph's first
+  // line" is spelled -- without this it would take the first-line text-indent a second time,
+  // several lines into the paragraph.
+  bool dropCapLinesEmitted = false;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<int32_t> reorderedFontsScratch;
@@ -79,6 +89,21 @@ class ParsedText {
   int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
                                   int fontId) const;
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
+  // The leading-edge indent of line `lineIndex` of the CURRENT extraction pass. The single
+  // source of both the width the line is broken to and the x its words start at, so the two
+  // cannot disagree. Beside a drop cap this is the reserved column; otherwise it is the
+  // paragraph's first-line text-indent, exactly as before.
+  int resolveLineIndent(size_t lineIndex, const GfxRenderer& renderer, int fontId) const;
+  // Chooses the glyph, magnification and column width for a `::first-letter` drop cap and
+  // removes the letter from the text flow. Returns false (leaving the text untouched, so the
+  // letter simply renders inline) when the paragraph cannot carry one.
+  bool prepareDropCap(const GfxRenderer& renderer, int fontId, int pageWidth);
+  // Greedy line breaks for the lines beside the drop cap. See the implementation for why these
+  // do not go through computeLineBreaks' optimal DP.
+  std::vector<size_t> computeDropCapLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
+                                               const std::vector<uint16_t>& wordWidths,
+                                               const std::vector<bool>& continuesVec,
+                                               const std::vector<bool>& noSpaceBeforeVec) const;
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& noSpaceBeforeVec);
@@ -93,6 +118,8 @@ class ParsedText {
                    const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                    const GfxRenderer& renderer, int fontId);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
+  // Drop the first `consumed` tokens, keeping every parallel per-word array in lockstep.
+  void consumeWords(size_t consumed);
 
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
@@ -102,7 +129,8 @@ class ParsedText {
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
         isNaturalAlign(false),
-        hasRtlWord(false) {}
+        hasRtlWord(false),
+        dropCapResolved(false) {}
   ~ParsedText() = default;
 
   // wordFontId: per-word font override from an inline font-size; 0 keeps the block's font.

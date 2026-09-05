@@ -226,4 +226,76 @@ TEST_F(CssParserTest, CompoundSelectorsSurviveTheCacheRoundTrip) {
   EXPECT_TRUE(style.defined.textAlign);
 }
 
+// ::first-letter is the one pseudo-element the selector parser accepts. It has to be reachable
+// through its own lookup and INVISIBLE to the ordinary element cascade -- a drop cap's 300%
+// must never become the paragraph's own font-size.
+TEST_F(CssParserTest, FirstLetterRuleIsSeparateFromTheElementStyle) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser, "p { text-align: justify; }\np::first-letter { font-size: 300%; }\n"));
+
+  const CssStyle block = parser.resolveStyle("p", "");
+  EXPECT_TRUE(block.defined.textAlign);
+  EXPECT_FALSE(block.defined.fontSize) << "the pseudo-element rule leaked into the block cascade";
+
+  CssLength size;
+  ASSERT_TRUE(parser.resolveFirstLetterFontSize("p", "", nullptr, size));
+  EXPECT_EQ(size.unit, CssUnit::Percent);
+  EXPECT_FLOAT_EQ(size.value, 300.0f);
+
+  CssLength other;
+  EXPECT_FALSE(parser.resolveFirstLetterFontSize("div", "", nullptr, other));
+}
+
+TEST_F(CssParserTest, FirstLetterMatchesClassAndCompoundSelectors) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser,
+                      ".opener::first-letter { font-size: 3em; }\n"
+                      ".chapter p::first-letter { font-size: 4em; }\n"));
+
+  CssLength size;
+  ASSERT_TRUE(parser.resolveFirstLetterFontSize("p", "opener", nullptr, size));
+  EXPECT_FLOAT_EQ(size.value, 3.0f);
+
+  CssElementPath path;
+  path.push("div");
+  path.setTopClasses("chapter");
+  path.push("p");
+  CssLength descendant;
+  ASSERT_TRUE(parser.resolveFirstLetterFontSize("p", "", &path, descendant));
+  EXPECT_FLOAT_EQ(descendant.value, 4.0f);
+}
+
+// Everything else with a colon stays rejected, and a mid-selector spelling is not a suffix.
+TEST_F(CssParserTest, OtherPseudoSelectorsAreStillRejected) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser,
+                      "p:hover { font-size: 300%; }\n"
+                      "p::before { font-size: 300%; }\n"
+                      "p::first-letter span { font-size: 300%; }\n"
+                      "::first-letter { font-size: 300%; }\n"));
+  EXPECT_EQ(parser.ruleCount(), 0u);
+
+  CssLength size;
+  EXPECT_FALSE(parser.resolveFirstLetterFontSize("p", "", nullptr, size));
+}
+
+// A class-based first-letter rule has to survive the chapter-usage filter loadFromCache applies:
+// the pseudo hangs off the compound with no separator, so the class name is only recoverable
+// once the suffix is stripped.
+TEST_F(CssParserTest, FirstLetterRuleSurvivesTheFilteredCacheRoundTrip) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer, "p.opener::first-letter { font-size: 300%; }\n"));
+    ASSERT_TRUE(writer.saveToCache());
+  }
+
+  CssParser reader(cachePath());
+  const std::vector<std::string> usedClasses = {"opener"};
+  ASSERT_TRUE(reader.loadFromCache(&usedClasses));
+
+  CssLength size;
+  ASSERT_TRUE(reader.resolveFirstLetterFontSize("p", "opener", nullptr, size));
+  EXPECT_FLOAT_EQ(size.value, 300.0f);
+}
+
 }  // namespace

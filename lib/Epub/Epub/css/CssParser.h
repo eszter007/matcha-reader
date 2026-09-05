@@ -62,7 +62,11 @@ class CssParser {
   // v21: CssPropertyFlags::anySet() omitted `border`, so a rule defining ONLY a border was
   //      discarded before it was stored. Framing is unchanged, but every cache up to v20 is
   //      missing all of them (145 rules on the EBPAJ template) while still validating cleanly.
-  static constexpr uint8_t CSS_CACHE_VERSION = 21;
+  // v22: `X::first-letter` selectors are stored, under a key carrying the literal suffix.
+  //      Framing is unchanged; the bump exists for the same reason v16's did -- a v21 cache
+  //      was written by a parser that dropped every such rule, so reusing it would silently
+  //      leave drop caps off with no way to notice.
+  static constexpr uint8_t CSS_CACHE_VERSION = 22;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -98,6 +102,20 @@ class CssParser {
    */
   [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr,
                                       const CssElementPath* path = nullptr) const;
+
+  /**
+   * The `font-size` an element's `::first-letter` rule declares, if any. Returns false when the
+   * table holds no first-letter rule for this element -- including the common case of a book
+   * with none at all, which costs one bool test and no lookups.
+   *
+   * Only font-size is reported: it is the whole of what a drop cap needs from the pseudo-element
+   * (the float and line-height a stylesheet pairs it with describe the wrap this renderer
+   * performs itself), and returning a length rather than a CssStyle keeps first-letter rules out
+   * of the block cascade entirely -- they are a separate key space, never merged over the
+   * element's own style. Cascade among competing first-letter rules follows resolveStyle().
+   */
+  [[nodiscard]] bool resolveFirstLetterFontSize(std::string_view tagName, std::string_view classAttr,
+                                                const CssElementPath* path, CssLength& out) const;
 
   /**
    * Parse an inline style attribute string.
@@ -282,8 +300,12 @@ class CssParser {
   // correctness.
   bool hasDescendantRules_ = false;
   bool hasChildRules_ = false;
+  // Same idea for the pseudo-element: resolveFirstLetterFontSize returns immediately unless
+  // the table actually holds one, so a book without drop caps pays a single bool test per
+  // block rather than a second pass of candidate lookups.
+  bool hasFirstLetterRules_ = false;
 
-  /** Record which combinators the table contains, from a stored (already normalized) key. */
+  /** Record which combinators and pseudo-elements the table contains, from a stored key. */
   void noteCombinatorsIn(std::string_view key);
 
   // Incremental cache writing state (beginCacheAppend/appendRulesToCache/endCacheAppend).

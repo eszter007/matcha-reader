@@ -168,6 +168,13 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
   const bool scanning = renderer.isFontCacheScanning();
   const int ascender = renderer.getFontAscenderSize(fontId);
 
+  // Drop cap: the words on this line and the ones beneath it were already positioned clear of
+  // its column at layout time, so it only has to be drawn. Both offsets are relative to the
+  // block's origin and were resolved against the same font metrics the layout used.
+  if (dropCap.present()) {
+    renderer.drawCharUpscaled(fontId, dropCap.cp, dropCap.scale, x + dropCap.inkLeft, y + dropCap.inkTop, inkBlack);
+  }
+
   // Resolve ruby collisions left-to-right to prevent adjacent ruby texts from overlapping
   struct RubyDrawInfo {
     int x;
@@ -444,6 +451,13 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.inkMode);
   serialization::writePod(file, blockStyle.inkModeDefined);
 
+  // Drop cap. Written on every line (cp 0 = none) rather than behind a flag byte: the record
+  // stays fixed-width, which is what lets deserialize() read it back without a framing branch.
+  serialization::writePod(file, dropCap.cp);
+  serialization::writePod(file, dropCap.inkLeft);
+  serialization::writePod(file, dropCap.inkTop);
+  serialization::writePod(file, dropCap.scale);
+
   return true;
 }
 
@@ -553,6 +567,15 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   // A corrupt byte must not commit the line to white-on-nothing: only the exact Inverted value
   // survives, anything else falls back to the always-legible Normal.
   if (blockStyle.inkMode != CssInkMode::Inverted) blockStyle.inkMode = CssInkMode::Normal;
+
+  serialization::readPod(file, block->dropCap.cp);
+  serialization::readPod(file, block->dropCap.inkLeft);
+  serialization::readPod(file, block->dropCap.inkTop);
+  serialization::readPod(file, block->dropCap.scale);
+  // Bound what a corrupt record can ask the glyph scaler for: an absurd scale would blow up
+  // the block-replication loop (and paint over the page) rather than fail. The cap matches the
+  // ceiling ParsedText applies when it chooses the scale.
+  if (block->dropCap.scale > MAX_DROP_CAP_SCALE) block->dropCap = DropCap{};
 
   return block;
 }

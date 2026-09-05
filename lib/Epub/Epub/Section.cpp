@@ -214,7 +214,11 @@ namespace {
 //      subject pronoun ("songeai-je", "pense-t-il") is now split into extra word tokens so the
 //      verb and pronoun are independently selectable for dictionary lookup, changing the token
 //      count and positions on any cached page containing one.
-constexpr uint8_t SECTION_FILE_VERSION = 84;
+// v85: each text block's record gains a drop cap trailer (codepoint, ink origin, glyph scale;
+//      zeroed on every line that has none), and a paragraph whose CSS declares
+//      `::first-letter { font-size: ... }` now reserves a column for the enlarged letter, so
+//      its opening lines are broken to a narrower width and their words sit at new positions.
+constexpr uint8_t SECTION_FILE_VERSION = 85;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

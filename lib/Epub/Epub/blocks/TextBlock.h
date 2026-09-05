@@ -49,6 +49,33 @@ class TextBlock final : public Block {
     int16_t topLift;
   };
 
+  // The enlarged `::first-letter` of a drop cap paragraph, carried by that paragraph's FIRST
+  // line only (cp == 0 on every other line). The letter was removed from the text flow at
+  // layout time and the lines beside it were laid out clear of its column, so this is purely
+  // what to draw and where: an integer magnification of the block font's own glyph, its ink
+  // box top at inkTop relative to the line's y.
+  //
+  // Ten bytes on every TextBlock, drop cap or not (~300 B across a resident page's ~30 lines).
+  // A side table keyed by block would cost more than that in nodes and lookups, and the arena
+  // is per-WORD -- this is per-line data with no word to hang it on.
+  //
+  // inkLeft/inkTop are the ink box's origin relative to the block's, resolved at layout time
+  // against the same font metrics that positioned the words: RTL puts the column on the
+  // trailing edge, and render() must not have to re-derive that (or re-measure the glyph).
+  struct DropCap {
+    uint32_t cp = 0;
+    int16_t inkLeft = 0;
+    int16_t inkTop = 0;
+    uint8_t scale = 0;
+    [[nodiscard]] bool present() const { return cp != 0 && scale > 0; }
+  };
+
+  // Ceiling on the glyph magnification, applied where the scale is CHOSEN and again where a
+  // cached one is read back. A drop cap spans at most a few lines, so nothing legitimate comes
+  // near this; it exists so a corrupt cache byte cannot hand the block-replication loop a
+  // factor that paints over the page.
+  static constexpr uint8_t MAX_DROP_CAP_SCALE = 16;
+
  private:
   BlockStyle blockStyle;
   uint16_t numWords = 0;
@@ -72,6 +99,7 @@ class TextBlock final : public Block {
   // Layout-only metadata. ChapterHtmlSlimParser moves it into Page::links
   // immediately; cached TextBlocks therefore keep the same compact format.
   std::vector<LinkSpan> linkSpans;
+  DropCap dropCap;
 
   TextBlock() = default;  // deserialize() fills the fields directly
   static size_t arenaSize(uint16_t wordCount, bool hasFocus, bool hasFonts, uint16_t textBytes);
@@ -114,6 +142,8 @@ class TextBlock final : public Block {
   int getRubyShift(int ascender) const { return hasRuby() ? (ascender / 2) : 0; }
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
   std::vector<LinkSpan> takeLinkSpans() { return std::move(linkSpans); }
+  void setDropCap(const DropCap& value) { dropCap = value; }
+  const DropCap& getDropCap() const { return dropCap; }
 
   // suppressRuby: the per-book Furigana toggle. Kept as a render-time flag (not a layout one)
   // so flipping it needs no section rebuild -- the ruby strings stay in the block either way.

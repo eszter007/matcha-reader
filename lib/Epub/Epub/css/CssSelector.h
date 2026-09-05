@@ -18,11 +18,17 @@
  *   compound compound     descendant .callout p        (B anywhere inside A)
  *   compound > compound   child      blockquote > p    (B a direct child of A)
  *
+ * Any of those may carry a trailing `::first-letter`, the one pseudo-element this engine
+ * implements (it is how every EPUB spells a drop cap). It is recorded on the selector and
+ * stored under a key ending in the literal suffix, which no ordinary key can collide with
+ * because ':' is rejected everywhere else. Nothing else about matching changes: an element
+ * lookup never generates the suffix, so these rules are invisible to resolveStyle().
+ *
  * THREE or more compounds (`.a .b p`) are REJECTED, not approximated by their rightmost
  * two: `.b p` matches everywhere, including outside `.a`, so the approximation applies
  * styling the author explicitly scoped away. A wrong match is worse than no match, and
  * dropping the rule is exactly the behaviour those selectors had before this existed.
- * Everything else -- attribute, pseudo, id, sibling, universal -- is rejected as before.
+ * Everything else -- attribute, other pseudos, id, sibling, universal -- is rejected.
  */
 namespace CssSelector {
 
@@ -37,7 +43,13 @@ inline constexpr char CHILD_COMBINATOR = '>';
 //   '+' adjacent sibling · '[' attribute · ':' pseudo · '#' id · '~' general sibling
 //   '*' universal · '|' namespace (which is also the scope-prefix separator, so a
 //       namespaced selector must never reach the map)
+// ':' stays here: parse() strips the ONE supported pseudo-element off the end before any
+// compound is examined, so a colon reaching a compound is still unsupported syntax.
 inline constexpr std::string_view UNSUPPORTED_CHARS = "+[]:#~*|";
+
+// The only pseudo-element that is parsed, stored and matched. Doubles as the storage-key
+// suffix; lowercase because keys are stored ASCII-lowercased.
+inline constexpr std::string_view FIRST_LETTER_PSEUDO = "::first-letter";
 
 // Specificity weights. The real cascade orders by the (ids, classes, types) triple; with
 // no id support and at most two compounds, one class can never be outranked by any number
@@ -71,13 +83,29 @@ struct Compound {
 
 /** A parsed selector: `subject`, optionally scoped by `ancestor` through `combinator`. */
 struct Selector {
-  Compound ancestor;    // meaningful only when combinator != 0
-  Compound subject;     // the element the rule styles (the rightmost compound)
-  char combinator = 0;  // 0 = simple, DESCENDANT_COMBINATOR or CHILD_COMBINATOR
+  Compound ancestor;         // meaningful only when combinator != 0
+  Compound subject;          // the element the rule styles (the rightmost compound)
+  char combinator = 0;       // 0 = simple, DESCENDANT_COMBINATOR or CHILD_COMBINATOR
+  bool firstLetter = false;  // selector ended in ::first-letter
+  // A pseudo-element adds no specificity in CSS beyond a type selector's, and this engine
+  // never cascades a first-letter rule against a non-first-letter one (they live in
+  // disjoint key spaces), so the subject/ancestor weights alone order them correctly.
   [[nodiscard]] constexpr uint8_t specificity() const {
     return static_cast<uint8_t>(subject.specificity() + (combinator ? ancestor.specificity() : 0));
   }
 };
+
+/** ASCII case-insensitive suffix test; `suffix` must already be lowercase. */
+inline bool endsWithPseudoIgnoreCase(const std::string_view s, const std::string_view suffix) {
+  if (s.size() < suffix.size()) return false;
+  const size_t start = s.size() - suffix.size();
+  for (size_t i = 0; i < suffix.size(); ++i) {
+    char c = s[start + i];
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    if (c != suffix[i]) return false;
+  }
+  return true;
+}
 
 /** Parse one compound. Returns false for anything outside `tag` / `.class` / `tag.class`. */
 inline bool parseCompound(const std::string_view s, Compound& out) {
@@ -107,7 +135,17 @@ inline bool parseCompound(const std::string_view s, Compound& out) {
  * Returns false if the selector uses syntax this engine does not implement, including
  * three or more compounds. Views in `out` point into `sel`.
  */
-inline bool parse(const std::string_view sel, Selector& out) {
+inline bool parse(std::string_view sel, Selector& out) {
+  // Strip the pseudo-element FIRST, and only where CSS can put it: at the very end. A
+  // mid-selector spelling (`p::first-letter span`) keeps its colons and is then rejected by
+  // parseCompound, exactly as before. The strict `>` also rejects a bare `::first-letter`,
+  // which would need the universal selector this engine does not implement.
+  bool firstLetter = false;
+  if (sel.size() > FIRST_LETTER_PSEUDO.size() && endsWithPseudoIgnoreCase(sel, FIRST_LETTER_PSEUDO)) {
+    sel.remove_suffix(FIRST_LETTER_PSEUDO.size());
+    firstLetter = true;
+  }
+
   Compound compounds[2];
   size_t count = 0;
   char combinator = 0;
@@ -138,10 +176,10 @@ inline bool parse(const std::string_view sel, Selector& out) {
 
   if (count == 0 || pendingChild) return false;  // empty, or a trailing combinator
   if (count == 1) {
-    out = Selector{{}, compounds[0], 0};
+    out = Selector{{}, compounds[0], 0, firstLetter};
     return true;
   }
-  out = Selector{compounds[0], compounds[1], combinator};
+  out = Selector{compounds[0], compounds[1], combinator, firstLetter};
   return true;
 }
 
@@ -168,6 +206,17 @@ void forEachKeyPiece(const Selector& sel, Sink&& sink) {
     sink(sel.combinator == CHILD_COMBINATOR ? CHILD_PIECE : DESCENDANT_PIECE);
   }
   emitCompound(sel.subject);
+  if (sel.firstLetter) sink(FIRST_LETTER_PSEUDO);
+}
+
+/**
+ * Strip the `::first-letter` suffix off a STORED key (or one compound of it), reporting
+ * whether it was there. Callers that pick a key apart -- the cache's chapter-usage class
+ * filter -- must go through this, or they read the pseudo as part of the class name.
+ */
+inline std::string_view withoutFirstLetterPseudo(const std::string_view key, bool& hadPseudo) {
+  hadPseudo = key.size() > FIRST_LETTER_PSEUDO.size() && endsWithPseudoIgnoreCase(key, FIRST_LETTER_PSEUDO);
+  return hadPseudo ? key.substr(0, key.size() - FIRST_LETTER_PSEUDO.size()) : key;
 }
 
 /** An element as the matcher sees it: its tag and its raw space-separated class attribute. */

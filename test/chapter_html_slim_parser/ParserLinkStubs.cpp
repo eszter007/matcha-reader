@@ -25,11 +25,21 @@ bool computeVisualWordOrder(const std::vector<std::string>& words, bool, std::ve
 }
 }  // namespace BidiUtils
 
-TextBlock::TextBlock(const std::vector<std::string>&, const std::vector<int16_t>&,
+// The real constructor flattens the per-word arrays into an arena; this double keeps them
+// where a test can read them instead, since the arena accessors it would need belong to
+// TextBlock.cpp (which cannot be linked here -- its render() calls a GfxRenderer far richer
+// than the stub). Appended in construction order, which is the order lines are emitted.
+std::vector<std::vector<std::string>> stubLineWords;
+std::vector<std::vector<int16_t>> stubLineXPos;
+
+TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>&, const std::vector<uint8_t>&,
                      const std::vector<uint16_t>&, const BlockStyle& blockStyle, std::vector<std::string> rubyTexts,
                      const std::vector<int32_t>&, std::vector<LinkSpan> linkSpans)
-    : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)), linkSpans(std::move(linkSpans)) {}
+    : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)), linkSpans(std::move(linkSpans)) {
+  stubLineWords.push_back(words);
+  stubLineXPos.push_back(wordXpos);
+}
 
 bool TextBlock::hasRuby() const { return false; }
 

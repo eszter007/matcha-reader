@@ -90,11 +90,19 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 84 (fork numbering)
+### Version 85 (fork numbering)
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 85 extends each text block's record with a drop cap trailer — the
+enlarged letter's codepoint (u32), its ink origin relative to the block (two
+i16) and its glyph magnification (u8), all zero on the lines that have none.
+The layout changes with it: a paragraph whose stylesheet declares
+`::first-letter { font-size: ... }` at 2x or more now takes that letter out of
+the text flow and reserves a column for it, so the opening lines are broken to
+a narrower width and their words sit at new x positions.
 
 Version 84 keeps the version 83 serialized layout unchanged. It was bumped
 because, in French books, a word ending in a hyphenated subject pronoun
