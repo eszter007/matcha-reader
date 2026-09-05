@@ -1216,7 +1216,10 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         std::string builtKey;
         if (scopedSelector) {
           builtKey += iequalsAscii(parsed.ancestor.cls, "hltr") ? "h|" : "v|";
-          const CssSelector::Selector subjectOnly{{}, parsed.subject, 0};
+          // The pseudo-element travels with the subject. Dropping it here would store
+          // `.hltr p::first-letter` under the plain key "h|p", where resolveStyle's own "h|"
+          // twin lookup finds it -- applying a drop cap's font-size to the whole paragraph.
+          const CssSelector::Selector subjectOnly{{}, parsed.subject, 0, parsed.firstLetter};
           CssSelector::forEachKeyPiece(
               subjectOnly, [&builtKey](const std::string_view piece) { builtKey.append(piece.data(), piece.size()); });
           sel = builtKey;
@@ -1516,15 +1519,28 @@ bool CssParser::resolveFirstLetterFontSize(const std::string_view tagName, const
   const CssStyle* best = nullptr;
   uint8_t bestSpec = 0;
 
-  const auto emit = [&](const std::string_view* pieces, const size_t count, const uint8_t spec, const bool) {
-    std::string_view keyed[CssSelector::MAX_KEY_PIECES + 1];
-    for (size_t i = 0; i < count; ++i) keyed[i] = pieces[i];
-    keyed[count] = CssSelector::FIRST_LETTER_PSEUDO;
-    const CssStyle* style = findStyle(keyed, count + 1);
+  const auto consider = [&](const std::string_view* keyed, const size_t count, const uint8_t spec) {
+    const CssStyle* style = findStyle(keyed, count);
     if (style != nullptr && style->hasFontSize() && (best == nullptr || spec >= bestSpec)) {
       best = style;
       bestSpec = spec;
     }
+  };
+
+  const auto emit = [&](const std::string_view* pieces, const size_t count, const uint8_t spec, const bool simple) {
+    // Room for the "h|" scope prefix, the key itself and the pseudo-element suffix.
+    std::string_view keyed[CssSelector::MAX_KEY_PIECES + 2];
+    for (size_t i = 0; i < count; ++i) keyed[i] = pieces[i];
+    keyed[count] = CssSelector::FIRST_LETTER_PSEUDO;
+    consider(keyed, count + 1, spec);
+
+    // The EBPAJ horizontal-mode twin, exactly as resolveStyle tries it for simple selectors:
+    // `.hltr p::first-letter` is stored as "h|p::first-letter" and is unreachable without this.
+    if (!simple) return;
+    keyed[0] = "h|";
+    for (size_t i = 0; i < count; ++i) keyed[i + 1] = pieces[i];
+    keyed[count + 1] = CssSelector::FIRST_LETTER_PSEUDO;
+    consider(keyed, count + 2, spec);
   };
 
   const bool walkAncestors = path != nullptr && (hasDescendantRules_ || hasChildRules_);

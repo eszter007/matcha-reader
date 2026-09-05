@@ -298,4 +298,20 @@ TEST_F(CssParserTest, FirstLetterRuleSurvivesTheFilteredCacheRoundTrip) {
   EXPECT_FLOAT_EQ(size.value, 300.0f);
 }
 
+// The EBPAJ writing-mode scope ("h|"/"v|") rebuilds a subject-only selector to build its key.
+// That rebuild must carry the pseudo-element: without it the rule is stored under the PLAIN
+// scoped key, where resolveStyle's own "h|" twin lookup finds it -- so a drop cap's 300% would
+// be applied to the whole paragraph instead of its first letter.
+TEST_F(CssParserTest, ScopedFirstLetterRuleDoesNotLeakIntoTheElementCascade) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser, ".hltr p::first-letter { font-size: 300%; }\n"));
+
+  const CssStyle block = parser.resolveStyle("p", "");
+  EXPECT_FALSE(block.defined.fontSize) << "the drop cap size leaked onto the paragraph itself";
+
+  CssLength size;
+  ASSERT_TRUE(parser.resolveFirstLetterFontSize("p", "", nullptr, size));
+  EXPECT_FLOAT_EQ(size.value, 300.0f);
+}
+
 }  // namespace
