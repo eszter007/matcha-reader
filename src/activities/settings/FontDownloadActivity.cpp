@@ -24,7 +24,7 @@
 
 namespace fui = freeink::ui;
 
-#if defined(FREEINK_MCU_C3)
+#if FREEINK_MCU_C3
 // On ESP32-C3 devices, enable HTTP downgrade for GitHub redirects to avoid
 // a second TLS session that can cause MEMORY_E/OOM due to heap fragmentation.
 constexpr bool ALLOW_HTTP_DOWNGRADE = true;
@@ -33,6 +33,9 @@ constexpr bool ALLOW_HTTP_DOWNGRADE = false;
 #endif
 
 namespace {
+constexpr char FONT_ASSET_BASE_URL_PREFIX[] =
+    "https://github.com/crosspoint-reader/crosspoint-fonts/releases/download/";
+
 // Entry gate for the whole manifest screen, sized against the published
 // manifest: 21 families / 84 files in ~17KB of JSON, whose parsed document
 // stays live while families_ and its per-family strings and vectors are
@@ -190,11 +193,11 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // TLS buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
 
-  // On ESP32-C3: GitHub's release assets redirect via short-lived JWT tokens.
-  // A second TLS session for the redirect can cause MEMORY_E/OOM. Enable HTTP
-  // downgrade for C3 only; the manifest is JSON and its integrity is verified
-  // by the parser, so a corrupted download fails safely. Non-C3 boards keep
-  // full HTTPS for manifest fetch.
+  // On ESP32-C3, GitHub's release assets redirect via short-lived JWT tokens.
+  // A second TLS session for the redirect can cause MEMORY_E/OOM. The HTTP
+  // fallback is a deliberate transport-authenticity tradeoff for C3 only:
+  // parsing validates syntax and schema, not the manifest's provenance.
+  // Non-C3 boards keep full HTTPS for manifest fetch.
   auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr,
                 nullptr, "", "", ALLOW_HTTP_DOWNGRADE);
   if (result != HttpDownloader::OK) {
@@ -246,7 +249,13 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     return false;
   }
 
-  baseUrl_ = doc["baseUrl"] | "";
+  const char* manifestBaseUrl = doc["baseUrl"] | "";
+  if (std::strncmp(manifestBaseUrl, FONT_ASSET_BASE_URL_PREFIX, sizeof(FONT_ASSET_BASE_URL_PREFIX) - 1) != 0) {
+    LOG_ERR("FONT", "Manifest has an unexpected asset URL");
+    errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
+    return false;
+  }
+  baseUrl_ = manifestBaseUrl;
   families_.clear();
   scriptGroupLabels_.clear();
   filteredIndices_.clear();
@@ -301,6 +310,14 @@ bool FontDownloadActivity::fetchAndParseManifest() {
       ManifestFile file;
       file.name = fileObj["name"] | "";
       file.size = fileObj["size"] | 0;
+
+      if (file.name.empty() || file.name.find(".cpfont") != file.name.size() - 7 ||
+          file.name.find('/') != std::string::npos || file.name.find('\\') != std::string::npos ||
+          file.name.find("..") != std::string::npos) {
+        LOG_ERR("FONT", "Malformed manifest file name: %s", file.name.c_str());
+        errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
+        return false;
+      }
 
       if (!fileObj["crc32"].is<uint32_t>()) {
         LOG_ERR("FONT", "Malformed manifest file entry: missing or invalid crc32 for %s", file.name.c_str());
@@ -578,8 +595,9 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
         // On ESP32-C3: GitHub's release asset URLs redirect via short-lived JWT tokens.
         // A second TLS session for the redirect can cause MEMORY_E/OOM due to heap
         // fragmentation. Enable HTTP downgrade for C3 only, trading transport
-        // authenticity for memory safety. CRC32 + cpfont format validation still
-        // protect against corruption. Non-C3 boards keep full HTTPS.
+        // authenticity for memory safety. CRC32 + cpfont format validation detect
+        // accidental corruption but do not authenticate an on-path replacement.
+        // Non-C3 boards keep full HTTPS.
         &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/ ALLOW_HTTP_DOWNGRADE);
 
     if (result == HttpDownloader::ABORTED) {
