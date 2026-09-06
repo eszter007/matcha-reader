@@ -270,8 +270,15 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::atomic<bool> loadingPopupDrawn{false};
   // When the pending lookup was raised, so a render that never acknowledges the loading popup
   // cannot strand the activity with input handling suspended.
+  //
+  // The deadline must clear a WHOLE e-ink render, because the acknowledgement cannot arrive until
+  // the render task finishes the pass it is already in: requestUpdate() posts an incrementing task
+  // notification, so the request is never dropped, only queued behind that pass. Measured worst
+  // case on device is 2585ms (clearScreen to displayBuffer, full refresh), so this is a last-resort
+  // guard against a genuinely lost wakeup and nothing else. An earlier 400ms fired during ordinary
+  // slow refreshes and reported a race that was not happening.
   uint32_t lookupPendingSinceMs = 0;
-  static constexpr uint32_t kLookupPopupTimeoutMs = 400;
+  static constexpr uint32_t kLookupPopupTimeoutMs = 4000;
   std::atomic<bool> noMatchPopupPending{false};
   size_t currentAllGlyphIndex() const;
   std::string buildLookupText() const;

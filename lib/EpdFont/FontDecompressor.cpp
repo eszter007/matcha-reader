@@ -262,13 +262,31 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     hotGroupFont = nullptr;
     hotGroupIndex = UINT16_MAX;
     if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
-      hotGroupFailNeeded = group.uncompressedSize;
-      hotGroupFailMaxAlloc = ESP.getMaxAllocHeap();
-      starvedGlyphs++;
-      LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u (backing off until heap > %u)",
-              group.uncompressedSize, groupIndex, hotGroupFailMaxAlloc);
-      stats.getBitmapTimeUs += micros() - tStart;
-      return nullptr;
+      // Last resort before dropping the glyph. The persistent glyph slab is SLAB_BYTES of pure
+      // cache -- a repeat-render accelerator for stray fallback glyphs -- and nothing in drawing
+      // THIS glyph needs it, so handing it back usually clears room for the group. Dropping the
+      // glyph instead punches a hole in the rendered text (a dictionary entry that looks
+      // half-loaded), and the back-off latch below then keeps every later glyph of the same group
+      // out as well, so one shortage costs a whole run of characters. Freed directly rather than
+      // via freeGlyphSlab(), which also clears the page buffers this render is drawing from.
+      if (slabBuf) {
+        free(slabBuf);
+        free(slabEntries);
+        slabBuf = nullptr;
+        slabEntries = nullptr;
+        slabEntryCount = 0;
+        slabUsed = 0;
+        LOG_INF("FDC", "Released glyph slab to fit hot group %u (maxAlloc=%u)", groupIndex, ESP.getMaxAllocHeap());
+      }
+      if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
+        hotGroupFailNeeded = group.uncompressedSize;
+        hotGroupFailMaxAlloc = ESP.getMaxAllocHeap();
+        starvedGlyphs++;
+        LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u (backing off until heap > %u)",
+                group.uncompressedSize, groupIndex, hotGroupFailMaxAlloc);
+        stats.getBitmapTimeUs += micros() - tStart;
+        return nullptr;
+      }
     }
     hotGroupFailNeeded = 0;  // a success proves the heap recovered
 
