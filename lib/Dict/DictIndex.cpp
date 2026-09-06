@@ -57,6 +57,13 @@ uint32_t g_lookupExactCalls = 0;
 // Set when an entry (or a merge) was dropped purely because the heap could not hold it, so a
 // caller can tell "this word has no definition" apart from "we could not load it right now".
 bool g_heapLimited = false;
+// Set when a search reached no verdict -- an .idx/.dat read failed, or every candidate definition
+// was skipped for want of heap -- rather than establishing that the headword is absent. The
+// difference matters only to the negative memo: recording such a lookup would state "this word
+// does not exist" for the rest of the session on the strength of one bad moment, and would also
+// answer the caller's release-fonts-and-retry from the memo before it could reach the SD card.
+// Reset at the top of every lookupExact().
+bool g_lookupIncomplete = false;
 static uint32_t g_missMemoHits = 0;  // lookups answered from the negative memo (no SD traffic)
 uint32_t g_recordCacheHits = 0;
 uint32_t g_recordCacheMisses = 0;
@@ -425,6 +432,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   while (lo < hi) {
     const size_t mid = lo + (hi - lo) / 2;
     if (!readIndexRecord(h, mid, recordCount, rec)) {
+      g_lookupIncomplete = true;
       break;
     }
 
@@ -461,7 +469,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       size_t first = mid;
       while (first > 0 && (mid - first) < kMaxSiblingScan) {
         DictIndexRecord prevRec;
-        if (!readIndexRecord(h, first - 1, recordCount, prevRec)) break;
+        if (!readIndexRecord(h, first - 1, recordCount, prevRec)) {
+          g_lookupIncomplete = true;
+          break;
+        }
         if (std::memcmp(key, prevRec.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         first--;
       }
@@ -472,7 +483,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       if (!needDefinition) {
         for (size_t idx = first; idx < scanEnd; idx++) {
           DictIndexRecord r;
-          if (!readIndexRecord(h, idx, recordCount, r)) break;
+          if (!readIndexRecord(h, idx, recordCount, r)) {
+            g_lookupIncomplete = true;
+            break;
+          }
           if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
           if (posAccept(r.posFlags)) {
             out.headword = headword;
@@ -502,7 +516,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       sibs.reserve(kMaxSiblingScan);
       for (size_t idx = first; idx < scanEnd && sibs.size() < kMaxSiblingScan; idx++) {
         DictIndexRecord r;
-        if (!readIndexRecord(h, idx, recordCount, r)) break;
+        if (!readIndexRecord(h, idx, recordCount, r)) {
+          g_lookupIncomplete = true;
+          break;
+        }
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         if (!posAccept(r.posFlags)) continue;  // wrong word class for this deinflection candidate
         sibs.push_back({r.priority, r.posFlags, r.offset, r.length});
@@ -533,6 +550,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         constexpr uint32_t MAX_DEF_BYTES = 16 * 1024;
         if (sibs[s].length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < sibs[s].length + 8 * 1024) {
           g_heapLimited = true;
+          g_lookupIncomplete = true;
           LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(sibs[s].length),
                   ESP.getMaxAllocHeap());
           if (entries.empty()) continue;  // keep trying: a lower-priority sibling may be smaller
@@ -541,8 +559,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         datFile.seek(sibs[s].offset);
         std::string def;
         def.resize(sibs[s].length);
-        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) != static_cast<int>(sibs[s].length))
+        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) != static_cast<int>(sibs[s].length)) {
+          g_lookupIncomplete = true;
           continue;
+        }
         if (entries.empty()) bestFlags = sibs[s].posFlags;
         entries.push_back({std::move(def), sibs[s].priority});
       }
@@ -592,6 +612,11 @@ namespace {
 // per slot over (headword, dictMask, posMask). needDefinition is deliberately NOT in the key: it
 // changes what a HIT returns, never whether the headword exists.
 //
+// Only a lookup that actually established absence may be recorded. A search cut short by an SD
+// read error, or one whose every candidate definition was skipped for want of heap, returns the
+// same `false` but has proven nothing (g_lookupIncomplete marks it) -- memoizing that would make
+// one transient failure the permanent answer for the rest of the lookup session.
+//
 // The 64-bit tag is what makes this safe. A tag collision would silently hide a real word; at
 // this table's occupancy that is ~1e-10 across a whole page, where a 32-bit tag would be a
 // near-certainty. The table is freed by releaseCaches() with the rest of the lookup state, so it
@@ -626,6 +651,7 @@ void rememberMiss(const uint64_t tag) {
 bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMask, bool needDefinition,
                             uint8_t posMask) {
   g_lookupExactCalls++;
+  g_lookupIncomplete = false;
   const uint64_t missTag = missTagFor(headword, dictMask, posMask);
   if (g_missMemo && g_missMemo[missTag % kMissMemoSlots] == missTag) {
     g_missMemoHits++;
@@ -648,7 +674,7 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
     out.sourceDict = DICT_NAMES;
     return true;
   }
-  rememberMiss(missTag);
+  if (!g_lookupIncomplete) rememberMiss(missTag);
   return false;
 }
 
