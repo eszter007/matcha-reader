@@ -628,8 +628,15 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   selectPageDrawn = false;
   initialRenderDone = false;
   lookupInFlight = true;
-  lookupPending = true;
+  // Clear the acknowledgement BEFORE raising the request. The render task runs concurrently, and
+  // with the stores the other way round a render that had already entered render() could set
+  // loadingPopupDrawn just before this cleared it -- the acknowledgement is lost, loop() waits on
+  // a popup that has already been drawn, and because it returns early while lookupPending stands,
+  // the activity stops handling input entirely: the word sits selected and the definition never
+  // opens.
   loadingPopupDrawn.store(false, std::memory_order_release);
+  lookupPending = true;
+  lookupPendingSinceMs = millis();
   requestUpdate();
 }
 
@@ -1187,7 +1194,12 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 
 void EpubReaderWordLookupActivity::loop() {
   if (lookupPending) {
-    if (loadingPopupDrawn.exchange(false, std::memory_order_acq_rel)) {
+    // The popup is a courtesy, not a precondition. If the render that would acknowledge it never
+    // lands, proceed anyway rather than waiting forever with input handling suspended -- a lookup
+    // that starts without having flashed "Loading..." is invisible next to one that never starts.
+    const bool ackTimedOut = millis() - lookupPendingSinceMs > kLookupPopupTimeoutMs;
+    if (loadingPopupDrawn.exchange(false, std::memory_order_acq_rel) || ackTimedOut) {
+      if (ackTimedOut) LOG_ERR("WLA", "Loading popup never acknowledged; looking up anyway");
       lookupPending = false;
       mode = Mode::Definition;
       performLookup();

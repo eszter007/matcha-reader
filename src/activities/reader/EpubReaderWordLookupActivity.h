@@ -268,6 +268,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool lookupInFlight = false;
   bool lookupPending = false;
   std::atomic<bool> loadingPopupDrawn{false};
+  // When the pending lookup was raised, so a render that never acknowledges the loading popup
+  // cannot strand the activity with input handling suspended.
+  uint32_t lookupPendingSinceMs = 0;
+  static constexpr uint32_t kLookupPopupTimeoutMs = 400;
   std::atomic<bool> noMatchPopupPending{false};
   size_t currentAllGlyphIndex() const;
   std::string buildLookupText() const;
