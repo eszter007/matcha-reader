@@ -1430,6 +1430,7 @@ void SdCardFont::clearPersistentCache() {
     delete[] advanceTable_[i];
     advanceTable_[i] = nullptr;
     advanceTableSize_[i] = 0;
+    advanceCapacity_[i] = 0;
   }
   // The kern/ligature class maps are the same kind of persistent measurement cache (~3KB per
   // loaded style) and reload from SD with one seek+read on the next ensure. Critically, they
@@ -1475,6 +1476,34 @@ bool SdCardFont::advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16
   return false;
 }
 
+bool SdCardFont::ensureAdvanceCapacity(uint8_t styleIdx, uint32_t needed) {
+  if (advanceCapacity_[styleIdx] >= needed) return true;
+
+  // Pin to the worst case on the FIRST allocation, while the heap is least fragmented. A chapter
+  // build discovers new codepoints continuously, so growing to fit each batch meant a fresh
+  // allocate-copy-free per batch, every one of them landing in the region the layout's page glyph
+  // vectors need. Reserving the full table once costs 12KB and makes every later merge allocation
+  // free. If that is unaffordable, fall back to exactly what this merge needs -- a smaller table
+  // still measures correctly, it just may grow again later.
+  uint32_t want = ADVANCE_CACHE_LIMIT;
+  auto* fresh = new (std::nothrow) AdvanceEntry[want];
+  if (!fresh) {
+    want = needed;
+    fresh = new (std::nothrow) AdvanceEntry[want];
+    if (!fresh) {
+      LOG_ERR("SDCF", "ensureAdvanceCapacity: alloc failed (%u entries) style %u", needed, styleIdx);
+      return false;
+    }
+  }
+  if (advanceTable_[styleIdx] && advanceTableSize_[styleIdx] > 0) {
+    std::memcpy(fresh, advanceTable_[styleIdx], advanceTableSize_[styleIdx] * sizeof(AdvanceEntry));
+  }
+  delete[] advanceTable_[styleIdx];
+  advanceTable_[styleIdx] = fresh;
+  advanceCapacity_[styleIdx] = want;
+  return true;
+}
+
 void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sortedNew, uint32_t newCount) {
   if (newCount == 0) return;
   const uint32_t oldSize = advanceTableSize_[styleIdx];
@@ -1486,29 +1515,34 @@ void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sor
   uint32_t mergedCap = oldSize + newCount;
   if (mergedCap > ADVANCE_CACHE_LIMIT) mergedCap = ADVANCE_CACHE_LIMIT;
 
-  AdvanceEntry* merged = new (std::nothrow) AdvanceEntry[mergedCap];
-  if (!merged) {
-    LOG_ERR("SDCF", "mergeIntoAdvanceTable: alloc failed (%u entries) style %u", mergedCap, styleIdx);
-    return;
-  }
-  // TEMP diagnostics for the vertical-build heap collapse (strip with the rest)
-  LOG_DBG("SDCF", "advance merge: style %u %u+%u -> %u entries, maxAlloc=%u", styleIdx, oldSize, newCount, mergedCap,
-          ESP.getMaxAllocHeap());
+  if (!ensureAdvanceCapacity(styleIdx, mergedCap)) return;
+  AdvanceEntry* table = advanceTable_[styleIdx];
 
-  const AdvanceEntry* a = advanceTable_[styleIdx];
-  const AdvanceEntry* b = sortedNew;
-  uint32_t i = 0, j = 0, k = 0;
-  while (k < mergedCap && (i < oldSize || j < newCount)) {
-    if (i < oldSize && (j >= newCount || a[i].codepoint <= b[j].codepoint)) {
-      merged[k++] = a[i++];
+  // Decide the cap-truncation BEFORE merging, by dropping the largest codepoints of the union --
+  // the same entries the old merged-tail truncation dropped, but chosen up front so the merge can
+  // run in place with no second buffer.
+  uint32_t keepOld = oldSize;
+  uint32_t keepNew = newCount;
+  for (uint32_t drop = oldSize + newCount - mergedCap; drop > 0; drop--) {
+    if (keepNew > 0 && (keepOld == 0 || sortedNew[keepNew - 1].codepoint > table[keepOld - 1].codepoint)) {
+      keepNew--;
     } else {
-      merged[k++] = b[j++];
+      keepOld--;
     }
   }
 
-  delete[] advanceTable_[styleIdx];
-  advanceTable_[styleIdx] = merged;
-  advanceTableSize_[styleIdx] = k;
+  // Merge backwards into the same buffer. The write cursor k starts at mergedCap >= keepOld and
+  // falls by one per step while the old-entry cursor falls by at most one, so k >= i always: an
+  // old entry is read before anything can overwrite it.
+  uint32_t i = keepOld, j = keepNew, k = mergedCap;
+  while (k > 0) {
+    if (i > 0 && (j == 0 || table[i - 1].codepoint > sortedNew[j - 1].codepoint)) {
+      table[--k] = table[--i];
+    } else {
+      table[--k] = sortedNew[--j];
+    }
+  }
+  advanceTableSize_[styleIdx] = mergedCap;
 }
 
 bool SdCardFont::hasAdvanceTable() const {
