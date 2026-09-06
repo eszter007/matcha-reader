@@ -1425,9 +1425,18 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
 
 // Largest block the styled-block table needs before it is attempted. The table is all-or-nothing
 // (a partial one silently drops whichever selectors sit late in the file), so it is skipped rather
-// than truncated. See the collect site: it logs what the table actually costs, because this figure
-// predates SD CJK fonts and a resident one can hold maxAlloc below it for a whole session.
-constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS = 48 * 1024;
+// than truncated.
+//
+// Derived from what the table actually costs rather than guessed. collectVerticalStyles() now
+// reserves its cap in ONE allocation, so the contiguous requirement is exactly that reservation;
+// the selector strings it copies are many small allocations that need free heap, not a big block.
+// The old flat 48KB predated SD CJK fonts, and a resident CJK font cache holds maxAlloc under it
+// for a whole session: on device this book was skipped -- and so rendered unstyled -- with 46996
+// bytes still available in the largest free block, a miss of barely 4KB.
+constexpr size_t STYLED_BLOCK_TABLE_ENTRIES = 256;  // must match collectVerticalStyles()'s maxOut default
+constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS =
+    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)) +
+    12 * 1024;
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
                                            const uint16_t viewportHeight, const uint8_t lineSpacing,
@@ -1550,6 +1559,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     // .k-solid boxes vanishing at a 64-entry cap). Either the full table fits, or the build
     // runs unstyled -- text-complete and still cached, see lastBuildUnstyledForHeap_.
     const uint32_t maxAllocNow = ESP.getMaxAllocHeap();
+    LOG_DBG("VSC", "styled-block table needs %u bytes contiguous (%u entries x %u); maxAlloc=%u",
+            static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS), static_cast<unsigned>(STYLED_BLOCK_TABLE_ENTRIES),
+            static_cast<unsigned>(sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)), maxAllocNow);
     if (maxAllocNow < MIN_MAX_ALLOC_FOR_STYLED_BLOCKS) {
       LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u, need %u); building unstyled", maxAllocNow,
               static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));

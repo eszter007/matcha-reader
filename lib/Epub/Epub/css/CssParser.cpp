@@ -1778,6 +1778,12 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     return unit == static_cast<uint8_t>(CssUnit::Em) || unit == static_cast<uint8_t>(CssUnit::Rem) ? v : 0.0f;
   };
 
+  // Reserve the bounded worst case once. Without it the vector doubles its way to maxOut
+  // (1, 2, 4 ... 256), and every step is an allocate-copy-free that both churns the heap and
+  // raises the peak to ~1.5x the final table -- during a build whose caller has already checked
+  // it can afford the table's SIZE, not its growth curve. One allocation instead.
+  if (out.capacity() < maxOut) out.reserve(maxOut);
+
   std::string selector;
   for (uint16_t i = 0; i < ruleCount && out.size() < maxOut; i++) {
     uint16_t selectorLen = 0;
