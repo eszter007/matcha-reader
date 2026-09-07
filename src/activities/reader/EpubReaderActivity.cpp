@@ -917,7 +917,7 @@ void EpubReaderActivity::readerLoop() {
     return;
   }
 
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput, useReversedPageTurn());
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
@@ -5104,6 +5104,14 @@ bool EpubReaderActivity::isJapaneseBook() const {
 // breaking, no word spaces. Gating on isJapaneseBook() alone would then hide the only control
 // that turns it back off, leaving the book permanently unreadable.
 bool EpubReaderActivity::showVerticalToggle() const { return isJapaneseBook() || verticalOverride == 1; }
+
+bool EpubReaderActivity::useReversedPageTurn() const {
+  // Gated on useVerticalText(), not just the toggle: that is already the authority on whether this
+  // book reads right-to-left, and it refuses tategaki for a non-Japanese book. So a horizontal
+  // Latin book stays normal even if the toggle is still on from a Japanese one -- which is what
+  // the setting's own name promises by scoping itself to vertical text and manga.
+  return SETTINGS.reversePageTurn != 0 && useVerticalText();
+}
 
 bool EpubReaderActivity::useVerticalText() const {
   // Vertical (tategaki) is a Japanese typesetting mode: it stacks characters in

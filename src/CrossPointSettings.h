@@ -247,6 +247,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Button layouts (front layout retained for migration only)
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
   uint8_t sideButtonLayout = PREV_NEXT;
+
+  // Right-to-left page turning for vertical (tategaki) EPUBs and manga. Global rather than a
+  // ReaderPrefs entry: it lives in the Controls screen, which a book cannot reach, so a per-book
+  // copy could never be changed once that book had prefs saved.
+  uint8_t reversePageTurn = 0;
   // Default ON: with it off, rotating the screen leaves every directional button pointing the way it
   // did in portrait, which reads as broken rather than as a preference. Saved settings keep whatever
   // they already store, so only new installs (and users who never touched it) see the change.

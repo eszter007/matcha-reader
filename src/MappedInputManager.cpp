@@ -29,8 +29,14 @@ bool MappedInputManager::isNavDirectionSwapped() const {
 }
 
 MappedInputManager::Button MappedInputManager::mapScreenDirection(const Button button) const {
+  return mapScreenDirectionFor(button, static_cast<uint8_t>(renderer.getOrientation()));
+}
+
+MappedInputManager::Button MappedInputManager::mapScreenDirectionFor(const Button button,
+                                                                     const uint8_t orientation) const {
   // Rows follow GfxRenderer::Orientation's declared order.
-  static constexpr Button directions[][4] = {
+  static constexpr uint8_t ORIENTATION_COUNT = 4;
+  static constexpr Button directions[ORIENTATION_COUNT][4] = {
       {Button::Left, Button::Right, Button::Up, Button::Down},
       {Button::Down, Button::Up, Button::Left, Button::Right},
       {Button::Right, Button::Left, Button::Down, Button::Up},
@@ -60,15 +66,21 @@ MappedInputManager::Button MappedInputManager::mapScreenDirection(const Button b
   // through that predicate, so gating this on the setting alone would silently drop the rotation
   // for touch users who leave the toggle off.
   const bool followOrientation = gpio.hasTouch() || SETTINGS.frontButtonFollowOrientation;
-  const uint8_t orientation = followOrientation ? static_cast<uint8_t>(renderer.getOrientation()) : 0;
-  return directions[orientation][direction];
+  // Clamped, not trusted: the orientation can arrive from a caller-supplied override (a persisted
+  // setting), and an out-of-range value would index past the table.
+  const uint8_t row = (followOrientation && orientation < ORIENTATION_COUNT) ? orientation : 0;
+  return directions[row][direction];
 }
 
 // True when the screen's vertical axis currently resolves to the front buttons -- i.e. in either
 // landscape, where the rotation hands the horizontal pair to the side buttons instead.
-bool MappedInputManager::frontPairIsVertical() const {
-  const Button up = mapScreenDirection(Button::ScreenUp);
+bool MappedInputManager::frontPairIsVerticalFor(const uint8_t orientation) const {
+  const Button up = mapScreenDirectionFor(Button::ScreenUp, orientation);
   return up == Button::Left || up == Button::Right;
+}
+
+bool MappedInputManager::frontPairIsVertical() const {
+  return frontPairIsVerticalFor(static_cast<uint8_t>(renderer.getOrientation()));
 }
 
 MappedInputManager::Button MappedInputManager::frontPairPrevious() const {
@@ -77,6 +89,21 @@ MappedInputManager::Button MappedInputManager::frontPairPrevious() const {
 
 MappedInputManager::Button MappedInputManager::frontPairNext() const {
   return frontPairIsVertical() ? Button::ScreenDown : Button::ScreenRight;
+}
+
+// These return an ALREADY-RESOLVED logical button (Left/Right/Up/Down), unlike the live-orientation
+// pair above which return a Screen* direction. That is the whole point: a Screen* button is resolved
+// later by mapButton() -> mapScreenDirection(), which reads the LIVE orientation -- so handing one
+// back here would let the content rotation the caller is trying to ignore creep in through the back
+// door. Resolving now pins the answer to the orientation the caller actually asked for.
+MappedInputManager::Button MappedInputManager::frontPairPrevious(const uint8_t orientation) const {
+  const Button dir = frontPairIsVerticalFor(orientation) ? Button::ScreenUp : Button::ScreenLeft;
+  return mapScreenDirectionFor(dir, orientation);
+}
+
+MappedInputManager::Button MappedInputManager::frontPairNext(const uint8_t orientation) const {
+  const Button dir = frontPairIsVerticalFor(orientation) ? Button::ScreenDown : Button::ScreenRight;
+  return mapScreenDirectionFor(dir, orientation);
 }
 
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {

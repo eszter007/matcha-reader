@@ -526,6 +526,10 @@ class EpubReaderActivity final : public ReaderActivity {
   ReaderRenderSpec readerSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
   void restoreSavedPosition();
   bool useVerticalText() const;
+  // True when page turning should be reversed for this book: the toggle is on AND this book
+  // actually reads right-to-left (vertical text). A horizontal Latin book is never reversed, even
+  // with the toggle left on from a Japanese one.
+  bool useReversedPageTurn() const;
   // Space kept clear below the text, in addition to the panel's own bezel.
   //
   // Horizontal follows upstream: the status bar and the reader's margin describe the same strip,
