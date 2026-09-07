@@ -214,13 +214,27 @@ bool UITheme::drawCoverThumbFilled(GfxRenderer& renderer, const std::string& cov
   return true;
 }
 
+namespace {
+// The height in a generated thumbnail's file NAME ("thumb_<height>.bmp"), or -1 when the name is
+// not one. The single place that decides what a generated thumbnail is called: the sibling scan
+// needs the number and the raw-image guard only needs the verdict, and the two must not drift.
+//
+// At most 5 digits, so a date-like "thumb_20240101.bmp" is not one of ours and the accumulation
+// stays far from overflowing. "thumb_0.bmp" is the shortest name the shape allows, at 11 chars.
+long thumbHeightOfName(const std::string& name) {
+  if (name.rfind("thumb_", 0) != 0) return -1;
+  if (name.size() < 11 || name.compare(name.size() - 4, 4, ".bmp") != 0) return -1;
+  const std::string digits = name.substr(6, name.size() - 10);
+  if (digits.empty() || digits.size() > 5 || digits.find_first_not_of("0123456789") != std::string::npos) return -1;
+  // std::accumulate rather than a raw loop: cppcheck's useStlAlgorithm fails the build on the
+  // loop, and `pio check` treats every defect as fatal.
+  return std::accumulate(digits.begin(), digits.end(), 0L, [](long acc, char c) { return acc * 10 + (c - '0'); });
+}
+}  // namespace
+
 bool UITheme::isGeneratedThumbPath(const std::string& path) {
   const size_t slash = path.find_last_of('/');
-  const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
-  if (name.rfind("thumb_", 0) != 0) return false;
-  if (name.size() < 11 || name.compare(name.size() - 4, 4, ".bmp") != 0) return false;
-  const std::string digits = name.substr(6, name.size() - 10);
-  return !digits.empty() && digits.find_first_not_of("0123456789") == std::string::npos;
+  return thumbHeightOfName(slash == std::string::npos ? path : path.substr(slash + 1)) >= 0;
 }
 
 // The LARGEST other thumb_<height>.bmp this book already has, or empty when there is none.
@@ -259,17 +273,7 @@ std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) 
     if (name[0] == '\0') continue;
     const std::string candidate(name);
     if (candidate == wanted) continue;  // the one we already know is missing
-    if (candidate.rfind("thumb_", 0) != 0) continue;
-    if (candidate.size() < 5 || candidate.compare(candidate.size() - 4, 4, ".bmp") != 0) continue;
-    // Parse the height out of thumb_<height>.bmp; skip anything that is not exactly that shape.
-    // Accumulated digit by digit rather than strtol: the input is already known to be all digits,
-    // so this needs no libc declaration and cannot be affected by a sign, whitespace or errno.
-    const std::string digits = candidate.substr(6, candidate.size() - 10);
-    // At most 5 digits: a thumbnail height is a screen dimension, so anything longer is not one of
-    // ours -- and refusing it keeps the accumulate below far from overflowing.
-    if (digits.empty() || digits.size() > 5 || digits.find_first_not_of("0123456789") != std::string::npos) continue;
-    const long height =
-        std::accumulate(digits.begin(), digits.end(), 0L, [](long acc, char c) { return acc * 10 + (c - '0'); });
+    const long height = thumbHeightOfName(candidate);
     if (height > bestHeight) {
       bestHeight = height;
       best = prefix + candidate;
