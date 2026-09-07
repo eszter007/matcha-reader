@@ -3259,7 +3259,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   const bool pageHasImages = page->hasImages();
   shownPageHasImages_ = pageHasImages;
-  const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   const bool manualRefreshPending = !grayscaleRefineOnly && forcedRefreshPending;
   if (!grayscaleRefineOnly) forcedRefreshPending = false;
   // The reader starts with zero here, which means the normal refresh cycle
@@ -3298,13 +3297,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     }
   };
 
-  if (!grayscaleRefineOnly && pageHasImagesNeedingDecode) {
-    page->renderWithImagePlaceholders(renderer, fontId, orientedMarginLeft, orientedMarginTop);
-    renderStatusBar();
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    renderer.clearScreen();
-  }
-
+  // Skip the placeholder pre-pass on cold image pages: it caused a visible two-stage update
+  // (placeholder boxes, then the real image) and an extra panel cycle.
+  // Instead, keep the previous page displayed while decoding and do a single refresh to the final image.
   auto tBwRender = tPrewarm;
   auto tDisplay = tBwRender;
   if (!grayscaleRefineOnly) {
