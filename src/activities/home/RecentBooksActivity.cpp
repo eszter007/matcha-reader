@@ -614,6 +614,24 @@ bool RecentBooksActivity::stepLibraryScan() {
     // records a fact about the BOOK, which a failed conversion can never fake.
     if (indexed && (indexed->flags & INDEX_FLAG_NO_COVER) && indexed->fileSize == bookSize &&
         indexed->modifiedStamp == bookStamp) {
+      // ...but a thumbnail may still exist at some OTHER height -- one an earlier build made, or
+      // a cover that converted once and cannot any more. Publish that CONCRETE sibling, so the
+      // draw rescales from it instead of showing a placeholder for artwork this book
+      // demonstrably has. Device report: home drew thumb_226.bmp while the library, wanting 207
+      // and 54, showed a placeholder for the same book.
+      //
+      // The concrete path rather than the templated thumb_[HEIGHT].bmp: templated would send
+      // every later draw at the size already known to be missing, failing an open and re-scanning
+      // the directory each time -- SD I/O on the draw path, for an answer that cannot change.
+      //
+      // Confined to the NO_COVER case on purpose: for a book whose thumbs are merely not
+      // generated YET, short-circuiting here would publish a stale size and never produce the
+      // right ones.
+      const std::string sibling = UITheme::findSiblingCoverThumb(thumbPath);
+      if (!sibling.empty()) {
+        book.coverBmpPath = sibling;
+        if (!publishBook(book)) return false;
+      }
       scan_.thumbIndex++;
       return false;
     }

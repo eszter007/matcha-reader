@@ -551,7 +551,20 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   int rc = jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback);
   if (rc != 1) {
-    LOG_ERR("JPG", "JPEG open failed (err=%d)", jpeg->getLastError());
+    const int err = jpeg->getLastError();
+    // Only a verdict about the FORMAT is permanent. JPEG_INVALID_FILE ("not a JPEG file") and
+    // JPEG_UNSUPPORTED_FEATURE describe the bytes themselves, so no retry changes the answer and
+    // recording it saves the library re-extracting and re-decoding on every visit (measured at
+    // ~9s per pass for a cover that can never appear).
+    //
+    // Everything else stays retryable. JPEG_DECODE_ERROR is the catch-all -- a truncated read, a
+    // bitstream walked out of step -- and JPEG_INVALID_PARAMETER is ours to fix, not the file's;
+    // marking either permanent would let one bad moment cost the cover forever, which is exactly
+    // what the "never persist a transient failure" rule forbids.
+    const bool permanent = err == JPEG_INVALID_FILE || err == JPEG_UNSUPPORTED_FEATURE;
+    LOG_ERR("JPG", "JPEG open failed (err=%d): %s%s", err, jpegDecodeErrorText(err),
+            permanent ? "; treating this cover as unconvertible" : "; will retry");
+    if (permanent && outUnsupported) *outUnsupported = true;
     return false;
   }
 
