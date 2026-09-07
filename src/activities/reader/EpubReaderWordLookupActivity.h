@@ -87,6 +87,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Set when a lookup was actually defeated by the heap. Gates the pre-emptive font release in
   // performLookup(), so the reload it causes is paid only after a real failure.
   bool lastLookupHeapLimited = false;
+  // Latched when a font-cache release proved unable to free anything contiguous, so the panel
+  // stops paying for a reclaim that cannot help. Per-activity by design -- see reclaimFontHeap().
+  bool reclaimIsFutile = false;
   bool selectPageDrawn = false;
   // A column jump must be immediate even on a cold page. Until dictionary segmentation catches
   // up, highlight the nearest raw text cell and allow it to be looked up directly.

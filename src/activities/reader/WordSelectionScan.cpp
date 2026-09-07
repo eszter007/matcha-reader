@@ -591,9 +591,13 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
   // truncates it. Bounded buffer, guarded allocation: failing to carry costs only the older
   // pages' cached scans, never this one.
   auto carry = makeUniqueNoThrow<uint8_t[]>(WLSCAN_MAX_CARRY_BYTES);
+  // Offsets are taken from this typed pointer rather than from carry.get() inline: cppcheck
+  // cannot resolve makeUniqueNoThrow's element type and reads .get() as void*, reporting
+  // arithOperationsOnVoidPointer on every offset expression.
+  uint8_t* const carryBuf = carry.get();
   size_t carryBytes = 0;
   uint16_t carryCount = 0;
-  if (carry) {
+  if (carryBuf != nullptr) {
     HalFile in;
     if (Storage.openFileForRead("WLS", path, in)) {
       WlscanFileHeader oldHdr;
@@ -610,9 +614,9 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
             continue;
           }
           if (carryBytes + sizeof(old) + bodyBytes > WLSCAN_MAX_CARRY_BYTES) break;
-          memcpy(carry.get() + carryBytes, &old, sizeof(old));
+          memcpy(carryBuf + carryBytes, &old, sizeof(old));
           carryBytes += sizeof(old);
-          if (in.read(carry.get() + carryBytes, bodyBytes) != static_cast<int>(bodyBytes)) {
+          if (in.read(carryBuf + carryBytes, bodyBytes) != static_cast<int>(bodyBytes)) {
             carryBytes -= sizeof(old);  // drop the half-read entry rather than write a corrupt one
             break;
           }
@@ -648,7 +652,7 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
     f.write(rec, sizeof(rec));
   }
   // Newest first, then the pages carried over -- so the oldest falls off the end naturally.
-  if (carryBytes > 0) f.write(carry.get(), carryBytes);
+  if (carryBytes > 0) f.write(carryBuf, carryBytes);
   LOG_INF("WLS", "Scan cached for spine=%u page=%u (%u selectable, %u other page(s) kept)", spineIndex, pageIndex,
           static_cast<unsigned>(selectToAllIdx.size()), carryCount);
   return true;

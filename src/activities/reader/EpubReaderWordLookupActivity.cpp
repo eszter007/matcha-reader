@@ -86,10 +86,10 @@ void EpubReaderWordLookupActivity::reclaimFontHeap() {
   // milliseconds -- on every single open. Device evidence: maxAlloc sat at 40948, twelve bytes
   // under this threshold, so the reclaim ran every time and reported "40948 -> 40948".
   //
-  // So: try it once, and if it buys nothing, stop trying for the rest of the session. A later
-  // genuine shortage still gets one attempt per session, which is what the crash this guard was
-  // added for actually needed.
-  static bool reclaimIsFutile = false;
+  // So: try it once, and if it buys nothing, stop trying for the rest of THIS panel session. A
+  // member, not a function-local static: the latter would latch until reboot and carry a verdict
+  // from one book or heap state into every later Word Lookup open. A later genuine shortage still
+  // gets one attempt per open, which is what the crash this guard was added for actually needed.
   if (reclaimIsFutile) return;
   LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", before);
   auto* fcm = renderer.getFontCacheManager();
@@ -189,9 +189,14 @@ void EpubReaderWordLookupActivity::onEnter() {
   // enter AND exit so a leak per open/close cycle shows as a declining series.
   LOG_INF("WLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // Suspend the glyph slab for the session -- 24KB back, and it cannot creep in again while the
-  // panel is up. Restored in onExit().
+  // panel is up. Restored in onExit(). Under the render lock: setSlabEnabled(false) FREES the
+  // slab, and the render task may be mid-render holding pointers into it -- the same cross-task
+  // use-after-free reclaimFontHeap() takes the lock for.
   if (auto* fcm = renderer.getFontCacheManager()) {
-    if (auto* fd = fcm->getDecompressor()) fd->setSlabEnabled(false);
+    if (auto* fd = fcm->getDecompressor()) {
+      RenderLock lock;
+      fd->setSlabEnabled(false);
+    }
   }
   // A scan-cache hit remembers the position the user was last at on this exact page -- resume
   // there instead of making them click back through every entry they've already seen.
@@ -234,7 +239,10 @@ void EpubReaderWordLookupActivity::onExit() {
   // session, where it earns little and costs 24KB of exactly the contiguous heap the dictionary
   // caches and the definition renderer are fighting over.
   if (auto* fcm = renderer.getFontCacheManager()) {
-    if (auto* fd = fcm->getDecompressor()) fd->setSlabEnabled(true);
+    if (auto* fd = fcm->getDecompressor()) {
+      RenderLock lock;  // mutates decompressor state; see the matching call in onEnter()
+      fd->setSlabEnabled(true);
+    }
   }
   // Persist the current cursor position (a no-op if the scan never finished, or the cache path
   // is unset) so the next open of this exact page resumes here instead of at word one.
@@ -685,7 +693,10 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   // dictionary query: ~40ms warm, ~65ms cold including the spx load. So on a freshly opened page
   // every lookup still paid the popup's full refresh for nothing.
   mode = Mode::Definition;
-  lookupInFlight = false;
+  // Stays TRUE across the handover: render() runs on another task, and a frame drawn in the gap
+  // would show "No match found" for a word whose lookup has not started yet. performLookup()
+  // clears it when the result is actually in.
+  lookupInFlight = true;
   performLookup();
   if (!hasResult) {
     mode = Mode::Select;
@@ -1750,5 +1761,11 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   // loaded" and "Advance table +368 from SD" after every single definition. Free the glyph data,
   // keep the measurements. (The glyph slab is already suspended for the whole session in
   // onEnter(), so nothing is holding it here either.)
-  if (auto* fcm = renderer.getFontCacheManager()) fcm->clearCache();
+  // FontDecompressor::clearCache(), not FontCacheManager::clearCache(): the latter also runs
+  // SdCardFont::clearCache() -> resetStyleMiniData(), dropping each style's 24-27KB mini-bitmap
+  // arena and moving the shortage to the next render ("Failed to allocate mini bitmap"). Same
+  // reasoning as the pre-read reclaim in performLookup().
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) fd->clearCache();
+  }
 }

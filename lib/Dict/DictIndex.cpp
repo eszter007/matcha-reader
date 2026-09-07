@@ -204,7 +204,10 @@ constexpr size_t SPXC_HEADER_SIZE = 24;  // magic(8) + fineCount + cstride + coa
 
 bool spxcPathFor(const char* idxPath, char* out, size_t outSize) {
   const size_t len = std::strlen(idxPath);
-  if (len < 4 || len + 2 > outSize) return false;
+  // len + 1 (not + 2): the copy below writes exactly len+1 bytes including the NUL, and the
+  // suffix swapped in is the same 4 chars as the one it replaces. Requiring an extra byte
+  // needlessly disabled the sidecar for paths that fit exactly.
+  if (len < 4 || len + 1 > outSize) return false;
   if (std::memcmp(idxPath + len - 4, ".idx", 4) != 0) return false;
   std::memcpy(out, idxPath, len + 1);
   std::memcpy(out + len - 4, ".spc", 4);
