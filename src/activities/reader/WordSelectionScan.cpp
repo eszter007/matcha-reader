@@ -4,6 +4,7 @@
 #include <DictIndex.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WordLookup.h>
 
 #include <algorithm>
@@ -376,6 +377,15 @@ void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
   if (scannedBits.empty()) return;
   // Already segmented: nothing to aim at, and re-reading it would only cost SD time.
   if (isGlyphMapped(glyphIndex)) return;
+  // The walk is already within context range of this target, so it will reach it on its own in
+  // the next few positions. Re-aiming would rewind scanPos by kMaxLookupChars to re-read context
+  // the walk is about to read anyway -- and a caller that re-aims on EVERY tick (the parked
+  // column jump in resolvePendingMove(), whose nearest-unmapped target shifts by one cell as each
+  // is mapped) then cancels out exactly what stepScan() advances. The frontier stops dead, so the
+  // scan never finishes, so the move never resolves, and handleSelectInput() swallows Confirm the
+  // whole time: the panel is frozen (device: scanPos pinned at 36/90 for as long as it was left).
+  // A genuine jump -- backwards, or far enough ahead to be worth skipping to -- still re-aims.
+  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxLookupChars)) return;
   recordFrom = glyphIndex;
   // Back up for context so a word overlapping the target is segmented as that word rather than
   // as a fragment starting mid-way through it. kMaxLookupChars bounds how far back a word can
@@ -415,6 +425,36 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 }
 
 namespace {
+// Multi-page container. The old format held exactly ONE page per book, so every page turn
+// evicted the previous page's scan and Word Lookup re-burst (~300ms) on essentially every open --
+// a cache that only ever hit if you reopened the very same page. Entries are tiny (a 16-byte
+// header plus 5 bytes per selectable word, so ~130 bytes for a typical page), so keeping the last
+// few costs well under a kilobyte of SD and no extra RAM.
+//
+// A distinct magic from the single-page format: an old wlscan.bin simply fails the check and is
+// rebuilt, which is the right outcome for a disposable cache.
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x4D534C57;  // "WLSM"
+constexpr uint16_t WLSCAN_MAX_PAGES = 8;
+constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
+
+struct WlscanFileHeader {
+  uint32_t magic;
+  uint16_t entryCount;
+  uint16_t reserved;
+} __attribute__((packed));
+
+// Per-entry header: one cached page. `magic` is the original single-page value, kept so a
+// truncated or corrupt container is detected entry-by-entry rather than trusted.
+struct Header {
+  uint32_t magic;
+  uint16_t spine;
+  uint16_t page;
+  uint32_t glyphHash;
+  uint32_t dictSize;
+  uint16_t count;
+  uint16_t lastCursor;
+} __attribute__((packed));
+
 constexpr uint32_t WLSCAN_MAGIC =
     0x45534C57;  // "WLSE" -- records now carry the match's cell span (GlyphRef::matchLen) after
                  // the glyph index; a "WLSD" file has 4-byte records and cannot be read as these
@@ -455,21 +495,33 @@ uint32_t WordSelectionScan::glyphContentHash() const {
 
 bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex) {
   HalFile f;
-  if (!Storage.openFileForRead("WLS", path, f)) return false;
+  if (!Storage.openFileForRead("WLS", path, f)) {
+    LOG_INF("WLS", "INSTR cache miss: no file %s", path.c_str());
+    return false;
+  }
 
-  struct Header {
-    uint32_t magic;
-    uint16_t spine;
-    uint16_t page;
-    uint32_t glyphHash;
-    uint32_t dictSize;
-    uint16_t count;
-    uint16_t lastCursor;
-  } __attribute__((packed)) hdr;
-  if (f.read(reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr)) != static_cast<int>(sizeof(hdr))) return false;
-  if (hdr.magic != WLSCAN_MAGIC || hdr.spine != spineIndex || hdr.page != pageIndex) return false;
-  if (hdr.glyphHash != glyphContentHash() || hdr.dictSize != dictFingerprint()) return false;
-  if (hdr.count > allGlyphs.size()) return false;
+  Header hdr;
+  WlscanFileHeader fileHdr;
+  if (f.read(reinterpret_cast<uint8_t*>(&fileHdr), sizeof(fileHdr)) != static_cast<int>(sizeof(fileHdr)) ||
+      fileHdr.magic != WLSCAN_MULTI_MAGIC) {
+    return false;  // absent, truncated, or the old single-page format -- rebuild
+  }
+  // Walk the entries, skipping over the records of the ones that do not match. Entries are small
+  // and there are at most WLSCAN_MAX_PAGES, so this costs a read or two.
+  const uint32_t wantHash = glyphContentHash();
+  const uint32_t wantDict = dictFingerprint();
+  bool found = false;
+  for (uint16_t e = 0; e < fileHdr.entryCount && e < WLSCAN_MAX_PAGES; e++) {
+    if (f.read(reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr)) != static_cast<int>(sizeof(hdr))) return false;
+    if (hdr.magic != WLSCAN_MAGIC) return false;
+    if (hdr.spine == spineIndex && hdr.page == pageIndex && hdr.glyphHash == wantHash && hdr.dictSize == wantDict &&
+        hdr.count <= allGlyphs.size()) {
+      found = true;
+      break;
+    }
+    if (!f.seekSet(f.position() + static_cast<uint32_t>(hdr.count) * kRecordBytes)) return false;
+  }
+  if (!found) return false;
 
   selectableGlyphs.clear();
   selectToAllIdx.clear();
@@ -522,7 +574,10 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
 
 bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex,
                                   const uint16_t cursorIndex) const {
-  if (!isDone()) return false;
+  if (!isDone()) {
+    LOG_INF("WLS", "INSTR not saving: scan not done");
+    return false;
+  }
   // Never persist a scan that ran out of heap mid-build: allGlyphs (or selectableGlyphs) was
   // truncated, so it found too few -- often zero -- selectable words. Caching that would make
   // "no matches" stick on this page for every future open, even once the heap recovers (the
@@ -532,18 +587,49 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
             static_cast<unsigned>(selectToAllIdx.size()));
     return false;
   }
+  // Carry the other pages forward. Read them BEFORE reopening the file for write, which
+  // truncates it. Bounded buffer, guarded allocation: failing to carry costs only the older
+  // pages' cached scans, never this one.
+  auto carry = makeUniqueNoThrow<uint8_t[]>(WLSCAN_MAX_CARRY_BYTES);
+  size_t carryBytes = 0;
+  uint16_t carryCount = 0;
+  if (carry) {
+    HalFile in;
+    if (Storage.openFileForRead("WLS", path, in)) {
+      WlscanFileHeader oldHdr;
+      if (in.read(reinterpret_cast<uint8_t*>(&oldHdr), sizeof(oldHdr)) == static_cast<int>(sizeof(oldHdr)) &&
+          oldHdr.magic == WLSCAN_MULTI_MAGIC) {
+        for (uint16_t e = 0; e < oldHdr.entryCount && e < WLSCAN_MAX_PAGES && carryCount + 1 < WLSCAN_MAX_PAGES; e++) {
+          Header old;
+          if (in.read(reinterpret_cast<uint8_t*>(&old), sizeof(old)) != static_cast<int>(sizeof(old))) break;
+          if (old.magic != WLSCAN_MAGIC) break;
+          const size_t bodyBytes = static_cast<size_t>(old.count) * kRecordBytes;
+          // This page is being rewritten as the newest entry; drop the stale copy.
+          if (old.spine == spineIndex && old.page == pageIndex) {
+            if (!in.seekSet(in.position() + bodyBytes)) break;
+            continue;
+          }
+          if (carryBytes + sizeof(old) + bodyBytes > WLSCAN_MAX_CARRY_BYTES) break;
+          memcpy(carry.get() + carryBytes, &old, sizeof(old));
+          carryBytes += sizeof(old);
+          if (in.read(carry.get() + carryBytes, bodyBytes) != static_cast<int>(bodyBytes)) {
+            carryBytes -= sizeof(old);  // drop the half-read entry rather than write a corrupt one
+            break;
+          }
+          carryBytes += bodyBytes;
+          carryCount++;
+        }
+      }
+      in.close();  // must close before reopening the same path for write
+    }
+  }
+
   HalFile f;
   if (!Storage.openFileForWrite("WLS", path, f)) return false;
+  const WlscanFileHeader fileHdr{WLSCAN_MULTI_MAGIC, static_cast<uint16_t>(carryCount + 1), 0};
+  f.write(reinterpret_cast<const uint8_t*>(&fileHdr), sizeof(fileHdr));
 
-  struct Header {
-    uint32_t magic;
-    uint16_t spine;
-    uint16_t page;
-    uint32_t glyphHash;
-    uint32_t dictSize;
-    uint16_t count;
-    uint16_t lastCursor;
-  } __attribute__((packed)) hdr;
+  Header hdr;
   hdr.magic = WLSCAN_MAGIC;
   hdr.spine = spineIndex;
   hdr.page = pageIndex;
@@ -561,6 +647,10 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
     rec[sizeof(idx)] = i < selectableGlyphs.size() ? selectableGlyphs[i].matchLen : 0;
     f.write(rec, sizeof(rec));
   }
+  // Newest first, then the pages carried over -- so the oldest falls off the end naturally.
+  if (carryBytes > 0) f.write(carry.get(), carryBytes);
+  LOG_INF("WLS", "Scan cached for spine=%u page=%u (%u selectable, %u other page(s) kept)", spineIndex, pageIndex,
+          static_cast<unsigned>(selectToAllIdx.size()), carryCount);
   return true;
 }
 
