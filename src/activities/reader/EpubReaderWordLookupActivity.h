@@ -84,6 +84,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // after a font-cache reclaim. Reported as low memory instead of "no match", which would be a
   // false statement about the word.
   bool lowMemoryResult = false;
+  // Set when a lookup was actually defeated by the heap. Gates the pre-emptive font release in
+  // performLookup(), so the reload it causes is paid only after a real failure.
+  bool lastLookupHeapLimited = false;
   bool selectPageDrawn = false;
   // A column jump must be immediate even on a cold page. Until dictionary segmentation catches
   // up, highlight the nearest raw text cell and allow it to be looked up directly.
@@ -135,6 +138,17 @@ class EpubReaderWordLookupActivity final : public Activity {
     uint32_t startedAt = 0;     // Column: device timing for the cold-jump performance log
   };
   PendingMove pending;
+  // How long a parked move may hold the panel before it is abandoned. handleSelectInput()
+  // deliberately swallows Confirm while a move is outstanding, so a wait that cannot finish
+  // quickly makes the whole view look frozen -- and the column walk's re-aim can keep the scan
+  // frontier crawling for tens of seconds on a dictionary-dense page. Generous enough that a
+  // normal cold jump (hundreds of ms on device) always completes.
+  static constexpr uint32_t kPendingMoveTimeoutMs = 2500;
+  // When the parked move was first SEEN waiting. Deliberately not PendingMove::startedAt: that
+  // field exists for the cold-jump performance log and only one of the three paths that park a
+  // Column move fills it in, so keying the timeout on it left the hanging paths unguarded.
+  // 0 = no move outstanding.
+  uint32_t pendingWaitSinceMs = 0;
 
   void renderSelect();
   // Screen boxes for one selectable word, written into `out` (at most kMaxHighlightBoxes),
@@ -266,19 +280,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   // True while performLookup() is executing; render() shows "Loading..." instead of
   // "No match found" so fast navigation never flashes a false negative.
   bool lookupInFlight = false;
-  bool lookupPending = false;
-  std::atomic<bool> loadingPopupDrawn{false};
-  // When the pending lookup was raised, so a render that never acknowledges the loading popup
-  // cannot strand the activity with input handling suspended.
-  //
-  // The deadline must clear a WHOLE e-ink render, because the acknowledgement cannot arrive until
-  // the render task finishes the pass it is already in: requestUpdate() posts an incrementing task
-  // notification, so the request is never dropped, only queued behind that pass. Measured worst
-  // case on device is 2585ms (clearScreen to displayBuffer, full refresh), so this is a last-resort
-  // guard against a genuinely lost wakeup and nothing else. An earlier 400ms fired during ordinary
-  // slow refreshes and reported a race that was not happening.
-  uint32_t lookupPendingSinceMs = 0;
-  static constexpr uint32_t kLookupPopupTimeoutMs = 4000;
   std::atomic<bool> noMatchPopupPending{false};
   size_t currentAllGlyphIndex() const;
   std::string buildLookupText() const;

@@ -41,8 +41,22 @@ const uint8_t* FontDecompressor::slabLookup(const EpdFontData* fontData, const u
   return nullptr;
 }
 
+void FontDecompressor::setSlabEnabled(const bool enabled) {
+  slabEnabled_ = enabled;
+  if (enabled || !slabBuf) return;
+  // Free the slab itself only -- NOT via freeGlyphSlab(), which also clearCache()s the page
+  // buffers and hot group a render in flight may be drawing from.
+  free(slabBuf);
+  free(slabEntries);
+  slabBuf = nullptr;
+  slabEntries = nullptr;
+  slabEntryCount = 0;
+  slabUsed = 0;
+}
+
 const uint8_t* FontDecompressor::slabInsert(const EpdFontData* fontData, const uint32_t glyphIndex, const uint8_t* data,
                                             const uint32_t len) {
+  if (!slabEnabled_) return nullptr;
   if (len == 0 || len > SLAB_BYTES) return nullptr;
   if (!slabBuf) {
     // Lazy allocation: the slab only costs RAM once non-prewarmed compressed-font glyphs are
