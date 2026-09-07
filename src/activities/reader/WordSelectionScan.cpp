@@ -270,12 +270,14 @@ void WordSelectionScan::initFromPage(const Page& page) {
       continue;
     }
     const TextBlock& block = *line.getBlock();
+    bool lineHadWord = false;
     for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
       if (oom) break;
       // The arena stores words as NUL-terminated spans, not std::strings (upstream 1.5.0).
       // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
       std::string_view word{block.wordText(wi), block.wordTextLen(wi)};
       if (word.empty()) continue;
+      lineHadWord = true;
       // A word broken by layout hyphenation ends the line with a hyphen the AUTHOR never wrote
       // ("Mu-" / "sik"), and the two halves reach the scan as separate words. Drop that hyphen and
       // suppress the space after it, so the lookup text reads "Musik" and the word resolves (#225).
@@ -323,6 +325,9 @@ void WordSelectionScan::initFromPage(const Page& page) {
         lastCp = cp;
       }
     }
+    // A line that emitted nothing (an empty block) is still a line in between: the pending join
+    // cannot reach across it.
+    if (!lineHadWord) joinToPrevious = false;
   }
   scanTruncated = oom;
   // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
