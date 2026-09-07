@@ -90,13 +90,22 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 90 (fork numbering)
+### Version 91 (fork numbering)
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 90 keeps the version 89 framing unchanged. An inline `font-size`
+Version 91 keeps the version 90 framing unchanged. Only the geometry stored in
+`PageBox` changes: a bordered block's closing edge is no longer allowed above
+the bottom of the last line inside it. The edge is still pulled up toward the
+text to absorb trailing block spacing, but a block carrying little or none used
+to have that pull-up land inside the final line's glyphs, drawing the border
+through the text. Because the box height is computed at build time and stored,
+existing caches keep the old geometry and must be rebuilt — hence the version
+bump rather than a pure code fix.
+
+Version 90 kept the version 89 framing unchanged. An inline `font-size`
 that the built-in font ladder cannot serve — a single-size SD-card reader font
 has no 12/14/16/18pt siblings to snap to — is now honoured by scaling the
 glyph bitmap instead of being dropped, at a scale snapped to an eighth. The
