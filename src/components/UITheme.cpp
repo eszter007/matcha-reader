@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
@@ -261,13 +262,13 @@ std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) 
     if (candidate.rfind("thumb_", 0) != 0) continue;
     if (candidate.size() < 5 || candidate.compare(candidate.size() - 4, 4, ".bmp") != 0) continue;
     // Parse the height out of thumb_<height>.bmp; skip anything that is not exactly that shape.
-    // Digit-by-digit rather than strtol: the input is already known to be all digits, so this
-    // needs no libc declaration and cannot be affected by a sign, leading whitespace or errno.
+    // Accumulated digit by digit rather than strtol: the input is already known to be all digits,
+    // so this needs no libc declaration and cannot be affected by a sign, whitespace or errno.
     // Bounded by the name buffer, so it cannot overflow a long.
     const std::string digits = candidate.substr(6, candidate.size() - 10);
     if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) continue;
-    long height = 0;
-    for (const char c : digits) height = height * 10 + (c - '0');
+    const long height =
+        std::accumulate(digits.begin(), digits.end(), 0L, [](long acc, char c) { return acc * 10 + (c - '0'); });
     if (height > bestHeight) {
       bestHeight = height;
       best = prefix + candidate;
