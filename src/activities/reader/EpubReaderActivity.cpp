@@ -4016,10 +4016,28 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
         prewarmedHPage_ = -1;
       }
       LOG_DBG("ERS", "Word lookup (vertical): maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
+      // Start of the NEXT page, so a word split across the boundary can still be looked up
+      // (#201). Fetched BEFORE the current page and copied into a string: getPage() hands out a
+      // pointer into the section's page cache, so asking for another page can invalidate the one
+      // already held.
+      std::string lookupTail;
+      uint32_t lookupTailParagraph = 0;
+      if (const VerticalPage* nextPage = verticalSection->getPage(verticalSection->currentPage + 1)) {
+        int taken = 0;
+        for (const auto& g : nextPage->glyphs) {
+          if (g.renderKind == VerticalGlyph::RotatedRun) continue;
+          if (taken == 0) lookupTailParagraph = g.paragraphIndex;
+          // One paragraph only: a word cannot span a paragraph break, and the scan would discard
+          // the rest anyway.
+          if (g.paragraphIndex != lookupTailParagraph) break;
+          WordSelectionScan::encodeUtf8(g.codepoint, lookupTail);
+          if (++taken >= WordSelectionScan::kLookupContextChars) break;
+        }
+      }
       if (const VerticalPage* page = verticalSection->getPage()) {
         panel = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
             renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
-            static_cast<uint16_t>(verticalSection->currentPage), selectCtx);
+            static_cast<uint16_t>(verticalSection->currentPage), selectCtx, lookupTail, lookupTailParagraph);
         if (!panel) LOG_ERR("ERS", "OOM: word lookup panel");
       }
     }
@@ -4058,9 +4076,33 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
       // here needs the build to still be live.
       LOG_DBG("ERS", "Word lookup: maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
 
+      // Start of the next page, so a word split across the boundary can still be looked up (#201).
+      // loadPageAt() returns an owned page, so unlike the vertical path there is no cache pointer
+      // to invalidate and the order does not matter.
+      std::string lookupTail;
+      if (auto nextPage = section->loadPageAt(section->currentPage + 1)) {
+        const std::string nextText = PageTextExtractor::fromHorizontalPage(*nextPage);
+        int taken = 0;
+        for (size_t i = 0; i < nextText.size() && taken < WordSelectionScan::kLookupContextChars;) {
+          const auto lead = static_cast<unsigned char>(nextText[i]);
+          size_t len = 1;
+          if ((lead & 0xE0) == 0xC0)
+            len = 2;
+          else if ((lead & 0xF0) == 0xE0)
+            len = 3;
+          else if ((lead & 0xF8) == 0xF0)
+            len = 4;
+          if (i + len > nextText.size()) break;
+          if (lead == '\n') break;  // paragraph break: a word cannot span it
+          lookupTail.append(nextText, i, len);
+          i += len;
+          taken++;
+        }
+      }
+
       startActivityForResult(std::make_unique<EpubReaderWordLookupActivity>(
                                  renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
-                                 static_cast<uint16_t>(section->currentPage)),
+                                 static_cast<uint16_t>(section->currentPage), lookupTail),
                              [this](const ActivityResult&) { requestUpdate(); });
     }
   }

@@ -55,11 +55,16 @@ class EpubReaderWordLookupActivity final : public Activity {
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         const VerticalPage& page, std::string scanCachePath = "",
                                         uint16_t spineIndex = 0, uint16_t pageIndex = 0,
-                                        const VerticalSelectContext& selectContext = {});
+                                        const VerticalSelectContext& selectContext = {},
+                                        // Start of the next page, so a word split across the page
+                                        // boundary still resolves. See appendLookupContext().
+                                        const std::string& lookupContext = "", uint32_t lookupContextParagraph = 0);
   // Horizontal (yokogaki) reading mode.
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Page& page,
-                                        std::string scanCachePath = "", uint16_t spineIndex = 0,
-                                        uint16_t pageIndex = 0);
+                                        std::string scanCachePath = "", uint16_t spineIndex = 0, uint16_t pageIndex = 0,
+                                        // See the vertical constructor: start of the next page, so
+                                        // a word split across the boundary still resolves.
+                                        const std::string& lookupContext = "");
 
   void onEnter() override;
   void onExit() override;

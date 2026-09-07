@@ -30,7 +30,9 @@
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
                                                            const uint16_t spineIndex, const uint16_t pageIndex,
-                                                           const VerticalSelectContext& selectContext)
+                                                           const VerticalSelectContext& selectContext,
+                                                           const std::string& lookupContext,
+                                                           const uint32_t lookupContextParagraph)
     : Activity("WordLookup", renderer, mappedInput),
       selectCtx(selectContext),
       scanCachePath(std::move(scanCachePath)),
@@ -46,12 +48,14 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
   }
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
+  if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, lookupContextParagraph);
   initScanFromCacheOrBurst("vertical");
 }
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const Page& page, std::string scanCachePath,
-                                                           const uint16_t spineIndex, const uint16_t pageIndex)
+                                                           const uint16_t spineIndex, const uint16_t pageIndex,
+                                                           const std::string& lookupContext)
     : Activity("WordLookup", renderer, mappedInput),
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
@@ -60,6 +64,8 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromPage(page);
+  // Horizontal glyphs all carry paragraphIndex 0, so the context matches by construction.
+  if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, 0);
   initScanFromCacheOrBurst("horizontal");
 }
 
