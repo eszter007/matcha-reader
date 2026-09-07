@@ -55,9 +55,28 @@ MappedInputManager::Button MappedInputManager::mapScreenDirection(const Button b
       return button;
   }
 
-  const uint8_t orientation =
-      SETTINGS.frontButtonFollowOrientation ? static_cast<uint8_t>(renderer.getOrientation()) : 0;
+  // Same policy as isNavDirectionSwapped(): touch boards always follow the rendered orientation,
+  // button-only boards keep the user toggle. Page turning used to reach orientation handling
+  // through that predicate, so gating this on the setting alone would silently drop the rotation
+  // for touch users who leave the toggle off.
+  const bool followOrientation = gpio.hasTouch() || SETTINGS.frontButtonFollowOrientation;
+  const uint8_t orientation = followOrientation ? static_cast<uint8_t>(renderer.getOrientation()) : 0;
   return directions[orientation][direction];
+}
+
+// True when the screen's vertical axis currently resolves to the front buttons -- i.e. in either
+// landscape, where the rotation hands the horizontal pair to the side buttons instead.
+bool MappedInputManager::frontPairIsVertical() const {
+  const Button up = mapScreenDirection(Button::ScreenUp);
+  return up == Button::Left || up == Button::Right;
+}
+
+MappedInputManager::Button MappedInputManager::frontPairPrevious() const {
+  return frontPairIsVertical() ? Button::ScreenUp : Button::ScreenLeft;
+}
+
+MappedInputManager::Button MappedInputManager::frontPairNext() const {
+  return frontPairIsVertical() ? Button::ScreenDown : Button::ScreenRight;
 }
 
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
@@ -108,14 +127,13 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
           return false;
       }
     case Button::NavNext:
-      // Logical "next item" navigation: side Down + front Right, with the control axis flipped in
-      // INVERTED / LANDSCAPE_CCW under the live orientation policy, matching the rotated hint labels.
-      return isNavDirectionSwapped() ? (mapButton(Button::Up, fn) || mapButton(Button::Left, fn))
-                                     : (mapButton(Button::Down, fn) || mapButton(Button::Right, fn));
+      // Logical "next item": whichever buttons point down and right ON THE ROTATED SCREEN.
+      // Deferring to the screen directions covers all four orientations; the isNavDirectionSwapped()
+      // flip this replaces only handled the two 180 degree ones, leaving both landscapes unrotated.
+      return mapButton(Button::ScreenDown, fn) || mapButton(Button::ScreenRight, fn);
     case Button::NavPrevious:
-      // Logical "previous item" navigation: side Up + front Left, axis-flipped in the same orientations.
-      return isNavDirectionSwapped() ? (mapButton(Button::Down, fn) || mapButton(Button::Right, fn))
-                                     : (mapButton(Button::Up, fn) || mapButton(Button::Left, fn));
+      // Logical "previous item": the up/left pair on the rotated screen, same reasoning.
+      return mapButton(Button::ScreenUp, fn) || mapButton(Button::ScreenLeft, fn);
     case Button::ScreenLeft:
     case Button::ScreenRight:
     case Button::ScreenUp:

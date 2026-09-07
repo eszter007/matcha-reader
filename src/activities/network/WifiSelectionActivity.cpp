@@ -653,14 +653,14 @@ void WifiSelectionActivity::loop() {
     if (route.routed && app.invalidated()) requestUpdate();
     if (route) return;  // dispatched to onPromptEvent
 
-    if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
-        mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::ScreenUp) ||
+        mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft)) {
       if (savePromptSelection > 0) {
         savePromptSelection--;
         requestUpdate();
       }
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Down) ||
-               mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+    } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenDown) ||
+               mappedInput.wasPressed(MappedInputManager::Button::ScreenRight)) {
       if (savePromptSelection < 1) {
         savePromptSelection++;
         requestUpdate();
@@ -688,14 +688,14 @@ void WifiSelectionActivity::loop() {
     if (route.routed && app.invalidated()) requestUpdate();
     if (route) return;  // dispatched to onPromptEvent
 
-    if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
-        mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::ScreenUp) ||
+        mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft)) {
       if (forgetPromptSelection > 0) {
         forgetPromptSelection--;
         requestUpdate();
       }
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Down) ||
-               mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+    } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenDown) ||
+               mappedInput.wasPressed(MappedInputManager::Button::ScreenRight)) {
       if (forgetPromptSelection < 1) {
         forgetPromptSelection++;
         requestUpdate();
@@ -773,12 +773,12 @@ void WifiSelectionActivity::loop() {
       return;
     }
 
-    if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::ScreenRight)) {
       startWifiScan();
       return;
     }
 
-    const bool leftPressed = mappedInput.wasPressed(MappedInputManager::Button::Left);
+    const bool leftPressed = mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft);
     if (leftPressed) {
       const bool hasSavedPassword = !networks.empty() && networks[selectedNetworkIndex].hasSavedPassword;
       if (hasSavedPassword) {

@@ -118,9 +118,13 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool swapFront = input.isNavDirectionSwapped();
-  const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
-  const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+  // The FRONT pair turns pages, whichever screen axis that pair currently serves: left/right in
+  // portrait, up/down in landscape. Naming ScreenLeft/ScreenRight outright would bind the SIDE
+  // buttons in landscape -- they already turn pages through PageBack/PageForward, so the front
+  // buttons would simply do nothing, which is what happened. It also must not reach the side
+  // buttons by another name: their page-turn role is the user's to disable via sideButtonLayout.
+  const auto prevButton = input.frontPairPrevious();
+  const auto nextButton = input.frontPairNext();
   const auto pageButtonTriggered = [&](const MappedInputManager::Button button) {
     if (usePress) return input.wasPressed(button);
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);

@@ -333,17 +333,23 @@ void MangaWordLookupActivity::loop() {
 
   const bool sideButtonsForLookup =
       SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-  const bool swapFrontButtons = mappedInput.isNavDirectionSwapped();
+  // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
+  // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
+  // way guarantees the two roles land on different buttons in every orientation. Reaching for the
+  // physical side buttons (PageBack/PageForward) for entries collided in landscape, where
+  // ScreenLeft/Right resolve to those very buttons -- scrolling and entry navigation ended up on
+  // the same pair and the front buttons did nothing.
+  //
+  // The setting keeps its meaning: it swaps which AXIS carries which role, so in portrait it still
+  // moves entry navigation onto the side buttons and scrolling onto the front pair.
   const auto nextEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::PageForward : MappedInputManager::Button::Right;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenDown : MappedInputManager::Button::ScreenRight;
   const auto previousEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::PageBack : MappedInputManager::Button::Left;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenUp : MappedInputManager::Button::ScreenLeft;
   const auto scrollDownButton =
-      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Left : MappedInputManager::Button::Right)
-                           : MappedInputManager::Button::Down;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
   const auto scrollUpButton =
-      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
-                           : MappedInputManager::Button::Up;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
   buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
   buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
@@ -457,11 +463,10 @@ void MangaWordLookupActivity::render(RenderLock&&) {
                                             counterText.empty() ? nullptr : counterText.c_str(), kind);
   renderContentArea(layout.body);
 
-  const bool sideButtonsForLookup =
-      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                            sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
+  // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
+  // direction on the rotated screen, which a fixed left/right pair cannot do.
+  const auto labels = mappedInput.mapDirectionalLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT),
+                                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

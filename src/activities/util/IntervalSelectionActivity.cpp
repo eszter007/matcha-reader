@@ -131,16 +131,17 @@ void IntervalSelectionActivity::loop() {
     return;
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { adjustValue(-smallStep); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { adjustValue(smallStep); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenLeft}, [this] { adjustValue(-smallStep); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenRight}, [this] { adjustValue(smallStep); });
 
   // On edge-button boards (X3, X4 Pro) the side buttons sit on the left/right edges of the screen rather
   // than as a vertical up/down rocker (X4), so BTN_UP is physically the left button and BTN_DOWN the right
   // one. Flip the large-step direction there so the left button decreases and the right button increases.
   const int upDelta = gpio.hasEdgeSideButtons() ? -largeStep : largeStep;
   const int downDelta = gpio.hasEdgeSideButtons() ? largeStep : -largeStep;
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this, upDelta] { adjustValue(upDelta); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down},
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp},
+                                       [this, upDelta] { adjustValue(upDelta); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown},
                                        [this, downDelta] { adjustValue(downDelta); });
 }
 

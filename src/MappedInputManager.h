@@ -105,6 +105,13 @@ class MappedInputManager {
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   const GfxRenderer& getRenderer() const { return renderer; }
+  // The screen-direction pair that currently lands on the two FRONT direction buttons: left/right
+  // in portrait and inverted, up/down in either landscape (the rotation puts the horizontal pair on
+  // the side buttons there). Lets a caller bind "the front pair" without naming physical buttons --
+  // and without stealing the side buttons, whose page-turn role the user can disable separately.
+  Button frontPairPrevious() const;
+  Button frontPairNext() const;
+
   Labels mapLabels(const char* back, const char* confirm, const char* previous, const char* next) const;
   // Maps four screen-direction labels onto the two physical front-button roles
   // using the same live-orientation transform as ScreenLeft/Right/Up/Down.
@@ -128,6 +135,7 @@ class MappedInputManager {
 
   Button mapScreenDirection(Button button) const;
   Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
+  bool frontPairIsVertical() const;
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
   // SDK edge classification (fui::edgeSwipe) + the shared decode/held-time
   // bookkeeping; the wrappers below give each edge its board meaning.

@@ -4516,10 +4516,10 @@ void EpubReaderActivity::handleOverlayInput() {
       closeOverlayToPage();
       return;
     }
-    const bool previousControl = mappedInput.wasLongPressed(MappedInputManager::Button::Left, 0) ||
-                                 mappedInput.wasLongPressed(MappedInputManager::Button::Up, 0);
-    const bool nextControl = mappedInput.wasLongPressed(MappedInputManager::Button::Right, 0) ||
-                             mappedInput.wasLongPressed(MappedInputManager::Button::Down, 0);
+    const bool previousControl = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenLeft, 0) ||
+                                 mappedInput.wasLongPressed(MappedInputManager::Button::ScreenUp, 0);
+    const bool nextControl = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenRight, 0) ||
+                             mappedInput.wasLongPressed(MappedInputManager::Button::ScreenDown, 0);
     if (previousControl || nextControl) {
       toolbarControl = (toolbarControl + (nextControl ? 1 : 4)) % 5;
       if (toolbarControl >= 2) focusedTool = toolbarControl - 2;
@@ -4687,8 +4687,8 @@ void EpubReaderActivity::handleOverlayInput() {
     return;
   }
 
-  const bool previousPanel = mappedInput.wasLongPressed(MappedInputManager::Button::Left, 0);
-  const bool nextPanel = mappedInput.wasLongPressed(MappedInputManager::Button::Right, 0);
+  const bool previousPanel = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenLeft, 0);
+  const bool nextPanel = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenRight, 0);
   if (previousPanel || nextPanel) {
     focusedTool = (focusedTool + (nextPanel ? 1 : 2)) % 3;
     openOverlay(toolOverlay(focusedTool));
@@ -4706,8 +4706,8 @@ void EpubReaderActivity::handleOverlayInput() {
   // row. The jump fires once on the hold and swallows the release that ends it,
   // so it never doubles up with the tap step.
   if (count > 0) {
-    const bool pressedUp = mappedInput.wasLongPressed(MappedInputManager::Button::Up, 0);
-    const bool pressedDown = mappedInput.wasLongPressed(MappedInputManager::Button::Down, 0);
+    const bool pressedUp = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenUp, 0);
+    const bool pressedDown = mappedInput.wasLongPressed(MappedInputManager::Button::ScreenDown, 0);
     if (pressedUp || pressedDown) {
       panelIndex =
           pressedUp ? ButtonNavigator::previousIndex(panelIndex, count) : ButtonNavigator::nextIndex(panelIndex, count);
@@ -4716,8 +4716,8 @@ void EpubReaderActivity::handleOverlayInput() {
       return;
     }
 
-    const bool up = mappedInput.isPressed(MappedInputManager::Button::Up);
-    const bool down = mappedInput.isPressed(MappedInputManager::Button::Down);
+    const bool up = mappedInput.isPressed(MappedInputManager::Button::ScreenUp);
+    const bool down = mappedInput.isPressed(MappedInputManager::Button::ScreenDown);
     if (!up && !down) panelHoldJumped = false;
     if (!panelHoldJumped && (up || down) && mappedInput.getHeldTime() >= PANEL_HOLD_MS) {
       const int step = down ? PANEL_HOLD_STEP : -PANEL_HOLD_STEP;

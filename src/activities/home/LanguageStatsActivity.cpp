@@ -84,21 +84,21 @@ void LanguageStatsActivity::loop() {
     requestUpdate();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
     StatsWidgets::stepMonth(calYear, calMonth, -1);
     requestUpdate();
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenRight)) {
     StatsWidgets::stepMonth(calYear, calMonth, +1);
     requestUpdate();
   }
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
     if (scrollOffset < maxScrollOffset) {
       scrollOffset = std::min(scrollOffset + 40, maxScrollOffset);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
     if (scrollOffset > 0) {
       scrollOffset = std::max(scrollOffset - 40, 0);
       requestUpdate();

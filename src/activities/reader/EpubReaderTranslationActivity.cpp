@@ -349,13 +349,13 @@ void EpubReaderTranslationActivity::loop() {
   }
 
   if (state == SHOWING_RESULT) {
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
       if (scrollOffset < maxScrollOffset) {
         scrollOffset++;
         requestUpdate();
       }
     });
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
       if (scrollOffset > 0) {
         scrollOffset--;
         requestUpdate();

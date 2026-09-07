@@ -247,7 +247,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Button layouts (front layout retained for migration only)
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
   uint8_t sideButtonLayout = PREV_NEXT;
-  uint8_t frontButtonFollowOrientation = 0;
+  // Default ON: with it off, rotating the screen leaves every directional button pointing the way it
+  // did in portrait, which reads as broken rather than as a preference. Saved settings keep whatever
+  // they already store, so only new installs (and users who never touched it) see the change.
+  uint8_t frontButtonFollowOrientation = 1;
   // Front button remap (logical -> hardware)
   // Used by MappedInputManager to translate logical buttons into physical front buttons.
   uint8_t frontButtonBack = FRONT_HW_BACK;

@@ -146,7 +146,7 @@ void OpdsBookBrowserActivity::loop() {
       activateSelected();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       navigateBack();
-    } else if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
       if (!searchTemplate.empty() && selectorIndex == 0) launchSearch();
     }
 

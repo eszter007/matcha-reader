@@ -68,23 +68,23 @@ void ReadingStatsActivity::loop() {
     return;
   }
   // Left/Right to navigate calendar months
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
     StatsWidgets::stepMonth(calYear, calMonth, -1);
     requestUpdate();
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenRight)) {
     StatsWidgets::stepMonth(calYear, calMonth, +1);
     requestUpdate();
   }
   // Up/Down to scroll
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
     if (scrollOffset < maxScrollOffset) {
       scrollOffset += 40;
       if (scrollOffset > maxScrollOffset) scrollOffset = maxScrollOffset;
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
     if (scrollOffset > 0) {
       scrollOffset -= 40;
       if (scrollOffset < 0) scrollOffset = 0;
