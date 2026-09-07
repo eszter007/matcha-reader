@@ -114,7 +114,8 @@ class MappedInputManager {
   // Same, resolved against an explicit orientation instead of the live one. For a viewer that
   // rotates the DISPLAY to fit its content (the manga reader turns a panel 90 degrees when its
   // aspect does not match the screen): that rotation is a content transform, not the reader
-  // picking the device up differently, so input must not follow it.
+  // picking the device up differently, so input must not follow it. These return an already-
+  // RESOLVED logical button rather than a Screen* direction -- see the definitions.
   Button frontPairPrevious(uint8_t orientation) const;
   Button frontPairNext(uint8_t orientation) const;
 
