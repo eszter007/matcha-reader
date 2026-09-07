@@ -115,7 +115,17 @@ class Section {
   bool startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);
   // Lay out up to maxPages more pages (maxPages <= 0 = build to completion). Returns
   // false on error (the build is abandoned). Sets isBuildComplete() when finished.
-  bool buildSomeMore(int maxPages);
+  //
+  // maxMillis (0 = no limit) additionally ends the call once that much wall time has passed,
+  // checked between parse steps. Background ticks run on the loop task, so whatever one call
+  // costs is exactly how long input handling is delayed; pacing on pages alone bounds that only
+  // as well as pages happen to be uniform, and they are not. The build keeps its state and
+  // resumes next tick, so this is a yield, not a cancellation.
+  //
+  // Deliberately a clock, not an input check: reading the buttons from in here means calling
+  // InputManager::getState(), which runs the touch state machine as a side effect and consumes
+  // the very edge events the loop task is waiting to handle.
+  bool buildSomeMore(int maxPages, uint32_t maxMillis = 0);
   bool isBuilding() const { return static_cast<bool>(build_); }
   bool isBuildComplete() const { return buildComplete_; }
   // Best-known total page count: the exact pageCount once finalized, or a smoothed byte-based

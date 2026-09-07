@@ -346,6 +346,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // background build chunk never noticeably delays input or a pending render.
   static constexpr int BUILD_PAGES_PER_CHUNK = 8;
   static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
+  // Wall-clock cap on one background build tick. The tick runs on the loop task, so this is
+  // also the delay it can add to handling a button press. Pages are not uniform (median ~23ms,
+  // p90 ~79ms measured on device), so the page count alone does not bound it.
+  static constexpr uint32_t BACKGROUND_BUILD_BUDGET_MS = 30;
 
   // MEMFIX-PORT: background-build heap floor; portable
   // Skip background build ticks below this free-heap floor. The parse path grows
