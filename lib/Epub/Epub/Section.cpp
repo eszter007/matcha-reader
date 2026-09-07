@@ -1080,9 +1080,21 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const int page) {
 // Read a page from the committed file at filePath (finalized section or partial from a
 // previous session). Uses a local handle so it is safe while a build holds the member
 // `file` open on the tmp .bin.
+// Open the committed section file for one of the read-only probes below.
+//
+// A missing file is the NORMAL case for these, not an error: the chapter may never have been
+// built, or its build may still be running with nothing committed yet. SDCardManager's
+// openFileForRead prints unconditionally on failure (raw Serial, so it is not even filtered by
+// the log level), which turned every such probe into console noise. Check first and stay quiet,
+// exactly as loadSectionFile() already does for the same reason.
+bool Section::openCommittedFile(HalFile& f) const {
+  if (!Storage.exists(filePath.c_str())) return false;
+  return Storage.openFileForRead("SCT", filePath, f);
+}
+
 std::unique_ptr<Page> Section::loadPageAt(const int page) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return nullptr;
   }
 
@@ -1153,7 +1165,7 @@ std::string Section::getTextFromSectionFile() {
 
 std::optional<uint16_t> Section::getCachedPageCount() const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1179,7 +1191,7 @@ std::optional<uint16_t> Section::getCachedPageCount() const {
 
 std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1209,7 +1221,7 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
 
 std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1248,7 +1260,7 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
 
 std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1280,7 +1292,7 @@ std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) c
 
 std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1329,7 +1341,7 @@ std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex)
 bool Section::loadSectionFootnotes(std::vector<std::pair<uint16_t, FootnoteEntry>>& out) {
   out.clear();
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) return false;
+  if (!openCommittedFile(f)) return false;
   const size_t fileSize = f.size();
   if (fileSize < sizeof(uint32_t)) return false;
   f.seek(fileSize - sizeof(uint32_t));
@@ -1363,7 +1375,7 @@ std::optional<uint32_t> Section::getVisibleTextOffsetForPage(const uint16_t page
   }
 
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f) || f.size() < HEADER_SIZE) {
+  if (!openCommittedFile(f) || f.size() < HEADER_SIZE) {
     return std::nullopt;
   }
 
@@ -1419,7 +1431,7 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
   }
 
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f) || f.size() < HEADER_SIZE) {
+  if (!openCommittedFile(f) || f.size() < HEADER_SIZE) {
     return std::nullopt;
   }
 

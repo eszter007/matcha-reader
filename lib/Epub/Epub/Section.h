@@ -64,6 +64,10 @@ class Section {
     // BuildContext ties it to exactly the span that must stay at full speed.
     HalPowerManager::Lock powerLock;
   };
+  // Opens the committed section file for the read-only probes, quietly when it is absent.
+  // See the definition: a missing file is expected there, and the SDK logs unconditionally.
+  bool openCommittedFile(HalFile& f) const;
+
   std::unique_ptr<BuildContext> build_;
   bool buildComplete_ = false;
   // Pages laid out by the active build (== build_->lut.size()). Distinct from pageCount,
