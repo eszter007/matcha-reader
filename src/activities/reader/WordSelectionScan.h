@@ -55,6 +55,10 @@ class WordSelectionScan {
   // matter: WordLookup's longest window is MAX_WINDOW_CHARS (8), so a word beginning on the last
   // on-page character reaches at most 7 further.
   void appendLookupContext(const std::string& utf8, uint32_t paragraphIndex);
+  // Number of leading allGlyphs entries that are really on the page. Anything reading a glyph's
+  // geometry (column/row/x/y) must stop here: context cells carry no position, and 0/0 is a valid
+  // vertical cell. Text building may read past it -- that is what the context is for.
+  size_t onPageGlyphCount() const { return contextStart; }
   static constexpr int kLookupContextChars = 8;
 
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).

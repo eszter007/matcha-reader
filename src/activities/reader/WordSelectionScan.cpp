@@ -249,6 +249,7 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
 }
 
 void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint32_t paragraphIndex) {
+  const bool hadBits = !scannedBits.empty();
   contextStart = allGlyphs.size();
   int added = 0;
   for (size_t i = 0; i < utf8.size() && added < kLookupContextChars;) {
@@ -267,17 +268,26 @@ void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint3
     }
     if (i + len > utf8.size()) break;  // truncated trailing sequence
     for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(utf8[i + k]) & 0x3F);
-    // Zero position: these are never drawn and never selectable, so there is nothing to place.
-    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, paragraphIndex, 0})) {
-      scanTruncated = true;
-      break;
-    }
+    // Zero position: these are never drawn and never selectable, so there is nothing to place --
+    // every consumer of a glyph's geometry stops at onPageGlyphCount().
+    // NOT scanTruncated on failure: the context is optional and the on-page glyph stream is
+    // intact, so the scan result is still complete and still worth caching.
+    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, paragraphIndex, 0})) break;
     i += len;
     added++;
   }
-  // The bitmap is sized from allGlyphs, so it has to cover the appended cells even though the walk
-  // never records them -- isGlyphMapped() is consulted by index.
+  if (allGlyphs.size() == contextStart) return;  // nothing appended: leave the bitmap alone
+  // The bitmap is sized from allGlyphs, so it has to be re-sized to cover the appended cells even
+  // though the walk never records them -- isGlyphMapped() is consulted by index.
   allocScannedBits();
+  if (hadBits && scannedBits.empty()) {
+    // The longer bitmap did not fit. It is worth more than the optional context -- without it the
+    // walk drops to a strictly sequential pass and select mode loses its column jumps -- so drop
+    // the context and go back to the size that already fitted.
+    allGlyphs.resize(contextStart);
+    allocScannedBits();
+    return;
+  }
   markContextScanned();
 }
 
