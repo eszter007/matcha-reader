@@ -463,8 +463,6 @@ void MangaWordLookupActivity::render(RenderLock&&) {
                                             counterText.empty() ? nullptr : counterText.c_str(), kind);
   renderContentArea(layout.body);
 
-  const bool sideButtonsForLookup =
-      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
   // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
   // direction on the rotated screen, which a fixed left/right pair cannot do.
   const auto labels = mappedInput.mapDirectionalLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT),

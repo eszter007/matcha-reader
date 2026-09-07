@@ -675,7 +675,8 @@ void KOReaderSyncActivity::loop() {
     if (route.routed && app.invalidated()) requestUpdate();
     if (route) return;  // dispatched to onResultRow
 
-    // Navigate the two options with physical buttons.
+    // Any direction button cycles the two options; the Screen* names follow the rendered
+    // orientation, so this stays "any direction key" however the screen is turned.
     if (mappedInput.wasReleased(MappedInputManager::Button::ScreenUp) ||
         mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft) ||
         mappedInput.wasReleased(MappedInputManager::Button::ScreenDown) ||

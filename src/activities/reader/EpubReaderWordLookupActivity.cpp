@@ -1735,8 +1735,6 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
                                             counterText.empty() ? nullptr : counterText.c_str(), visibleKind());
   renderContentArea(layout.body);
 
-  const bool sideButtonsForLookup =
-      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
   // Directional labels, not mapLabels: the hint has to name the direction the button moves the
   // selection ON THE ROTATED SCREEN. mapLabels only ever flipped a fixed left/right pair, so in
   // landscape the front buttons still read "Left"/"Right" while actually moving up and down.
