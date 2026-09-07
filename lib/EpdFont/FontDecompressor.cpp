@@ -370,6 +370,20 @@ int32_t FontDecompressor::findGlyphIndex(const EpdFontData* fontData, uint32_t c
 int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8Text) {
   if (!fontData || !fontData->groups || !utf8Text) return 0;
 
+  // One slot per font, enforced here: getBitmap() consults only the FIRST slot whose fontData
+  // matches and stops there ("don't check other slots"), so a second slot for the same font is
+  // never read -- its decompressed glyphs are dead memory, and it costs a slot that a DIFFERENT
+  // font then cannot have. That is the whole failure mode this guard removes: measured on device,
+  // one screen claimed six slots for four distinct fonts (a font reached through two ids, plus a
+  // fallback family shared by two others) and the last two fonts were refused.
+  //
+  // Returning here leaves any glyph this call needed but the existing slot lacks to the
+  // hot-group path -- exactly where a second slot would have left it anyway, since it could
+  // never be read.
+  for (uint8_t i = 0; i < pageSlotCount; i++) {
+    if (pageSlots[i].fontData == fontData && pageSlots[i].glyphCount > 0) return 0;
+  }
+
   // Allocate the next available slot (caller must call freePageBuffer/clearCache to reset)
   if (pageSlotCount >= MAX_PAGE_SLOTS) {
     LOG_ERR("FDC", "All %u page buffer slots full, cannot prewarm fontData=%p", MAX_PAGE_SLOTS, (void*)fontData);
