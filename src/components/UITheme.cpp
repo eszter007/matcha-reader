@@ -264,9 +264,10 @@ std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) 
     // Parse the height out of thumb_<height>.bmp; skip anything that is not exactly that shape.
     // Accumulated digit by digit rather than strtol: the input is already known to be all digits,
     // so this needs no libc declaration and cannot be affected by a sign, whitespace or errno.
-    // Bounded by the name buffer, so it cannot overflow a long.
     const std::string digits = candidate.substr(6, candidate.size() - 10);
-    if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) continue;
+    // At most 5 digits: a thumbnail height is a screen dimension, so anything longer is not one of
+    // ours -- and refusing it keeps the accumulate below far from overflowing.
+    if (digits.empty() || digits.size() > 5 || digits.find_first_not_of("0123456789") != std::string::npos) continue;
     const long height =
         std::accumulate(digits.begin(), digits.end(), 0L, [](long acc, char c) { return acc * 10 + (c - '0'); });
     if (height > bestHeight) {
