@@ -4021,6 +4021,9 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
       // pointer into the section's page cache, so asking for another page can invalidate the one
       // already held.
       std::string lookupTail;
+      // Worst case 4 UTF-8 bytes per context character: one reserve instead of repeated growth
+      // on a heap that was just reclaimed.
+      lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);
       uint32_t lookupTailParagraph = 0;
       if (const VerticalPage* nextPage = verticalSection->getPage(verticalSection->currentPage + 1)) {
         int taken = 0;
@@ -4083,6 +4086,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
       // loadPageAt() returns an owned page, so unlike the vertical path there is no cache pointer
       // to invalidate and the order does not matter.
       std::string lookupTail;
+      lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);  // see the vertical path
       if (auto nextPage = section->loadPageAt(section->currentPage + 1)) {
         // Flattened the way initFromPage() flattens the current page -- a separating space only
         // between two ASCII words, CJK runs concatenated -- so a split Japanese word still meets

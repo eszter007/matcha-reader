@@ -814,6 +814,10 @@ In **horizontal text** and in manga, lookup opens directly in the definition vie
 The header counts your position (e.g. 10/35). The page is pre-scanned, so you only ever land on a word the
 dictionary actually has.
 
+A Japanese word broken by the page break still resolves: the lookup reads a few characters past the last one on
+screen, so selecting the part you can see gives the whole word. The highlight stays on the page, covering only
+the characters that are actually there.
+
 Enable **Settings → Controls → Navigate with Side Buttons in Word Lookup** to use the side buttons for moving
 between words and the front Left / Right buttons for scrolling. The default mapping above remains active when
 **Side Button Layout** is set to **Disabled**.

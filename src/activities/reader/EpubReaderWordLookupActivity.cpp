@@ -361,7 +361,7 @@ bool EpubReaderWordLookupActivity::stepCursor(const int delta, int& outIndex) {
 }
 
 void EpubReaderWordLookupActivity::moveSelection(const int delta) {
-  if (provisionalGlyph < scan.allGlyphs.size()) {
+  if (provisionalGlyph < scan.onPageGlyphCount()) {
     const auto& current = scan.allGlyphs[provisionalGlyph];
     size_t target = SIZE_MAX;
     int bestDistance = INT_MAX;
@@ -418,7 +418,7 @@ void EpubReaderWordLookupActivity::moveSelection(const int delta) {
 // resolvePendingMove() as the frontier reaches it.
 void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
   const size_t currentGlyph = currentAllGlyphIndex();
-  if (currentGlyph >= scan.allGlyphs.size()) return;
+  if (currentGlyph >= scan.onPageGlyphCount()) return;
   const auto& cur = scan.allGlyphs[currentGlyph];
   uint16_t minColumn = 0;
   uint16_t maxColumn = 0;
@@ -849,7 +849,7 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   // observe a half-built set. Only the publish at the end runs with the render task locked out.
   HighlightBox boxes[kMaxHighlightBoxes];
   int count = 0;
-  if (provisionalGlyph < scan.allGlyphs.size()) {
+  if (provisionalGlyph < scan.onPageGlyphCount()) {
     const auto& glyph = scan.allGlyphs[provisionalGlyph];
     boxes[0] = HighlightBox{static_cast<int16_t>(glyph.x + selectCtx.marginLeft),
                             static_cast<int16_t>(glyph.y + selectCtx.marginTop), static_cast<int16_t>(selectCtx.cellPx),
@@ -926,7 +926,7 @@ void EpubReaderWordLookupActivity::renderSelect() {
 }
 
 size_t EpubReaderWordLookupActivity::currentAllGlyphIndex() const {
-  if (provisionalGlyph < scan.allGlyphs.size()) return provisionalGlyph;
+  if (provisionalGlyph < scan.onPageGlyphCount()) return provisionalGlyph;
   if (cursorIndex < 0 || static_cast<size_t>(cursorIndex) >= scan.selectToAllIdx.size()) return SIZE_MAX;
   return scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
 }

@@ -59,7 +59,7 @@ class WordSelectionScan {
   // geometry (column/row/x/y) must stop here: context cells carry no position, and 0/0 is a valid
   // vertical cell. Text building may read past it -- that is what the context is for.
   size_t onPageGlyphCount() const { return contextStart; }
-  static constexpr int kLookupContextChars = 8;
+  static constexpr int kLookupContextChars = 8;  // == kMaxLookupChars, asserted below
 
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).
   // Returns true when the scan is fully done.
@@ -128,6 +128,9 @@ class WordSelectionScan {
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
+  // The context is exactly one lookup window: a word beginning on the last on-page character
+  // reaches at most kMaxLookupChars - 1 further, and nothing past that can ever be matched.
+  static_assert(kLookupContextChars == kMaxLookupChars, "context must cover one lookup window");
   static void encodeUtf8(uint32_t cp, std::string& out);
   static bool isLookupableChar(uint32_t cp);
   static bool isKatakana(uint32_t cp);
