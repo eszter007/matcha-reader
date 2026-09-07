@@ -255,6 +255,7 @@ void WordSelectionScan::initFromPage(const Page& page) {
   };
   uint32_t lastCp = 0;
   bool oom = false;
+  bool joinToPrevious = false;  // previous line ended on a layout hyphen; see below
   for (const auto& el : page.elements) {
     if (oom) break;
     if (el->getTag() != TAG_PageLine) continue;
@@ -265,16 +266,29 @@ void WordSelectionScan::initFromPage(const Page& page) {
       if (oom) break;
       // The arena stores words as NUL-terminated spans, not std::strings (upstream 1.5.0).
       // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
-      const std::string_view word{block.wordText(wi), block.wordTextLen(wi)};
+      std::string_view word{block.wordText(wi), block.wordTextLen(wi)};
       if (word.empty()) continue;
-      // Insert a separating space only between two ASCII-word boundaries.
-      if (lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&
+      // A word broken by layout hyphenation ends the line with a hyphen the AUTHOR never wrote
+      // ("Mu-" / "sik"), and the two halves reach the scan as separate words. Drop that hyphen and
+      // suppress the space after it, so the lookup text reads "Musik" and the word resolves (#225).
+      //
+      // Only a LINE-FINAL hyphen qualifies, which is the strongest signal available here: the
+      // layout's own continuation flag lives in ParsedText and does not survive into the page. A
+      // real hyphen falling at a line end is therefore joined too. That is deliberate -- a wrong
+      // join simply finds nothing, exactly as today, while the right one is the whole feature.
+      const bool lineFinal = wi + 1 == block.wordCount();
+      const bool joinHyphen = lineFinal && word.size() > 1 && word.back() == '-';
+      if (joinHyphen) word.remove_suffix(1);
+      // Insert a separating space only between two ASCII-word boundaries -- unless the previous
+      // line ended mid-word, where a space is exactly what must not appear.
+      if (!joinToPrevious && lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&
           isAsciiWord(static_cast<unsigned char>(word[0]))) {
         if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, ' ', 0, 0})) {
           oom = true;
           break;
         }
       }
+      joinToPrevious = joinHyphen;
       size_t b = 0;
       while (b < word.size()) {
         auto c0 = static_cast<unsigned char>(word[b]);
