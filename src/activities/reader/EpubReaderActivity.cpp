@@ -531,6 +531,12 @@ void EpubReaderActivity::readerLoop() {
       requestUpdate();
       return;
     }
+  } else if (pendingOrientation != 0xFF) {
+    // The setting swung back to what is already applied before the window elapsed. Nothing needs
+    // reflowing, and a pending value left behind would carry its old timestamp: the next change
+    // back to that same orientation would find the settle window already "elapsed" and apply
+    // immediately, which is exactly the coalescing this is meant to provide.
+    pendingOrientation = 0xFF;
   }
 
   // A horizontal image is shown immediately in BW; refine it only after the reader
