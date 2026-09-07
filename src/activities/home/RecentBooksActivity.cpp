@@ -623,8 +623,12 @@ bool RecentBooksActivity::stepLibraryScan() {
       // Confined to the NO_COVER case on purpose: for a book whose thumbs are merely not
       // generated YET, short-circuiting here would publish a stale size and never produce the
       // right ones.
-      if (!UITheme::findSiblingCoverThumb(thumbPath).empty()) {
-        book.coverBmpPath = cachePath + "/thumb_[HEIGHT].bmp";
+      // The CONCRETE sibling, not the templated path: publishing thumb_[HEIGHT].bmp would send
+      // every later draw at the size we already know is missing, failing an open and re-scanning
+      // the directory each time -- SD I/O on the draw path, for an answer that cannot change.
+      const std::string sibling = UITheme::findSiblingCoverThumb(thumbPath);
+      if (!sibling.empty()) {
+        book.coverBmpPath = sibling;
         if (!publishBook(book)) return false;
       }
       scan_.thumbIndex++;

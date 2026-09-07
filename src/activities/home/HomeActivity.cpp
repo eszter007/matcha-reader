@@ -109,7 +109,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // the raw file of course exists, an exists() check alone reported "cover present" and the
       // card drew the full-size page scaled into the cell. For a dithered manga page that comes
       // out near-black (device report).
-      const bool coverIsThumb = book.coverBmpPath.find("[HEIGHT]") != std::string::npos;
+      // Templated, or a concrete thumb_<height>.bmp. The concrete form is what the Library
+      // publishes for a book whose exact size cannot be generated but which still has a
+      // thumbnail at another one -- it is a GENERATED cover, not a raw source, so it must not
+      // send this card back through the generator on every visit.
+      const bool coverIsThumb =
+          book.coverBmpPath.find("[HEIGHT]") != std::string::npos || UITheme::isGeneratedThumbPath(book.coverBmpPath);
       // hasContent(), not exists(): SD cards written by earlier builds still carry the 0-byte
       // sentinel Epub::generateThumbBmp used to leave on failure, and exists() counted it as a
       // cover -- the card then skipped regeneration and drew a placeholder forever.

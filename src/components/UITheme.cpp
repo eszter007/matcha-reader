@@ -213,7 +213,22 @@ bool UITheme::drawCoverThumbFilled(GfxRenderer& renderer, const std::string& cov
   return true;
 }
 
-// Any other thumb_<height>.bmp this book already has. Returns empty when there is none.
+bool UITheme::isGeneratedThumbPath(const std::string& path) {
+  const size_t slash = path.find_last_of('/');
+  const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+  if (name.rfind("thumb_", 0) != 0) return false;
+  if (name.size() < 11 || name.compare(name.size() - 4, 4, ".bmp") != 0) return false;
+  const std::string digits = name.substr(6, name.size() - 10);
+  return !digits.empty() && digits.find_first_not_of("0123456789") == std::string::npos;
+}
+
+// The LARGEST other thumb_<height>.bmp this book already has, or empty when there is none.
+//
+// Largest, not first: directory iteration order is not guaranteed, so taking the first match could
+// pick thumb_54 over thumb_226 on one boot and the reverse on the next -- inconsistent output from
+// the same files, and needless upscaling when a better source was sitting right there. Scaling
+// down is also the cheaper and better-looking direction.
+//
 // Directory scan, so it only runs on the miss path -- the hit path never opens the directory.
 std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) {
   const size_t slash = missingThumbPath.find_last_of('/');
@@ -227,6 +242,8 @@ std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) 
   if (!folder || !folder.isDirectory()) return "";
   folder.rewindDirectory();
   char name[64];
+  std::string best;
+  long bestHeight = 0;
   for (HalFile entry = folder.openNextFile(); entry; entry = folder.openNextFile()) {
     if (entry.isDirectory()) continue;
     name[0] = '\0';
@@ -236,9 +253,16 @@ std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) 
     if (candidate == wanted) continue;  // the one we already know is missing
     if (candidate.rfind("thumb_", 0) != 0) continue;
     if (candidate.size() < 5 || candidate.compare(candidate.size() - 4, 4, ".bmp") != 0) continue;
-    return dir + "/" + candidate;
+    // Parse the height out of thumb_<height>.bmp; skip anything that is not exactly that shape.
+    const std::string digits = candidate.substr(6, candidate.size() - 10);
+    if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) continue;
+    const long height = strtol(digits.c_str(), nullptr, 10);
+    if (height > bestHeight) {
+      bestHeight = height;
+      best = dir + "/" + candidate;
+    }
   }
-  return "";
+  return best;
 }
 
 int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumbPath, const int x, const int y,
