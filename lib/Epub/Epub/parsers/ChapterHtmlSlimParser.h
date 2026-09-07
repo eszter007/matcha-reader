@@ -65,6 +65,9 @@ class ChapterHtmlSlimParser {
   bool boxShrinkToContent = false;
   bool boxContinued = false;          // continued from the previous page: omit the top edge
   bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
+  // Bottom of the last line placed inside the open box. emitBoxRect() pulls its closing edge up
+  // toward the text, and this is the floor it must not cross -- see the comment there.
+  int16_t boxLastLineBottomY = 0;
   // Inverted-block panel tracking (CSS color/background-color, see CssInkMode). Each line of an
   // inverted block gets a filled PageBox pushed just before it, so the panel survives a page break
   // and needs no knowledge of the block's total height. Only the block's own padding needs

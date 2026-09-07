@@ -239,7 +239,11 @@ namespace {
 //      eighth. `<small>` runs that used to render at body size are narrower, so every line
 //      holding one breaks and positions differently. The per-word font slot carries the scale as
 //      a negative tag, so the framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 90;
+// v91: a bordered block's closing edge is no longer pulled up past the bottom of the last line
+//      inside it, so a block with little or no trailing spacing gets a slightly taller box.
+//      PageBox height is computed at layout time and stored, so cached geometry must be rebuilt.
+//      The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 91;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

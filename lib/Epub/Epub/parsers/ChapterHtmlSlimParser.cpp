@@ -743,11 +743,17 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
   // Closing edge: currentPageNextY at close already includes the last block's bottom spacing
   // (margin/padding + extra paragraph spacing), so the line must be pulled back UP toward the
   // text ink rather than padded further down (device feedback, three rounds).
+  //
+  // ...but never above the bottom of the last line inside the box. That pull-up assumes there IS
+  // trailing spacing to eat into; a block with little or none has currentPageNextY sitting right
+  // at the last line's bottom, and a third of a line above that lands inside its glyphs -- the
+  // closing border drew THROUGH the final line of text, striking it out (reported on a German
+  // EPUB whose bordered blocks carry no bottom margin).
   const int lineHeight2 = static_cast<int>(renderer.getLineHeight(fontId) * lineCompression);
+  const int pulledUp = std::max<int>(boxLastLineBottomY, currentPageNextY - lineHeight2 / 3);
   const auto yBottom = openBottom
                            ? static_cast<int16_t>(viewportHeight - 1)
-                           : static_cast<int16_t>(std::min<int>(
-                                 viewportHeight - 1, std::max<int>(yTop + 1, currentPageNextY - lineHeight2 / 3)));
+                           : static_cast<int16_t>(std::min<int>(viewportHeight - 1, std::max<int>(yTop + 1, pulledUp)));
   if (yBottom <= yTop) return;
   uint8_t edges = CssStyle::edgeMaskOf(boxBorderSpec);
   if (boxContinued) edges &= static_cast<uint8_t>(~CssStyle::BORDER_TOP);
@@ -799,8 +805,14 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
 
 void ChapterHtmlSlimParser::maybeEmitOpenBoxForPageBreak() {
   if (boxDepth < 0) return;
+  // Nothing of the box is on this page yet, so no open-bottomed rect is emitted -- and it must not
+  // be marked continued either, or the first page that does hold it would omit its top edge.
+  if (boxAwaitingFirstLine) return;
   emitBoxRect(/*openBottom=*/true);
   boxContinued = true;
+  // The continuation starts at y = 0 on the next page, so the floor from this page's last line
+  // would sit far below anything drawn there and push the closing edge to the wrong place.
+  boxLastLineBottomY = 0;
 }
 
 void ChapterHtmlSlimParser::closeBoxBlock() {
@@ -830,6 +842,7 @@ void ChapterHtmlSlimParser::closeBoxBlock() {
   boxShrinkToContent = false;
   boxContinued = false;
   boxAwaitingFirstLine = false;
+  boxLastLineBottomY = 0;
 }
 
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
@@ -2038,6 +2051,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->boxBorderSpec = cssStyle.borderEdges;
     self->boxContinued = false;
     self->boxAwaitingFirstLine = true;
+    self->boxLastLineBottomY = 0;
     self->boxShrinkToContent = cssStyle.display == CssDisplay::InlineBlock;
     self->boxFirstElementIndex = self->currentPage ? self->currentPage->elements.size() : 0;
     // Adjacent CSS vertical margins collapse. For an empty worksheet paragraph, advancing by the
@@ -3111,6 +3125,8 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   }
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
   currentPageNextY += lineHeight;
+  // Floor for the box's closing edge: it may be pulled up into trailing spacing, never into text.
+  if (boxDepth >= 0) boxLastLineBottomY = currentPageNextY;
 }
 
 void ChapterHtmlSlimParser::makePages() {
