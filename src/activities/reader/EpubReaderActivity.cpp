@@ -3297,13 +3297,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     }
   };
 
-  // No placeholder pass before this. A cold image cache used to paint placeholder rectangles and
-  // spend a whole FAST refresh (~500ms) showing them, then decode, then refresh again -- two
-  // visible stages and an extra panel cycle for a page the reader only ever wanted once. E-ink
-  // holds the PREVIOUS page for free while the decode runs, so the turn now costs one refresh and
-  // shows one picture. Measured on device: a 464x709 first visit was 2463ms total with 1708ms of
-  // that the decode itself; a warm .pxc is 33ms of render inside a 605ms panel-bound turn, so the
-  // cold path is the only one that ever showed placeholders.
+  // Skip the placeholder pre-pass on cold image pages: it caused a visible two-stage update
+  // (placeholder boxes, then the real image) and an extra panel cycle.
+  // Instead, keep the previous page displayed while decoding and do a single refresh to the final image.
   auto tBwRender = tPrewarm;
   auto tDisplay = tBwRender;
   if (!grayscaleRefineOnly) {
