@@ -353,16 +353,7 @@ class SdCardFont {
            || (cp >= 0xF900 && cp <= 0xFAFF);  // CJK compat
   }
   uint32_t advanceTableSize_[MAX_STYLES] = {};
-  // Entries the table can hold, which is NOT advanceTableSize_: the buffer is pinned to
-  // ADVANCE_CACHE_LIMIT on its first allocation so later merges never allocate again. Growing
-  // it in small steps was a heap-fragmentation source -- a chapter build discovers glyphs
-  // continuously, and each grow-copy-free planted a block in the middle of the region the page
-  // glyph vectors need, starving the layout into tiny pages.
-  uint32_t advanceCapacity_[MAX_STYLES] = {};
   bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;
-  // Ensure the style's table can hold `needed` entries, pinning to ADVANCE_CACHE_LIMIT when the
-  // heap allows. False only when even `needed` entries cannot be allocated.
-  bool ensureAdvanceCapacity(uint8_t styleIdx, uint32_t needed);
   // Merge sortedNew (sorted by codepoint, no overlap with existing) into the
   // advance table for styleIdx, preserving sort order; cap-truncates the tail.
   void mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sortedNew, uint32_t newCount);
