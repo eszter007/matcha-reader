@@ -686,6 +686,9 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   // routes the next select render through the repaint branch, and that resets it there.
   selectPageDrawn = false;
   initialRenderDone = false;
+  // Set BEFORE the mode switch and left alone until performLookup() clears it: render() runs on
+  // another task, and a frame landing in the gap would show "No match found" for a word whose
+  // lookup has not started yet.
   lookupInFlight = true;
   // Unconditional, deliberately. An earlier version skipped the popup only once scan.isDone(),
   // on the theory that a page still being segmented implies a slow lookup -- it does not. The
@@ -693,10 +696,6 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   // dictionary query: ~40ms warm, ~65ms cold including the spx load. So on a freshly opened page
   // every lookup still paid the popup's full refresh for nothing.
   mode = Mode::Definition;
-  // Stays TRUE across the handover: render() runs on another task, and a frame drawn in the gap
-  // would show "No match found" for a word whose lookup has not started yet. performLookup()
-  // clears it when the result is actually in.
-  lookupInFlight = true;
   performLookup();
   if (!hasResult) {
     mode = Mode::Select;
