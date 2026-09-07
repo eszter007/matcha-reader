@@ -265,7 +265,9 @@ std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) 
   folder.rewindDirectory();
   char name[64];
   std::string best;
-  long bestHeight = 0;
+  // -1, not 0: thumbHeightOfName() accepts thumb_0.bmp as a generated thumbnail, so the scan has to
+  // be able to pick it when it is the only sibling rather than silently reporting none.
+  long bestHeight = -1;
   for (HalFile entry = folder.openNextFile(); entry; entry = folder.openNextFile()) {
     if (entry.isDirectory()) continue;
     name[0] = '\0';
