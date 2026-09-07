@@ -647,7 +647,7 @@ void EpubReaderActivity::readerLoop() {
     // always true.
     // cppcheck-suppress knownConditionTrueFalse
     if (section->isBuilding() && buildTickHeapGate()) {
-      if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
+      if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, BACKGROUND_BUILD_BUDGET_MS)) {
         LOG_ERR("ERS", "Background section build failed");
         section.reset();
         requestUpdate();

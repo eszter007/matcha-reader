@@ -712,7 +712,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   return true;
 }
 
-bool Section::buildSomeMore(const int maxPages) {
+bool Section::buildSomeMore(const int maxPages, const uint32_t maxMillis) {
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
@@ -721,6 +721,7 @@ bool Section::buildSomeMore(const int maxPages) {
   // pageCount stays pinned at the partial's watermark until the build passes it, which
   // would otherwise turn one "small" chunk into a blocking rebuild of the whole watermark.
   const int startCount = builtPageCount_;
+  const uint32_t startMs = millis();
   for (;;) {
     const auto status = build_->parser->parseStep();
     if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
@@ -741,8 +742,15 @@ bool Section::buildSomeMore(const int maxPages) {
     if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
       return finalizeBuild();
     }
-    // ParseStatus::More: yield once we've laid out the requested number of pages.
+    // ParseStatus::More: yield once we've laid out the requested number of pages, or once the
+    // caller's time budget is spent -- whichever comes first. One parse step is the floor: a
+    // single slow page still runs to completion, so this bounds the tick at roughly one page
+    // rather than the full maxPages worth.
     if (maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) {
+      build_->bytesConsumed = build_->parser->parseBytesConsumed();
+      return true;
+    }
+    if (maxMillis > 0 && millis() - startMs >= maxMillis) {
       build_->bytesConsumed = build_->parser->parseBytesConsumed();
       return true;
     }
