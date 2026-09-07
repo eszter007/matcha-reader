@@ -161,6 +161,12 @@ class WordSelectionScan {
   void markScanned(size_t glyphIndex) {
     if (glyphIndex < allGlyphs.size() && !scannedBits.empty()) scannedBits[glyphIndex >> 3] |= (1u << (glyphIndex & 7));
   }
+  // Off-page context cells are never walked, so they would stay unmapped forever: mark them
+  // segmented so nextUnscanned() and the select-mode "closest unmapped cell" search skip them
+  // instead of repeatedly aiming the walk at work it will never do.
+  void markContextScanned() {
+    for (size_t i = contextStart; i < allGlyphs.size(); i++) markScanned(i);
+  }
   // Next cell at or after `from` that has not been segmented; allGlyphs.size() when none remain.
   size_t nextUnscanned(size_t from) const;
   // Size the per-cell bitmap for the glyph list just built. Nothrow: on OOM the bitmap stays

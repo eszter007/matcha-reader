@@ -222,6 +222,7 @@ void WordSelectionScan::restartStepScan() {
   recordFrom = 0;
   // Every cell is unsegmented again: the re-walk rebuilds selectableGlyphs from scratch.
   std::fill(scannedBits.begin(), scannedBits.end(), 0);
+  markContextScanned();
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
@@ -277,6 +278,7 @@ void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint3
   // The bitmap is sized from allGlyphs, so it has to cover the appended cells even though the walk
   // never records them -- isGlyphMapped() is consulted by index.
   allocScannedBits();
+  markContextScanned();
 }
 
 void WordSelectionScan::initFromPage(const Page& page) {
