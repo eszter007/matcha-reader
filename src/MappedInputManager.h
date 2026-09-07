@@ -111,6 +111,12 @@ class MappedInputManager {
   // and without stealing the side buttons, whose page-turn role the user can disable separately.
   Button frontPairPrevious() const;
   Button frontPairNext() const;
+  // Same, resolved against an explicit orientation instead of the live one. For a viewer that
+  // rotates the DISPLAY to fit its content (the manga reader turns a panel 90 degrees when its
+  // aspect does not match the screen): that rotation is a content transform, not the reader
+  // picking the device up differently, so input must not follow it.
+  Button frontPairPrevious(uint8_t orientation) const;
+  Button frontPairNext(uint8_t orientation) const;
 
   Labels mapLabels(const char* back, const char* confirm, const char* previous, const char* next) const;
   // Maps four screen-direction labels onto the two physical front-button roles
@@ -134,6 +140,8 @@ class MappedInputManager {
   const GfxRenderer& renderer;
 
   Button mapScreenDirection(Button button) const;
+  Button mapScreenDirectionFor(Button button, uint8_t orientation) const;
+  bool frontPairIsVerticalFor(uint8_t orientation) const;
   Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
   bool frontPairIsVertical() const;
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;

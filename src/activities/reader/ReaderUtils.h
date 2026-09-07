@@ -114,7 +114,9 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
-inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
+// orientationOverride (>= 0) resolves the front pair against that orientation instead of the live
+// one, for a viewer that rotates the display to fit its content -- see the overloads it calls.
+inline PageTurnResult detectPageTurn(const MappedInputManager& input, const int orientationOverride = -1) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
@@ -123,8 +125,10 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   // buttons in landscape -- they already turn pages through PageBack/PageForward, so the front
   // buttons would simply do nothing, which is what happened. It also must not reach the side
   // buttons by another name: their page-turn role is the user's to disable via sideButtonLayout.
-  const auto prevButton = input.frontPairPrevious();
-  const auto nextButton = input.frontPairNext();
+  const auto prevButton = orientationOverride >= 0 ? input.frontPairPrevious(static_cast<uint8_t>(orientationOverride))
+                                                   : input.frontPairPrevious();
+  const auto nextButton =
+      orientationOverride >= 0 ? input.frontPairNext(static_cast<uint8_t>(orientationOverride)) : input.frontPairNext();
   const auto pageButtonTriggered = [&](const MappedInputManager::Button button) {
     if (usePress) return input.wasPressed(button);
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);

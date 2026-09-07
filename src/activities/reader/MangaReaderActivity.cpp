@@ -610,7 +610,12 @@ void MangaReaderActivity::loop() {
     }
   }
 
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  // Resolve against the reader's OWN orientation, not the live one: a panel whose aspect does not
+  // match the screen is displayed rotated 90 degrees, and that rotation stays applied while the
+  // panel is on screen. Following it inverted the front pair, so the same press stepped forward on
+  // an upright panel and back on a rotated one -- observed on device as walking backwards through
+  // a page's panels (orient flipping 0 <-> 3 between presses, the front pair swapping with it).
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput, SETTINGS.orientation);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
