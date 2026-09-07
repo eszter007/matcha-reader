@@ -193,6 +193,68 @@ bool spxPathFor(const char* idxPath, char* out, size_t outSize) {
   return true;
 }
 
+// The coarse tier is sampled from keys scattered the whole length of the .spx, so building it
+// costs one seek+read per entry -- 128 of them per dictionary, and seek latency dominates
+// (measured: 177ms jmdict, 192ms jmnedict, 38ms grammar at 15 coarse; ~400ms of a ~613ms Word
+// Lookup open). The keys only change when the .spx does, so cache them next to it and read the
+// whole tier back in ONE sequential read. Purely additive: a missing, stale or unreadable sidecar
+// just falls back to the scattered build, which then rewrites it.
+constexpr uint8_t SPXC_MAGIC[8] = {'C', 'P', 'S', 'P', 'C', '1', 0, 0};
+constexpr size_t SPXC_HEADER_SIZE = 24;  // magic(8) + fineCount + cstride + coarseCount + entrySize
+
+bool spxcPathFor(const char* idxPath, char* out, size_t outSize) {
+  const size_t len = std::strlen(idxPath);
+  if (len < 4 || len + 2 > outSize) return false;
+  if (std::memcmp(idxPath + len - 4, ".idx", 4) != 0) return false;
+  std::memcpy(out, idxPath, len + 1);
+  std::memcpy(out + len - 4, ".spc", 4);
+  return true;
+}
+
+// One read of the whole coarse tier. False = no usable sidecar; caller builds it the slow way.
+bool loadCoarseSidecar(const char* idxPath, CoarseEntry* coarse, uint32_t fineCount, uint32_t cstride,
+                       size_t coarseCount) {
+  char path[64];
+  if (!spxcPathFor(idxPath, path, sizeof(path))) return false;
+  HalFile f;
+  if (!Storage.openFileForRead("DICT", path, f)) return false;
+  uint8_t header[SPXC_HEADER_SIZE];
+  if (f.read(header, SPXC_HEADER_SIZE) != static_cast<int>(SPXC_HEADER_SIZE)) return false;
+  if (std::memcmp(header, SPXC_MAGIC, sizeof(SPXC_MAGIC)) != 0) return false;
+  uint32_t gotFine, gotCStride, gotCount, gotEntry;
+  std::memcpy(&gotFine, header + 8, 4);
+  std::memcpy(&gotCStride, header + 12, 4);
+  std::memcpy(&gotCount, header + 16, 4);
+  std::memcpy(&gotEntry, header + 20, 4);
+  // Every field the tier's meaning depends on: a regenerated .spx changes fineCount, and a
+  // different build of the firmware could change the entry layout.
+  if (gotFine != fineCount || gotCStride != cstride || gotCount != coarseCount || gotEntry != sizeof(CoarseEntry)) {
+    return false;
+  }
+  const size_t bytes = coarseCount * sizeof(CoarseEntry);
+  return f.read(reinterpret_cast<uint8_t*>(coarse), bytes) == static_cast<int>(bytes);
+}
+
+void saveCoarseSidecar(const char* idxPath, const CoarseEntry* coarse, uint32_t fineCount, uint32_t cstride,
+                       size_t coarseCount) {
+  char path[64];
+  if (!spxcPathFor(idxPath, path, sizeof(path))) return;
+  HalFile f;
+  if (!Storage.openFileForWrite("DICT", path, f)) return;
+  uint8_t header[SPXC_HEADER_SIZE];
+  std::memset(header, 0, sizeof(header));
+  std::memcpy(header, SPXC_MAGIC, sizeof(SPXC_MAGIC));
+  const uint32_t entrySize = sizeof(CoarseEntry);
+  const uint32_t count32 = static_cast<uint32_t>(coarseCount);
+  std::memcpy(header + 8, &fineCount, 4);
+  std::memcpy(header + 12, &cstride, 4);
+  std::memcpy(header + 16, &count32, 4);
+  std::memcpy(header + 20, &entrySize, 4);
+  if (f.write(header, SPXC_HEADER_SIZE) != static_cast<int>(SPXC_HEADER_SIZE)) return;
+  const size_t bytes = coarseCount * sizeof(CoarseEntry);
+  f.write(reinterpret_cast<const uint8_t*>(coarse), bytes);
+}
+
 // Load and validate the .spx sidecar for h, building the RAM coarse tier. Sets h.spxOk.
 // Safe to leave spxOk=false on any inconsistency -- lookupInFile() then does a full search.
 void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
@@ -229,13 +291,18 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
             static_cast<unsigned>(fineBytes));
     return;
   }
-  for (size_t c = 0; c < coarseCount; c++) {
-    const uint32_t fineIdx = static_cast<uint32_t>(c) * cstride;  // < fineCount by construction
-    h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fineIdx) * SPX_KEY_SIZE);
-    if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) != static_cast<int>(SPX_KEY_SIZE)) {
-      return;  // partial -> leave spxOk false
+  if (!loadCoarseSidecar(idxPath, coarse.get(), fineCount, cstride, coarseCount)) {
+    for (size_t c = 0; c < coarseCount; c++) {
+      const uint32_t fineIdx = static_cast<uint32_t>(c) * cstride;  // < fineCount by construction
+      h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fineIdx) * SPX_KEY_SIZE);
+      if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) != static_cast<int>(SPX_KEY_SIZE)) {
+        return;  // partial -> leave spxOk false
+      }
+      coarse[c].fineIdx = fineIdx;
     }
-    coarse[c].fineIdx = fineIdx;
+    // Only a COMPLETE tier is cached: a partial build returned above, so reaching here means
+    // every key was read.
+    saveCoarseSidecar(idxPath, coarse.get(), fineCount, cstride, coarseCount);
   }
 
   h.coarse = std::move(coarse);
