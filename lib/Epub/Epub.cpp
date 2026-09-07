@@ -283,6 +283,9 @@ void Epub::parseCssFiles() const {
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
   // Minimum heap required before attempting CSS parsing
   constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 64 * 1024;  // 64KB
+  // The streaming inflate's LZ window (TINFL_LZ_DICT_SIZE): the one contiguous block extracting a
+  // CSS file needs, and the block whose absence makes that extraction fail.
+  constexpr uint32_t INFLATE_WINDOW_BYTES = 32 * 1024;
 
   if (cssFiles.empty()) {
     LOG_DBG("EBP", "No CSS files to parse, but CssParser created for inline styles");
@@ -374,7 +377,21 @@ void Epub::parseCssFiles() const {
       continue;
     }
     if (!readItemContentsToStream(cssPath, tempCssFile, 1024)) {
-      LOG_ERR("EBP", "Could not read CSS file: %s", cssPath.c_str());
+      // Extraction needs the streaming inflate's contiguous 32KB LZ window; on a fragmented heap
+      // that allocation is the failure (InflateStream::init cannot fail for any other reason --
+      // a corrupt entry fails later, in the inflate itself). Dropping the file then means "not
+      // right now", not "this book has no such stylesheet", so flag the parse partial and let the
+      // guard below discard the cache for a retry. Caching it instead freezes the missing
+      // stylesheets in as this book's permanent styling: An.epub loses style-advance.css (938 of
+      // its 1936 rules) that way. Above the window size the failure is a genuinely unreadable
+      // entry, which no retry fixes -- cache what parsed rather than re-parsing on every open.
+      const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+      if (maxAlloc < INFLATE_WINDOW_BYTES) {
+        LOG_ERR("EBP", "Could not read CSS file on low heap (maxAlloc=%u): %s", maxAlloc, cssPath.c_str());
+        skippedFileForHeap = true;
+      } else {
+        LOG_ERR("EBP", "Could not read CSS file: %s", cssPath.c_str());
+      }
       // Explicitly close() file before calling Storage.remove()
       tempCssFile.close();
       Storage.remove(tmpCssPath.c_str());

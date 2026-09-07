@@ -885,8 +885,18 @@ WrapResult drawWrapped(GfxRenderer& renderer, const int fontId, const std::strin
   // show nothing (header/word still render) rather than crash. -fno-exceptions makes an
   // unguarded reserve() an abort, not an error.
   if (ESP.getMaxAllocHeap() < LINE_BUF_CAP + 4 * 1024) {
-    LOG_ERR("DEFTXT", "Skipping definition render, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-    return {};
+    // What starves this is the definition's OWN glyph prewarm: it fills a ~16KB hot group
+    // immediately before the draw, and the draw then cannot get the 4.6KB it needs (device:
+    // maxAlloc 3700 against 4608, with three hot groups allocated in the preceding 90ms). Those
+    // are caches whose only cost is a lazy reload during the draw, whereas returning here shows
+    // an empty panel for a word the dictionary successfully found -- the reader loses the entry.
+    // Reclaim first, and give up only if the line buffer still will not fit.
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+    if (ESP.getMaxAllocHeap() < LINE_BUF_CAP + 4 * 1024) {
+      LOG_ERR("DEFTXT", "Skipping definition render, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+      return {};
+    }
+    LOG_INF("DEFTXT", "Reclaimed font caches for definition render (maxAlloc=%u)", ESP.getMaxAllocHeap());
   }
   std::string lineBuf;
   lineBuf.reserve(LINE_BUF_CAP);

@@ -84,6 +84,12 @@ class EpubReaderWordLookupActivity final : public Activity {
   // after a font-cache reclaim. Reported as low memory instead of "no match", which would be a
   // false statement about the word.
   bool lowMemoryResult = false;
+  // Set when a lookup was actually defeated by the heap. Gates the pre-emptive font release in
+  // performLookup(), so the reload it causes is paid only after a real failure.
+  bool lastLookupHeapLimited = false;
+  // Latched when a font-cache release proved unable to free anything contiguous, so the panel
+  // stops paying for a reclaim that cannot help. Per-activity by design -- see reclaimFontHeap().
+  bool reclaimIsFutile = false;
   bool selectPageDrawn = false;
   // A column jump must be immediate even on a cold page. Until dictionary segmentation catches
   // up, highlight the nearest raw text cell and allow it to be looked up directly.
@@ -135,6 +141,17 @@ class EpubReaderWordLookupActivity final : public Activity {
     uint32_t startedAt = 0;     // Column: device timing for the cold-jump performance log
   };
   PendingMove pending;
+  // How long a parked move may hold the panel before it is abandoned. handleSelectInput()
+  // deliberately swallows Confirm while a move is outstanding, so a wait that cannot finish
+  // quickly makes the whole view look frozen -- and the column walk's re-aim can keep the scan
+  // frontier crawling for tens of seconds on a dictionary-dense page. Generous enough that a
+  // normal cold jump (hundreds of ms on device) always completes.
+  static constexpr uint32_t kPendingMoveTimeoutMs = 2500;
+  // When the parked move was first SEEN waiting. Deliberately not PendingMove::startedAt: that
+  // field exists for the cold-jump performance log and only one of the three paths that park a
+  // Column move fills it in, so keying the timeout on it left the hanging paths unguarded.
+  // 0 = no move outstanding.
+  uint32_t pendingWaitSinceMs = 0;
 
   void renderSelect();
   // Screen boxes for one selectable word, written into `out` (at most kMaxHighlightBoxes),
@@ -266,8 +283,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   // True while performLookup() is executing; render() shows "Loading..." instead of
   // "No match found" so fast navigation never flashes a false negative.
   bool lookupInFlight = false;
-  bool lookupPending = false;
-  std::atomic<bool> loadingPopupDrawn{false};
   std::atomic<bool> noMatchPopupPending{false};
   size_t currentAllGlyphIndex() const;
   std::string buildLookupText() const;

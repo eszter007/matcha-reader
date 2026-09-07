@@ -4,6 +4,7 @@
 #include <DictIndex.h>
 #include <Epub/RubyGlossary.h>
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -77,18 +78,38 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
 // RESUME_HEAP_FLOOR so the tight X3-resume path (huge CSS book, maxAlloc bottoming near 7K)
 // reliably reclaims before the scan runs. Fonts reload lazily; the reader re-warms on return.
 void EpubReaderWordLookupActivity::reclaimFontHeap() {
-  if (ESP.getMaxAllocHeap() < 40 * 1024) {
-    LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      // This runs on the main task; the render task may be mid-render with glyph
-      // pointers into the font cache (it holds the render lock for the whole
-      // render()). Freeing under the lock waits that render out -- releasing
-      // without it is a cross-task use-after-free (confirmed crash_report:
-      // renderCharImpl faulted while this path freed the cache).
-      RenderLock lock;
-      fcm->releaseAllFontMemory();
-      LOG_INF("WLA", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
-    }
+  const uint32_t before = ESP.getMaxAllocHeap();
+  if (before >= 40 * 1024) return;
+  // Releasing the font caches only helps when THEY are what caps the largest block. When the cap
+  // comes from fragmentation elsewhere, the release frees nothing contiguous and the fonts simply
+  // reload from SD -- kern classes, the mini-kern matrix and the advance table, hundreds of
+  // milliseconds -- on every single open. Device evidence: maxAlloc sat at 40948, twelve bytes
+  // under this threshold, so the reclaim ran every time and reported "40948 -> 40948".
+  //
+  // So: try it once, and if it buys nothing, stop trying for the rest of THIS panel session. A
+  // member, not a function-local static: the latter would latch until reboot and carry a verdict
+  // from one book or heap state into every later Word Lookup open. A later genuine shortage still
+  // gets one attempt per open, which is what the crash this guard was added for actually needed.
+  if (reclaimIsFutile) return;
+  LOG_INF("WLA", "Low contiguous heap (maxAlloc=%u); releasing font caches", before);
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm) return;
+  {
+    // This runs on the main task; the render task may be mid-render with glyph
+    // pointers into the font cache (it holds the render lock for the whole
+    // render()). Freeing under the lock waits that render out -- releasing
+    // without it is a cross-task use-after-free (confirmed crash_report:
+    // renderCharImpl faulted while this path freed the cache).
+    RenderLock lock;
+    fcm->releaseAllFontMemory();
+  }
+  const uint32_t after = ESP.getMaxAllocHeap();
+  // A few hundred bytes is noise, not a reclaim. Require something worth the reload.
+  if (after <= before + 2048) {
+    reclaimIsFutile = true;
+    LOG_INF("WLA", "Font release freed nothing contiguous (%u -> %u); not retrying this session", before, after);
+  } else {
+    LOG_INF("WLA", "After font release: maxAlloc=%u", after);
   }
 }
 
@@ -167,6 +188,16 @@ void EpubReaderWordLookupActivity::onEnter() {
   // string allocation inside performLookupImpl -- heap exhausted, cause unknown). Logged at
   // enter AND exit so a leak per open/close cycle shows as a declining series.
   LOG_INF("WLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  // Suspend the glyph slab for the session -- 24KB back, and it cannot creep in again while the
+  // panel is up. Restored in onExit(). Under the render lock: setSlabEnabled(false) FREES the
+  // slab, and the render task may be mid-render holding pointers into it -- the same cross-task
+  // use-after-free reclaimFontHeap() takes the lock for.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) {
+      RenderLock lock;
+      fd->setSlabEnabled(false);
+    }
+  }
   // A scan-cache hit remembers the position the user was last at on this exact page -- resume
   // there instead of making them click back through every entry they've already seen.
   const bool restored = scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
@@ -204,6 +235,15 @@ void EpubReaderWordLookupActivity::onEnter() {
 
 void EpubReaderWordLookupActivity::onExit() {
   LOG_INF("WLA", "onExit heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  // Hand the glyph slab back to the UI (see setSlabEnabled): it is suspended for the whole panel
+  // session, where it earns little and costs 24KB of exactly the contiguous heap the dictionary
+  // caches and the definition renderer are fighting over.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) {
+      RenderLock lock;  // mutates decompressor state; see the matching call in onEnter()
+      fd->setSlabEnabled(true);
+    }
+  }
   // Persist the current cursor position (a no-op if the scan never finished, or the cache path
   // is unset) so the next open of this exact page resumes here instead of at word one.
   if (!scanCachePath.empty()) {
@@ -547,7 +587,11 @@ void EpubReaderWordLookupActivity::selectMiddleOfPage() {
 // Completes a parked move once the scan has mapped what it needs. Called every tick while a move
 // is parked. Nothing is drawn for the wait itself: select mode has no hint bar to put it in.
 void EpubReaderWordLookupActivity::resolvePendingMove() {
-  if (pending.kind == PendingMove::Kind::None) return;
+  if (pending.kind == PendingMove::Kind::None) {
+    pendingWaitSinceMs = 0;
+    return;
+  }
+  if (pendingWaitSinceMs == 0) pendingWaitSinceMs = millis();
   const uint32_t startedAt = pending.startedAt;
 
   bool moved = false;
@@ -606,7 +650,22 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
       }
     }
   }
-  if (!stillWaiting) pending = PendingMove{};
+  // A parked move holds the panel hostage: handleSelectInput() swallows Confirm while one is
+  // outstanding, so a wait that cannot complete quickly is indistinguishable from a hang. The
+  // column walk above re-aims the scan at its nearest unmapped cell on EVERY tick, and each
+  // re-aim rewinds the walk by kMaxLookupChars to re-read context; on a hiragana-dense page,
+  // where every position runs the full deinflection probe, the frontier can then sit effectively
+  // still (device: scanPos pinned at 36/90 with input dead). Abandon the move instead of waiting
+  // for it -- the cursor simply stays where it is, and the reader gets control back.
+  if (stillWaiting && millis() - pendingWaitSinceMs > kPendingMoveTimeoutMs) {
+    LOG_ERR("WLA", "Column jump abandoned after %u ms; scan frontier too slow", millis() - pendingWaitSinceMs);
+    stillWaiting = false;
+    moved = false;
+  }
+  if (!stillWaiting) {
+    pending = PendingMove{};
+    pendingWaitSinceMs = 0;
+  }
 
   if (pending.kind != PendingMove::Kind::None) {
     return;
@@ -627,9 +686,22 @@ void EpubReaderWordLookupActivity::enterDefinition() {
   // routes the next select render through the repaint branch, and that resets it there.
   selectPageDrawn = false;
   initialRenderDone = false;
+  // Set BEFORE the mode switch and left alone until performLookup() clears it: render() runs on
+  // another task, and a frame landing in the gap would show "No match found" for a word whose
+  // lookup has not started yet.
   lookupInFlight = true;
-  lookupPending = true;
-  loadingPopupDrawn.store(false, std::memory_order_release);
+  // Unconditional, deliberately. An earlier version skipped the popup only once scan.isDone(),
+  // on the theory that a page still being segmented implies a slow lookup -- it does not. The
+  // background scan runs between input polls, never inside the lookup, and a lookup is one
+  // dictionary query: ~40ms warm, ~65ms cold including the spx load. So on a freshly opened page
+  // every lookup still paid the popup's full refresh for nothing.
+  mode = Mode::Definition;
+  performLookup();
+  if (!hasResult) {
+    mode = Mode::Select;
+    noMatchPopupPending.store(true, std::memory_order_release);
+    selectPageDrawn = false;
+  }
   requestUpdate();
 }
 
@@ -890,11 +962,24 @@ void EpubReaderWordLookupActivity::performLookup() {
   // navigation session (font glyphs loaded per rendered definition accumulate; a crash_report
   // showed the definition read inside DictIndex aborting after renders had slowed from 1.2s to
   // 6.3s as the heap ran down). Same release as at open; fonts reload lazily.
-  if (ESP.getMaxAllocHeap() < 20 * 1024) {
-    LOG_INF("WLA", "Low heap mid-session (maxAlloc=%u); releasing font caches", ESP.getMaxAllocHeap());
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->releaseAllFontMemory();
-    }
+  // Reading a definition and drawing it never need memory at the same moment: the read needs one
+  // contiguous block for the entry text, the draw needs the glyph buffers, and they are strictly
+  // sequential. Holding both is what oversubscribes the heap -- maxAlloc reaching ~4KB, at which
+  // point the dictionary cannot allocate its own entries and drops them ("Skipping entry
+  // (928 bytes, maxAlloc=4084)"), i.e. the reader silently loses part of the definition.
+  //
+  // So hand the decompressed glyph data back before every read -- but ONLY the decompressor's own
+  // buffers (the page slots and the 16KB hot group), which the render re-prewarms on every
+  // definition anyway, as the log's "Prewarm:" lines show.
+  //
+  // Deliberately NOT FontCacheManager::clearCache(), which also calls SdCardFont::clearCache()
+  // and through it resetStyleMiniData(), dropping each style's 24-27KB mini-bitmap arena. That
+  // merely moves the shortage: the read gains the space and the render then fails to get it back
+  // ("Failed to allocate mini bitmap (26737 bytes)"), trading dropped dictionary entries for
+  // dropped glyphs. And not releaseAllFontMemory() either, which additionally wipes the advance
+  // and kern measurements and costs ~250ms of SD re-reads per definition.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) fd->clearCache();
   }
   // Signals render() to show "Loading..." instead of "No match found" while the lookup below
   // runs -- fast navigation otherwise briefly flashes the no-match text in the window between
@@ -912,10 +997,12 @@ void EpubReaderWordLookupActivity::performLookup() {
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
     performLookupImpl();
     lowMemoryResult = DictIndex::consumeHeapLimited() && (!hasResult || resultDefinition.empty());
+    lastLookupHeapLimited = true;
     if (lowMemoryResult)
       LOG_ERR("WLA", "Definition still unloadable after reclaim (maxAlloc=%u)", ESP.getMaxAllocHeap());
   } else {
     lowMemoryResult = false;
+    lastLookupHeapLimited = false;
   }
   lookupInFlight = false;
 }
@@ -1186,20 +1273,6 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 }
 
 void EpubReaderWordLookupActivity::loop() {
-  if (lookupPending) {
-    if (loadingPopupDrawn.exchange(false, std::memory_order_acq_rel)) {
-      lookupPending = false;
-      mode = Mode::Definition;
-      performLookup();
-      if (!hasResult) {
-        mode = Mode::Select;
-        noMatchPopupPending.store(true, std::memory_order_release);
-        selectPageDrawn = false;
-        requestUpdate();
-      }
-    }
-    return;
-  }
   if (mode == Mode::Select) {
     if (!handleSelectInput()) return;
   } else if (!handleDefinitionInput()) {
@@ -1611,11 +1684,6 @@ void EpubReaderWordLookupActivity::renderContentArea(const Rect& body) {
 
 void EpubReaderWordLookupActivity::render(RenderLock&&) {
   if (mode == Mode::Select) {
-    if (lookupPending) {
-      GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-      loadingPopupDrawn.store(true, std::memory_order_release);
-      return;
-    }
     renderSelect();
     if (noMatchPopupPending.exchange(false, std::memory_order_acq_rel)) {
       GUI.drawPopup(renderer, lowMemoryResult ? tr(STR_LOW_MEMORY_RETRY) : tr(STR_NO_MATCH));
@@ -1682,7 +1750,21 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     }
   }
 
-  // The framebuffer owns the finished pixels; keeping the decompressed glyph slab until the
-  // next keypress only fragments the heap while the dictionary caches are resident.
-  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  // The framebuffer owns the finished pixels; keeping the decompressed glyph data until the next
+  // keypress only fragments the heap while the dictionary caches are resident.
+  //
+  // clearCache(), NOT releaseAllFontMemory(): the latter additionally wipes each SD font's
+  // persistent measurement caches -- the advance table and the kern/ligature class maps -- which
+  // are not decompressed glyph data and are not what this is trying to reclaim. They then have to
+  // be re-read from SD for the very next render, which measured ~250ms of "Kern classes + lig
+  // loaded" and "Advance table +368 from SD" after every single definition. Free the glyph data,
+  // keep the measurements. (The glyph slab is already suspended for the whole session in
+  // onEnter(), so nothing is holding it here either.)
+  // FontDecompressor::clearCache(), not FontCacheManager::clearCache(): the latter also runs
+  // SdCardFont::clearCache() -> resetStyleMiniData(), dropping each style's 24-27KB mini-bitmap
+  // arena and moving the shortage to the next render ("Failed to allocate mini bitmap"). Same
+  // reasoning as the pre-read reclaim in performLookup().
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) fd->clearCache();
+  }
 }

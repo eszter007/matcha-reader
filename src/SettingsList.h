@@ -221,12 +221,9 @@ inline std::vector<StrId> buildLongPressMenuValues() {
 // from the active family rather than a fixed enum.
 // categoryFilter/includeTextSettingsEntries let embedded device screens copy only
 // entries they can display while the reader keeps its memory-heavy state alive.
-inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
-                                                const std::vector<DictionaryEntry>* dictionaries = nullptr,
-                                                const StrId categoryFilter = StrId::STR_NONE_OPT,
-                                                const bool includeTextSettingsEntries = true,
-                                                const std::string& bookLanguage = {},
-                                                const bool showAppliedDictionary = false) {
+// The settings table itself, built once. Exposed separately from getSettingsList() so the
+// persistence path can walk it WITHOUT materializing a copy -- see forEachPersistableSetting().
+inline const std::vector<SettingInfo>& settingsBaseList() {
   static const std::vector<SettingInfo> baseList = [] {
     // Enum settings are persisted as numeric values. Assign these labels by enum
     // value so a reordered menu or enum cannot silently swap their behavior.
@@ -500,6 +497,44 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     }
     return v;
   }();
+  return baseList;
+}
+
+// Board-dependent rows that getSettingsList() strips from what it returns. Factored out so the
+// persistence walk applies exactly the same set -- a divergence here would change WHICH keys get
+// written to the settings file on a given board.
+inline bool settingHiddenByBoard(const SettingInfo& s) {
+  if (!BoardConfig::hasTouch() &&
+      (s.nameId == StrId::STR_TOUCH_READER_CONTROLS || s.nameId == StrId::STR_READER_MENU_STYLE)) {
+    return true;
+  }
+  if (!BoardConfig::hasHomeKey() && s.nameId == StrId::STR_SHOW_READER_MENU) return true;
+  if (BoardConfig::hasTouch() &&
+      (s.nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION || s.nameId == StrId::STR_SUNLIGHT_FADING_FIX ||
+       s.nameId == StrId::STR_BACK_SHORT_TO_FILE_BROWSER)) {
+    return true;
+  }
+  return false;
+}
+
+// NOTE for the persistence path (CrossPointSettings::toJson/fromJson): walk settingsBaseList()
+// directly, skipping settingHiddenByBoard(), rather than calling getSettingsList(). Those two read
+// only each entry's key and value pointer, and the substitutions getSettingsList() applies (font
+// family, font size) keep both, while the row it inserts (dictionary) has no key and serialization
+// skips it anyway -- so the copy buys nothing there. That copy is one large contiguous allocation
+// from std::vector, which under -fno-exceptions abort()s the firmware instead of failing:
+// confirmed on device, abort inside _M_allocate_and_copy while saving settings as the reader tore
+// down, with maxAlloc at 5876. Saving settings must never be the thing that crashes.
+
+// categoryFilter/includeTextSettingsEntries let embedded device screens copy only
+// entries they can display while the reader keeps its memory-heavy state alive.
+inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
+                                                const std::vector<DictionaryEntry>* dictionaries = nullptr,
+                                                const StrId categoryFilter = StrId::STR_NONE_OPT,
+                                                const bool includeTextSettingsEntries = true,
+                                                const std::string& bookLanguage = {},
+                                                const bool showAppliedDictionary = false) {
+  const std::vector<SettingInfo>& baseList = settingsBaseList();
 
   const auto shouldInclude = [categoryFilter, includeTextSettingsEntries](const SettingInfo& setting) {
     const bool categoryMatches = categoryFilter == StrId::STR_NONE_OPT || setting.category == categoryFilter;
