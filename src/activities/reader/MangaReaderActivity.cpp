@@ -615,8 +615,12 @@ void MangaReaderActivity::loop() {
   // panel is on screen. Following it inverted the front pair, so the same press stepped forward on
   // an upright panel and back on a rotated one -- observed on device as walking backwards through
   // a page's panels (orient flipping 0 <-> 3 between presses, the front pair swapping with it).
+  //
+  // With the toggle on, the left button advances -- into the panels and on through the pages --
+  // and the right button goes back, matching how manga is read.
+  const bool reversedTurn = SETTINGS.reversePageTurn != 0;
   auto [prevTriggered, nextTriggered, fromTilt] =
-      ReaderUtils::detectPageTurnForOrientation(mappedInput, SETTINGS.orientation);
+      ReaderUtils::detectPageTurnForOrientation(mappedInput, reversedTurn, SETTINGS.orientation);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {

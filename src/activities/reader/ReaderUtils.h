@@ -115,10 +115,15 @@ struct PageTurnResult {
 };
 
 // orientationOverride (>= 0) resolves the front pair against that orientation instead of the live
-// one, for a viewer that rotates the display to fit its content. Private: callers use
-// detectPageTurn() or detectPageTurnForOrientation() below, which cannot be confused for one
-// another at a call site.
-inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const int orientationOverride) {
+// one, for a viewer that rotates the display to fit its content. reversed swaps what "previous" and
+// "next" mean, for content that reads right-to-left; it is applied to the RESULT rather than to the
+// button lookups, so it covers the front pair and the side buttons together and cannot fall out of
+// step with them, and tilt turns swap with them for the same reason.
+//
+// Private: callers use detectPageTurn() or detectPageTurnForOrientation() below, which cannot be
+// confused for one another at a call site.
+inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const bool reversed,
+                                         const int orientationOverride) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
@@ -141,18 +146,22 @@ inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const 
                          input.wasReleased(MappedInputManager::Button::Power);
   const bool next = tiltNext || pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
                     pageButtonTriggered(nextButton);
+  if (reversed) return {next, prev, tiltPrev || tiltNext};
   return {prev, next, tiltPrev || tiltNext};
 }
 
 // Page turns resolved against the live orientation -- the normal case.
-inline PageTurnResult detectPageTurn(const MappedInputManager& input) { return detectPageTurnImpl(input, -1); }
+inline PageTurnResult detectPageTurn(const MappedInputManager& input, const bool reversed = false) {
+  return detectPageTurnImpl(input, reversed, -1);
+}
 
 // Page turns resolved against an explicit orientation, for a viewer that rotates the DISPLAY to fit
 // its content. A separate name rather than a defaulted parameter on detectPageTurn(): an extra
 // numeric argument there would bind silently to whatever the parameter happens to be, so a caller
 // passing an orientation could compile into something else entirely.
-inline PageTurnResult detectPageTurnForOrientation(const MappedInputManager& input, const uint8_t orientation) {
-  return detectPageTurnImpl(input, static_cast<int>(orientation));
+inline PageTurnResult detectPageTurnForOrientation(const MappedInputManager& input, const bool reversed,
+                                                   const uint8_t orientation) {
+  return detectPageTurnImpl(input, reversed, static_cast<int>(orientation));
 }
 
 // A short power-button click closes the dictionary / word-lookup screens, but only when that same
