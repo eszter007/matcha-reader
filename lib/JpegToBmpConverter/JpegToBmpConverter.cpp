@@ -551,7 +551,14 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   int rc = jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback);
   if (rc != 1) {
-    LOG_ERR("JPG", "JPEG open failed (err=%d)", jpeg->getLastError());
+    // Permanent for this file, like the dimension limit below: the decoder could not even read a
+    // header, so no retry produces a different answer. Traced on device to an EPUB whose cover
+    // entry is stored intact by the ZIP (right name, right offset, method STORED) but whose bytes
+    // are not JPEG at all -- the image is obfuscated, which this build cannot undo. Without the
+    // flag the library re-extracted and re-decoded it on every pass forever: ~9s of SD reads per
+    // visit, for a cover that can never appear.
+    LOG_ERR("JPG", "JPEG open failed (err=%d); treating this cover as unconvertible", jpeg->getLastError());
+    if (outUnsupported) *outUnsupported = true;
     return false;
   }
 

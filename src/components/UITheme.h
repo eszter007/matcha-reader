@@ -34,6 +34,9 @@ class UITheme {
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight = 0);
   static std::string getCoverThumbPath(std::string coverBmpPath, int coverHeight);
+  // Any other thumb_<height>.bmp the same book already has, for when the requested size is
+  // missing and cannot be regenerated. Empty when there is none. See drawCoverThumb().
+  static std::string findSiblingCoverThumb(const std::string& missingThumbPath);
   // Draws a cover thumbnail at (x, y), scaled to coverHeight. Handles both cover kinds:
   // the BMP thumbnails generated for EPUB/XTC and the JPG/PNG a manga carries as its own
   // first page. Themes that only opened the file as a Bitmap silently drew an empty frame

@@ -180,7 +180,14 @@ bool UITheme::drawCoverThumbFilled(GfxRenderer& renderer, const std::string& cov
   }
 
   HalFile file;
-  if (!Storage.openFileForRead("HOME", coverThumbPath, file)) return false;
+  if (!Storage.openFileForRead("HOME", coverThumbPath, file)) {
+    // Same fallback as drawCoverThumb(): reuse a thumbnail this book has at another height rather
+    // than drawing a placeholder for artwork that exists. This is the LIBRARY's draw path -- the
+    // grid calls here, the home cards call drawCoverThumb(), and only fixing one of them leaves
+    // the cover showing on one screen and missing on the other, which is the reported symptom.
+    const std::string sibling = findSiblingCoverThumb(coverThumbPath);
+    if (sibling.empty() || !Storage.openFileForRead("HOME", sibling, file)) return false;
+  }
   Bitmap bitmap(file);
   if (bitmap.parseHeaders() != BmpReaderError::Ok || bitmap.getHeight() <= 0) return false;
   // Crop the longer axis so the short one fills the box.
@@ -206,6 +213,34 @@ bool UITheme::drawCoverThumbFilled(GfxRenderer& renderer, const std::string& cov
   return true;
 }
 
+// Any other thumb_<height>.bmp this book already has. Returns empty when there is none.
+// Directory scan, so it only runs on the miss path -- the hit path never opens the directory.
+std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) {
+  const size_t slash = missingThumbPath.find_last_of('/');
+  if (slash == std::string::npos) return "";
+  const std::string dir = missingThumbPath.substr(0, slash);
+  const std::string wanted = missingThumbPath.substr(slash + 1);
+
+  // Storage.open(), not openFileForRead(): the latter is for files and fails on a directory
+  // (device log: "[HOME] Failed to open file for reading: /.crosspoint/epub_...").
+  auto folder = Storage.open(dir.c_str());
+  if (!folder || !folder.isDirectory()) return "";
+  folder.rewindDirectory();
+  char name[64];
+  for (HalFile entry = folder.openNextFile(); entry; entry = folder.openNextFile()) {
+    if (entry.isDirectory()) continue;
+    name[0] = '\0';
+    entry.getName(name, sizeof(name));
+    if (name[0] == '\0') continue;
+    const std::string candidate(name);
+    if (candidate == wanted) continue;  // the one we already know is missing
+    if (candidate.rfind("thumb_", 0) != 0) continue;
+    if (candidate.size() < 5 || candidate.compare(candidate.size() - 4, 4, ".bmp") != 0) continue;
+    return dir + "/" + candidate;
+  }
+  return "";
+}
+
 int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumbPath, const int x, const int y,
                             const int coverHeight, const int boxWidth, const float cropX, const float cropY) {
   if (coverThumbPath.empty() || coverHeight <= 0) return 0;
@@ -229,7 +264,18 @@ int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumb
   }
 
   HalFile file;
-  if (!Storage.openFileForRead("HOME", coverThumbPath, file)) return 0;
+  if (!Storage.openFileForRead("HOME", coverThumbPath, file)) {
+    // Nothing at this size -- reuse a thumbnail this book already has at another one. drawBitmap
+    // rescales (allowUpscale), so a sibling renders correctly at the requested height.
+    //
+    // Worth doing because a cover can be convertible ONCE and not again: a book whose cover image
+    // this build cannot decode still shows artwork wherever an older thumbnail survives, and
+    // without this the other screens draw a placeholder for a cover that is sitting right beside
+    // the one they asked for. Device report: home drew thumb_226.bmp while the library asked for
+    // thumb_207/54 and re-decoded the (undecodable) source on every pass.
+    const std::string sibling = findSiblingCoverThumb(coverThumbPath);
+    if (sibling.empty() || !Storage.openFileForRead("HOME", sibling, file)) return 0;
+  }
   Bitmap bitmap(file);
   if (bitmap.parseHeaders() != BmpReaderError::Ok) return 0;
   const int drawWidth = (boxWidth > 0) ? boxWidth : bitmap.getWidth();
