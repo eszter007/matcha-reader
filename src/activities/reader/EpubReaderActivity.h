@@ -541,6 +541,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // the activity stack, and Pop restores it without onEnter(), so the drift has
   // to be noticed here rather than assumed away.
   uint8_t appliedOrientation = 0;
+  // Coalescing state for orientation changes. The control-centre tile steps one orientation at a
+  // time, so portrait->landscape passes through an intermediate, and reflowing per step means a
+  // full chapter repagination per step. Wait for the setting to hold still, then reflow once.
+  uint8_t pendingOrientation = 0xFF;  // 0xFF = nothing pending
+  uint32_t pendingOrientationSinceMs = 0;
+  // Comfortably longer than a multi-step gesture, and negligible against the repagination it
+  // saves (seconds to tens of seconds on a long chapter).
+  static constexpr uint32_t kOrientationSettleMs = 400;
 
   bool loadBook() override;
   bool hasBook() const override { return epub != nullptr; }

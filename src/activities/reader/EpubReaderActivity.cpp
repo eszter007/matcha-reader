@@ -517,9 +517,26 @@ void EpubReaderActivity::readerLoop() {
   // center's orientation tile). Reflow before the next render, or the page
   // would be drawn with a layout built for the previous frame size.
   if (appliedOrientation != SETTINGS.orientation) {
-    applyOrientation(SETTINGS.orientation);
-    requestUpdate();
-    return;
+    // Reflow only once the setting has stopped moving. Each reflow repaginates the whole chapter,
+    // so rotating through an intermediate orientation used to cost one full rebuild per step --
+    // reported in #209 as repeated "Indexing..." for a single shortcut. Deliberately does NOT
+    // return while waiting: input must keep being handled, and the reader simply keeps drawing
+    // the old layout for the settle window.
+    if (pendingOrientation != SETTINGS.orientation) {
+      pendingOrientation = SETTINGS.orientation;
+      pendingOrientationSinceMs = millis();
+    } else if (millis() - pendingOrientationSinceMs >= kOrientationSettleMs) {
+      pendingOrientation = 0xFF;
+      applyOrientation(SETTINGS.orientation);
+      requestUpdate();
+      return;
+    }
+  } else if (pendingOrientation != 0xFF) {
+    // The setting swung back to what is already applied before the window elapsed. Nothing needs
+    // reflowing, and a pending value left behind would carry its old timestamp: the next change
+    // back to that same orientation would find the settle window already "elapsed" and apply
+    // immediately, which is exactly the coalescing this is meant to provide.
+    pendingOrientation = 0xFF;
   }
 
   // A horizontal image is shown immediately in BW; refine it only after the reader

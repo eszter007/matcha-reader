@@ -33,6 +33,12 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   // remembered mode, so a Swipe or Inverted Tap user gets their mode back
   // rather than the Tap default. Seeded from the setting in onEnter().
   uint8_t touchModeRestore = CrossPointSettings::TOUCH_READER_ON;
+  // When the orientation tile last fired. Each activation costs the reader a full chapter
+  // repagination, so a repeated event must not be taken as a repeated intent -- see runTile().
+  uint32_t lastOrientationTileMs = 0;
+  // A deliberate second rotation is seconds apart; a repeat from one gesture is tens of
+  // milliseconds. Well clear of both.
+  static constexpr uint32_t kOrientationTileDebounceMs = 750;
   int panelBottom = 0;
 
   // Quick-setting tiles, in grid order (2 columns): night mode, refresh,
