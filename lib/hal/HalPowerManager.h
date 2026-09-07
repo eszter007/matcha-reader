@@ -6,6 +6,7 @@
 #include <Logging.h>
 #include <freertos/semphr.h>
 
+#include <atomic>
 #include <cassert>
 
 #include "HalGPIO.h"
@@ -22,8 +23,19 @@ class HalPowerManager {
 
   // Nesting count, not a flag: the render task and a foreground section build hold a lock at the
   // same time, and whichever released first would otherwise un-throttle the other.
-  uint8_t lockCount = 0;
-  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to lockCount
+  //
+  // Atomic rather than mutex-protected: setPowerSaving() reads it from the main loop while Lock
+  // ctors/dtors run on the render and build tasks, and a plain read racing those writes is UB
+  // regardless of how stale a value we are willing to tolerate. 16 bits with no clamp keeps the
+  // increment and decrement exactly symmetric -- Lock is non-copyable and non-movable, so every
+  // increment has exactly one matching decrement and the count cannot run away.
+  std::atomic<uint16_t> lockCount{0};
+
+  // Serializes the actual setCpuFrequencyMhz() transition and the isLowPower flag behind it.
+  // Locks are taken from the render and build tasks, so two tasks can now reach the transition
+  // at once; without this they could interleave a raise and a drop and leave isLowPower
+  // disagreeing with the real clock.
+  SemaphoreHandle_t freqMutex = nullptr;
 
  public:
 #if BOARD_HAS_PSRAM
