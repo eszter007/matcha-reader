@@ -157,13 +157,25 @@ void FrontlightPanelActivity::runTile(const int idx) {
       renderer.promoteNextRefresh(HalDisplay::FULL_REFRESH);
       close();
       break;
-    case 2:  // Cycle the reading orientation
+    case 2: {  // Cycle the reading orientation
+      // Ignore a repeat of the same gesture. Every step here changes the reader's viewport, and
+      // the reader reflows on any change -- a full chapter repagination, seconds to tens of
+      // seconds on a long chapter. So a tile that fires three times for one hold does not just
+      // overshoot the orientation, it rebuilds the chapter three times, which is what #209
+      // reports as "flip, indexing, flip, indexing, flip, indexing" for a single shortcut.
+      const uint32_t now = millis();
+      if (lastOrientationTileMs != 0 && now - lastOrientationTileMs < kOrientationTileDebounceMs) {
+        LOG_INF("FLP", "Ignoring repeated orientation tile within %ums", now - lastOrientationTileMs);
+        break;
+      }
+      lastOrientationTileMs = now;
       SETTINGS.orientation = static_cast<uint8_t>((SETTINGS.orientation + 1) % 4);
       SETTINGS.saveToFile();
       // Only the setting changes: turning the renderer cropped the portrait-only
       // screens the panel opens over. The reader reflows on its next loop().
       requestUpdate();
       break;
+    }
     case 3:  // Touch reader controls (for reading with the palm on the glass)
       // Toggles the existing Settings -> Controls option, nothing lower-level:
       // that setting only governs the reader's tap/swipe handling, so the
