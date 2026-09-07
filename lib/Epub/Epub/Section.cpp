@@ -386,8 +386,45 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
         spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled) {
+      // Name the field(s). A mismatch here throws the whole chapter away and rebuilds it, and on a
+      // build long enough to be SUSPENDED (which persists a partial) an unexplained rejection is
+      // indistinguishable from an infinite rebuild loop -- reported in #209 as the orientation
+      // flip "indexing" three times, with the persisted page count going 164 -> 138 -> 126 as each
+      // restart discarded work it already had. Which field disagrees is the whole diagnosis, and
+      // it cost nothing to record.
+      char why[224];
+      size_t at = 0;
+      const auto note = [&](const char* name, const long long want, const long long got) {
+        if (at + 1 >= sizeof(why)) return;
+        const int n = snprintf(why + at, sizeof(why) - at, "%s %lld!=%lld ", name, want, got);
+        if (n > 0) at += static_cast<size_t>(n) < sizeof(why) - at ? static_cast<size_t>(n) : sizeof(why) - at - 1;
+      };
+      if (spec.fontId != fileFontId) note("fontId", spec.fontId, fileFontId);
+      if (spec.lineCompression != fileLineCompression) {
+        if (at + 1 < sizeof(why)) {
+          const int n = snprintf(why + at, sizeof(why) - at, "lineCompression %.3f!=%.3f ",
+                                 static_cast<double>(spec.lineCompression), static_cast<double>(fileLineCompression));
+          if (n > 0) at += static_cast<size_t>(n) < sizeof(why) - at ? static_cast<size_t>(n) : sizeof(why) - at - 1;
+        }
+      }
+      if (spec.extraParagraphSpacing != fileExtraParagraphSpacing)
+        note("extraParagraphSpacing", spec.extraParagraphSpacing, fileExtraParagraphSpacing);
+      if (spec.paragraphAlignment != fileParagraphAlignment)
+        note("paragraphAlignment", spec.paragraphAlignment, fileParagraphAlignment);
+      if (spec.viewportWidth != fileViewportWidth) note("viewportWidth", spec.viewportWidth, fileViewportWidth);
+      if (spec.viewportHeight != fileViewportHeight) note("viewportHeight", spec.viewportHeight, fileViewportHeight);
+      if (spec.hyphenationEnabled != fileHyphenationEnabled)
+        note("hyphenation", spec.hyphenationEnabled, fileHyphenationEnabled);
+      if (spec.embeddedStyle != fileEmbeddedStyle) note("embeddedStyle", spec.embeddedStyle, fileEmbeddedStyle);
+      if (spec.imageRendering != fileImageRendering) note("imageRendering", spec.imageRendering, fileImageRendering);
+      if (spec.focusReadingEnabled != fileFocusReadingEnabled)
+        note("focusReading", spec.focusReadingEnabled, fileFocusReadingEnabled);
+      if (spec.honorBookInsets != fileHonorBookInsets)
+        note("honorBookInsets", spec.honorBookInsets, fileHonorBookInsets);
+      if (spec.furiganaEnabled != fileFuriganaEnabled) note("furigana", spec.furiganaEnabled, fileFuriganaEnabled);
+      why[at] = '\0';
       file.close();
-      LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
+      LOG_ERR("SCT", "Cache rejected (%s): want!=file %s", filePartial ? "partial" : "complete", why);
       clearCache();
       return false;
     }
