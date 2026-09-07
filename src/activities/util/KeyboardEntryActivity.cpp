@@ -568,12 +568,12 @@ void KeyboardEntryActivity::loop() {
     }
   }
 
-  if (!cursorMode && mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+  if (!cursorMode && mappedInput.wasPressed(MappedInputManager::Button::ScreenUp)) {
     upHeld = true;
     upLongHandled = false;
   }
 
-  if (upHeld && !upLongHandled && mappedInput.isPressed(MappedInputManager::Button::Up) &&
+  if (upHeld && !upLongHandled && mappedInput.isPressed(MappedInputManager::Button::ScreenUp) &&
       mappedInput.getHeldTime() > LONG_PRESS_MS) {
     cursorMode = true;
     upLongHandled = true;
@@ -582,7 +582,7 @@ void KeyboardEntryActivity::loop() {
     requestUpdate();
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenUp)) {
     if (upHeld && !upLongHandled && !cursorMode) {
       moveSelectionRow(-1);
       requestUpdate();
@@ -591,7 +591,7 @@ void KeyboardEntryActivity::loop() {
     upLongHandled = false;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+  if (mappedInput.wasPressed(MappedInputManager::Button::ScreenDown)) {
     downHeld = true;
     if (cursorMode) {
       togglePos = false;
@@ -605,7 +605,7 @@ void KeyboardEntryActivity::loop() {
     }
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenDown)) {
     if (downHeld && !downLongHandled && !cursorMode) {
       moveSelectionRow(1);
       requestUpdate();
@@ -614,13 +614,13 @@ void KeyboardEntryActivity::loop() {
     downLongHandled = false;
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenLeft}, [this] {
     if (cursorMode) return;
     moveSelectionCol(-1);
     requestUpdate();
   });
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
     if (cursorMode) {
       if (togglePos) {
         cursorPos = savedCursorPos;
@@ -633,7 +633,7 @@ void KeyboardEntryActivity::loop() {
     }
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+  if (mappedInput.wasPressed(MappedInputManager::Button::ScreenRight)) {
     if (cursorMode && inputType == InputType::Password && !togglePos) {
       rightHeld = true;
       rightLongHandled = false;
@@ -641,13 +641,13 @@ void KeyboardEntryActivity::loop() {
     }
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenRight}, [this] {
     if (cursorMode) return;
     moveSelectionCol(1);
     requestUpdate();
   });
 
-  if (rightHeld && !rightLongHandled && mappedInput.isPressed(MappedInputManager::Button::Right) &&
+  if (rightHeld && !rightLongHandled && mappedInput.isPressed(MappedInputManager::Button::ScreenRight) &&
       mappedInput.getHeldTime() > LONG_PRESS_MS) {
     if (cursorMode && inputType == InputType::Password && !togglePos) {
       savedCursorPos = rightStartCursorPos;
@@ -657,7 +657,7 @@ void KeyboardEntryActivity::loop() {
     }
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenRight)) {
     if (cursorMode && inputType == InputType::Password) {
       rightHeld = false;
       rightLongHandled = false;

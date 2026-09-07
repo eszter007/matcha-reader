@@ -104,17 +104,17 @@ void EpubReaderFootnotesActivity::loop() {
     }
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right},
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenRight},
                                        [this] { selectFootnote(selectedIndex + 1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left},
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenLeft},
                                        [this] { selectFootnote(selectedIndex - 1); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
     if (scrollOffset < maxScroll) {
       scrollOffset = std::min(maxScroll, scrollOffset + 5);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
     if (scrollOffset > 0) {
       scrollOffset = std::max(0, scrollOffset - 5);
       requestUpdate();

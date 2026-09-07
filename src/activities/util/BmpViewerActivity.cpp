@@ -275,14 +275,14 @@ void BmpViewerActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft) ||
+      mappedInput.wasReleased(MappedInputManager::Button::ScreenUp)) {
     openSibling(-1);
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenRight) ||
+      mappedInput.wasReleased(MappedInputManager::Button::ScreenDown)) {
     openSibling(1);
     return;
   }

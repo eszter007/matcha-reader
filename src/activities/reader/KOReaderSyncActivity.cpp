@@ -676,10 +676,10 @@ void KOReaderSyncActivity::loop() {
     if (route) return;  // dispatched to onResultRow
 
     // Navigate the two options with physical buttons.
-    if (mappedInput.wasReleased(MappedInputManager::Button::Up) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Left) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Down) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::ScreenUp) ||
+        mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft) ||
+        mappedInput.wasReleased(MappedInputManager::Button::ScreenDown) ||
+        mappedInput.wasReleased(MappedInputManager::Button::ScreenRight)) {
       selectedOption = (selectedOption + 1) % 2;  // Wrap around among 2 options
       requestUpdate();
     }

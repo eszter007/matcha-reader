@@ -776,13 +776,14 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
     return true;
   }
 
-  // Side buttons step word by word (down a column is the same gesture as a page turn), front
-  // Left/Right jump columns. Button::Up/Down are the physical side buttons whatever the page-turn
-  // layout setting is, so this mapping holds on every device that has them.
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Down, [this] { moveSelection(1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Up, [this] { moveSelection(-1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Left, [this] { jumpColumn(1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::Right, [this] { jumpColumn(-1); });
+  // Stepping word by word follows the screen's down/up axis and jumping columns its left/right
+  // axis, so which PHYSICAL buttons those are changes with orientation: in portrait the side
+  // buttons step and the front pair jumps columns, in landscape they trade places. That is the
+  // point -- the gesture stays "down the column as you see it".
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenDown, [this] { moveSelection(1); });
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenUp, [this] { moveSelection(-1); });
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenLeft, [this] { jumpColumn(1); });
+  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenRight, [this] { jumpColumn(-1); });
   return true;
 }
 
@@ -1340,17 +1341,23 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
 
   const bool sideButtonsForLookup =
       SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-  const bool swapFrontButtons = mappedInput.isNavDirectionSwapped();
+  // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
+  // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
+  // way guarantees the two roles land on different buttons in every orientation. Reaching for the
+  // physical side buttons (PageBack/PageForward) for entries collided in landscape, where
+  // ScreenLeft/Right resolve to those very buttons -- scrolling and entry navigation ended up on
+  // the same pair and the front buttons did nothing.
+  //
+  // The setting keeps its meaning: it swaps which AXIS carries which role, so in portrait it still
+  // moves entry navigation onto the side buttons and scrolling onto the front pair.
   const auto nextEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::PageForward : MappedInputManager::Button::Right;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenDown : MappedInputManager::Button::ScreenRight;
   const auto previousEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::PageBack : MappedInputManager::Button::Left;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenUp : MappedInputManager::Button::ScreenLeft;
   const auto scrollDownButton =
-      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Left : MappedInputManager::Button::Right)
-                           : MappedInputManager::Button::Down;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
   const auto scrollUpButton =
-      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
-                           : MappedInputManager::Button::Up;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
   if (pagedDefinition()) {
     // Tategaki reached this view from the page itself, with the word already chosen, so these
     // buttons walk the entry's sources instead of jumping to another word.
@@ -1730,9 +1737,11 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
 
   const bool sideButtonsForLookup =
       SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                            sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
+  // Directional labels, not mapLabels: the hint has to name the direction the button moves the
+  // selection ON THE ROTATED SCREEN. mapLabels only ever flipped a fixed left/right pair, so in
+  // landscape the front buttons still read "Left"/"Right" while actually moving up and down.
+  const auto labels = mappedInput.mapDirectionalLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT),
+                                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

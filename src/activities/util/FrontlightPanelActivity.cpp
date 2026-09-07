@@ -273,17 +273,18 @@ void FrontlightPanelActivity::loop() {
     return;
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left},
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenLeft},
                                        [this] { adjustBrightness(-BRIGHTNESS_STEP); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right},
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenRight},
                                        [this] { adjustBrightness(BRIGHTNESS_STEP); });
 
   const int upDelta = gpio.hasEdgeSideButtons() ? -BRIGHTNESS_STEP : BRIGHTNESS_STEP;
   const int downDelta = gpio.hasEdgeSideButtons() ? BRIGHTNESS_STEP : -BRIGHTNESS_STEP;
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up, MappedInputManager::Button::PageBack},
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp, MappedInputManager::Button::PageBack},
                                        [this, upDelta] { adjustBrightness(upDelta); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down, MappedInputManager::Button::PageForward},
-                                       [this, downDelta] { adjustBrightness(downDelta); });
+  buttonNavigator.onPressAndContinuous(
+      {MappedInputManager::Button::ScreenDown, MappedInputManager::Button::PageForward},
+      [this, downDelta] { adjustBrightness(downDelta); });
 }
 
 int FrontlightPanelActivity::computePanelBottom() const {
