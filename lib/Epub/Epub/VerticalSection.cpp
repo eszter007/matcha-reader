@@ -4,6 +4,7 @@
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -1452,6 +1453,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
                                            const bool furiganaEnabled) {
   lastBuildDroppedForHeap_ = false;
   lastBuildUnstyledForHeap_ = false;
+  // Same reason as Section::buildSomeMore: a chapter layout outlasts IDLE_POWER_SAVING_MS, and
+  // the throttle would otherwise land in the middle of it.
+  HalPowerManager::Lock powerLock;
   // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
   // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
   // whether that low contiguous budget is a fresh drop from THIS chapter's own parsing, or whether

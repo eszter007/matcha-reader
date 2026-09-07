@@ -20,9 +20,10 @@ class HalPowerManager {
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
 
-  enum LockMode { None, NormalSpeed };
-  LockMode currentLockMode = None;
-  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to currentLockMode
+  // Nesting count, not a flag: the render task and a foreground section build hold a lock at the
+  // same time, and whichever released first would otherwise un-throttle the other.
+  uint8_t lockCount = 0;
+  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to lockCount
 
  public:
 #if BOARD_HAS_PSRAM
@@ -39,7 +40,7 @@ class HalPowerManager {
   void setPowerSaving(bool enabled);
 
   // Setup wake up GPIO and enter deep sleep
-  // Should be called inside main loop() to handle the currentLockMode
+  // Should be called inside main loop() to handle the pending lock state
   void startDeepSleep(HalGPIO& gpio) const;
 
   // Get battery percentage (range 0-100)
@@ -47,10 +48,9 @@ class HalPowerManager {
 
   // RAII helper class to manage power saving locks
   // Usage: create an instance of Lock in a scope to disable power saving, for example when running a task that needs
-  // full performance. When the Lock instance is destroyed (goes out of scope), power saving will be re-enabled.
+  // full performance. Locks nest: power saving is re-enabled when the LAST one goes out of scope.
   class Lock {
     friend class HalPowerManager;
-    bool valid = false;
 
    public:
     explicit Lock();

@@ -2,6 +2,7 @@
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -717,6 +718,11 @@ bool Section::buildSomeMore(const int maxPages) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
   }
+  // Laying out pages is not "idle" just because no button was pressed. The main loop drops the
+  // CPU to LOW_POWER_FREQ after IDLE_POWER_SAVING_MS of no input, and a chapter build runs far
+  // longer than that -- on the C3 that is 160 MHz -> 10 MHz, measured as a ~10x step slowdown
+  // partway through a rebuild, hitting exactly the wait the reader is staring at.
+  HalPowerManager::Lock powerLock;
   // Pace on pages laid out by THIS build, not pageCount: during a rebuild over a partial,
   // pageCount stays pinned at the partial's watermark until the build passes it, which
   // would otherwise turn one "small" chunk into a blocking rebuild of the whole watermark.
