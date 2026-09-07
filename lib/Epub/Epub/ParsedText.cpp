@@ -1603,8 +1603,14 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
 
   const int firstLineIndent = resolveLineIndent(breakIndex, renderer, fontId);
 
-  std::vector<std::string> lineRubyTexts(lineWordCount);
+  // Sized only when this block actually carries ruby. TextBlock's constructor discards an
+  // all-empty rubyTexts anyway (see the invariant there), so building one per line for a
+  // ruby-less block allocates a vector and default-constructs lineWordCount strings, has
+  // hasRuby() scan all of them to prove they are empty, and frees them again -- for every line
+  // of every paragraph. Every read of it is already bounds-checked, here and in TextBlock.
+  std::vector<std::string> lineRubyTexts;
   if (!rubyTexts.empty() && lastBreakAt < rubyTexts.size()) {
+    lineRubyTexts.resize(lineWordCount);
     const size_t copyCount = std::min(lineBreak, rubyTexts.size()) - lastBreakAt;
     std::copy(rubyTexts.begin() + lastBreakAt, rubyTexts.begin() + lastBreakAt + copyCount, lineRubyTexts.begin());
   }
