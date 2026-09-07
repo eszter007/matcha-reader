@@ -231,9 +231,16 @@ bool UITheme::isGeneratedThumbPath(const std::string& path) {
 //
 // Directory scan, so it only runs on the miss path -- the hit path never opens the directory.
 std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) {
+  // Only a generated-thumb path has siblings worth looking for. Without this a raw cover image,
+  // or any other path that happens to reach here, would open and walk a directory for nothing.
+  if (!isGeneratedThumbPath(missingThumbPath)) return "";
+
   const size_t slash = missingThumbPath.find_last_of('/');
   if (slash == std::string::npos) return "";
-  const std::string dir = missingThumbPath.substr(0, slash);
+  // slash == 0 means the file sits at the root: the directory is "/", not the empty string that
+  // substr would give, which Storage.open() cannot resolve.
+  const std::string dir = slash == 0 ? "/" : missingThumbPath.substr(0, slash);
+  const std::string prefix = dir == "/" ? dir : dir + "/";
   const std::string wanted = missingThumbPath.substr(slash + 1);
 
   // Storage.open(), not openFileForRead(): the latter is for files and fails on a directory
@@ -254,12 +261,16 @@ std::string UITheme::findSiblingCoverThumb(const std::string& missingThumbPath) 
     if (candidate.rfind("thumb_", 0) != 0) continue;
     if (candidate.size() < 5 || candidate.compare(candidate.size() - 4, 4, ".bmp") != 0) continue;
     // Parse the height out of thumb_<height>.bmp; skip anything that is not exactly that shape.
+    // Digit-by-digit rather than strtol: the input is already known to be all digits, so this
+    // needs no libc declaration and cannot be affected by a sign, leading whitespace or errno.
+    // Bounded by the name buffer, so it cannot overflow a long.
     const std::string digits = candidate.substr(6, candidate.size() - 10);
     if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) continue;
-    const long height = strtol(digits.c_str(), nullptr, 10);
+    long height = 0;
+    for (const char c : digits) height = height * 10 + (c - '0');
     if (height > bestHeight) {
       bestHeight = height;
-      best = dir + "/" + candidate;
+      best = prefix + candidate;
     }
   }
   return best;
