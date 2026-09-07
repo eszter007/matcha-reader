@@ -1367,8 +1367,17 @@ struct LayoutPageSink final : ParagraphSink {
           GfxRenderer::FrameBufferLoan loan(renderer);
           // Prefer 16KB chunks when the framebuffer loan is available or the heap is already
           // roomy; SD write throughput is per-chunk-latency bound. 4KB remains the fallback.
-          const bool useFastChunks = canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024;
-          const size_t chunkSize = useFastChunks ? 16384 : 4096;
+          // The loan feeds InflateStream's 32KB window and state through buildscratch, but the
+          // two chunkSize buffers readItemContentsToStream allocates (file read + inflate output)
+          // are plain heap, so a loan alone does NOT make the fast path affordable. Require room
+          // for both before choosing it: on device, at maxAlloc=31732 the first 16KB buffer
+          // succeeded and the second failed, and the chapter then did not render at all --
+          // "Failed to allocate memory for output buffer" -> "Failed to stream chapter HTML" ->
+          // "Failed to build vertical section". The 4KB fallback would have loaded it fine.
+          constexpr size_t kFastChunk = 16384;
+          const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
+                                     ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
+          const size_t chunkSize = useFastChunks ? kFastChunk : 4096;
           extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
         }
         cachedFile.flush();
@@ -1482,8 +1491,12 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     {
       const bool canLendFrameBuffer = renderer.hasFrameBuffer();
       GfxRenderer::FrameBufferLoan loan(renderer);
-      const bool useFastChunks = canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024;
-      const size_t chunkSize = useFastChunks ? 16384 : PARSE_BUFFER_SIZE;
+      // Same reasoning as the image path above: the loan does not cover the two chunkSize heap
+      // buffers, so ask for them explicitly rather than inferring affordability from the loan.
+      constexpr size_t kFastChunk = 16384;
+      const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
+                                 ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
+      const size_t chunkSize = useFastChunks ? kFastChunk : PARSE_BUFFER_SIZE;
       success = epub->readItemContentsToStream(localPath, tmpHtml, chunkSize);
     }
     tmpHtml.close();
