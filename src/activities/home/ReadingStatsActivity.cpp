@@ -4,6 +4,7 @@
 #include <HalClock.h>
 #include <I18n.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -76,6 +77,19 @@ void ReadingStatsActivity::loop() {
     StatsWidgets::stepMonth(calYear, calMonth, +1);
     requestUpdate();
   }
+  // Swipe to scroll, a page at a time — the same gesture and direction the
+  // lists use (swipe up to go forward). The keys below stay the fine control.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+    const int delta = swipe == MappedInputManager::SwipeDir::Up ? scrollPageHeight : -scrollPageHeight;
+    const int target = std::clamp(scrollOffset + delta, 0, maxScrollOffset);
+    if (target != scrollOffset) {
+      scrollOffset = target;
+      requestUpdate();
+    }
+    return;
+  }
+
   // Up/Down to scroll
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
     if (scrollOffset < maxScrollOffset) {
@@ -154,6 +168,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const int visibleHeight = renderer.getScreenHeight() - headerBottom - 50;  // 50 for button hints
   maxScrollOffset = contentEndY - headerBottom - visibleHeight + scrollOffset;
   if (maxScrollOffset < 0) maxScrollOffset = 0;
+  scrollPageHeight = visibleHeight;
 
   // Redraw header on top of scrolled content so text doesn't bleed through.
   // Clear only up to the header line, then redraw the header (which draws the line).
