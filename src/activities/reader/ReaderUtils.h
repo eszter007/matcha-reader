@@ -115,8 +115,10 @@ struct PageTurnResult {
 };
 
 // orientationOverride (>= 0) resolves the front pair against that orientation instead of the live
-// one, for a viewer that rotates the display to fit its content -- see the overloads it calls.
-inline PageTurnResult detectPageTurn(const MappedInputManager& input, const int orientationOverride = -1) {
+// one, for a viewer that rotates the display to fit its content. Private: callers use
+// detectPageTurn() or detectPageTurnForOrientation() below, which cannot be confused for one
+// another at a call site.
+inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const int orientationOverride) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
@@ -140,6 +142,17 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input, const int 
   const bool next = tiltNext || pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
                     pageButtonTriggered(nextButton);
   return {prev, next, tiltPrev || tiltNext};
+}
+
+// Page turns resolved against the live orientation -- the normal case.
+inline PageTurnResult detectPageTurn(const MappedInputManager& input) { return detectPageTurnImpl(input, -1); }
+
+// Page turns resolved against an explicit orientation, for a viewer that rotates the DISPLAY to fit
+// its content. A separate name rather than a defaulted parameter on detectPageTurn(): an extra
+// numeric argument there would bind silently to whatever the parameter happens to be, so a caller
+// passing an orientation could compile into something else entirely.
+inline PageTurnResult detectPageTurnForOrientation(const MappedInputManager& input, const uint8_t orientation) {
+  return detectPageTurnImpl(input, static_cast<int>(orientation));
 }
 
 // A short power-button click closes the dictionary / word-lookup screens, but only when that same
