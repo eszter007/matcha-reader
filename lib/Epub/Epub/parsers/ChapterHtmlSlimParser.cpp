@@ -805,6 +805,9 @@ void ChapterHtmlSlimParser::emitBoxRect(const bool openBottom) {
 
 void ChapterHtmlSlimParser::maybeEmitOpenBoxForPageBreak() {
   if (boxDepth < 0) return;
+  // Nothing of the box is on this page yet, so no open-bottomed rect is emitted -- and it must not
+  // be marked continued either, or the first page that does hold it would omit its top edge.
+  if (boxAwaitingFirstLine) return;
   emitBoxRect(/*openBottom=*/true);
   boxContinued = true;
   // The continuation starts at y = 0 on the next page, so the floor from this page's last line
