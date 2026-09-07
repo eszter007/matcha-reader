@@ -209,6 +209,7 @@ void WordSelectionScan::reset() {
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
+  contextStart = 0;
 }
 
 void WordSelectionScan::restartStepScan() {
@@ -221,6 +222,7 @@ void WordSelectionScan::restartStepScan() {
   recordFrom = 0;
   // Every cell is unsegmented again: the re-walk rebuilds selectableGlyphs from scratch.
   std::fill(scannedBits.begin(), scannedBits.end(), 0);
+  markContextScanned();
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
@@ -242,7 +244,51 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  contextStart = allGlyphs.size();
   allocScannedBits();
+}
+
+void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint32_t paragraphIndex) {
+  const bool hadBits = !scannedBits.empty();
+  contextStart = allGlyphs.size();
+  int added = 0;
+  for (size_t i = 0; i < utf8.size() && added < kLookupContextChars;) {
+    const auto lead = static_cast<unsigned char>(utf8[i]);
+    size_t len = 1;
+    uint32_t cp = lead;
+    if ((lead & 0xE0) == 0xC0) {
+      len = 2;
+      cp = lead & 0x1F;
+    } else if ((lead & 0xF0) == 0xE0) {
+      len = 3;
+      cp = lead & 0x0F;
+    } else if ((lead & 0xF8) == 0xF0) {
+      len = 4;
+      cp = lead & 0x07;
+    }
+    if (i + len > utf8.size()) break;  // truncated trailing sequence
+    for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(utf8[i + k]) & 0x3F);
+    // Zero position: these are never drawn and never selectable, so there is nothing to place --
+    // every consumer of a glyph's geometry stops at onPageGlyphCount().
+    // NOT scanTruncated on failure: the context is optional and the on-page glyph stream is
+    // intact, so the scan result is still complete and still worth caching.
+    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, paragraphIndex, 0})) break;
+    i += len;
+    added++;
+  }
+  if (allGlyphs.size() == contextStart) return;  // nothing appended: leave the bitmap alone
+  // The bitmap is sized from allGlyphs, so it has to be re-sized to cover the appended cells even
+  // though the walk never records them -- isGlyphMapped() is consulted by index.
+  allocScannedBits();
+  if (hadBits && scannedBits.empty()) {
+    // The longer bitmap did not fit. It is worth more than the optional context -- without it the
+    // walk drops to a strictly sequential pass and select mode loses its column jumps -- so drop
+    // the context and go back to the size that already fitted.
+    allGlyphs.resize(contextStart);
+    allocScannedBits();
+    return;
+  }
+  markContextScanned();
 }
 
 void WordSelectionScan::initFromPage(const Page& page) {
@@ -335,6 +381,7 @@ void WordSelectionScan::initFromPage(const Page& page) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  contextStart = allGlyphs.size();
   allocScannedBits();
 }
 
@@ -370,6 +417,7 @@ void WordSelectionScan::initFromUtf8Text(const std::string& text) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  contextStart = allGlyphs.size();
   allocScannedBits();
 }
 
@@ -427,7 +475,9 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
     // Walked off the end, or onto cells another pass already did: pick up the next unfinished
     // cell wherever it is. Searching from 0 keeps the sweep in page order once the demand-driven
     // jumps have filled in the parts the reader actually looked at.
-    if (scanPos >= allGlyphs.size() || (scanPos >= recordFrom && isGlyphMapped(scanPos))) {
+    // contextStart, not allGlyphs.size(): the walk records selectable words, and the cells past
+    // contextStart are off-page context that can be MATCHED into but never pointed at.
+    if (scanPos >= contextStart || (scanPos >= recordFrom && isGlyphMapped(scanPos))) {
       // Without the bitmap the walk is a single sequential pass, so the end of the page IS the
       // end of the work. Consulting nextUnscanned() here would restart at 0 forever, since with
       // no bits every cell reports unmapped.
@@ -435,8 +485,11 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
         phase = Phase::Done;
         break;
       }
+      // contextStart, not allGlyphs.size(): the context cells past it are never walked, so they
+      // never get marked scanned -- treating a resume there as the end keeps the sweep from
+      // returning to them forever.
       const size_t resume = nextUnscanned(0);
-      if (resume >= allGlyphs.size()) {
+      if (resume >= contextStart) {
         phase = Phase::Done;
         break;
       }
@@ -950,7 +1003,11 @@ void WordSelectionScan::scanOnePosition() {
     // digits plus the dictionary match. Recorded now because the caller drawing a highlight over
     // the page must not have to repeat the lookup just to learn how many cells to cover.
     GlyphRef entry = g;
-    const size_t span = static_cast<size_t>(digitGlyphs) + static_cast<size_t>(std::max(matchChars, 1));
+    size_t span = static_cast<size_t>(digitGlyphs) + static_cast<size_t>(std::max(matchChars, 1));
+    // A word running into the next page matches in full but is only PRESENT up to the boundary,
+    // and matchLen is what draws the highlight box -- so clamp it to the cells that exist here.
+    // The match itself is untouched: the whole point is that the split word still resolves.
+    if (i + span > contextStart) span = contextStart - i;
     entry.matchLen = static_cast<uint8_t>(std::min<size_t>(span, 255));
     // Push selectableGlyphs first -- if it can't grow, the heap is exhausted, so stop the scan
     // rather than push a mismatched selectToAllIdx entry with no corresponding glyph.

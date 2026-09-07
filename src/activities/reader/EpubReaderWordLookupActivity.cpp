@@ -30,7 +30,9 @@
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
                                                            const uint16_t spineIndex, const uint16_t pageIndex,
-                                                           const VerticalSelectContext& selectContext)
+                                                           const VerticalSelectContext& selectContext,
+                                                           const std::string& lookupContext,
+                                                           const uint32_t lookupContextParagraph)
     : Activity("WordLookup", renderer, mappedInput),
       selectCtx(selectContext),
       scanCachePath(std::move(scanCachePath)),
@@ -46,12 +48,14 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
   }
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
+  if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, lookupContextParagraph);
   initScanFromCacheOrBurst("vertical");
 }
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const Page& page, std::string scanCachePath,
-                                                           const uint16_t spineIndex, const uint16_t pageIndex)
+                                                           const uint16_t spineIndex, const uint16_t pageIndex,
+                                                           const std::string& lookupContext)
     : Activity("WordLookup", renderer, mappedInput),
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
@@ -60,6 +64,8 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromPage(page);
+  // Horizontal glyphs all carry paragraphIndex 0, so the context matches by construction.
+  if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, 0);
   initScanFromCacheOrBurst("horizontal");
 }
 
@@ -355,13 +361,13 @@ bool EpubReaderWordLookupActivity::stepCursor(const int delta, int& outIndex) {
 }
 
 void EpubReaderWordLookupActivity::moveSelection(const int delta) {
-  if (provisionalGlyph < scan.allGlyphs.size()) {
+  if (provisionalGlyph < scan.onPageGlyphCount()) {
     const auto& current = scan.allGlyphs[provisionalGlyph];
     size_t target = SIZE_MAX;
     int bestDistance = INT_MAX;
     size_t wrapped = SIZE_MAX;
     uint16_t wrappedRow = delta > 0 ? UINT16_MAX : 0;
-    for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+    for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
       const auto& glyph = scan.allGlyphs[i];
       if (glyph.column != current.column || !WordSelectionScan::isLookupableChar(glyph.codepoint)) continue;
       const int distance = static_cast<int>(glyph.row) - static_cast<int>(current.row);
@@ -412,7 +418,7 @@ void EpubReaderWordLookupActivity::moveSelection(const int delta) {
 // resolvePendingMove() as the frontier reaches it.
 void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
   const size_t currentGlyph = currentAllGlyphIndex();
-  if (currentGlyph >= scan.allGlyphs.size()) return;
+  if (currentGlyph >= scan.onPageGlyphCount()) return;
   const auto& cur = scan.allGlyphs[currentGlyph];
   uint16_t minColumn = 0;
   uint16_t maxColumn = 0;
@@ -449,7 +455,7 @@ void EpubReaderWordLookupActivity::jumpColumn(const int direction) {
 
 bool EpubReaderWordLookupActivity::columnRange(const uint16_t column, size_t& first, size_t& last) const {
   bool found = false;
-  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+  for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
     if (scan.allGlyphs[i].column != column) continue;
     if (!found) {
       first = i;
@@ -464,7 +470,7 @@ bool EpubReaderWordLookupActivity::closestUnmappedInColumn(const uint16_t column
                                                            size_t& outGlyph, int& outDistance) const {
   bool found = false;
   outDistance = INT_MAX;
-  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+  for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
     const auto& glyph = scan.allGlyphs[i];
     if (glyph.column != column || scan.isGlyphMapped(i)) continue;
     const int distance = std::abs(static_cast<int>(glyph.row) - static_cast<int>(anchorRow));
@@ -481,7 +487,7 @@ bool EpubReaderWordLookupActivity::closestGlyphInColumn(const uint16_t column, c
                                                         size_t& outGlyph) const {
   bool found = false;
   int bestDistance = INT_MAX;
-  for (size_t i = 0; i < scan.allGlyphs.size(); i++) {
+  for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
     const auto& glyph = scan.allGlyphs[i];
     if (glyph.column != column || !WordSelectionScan::isLookupableChar(glyph.codepoint)) continue;
     const int distance = std::abs(static_cast<int>(glyph.row) - static_cast<int>(anchorRow));
@@ -498,7 +504,8 @@ bool EpubReaderWordLookupActivity::columnBounds(uint16_t& outMin, uint16_t& outM
   if (scan.allGlyphs.empty()) return false;
   outMin = UINT16_MAX;
   outMax = 0;
-  for (const auto& g : scan.allGlyphs) {
+  for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
+    const auto& g = scan.allGlyphs[i];
     outMin = std::min(outMin, g.column);
     outMax = std::max(outMax, g.column);
   }
@@ -544,7 +551,8 @@ bool EpubReaderWordLookupActivity::middleTarget(uint16_t& outColumn, uint16_t& o
   uint16_t maxColumn = 0;
   uint16_t minRow = UINT16_MAX;
   uint16_t maxRow = 0;
-  for (const auto& g : scan.allGlyphs) {
+  for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
+    const auto& g = scan.allGlyphs[i];
     minColumn = std::min(minColumn, g.column);
     maxColumn = std::max(maxColumn, g.column);
     minRow = std::min(minRow, g.row);
@@ -792,10 +800,11 @@ int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, Highl
   if (selectableIndex < 0 || static_cast<size_t>(selectableIndex) >= scan.selectToAllIdx.size()) return 0;
 
   const size_t start = scan.selectToAllIdx[static_cast<size_t>(selectableIndex)];
-  if (start >= scan.allGlyphs.size()) return 0;
+  if (start >= scan.onPageGlyphCount()) return 0;
 
   const size_t span = std::max<size_t>(scan.selectableGlyphs[static_cast<size_t>(selectableIndex)].matchLen, 1);
-  const size_t end = std::min(start + span, scan.allGlyphs.size());
+  // Bounded on the page: a match running into the next page's context has no cells to draw here.
+  const size_t end = std::min(start + span, scan.onPageGlyphCount());
   const int cellPx = selectCtx.cellPx;
 
   size_t i = start;
@@ -840,7 +849,7 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   // observe a half-built set. Only the publish at the end runs with the render task locked out.
   HighlightBox boxes[kMaxHighlightBoxes];
   int count = 0;
-  if (provisionalGlyph < scan.allGlyphs.size()) {
+  if (provisionalGlyph < scan.onPageGlyphCount()) {
     const auto& glyph = scan.allGlyphs[provisionalGlyph];
     boxes[0] = HighlightBox{static_cast<int16_t>(glyph.x + selectCtx.marginLeft),
                             static_cast<int16_t>(glyph.y + selectCtx.marginTop), static_cast<int16_t>(selectCtx.cellPx),
@@ -917,7 +926,7 @@ void EpubReaderWordLookupActivity::renderSelect() {
 }
 
 size_t EpubReaderWordLookupActivity::currentAllGlyphIndex() const {
-  if (provisionalGlyph < scan.allGlyphs.size()) return provisionalGlyph;
+  if (provisionalGlyph < scan.onPageGlyphCount()) return provisionalGlyph;
   if (cursorIndex < 0 || static_cast<size_t>(cursorIndex) >= scan.selectToAllIdx.size()) return SIZE_MAX;
   return scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
 }

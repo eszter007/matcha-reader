@@ -44,6 +44,23 @@ class WordSelectionScan {
   // Manga mode: a plain UTF-8 text blob (panel or combined page text). Newlines are dropped.
   void initFromUtf8Text(const std::string& text);
 
+  // Append the start of the NEXT page as lookup context, so a word split across the page boundary
+  // can still be segmented and looked up. Call after an initFrom*(); paragraphIndex is the next
+  // page's first paragraph, which makes the check free: the text builder already stops at a
+  // paragraph change, so context from a DIFFERENT paragraph is ignored without a special case.
+  //
+  // Context only. These glyphs carry no page position and never become selectable -- the reader
+  // cannot put a cursor on a character that is not on screen -- so they extend what a word at the
+  // page end can MATCH without adding anywhere new to point at. 8 characters is the most that can
+  // matter: WordLookup's longest window is MAX_WINDOW_CHARS (8), so a word beginning on the last
+  // on-page character reaches at most 7 further.
+  void appendLookupContext(const std::string& utf8, uint32_t paragraphIndex);
+  // Number of leading allGlyphs entries that are really on the page. Anything reading a glyph's
+  // geometry (column/row/x/y) must stop here: context cells carry no position, and 0/0 is a valid
+  // vertical cell. Text building may read past it -- that is what the context is for.
+  size_t onPageGlyphCount() const { return contextStart; }
+  static constexpr int kLookupContextChars = 8;  // == kMaxLookupChars, asserted below
+
   // Run scan/filter work for up to maxMillis (pass UINT32_MAX to run to completion).
   // Returns true when the scan is fully done.
   bool step(uint32_t maxMillis);
@@ -79,6 +96,9 @@ class WordSelectionScan {
   std::vector<GlyphRef> allGlyphs;         // Full glyph list for building lookup text
   std::vector<GlyphRef> selectableGlyphs;  // Positions with a dictionary match
   std::vector<size_t> selectToAllIdx;      // Maps selectableGlyphs index -> allGlyphs index
+  // First index in allGlyphs that is off-page lookup context (see appendLookupContext).
+  // allGlyphs.size() when there is none, so it is always a valid "end of the page" bound.
+  size_t contextStart = 0;
 
   // Where the walk currently sits in allGlyphs. Every cell's page position is known from
   // initFrom*(), but only segmented cells can be selected.
@@ -108,6 +128,9 @@ class WordSelectionScan {
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
+  // The context is exactly one lookup window: a word beginning on the last on-page character
+  // reaches at most kMaxLookupChars - 1 further, and nothing past that can ever be matched.
+  static_assert(kLookupContextChars == kMaxLookupChars, "context must cover one lookup window");
   static void encodeUtf8(uint32_t cp, std::string& out);
   static bool isLookupableChar(uint32_t cp);
   static bool isKatakana(uint32_t cp);
@@ -144,6 +167,12 @@ class WordSelectionScan {
   size_t recordFrom = 0;
   void markScanned(size_t glyphIndex) {
     if (glyphIndex < allGlyphs.size() && !scannedBits.empty()) scannedBits[glyphIndex >> 3] |= (1u << (glyphIndex & 7));
+  }
+  // Off-page context cells are never walked, so they would stay unmapped forever: mark them
+  // segmented so nextUnscanned() and the select-mode "closest unmapped cell" search skip them
+  // instead of repeatedly aiming the walk at work it will never do.
+  void markContextScanned() {
+    for (size_t i = contextStart; i < allGlyphs.size(); i++) markScanned(i);
   }
   // Next cell at or after `from` that has not been segmented; allGlyphs.size() when none remain.
   size_t nextUnscanned(size_t from) const;
