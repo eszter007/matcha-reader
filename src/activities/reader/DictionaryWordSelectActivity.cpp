@@ -74,10 +74,18 @@ void DictionaryWordSelectActivity::extractWords() {
   int16_t pendingHyphen = -1;  // line-final word ending in '-', awaiting its remainder
 
   for (const auto& element : page->elements) {
-    if (element->getTag() != TAG_PageLine) continue;
+    // Layout hyphenation only ever continues onto the IMMEDIATELY following text line, so
+    // anything else in between (an image, a line with no usable block) disarms the join.
+    if (element->getTag() != TAG_PageLine) {
+      pendingHyphen = -1;
+      continue;
+    }
     const auto* line = static_cast<const PageLine*>(element.get());
     const auto& block = line->getBlock();
-    if (!block || !block->valid()) continue;
+    if (!block || !block->valid()) {
+      pendingHyphen = -1;
+      continue;
+    }
 
     bool rowHasWords = false;
     const int lineFontId = block->getBlockStyle().resolveFontId(fontId);
@@ -119,7 +127,12 @@ void DictionaryWordSelectActivity::extractWords() {
       pageText.push_back(' ');
       styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(box.style) & 0x03));
     }
-    if (rowHasWords) rowCount++;
+    if (rowHasWords) {
+      rowCount++;
+    } else {
+      // A line with nothing selectable on it: same rule, the pending prefix cannot reach past it.
+      pendingHyphen = -1;
+    }
   }
 
   if (styleMask == 0) styleMask = 0x01;  // REGULAR

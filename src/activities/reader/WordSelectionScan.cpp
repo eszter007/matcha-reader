@@ -258,9 +258,17 @@ void WordSelectionScan::initFromPage(const Page& page) {
   bool joinToPrevious = false;  // previous line ended on a layout hyphen; see below
   for (const auto& el : page.elements) {
     if (oom) break;
-    if (el->getTag() != TAG_PageLine) continue;
+    // Layout hyphenation only ever continues onto the IMMEDIATELY following text line, so
+    // anything else in between (an image, a line with no block) disarms the join.
+    if (el->getTag() != TAG_PageLine) {
+      joinToPrevious = false;
+      continue;
+    }
     const auto& line = static_cast<const PageLine&>(*el);
-    if (!line.getBlock()) continue;
+    if (!line.getBlock()) {
+      joinToPrevious = false;
+      continue;
+    }
     const TextBlock& block = *line.getBlock();
     for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
       if (oom) break;
