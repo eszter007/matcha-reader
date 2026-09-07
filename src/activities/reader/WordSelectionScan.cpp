@@ -446,8 +446,11 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
         phase = Phase::Done;
         break;
       }
+      // contextStart, not allGlyphs.size(): the context cells past it are never walked, so they
+      // never get marked scanned -- treating a resume there as the end keeps the sweep from
+      // returning to them forever.
       const size_t resume = nextUnscanned(0);
-      if (resume >= allGlyphs.size()) {
+      if (resume >= contextStart) {
         phase = Phase::Done;
         break;
       }

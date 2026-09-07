@@ -4026,6 +4026,9 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
         int taken = 0;
         for (const auto& g : nextPage->glyphs) {
           if (g.renderKind == VerticalGlyph::RotatedRun) continue;
+          // Both run kinds keep their text in the page's pool and leave codepoint == 0; encoding
+          // that would put a NUL byte into the tail and be read back as a real character.
+          if (g.codepoint == 0) continue;
           if (taken == 0) lookupTailParagraph = g.paragraphIndex;
           // One paragraph only: a word cannot span a paragraph break, and the scan would discard
           // the rest anyway.
@@ -4081,22 +4084,44 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
       // to invalidate and the order does not matter.
       std::string lookupTail;
       if (auto nextPage = section->loadPageAt(section->currentPage + 1)) {
-        const std::string nextText = PageTextExtractor::fromHorizontalPage(*nextPage);
+        // Flattened the way initFromPage() flattens the current page -- a separating space only
+        // between two ASCII words, CJK runs concatenated -- so a split Japanese word still meets
+        // its continuation. PageTextExtractor spaces EVERY word, which would break that; walking
+        // the first few words directly also avoids building the whole next page's text.
+        auto isAsciiWord = [](unsigned char c) {
+          return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        };
         int taken = 0;
-        for (size_t i = 0; i < nextText.size() && taken < WordSelectionScan::kLookupContextChars;) {
-          const auto lead = static_cast<unsigned char>(nextText[i]);
-          size_t len = 1;
-          if ((lead & 0xE0) == 0xC0)
-            len = 2;
-          else if ((lead & 0xF0) == 0xE0)
-            len = 3;
-          else if ((lead & 0xF8) == 0xF0)
-            len = 4;
-          if (i + len > nextText.size()) break;
-          if (lead == '\n') break;  // paragraph break: a word cannot span it
-          lookupTail.append(nextText, i, len);
-          i += len;
-          taken++;
+        for (const auto& el : nextPage->elements) {
+          if (taken >= WordSelectionScan::kLookupContextChars) break;
+          if (el->getTag() != TAG_PageLine) continue;
+          const auto& line = static_cast<const PageLine&>(*el);
+          if (!line.getBlock()) continue;
+          const TextBlock& block = *line.getBlock();
+          for (uint16_t wi = 0; wi < block.wordCount() && taken < WordSelectionScan::kLookupContextChars; wi++) {
+            // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
+            const std::string_view w{block.wordText(wi), block.wordTextLen(wi)};
+            if (w.empty()) continue;
+            if (!lookupTail.empty() && isAsciiWord(static_cast<unsigned char>(lookupTail.back())) &&
+                isAsciiWord(static_cast<unsigned char>(w[0]))) {
+              lookupTail += ' ';
+              taken++;
+            }
+            for (size_t b = 0; b < w.size() && taken < WordSelectionScan::kLookupContextChars;) {
+              const auto lead = static_cast<unsigned char>(w[b]);
+              size_t len = 1;
+              if ((lead & 0xE0) == 0xC0)
+                len = 2;
+              else if ((lead & 0xF0) == 0xE0)
+                len = 3;
+              else if ((lead & 0xF8) == 0xF0)
+                len = 4;
+              if (b + len > w.size()) break;
+              lookupTail.append(w.data() + b, len);
+              b += len;
+              taken++;
+            }
+          }
         }
       }
 
