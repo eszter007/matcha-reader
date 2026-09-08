@@ -1103,6 +1103,7 @@ void RecentBooksActivity::loop() {
           shelfConfirmPressSeen = false;
           shelfContentIndex = 0;
           shelfScrollRow = 0;
+          selectorVisible = true;  // opened with a key, so the shelf opens with its cursor shown
           loadShelfBooks(shelves[itemIdx].folderPath);
           requestUpdate();
           return;
@@ -1255,6 +1256,7 @@ void RecentBooksActivity::loop() {
     if (contentIndex > 0) {
       contentIndex = 0;
       scrollRow = 0;
+      selectorVisible = true;
       requestUpdate();
     } else {
       onGoHome();
@@ -1291,6 +1293,9 @@ void RecentBooksActivity::loop() {
   if (hasChangedTab) {
     contentIndex = (contentIndex == 0) ? 0 : 1;
     scrollRow = 0;
+    // Only the keys reach here -- a tab tap is handled in the touch block and returns -- so the
+    // cursor comes back on, wherever a touch left it.
+    selectorVisible = true;
     if (selectedTab == 1 && !shelvesLoaded) loadShelves();
   }
 
