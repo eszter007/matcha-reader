@@ -36,5 +36,5 @@ class MangaBookmarksActivity final : public Activity {
   static int getGutterBottom(const GfxRenderer& renderer);
 
   // Calculate the height available for the bookmark list based on orientation
-  int getListHeight(const GfxRenderer& renderer);
+  static int getListHeight(const GfxRenderer& renderer);
 };

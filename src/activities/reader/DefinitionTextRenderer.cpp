@@ -877,7 +877,7 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
   return out;
 }
 
-WrapResult drawWrapped(GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
+WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                        const int startY, const int lineHeight, const int maxWidth, const int maxY,
                        const int scrollOffset, const uint16_t scale) {
   // The single allocation of this whole function, guarded: if even one line buffer doesn't
