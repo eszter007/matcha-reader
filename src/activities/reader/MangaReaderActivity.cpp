@@ -557,15 +557,18 @@ void MangaReaderActivity::loop() {
   bool touchMenu = false;
   {
     RenderLock touchLock{RenderLock::Try{}};
-    const auto touchOrientation = renderer.getOrientation();
     const bool rotateTouch = touchLock.held() && displayedRotated_;
+    auto baseOrientation = GfxRenderer::Orientation::Portrait;
     if (rotateTouch) {
-      renderer.setOrientation(static_cast<GfxRenderer::Orientation>((touchOrientation + 3) % 4));
+      // Read inside the lock too: the render task writes this field while it draws a rotated
+      // page, so reading it unguarded would be a race in its own right.
+      baseOrientation = renderer.getOrientation();
+      renderer.setOrientation(static_cast<GfxRenderer::Orientation>((baseOrientation + 3) % 4));
     }
     touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
     touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
     if (rotateTouch) {
-      renderer.setOrientation(touchOrientation);
+      renderer.setOrientation(baseOrientation);
     }
   }
 

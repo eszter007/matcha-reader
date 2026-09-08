@@ -13,10 +13,11 @@ MangaChapterSelectionActivity::MangaChapterSelectionActivity(GfxRenderer& render
                                                              std::vector<manga::TocEntry> tocEntries,
                                                              const uint32_t currentPage)
     : UiListActivity("MangaChapterSelection", renderer, mappedInput), tocEntries(std::move(tocEntries)) {
-  // Pre-select whichever chapter the current page falls within.
+  // Which chapter the current page falls within. Applied in onEnter(), not here: the base
+  // class resets the nav there, so a selection made in the constructor never survives.
   for (size_t i = 0; i < this->tocEntries.size(); i++) {
     if (this->tocEntries[i].pageIndex <= currentPage) {
-      nav.selected = static_cast<int>(i);
+      initialSelected = static_cast<int>(i);
     } else {
       break;
     }
@@ -38,6 +39,9 @@ MangaChapterSelectionActivity::MangaChapterSelectionActivity(GfxRenderer& render
 
 void MangaChapterSelectionActivity::onEnter() {
   UiListActivity::onEnter();
+  // After the base, which resets the nav: the first screen build then pulls the viewport to the
+  // chapter the reader is in, the same way the EPUB picker does.
+  nav.selected = initialSelected;
   requestUpdate();
 }
 

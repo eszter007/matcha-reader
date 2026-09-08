@@ -24,6 +24,7 @@ class MangaChapterSelectionActivity final : public UiListActivity {
   // manga TOC is a handful of chapters rather than the hundreds an EPUB can
   // carry -- so the whole list is materialised rather than windowed.
   std::vector<freeink::ui::ListItem> items;
+  int initialSelected = 0;  // chapter holding the page the reader is on; applied in onEnter()
 
   int listCount() const override { return static_cast<int>(tocEntries.size()); }
   void buildScreen(UiScreen& screen) override;
