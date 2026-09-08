@@ -427,7 +427,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;
   }
 
-  if (imageFailedThisSession(imagePath)) {
+  if (imageFailedThisRender(imagePath)) {
     renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
   }

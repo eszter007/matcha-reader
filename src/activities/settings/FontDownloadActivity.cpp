@@ -375,7 +375,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
       file.size = fileObj["size"] | 0u;
 
       if (!fileObj["crc32"].is<uint32_t>()) {
-        LOG_ERR("FONT", "Malformed manifest file entry: missing or invalid crc32 for %s", file.name.c_str());
+        LOG_ERR("FONT", "Malformed manifest file entry: missing or invalid crc32 for %s", str(file.name));
         errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
         return false;
       }
