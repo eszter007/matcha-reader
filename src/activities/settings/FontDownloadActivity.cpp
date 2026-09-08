@@ -163,8 +163,14 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
   // TLS handshake and manifest build below, both of which run
   // std::string/std::vector growth that aborts on OOM (issue #191). Fonts
   // reload lazily once the reader resumes. Full release, matching onEnter():
-  // a CJK SSID reloads the JP fallback family, not just its glyph slabs.
-  sdFontSystem.releaseAllResidentFonts(renderer);
+  // a CJK SSID reloads the JP fallback family, not just its glyph slabs. Under
+  // RenderLock for the same reason onEnter() is: unloading the families retires
+  // renderer font registrations the render task walks, so a concurrent update
+  // would read them as they are freed.
+  {
+    RenderLock lock(*this);
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
 
   if (!fetchAndParseManifest()) {
     // Drop whatever was parsed before the failure: it would otherwise sit in
@@ -225,14 +231,9 @@ bool FontDownloadActivity::internString(const char* text, StrRef& outRef) {
 }
 
 bool FontDownloadActivity::fetchAndParseManifest() {
-  // Rebuildable SD-font caches can hold tens of KB the TLS session needs;
-  // release them before the heap gate below, not after, so a low-heap entry
-  // caused by those very caches (issue #191: a book open on a large SD-card
-  // font) still gets a chance to pass instead of failing before reclaiming
-  // anything.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseAllFontMemory();
-  }
+  // The reclaim that issue #191 put here now happens in the sole caller, which
+  // releases the resident families as well as their glyph slabs and does it
+  // under RenderLock. Nothing repopulates either between there and here.
 
   // Refuse before even opening the connection: the WiFi/TLS handshake and the
   // manual HTTP client (SecureClient/SecureHttpClient) run their own
