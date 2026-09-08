@@ -1099,7 +1099,7 @@ void RecentBooksActivity::loop() {
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
     const int maxRow = maxScrollRow(gridContentHeight());
     const int moved = std::clamp(scrollRow + (swipe == MappedInputManager::SwipeDir::Up ? 1 : -1), 0, maxRow);
-    selectorVisible = false;
+    hideSelector();
     if (moved != scrollRow) {
       scrollRow = moved;
       requestUpdate();
@@ -1123,6 +1123,7 @@ void RecentBooksActivity::loop() {
     int tab = -1;
     const auto tabTouch = mappedInput.colTouch(tab, 0, renderer.getScreenWidth() / TAB_COUNT, TAB_COUNT, tabBarY,
                                                tabBarY + m.tabBarHeight);
+    if (tabTouch != MappedInputManager::RowTouch::None) hideSelector();
     if (tabTouch == MappedInputManager::RowTouch::Tap && tab >= 0 && tab != selectedTab) {
       selectedTab = tab;
       if (selectedTab == 1 && !shelvesLoaded) loadShelves();
@@ -1139,6 +1140,7 @@ void RecentBooksActivity::loop() {
     // cannot also tap the screen this opens.
     if (mappedInput.wasScreenLongPress(gx, gy)) {
       const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      hideSelector();
       // Stats are for books; a shelf has none.
       if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
         contentIndex = hit + 1;
@@ -1148,7 +1150,7 @@ void RecentBooksActivity::loop() {
     }
     if (mappedInput.wasScreenTouchDown(gx, gy)) {
       const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
-      selectorVisible = false;
+      hideSelector();
       if (hit >= 0 && contentIndex != hit + 1) {
         contentIndex = hit + 1;  // index 0 is the tab bar
         requestUpdate();
@@ -1157,6 +1159,7 @@ void RecentBooksActivity::loop() {
     }
     if (mappedInput.wasScreenTapped(gx, gy)) {
       const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      hideSelector();
       if (hit >= 0) {
         contentIndex = hit + 1;
         if (selectedTab == 0) {

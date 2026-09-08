@@ -93,6 +93,14 @@ class RecentBooksActivity final : public Activity {
   // touch, so a highlight sitting on some other cover is just noise -- and worse, it
   // implies the swipe moved it. Set by the nav keys, cleared by any touch.
   bool selectorVisible = false;
+  // Clearing the flag is not enough: the frame still showing the selector has to be replaced,
+  // and a touch that changes nothing else (a swipe against the end stop, a tap on the current
+  // cover, a tap on the active tab) requests no redraw of its own.
+  void hideSelector() {
+    if (!selectorVisible) return;
+    selectorVisible = false;
+    requestUpdate();
+  }
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
   int readProgressPercent(const std::string& bookPath) const;
