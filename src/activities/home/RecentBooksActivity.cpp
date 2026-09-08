@@ -276,6 +276,22 @@ int RecentBooksActivity::getVisibleRows(int cellHeight, int contentHeight) const
   return std::max(1, (contentHeight + GRID_ROW_GAP) / (cellHeight + GRID_ROW_GAP));
 }
 
+int RecentBooksActivity::gridContentHeight() const {
+  const auto& m = UITheme::getInstance().getMetrics();
+  const int gridTop = m.topPadding + m.headerHeight + m.tabBarHeight + m.verticalSpacing;
+  return renderer.getScreenHeight() - gridTop - m.buttonHintsHeight - m.verticalSpacing;
+}
+
+int RecentBooksActivity::maxScrollRow(const int contentHeight) const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int cellWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / GRID_COLS;
+  if (cellWidth <= 0) return 0;
+  const int visibleRows = getVisibleRows(getCellHeight(cellWidth), contentHeight);
+  const int itemCount = getContentItemCount();
+  const int totalRows = (itemCount + GRID_COLS - 1) / GRID_COLS;
+  return std::max(0, totalRows - visibleRows);
+}
+
 int RecentBooksActivity::gridIndexAtPoint(const int x, const int y, const int contentTop, const int contentHeight,
                                           const int scrollRowIn, const int itemCount) const {
   if (itemCount <= 0) return -1;
@@ -1073,15 +1089,19 @@ void RecentBooksActivity::loop() {
   }
 
   // Upstream's flat recents list (selectorIndex + handleListTouch) doesn't exist here: this
-  // screen is a tabbed cover GRID addressed by contentIndex/scrollRow. Swipes move one grid
-  // row; Back stays with the tab/shelf-aware handler below rather than always going home.
+  // screen is a tabbed cover GRID addressed by contentIndex/scrollRow. Back stays with the
+  // tab/shelf-aware handler below rather than always going home.
+  //
+  // A swipe scrolls the viewport and leaves the selection alone, the way a phone does.
+  // Moving the selector by GRID_COLS instead, as this used to, skipped two of every three
+  // books: the covers between the old and new row could not be reached by swiping at all.
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
-    const int totalItems = getContentItemCount() + 1;
-    const int delta = (swipe == MappedInputManager::SwipeDir::Up) ? GRID_COLS : -GRID_COLS;
-    const int moved = std::clamp(contentIndex + delta, 0, std::max(0, totalItems - 1));
-    if (moved != contentIndex) {
-      contentIndex = moved;
+    const int maxRow = maxScrollRow(gridContentHeight());
+    const int moved = std::clamp(scrollRow + (swipe == MappedInputManager::SwipeDir::Up ? 1 : -1), 0, maxRow);
+    selectorVisible = false;
+    if (moved != scrollRow) {
+      scrollRow = moved;
       requestUpdate();
     }
     return;
@@ -1096,7 +1116,7 @@ void RecentBooksActivity::loop() {
     const int tabBarY = m.topPadding + m.headerHeight;
     // The tabbed views start BELOW the tab bar, unlike the loop-local contentTop above.
     const int gridTop = tabBarY + m.tabBarHeight + m.verticalSpacing;
-    const int gridHeight = renderer.getScreenHeight() - gridTop - m.buttonHintsHeight - m.verticalSpacing;
+    const int gridHeight = gridContentHeight();
     const int itemCount = getContentItemCount();
 
     // Tab bar: two equal columns across the full width, matching GUI.drawTabBar's rect.
@@ -1128,6 +1148,7 @@ void RecentBooksActivity::loop() {
     }
     if (mappedInput.wasScreenTouchDown(gx, gy)) {
       const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      selectorVisible = false;
       if (hit >= 0 && contentIndex != hit + 1) {
         contentIndex = hit + 1;  // index 0 is the tab bar
         requestUpdate();
@@ -1174,11 +1195,13 @@ void RecentBooksActivity::loop() {
 
   buttonNavigator.onNextRelease([this, totalItems] {
     contentIndex = ButtonNavigator::nextIndex(contentIndex, totalItems);
+    selectorVisible = true;
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this, totalItems] {
     contentIndex = ButtonNavigator::previousIndex(contentIndex, totalItems);
+    selectorVisible = true;
     requestUpdate();
   });
 
@@ -1362,9 +1385,15 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   const int totalRows = (bookCount + GRID_COLS - 1) / GRID_COLS;
   const int selectedItem = contentIndex - 1;
 
+  // Only the key selector drags the viewport with it. After a swipe the scroll position is
+  // the user's, and snapping it back to wherever the selection happens to sit would undo the
+  // gesture on the very next frame.
   const int selectedRow = selectedItem >= 0 ? selectedItem / GRID_COLS : 0;
-  if (selectedRow < scrollRow) scrollRow = selectedRow;
-  if (selectedRow >= scrollRow + visibleRows) scrollRow = selectedRow - visibleRows + 1;
+  if (selectorVisible) {
+    if (selectedRow < scrollRow) scrollRow = selectedRow;
+    if (selectedRow >= scrollRow + visibleRows) scrollRow = selectedRow - visibleRows + 1;
+  }
+  scrollRow = std::clamp(scrollRow, 0, std::max(0, totalRows - visibleRows));
 
   // One extra row peeks behind the button bar as a "more below" hint (covers and badges show;
   // the hint bar overdraws the bottom). Its titles sit fully under the hints, so they are
@@ -1398,7 +1427,7 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
-                 idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
+                 selectorVisible && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1716,7 +1745,8 @@ void RecentBooksActivity::render(RenderLock&&) {
   tabs.push_back({tr(STR_TAB_BOOKS), selectedTab == 0});
   tabs.push_back({tr(STR_TAB_SHELVES), selectedTab == 1});
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
-  GUI.drawTabBar(renderer, Rect{0, tabBarY, pageWidth, metrics.tabBarHeight}, tabs, contentIndex == 0);
+  GUI.drawTabBar(renderer, Rect{0, tabBarY, pageWidth, metrics.tabBarHeight}, tabs,
+                 selectorVisible && contentIndex == 0);
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;

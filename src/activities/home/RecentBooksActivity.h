@@ -71,6 +71,10 @@ class RecentBooksActivity final : public Activity {
 
   int getVisibleRows(int cellHeight, int contentHeight) const;
   int getCellHeight(int cellWidth) const;
+  // The grid's viewport height, below the tab bar and above the button hints.
+  [[nodiscard]] int gridContentHeight() const;
+  // Highest scrollRow that still fills the viewport, for the swipe that scrolls it.
+  [[nodiscard]] int maxScrollRow(int contentHeight) const;
   // Absolute grid item index under a screen point, or -1 for a miss. Derives the cell grid the
   // same way renderBooksTab()/renderShelvesTab()/renderShelfBooksView() do, so the hit targets
   // are exactly the drawn cells. Deliberately stops at visibleRows: those renderers draw one
@@ -85,6 +89,10 @@ class RecentBooksActivity final : public Activity {
 
   void loadRecentBooks();
   void loadBookProgress();
+  // A pointer-style selector belongs to key navigation. Touch users act on what they
+  // touch, so a highlight sitting on some other cover is just noise -- and worse, it
+  // implies the swipe moved it. Set by the nav keys, cleared by any touch.
+  bool selectorVisible = false;
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
   int readProgressPercent(const std::string& bookPath) const;
