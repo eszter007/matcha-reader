@@ -990,6 +990,7 @@ void RecentBooksActivity::loop() {
     int shelfTouchY = 0;
     if (mappedInput.wasScreenLongPress(shelfTouchX, shelfTouchY)) {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      hideSelector();
       if (hit >= 0) {
         shelfContentIndex = hit;
         showBookStats(shelfBooks[hit].path, shelfBooks[hit].title);
@@ -998,6 +999,7 @@ void RecentBooksActivity::loop() {
     }
     if (mappedInput.wasScreenTouchDown(shelfTouchX, shelfTouchY)) {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      hideSelector();
       if (hit >= 0 && hit != shelfContentIndex) {
         shelfContentIndex = hit;
         requestUpdate();
@@ -1006,6 +1008,7 @@ void RecentBooksActivity::loop() {
     }
     if (mappedInput.wasScreenTapped(shelfTouchX, shelfTouchY)) {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      hideSelector();
       if (hit >= 0) {
         shelfContentIndex = hit;
         LOG_DBG("RBA", "Tapped shelf book: %s", shelfBooks[hit].path.c_str());
@@ -1036,10 +1039,12 @@ void RecentBooksActivity::loop() {
     if (shelfItemCount > 0) {
       buttonNavigator.onNextRelease([this, shelfItemCount] {
         shelfContentIndex = ButtonNavigator::nextIndex(shelfContentIndex, shelfItemCount);
+        selectorVisible = true;
         requestUpdate();
       });
       buttonNavigator.onPreviousRelease([this, shelfItemCount] {
         shelfContentIndex = ButtonNavigator::previousIndex(shelfContentIndex, shelfItemCount);
+        selectorVisible = true;
         requestUpdate();
       });
     }
@@ -1560,7 +1565,7 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
 
   for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
     const int itemY = contentTop + (i - scrollOffset) * rowHeight;
-    drawShelfRow(i, itemY, i == selectedItem);
+    drawShelfRow(i, itemY, selectorVisible && i == selectedItem);
   }
 
   if (shelfCount > visibleItems) {
@@ -1624,7 +1629,7 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
-                 idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
+                 selectorVisible && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1636,6 +1641,9 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
 
 bool RecentBooksActivity::tryPartialSelectionRedraw() {
   if (!lastRendered.valid) return false;
+  // This path only ever moves a selection border. With the cursor hidden there is no border to
+  // move, and taking it after a touch would paint one back onto a screen that must not show it.
+  if (!selectorVisible) return false;
   if (openShelfIndex != lastRendered.openShelf || selectedTab != lastRendered.tab) return false;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
