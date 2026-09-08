@@ -822,7 +822,7 @@ void WifiSelectionActivity::loop() {
   }
 }
 
-std::string WifiSelectionActivity::getSignalStrengthIndicator(const int32_t rssi) {
+std::string WifiSelectionActivity::getSignalStrengthIndicator(const int32_t rssi) const {
   // Convert RSSI to signal bars representation
   if (rssi >= -50) {
     return "||||";  // Excellent

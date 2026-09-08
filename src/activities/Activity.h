@@ -61,10 +61,10 @@ class Activity {
   void setResult(ActivityResult&& result);
 
   // Finish this activity and return to the previous one on the stack (if any)
-  static void finish();
+  void finish();
 
   // Convenience method to facilitate API transition to ActivityManager
   // TODO: remove this in near future
-  static void onGoHome(HomeMenuItem item = HomeMenuItem::NONE);
-  static void onSelectBook(const std::string& path);
+  void onGoHome(HomeMenuItem item = HomeMenuItem::NONE);
+  void onSelectBook(const std::string& path);
 };

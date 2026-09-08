@@ -36,7 +36,7 @@ void EndOfBookOptions::loadOnce(const std::string& currentBookPath) {
   }
   folder = FsHelpers::extractFolderPath(currentBookPath);
   names = NextBookFinder::findNextBooks(currentBookPath, MAX_SUGGESTIONS);
-  selector.store(0, std::memory_order_relaxed);
+  selector = 0;
   if (!names.empty()) {
     // One-time app setup on the render task, before the first render/route.
     resetUi();
@@ -84,7 +84,7 @@ std::string EndOfBookOptions::fullPath(const size_t index) const {
 void EndOfBookOptions::onRowEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<EndOfBookOptions*>(user);
   if (event.value < 0 || event.value > static_cast<int16_t>(self->names.size())) return;
-  self->selector.store(event.value, std::memory_order_relaxed);
+  self->selector = event.value;
   // The tapped row leaves this screen (open book or home); a lingering flash
   // would gray an unrelated element on the next render.
   self->app.clearTapFlash();
@@ -112,11 +112,10 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
     return Action::Redraw;
   }
 
-  const int selectedIndex = selector.load(std::memory_order_relaxed);
   if (input.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedIndex < static_cast<int>(names.size())) {
+    if (selector < static_cast<int>(names.size())) {
       if (openPath) {
-        *openPath = fullPath(selectedIndex);
+        *openPath = fullPath(selector);
       }
       return Action::OpenBook;
     }
@@ -141,11 +140,11 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   };
   const int itemCount = static_cast<int>(names.size()) + 1;  // + "Home" entry
   if (triggered(MappedInputManager::Button::NavPrevious)) {
-    selector.store(ButtonNavigator::previousIndex(selectedIndex, itemCount), std::memory_order_relaxed);
+    selector = ButtonNavigator::previousIndex(selector, itemCount);  // wraps to the bottom
     return Action::Redraw;
   }
   if (triggered(MappedInputManager::Button::NavNext)) {
-    selector.store(ButtonNavigator::nextIndex(selectedIndex, itemCount), std::memory_order_relaxed);
+    selector = ButtonNavigator::nextIndex(selector, itemCount);  // wraps to the top
     return Action::Redraw;
   }
   return Action::None;
@@ -173,7 +172,7 @@ void EndOfBookOptions::buildListScreen(UiScreen& screen) {
   fui::ListProps props;
   props.items = rowItems;
   props.count = static_cast<uint16_t>(rowCount);
-  props.selectedIndex = static_cast<int16_t>(selector.load(std::memory_order_relaxed));
+  props.selectedIndex = static_cast<int16_t>(selector);
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in handleMenuInput()
   if (!gpio.hasTouch()) {

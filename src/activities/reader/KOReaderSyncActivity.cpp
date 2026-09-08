@@ -235,19 +235,14 @@ void KOReaderSyncActivity::performSync() {
 
   // The standard KOReader progress XPath is the authoritative content anchor.
   // The CrossPoint server's existing rich page hints remain a legacy fallback.
-  {
-    RenderLock lock;
-    GfxRenderer::FrameBufferLoan loan(renderer);
-    SavedProgressPosition koPos = {remoteProgress.progress, remoteProgress.percentage};
-    remotePosition = ProgressMapper::toCrossPoint(epub, koPos, renderer, currentSpineIndex, totalPagesInSpine);
-    if (!remotePosition.hasVisibleTextOffset && remoteProgress.position.has_value()) {
-      // toCrossPoint above already tried koPos.xpath; if the rich position carries the same XPath,
-      // tell fromRichPosition to skip re-resolving it and use its page hints directly.
-      const bool sameXPath = remoteProgress.position->xpath == remoteProgress.progress;
-      if (const auto richMapped =
-              ProgressMapper::fromRichPosition(epub, *remoteProgress.position, renderer, sameXPath)) {
-        remotePosition = *richMapped;
-      }
+  SavedProgressPosition koPos = {remoteProgress.progress, remoteProgress.percentage};
+  remotePosition = ProgressMapper::toCrossPoint(epub, koPos, renderer, currentSpineIndex, totalPagesInSpine);
+  if (!remotePosition.hasVisibleTextOffset && remoteProgress.position.has_value()) {
+    // toCrossPoint above already tried koPos.xpath; if the rich position carries the same XPath,
+    // tell fromRichPosition to skip re-resolving it and use its page hints directly.
+    const bool sameXPath = remoteProgress.position->xpath == remoteProgress.progress;
+    if (const auto richMapped = ProgressMapper::fromRichPosition(epub, *remoteProgress.position, renderer, sameXPath)) {
+      remotePosition = *richMapped;
     }
   }
 

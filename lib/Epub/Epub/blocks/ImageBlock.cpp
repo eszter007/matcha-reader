@@ -59,10 +59,13 @@ bool readValidCacheHeader(HalFile& cacheFile, const int expectedWidth, const int
   return cacheFile.size() >= expectedSize;
 }
 
-// Suppress repeated failures across the BW/grayscale passes of one page render.
-// Clear before the next page render so transient memory/storage failures retry.
-constexpr size_t MAX_RENDER_IMAGE_FAILURES = 16;
-uint64_t failedImageHashes[MAX_RENDER_IMAGE_FAILURES];
+// Pages are deserialized afresh on each visit. Keep a bounded, allocation-free
+// record so an image that failed renders its placeholder directly for the rest
+// of the reader session instead of paying another placeholder refresh and
+// decode. The reader clears this on entry so transient memory/storage failures
+// are retried.
+constexpr size_t MAX_SESSION_IMAGE_FAILURES = 16;
+uint64_t failedImageHashes[MAX_SESSION_IMAGE_FAILURES];
 size_t failedImageCount = 0;
 
 uint64_t imagePathHash(const std::string& path) {
@@ -74,7 +77,7 @@ uint64_t imagePathHash(const std::string& path) {
   return hash;
 }
 
-bool imageFailedThisRender(const std::string& path) {
+bool imageFailedThisSession(const std::string& path) {
   const uint64_t hash = imagePathHash(path);
   for (size_t i = 0; i < failedImageCount; i++) {
     if (failedImageHashes[i] == hash) return true;
@@ -83,7 +86,7 @@ bool imageFailedThisRender(const std::string& path) {
 }
 
 void rememberImageFailure(const std::string& path) {
-  if (failedImageCount == MAX_RENDER_IMAGE_FAILURES || imageFailedThisRender(path)) return;
+  if (failedImageCount == MAX_SESSION_IMAGE_FAILURES || imageFailedThisSession(path)) return;
   failedImageHashes[failedImageCount++] = imagePathHash(path);
 }
 
@@ -341,9 +344,9 @@ bool ImageBlock::hasValidCache() const {
   return readValidCacheHeader(cacheFile, width, height, cachedWidth, cachedHeight);
 }
 
-bool ImageBlock::needsDecode() const { return !imageFailedThisRender(imagePath) && !hasValidCache(); }
+bool ImageBlock::needsDecode() const { return !imageFailedThisSession(imagePath) && !hasValidCache(); }
 
-void ImageBlock::clearRenderFailures() { failedImageCount = 0; }
+void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
 
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
 
