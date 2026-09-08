@@ -251,6 +251,15 @@ void DictionaryDefinitionActivity::loop() {
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
+    // Outside the card is "put it away": the panel floats over the page, so a
+    // tap on the page around it reads as dismissing it rather than as paging
+    // a definition the finger is not even on. Paging keeps the card itself.
+    const auto layout = DictionaryPanel::compute(renderer);
+    if (tx < layout.box.x || tx >= layout.box.x + layout.box.width || ty < layout.box.y ||
+        ty >= layout.box.y + layout.box.height) {
+      finish();
+      return;
+    }
     if (tx < renderer.getScreenWidth() / 3) {
       if (currentPage > 0) {
         currentPage--;

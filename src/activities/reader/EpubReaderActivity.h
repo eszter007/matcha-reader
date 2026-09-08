@@ -454,7 +454,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // pageOnScreen: the framebuffer still holds the reader page, so the vertical word-lookup panel
   // can draw its cursor straight onto it instead of paying for a page repaint first. False when
   // something else was on screen (the reader menu).
-  void openDictionaryWordSelect(bool pageOnScreen);
+  // lookupAtX/Y: screen point of a long press on a word. -1 opens ordinary word
+  // selection; a point selects that word and shows its definition immediately.
+  void openDictionaryWordSelect(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
   bool launchKOReaderSync();

@@ -17,14 +17,23 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        std::string folderName, std::string language, int baseFontId)
+                                        std::string folderName, std::string language, int baseFontId,
+                                        int lookupAtX = -1, int lookupAtY = -1)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
+        lookupAtX(lookupAtX),
+        lookupAtY(lookupAtY),
         page(std::move(page)),
         marginLeft(marginLeft),
         marginTop(marginTop),
         fontId(baseFontId),
         folderName(std::move(folderName)),
         language(std::move(language)) {}
+
+  // Screen point to open on: the word under it is selected and looked up
+  // immediately, so a long press on the page goes straight to the definition
+  // instead of dropping the reader into word selection. -1 = normal entry.
+  int lookupAtX = -1;
+  int lookupAtY = -1;
 
   void onEnter() override;
   void loop() override;
