@@ -55,6 +55,23 @@ void DictionaryWordSelectActivity::onEnter() {
     const int initial = closestInRow(rowCount / 2, renderer.getScreenWidth() / 2);
     if (initial >= 0) selected = initial;
   }
+  // Opened by a long press on a word: start there and show the definition
+  // straight away. A miss (the press landed between words) falls through to
+  // ordinary selection rather than closing, so the gesture is never a dead end.
+  if (!words.empty() && lookupAtX >= 0 && lookupAtY >= 0) {
+    const int hit = wordAt(lookupAtX, lookupAtY);
+    if (hit >= 0) {
+      selected = hit;
+      requestUpdate();
+      performLookup();
+      return;
+    }
+    // Missed: from here this is ordinary selection, which the reader is now driving themselves.
+    // Forgetting the press keeps the close behaviour ordinary too -- otherwise a definition they
+    // opened by hand would still return to the page instead of back to the words.
+    lookupAtX = -1;
+    lookupAtY = -1;
+  }
   requestUpdate();
 }
 
@@ -260,6 +277,13 @@ void DictionaryWordSelectActivity::performLookup() {
                              // The definition view cancels when its power click asked to leave the dictionary
                              // entirely, rather than step back to this selection.
                              if (result.isCancelled) {
+                               finish();
+                               return;
+                             }
+                             // A long press opened the definition directly, so closing it returns to the
+                             // page. Word selection was never a step the reader asked for, and stopping
+                             // here would strand them in a screen they did not open.
+                             if (lookupAtX >= 0 && lookupAtY >= 0) {
                                finish();
                                return;
                              }

@@ -25,8 +25,11 @@ The Fallback dictionary row only appears when at least one usable dictionary fol
 
 ## Looking Up a Word
 
-Two ways to start a lookup while reading:
+Three ways to start a lookup while reading:
 
+- **Long-press a word on the screen** (touch devices). The definition opens straight away, with no setting to turn
+  on first. A press that lands between words opens ordinary word selection instead, so the gesture is never a dead
+  end. Closing a definition opened this way returns to the page.
 - Open the reader menu (**Confirm**) and choose **Look Up**.
 - Or set **Settings → Controls → Long-press Menu** to "Dictionary", then hold **Confirm** (~0.4s) on the reading page.
 
@@ -58,6 +61,9 @@ HTML dictionaries that declare `sametypesequence=h` use the EPUB text-layout eng
 
 - **Left/Right** or side **Up/Down** — previous / next page
 - **Back** — return to word selection
+- **Touch** — the card pages the same way the reader itself is set to turn pages (**Settings → Controls → Touch
+  Reader Controls**): tap zones, inverted zones, swipes, inverted swipes, or nothing at all when touch page turns
+  are off. A tap outside the card puts it away.
 
 
 

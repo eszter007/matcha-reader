@@ -470,7 +470,7 @@ void EpubReaderActivity::showBuildPopup() {
   buildPopupPending = false;
 }
 
-void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen) {
+void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
   if (isJapaneseBook()) {
     openWordLookupPanel(pageOnScreen);
     return;
@@ -499,7 +499,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen) {
   // long-press): the user is mid-reading, not mid-menu.
   startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(
                              renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop,
-                             std::move(dictionaryFolder), bookLanguage, effectiveReaderFontId()),
+                             std::move(dictionaryFolder), bookLanguage, effectiveReaderFontId(), lookupAtX, lookupAtY),
                          [this](const ActivityResult&) { requestUpdate(); });
 }
 
@@ -821,6 +821,21 @@ void EpubReaderActivity::readerLoop() {
       case CrossPointSettings::LP_MENU_DISABLED:
       default:
         break;
+    }
+  }
+
+  // A long press on a word looks it up. Deliberately not behind
+  // longPressMenuFunction: that setting assigns the *key* hold (Confirm, or the
+  // Home key on boards without one), and a press on the glass is a different
+  // gesture that means "what is this word". Ahead of the link and menu zones so
+  // a hold never reads as the tap those handle. Japanese books keep their own
+  // vertical panel, which segments rather than splitting on spaces.
+  if (!atEndOfBook && mappedInput.hasTouch() && !isJapaneseBook()) {
+    int pressX = 0;
+    int pressY = 0;
+    if (mappedInput.wasScreenLongPress(pressX, pressY)) {
+      openDictionaryWordSelect(/*pageOnScreen=*/true, pressX, pressY);
+      return;
     }
   }
 

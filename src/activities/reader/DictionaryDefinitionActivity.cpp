@@ -246,17 +246,30 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
 
-  // Same tap zones as the reader page turns: left third = previous page,
-  // the rest = next. Back is the usual left-edge swipe.
+  // Outside the card is "put it away": the panel floats over the page, so a tap
+  // on the page around it reads as dismissing it rather than as paging a
+  // definition the finger is not even on. Checked before paging so the two
+  // cannot both claim the same contact.
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
-    if (tx < renderer.getScreenWidth() / 3) {
-      if (currentPage > 0) {
-        currentPage--;
-        requestUpdate();
-      }
-    } else if (currentPage + 1 < totalPages) {
+    const auto box = DictionaryPanel::compute(renderer).box;
+    if (tx < box.x || tx >= box.x + box.width || ty < box.y || ty >= box.y + box.height) {
+      finish();
+      return;
+    }
+  }
+
+  // Paging follows whatever the reader is set to, rather than a second scheme
+  // to learn: tap zones, inverted zones, swipes or inverted swipes, and nothing
+  // at all when touch reader controls are off. Same helper the page turns use,
+  // so the definition answers the gesture the reader already taught.
+  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  if (touchTurn.prev || touchTurn.next) {
+    if (touchTurn.prev && currentPage > 0) {
+      currentPage--;
+      requestUpdate();
+    } else if (touchTurn.next && currentPage + 1 < totalPages) {
       currentPage++;
       requestUpdate();
     }
