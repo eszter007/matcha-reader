@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "RecentBooksStore.h"
-#include "components/UITheme.h"  // TabInfo, Rect
 #include "activities/Activity.h"
+#include "components/UITheme.h"  // TabInfo, Rect
 #include "util/ButtonNavigator.h"
 
 class RecentBooksActivity final : public Activity {
