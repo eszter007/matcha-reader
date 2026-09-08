@@ -339,12 +339,19 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // exhausting the heap here panics to the boot screen instead of reporting a
   // failure. Refuse up front, while refusing is still possible -- against what
   // this manifest costs, since the document's share is already spent.
+  // Every allocation below that scales with the manifest, so the check keeps
+  // matching as the manifest grows. rowLabels_/rowItems_ are deliberately absent:
+  // buildRows() runs after this function returns the document's ~25KB to the heap,
+  // so they do not share this peak.
   const size_t fileTableBytes = manifestFileCount * sizeof(ManifestFile);
   const size_t familyTableBytes = familiesArr.size() * sizeof(ManifestFamily);
-  const size_t buildBytes = arenaBytes + fileTableBytes + familyTableBytes;
+  const size_t groupLabelBytes = groupCount * sizeof(StrRef);
+  const size_t filteredIndexBytes = familiesArr.size() * sizeof(int);
+  const size_t buildBytes = arenaBytes + fileTableBytes + familyTableBytes + groupLabelBytes + filteredIndexBytes;
   // The largest single block decides whether a fragmented heap can serve the
   // build at all, however much total free it reports.
-  const size_t largestBlock = std::max({arenaBytes, fileTableBytes, familyTableBytes});
+  const size_t largestBlock =
+      std::max({arenaBytes, fileTableBytes, familyTableBytes, groupLabelBytes, filteredIndexBytes});
   if (ESP.getFreeHeap() < buildBytes + FONT_BUILD_HEADROOM || ESP.getMaxAllocHeap() < largestBlock) {
     LOG_ERR("FONT", "Low heap for manifest build (%u free, %u max block; need %zu + %zu headroom, %zu block)",
             ESP.getFreeHeap(), ESP.getMaxAllocHeap(), buildBytes, FONT_BUILD_HEADROOM, largestBlock);
