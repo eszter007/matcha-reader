@@ -12,6 +12,7 @@
 
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
+#include "components/UITheme.h"  // TabInfo, Rect
 #include "util/ButtonNavigator.h"
 
 class RecentBooksActivity final : public Activity {
@@ -85,6 +86,10 @@ class RecentBooksActivity final : public Activity {
 
   void loadRecentBooks();
   void loadBookProgress();
+  // One definition of the tab bar, used by both the renderer and the hit test, so the
+  // labels and the touch targets cannot drift apart.
+  [[nodiscard]] std::vector<TabInfo> buildTabs() const;
+  [[nodiscard]] Rect tabBarRect() const;
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
   int readProgressPercent(const std::string& bookPath) const;
