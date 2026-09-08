@@ -646,10 +646,16 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
   // Rebuildable SD-font caches (glyph/kern arenas, CJK fallback tables) can
   // hold tens of KB the TLS session needs; release them up front rather than
-  // starving the transfer. They repopulate on demand after the download.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseAllFontMemory();
-    LOG_DBG("FONT", "Free heap after SD font cache release: %u bytes", ESP.getFreeHeap());
+  // starving the transfer. They repopulate on demand after the download. Under
+  // RenderLock like the other release sites: the slabs it frees are the ones the
+  // render task reads, and the progress callback below renders as the body
+  // streams.
+  {
+    RenderLock lock(*this);
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_DBG("FONT", "Free heap after SD font cache release: %u bytes", ESP.getFreeHeap());
+    }
   }
 
   // Check before touching the family directory so a failed update leaves the
