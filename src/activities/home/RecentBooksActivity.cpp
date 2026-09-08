@@ -1116,13 +1116,19 @@ void RecentBooksActivity::loop() {
   // books: the covers between the old and new row could not be reached by swiping at all.
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
-    const int maxRow = maxScrollRow(gridContentHeight());
-    const int moved = std::clamp(scrollRow + (swipe == MappedInputManager::SwipeDir::Up ? 1 : -1), 0, maxRow);
-    hideSelector();
-    if (moved != scrollRow) {
-      scrollRow = moved;
-      requestUpdate();
+    hideSelector();  // a swipe is a touch on either tab
+    // Books tab only: the Shelves tab is a list that scrolls by its own offset, derived from the
+    // selection in renderShelvesTab. scrollRow drives the cover grid alone, so moving it there
+    // would scroll nothing on screen while quietly displacing the grid's viewport.
+    if (selectedTab == 0) {
+      const int maxRow = maxScrollRow(gridContentHeight());
+      const int moved = std::clamp(scrollRow + (swipe == MappedInputManager::SwipeDir::Up ? 1 : -1), 0, maxRow);
+      if (moved != scrollRow) {
+        scrollRow = moved;
+        requestUpdate();
+      }
     }
+    // Consumed either way: a swipe must not fall through and read as a tap on whatever it ended on.
     return;
   }
 
