@@ -470,8 +470,7 @@ void EpubReaderActivity::showBuildPopup() {
   buildPopupPending = false;
 }
 
-void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const int lookupAtX,
-                                                 const int lookupAtY) {
+void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
   if (isJapaneseBook()) {
     openWordLookupPanel(pageOnScreen);
     return;
@@ -500,8 +499,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
   // long-press): the user is mid-reading, not mid-menu.
   startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(
                              renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop,
-                             std::move(dictionaryFolder), bookLanguage, effectiveReaderFontId(), lookupAtX,
-                             lookupAtY),
+                             std::move(dictionaryFolder), bookLanguage, effectiveReaderFontId(), lookupAtX, lookupAtY),
                          [this](const ActivityResult&) { requestUpdate(); });
 }
 
