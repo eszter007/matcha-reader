@@ -292,6 +292,35 @@ int RecentBooksActivity::maxScrollRow(const int contentHeight) const {
   return std::max(0, totalRows - visibleRows);
 }
 
+int RecentBooksActivity::shelvesVisibleItems(const int contentHeight) const {
+  const int rowHeight = UITheme::getInstance().getMetrics().listWithSubtitleRowHeight;
+  if (rowHeight <= 0) return 1;
+  return std::max(1, contentHeight / rowHeight);
+}
+
+int RecentBooksActivity::shelvesScrollOffset(const int visibleItems) const {
+  const int selectedItem = contentIndex - 1;  // index 0 is the tab bar
+  return selectedItem >= visibleItems ? selectedItem - visibleItems + 1 : 0;
+}
+
+// The Shelves tab is a list of full-width rows, NOT the cover grid: hit-testing it with
+// gridIndexAtPoint's three columns and tall cells mapped a tap to whichever cover cell it
+// happened to fall in, so it opened the wrong shelf or none at all.
+int RecentBooksActivity::shelfRowAtPoint(const int x, const int y, const int contentTop,
+                                         const int contentHeight) const {
+  const int rowHeight = UITheme::getInstance().getMetrics().listWithSubtitleRowHeight;
+  const int shelfCount = static_cast<int>(shelves.size());
+  if (rowHeight <= 0 || shelfCount <= 0) return -1;
+  if (x < 0 || x >= renderer.getScreenWidth()) return -1;
+  const int localY = y - contentTop;
+  if (localY < 0) return -1;
+  const int visibleItems = shelvesVisibleItems(contentHeight);
+  const int row = localY / rowHeight;
+  if (row >= visibleItems) return -1;
+  const int index = shelvesScrollOffset(visibleItems) + row;
+  return index < shelfCount ? index : -1;
+}
+
 int RecentBooksActivity::gridIndexAtPoint(const int x, const int y, const int contentTop, const int contentHeight,
                                           const int scrollRowIn, const int itemCount) const {
   if (itemCount <= 0) return -1;
@@ -1171,8 +1200,14 @@ void RecentBooksActivity::loop() {
     int gy = 0;
     // Long press first: wasScreenLongPress suppresses the rest of the contact, so the lift
     // cannot also tap the screen this opens.
+    // Books is a cover grid, Shelves a row list -- each answers to its own geometry.
+    const auto hitAtPoint = [&](const int px, const int py) {
+      return selectedTab == 0 ? gridIndexAtPoint(px, py, gridTop, gridHeight, scrollRow, itemCount)
+                              : shelfRowAtPoint(px, py, gridTop, gridHeight);
+    };
+
     if (mappedInput.wasScreenLongPress(gx, gy)) {
-      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      const int hit = hitAtPoint(gx, gy);
       hideSelector();
       // Stats are for books; a shelf has none.
       if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
@@ -1182,7 +1217,7 @@ void RecentBooksActivity::loop() {
       return;
     }
     if (mappedInput.wasScreenTouchDown(gx, gy)) {
-      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      const int hit = hitAtPoint(gx, gy);
       hideSelector();
       if (hit >= 0 && contentIndex != hit + 1) {
         contentIndex = hit + 1;  // index 0 is the tab bar
@@ -1191,7 +1226,7 @@ void RecentBooksActivity::loop() {
       return;
     }
     if (mappedInput.wasScreenTapped(gx, gy)) {
-      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      const int hit = hitAtPoint(gx, gy);
       hideSelector();
       if (hit >= 0) {
         contentIndex = hit + 1;
@@ -1546,14 +1581,10 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
   }
 
   const int rowHeight = metrics.listWithSubtitleRowHeight;
-  const int visibleItems = std::max(1, contentHeight / rowHeight);
+  const int visibleItems = shelvesVisibleItems(contentHeight);
   const int selectedItem = contentIndex - 1;
   const int shelfCount = static_cast<int>(shelves.size());
-
-  int scrollOffset = 0;
-  if (selectedItem >= visibleItems) {
-    scrollOffset = selectedItem - visibleItems + 1;
-  }
+  const int scrollOffset = shelvesScrollOffset(visibleItems);
 
   // Prewarm the font cache with all visible folder names before drawing. Folder names are drawn
   // unconditionally on every render (unlike cover-fallback titles below), so without this, non-Latin

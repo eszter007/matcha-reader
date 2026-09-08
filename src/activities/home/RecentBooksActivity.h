@@ -106,6 +106,12 @@ class RecentBooksActivity final : public Activity {
   // labels and the touch targets cannot drift apart.
   [[nodiscard]] std::vector<TabInfo> buildTabs() const;
   [[nodiscard]] Rect tabBarRect() const;
+  // Same idea for the Shelves list, which is rows rather than the cover grid: the renderer and
+  // the hit test below share this geometry instead of each deriving its own.
+  [[nodiscard]] int shelvesVisibleItems(int contentHeight) const;
+  [[nodiscard]] int shelvesScrollOffset(int visibleItems) const;
+  // Shelf index under a screen point in the Shelves list, or -1 for a miss.
+  [[nodiscard]] int shelfRowAtPoint(int x, int y, int contentTop, int contentHeight) const;
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
   int readProgressPercent(const std::string& bookPath) const;
