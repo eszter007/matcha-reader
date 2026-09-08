@@ -21,7 +21,8 @@ class RecentBooksActivity final : public Activity {
 
   int selectedTab = 0;
   int contentIndex = 0;
-  int scrollRow = 0;
+  int scrollRow = 0;      // Books tab: first visible grid row
+  int shelvesScroll = 0;  // Shelves tab: first visible list row
 
   bool longPressFired = false;
   // A shelf opens on the Confirm PRESS, so the release of that same physical click arrives with
@@ -72,6 +73,10 @@ class RecentBooksActivity final : public Activity {
 
   int getVisibleRows(int cellHeight, int contentHeight) const;
   int getCellHeight(int cellWidth) const;
+  // The grid's viewport height, below the tab bar and above the button hints.
+  [[nodiscard]] int gridContentHeight() const;
+  // Highest scrollRow that still fills the viewport, for the swipe that scrolls it.
+  [[nodiscard]] int maxScrollRow(int contentHeight) const;
   // Absolute grid item index under a screen point, or -1 for a miss. Derives the cell grid the
   // same way renderBooksTab()/renderShelvesTab()/renderShelfBooksView() do, so the hit targets
   // are exactly the drawn cells. Deliberately stops at visibleRows: those renderers draw one
@@ -86,10 +91,28 @@ class RecentBooksActivity final : public Activity {
 
   void loadRecentBooks();
   void loadBookProgress();
+  // A pointer-style selector belongs to key navigation. Touch users act on what they
+  // touch, so a highlight sitting on some other cover is just noise -- and worse, it
+  // implies the swipe moved it. Set by the nav keys, cleared by any touch.
+  bool selectorVisible = false;
+  // Clearing the flag is not enough: the frame still showing the selector has to be replaced,
+  // and a touch that changes nothing else (a swipe against the end stop, a tap on the current
+  // cover, a tap on the active tab) requests no redraw of its own.
+  void hideSelector() {
+    if (!selectorVisible) return;
+    selectorVisible = false;
+    requestUpdate();
+  }
   // One definition of the tab bar, used by both the renderer and the hit test, so the
   // labels and the touch targets cannot drift apart.
   [[nodiscard]] std::vector<TabInfo> buildTabs() const;
   [[nodiscard]] Rect tabBarRect() const;
+  // Same idea for the Shelves list, which is rows rather than the cover grid: the renderer and
+  // the hit test below share this geometry instead of each deriving its own.
+  [[nodiscard]] int shelvesVisibleItems(int contentHeight) const;
+  [[nodiscard]] int shelvesScrollOffset(int visibleItems) const;
+  // Shelf index under a screen point in the Shelves list, or -1 for a miss.
+  [[nodiscard]] int shelfRowAtPoint(int x, int y, int contentTop, int contentHeight) const;
   void loadShelves();
   void loadShelfBooks(const std::string& folderPath);
   int readProgressPercent(const std::string& bookPath) const;
@@ -127,10 +150,24 @@ class RecentBooksActivity final : public Activity {
     int tab = -1;
     int contentIndex = -1;
     int scrollRow = -1;
+    int shelvesScroll = -1;
     int shelfContentIndex = -1;
     int shelfScrollRow = -1;
   };
   RenderedState lastRendered;
+  // The one place that snapshots what the frame on screen shows. Both render paths call it, so a
+  // new piece of view state cannot be added to the renderer and forgotten here -- which is exactly
+  // how the partial redraw came to read the Shelves list at an offset it was no longer drawn at.
+  void rememberRendered() {
+    lastRendered.valid = true;
+    lastRendered.openShelf = openShelfIndex;
+    lastRendered.tab = selectedTab;
+    lastRendered.contentIndex = contentIndex;
+    lastRendered.scrollRow = scrollRow;
+    lastRendered.shelvesScroll = shelvesScroll;
+    lastRendered.shelfContentIndex = shelfContentIndex;
+    lastRendered.shelfScrollRow = shelfScrollRow;
+  }
 
   // Background library scan (stale-while-revalidate): onEnter() shows the persisted book list
   // instantly; loop() re-walks the SD card one directory entry per slice and applies/saves changes

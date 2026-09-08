@@ -276,6 +276,51 @@ int RecentBooksActivity::getVisibleRows(int cellHeight, int contentHeight) const
   return std::max(1, (contentHeight + GRID_ROW_GAP) / (cellHeight + GRID_ROW_GAP));
 }
 
+int RecentBooksActivity::gridContentHeight() const {
+  const auto& m = UITheme::getInstance().getMetrics();
+  const int gridTop = m.topPadding + m.headerHeight + m.tabBarHeight + m.verticalSpacing;
+  return renderer.getScreenHeight() - gridTop - m.buttonHintsHeight - m.verticalSpacing;
+}
+
+int RecentBooksActivity::maxScrollRow(const int contentHeight) const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int cellWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / GRID_COLS;
+  if (cellWidth <= 0) return 0;
+  const int visibleRows = getVisibleRows(getCellHeight(cellWidth), contentHeight);
+  const int itemCount = getContentItemCount();
+  const int totalRows = (itemCount + GRID_COLS - 1) / GRID_COLS;
+  return std::max(0, totalRows - visibleRows);
+}
+
+int RecentBooksActivity::shelvesVisibleItems(const int contentHeight) const {
+  const int rowHeight = UITheme::getInstance().getMetrics().listWithSubtitleRowHeight;
+  if (rowHeight <= 0) return 1;
+  return std::max(1, contentHeight / rowHeight);
+}
+
+int RecentBooksActivity::shelvesScrollOffset(const int visibleItems) const {
+  const int maxOffset = std::max(0, static_cast<int>(shelves.size()) - visibleItems);
+  return std::clamp(shelvesScroll, 0, maxOffset);
+}
+
+// The Shelves tab is a list of full-width rows, NOT the cover grid: hit-testing it with
+// gridIndexAtPoint's three columns and tall cells mapped a tap to whichever cover cell it
+// happened to fall in, so it opened the wrong shelf or none at all.
+int RecentBooksActivity::shelfRowAtPoint(const int x, const int y, const int contentTop,
+                                         const int contentHeight) const {
+  const int rowHeight = UITheme::getInstance().getMetrics().listWithSubtitleRowHeight;
+  const int shelfCount = static_cast<int>(shelves.size());
+  if (rowHeight <= 0 || shelfCount <= 0) return -1;
+  if (x < 0 || x >= renderer.getScreenWidth()) return -1;
+  const int localY = y - contentTop;
+  if (localY < 0) return -1;
+  const int visibleItems = shelvesVisibleItems(contentHeight);
+  const int row = localY / rowHeight;
+  if (row >= visibleItems) return -1;
+  const int index = shelvesScrollOffset(visibleItems) + row;
+  return index < shelfCount ? index : -1;
+}
+
 int RecentBooksActivity::gridIndexAtPoint(const int x, const int y, const int contentTop, const int contentHeight,
                                           const int scrollRowIn, const int itemCount) const {
   if (itemCount <= 0) return -1;
@@ -917,6 +962,7 @@ void RecentBooksActivity::onEnter() {
   selectedTab = 0;
   contentIndex = 0;
   scrollRow = 0;
+  shelvesScroll = 0;
   openShelfIndex = -1;
   requestUpdate();
 }
@@ -974,6 +1020,7 @@ void RecentBooksActivity::loop() {
     int shelfTouchY = 0;
     if (mappedInput.wasScreenLongPress(shelfTouchX, shelfTouchY)) {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      hideSelector();
       if (hit >= 0) {
         shelfContentIndex = hit;
         showBookStats(shelfBooks[hit].path, shelfBooks[hit].title);
@@ -982,6 +1029,7 @@ void RecentBooksActivity::loop() {
     }
     if (mappedInput.wasScreenTouchDown(shelfTouchX, shelfTouchY)) {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      hideSelector();
       if (hit >= 0 && hit != shelfContentIndex) {
         shelfContentIndex = hit;
         requestUpdate();
@@ -990,6 +1038,7 @@ void RecentBooksActivity::loop() {
     }
     if (mappedInput.wasScreenTapped(shelfTouchX, shelfTouchY)) {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
+      hideSelector();
       if (hit >= 0) {
         shelfContentIndex = hit;
         LOG_DBG("RBA", "Tapped shelf book: %s", shelfBooks[hit].path.c_str());
@@ -1020,10 +1069,12 @@ void RecentBooksActivity::loop() {
     if (shelfItemCount > 0) {
       buttonNavigator.onNextRelease([this, shelfItemCount] {
         shelfContentIndex = ButtonNavigator::nextIndex(shelfContentIndex, shelfItemCount);
+        selectorVisible = true;
         requestUpdate();
       });
       buttonNavigator.onPreviousRelease([this, shelfItemCount] {
         shelfContentIndex = ButtonNavigator::previousIndex(shelfContentIndex, shelfItemCount);
+        selectorVisible = true;
         requestUpdate();
       });
     }
@@ -1053,6 +1104,7 @@ void RecentBooksActivity::loop() {
           shelfConfirmPressSeen = false;
           shelfContentIndex = 0;
           shelfScrollRow = 0;
+          selectorVisible = true;  // opened with a key, so the shelf opens with its cursor shown
           loadShelfBooks(shelves[itemIdx].folderPath);
           requestUpdate();
           return;
@@ -1087,17 +1139,35 @@ void RecentBooksActivity::loop() {
   }
 
   // Upstream's flat recents list (selectorIndex + handleListTouch) doesn't exist here: this
-  // screen is a tabbed cover GRID addressed by contentIndex/scrollRow. Swipes move one grid
-  // row; Back stays with the tab/shelf-aware handler below rather than always going home.
+  // screen is a tabbed cover GRID addressed by contentIndex/scrollRow. Back stays with the
+  // tab/shelf-aware handler below rather than always going home.
+  //
+  // A swipe scrolls the viewport and leaves the selection alone, the way a phone does.
+  // Moving the selector by GRID_COLS instead, as this used to, skipped two of every three
+  // books: the covers between the old and new row could not be reached by swiping at all.
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
-    const int totalItems = getContentItemCount() + 1;
-    const int delta = (swipe == MappedInputManager::SwipeDir::Up) ? GRID_COLS : -GRID_COLS;
-    const int moved = std::clamp(contentIndex + delta, 0, std::max(0, totalItems - 1));
-    if (moved != contentIndex) {
-      contentIndex = moved;
-      requestUpdate();
+    hideSelector();  // a swipe is a touch on either tab
+    // Each tab scrolls its own viewport: the cover grid by rows of GRID_COLS, the Shelves list by
+    // single rows. Neither moves the selection -- that is what the gesture means here.
+    const int step = swipe == MappedInputManager::SwipeDir::Up ? 1 : -1;
+    if (selectedTab == 0) {
+      const int maxRow = maxScrollRow(gridContentHeight());
+      const int moved = std::clamp(scrollRow + step, 0, maxRow);
+      if (moved != scrollRow) {
+        scrollRow = moved;
+        requestUpdate();
+      }
+    } else {
+      const int visibleItems = shelvesVisibleItems(gridContentHeight());
+      const int maxOffset = std::max(0, static_cast<int>(shelves.size()) - visibleItems);
+      const int moved = std::clamp(shelvesScroll + step, 0, maxOffset);
+      if (moved != shelvesScroll) {
+        shelvesScroll = moved;
+        requestUpdate();
+      }
     }
+    // Consumed either way: a swipe must not fall through and read as a tap on whatever it ended on.
     return;
   }
 
@@ -1110,7 +1180,7 @@ void RecentBooksActivity::loop() {
     const int tabBarY = m.topPadding + m.headerHeight;
     // The tabbed views start BELOW the tab bar, unlike the loop-local contentTop above.
     const int gridTop = tabBarY + m.tabBarHeight + m.verticalSpacing;
-    const int gridHeight = renderer.getScreenHeight() - gridTop - m.buttonHintsHeight - m.verticalSpacing;
+    const int gridHeight = gridContentHeight();
     const int itemCount = getContentItemCount();
 
     // Tab bar: hit-test through the theme, which lays the targets out exactly as
@@ -1122,12 +1192,14 @@ void RecentBooksActivity::loop() {
     int tabX = 0;
     int tabY = 0;
     if (mappedInput.wasScreenTapped(tabX, tabY) && tabY >= barRect.y && tabY < barRect.y + barRect.height) {
+      hideSelector();  // a touch, whether or not it lands on a label
       int tab = -1;
       if (GUI.tabIndexFromPoint(renderer, barRect, buildTabs(), tabX, tabY, tab) && tab != selectedTab) {
         selectedTab = tab;
         if (selectedTab == 1 && !shelvesLoaded) loadShelves();
         contentIndex = 0;
         scrollRow = 0;
+        shelvesScroll = 0;
         requestUpdate();
       }
       // The bar swallows the contact either way: a tap that lands in the gap between
@@ -1139,8 +1211,15 @@ void RecentBooksActivity::loop() {
     int gy = 0;
     // Long press first: wasScreenLongPress suppresses the rest of the contact, so the lift
     // cannot also tap the screen this opens.
+    // Books is a cover grid, Shelves a row list -- each answers to its own geometry.
+    const auto hitAtPoint = [&](const int px, const int py) {
+      return selectedTab == 0 ? gridIndexAtPoint(px, py, gridTop, gridHeight, scrollRow, itemCount)
+                              : shelfRowAtPoint(px, py, gridTop, gridHeight);
+    };
+
     if (mappedInput.wasScreenLongPress(gx, gy)) {
-      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      const int hit = hitAtPoint(gx, gy);
+      hideSelector();
       // Stats are for books; a shelf has none.
       if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
         contentIndex = hit + 1;
@@ -1149,7 +1228,8 @@ void RecentBooksActivity::loop() {
       return;
     }
     if (mappedInput.wasScreenTouchDown(gx, gy)) {
-      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      const int hit = hitAtPoint(gx, gy);
+      hideSelector();
       if (hit >= 0 && contentIndex != hit + 1) {
         contentIndex = hit + 1;  // index 0 is the tab bar
         requestUpdate();
@@ -1157,7 +1237,8 @@ void RecentBooksActivity::loop() {
       return;
     }
     if (mappedInput.wasScreenTapped(gx, gy)) {
-      const int hit = gridIndexAtPoint(gx, gy, gridTop, gridHeight, scrollRow, itemCount);
+      const int hit = hitAtPoint(gx, gy);
+      hideSelector();
       if (hit >= 0) {
         contentIndex = hit + 1;
         if (selectedTab == 0) {
@@ -1185,6 +1266,8 @@ void RecentBooksActivity::loop() {
     if (contentIndex > 0) {
       contentIndex = 0;
       scrollRow = 0;
+      shelvesScroll = 0;
+      selectorVisible = true;
       requestUpdate();
     } else {
       onGoHome();
@@ -1196,11 +1279,13 @@ void RecentBooksActivity::loop() {
 
   buttonNavigator.onNextRelease([this, totalItems] {
     contentIndex = ButtonNavigator::nextIndex(contentIndex, totalItems);
+    selectorVisible = true;
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this, totalItems] {
     contentIndex = ButtonNavigator::previousIndex(contentIndex, totalItems);
+    selectorVisible = true;
     requestUpdate();
   });
 
@@ -1219,6 +1304,10 @@ void RecentBooksActivity::loop() {
   if (hasChangedTab) {
     contentIndex = (contentIndex == 0) ? 0 : 1;
     scrollRow = 0;
+    shelvesScroll = 0;
+    // Only the keys reach here -- a tab tap is handled in the touch block and returns -- so the
+    // cursor comes back on, wherever a touch left it.
+    selectorVisible = true;
     if (selectedTab == 1 && !shelvesLoaded) loadShelves();
   }
 
@@ -1384,9 +1473,15 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
   const int totalRows = (bookCount + GRID_COLS - 1) / GRID_COLS;
   const int selectedItem = contentIndex - 1;
 
+  // Only the key selector drags the viewport with it. After a swipe the scroll position is
+  // the user's, and snapping it back to wherever the selection happens to sit would undo the
+  // gesture on the very next frame.
   const int selectedRow = selectedItem >= 0 ? selectedItem / GRID_COLS : 0;
-  if (selectedRow < scrollRow) scrollRow = selectedRow;
-  if (selectedRow >= scrollRow + visibleRows) scrollRow = selectedRow - visibleRows + 1;
+  if (selectorVisible) {
+    if (selectedRow < scrollRow) scrollRow = selectedRow;
+    if (selectedRow >= scrollRow + visibleRows) scrollRow = selectedRow - visibleRows + 1;
+  }
+  scrollRow = std::clamp(scrollRow, 0, std::max(0, totalRows - visibleRows));
 
   // One extra row peeks behind the button bar as a "more below" hint (covers and badges show;
   // the hint bar overdraws the bottom). Its titles sit fully under the hints, so they are
@@ -1420,7 +1515,7 @@ void RecentBooksActivity::renderBooksTab(int contentTop, int contentHeight) {
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
-                 idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
+                 selectorVisible && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1503,14 +1598,17 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
   }
 
   const int rowHeight = metrics.listWithSubtitleRowHeight;
-  const int visibleItems = std::max(1, contentHeight / rowHeight);
+  const int visibleItems = shelvesVisibleItems(contentHeight);
   const int selectedItem = contentIndex - 1;
   const int shelfCount = static_cast<int>(shelves.size());
 
-  int scrollOffset = 0;
-  if (selectedItem >= visibleItems) {
-    scrollOffset = selectedItem - visibleItems + 1;
+  // Only the key cursor drags the list with it; after a swipe the offset is the user's. Same
+  // split as renderBooksTab's, and for the same reason -- see the comment there.
+  if (selectorVisible && selectedItem >= 0) {
+    if (selectedItem < shelvesScroll) shelvesScroll = selectedItem;
+    if (selectedItem >= shelvesScroll + visibleItems) shelvesScroll = selectedItem - visibleItems + 1;
   }
+  const int scrollOffset = shelvesScrollOffset(visibleItems);
 
   // Prewarm the font cache with all visible folder names before drawing. Folder names are drawn
   // unconditionally on every render (unlike cover-fallback titles below), so without this, non-Latin
@@ -1528,7 +1626,7 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
 
   for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
     const int itemY = contentTop + (i - scrollOffset) * rowHeight;
-    drawShelfRow(i, itemY, i == selectedItem);
+    drawShelfRow(i, itemY, selectorVisible && i == selectedItem);
   }
 
   if (shelfCount > visibleItems) {
@@ -1592,7 +1690,7 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
-                 idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
+                 selectorVisible && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1604,6 +1702,9 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
 
 bool RecentBooksActivity::tryPartialSelectionRedraw() {
   if (!lastRendered.valid) return false;
+  // This path only ever moves a selection border. With the cursor hidden there is no border to
+  // move, and taking it after a touch would paint one back onto a screen that must not show it.
+  if (!selectorVisible) return false;
   if (openShelfIndex != lastRendered.openShelf || selectedTab != lastRendered.tab) return false;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -1678,12 +1779,16 @@ bool RecentBooksActivity::tryPartialSelectionRedraw() {
   // Shelves list rows.
   if (newIdx > static_cast<int>(shelves.size()) || oldIdx > static_cast<int>(shelves.size())) return false;
   const int rowHeight = metrics.listWithSubtitleRowHeight;
-  const int visibleItems = std::max(1, contentHeight / rowHeight);
-  auto scrollOffsetFor = [visibleItems](const int selectedItem) {
-    return selectedItem >= visibleItems ? selectedItem - visibleItems + 1 : 0;
+  const int visibleItems = shelvesVisibleItems(contentHeight);
+  const int scrollOffset = shelvesScrollOffset(visibleItems);
+  // The list scrolls on its own now (a swipe moves shelvesScroll), so the rows are wherever that
+  // offset put them -- not at a position derived from the selection. Bail unless the frame on
+  // screen was drawn at this offset and the move stays inside it; renderShelvesTab would scroll.
+  if (shelvesScroll != lastRendered.shelvesScroll) return false;
+  const auto offScreen = [scrollOffset, visibleItems](const int idx) {
+    return idx < scrollOffset || idx >= scrollOffset + visibleItems;
   };
-  if (scrollOffsetFor(newIdx - 1) != scrollOffsetFor(oldIdx - 1)) return false;
-  const int scrollOffset = scrollOffsetFor(newIdx - 1);
+  if (offScreen(oldIdx - 1) || offScreen(newIdx - 1)) return false;
 
   if (fcm) {
     renderer.prewarmText(UI_10_FONT_ID, (shelves[oldIdx - 1].folderName + ' ' + shelves[newIdx - 1].folderName).c_str(),
@@ -1726,7 +1831,7 @@ void RecentBooksActivity::render(RenderLock&&) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-    lastRendered = {true, openShelfIndex, selectedTab, contentIndex, scrollRow, shelfContentIndex, shelfScrollRow};
+    rememberRendered();
     renderer.displayBuffer();
     return;
   }
@@ -1734,7 +1839,7 @@ void RecentBooksActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS));
 
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
-  GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), contentIndex == 0);
+  GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), selectorVisible && contentIndex == 0);
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
@@ -1748,6 +1853,6 @@ void RecentBooksActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  lastRendered = {true, openShelfIndex, selectedTab, contentIndex, scrollRow, shelfContentIndex, shelfScrollRow};
+  rememberRendered();
   renderer.displayBuffer();
 }
