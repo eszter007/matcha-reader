@@ -21,14 +21,12 @@ MangaChapterSelectionActivity::MangaChapterSelectionActivity(GfxRenderer& render
       break;
     }
   }
-  labels.reserve(this->tocEntries.size());
+  // The rows borrow their labels from tocEntries, which outlives them and is not touched again
+  // after this: a second copy of every chapter title is heap this device would rather keep.
   items.reserve(this->tocEntries.size());
-  for (const auto& entry : this->tocEntries) {
-    labels.push_back(entry.title);
-  }
-  for (size_t i = 0; i < labels.size(); i++) {
+  for (size_t i = 0; i < this->tocEntries.size(); i++) {
     fui::ListItem item;
-    item.label = labels[i].c_str();
+    item.label = this->tocEntries[i].title.c_str();
     // The row's identity travels in actionValue -- list() registers the tap
     // target as hit(rect, action, item.actionValue), so leaving it at its
     // default reported every row as index 0 and every tap opened the first
@@ -47,11 +45,10 @@ void MangaChapterSelectionActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   // Content: the safe area minus the header band drawChrome paints the title in.
-  screen.setContentMarginFromScreen(
-      fui::Insets{static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
-                  static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
-                  static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)),
-                  static_cast<int16_t>(safe.x)});
+  screen.setContentMarginFromScreen(fui::Insets{
+      static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
+      static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
+      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   if (listCount() == 0) {

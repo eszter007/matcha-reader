@@ -23,7 +23,6 @@ class MangaChapterSelectionActivity final : public UiListActivity {
   // fui::ListItem points at label storage that must outlive the build, and a
   // manga TOC is a handful of chapters rather than the hundreds an EPUB can
   // carry -- so the whole list is materialised rather than windowed.
-  std::vector<std::string> labels;
   std::vector<freeink::ui::ListItem> items;
 
   int listCount() const override { return static_cast<int>(tocEntries.size()); }

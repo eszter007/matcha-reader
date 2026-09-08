@@ -546,14 +546,26 @@ void MangaReaderActivity::loop() {
   // is on screen, and the outer thirds land on the wrong edges of a rotated page.
   // Both the tap point (tapToLogical) and the screen dims come from the renderer's
   // current orientation, so setting it around the read gives a consistent frame.
-  const auto touchOrientation = renderer.getOrientation();
-  if (displayedRotated_) {
-    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((touchOrientation + 3) % 4));
-  }
-  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
-  if (displayedRotated_) {
-    renderer.setOrientation(touchOrientation);
+  //
+  // Under a Try lock, because render() runs on its own task: flipping the renderer's orientation
+  // while a frame is in flight would tear it, and displayedRotated_ is written by that same task.
+  // Taking the lock makes both safe, and taking it non-blocking keeps the input loop off the
+  // render's critical path -- on a miss this tick simply resolves in the base orientation, which
+  // is what it did before.
+  ReaderUtils::TouchPageTurn touch{};
+  bool touchMenu = false;
+  {
+    RenderLock touchLock{RenderLock::Try{}};
+    const auto touchOrientation = renderer.getOrientation();
+    const bool rotateTouch = touchLock.held() && displayedRotated_;
+    if (rotateTouch) {
+      renderer.setOrientation(static_cast<GfxRenderer::Orientation>((touchOrientation + 3) % 4));
+    }
+    touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+    touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+    if (rotateTouch) {
+      renderer.setOrientation(touchOrientation);
+    }
   }
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
