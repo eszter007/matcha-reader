@@ -87,7 +87,11 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
       http.addHeader("Authorization", std::string("Basic ") + encoded.c_str());
     }
 
-    LOG_DBG("HTTP", "wolfSSL GET: %s", url.c_str());
+    // Per-hop heap: each redirect opens a fresh TLS session, and its record
+    // buffer is the MEMORY_E site on this board. Total free and largest block
+    // fail differently, so log both.
+    LOG_DBG("HTTP", "wolfSSL GET hop %d (%u free, %u max block): %s", hop, ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+            url.c_str());
     const int status = http.GET(
         [&http, &sink](const uint8_t* data, size_t len) {
           if (http.getStatus() != 200) return true;

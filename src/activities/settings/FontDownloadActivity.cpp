@@ -27,19 +27,35 @@
 namespace fui = freeink::ui;
 
 namespace {
-// Entry gate for the whole manifest screen, sized against the published
-// manifest: 21 families / 84 files in ~17KB of JSON, whose parsed document
-// stays live while families_ and its per-family strings and vectors are
-// allocated beside it. That build peaks around 40KB, so require a little over
-// it, plus a contiguous block for the one big allocation (families_.reserve).
-// Same shape and the same reasoning as the styled-definition gate in
-// DictHtmlPages.cpp. Checked both before the fetch (issue #191: a book open on
-// a large SD-card font can leave too little heap for the WiFi/TLS connect
-// itself, which -- like the JSON build below -- runs std::string/std::vector
-// growth through the throwing operator new) and again before the build (the
-// TLS teardown in between fragments the heap further).
+// Entry gate for the whole manifest screen: the parsed document stays live
+// while families_ and its per-family strings and vectors are allocated beside
+// it, and the document dominates that peak (27.7KB of JSON at sd-fonts-m1-b4
+// parses to roughly 25KB). Require a little over the pair, plus a contiguous
+// block for the largest single allocation. Same shape and the same reasoning as
+// the styled-definition gate in DictHtmlPages.cpp. Checked before the fetch
+// (issue #191: a book open on a large SD-card font can leave too little heap
+// for the WiFi/TLS connect itself, which -- like the JSON build below -- runs
+// std::string/std::vector growth through the throwing operator new) and, in
+// onEnter(), before esp_wifi_init runs at all.
 constexpr size_t FONT_SCREEN_MIN_FREE_HEAP = 48 * 1024;
 constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 12 * 1024;
+
+// Headroom over the exact bytes the catalog build is about to allocate, checked
+// once the document is parsed and its own footprint is already spent. The floor
+// above cannot serve here: it covers the whole-screen peak *including* the
+// document, so reusing it after the document is resident demands that memory
+// twice and refuses a build that needs about 7KB. The manifest grows over
+// time -- 27.7KB of JSON at sd-fonts-m1-b4, against the ~17KB this screen was
+// first sized for -- so measure the requirement rather than restating it.
+constexpr size_t FONT_BUILD_HEADROOM = 12 * 1024;
+
+// Progress-render throttle, matching OpdsBookBrowserActivity. Rendering is not free
+// on this path: each repaint allocates while wolfSSL is shrinking and re-growing a
+// ~17.7KB TLS record buffer per record, and a repaint that lands in that hole leaves
+// the transfer with 35KB free and no block big enough -- the MEMORY_E (-125) seen
+// mid-download. Fewer repaints, fewer windows for the collision.
+constexpr int DOWNLOAD_PROGRESS_STEP_PERCENT = 5;
+constexpr unsigned long DOWNLOAD_PROGRESS_MIN_UPDATE_MS = 5000;
 }  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -89,6 +105,46 @@ void FontDownloadActivity::onBackButton() {
 
 void FontDownloadActivity::onEnter() {
   UiListActivity::onEnter();
+
+  // Reclaim before the WiFi stack comes up, not after (this screen draws in the
+  // built-in UI fonts; ensureLoaded() restores the reader's selection when it
+  // resumes). Same ordering as CrossPointWebServerActivity::onEnter().
+  //
+  // Releasing only the glyph caches is not enough: reached from a book by way of
+  // Text Settings, that path leaves ~41KB free where the manifest build needs
+  // ~48KB, and the screen refuses itself. The resident SD font families are the
+  // rest of the difference, so release those as well.
+  {
+    RenderLock lock(*this);
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
+
+  // esp_wifi_init claims tens of KB and reports OOM by returning an error that
+  // nothing here can act on late: once the heap is drained, the next newlib
+  // stdio lock (a single ~80-byte FreeRTOS mutex, taken on any log line) hits
+  // the abort() in lock_init_generic and panics the device. The manifest gates
+  // below all run after WiFi is already up, so they cannot catch this. Refuse
+  // the screen instead, while refusing is still possible.
+  if (ESP.getFreeHeap() < std::max<size_t>(FONT_SCREEN_MIN_FREE_HEAP, HttpDownloader::MIN_TLS_FREE_HEAP) ||
+      ESP.getMaxAllocHeap() < std::max<size_t>(FONT_SCREEN_MIN_MAX_ALLOC, HttpDownloader::MIN_TLS_MAX_ALLOC)) {
+    LOG_ERR("FONT", "Low heap before WiFi start (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    {
+      RenderLock lock(*this);
+      // Put back what the reclaim above took. Every other exit from this screen
+      // brings WiFi up and leaves through onExit()'s silentRestart(), which
+      // reloads everything; this refusal does neither, so backing out would
+      // otherwise return to Text Settings and the reader with the selected
+      // family -- and a Japanese book's companion -- still unloaded.
+      sdFontSystem.ensureLoaded(renderer);
+      errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
+      state_ = ERROR;
+    }
+    // UiListActivity::onEnter() already requested a render, which may have drawn
+    // the empty list before ERROR was set. Ask again so the error screen shows.
+    requestUpdate();
+    return;
+  }
+
   WiFi.mode(WIFI_STA);
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
@@ -125,8 +181,15 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
   // Japanese book's SD font caches hold (tens of KB at a large size) before the
   // TLS handshake and manifest build below, both of which run
   // std::string/std::vector growth that aborts on OOM (issue #191). Fonts
-  // reload lazily once the reader resumes.
-  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  // reload lazily once the reader resumes. Full release, matching onEnter():
+  // a CJK SSID reloads the JP fallback family, not just its glyph slabs. Under
+  // RenderLock for the same reason onEnter() is: unloading the families retires
+  // renderer font registrations the render task walks, so a concurrent update
+  // would read them as they are freed.
+  {
+    RenderLock lock(*this);
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
 
   if (!fetchAndParseManifest()) {
     // Drop whatever was parsed before the failure: it would otherwise sit in
@@ -187,14 +250,9 @@ bool FontDownloadActivity::internString(const char* text, StrRef& outRef) {
 }
 
 bool FontDownloadActivity::fetchAndParseManifest() {
-  // Rebuildable SD-font caches can hold tens of KB the TLS session needs;
-  // release them before the heap gate below, not after, so a low-heap entry
-  // caused by those very caches (issue #191: a book open on a large SD-card
-  // font) still gets a chance to pass instead of failing before reclaiming
-  // anything.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseAllFontMemory();
-  }
+  // The reclaim that issue #191 put here now happens in the sole caller, which
+  // releases the resident families as well as their glyph slabs and does it
+  // under RenderLock. Nothing repopulates either between there and here.
 
   // Refuse before even opening the connection: the WiFi/TLS handshake and the
   // manual HTTP client (SecureClient/SecureHttpClient) run their own
@@ -268,29 +326,13 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     return false;
   }
 
-  // Everything below builds std::string/std::vector members while the parsed
-  // document stays live -- the heap peak of the whole screen, reached on a heap
-  // the TLS teardown just fragmented. Those allocations go through the throwing
-  // operator new, which under -fno-exceptions calls abort() instead of returning
-  // null, so exhausting the heap here panics to the boot screen instead of
-  // reporting a failure. Refuse up front, while refusing is still possible.
-  if (ESP.getFreeHeap() < FONT_SCREEN_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < FONT_SCREEN_MIN_MAX_ALLOC) {
-    LOG_ERR("FONT", "Low heap for manifest build (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
-    return false;
-  }
-
-  baseUrl_ = doc["baseUrl"] | "";
-  downloadUrl_.reserve(baseUrl_.size() + 128);
-  clearManifest();
-  fontInstaller_.refreshRegistry();
-
   JsonArray groupsArr = doc["scriptGroups"].as<JsonArray>();
   JsonArray familiesArr = doc["families"].as<JsonArray>();
 
   // Size the arena and the file table in one pass so neither reallocates while
   // the catalog is built: a mid-build growth would both fragment the heap and
-  // invalidate arena pointers already handed out below.
+  // invalidate arena pointers already handed out below. Allocates nothing, so
+  // it can run ahead of the gate and tell it what the build actually costs.
   const size_t groupCount = std::min(groupsArr.size(), MAX_SCRIPT_GROUPS);
   size_t arenaBytes = 1;  // leading terminator makes offset 0 the empty string
   size_t manifestFileCount = 0;
@@ -305,6 +347,47 @@ bool FontDownloadActivity::fetchAndParseManifest() {
       manifestFileCount++;
     }
   }
+
+  // Release the previous catalog before measuring, so a retry is judged on the
+  // heap the build will really see rather than on one still holding the state
+  // it is about to replace.
+  clearManifest();
+
+  // Everything below builds std::string/std::vector members while the parsed
+  // document stays live. Those allocations go through the throwing operator new,
+  // which under -fno-exceptions calls abort() instead of returning null, so
+  // exhausting the heap here panics to the boot screen instead of reporting a
+  // failure. Refuse up front, while refusing is still possible -- against what
+  // this manifest costs, since the document's share is already spent.
+  // Every allocation this function makes that scales with the manifest, so the
+  // check keeps matching as the manifest grows. The row caches count too: they
+  // are reserved at the end of this function, while the document is still live.
+  // sizeof the element types rather than constants, so the arithmetic follows
+  // the structs.
+  const size_t rowCapacity = std::max(familiesArr.size() + 2, groupCount + 1);
+  const size_t fileTableBytes = manifestFileCount * sizeof(ManifestFile);
+  const size_t familyTableBytes = familiesArr.size() * sizeof(ManifestFamily);
+  const size_t groupLabelBytes = groupCount * sizeof(StrRef);
+  const size_t filteredIndexBytes = familiesArr.size() * sizeof(int);
+  const size_t rowLabelBytes = rowCapacity * sizeof(decltype(rowLabels_)::value_type);
+  const size_t rowItemBytes = rowCapacity * sizeof(decltype(rowItems_)::value_type);
+  const size_t buildBytes = arenaBytes + fileTableBytes + familyTableBytes + groupLabelBytes + filteredIndexBytes +
+                            rowLabelBytes + rowItemBytes;
+  // The largest single block decides whether a fragmented heap can serve the
+  // build at all, however much total free it reports.
+  const size_t largestBlock = std::max(
+      {arenaBytes, fileTableBytes, familyTableBytes, groupLabelBytes, filteredIndexBytes, rowLabelBytes, rowItemBytes});
+  if (ESP.getFreeHeap() < buildBytes + FONT_BUILD_HEADROOM || ESP.getMaxAllocHeap() < largestBlock) {
+    LOG_ERR("FONT", "Low heap for manifest build (%u free, %u max block; need %zu + %zu headroom, %zu block)",
+            ESP.getFreeHeap(), ESP.getMaxAllocHeap(), buildBytes, FONT_BUILD_HEADROOM, largestBlock);
+    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
+    return false;
+  }
+
+  baseUrl_ = doc["baseUrl"] | "";
+  downloadUrl_.reserve(baseUrl_.size() + 128);
+  fontInstaller_.refreshRegistry();
+
   stringArena_ = makeUniqueNoThrow<char[]>(arenaBytes);
   if (!stringArena_) {
     LOG_ERR("FONT", "OOM: %zu byte string arena", arenaBytes);
@@ -414,7 +497,8 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     families_.push_back(family);
   }
 
-  const size_t rowCapacity = std::max(families_.size() + 2, scriptGroupLabels_.size() + 1);
+  // rowCapacity is the figure the gate above budgeted for; reuse it rather than
+  // recomputing, so the two cannot drift apart.
   rowLabels_.reserve(rowCapacity);
   rowItems_.reserve(rowCapacity);
 
@@ -587,10 +671,16 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
   // Rebuildable SD-font caches (glyph/kern arenas, CJK fallback tables) can
   // hold tens of KB the TLS session needs; release them up front rather than
-  // starving the transfer. They repopulate on demand after the download.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseAllFontMemory();
-    LOG_DBG("FONT", "Free heap after SD font cache release: %u bytes", ESP.getFreeHeap());
+  // starving the transfer. They repopulate on demand after the download. Under
+  // RenderLock like the other release sites: the slabs it frees are the ones the
+  // render task reads, and the progress callback below renders as the body
+  // streams.
+  {
+    RenderLock lock(*this);
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseAllFontMemory();
+      LOG_DBG("FONT", "Free heap after SD font cache release: %u bytes", ESP.getFreeHeap());
+    }
   }
 
   // Check before touching the family directory so a failed update leaves the
@@ -626,9 +716,11 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     downloadUrl_.assign(baseUrl_).append(str(file.name));
 
+    int lastRenderedPercent = -1;
+    unsigned long lastProgressUpdateMs = 0;
     auto result = HttpDownloader::downloadToFile(
         downloadUrl_, destPath,
-        [this](size_t downloaded, size_t total) {
+        [this, &lastRenderedPercent, &lastProgressUpdateMs](size_t downloaded, size_t total) {
           fileProgress_ = downloaded;
           fileTotal_ = total;
           mappedInput.update();
@@ -643,7 +735,17 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
             cancelRequested_ = true;
             goHomeRequested_ = true;
           }
-          requestUpdate(true);
+          // Input above is pumped every chunk so Back/Home stay responsive; only the
+          // repaint is throttled.
+          const int percent = total > 0 ? static_cast<int>(static_cast<uint64_t>(downloaded) * 100 / total) : 0;
+          const unsigned long now = millis();
+          if (percent >= 100 || lastRenderedPercent < 0 ||
+              percent >= lastRenderedPercent + DOWNLOAD_PROGRESS_STEP_PERCENT ||
+              now - lastProgressUpdateMs >= DOWNLOAD_PROGRESS_MIN_UPDATE_MS) {
+            lastRenderedPercent = percent;
+            lastProgressUpdateMs = now;
+            requestUpdate(true);
+          }
         },
         // Redirects stay on HTTPS: CRC32 (below) catches transmission errors
         // but not a deliberate substitution by an on-path attacker, who could

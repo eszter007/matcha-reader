@@ -70,18 +70,31 @@ void MangaReaderActivity::onEnter() {
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
   if (!book) {
-    sdFontSystem.releaseForImageDecode(renderer);
+    // Retires renderer font registrations, so it cannot run beside the render task.
+    // Manga renders no book text: drop the Japanese companion policy explicitly, since
+    // releaseAllResidentFonts() frees memory without deciding what should come back.
+    {
+      RenderLock lock;
+      sdFontSystem.releaseAllResidentFonts(renderer);
+      sdFontSystem.setJpFallbackNeeded(renderer, false);
+    }
     book = makeUniqueNoThrow<manga::MangaBook>(std::move(pendingBookPath));
     if (!book) {
       LOG_ERR("MRA", "Failed to allocate MangaBook");
-      sdFontSystem.ensureLoaded(renderer);
+      {
+        RenderLock lock;
+        sdFontSystem.ensureLoaded(renderer);
+      }
       finish();
       return;
     }
     if (!book->load()) {
       LOG_ERR("MRA", "Failed to load manga: %s", book->getFolder().c_str());
       book.reset();
-      sdFontSystem.ensureLoaded(renderer);
+      {
+        RenderLock lock;
+        sdFontSystem.ensureLoaded(renderer);
+      }
       finish();
       return;
     }
@@ -202,8 +215,11 @@ void MangaReaderActivity::onExit() {
 
   // Home/Library and the next text reader need the user's selected font again. The manga entry
   // released it only from RAM; ensureLoaded() restores the unchanged saved selection here.
-  sdFontSystem.setJpFallbackNeeded(renderer, false);
-  sdFontSystem.ensureLoaded(renderer);
+  {
+    RenderLock lock;
+    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    sdFontSystem.ensureLoaded(renderer);
+  }
 
   Activity::onExit();
 }
@@ -1568,14 +1584,21 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
   if (combined.empty()) return;
   // Dictionary text needs the Japanese SD fallback. Restore it only for the child activity, then
   // return its memory to the page decoder before the manga redraws.
-  sdFontSystem.ensureLoaded(renderer);
-  sdFontSystem.setJpFallbackNeeded(renderer, true);
+  {
+    RenderLock lock;
+    sdFontSystem.ensureLoaded(renderer);
+    sdFontSystem.setJpFallbackNeeded(renderer, true);
+  }
   startActivityForResult(std::make_unique<MangaWordLookupActivity>(
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this, returnMode](const ActivityResult&) {
-                           sdFontSystem.releaseForImageDecode(renderer);
-                           viewMode = returnMode;
+                           {
+                             RenderLock lock;
+                             sdFontSystem.releaseAllResidentFonts(renderer);
+                             sdFontSystem.setJpFallbackNeeded(renderer, false);
+                             viewMode = returnMode;
+                           }
                            requestUpdate();
                          });
 }
@@ -1596,8 +1619,11 @@ void MangaReaderActivity::launchWordLookup() {
 
   if (combined.empty()) return;
 
-  sdFontSystem.ensureLoaded(renderer);
-  sdFontSystem.setJpFallbackNeeded(renderer, true);
+  {
+    RenderLock lock;
+    sdFontSystem.ensureLoaded(renderer);
+    sdFontSystem.setJpFallbackNeeded(renderer, true);
+  }
 
   // Use the MangaWordLookup sub-activity with raw text. The scan cache makes a re-open of the
   // same panel/page text instant (validated by content hash, so the key is just a hint).
@@ -1605,8 +1631,12 @@ void MangaReaderActivity::launchWordLookup() {
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this](const ActivityResult&) {
-                           sdFontSystem.releaseForImageDecode(renderer);
-                           viewMode = ViewMode::PanelZoom;
+                           {
+                             RenderLock lock;
+                             sdFontSystem.releaseAllResidentFonts(renderer);
+                             sdFontSystem.setJpFallbackNeeded(renderer, false);
+                             viewMode = ViewMode::PanelZoom;
+                           }
                            requestUpdate();
                          });
 }
@@ -1814,7 +1844,10 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
       // Manga keeps Rotate Panels and the other applicable Reader settings, while hiding
       // EPUB-only text and image-rendering settings through SettingsActivity's mangaMode.
       // Restore SD fonts while Settings is open, then release that memory before manga redraws.
-      sdFontSystem.ensureLoaded(renderer);
+      {
+        RenderLock lock;
+        sdFontSystem.ensureLoaded(renderer);
+      }
       startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
                                                                 /*finishOnBack=*/true, /*japaneseBook=*/true,
                                                                 /*dictionaryLanguage=*/std::string{},
@@ -1827,7 +1860,10 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
                                ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
                                baseScreenW = renderer.getScreenWidth();
                                baseScreenH = renderer.getScreenHeight();
-                               sdFontSystem.releaseForImageDecode(renderer);
+                               {
+                                 RenderLock lock;
+                                 sdFontSystem.releaseAllResidentFonts(renderer);
+                               }
                                launchMenu();
                              });
       return;

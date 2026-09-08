@@ -1056,6 +1056,10 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
         fit /= 2;
       }
       if (missedForStyle == PREWARM_ARENA_TOO_LARGE) {
+        // The ladder ran out: every prefix down to a single glyph failed to find a
+        // contiguous arena, so this style renders entirely uncached.
+        LOG_ERR("SDCF", "No mini bitmap arena for style %u at any size (%uB/glyph, maxAlloc=%u); %u glyphs uncached",
+                si, perGlyph, ESP.getMaxAllocHeap(), cpCount);
         missedForStyle = static_cast<int>(cpCount);  // nothing resident
       } else {
         missedForStyle += static_cast<int>(cpCount - fit);  // the dropped suffix is absent too
@@ -1314,7 +1318,11 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     if (validCount > 0) s.measuredBytesPerGlyph = (totalBitmapSize + validCount - 1) / validCount;
 
     if (!ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize)) {
-      LOG_ERR("SDCF", "Failed to allocate mini bitmap (%u bytes) for style %u", totalBitmapSize, styleIdx);
+      // Not a failure on its own: the only caller answers PREWARM_ARENA_TOO_LARGE
+      // by retrying with a smaller prefix, and logs an error itself if that ladder
+      // runs out. Reporting each attempt as an error made a working fallback look
+      // like a fault.
+      LOG_DBG("SDCF", "Mini bitmap arena too large (%u bytes) for style %u", totalBitmapSize, styleIdx);
       delete[] readOrder;
       delete[] mappings;
       freeStyleMiniData(s);
