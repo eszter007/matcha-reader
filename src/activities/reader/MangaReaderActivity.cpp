@@ -539,8 +539,22 @@ void MangaReaderActivity::loop() {
   // the menu. Both helpers gate on SETTINGS.touchReaderControls and hasTouch(), so tap-vs-swipe
   // mode and the global opt-out are inherited and non-touch boards see no change. Read once per
   // tick, before any early return can swallow the gesture.
+  // Resolve touch in the orientation the page is actually displayed in. A page or
+  // panel whose aspect does not match the screen is drawn rotated, and the render
+  // path restores the base orientation before returning -- so without this the
+  // zones follow the Reading Orientation setting no matter which way the content
+  // is on screen, and the outer thirds land on the wrong edges of a rotated page.
+  // Both the tap point (tapToLogical) and the screen dims come from the renderer's
+  // current orientation, so setting it around the read gives a consistent frame.
+  const auto touchOrientation = renderer.getOrientation();
+  if (displayedRotated_) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>((touchOrientation + 3) % 4));
+  }
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+  if (displayedRotated_) {
+    renderer.setOrientation(touchOrientation);
+  }
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
@@ -873,6 +887,7 @@ void MangaReaderActivity::renderFullPage() {
 
   const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const bool rotatePage = g.rotated;
+  displayedRotated_ = rotatePage;
   const int x = g.x, y = g.y;
   const int destWidth = g.destWidth, destHeight = g.destHeight;
   const int screenW = g.screenW, screenH = g.screenH;
@@ -1057,6 +1072,7 @@ void MangaReaderActivity::renderPanelZoom() {
 
   const PanelGeom g = applyPanelGeometry(panelDims[currentPanel].w, panelDims[currentPanel].h);
   const bool rotatePanel = g.rotated;
+  displayedRotated_ = rotatePanel;
   const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const int screenW = renderer.getScreenWidth();
   const int screenH = renderer.getScreenHeight();
