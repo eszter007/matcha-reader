@@ -48,6 +48,14 @@ constexpr size_t FONT_SCREEN_MIN_MAX_ALLOC = 12 * 1024;
 // time -- 27.7KB of JSON at sd-fonts-m1-b4, against the ~17KB this screen was
 // first sized for -- so measure the requirement rather than restating it.
 constexpr size_t FONT_BUILD_HEADROOM = 12 * 1024;
+
+// Progress-render throttle, matching OpdsBookBrowserActivity. Rendering is not free
+// on this path: each repaint allocates while wolfSSL is shrinking and re-growing a
+// ~17.7KB TLS record buffer per record, and a repaint that lands in that hole leaves
+// the transfer with 35KB free and no block big enough -- the MEMORY_E (-125) seen
+// mid-download. Fewer repaints, fewer windows for the collision.
+constexpr int DOWNLOAD_PROGRESS_STEP_PERCENT = 5;
+constexpr unsigned long DOWNLOAD_PROGRESS_MIN_UPDATE_MS = 5000;
 }  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -708,9 +716,11 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     downloadUrl_.assign(baseUrl_).append(str(file.name));
 
+    int lastRenderedPercent = -1;
+    unsigned long lastProgressUpdateMs = 0;
     auto result = HttpDownloader::downloadToFile(
         downloadUrl_, destPath,
-        [this](size_t downloaded, size_t total) {
+        [this, &lastRenderedPercent, &lastProgressUpdateMs](size_t downloaded, size_t total) {
           fileProgress_ = downloaded;
           fileTotal_ = total;
           mappedInput.update();
@@ -725,7 +735,17 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
             cancelRequested_ = true;
             goHomeRequested_ = true;
           }
-          requestUpdate(true);
+          // Input above is pumped every chunk so Back/Home stay responsive; only the
+          // repaint is throttled.
+          const int percent = total > 0 ? static_cast<int>(static_cast<uint64_t>(downloaded) * 100 / total) : 0;
+          const unsigned long now = millis();
+          if (percent >= 100 || lastRenderedPercent < 0 ||
+              percent >= lastRenderedPercent + DOWNLOAD_PROGRESS_STEP_PERCENT ||
+              now - lastProgressUpdateMs >= DOWNLOAD_PROGRESS_MIN_UPDATE_MS) {
+            lastRenderedPercent = percent;
+            lastProgressUpdateMs = now;
+            requestUpdate(true);
+          }
         },
         // Redirects stay on HTTPS: CRC32 (below) catches transmission errors
         // but not a deliberate substitution by an on-path attacker, who could
