@@ -814,6 +814,20 @@ void RecentBooksActivity::warmOnePendingProgress() {
   // No requestUpdate: visible entries are still filled synchronously during their render.
 }
 
+std::vector<TabInfo> RecentBooksActivity::buildTabs() const {
+  std::vector<TabInfo> tabs;
+  tabs.reserve(TAB_COUNT);
+  tabs.push_back({tr(STR_TAB_BOOKS), selectedTab == 0});
+  tabs.push_back({tr(STR_TAB_SHELVES), selectedTab == 1});
+  return tabs;
+}
+
+Rect RecentBooksActivity::tabBarRect() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return Rect{0, static_cast<int16_t>(metrics.topPadding + metrics.headerHeight),
+              static_cast<int16_t>(renderer.getScreenWidth()), static_cast<int16_t>(metrics.tabBarHeight)};
+}
+
 void RecentBooksActivity::loadShelves() {
   shelvesLoaded = true;
   shelves.clear();
@@ -1119,20 +1133,28 @@ void RecentBooksActivity::loop() {
     const int gridHeight = gridContentHeight();
     const int itemCount = getContentItemCount();
 
-    // Tab bar: two equal columns across the full width, matching GUI.drawTabBar's rect.
-    int tab = -1;
-    const auto tabTouch = mappedInput.colTouch(tab, 0, renderer.getScreenWidth() / TAB_COUNT, TAB_COUNT, tabBarY,
-                                               tabBarY + m.tabBarHeight);
-    if (tabTouch != MappedInputManager::RowTouch::None) hideSelector();
-    if (tabTouch == MappedInputManager::RowTouch::Tap && tab >= 0 && tab != selectedTab) {
-      selectedTab = tab;
-      if (selectedTab == 1 && !shelvesLoaded) loadShelves();
-      contentIndex = 0;
-      scrollRow = 0;
-      requestUpdate();
+    // Tab bar: hit-test through the theme, which lays the targets out exactly as
+    // drawTabBar draws the labels -- same scroll offset, same skip rule, same text
+    // widths. Two equal columns across the full width did not match: the labels are
+    // packed to the left, so "Shelves" ignored a tap on the word and answered to one
+    // on empty space in the right half instead.
+    const Rect barRect = tabBarRect();
+    int tabX = 0;
+    int tabY = 0;
+    if (mappedInput.wasScreenTapped(tabX, tabY) && tabY >= barRect.y && tabY < barRect.y + barRect.height) {
+      hideSelector();  // a touch, whether or not it lands on a label
+      int tab = -1;
+      if (GUI.tabIndexFromPoint(renderer, barRect, buildTabs(), tabX, tabY, tab) && tab != selectedTab) {
+        selectedTab = tab;
+        if (selectedTab == 1 && !shelvesLoaded) loadShelves();
+        contentIndex = 0;
+        scrollRow = 0;
+        requestUpdate();
+      }
+      // The bar swallows the contact either way: a tap that lands in the gap between
+      // labels must not fall through to the grid below.
       return;
     }
-    if (tabTouch != MappedInputManager::RowTouch::None) return;
 
     int gx = 0;
     int gy = 0;
@@ -1743,13 +1765,8 @@ void RecentBooksActivity::render(RenderLock&&) {
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS));
 
-  std::vector<TabInfo> tabs;
-  tabs.reserve(TAB_COUNT);
-  tabs.push_back({tr(STR_TAB_BOOKS), selectedTab == 0});
-  tabs.push_back({tr(STR_TAB_SHELVES), selectedTab == 1});
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
-  GUI.drawTabBar(renderer, Rect{0, tabBarY, pageWidth, metrics.tabBarHeight}, tabs,
-                 selectorVisible && contentIndex == 0);
+  GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), selectorVisible && contentIndex == 0);
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
