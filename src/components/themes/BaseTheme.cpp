@@ -283,7 +283,7 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
 }
 
 bool BaseTheme::prewarmRows(const GfxRenderer& renderer, const int fontId, const uint8_t styleMask, const int first,
-                            const int end, const std::function<std::string(int index)>& label) const {
+                            const int end, const std::function<std::string(int index)>& label) {
   if (!renderer.getFontCacheManager()) return false;
   std::string buf;
   buf.reserve(512);
@@ -304,7 +304,7 @@ bool BaseTheme::prewarmRows(const GfxRenderer& renderer, const int fontId, const
   return true;
 }
 
-void BaseTheme::releaseRowPrewarm(const GfxRenderer& renderer) const {
+void BaseTheme::releaseRowPrewarm(const GfxRenderer& renderer) {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->clearCache();
   }
@@ -553,7 +553,7 @@ void BaseTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
 
 int BaseTheme::tabScrollOffset(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
                                const int fontId, const int extraPerTab, const int spacing, const int sidePad,
-                               const bool boldSelected) const {
+                               const bool boldSelected) {
   int total = 0, selLeft = 0, selRight = 0;
   bool found = false;
   for (const auto& tab : tabs) {

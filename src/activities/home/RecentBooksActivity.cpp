@@ -1336,6 +1336,7 @@ void RecentBooksActivity::drawGridCell(const int cellX, const int cellY, const i
 void RecentBooksActivity::fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,
                                               const std::vector<ShelfBook>* sBooks, const int firstIdx,
                                               const int lastIdx) {
+  if (!books && !sBooks) return;  // one list or the other is always given, never neither
   for (int i = firstIdx; i >= 0 && i <= lastIdx && i < static_cast<int>(progress.size()); i++) {
     if (progress[i].percent != PROGRESS_PENDING) continue;
     const std::string& path = books ? (*books)[i].path : (*sBooks)[i].path;

@@ -36,18 +36,19 @@ constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYP
 int findCurrentFontIndex(const std::vector<TextSettingsActivity::FontEntry>& fonts, const char* sdFontFamilyName,
                          uint8_t fontFamily) {
   if (sdFontFamilyName[0] != '\0') {
-    for (int i = 0; i < static_cast<int>(fonts.size()); i++) {
-      if (!fonts[i].isBuiltin && fonts[i].name == sdFontFamilyName) return i;
-    }
+    const auto match = std::find_if(fonts.begin(), fonts.end(), [sdFontFamilyName](const auto& font) {
+      return !font.isBuiltin && font.name == sdFontFamilyName;
+    });
+    if (match != fonts.end()) return static_cast<int>(match - fonts.begin());
     // Selected family is hidden or gone (JP extension carried over from an older
     // build, or the card was swapped): fall through to the built-in entry.
   }
 
   const uint8_t builtin = fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
-  for (int i = 0; i < static_cast<int>(fonts.size()); i++) {
-    if (fonts[i].isBuiltin && fonts[i].settingIndex == builtin) return i;
-  }
-  return 0;
+  const auto entry = std::find_if(fonts.begin(), fonts.end(), [builtin](const auto& font) {
+    return font.isBuiltin && font.settingIndex == builtin;
+  });
+  return entry != fonts.end() ? static_cast<int>(entry - fonts.begin()) : 0;
 }
 
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};

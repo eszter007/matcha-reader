@@ -34,8 +34,6 @@ void MangaBookmarksActivity::onEnter() {
   requestUpdate();
 }
 
-void MangaBookmarksActivity::onExit() { Activity::onExit(); }
-
 int MangaBookmarksActivity::getGutterBottom(const GfxRenderer& renderer) {
   const auto orientation = renderer.getOrientation();
   const bool isPortrait = orientation == GfxRenderer::Orientation::Portrait;

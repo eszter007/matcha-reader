@@ -257,8 +257,8 @@ class BaseTheme {
                           bool selected) const;
   // Offset keeping the selected tab inside `rect` when the row overruns it; 0 when it fits.
   // Each theme measures its own tabs, hence the font/padding parameters.
-  int tabScrollOffset(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int fontId,
-                      int extraPerTab, int spacing, int sidePad, bool boldSelected) const;
+  static int tabScrollOffset(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int fontId,
+                             int extraPerTab, int spacing, int sidePad, bool boldSelected);
   virtual bool tabIndexFromPoint(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int x, int y,
                                  int& index) const;
   virtual void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
@@ -293,7 +293,7 @@ class BaseTheme {
   // Claims page slots from a tiny shared pool -- when it returns true, callers MUST pair with
   // releaseRowPrewarm() after drawing (see LyraTheme::drawRecentBookCover for what an unreleased
   // prewarm does). Returns false (nothing claimed, nothing to release) for pure-ASCII text.
-  bool prewarmRows(const GfxRenderer& renderer, int fontId, uint8_t styleMask, int first, int end,
-                   const std::function<std::string(int index)>& label) const;
-  void releaseRowPrewarm(const GfxRenderer& renderer) const;
+  static bool prewarmRows(const GfxRenderer& renderer, int fontId, uint8_t styleMask, int first, int end,
+                          const std::function<std::string(int index)>& label);
+  static void releaseRowPrewarm(const GfxRenderer& renderer);
 };

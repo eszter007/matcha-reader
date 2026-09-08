@@ -26,7 +26,6 @@ class MangaBookmarksActivity final : public Activity {
         bookPath(std::move(bookPath)),
         tocEntries(std::move(tocEntries)) {}
   void onEnter() override;
-  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
@@ -34,7 +33,7 @@ class MangaBookmarksActivity final : public Activity {
   // Scrubs the manga page's gray charge on the first paint; see the .cpp.
   bool firstPaint_ = true;
   // Calculate the vertical space to reserve for button hints based on orientation
-  int getGutterBottom(const GfxRenderer& renderer);
+  static int getGutterBottom(const GfxRenderer& renderer);
 
   // Calculate the height available for the bookmark list based on orientation
   int getListHeight(const GfxRenderer& renderer);

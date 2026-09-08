@@ -101,7 +101,7 @@ void XMLCALL characterData(void* userData, const char* s, const int len) {
 
 namespace FootnoteText {
 
-bool extract(Epub& epub, const int currentSpineIndex, const std::string& href, std::string& out,
+bool extract(const Epub& epub, const int currentSpineIndex, const std::string& href, std::string& out,
              const size_t maxBytes) {
   out.clear();
 
