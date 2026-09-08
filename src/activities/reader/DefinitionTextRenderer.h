@@ -94,7 +94,7 @@ struct WrapResult {
 // maxWidth and draws the lines that fall inside [scrollOffset, maxY). Latin text breaks at
 // the last fitting space; CJK breaks per character, keeping sentence-ending punctuation
 // attached to its line rather than orphaned at a line start.
-WrapResult drawWrapped(GfxRenderer& renderer, int fontId, const std::string& text, int textX, int startY,
+WrapResult drawWrapped(const GfxRenderer& renderer, int fontId, const std::string& text, int textX, int startY,
                        int lineHeight, int maxWidth, int maxY, int scrollOffset, uint16_t scale = 256);
 
 }  // namespace DefinitionText

@@ -301,7 +301,7 @@ void EpubReaderActivity::onReaderEnter() {
   // Some entry screens open on Confirm press, others on release. Swallow only
   // a release that is still pending; otherwise the first real reader click vanished.
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-  ImageBlock::clearSessionRenderFailures();
+  ImageBlock::clearRenderFailures();
   // Lazy image extraction: section builds only header-probe images, so the first
   // render of an image page pulls the file out of the EPUB through this hook.
   ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* src, const char* dest) {
@@ -1554,7 +1554,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
 
   // Pre-compute local KO position and chapter name while Epub is still in RAM.
   CrossPointPosition localPos = getCurrentPosition();
-  SavedProgressPosition localKoPos = ProgressMapper::toSavedProgress(epub, localPos);
+  SavedProgressPosition localKoPos;
   const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
   std::string localChapterName = (tocIdx >= 0) ? epub->getTocItem(tocIdx).title : "";
   const std::string savedEpubPath = epub->getPath();
@@ -1577,12 +1577,20 @@ bool EpubReaderActivity::launchKOReaderSync() {
     } else if (section) {
       nextPageNumber = section->currentPage;
     }
+    discardOverlayPage();
+    ImageBlock::releaseRenderCache();
     // The image extractor holds a raw pointer into this epub (see onEnter);
     // clear it before the early release, mirroring onExit(), or a later image
     // render would call through a dangling context.
     ImageBlock::setExtractor(nullptr, nullptr);
     section.reset();
     verticalSection.reset();
+    // Mapped here, with the sections already gone, so the mapper works at the lowest heap point
+    // of the release. No rendering may run while it borrows the framebuffer.
+    {
+      GfxRenderer::FrameBufferLoan loan(renderer);
+      localKoPos = ProgressMapper::toSavedProgress(epub, localPos);
+    }
     epub.reset();
     // Also release the resident font caches (SD font slab + advance tables -- tens of KB on a
     // Japanese book). Freeing the Epub alone leaves those pinned, fragmenting the heap so WiFi +
@@ -3227,6 +3235,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Reuse the image-warm input generation, which is bumped on every input/page turn.
   const uint32_t inputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
   const int fontId = effectiveReaderFontId();
+  // The failure memo is scoped to ONE page render (the BW double-refresh plus every grayscale
+  // band pass), so a transient decode failure is retried on the next page rather than remembered.
+  ImageBlock::clearRenderFailures();
 
   // The image pixel-cache RAM slot lives for exactly one page render (it feeds
   // the BW double-refresh and every grayscale band pass); release it on every

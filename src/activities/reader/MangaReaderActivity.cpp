@@ -1005,8 +1005,6 @@ void MangaReaderActivity::renderPanelZoom() {
     return;
   }
 
-  const auto& panel = panels[currentPanel];
-
   // Crop known missing/invalid from an earlier probe: fall back without touching the SD.
   if (panelDims[currentPanel].w < 0) {
     renderFullPage();

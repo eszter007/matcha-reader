@@ -707,7 +707,7 @@ int drawEntryMetadata(const GfxRenderer& renderer, const Rect& body, const int f
   return std::min(baseY + (y - startY), clipBottom);
 }
 
-WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
+WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                            const int startY, const int lineHeight, const int maxWidth, const int maxY,
                            const int scrollOffset, const uint16_t scale, std::string& lineBuf) {
   WrapResult out;
@@ -877,7 +877,7 @@ WrapResult DrawWrappedImpl(GfxRenderer& renderer, const int fontId, const std::s
   return out;
 }
 
-WrapResult drawWrapped(GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
+WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std::string& text, const int textX,
                        const int startY, const int lineHeight, const int maxWidth, const int maxY,
                        const int scrollOffset, const uint16_t scale) {
   // The single allocation of this whole function, guarded: if even one line buffer doesn't

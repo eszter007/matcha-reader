@@ -17,7 +17,8 @@ namespace FootnoteText {
 
 // Returns false when the href can't be resolved or the target can't be read; `out` is then a
 // best-effort empty string. maxBytes caps the collected UTF-8 text (never splits mid-glyph).
-bool extract(Epub& epub, int currentSpineIndex, const std::string& href, std::string& out, size_t maxBytes = 2048);
+bool extract(const Epub& epub, int currentSpineIndex, const std::string& href, std::string& out,
+             size_t maxBytes = 2048);
 
 // Delete the temp file extract() keeps staged between lookups (a chapter's notes nearly all share
 // one target, so re-staging it per lookup is what made stepping through the panel slow). Call when
