@@ -1785,9 +1785,10 @@ bool RecentBooksActivity::tryPartialSelectionRedraw() {
   // offset put them -- not at a position derived from the selection. Bail unless the frame on
   // screen was drawn at this offset and the move stays inside it; renderShelvesTab would scroll.
   if (shelvesScroll != lastRendered.shelvesScroll) return false;
-  for (const int idx : {oldIdx - 1, newIdx - 1}) {
-    if (idx < scrollOffset || idx >= scrollOffset + visibleItems) return false;
-  }
+  const auto offScreen = [scrollOffset, visibleItems](const int idx) {
+    return idx < scrollOffset || idx >= scrollOffset + visibleItems;
+  };
+  if (offScreen(oldIdx - 1) || offScreen(newIdx - 1)) return false;
 
   if (fcm) {
     renderer.prewarmText(UI_10_FONT_ID, (shelves[oldIdx - 1].folderName + ' ' + shelves[newIdx - 1].folderName).c_str(),
