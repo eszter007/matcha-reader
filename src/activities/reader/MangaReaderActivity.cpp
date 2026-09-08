@@ -493,6 +493,7 @@ bool MangaReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, cons
 
 bool MangaReaderActivity::renderEndOfBook() {
   if (!isAtEndOfBook()) return false;
+  displayedRotated_ = false;  // this screen is drawn in the base orientation, whatever preceded it
   if (!endOfBookOptions) {
     endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
     if (!endOfBookOptions) LOG_ERR("MRA", "OOM: EndOfBookOptions");
@@ -848,6 +849,11 @@ bool MangaReaderActivity::fullPageGeomFromCache(const PixelCacheIO::Reader& cach
 
 void MangaReaderActivity::renderFullPage() {
   renderer.clearScreen();
+  // Cleared up front, not just assigned once the geometry works out: the paths below display a
+  // placeholder and return early (no image, no decoder, an unreadable header), and a stale true
+  // from the last rotated page would have touch resolving rotated over an unrotated screen. The
+  // geometry sets the real value further down.
+  displayedRotated_ = false;
 
   std::string imgPath = book->getPageImagePath(currentPage);
   if (imgPath.empty()) {
@@ -1029,6 +1035,7 @@ void MangaReaderActivity::prefetchNextPageCache() {
 }
 
 void MangaReaderActivity::renderPanelZoom() {
+  displayedRotated_ = false;  // see renderFullPage(): every early return below falls back to it
   // Deferred-grayscale phase (see the panelGray* flags in the header). true means the BW image is
   // already displayed on the e-ink from the initial entry, so this pass skips the BW refresh wave
   // and only adds the 4-level gray wave; false is a fresh entry that shows BW and re-defers the gray
