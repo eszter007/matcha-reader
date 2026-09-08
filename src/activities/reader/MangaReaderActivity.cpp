@@ -1510,6 +1510,7 @@ void MangaReaderActivity::workerWarmPanel() {
 
 void MangaReaderActivity::renderTextOverlay() {
   renderer.clearScreen();
+  displayedRotated_ = false;  // see renderFullPage(): text is laid out in the base orientation
 
   if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) {
     viewMode = ViewMode::PanelZoom;

@@ -95,11 +95,12 @@ bool MangaChapterSelectionActivity::handleButtons() {
   return false;
 }
 
+// Header only: UiListActivity::render() calls drawFooter() for the button hints, and it draws the
+// same four labels. Painting them here as well drew them twice -- three times on the pass where a
+// wrapped row makes the list re-layout and drawChrome() runs again.
 void MangaChapterSelectionActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   GUI.drawHeader(renderer, Rect{safe.x, safe.y + metrics.topPadding, safe.width, metrics.headerHeight},
                  tr(STR_SELECT_CHAPTER));
-  const auto labelSet = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labelSet.btn1, labelSet.btn2, labelSet.btn3, labelSet.btn4);
 }
