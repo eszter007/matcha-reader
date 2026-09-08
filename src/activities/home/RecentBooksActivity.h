@@ -150,10 +150,24 @@ class RecentBooksActivity final : public Activity {
     int tab = -1;
     int contentIndex = -1;
     int scrollRow = -1;
+    int shelvesScroll = -1;
     int shelfContentIndex = -1;
     int shelfScrollRow = -1;
   };
   RenderedState lastRendered;
+  // The one place that snapshots what the frame on screen shows. Both render paths call it, so a
+  // new piece of view state cannot be added to the renderer and forgotten here -- which is exactly
+  // how the partial redraw came to read the Shelves list at an offset it was no longer drawn at.
+  void rememberRendered() {
+    lastRendered.valid = true;
+    lastRendered.openShelf = openShelfIndex;
+    lastRendered.tab = selectedTab;
+    lastRendered.contentIndex = contentIndex;
+    lastRendered.scrollRow = scrollRow;
+    lastRendered.shelvesScroll = shelvesScroll;
+    lastRendered.shelfContentIndex = shelfContentIndex;
+    lastRendered.shelfScrollRow = shelfScrollRow;
+  }
 
   // Background library scan (stale-while-revalidate): onEnter() shows the persisted book list
   // instantly; loop() re-walks the SD card one directory entry per slice and applies/saves changes
