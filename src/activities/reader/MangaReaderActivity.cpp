@@ -70,7 +70,11 @@ void MangaReaderActivity::onEnter() {
   ignoreNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
   if (!book) {
-    sdFontSystem.releaseAllResidentFonts(renderer);
+    // Retires renderer font registrations, so it cannot run beside the render task.
+    {
+      RenderLock lock;
+      sdFontSystem.releaseAllResidentFonts(renderer);
+    }
     book = makeUniqueNoThrow<manga::MangaBook>(std::move(pendingBookPath));
     if (!book) {
       LOG_ERR("MRA", "Failed to allocate MangaBook");
@@ -1574,8 +1578,11 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this, returnMode](const ActivityResult&) {
-                           sdFontSystem.releaseAllResidentFonts(renderer);
-                           viewMode = returnMode;
+                           {
+                             RenderLock lock;
+                             sdFontSystem.releaseAllResidentFonts(renderer);
+                             viewMode = returnMode;
+                           }
                            requestUpdate();
                          });
 }
@@ -1605,8 +1612,11 @@ void MangaReaderActivity::launchWordLookup() {
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
                              static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
                          [this](const ActivityResult&) {
-                           sdFontSystem.releaseAllResidentFonts(renderer);
-                           viewMode = ViewMode::PanelZoom;
+                           {
+                             RenderLock lock;
+                             sdFontSystem.releaseAllResidentFonts(renderer);
+                             viewMode = ViewMode::PanelZoom;
+                           }
                            requestUpdate();
                          });
 }
@@ -1827,7 +1837,10 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
                                ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
                                baseScreenW = renderer.getScreenWidth();
                                baseScreenH = renderer.getScreenHeight();
-                               sdFontSystem.releaseAllResidentFonts(renderer);
+                               {
+                                 RenderLock lock;
+                                 sdFontSystem.releaseAllResidentFonts(renderer);
+                               }
                                launchMenu();
                              });
       return;

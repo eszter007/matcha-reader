@@ -120,9 +120,14 @@ void FontDownloadActivity::onEnter() {
   if (ESP.getFreeHeap() < std::max<size_t>(FONT_SCREEN_MIN_FREE_HEAP, HttpDownloader::MIN_TLS_FREE_HEAP) ||
       ESP.getMaxAllocHeap() < std::max<size_t>(FONT_SCREEN_MIN_MAX_ALLOC, HttpDownloader::MIN_TLS_MAX_ALLOC)) {
     LOG_ERR("FONT", "Low heap before WiFi start (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    RenderLock lock(*this);
-    errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
-    state_ = ERROR;
+    {
+      RenderLock lock(*this);
+      errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
+      state_ = ERROR;
+    }
+    // UiListActivity::onEnter() already requested a render, which may have drawn
+    // the empty list before ERROR was set. Ask again so the error screen shows.
+    requestUpdate();
     return;
   }
 
@@ -340,19 +345,24 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // exhausting the heap here panics to the boot screen instead of reporting a
   // failure. Refuse up front, while refusing is still possible -- against what
   // this manifest costs, since the document's share is already spent.
-  // Every allocation below that scales with the manifest, so the check keeps
-  // matching as the manifest grows. rowLabels_/rowItems_ are deliberately absent:
-  // buildRows() runs after this function returns the document's ~25KB to the heap,
-  // so they do not share this peak.
+  // Every allocation this function makes that scales with the manifest, so the
+  // check keeps matching as the manifest grows. The row caches count too: they
+  // are reserved at the end of this function, while the document is still live.
+  // sizeof the element types rather than constants, so the arithmetic follows
+  // the structs.
+  const size_t rowCapacity = std::max(familiesArr.size() + 2, groupCount + 1);
   const size_t fileTableBytes = manifestFileCount * sizeof(ManifestFile);
   const size_t familyTableBytes = familiesArr.size() * sizeof(ManifestFamily);
   const size_t groupLabelBytes = groupCount * sizeof(StrRef);
   const size_t filteredIndexBytes = familiesArr.size() * sizeof(int);
-  const size_t buildBytes = arenaBytes + fileTableBytes + familyTableBytes + groupLabelBytes + filteredIndexBytes;
+  const size_t rowLabelBytes = rowCapacity * sizeof(decltype(rowLabels_)::value_type);
+  const size_t rowItemBytes = rowCapacity * sizeof(decltype(rowItems_)::value_type);
+  const size_t buildBytes = arenaBytes + fileTableBytes + familyTableBytes + groupLabelBytes + filteredIndexBytes +
+                            rowLabelBytes + rowItemBytes;
   // The largest single block decides whether a fragmented heap can serve the
   // build at all, however much total free it reports.
-  const size_t largestBlock =
-      std::max({arenaBytes, fileTableBytes, familyTableBytes, groupLabelBytes, filteredIndexBytes});
+  const size_t largestBlock = std::max(
+      {arenaBytes, fileTableBytes, familyTableBytes, groupLabelBytes, filteredIndexBytes, rowLabelBytes, rowItemBytes});
   if (ESP.getFreeHeap() < buildBytes + FONT_BUILD_HEADROOM || ESP.getMaxAllocHeap() < largestBlock) {
     LOG_ERR("FONT", "Low heap for manifest build (%u free, %u max block; need %zu + %zu headroom, %zu block)",
             ESP.getFreeHeap(), ESP.getMaxAllocHeap(), buildBytes, FONT_BUILD_HEADROOM, largestBlock);
@@ -473,7 +483,8 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     families_.push_back(family);
   }
 
-  const size_t rowCapacity = std::max(families_.size() + 2, scriptGroupLabels_.size() + 1);
+  // rowCapacity is the figure the gate above budgeted for; reuse it rather than
+  // recomputing, so the two cannot drift apart.
   rowLabels_.reserve(rowCapacity);
   rowItems_.reserve(rowCapacity);
 
