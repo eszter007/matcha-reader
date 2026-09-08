@@ -21,7 +21,8 @@ class RecentBooksActivity final : public Activity {
 
   int selectedTab = 0;
   int contentIndex = 0;
-  int scrollRow = 0;
+  int scrollRow = 0;       // Books tab: first visible grid row
+  int shelvesScroll = 0;   // Shelves tab: first visible list row
 
   bool longPressFired = false;
   // A shelf opens on the Confirm PRESS, so the release of that same physical click arrives with

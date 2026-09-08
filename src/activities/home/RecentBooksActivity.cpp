@@ -299,8 +299,8 @@ int RecentBooksActivity::shelvesVisibleItems(const int contentHeight) const {
 }
 
 int RecentBooksActivity::shelvesScrollOffset(const int visibleItems) const {
-  const int selectedItem = contentIndex - 1;  // index 0 is the tab bar
-  return selectedItem >= visibleItems ? selectedItem - visibleItems + 1 : 0;
+  const int maxOffset = std::max(0, static_cast<int>(shelves.size()) - visibleItems);
+  return std::clamp(shelvesScroll, 0, maxOffset);
 }
 
 // The Shelves tab is a list of full-width rows, NOT the cover grid: hit-testing it with
@@ -962,6 +962,7 @@ void RecentBooksActivity::onEnter() {
   selectedTab = 0;
   contentIndex = 0;
   scrollRow = 0;
+  shelvesScroll = 0;
   openShelfIndex = -1;
   requestUpdate();
 }
@@ -1147,14 +1148,22 @@ void RecentBooksActivity::loop() {
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
     hideSelector();  // a swipe is a touch on either tab
-    // Books tab only: the Shelves tab is a list that scrolls by its own offset, derived from the
-    // selection in renderShelvesTab. scrollRow drives the cover grid alone, so moving it there
-    // would scroll nothing on screen while quietly displacing the grid's viewport.
+    // Each tab scrolls its own viewport: the cover grid by rows of GRID_COLS, the Shelves list by
+    // single rows. Neither moves the selection -- that is what the gesture means here.
+    const int step = swipe == MappedInputManager::SwipeDir::Up ? 1 : -1;
     if (selectedTab == 0) {
       const int maxRow = maxScrollRow(gridContentHeight());
-      const int moved = std::clamp(scrollRow + (swipe == MappedInputManager::SwipeDir::Up ? 1 : -1), 0, maxRow);
+      const int moved = std::clamp(scrollRow + step, 0, maxRow);
       if (moved != scrollRow) {
         scrollRow = moved;
+        requestUpdate();
+      }
+    } else {
+      const int visibleItems = shelvesVisibleItems(gridContentHeight());
+      const int maxOffset = std::max(0, static_cast<int>(shelves.size()) - visibleItems);
+      const int moved = std::clamp(shelvesScroll + step, 0, maxOffset);
+      if (moved != shelvesScroll) {
+        shelvesScroll = moved;
         requestUpdate();
       }
     }
@@ -1190,6 +1199,7 @@ void RecentBooksActivity::loop() {
         if (selectedTab == 1 && !shelvesLoaded) loadShelves();
         contentIndex = 0;
         scrollRow = 0;
+        shelvesScroll = 0;
         requestUpdate();
       }
       // The bar swallows the contact either way: a tap that lands in the gap between
@@ -1256,6 +1266,7 @@ void RecentBooksActivity::loop() {
     if (contentIndex > 0) {
       contentIndex = 0;
       scrollRow = 0;
+      shelvesScroll = 0;
       selectorVisible = true;
       requestUpdate();
     } else {
@@ -1293,6 +1304,7 @@ void RecentBooksActivity::loop() {
   if (hasChangedTab) {
     contentIndex = (contentIndex == 0) ? 0 : 1;
     scrollRow = 0;
+    shelvesScroll = 0;
     // Only the keys reach here -- a tab tap is handled in the touch block and returns -- so the
     // cursor comes back on, wherever a touch left it.
     selectorVisible = true;
@@ -1589,6 +1601,13 @@ void RecentBooksActivity::renderShelvesTab(int contentTop, int contentHeight) {
   const int visibleItems = shelvesVisibleItems(contentHeight);
   const int selectedItem = contentIndex - 1;
   const int shelfCount = static_cast<int>(shelves.size());
+
+  // Only the key cursor drags the list with it; after a swipe the offset is the user's. Same
+  // split as renderBooksTab's, and for the same reason -- see the comment there.
+  if (selectorVisible && selectedItem >= 0) {
+    if (selectedItem < shelvesScroll) shelvesScroll = selectedItem;
+    if (selectedItem >= shelvesScroll + visibleItems) shelvesScroll = selectedItem - visibleItems + 1;
+  }
   const int scrollOffset = shelvesScrollOffset(visibleItems);
 
   // Prewarm the font cache with all visible folder names before drawing. Folder names are drawn
