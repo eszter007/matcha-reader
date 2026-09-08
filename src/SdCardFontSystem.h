@@ -33,11 +33,14 @@ class SdCardFontSystem {
   /// Applies immediately (loads/unloads the fallback and recomputes the global fallback).
   void setJpFallbackNeeded(GfxRenderer& renderer, bool needed);
 
-  /// Release every resident SD font while an image-only reader owns the screen. Manga JPEG/PNG
-  /// decoders need a 36-60 KB allocation and cannot coexist reliably with the selected reader
-  /// font plus its size-matched UI fallbacks on the ESP32-C3 heap. The saved selection is kept;
-  /// ensureLoaded() restores it when text rendering is needed again.
-  void releaseForImageDecode(GfxRenderer& renderer);
+  /// Release every resident SD font -- the selected family, its companion fallback, their
+  /// size-matched UI fallback registrations, and the glyph slabs FontCacheManager holds for
+  /// them. For any screen that needs a large allocation and does not render book text: manga
+  /// JPEG/PNG decoders (a 36-60 KB block) and the WiFi-backed font catalog (esp_wifi_init plus
+  /// two TLS sessions) both call it. Strictly more than FontCacheManager::releaseAllFontMemory(),
+  /// which frees the glyph slabs but leaves the SdCardFont objects themselves allocated. The
+  /// saved selection is kept; ensureLoaded() restores it when text rendering is needed again.
+  void releaseAllResidentFonts(GfxRenderer& renderer);
 
   /// Font ID of the loaded companion/fallback font (0 when none). See effective-reader-font
   /// substitution in EpubReaderActivity: when the SELECTED font can't carry a book's primary

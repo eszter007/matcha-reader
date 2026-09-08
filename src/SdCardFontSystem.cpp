@@ -510,7 +510,7 @@ void SdCardFontSystem::setJpFallbackNeeded(GfxRenderer& renderer, const bool nee
   updateGlobalFallback(renderer);
 }
 
-void SdCardFontSystem::releaseForImageDecode(GfxRenderer& renderer) {
+void SdCardFontSystem::releaseAllResidentFonts(GfxRenderer& renderer) {
   const uint32_t freeBefore = ESP.getFreeHeap();
   const uint32_t maxBefore = ESP.getMaxAllocHeap();
 
@@ -522,10 +522,10 @@ void SdCardFontSystem::releaseForImageDecode(GfxRenderer& renderer) {
   updateGlobalFallback(renderer);
 
   // Glyph slabs and hot groups are owned by FontCacheManager rather than either SD-font manager.
-  // Release them too so the decoder receives one coalesced block, not merely enough total bytes.
+  // Release them too so the caller receives one coalesced block, not merely enough total bytes.
   if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
 
-  LOG_INF("SDFS", "Image decode font release: free %u->%u, maxAlloc %u->%u", freeBefore, ESP.getFreeHeap(), maxBefore,
+  LOG_INF("SDFS", "Resident font release: free %u->%u, maxAlloc %u->%u", freeBefore, ESP.getFreeHeap(), maxBefore,
           ESP.getMaxAllocHeap());
 }
 

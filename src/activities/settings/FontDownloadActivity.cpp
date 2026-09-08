@@ -105,11 +105,10 @@ void FontDownloadActivity::onEnter() {
   // Releasing only the glyph caches is not enough: reached from a book by way of
   // Text Settings, that path leaves ~41KB free where the manifest build needs
   // ~48KB, and the screen refuses itself. The resident SD font families are the
-  // rest of the difference, so drop those too -- despite the name, that is all
-  // releaseForImageDecode() does (it calls releaseAllFontMemory() itself).
+  // rest of the difference, so release those as well.
   {
     RenderLock lock(*this);
-    sdFontSystem.releaseForImageDecode(renderer);
+    sdFontSystem.releaseAllResidentFonts(renderer);
   }
 
   // esp_wifi_init claims tens of KB and reports OOM by returning an error that
@@ -165,7 +164,7 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
   // std::string/std::vector growth that aborts on OOM (issue #191). Fonts
   // reload lazily once the reader resumes. Full release, matching onEnter():
   // a CJK SSID reloads the JP fallback family, not just its glyph slabs.
-  sdFontSystem.releaseForImageDecode(renderer);
+  sdFontSystem.releaseAllResidentFonts(renderer);
 
   if (!fetchAndParseManifest()) {
     // Drop whatever was parsed before the failure: it would otherwise sit in
