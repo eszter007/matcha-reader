@@ -66,6 +66,11 @@ void DictionaryWordSelectActivity::onEnter() {
       performLookup();
       return;
     }
+    // Missed: from here this is ordinary selection, which the reader is now driving themselves.
+    // Forgetting the press keeps the close behaviour ordinary too -- otherwise a definition they
+    // opened by hand would still return to the page instead of back to the words.
+    lookupAtX = -1;
+    lookupAtY = -1;
   }
   requestUpdate();
 }
