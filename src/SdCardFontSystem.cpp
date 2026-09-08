@@ -516,7 +516,10 @@ void SdCardFontSystem::releaseAllResidentFonts(GfxRenderer& renderer) {
 
   // Drop the companion first, then the selected family. manager_.unloadAll() also removes the
   // size-matched UI fallback registrations before deleting their backing SdCardFont objects.
-  jpFallbackNeeded_ = false;
+  // jpFallbackNeeded_ is deliberately left alone: it is policy ("this book wants the Japanese
+  // companion"), not residency, and ensureLoaded() reads it to decide what to restore. Clearing
+  // it here would quietly demote a Japanese book's fallback for any caller that only wanted the
+  // memory back. Callers that mean to change the policy call setJpFallbackNeeded().
   if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
   if (!manager_.currentFamilyName().empty()) manager_.unloadAll(renderer);
   updateGlobalFallback(renderer);

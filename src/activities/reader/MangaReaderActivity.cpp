@@ -71,9 +71,12 @@ void MangaReaderActivity::onEnter() {
 
   if (!book) {
     // Retires renderer font registrations, so it cannot run beside the render task.
+    // Manga renders no book text: drop the Japanese companion policy explicitly, since
+    // releaseAllResidentFonts() frees memory without deciding what should come back.
     {
       RenderLock lock;
       sdFontSystem.releaseAllResidentFonts(renderer);
+      sdFontSystem.setJpFallbackNeeded(renderer, false);
     }
     book = makeUniqueNoThrow<manga::MangaBook>(std::move(pendingBookPath));
     if (!book) {
@@ -1593,6 +1596,7 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
                            {
                              RenderLock lock;
                              sdFontSystem.releaseAllResidentFonts(renderer);
+                             sdFontSystem.setJpFallbackNeeded(renderer, false);
                              viewMode = returnMode;
                            }
                            requestUpdate();
@@ -1630,6 +1634,7 @@ void MangaReaderActivity::launchWordLookup() {
                            {
                              RenderLock lock;
                              sdFontSystem.releaseAllResidentFonts(renderer);
+                             sdFontSystem.setJpFallbackNeeded(renderer, false);
                              viewMode = ViewMode::PanelZoom;
                            }
                            requestUpdate();

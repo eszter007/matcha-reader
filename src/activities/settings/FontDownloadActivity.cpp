@@ -122,6 +122,12 @@ void FontDownloadActivity::onEnter() {
     LOG_ERR("FONT", "Low heap before WiFi start (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     {
       RenderLock lock(*this);
+      // Put back what the reclaim above took. Every other exit from this screen
+      // brings WiFi up and leaves through onExit()'s silentRestart(), which
+      // reloads everything; this refusal does neither, so backing out would
+      // otherwise return to Text Settings and the reader with the selected
+      // family -- and a Japanese book's companion -- still unloaded.
+      sdFontSystem.ensureLoaded(renderer);
       errorMessage_ = tr(STR_LOW_MEMORY_RETRY);
       state_ = ERROR;
     }

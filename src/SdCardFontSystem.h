@@ -39,7 +39,9 @@ class SdCardFontSystem {
   /// JPEG/PNG decoders (a 36-60 KB block) and the WiFi-backed font catalog (esp_wifi_init plus
   /// two TLS sessions) both call it. Strictly more than FontCacheManager::releaseAllFontMemory(),
   /// which frees the glyph slabs but leaves the SdCardFont objects themselves allocated. The
-  /// saved selection is kept; ensureLoaded() restores it when text rendering is needed again.
+  /// saved selection is kept, and so is the JP-fallback policy; ensureLoaded() restores both when
+  /// text rendering is needed again. To drop the Japanese companion for good, the caller says so
+  /// with setJpFallbackNeeded(renderer, false) -- releasing memory does not decide policy.
   void releaseAllResidentFonts(GfxRenderer& renderer);
 
   /// Font ID of the loaded companion/fallback font (0 when none). See effective-reader-font
