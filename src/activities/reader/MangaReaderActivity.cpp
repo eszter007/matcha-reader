@@ -493,6 +493,7 @@ bool MangaReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, cons
 
 bool MangaReaderActivity::renderEndOfBook() {
   if (!isAtEndOfBook()) return false;
+  displayedRotated_ = false;  // this screen is drawn in the base orientation, whatever preceded it
   if (!endOfBookOptions) {
     endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
     if (!endOfBookOptions) LOG_ERR("MRA", "OOM: EndOfBookOptions");
@@ -539,8 +540,37 @@ void MangaReaderActivity::loop() {
   // the menu. Both helpers gate on SETTINGS.touchReaderControls and hasTouch(), so tap-vs-swipe
   // mode and the global opt-out are inherited and non-touch boards see no change. Read once per
   // tick, before any early return can swallow the gesture.
-  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+  // Resolve touch in the orientation the page is actually displayed in. A page or
+  // panel whose aspect does not match the screen is drawn rotated, and the render
+  // path restores the base orientation before returning -- so without this the
+  // zones follow the Reading Orientation setting no matter which way the content
+  // is on screen, and the outer thirds land on the wrong edges of a rotated page.
+  // Both the tap point (tapToLogical) and the screen dims come from the renderer's
+  // current orientation, so setting it around the read gives a consistent frame.
+  //
+  // Under a Try lock, because render() runs on its own task: flipping the renderer's orientation
+  // while a frame is in flight would tear it, and displayedRotated_ is written by that same task.
+  // Taking the lock makes both safe, and taking it non-blocking keeps the input loop off the
+  // render's critical path -- on a miss this tick simply resolves in the base orientation, which
+  // is what it did before.
+  ReaderUtils::TouchPageTurn touch{};
+  bool touchMenu = false;
+  {
+    RenderLock touchLock{RenderLock::Try{}};
+    const bool rotateTouch = touchLock.held() && displayedRotated_;
+    auto baseOrientation = GfxRenderer::Orientation::Portrait;
+    if (rotateTouch) {
+      // Read inside the lock too: the render task writes this field while it draws a rotated
+      // page, so reading it unguarded would be a race in its own right.
+      baseOrientation = renderer.getOrientation();
+      renderer.setOrientation(static_cast<GfxRenderer::Orientation>((baseOrientation + 3) % 4));
+    }
+    touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+    touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+    if (rotateTouch) {
+      renderer.setOrientation(baseOrientation);
+    }
+  }
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
@@ -822,6 +852,11 @@ bool MangaReaderActivity::fullPageGeomFromCache(const PixelCacheIO::Reader& cach
 
 void MangaReaderActivity::renderFullPage() {
   renderer.clearScreen();
+  // Cleared up front, not just assigned once the geometry works out: the paths below display a
+  // placeholder and return early (no image, no decoder, an unreadable header), and a stale true
+  // from the last rotated page would have touch resolving rotated over an unrotated screen. The
+  // geometry sets the real value further down.
+  displayedRotated_ = false;
 
   std::string imgPath = book->getPageImagePath(currentPage);
   if (imgPath.empty()) {
@@ -873,6 +908,7 @@ void MangaReaderActivity::renderFullPage() {
 
   const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const bool rotatePage = g.rotated;
+  displayedRotated_ = rotatePage;
   const int x = g.x, y = g.y;
   const int destWidth = g.destWidth, destHeight = g.destHeight;
   const int screenW = g.screenW, screenH = g.screenH;
@@ -1002,6 +1038,7 @@ void MangaReaderActivity::prefetchNextPageCache() {
 }
 
 void MangaReaderActivity::renderPanelZoom() {
+  displayedRotated_ = false;  // see renderFullPage(): every early return below falls back to it
   // Deferred-grayscale phase (see the panelGray* flags in the header). true means the BW image is
   // already displayed on the e-ink from the initial entry, so this pass skips the BW refresh wave
   // and only adds the 4-level gray wave; false is a fresh entry that shows BW and re-defers the gray
@@ -1057,6 +1094,7 @@ void MangaReaderActivity::renderPanelZoom() {
 
   const PanelGeom g = applyPanelGeometry(panelDims[currentPanel].w, panelDims[currentPanel].h);
   const bool rotatePanel = g.rotated;
+  displayedRotated_ = rotatePanel;
   const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const int screenW = renderer.getScreenWidth();
   const int screenH = renderer.getScreenHeight();
@@ -1475,6 +1513,7 @@ void MangaReaderActivity::workerWarmPanel() {
 
 void MangaReaderActivity::renderTextOverlay() {
   renderer.clearScreen();
+  displayedRotated_ = false;  // see renderFullPage(): text is laid out in the base orientation
 
   if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) {
     viewMode = ViewMode::PanelZoom;

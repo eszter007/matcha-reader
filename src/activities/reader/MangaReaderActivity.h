@@ -91,6 +91,13 @@ class MangaReaderActivity final : public Activity {
   };
   // NOTE: sets the renderer orientation when rotation is needed -- the caller must restore
   // savedOrientation when done.
+  // Whether what is currently on screen was drawn rotated. The render paths
+  // apply the rotation and restore the base orientation before returning, so by
+  // the time loop() runs the renderer no longer knows -- and the touch zones
+  // were being split along the reading orientation's axis rather than the one
+  // the page is actually displayed on.
+  bool displayedRotated_ = false;
+
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
   // Pure fit/rotate math shared by applyFullPageGeometry (render path) and the prefetch worker.
   // Touches NO renderer state: rotation is just a screen-dim swap here, which matches what
