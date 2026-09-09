@@ -76,7 +76,9 @@ class RecentBooksActivity final : public Activity {
   // The grid's viewport height, below the tab bar and above the button hints.
   [[nodiscard]] int gridContentHeight() const;
   // Highest scrollRow that still fills the viewport, for the swipe that scrolls it.
-  [[nodiscard]] int maxScrollRow(int contentHeight) const;
+  // itemCount defaults to the tabbed view's; the shelf detail view passes its own,
+  // since it scrolls its own grid of shelfBooks rather than the Library's.
+  [[nodiscard]] int maxScrollRow(int contentHeight, int itemCount = -1) const;
   // Absolute grid item index under a screen point, or -1 for a miss. Derives the cell grid the
   // same way renderBooksTab()/renderShelvesTab()/renderShelfBooksView() do, so the hit targets
   // are exactly the drawn cells. Deliberately stops at visibleRows: those renderers draw one

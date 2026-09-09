@@ -282,13 +282,13 @@ int RecentBooksActivity::gridContentHeight() const {
   return renderer.getScreenHeight() - gridTop - m.buttonHintsHeight - m.verticalSpacing;
 }
 
-int RecentBooksActivity::maxScrollRow(const int contentHeight) const {
+int RecentBooksActivity::maxScrollRow(const int contentHeight, const int itemCount) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int cellWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / GRID_COLS;
   if (cellWidth <= 0) return 0;
   const int visibleRows = getVisibleRows(getCellHeight(cellWidth), contentHeight);
-  const int itemCount = getContentItemCount();
-  const int totalRows = (itemCount + GRID_COLS - 1) / GRID_COLS;
+  const int count = itemCount >= 0 ? itemCount : getContentItemCount();
+  const int totalRows = (count + GRID_COLS - 1) / GRID_COLS;
   return std::max(0, totalRows - visibleRows);
 }
 
@@ -1046,6 +1046,22 @@ void RecentBooksActivity::loop() {
       }
       return;
     }
+    // A swipe scrolls this grid's viewport, exactly as it does on the Library's own
+    // grid. Without it the shelf was reachable only by the keys: a shelf of any depth
+    // showed its first page and nothing a finger did moved past it.
+    const auto shelfSwipe = mappedInput.wasSwipe();
+    if (shelfSwipe == MappedInputManager::SwipeDir::Up || shelfSwipe == MappedInputManager::SwipeDir::Down) {
+      hideSelector();
+      const int step = shelfSwipe == MappedInputManager::SwipeDir::Up ? 1 : -1;
+      const int maxRow = maxScrollRow(contentHeight, shelfCount);
+      const int moved = std::clamp(shelfScrollRow + step, 0, maxRow);
+      if (moved != shelfScrollRow) {
+        shelfScrollRow = moved;
+        requestUpdate();
+      }
+      // Consumed either way, so a swipe cannot also read as a tap on the cover it ended on.
+      return;
+    }
 
     // The click that opened this shelf is still down: only a press that STARTS here may act, or
     // its release opens the focused book the instant the shelf appears (see shelfConfirmPressSeen).
@@ -1660,9 +1676,15 @@ void RecentBooksActivity::renderShelfBooksView(int contentTop, int contentHeight
   const int bookCount = static_cast<int>(shelfBooks.size());
   const int totalRows = (bookCount + GRID_COLS - 1) / GRID_COLS;
 
+  // Same rule as renderBooksTab: only the key selector drags the viewport with it. After a
+  // swipe the scroll position is the user's, and snapping it back to the selection would undo
+  // the gesture on the very next frame.
   const int selectedRow = shelfContentIndex >= 0 ? shelfContentIndex / GRID_COLS : 0;
-  if (selectedRow < shelfScrollRow) shelfScrollRow = selectedRow;
-  if (selectedRow >= shelfScrollRow + visibleRows) shelfScrollRow = selectedRow - visibleRows + 1;
+  if (selectorVisible) {
+    if (selectedRow < shelfScrollRow) shelfScrollRow = selectedRow;
+    if (selectedRow >= shelfScrollRow + visibleRows) shelfScrollRow = selectedRow - visibleRows + 1;
+  }
+  shelfScrollRow = std::clamp(shelfScrollRow, 0, std::max(0, totalRows - visibleRows));
 
   // See renderBooksTab: one peek row, no titles on it, badges filled synchronously.
   const int renderRows = std::min(totalRows - shelfScrollRow, visibleRows + 1);
