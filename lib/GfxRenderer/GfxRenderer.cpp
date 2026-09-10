@@ -705,16 +705,20 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
   const int32_t stepFP = (256 << 16) / scale;  // source texels per destination pixel, 16.16
 
   for (int dstY = 0; dstY < height; ++dstY) {
-    const int srcY = std::min<int>(glyph->height - 1, (dstY * 256) / scale);
     // Destination pixel CENTRE mapped back into the source, less the half texel that puts texel
     // centres on integers. Off-by-a-half here shifts every glyph a subpixel and thickens one side.
+    // Each branch divides only for the coordinate it uses: the C3 has no divider.
     const int32_t syFP = interpolate ? ((2 * dstY + 1) * stepFP) / 2 - 32768 : 0;
+    const int srcY = interpolate ? 0 : std::min<int>(glyph->height - 1, (dstY * 256) / scale);
     for (int dstX = 0; dstX < width; ++dstX) {
-      const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
-      const int32_t sxFP = interpolate ? ((2 * dstX + 1) * stepFP) / 2 - 32768 : 0;
-      const uint8_t ink = interpolate
-                              ? sampleGlyphInk(bitmap, fontData->is2Bit, glyph->width, glyph->height, sxFP, syFP)
-                              : glyphTexelInk(bitmap, fontData->is2Bit, srcY * glyph->width + srcX);
+      uint8_t ink;
+      if (interpolate) {
+        const int32_t sxFP = ((2 * dstX + 1) * stepFP) / 2 - 32768;
+        ink = sampleGlyphInk(bitmap, fontData->is2Bit, glyph->width, glyph->height, sxFP, syFP);
+      } else {
+        const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
+        ink = glyphTexelInk(bitmap, fontData->is2Bit, srcY * glyph->width + srcX);
+      }
       if (renderMode == GfxRenderer::BW) {
         // Half coverage or more takes the pixel. The panel has one bit here, so this cannot be a
         // soft edge -- but the edge now lands where the outline is rather than where the source
