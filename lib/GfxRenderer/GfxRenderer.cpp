@@ -642,10 +642,15 @@ static int scalePositive(const int value, const uint16_t scale) {
 
 // Ink in one source texel, 0 (none) .. 255 (full). Both glyph formats reduce to the same scale so
 // the sampler below does not have to care which one it is reading.
-static inline uint8_t glyphTexelInk(const uint8_t* bitmap, const bool is2Bit, const int pos) {
+// binarize collapses the 2-bit tones to "any ink at all". The BW pass needs it: the panel has one
+// bit per pixel and the old renderer drew every non-white texel solid, so the font's light level is
+// a shape the glyph HAS, not a third of a pixel's worth of coverage. Interpolating it as coverage
+// instead would thin every enlarged 2-bit glyph and erase a stroke drawn entirely at that level.
+static inline uint8_t glyphTexelInk(const uint8_t* bitmap, const bool is2Bit, const bool binarize, const int pos) {
   if (is2Bit) {
     const uint8_t byte = bitmap[pos >> 2];
     const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;  // 0 = no ink, 3 = darkest
+    if (binarize) return raw ? 255 : 0;
     return static_cast<uint8_t>(raw * 85);
   }
   return ((bitmap[pos >> 3] >> (7 - (pos & 7))) & 1) ? 255 : 0;
@@ -659,8 +664,8 @@ static inline uint8_t glyphTexelInk(const uint8_t* bitmap, const bool is2Bit, co
 // texel the destination pixel happens to land on, so a magnified edge is the source staircase
 // magnified with it; reading the coverage between texels instead lets the threshold below put the
 // edge where the outline actually is.
-static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, const int gw, const int gh, int32_t sxFP,
-                                     int32_t syFP) {
+static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, const bool binarize, const int gw,
+                                     const int gh, int32_t sxFP, int32_t syFP) {
   if (sxFP < 0) sxFP = 0;  // clamp to the edge texel: there is nothing to interpolate with outside
   if (syFP < 0) syFP = 0;
   int x0 = sxFP >> 16;
@@ -672,13 +677,15 @@ static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, c
   const int x1 = x0 + 1 < gw ? x0 + 1 : gw - 1;
   const int y1 = y0 + 1 < gh ? y0 + 1 : gh - 1;
 
-  const uint32_t c00 = glyphTexelInk(bitmap, is2Bit, y0 * gw + x0);
-  const uint32_t c10 = glyphTexelInk(bitmap, is2Bit, y0 * gw + x1);
-  const uint32_t c01 = glyphTexelInk(bitmap, is2Bit, y1 * gw + x0);
-  const uint32_t c11 = glyphTexelInk(bitmap, is2Bit, y1 * gw + x1);
-  const uint32_t top = (c00 * (65536 - fx) + c10 * fx) >> 16;
-  const uint32_t bottom = (c01 * (65536 - fx) + c11 * fx) >> 16;
-  return static_cast<uint8_t>((top * (65536 - fy) + bottom * fy) >> 16);
+  const uint32_t c00 = glyphTexelInk(bitmap, is2Bit, binarize, y0 * gw + x0);
+  const uint32_t c10 = glyphTexelInk(bitmap, is2Bit, binarize, y0 * gw + x1);
+  const uint32_t c01 = glyphTexelInk(bitmap, is2Bit, binarize, y1 * gw + x0);
+  const uint32_t c11 = glyphTexelInk(bitmap, is2Bit, binarize, y1 * gw + x1);
+  // +32768 rounds each lerp instead of truncating: without it an exact 50/50 mix of 0 and 255 comes
+  // out 127 and falls just under the half-coverage threshold the caller applies.
+  const uint32_t top = (c00 * (65536 - fx) + c10 * fx + 32768) >> 16;
+  const uint32_t bottom = (c01 * (65536 - fx) + c11 * fx + 32768) >> 16;
+  return static_cast<uint8_t>((top * (65536 - fy) + bottom * fy + 32768) >> 16);
 }
 
 // Word Lookup needs a few larger sizes, but the built-in small font is the only one that has
@@ -702,7 +709,9 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
   // texels a destination pixel covers, so thin stems cannot fall between samples), which is its own
   // change. At 1:1 drawTextScaled() has already returned above.
   const bool interpolate = scale > 256;
-  const int32_t stepFP = (256 << 16) / scale;  // source texels per destination pixel, 16.16
+  // Guarded by interpolate: scale is caller-supplied and drawTextScaled does not reject 0, which
+  // would divide by zero here even though the loops below would not run.
+  const int32_t stepFP = interpolate ? (256 << 16) / scale : 0;  // source texels per dst pixel, 16.16
 
   for (int dstY = 0; dstY < height; ++dstY) {
     // Destination pixel CENTRE mapped back into the source, less the half texel that puts texel
@@ -711,22 +720,23 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
     const int32_t syFP = interpolate ? ((2 * dstY + 1) * stepFP) / 2 - 32768 : 0;
     const int srcY = interpolate ? 0 : std::min<int>(glyph->height - 1, (dstY * 256) / scale);
     for (int dstX = 0; dstX < width; ++dstX) {
+      // The BW pass reads the glyph as a solid shape; the grayscale passes need the real tones.
+      const bool binarize = renderMode == GfxRenderer::BW;
       uint8_t ink;
       if (interpolate) {
         const int32_t sxFP = ((2 * dstX + 1) * stepFP) / 2 - 32768;
-        ink = sampleGlyphInk(bitmap, fontData->is2Bit, glyph->width, glyph->height, sxFP, syFP);
+        ink = sampleGlyphInk(bitmap, fontData->is2Bit, binarize, glyph->width, glyph->height, sxFP, syFP);
       } else {
         const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
-        ink = glyphTexelInk(bitmap, fontData->is2Bit, srcY * glyph->width + srcX);
+        ink = glyphTexelInk(bitmap, fontData->is2Bit, binarize, srcY * glyph->width + srcX);
       }
       if (renderMode == GfxRenderer::BW) {
         // Half coverage or more takes the pixel. The panel has one bit here, so this cannot be a
         // soft edge -- but the edge now lands where the outline is rather than where the source
         // grid happened to fall, which is what removes the staircase.
         //
-        // 2-bit glyphs keep their "any ink at all" rule when point-sampled, so an unenlarged glyph
-        // renders exactly as before; interpolated ink spread over the neighbours would only bolden
-        // it.
+        // ink is binarized here, so this is coverage of the shape the old renderer drew, and a
+        // point sample is 0 or 255 either way -- an unenlarged glyph renders exactly as before.
         const bool inked = interpolate ? ink >= 128 : ink > 0;
         if (inked) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
         continue;
