@@ -659,8 +659,8 @@ static inline uint8_t glyphTexelInk(const uint8_t* bitmap, const bool is2Bit, co
 // texel the destination pixel happens to land on, so a magnified edge is the source staircase
 // magnified with it; reading the coverage between texels instead lets the threshold below put the
 // edge where the outline actually is.
-static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, const int gw, const int gh,
-                                     int32_t sxFP, int32_t syFP) {
+static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, const int gw, const int gh, int32_t sxFP,
+                                     int32_t syFP) {
   if (sxFP < 0) sxFP = 0;  // clamp to the edge texel: there is nothing to interpolate with outside
   if (syFP < 0) syFP = 0;
   int x0 = sxFP >> 16;
