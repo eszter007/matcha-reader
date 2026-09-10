@@ -640,6 +640,54 @@ static int scalePositive(const int value, const uint16_t scale) {
   return std::max(0, static_cast<int>((static_cast<int64_t>(value) * scale + 128) / 256));
 }
 
+// Ink in one source texel, 0 (none) .. 255 (full). Both glyph formats reduce to the same scale so
+// the sampler below does not have to care which one it is reading.
+// binarize collapses the 2-bit tones to "any ink at all". The BW pass needs it: the panel has one
+// bit per pixel and the old renderer drew every non-white texel solid, so the font's light level is
+// a shape the glyph HAS, not a third of a pixel's worth of coverage. Interpolating it as coverage
+// instead would thin every enlarged 2-bit glyph and erase a stroke drawn entirely at that level.
+static inline uint8_t glyphTexelInk(const uint8_t* bitmap, const bool is2Bit, const bool binarize, const int pos) {
+  if (is2Bit) {
+    const uint8_t byte = bitmap[pos >> 2];
+    const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;  // 0 = no ink, 3 = darkest
+    if (binarize) return raw ? 255 : 0;
+    return static_cast<uint8_t>(raw * 85);
+  }
+  return ((bitmap[pos >> 3] >> (7 - (pos & 7))) & 1) ? 255 : 0;
+}
+
+// Ink at a fractional position in the glyph, bilinear over the four texels around it. 16.16 fixed
+// point throughout: the C3 has no FPU, and the intermediates stay under 2^25 for any glyph the
+// fonts carry.
+//
+// This is what makes an upscaled edge follow the glyph's shape. Point-sampling copies whichever
+// texel the destination pixel happens to land on, so a magnified edge is the source staircase
+// magnified with it; reading the coverage between texels instead lets the threshold below put the
+// edge where the outline actually is.
+static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, const bool binarize, const int gw,
+                                     const int gh, int32_t sxFP, int32_t syFP) {
+  if (sxFP < 0) sxFP = 0;  // clamp to the edge texel: there is nothing to interpolate with outside
+  if (syFP < 0) syFP = 0;
+  int x0 = sxFP >> 16;
+  int y0 = syFP >> 16;
+  const uint32_t fx = static_cast<uint32_t>(sxFP) & 0xFFFF;
+  const uint32_t fy = static_cast<uint32_t>(syFP) & 0xFFFF;
+  if (x0 > gw - 1) x0 = gw - 1;
+  if (y0 > gh - 1) y0 = gh - 1;
+  const int x1 = x0 + 1 < gw ? x0 + 1 : gw - 1;
+  const int y1 = y0 + 1 < gh ? y0 + 1 : gh - 1;
+
+  const uint32_t c00 = glyphTexelInk(bitmap, is2Bit, binarize, y0 * gw + x0);
+  const uint32_t c10 = glyphTexelInk(bitmap, is2Bit, binarize, y0 * gw + x1);
+  const uint32_t c01 = glyphTexelInk(bitmap, is2Bit, binarize, y1 * gw + x0);
+  const uint32_t c11 = glyphTexelInk(bitmap, is2Bit, binarize, y1 * gw + x1);
+  // +32768 rounds each lerp instead of truncating: without it an exact 50/50 mix of 0 and 255 comes
+  // out 127 and falls just under the half-coverage threshold the caller applies.
+  const uint32_t top = (c00 * (65536 - fx) + c10 * fx + 32768) >> 16;
+  const uint32_t bottom = (c01 * (65536 - fx) + c11 * fx + 32768) >> 16;
+  return static_cast<uint8_t>((top * (65536 - fy) + bottom * fy + 32768) >> 16);
+}
+
 // Word Lookup needs a few larger sizes, but the built-in small font is the only one that has
 // the desired CJK fallback. Scale its bitmap directly instead of adding another font family.
 static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode,
@@ -657,24 +705,55 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
   const int baseY = cursorY - scaleSigned(glyph->top, scale);
   if (!renderer.glyphIntersectsStrip(baseX, baseY, baseX + width - 1, baseY + height - 1)) return;
 
+  // Enlarging only. Shrinking keeps the old point sample: it needs the opposite filter (average the
+  // texels a destination pixel covers, so thin stems cannot fall between samples), which is its own
+  // change. At 1:1 drawTextScaled() has already returned above.
+  const bool interpolate = scale > 256;
+  // Guarded by interpolate: scale is caller-supplied and drawTextScaled does not reject 0, which
+  // would divide by zero here even though the loops below would not run.
+  const int32_t stepFP = interpolate ? (256 << 16) / scale : 0;  // source texels per dst pixel, 16.16
+
   for (int dstY = 0; dstY < height; ++dstY) {
-    const int srcY = std::min<int>(glyph->height - 1, (dstY * 256) / scale);
+    // Destination pixel CENTRE mapped back into the source, less the half texel that puts texel
+    // centres on integers. Off-by-a-half here shifts every glyph a subpixel and thickens one side.
+    // Each branch divides only for the coordinate it uses; the other value is never read.
+    const int32_t syFP = interpolate ? ((2 * dstY + 1) * stepFP) / 2 - 32768 : 0;
+    const int srcY = interpolate ? 0 : std::min<int>(glyph->height - 1, (dstY * 256) / scale);
     for (int dstX = 0; dstX < width; ++dstX) {
-      const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
-      const int pos = srcY * glyph->width + srcX;
-      if (fontData->is2Bit) {
-        const uint8_t byte = bitmap[pos >> 2];
-        const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
-        const uint8_t bmpVal = 3 - raw;
-        if (renderMode == GfxRenderer::BW && bmpVal < 3) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
-        } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, false);
-        } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, false);
-        }
-      } else if ((bitmap[pos >> 3] >> (7 - (pos & 7))) & 1) {
-        renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+      // The BW pass reads the glyph as a solid shape; the grayscale passes need the real tones.
+      const bool binarize = renderMode == GfxRenderer::BW;
+      uint8_t ink;
+      if (interpolate) {
+        const int32_t sxFP = ((2 * dstX + 1) * stepFP) / 2 - 32768;
+        ink = sampleGlyphInk(bitmap, fontData->is2Bit, binarize, glyph->width, glyph->height, sxFP, syFP);
+      } else {
+        const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
+        ink = glyphTexelInk(bitmap, fontData->is2Bit, binarize, srcY * glyph->width + srcX);
+      }
+      if (renderMode == GfxRenderer::BW) {
+        // Half coverage or more takes the pixel. The panel has one bit here, so this cannot be a
+        // soft edge -- but the edge now lands where the outline is rather than where the source
+        // grid happened to fall, which is what removes the staircase.
+        //
+        // ink is binarized here, so this is coverage of the shape the old renderer drew, and a
+        // point sample is 0 or 255 either way -- an unenlarged glyph renders exactly as before.
+        const bool inked = interpolate ? ink >= 128 : ink > 0;
+        if (inked) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+        continue;
+      }
+      if (!fontData->is2Bit) {
+        // A 1-bit glyph has no tones to separate into planes: it draws in every pass, as before.
+        if (ink >= 128) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+        continue;
+      }
+      // Back to the 4 levels the planes encode. Round-trips exactly for a point sample (85 per
+      // level), so only enlarged glyphs see the interpolated tones.
+      const uint8_t raw = static_cast<uint8_t>((ink * 3 + 127) / 255);
+      const uint8_t bmpVal = 3 - raw;
+      if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
+        renderer.drawPixel(baseX + dstX, baseY + dstY, false);
+      } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
+        renderer.drawPixel(baseX + dstX, baseY + dstY, false);
       }
     }
   }
