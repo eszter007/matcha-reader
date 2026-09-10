@@ -43,6 +43,7 @@ class GfxRenderer {
 
   HalDisplay& display;
   RenderMode renderMode;
+  mutable bool absoluteGrayPlanes = false;
   Orientation orientation;
   bool fadingFix;
   uint8_t* frameBuffer = nullptr;
@@ -268,6 +269,12 @@ class GfxRenderer {
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
   bool supportsAsyncRefresh() const;
+  // True when the display can overlap an ordinary B/W refresh with grayscale
+  // composition without bypassing a required grayscale base waveform.
+  HalDisplay::GrayscaleCapabilities grayscaleCapabilities(
+      HalDisplay::GrayscaleMode mode = HalDisplay::GrayscaleMode::Overlay) const;
+  // Compatibility queries for Overlay mode.
+  bool supportsAsyncGrayscaleBase() const;
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   // void displayWindow(int x, int y, int width, int height) const;
   void invertScreen() const;
@@ -326,9 +333,9 @@ class GfxRenderer {
   // screens rely on this); pass true to also grow a source smaller than the box up to fill it
   // (manga panel zoom). Only wired through the 1-bit path -- the grayscale path always shrink-fits.
   void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
-  void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
+  bool drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
                   bool allowUpscale = false) const;
-  void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, bool allowUpscale = false) const;
+  bool drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, bool allowUpscale = false) const;
   // Counter-invert content images in the logical framebuffer so output-level
   // dark mode leaves their original polarity unchanged.
   void preserveImagePolarity(int x, int y, int width, int height) const;
@@ -432,7 +439,7 @@ class GfxRenderer {
   int getTextHeight(int fontId) const;
 
   // Grayscale functions
-  void setRenderMode(const RenderMode mode) { this->renderMode = mode; }
+  void setRenderMode(RenderMode mode);
   RenderMode getRenderMode() const { return renderMode; }
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload
   // takes the gray region in LOGICAL screen coordinates and rotates it to the
@@ -444,9 +451,13 @@ class GfxRenderer {
   // follows (X3: OEM differential base waveform; others: plain display with
   // `fallback`).
   void displayGrayscaleBase(HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
+  bool displayGrayscaleBase(HalDisplay::GrayscaleMode mode,
+                            HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
+  // Active input encoding, used when drawing monochrome overlays into planes.
+  bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+

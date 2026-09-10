@@ -333,6 +333,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   constexpr int wideButtonPositions[] = {65, 157, 291, 383};
   const int* buttonPositions = renderer.getScreenWidth() >= 528 ? wideButtonPositions : narrowButtonPositions;
   const char* labels[] = {btn1, btn2, btn3, btn4};
+  const bool grayscale = renderer.getRenderMode() != GfxRenderer::BW && !renderer.grayPlanesAreAbsolute();
 
   for (int i = 0; i < 4; i++) {
     // An empty label means the button does nothing on this screen, so draw nothing.
@@ -342,7 +343,10 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
     // unused slot blank; this matches them.
     if (labels[i] == nullptr || labels[i][0] == '\0') continue;
     const int x = buttonPositions[i];
-    renderer.fillRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, cornerRadius, Color::White);
+    renderer.fillRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, cornerRadius,
+                             grayscale ? Color::Black : Color::White);
+    // The gray planes carry only the filled block; the border and label are drawn on the B/W pass.
+    if (grayscale) continue;
     renderer.drawRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, 1, cornerRadius, true, true, false,
                              false, true);
     drawHintLabel(renderer, SMALL_FONT_ID, labels[i], x, buttonWidth, pageHeight - buttonY, buttonHeight, textYOffset);
