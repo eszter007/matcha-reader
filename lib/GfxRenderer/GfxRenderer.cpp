@@ -716,7 +716,7 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
   for (int dstY = 0; dstY < height; ++dstY) {
     // Destination pixel CENTRE mapped back into the source, less the half texel that puts texel
     // centres on integers. Off-by-a-half here shifts every glyph a subpixel and thickens one side.
-    // Each branch divides only for the coordinate it uses: the C3 has no divider.
+    // Each branch divides only for the coordinate it uses; the other value is never read.
     const int32_t syFP = interpolate ? ((2 * dstY + 1) * stepFP) / 2 - 32768 : 0;
     const int srcY = interpolate ? 0 : std::min<int>(glyph->height - 1, (dstY * 256) / scale);
     for (int dstX = 0; dstX < width; ++dstX) {
