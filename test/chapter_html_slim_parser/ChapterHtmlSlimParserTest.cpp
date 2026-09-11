@@ -658,4 +658,50 @@ TEST_F(ChapterHtmlSlimParserTest, DivWithHiddenAttributeContentShouldBeSkipped) 
   ASSERT_EQ(parser.partWordBufferIndex, 0);
 }
 
+
+// visibleTextOffset is the reading position KOReader sync resolves against, so it must count
+// only text that actually reaches the layout. Hidden content is skipped by the renderer; if it
+// still advanced the counter, every page after a hidden block would resolve to a later page than
+// the text the reader can see.
+TEST_F(ChapterHtmlSlimParserTest, HiddenTextDoesNotAdvanceTheVisibleOffset) {
+  const XML_Char* hidden[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  parser.insideBody = true;
+
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "abc", 3);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  const uint32_t afterVisible = parser.visibleTextOffset;
+  ASSERT_EQ(afterVisible, 3u) << "visible text must be counted";
+
+  ChapterHtmlSlimParser::startElement(&parser, "p", hidden);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  EXPECT_EQ(parser.visibleTextOffset, afterVisible) << "hidden text must not advance the offset";
+
+  // ...and the counter resumes from the visible total, not from a position inflated by the
+  // hidden run, so the next page's recorded offset still points at rendered text.
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "de", 2);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  EXPECT_EQ(parser.visibleTextOffset, afterVisible + 2);
+}
+
+TEST_F(ChapterHtmlSlimParserTest, HiddenSubtreeContentDoesNotAdvanceTheVisibleOffset) {
+  const XML_Char* hidden[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  parser.insideBody = true;
+
+  // Nested inside the hidden element: the skip covers the whole subtree, not just its own text.
+  ChapterHtmlSlimParser::startElement(&parser, "div", hidden);
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "buried", 6);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  ChapterHtmlSlimParser::endElement(&parser, "div");
+
+  EXPECT_EQ(parser.visibleTextOffset, 0u);
+}
+
 }  // namespace

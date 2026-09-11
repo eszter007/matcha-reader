@@ -49,6 +49,34 @@ class CancellablePrint final : public Print {
   BmpConvertCancelFn shouldCancel;
   void* cancelCtx;
 };
+
+// A cached cover/thumbnail counts as generated only if its BMP is whole. Every converter below
+// opens the destination before it knows the decode will succeed, so an interrupted run can leave
+// a non-empty but truncated file -- which hasContent() alone would trust forever, making one bad
+// moment permanent and silent. The header carries the total file size, so it validates itself.
+// Read byte-wise: the buffer is not guaranteed 4-byte aligned and the C3 faults on unaligned
+// multi-byte loads.
+bool hasCompleteBmp(const char* moduleName, const std::string& path) {
+  HalFile file;
+  if (!Storage.openFileForRead(moduleName, path, file)) return false;
+  uint8_t header[6];
+  if (file.read(header, sizeof(header)) != static_cast<int>(sizeof(header))) return false;
+  if (header[0] != 'B' || header[1] != 'M') return false;
+  const uint32_t declared = static_cast<uint32_t>(header[2]) | (static_cast<uint32_t>(header[3]) << 8) |
+                            (static_cast<uint32_t>(header[4]) << 16) | (static_cast<uint32_t>(header[5]) << 24);
+  return declared > 0 && file.size() >= declared;
+}
+
+// Drops a present-but-incomplete artifact so the conversion that follows retries instead of
+// inheriting the partial file. Absent paths are a no-op.
+bool bmpCacheIsUsable(const char* moduleName, const std::string& path) {
+  if (hasCompleteBmp(moduleName, path)) return true;
+  if (Storage.exists(path.c_str())) {
+    LOG_ERR("EBP", "Discarding incomplete BMP cache: %s", path.c_str());
+    Storage.remove(path.c_str());
+  }
+  return false;
+}
 }  // namespace
 
 bool Epub::findContentOpfFile(std::string* contentOpfFile, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
@@ -664,10 +692,11 @@ std::string Epub::getCoverBmpPath(bool cropped, bool originalThresholds) const {
 }
 
 bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
-  // Already generated, return true. hasContent(), not exists(): every failure below removes the
-  // partial file, but openFileForWrite() creates it before the conversion runs, so a reset or
-  // power loss in that window leaves a 0-byte cover that exists() would trust forever.
-  if (FsHelpers::hasContent("EBP", getCoverBmpPath(cropped, originalThresholds))) {
+  // Already generated, return true. Not exists(): openFileForWrite() creates the destination
+  // before the conversion runs, so a reset or power loss in that window leaves a 0-byte or
+  // half-written cover that exists() would trust forever. bmpCacheIsUsable() requires a whole
+  // BMP and clears anything short of one.
+  if (bmpCacheIsUsable("EBP", getCoverBmpPath(cropped, originalThresholds))) {
     return true;
   }
 
@@ -796,12 +825,12 @@ std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
 bool Epub::generateThumbBmp(int height, BmpConvertCancelFn shouldCancel, void* cancelCtx) const {
-  // Already generated, return true. hasContent(), not exists(): every branch below opens the
-  // destination for writing before it knows the conversion will succeed, so a failed, cancelled
-  // or power-interrupted run leaves a 0-byte file. Answering "already generated" for that husk
-  // made the failure permanent AND invisible -- the caller drew a placeholder forever while
-  // this function reported success and never attempted the cover again.
-  if (FsHelpers::hasContent("EBP", getThumbBmpPath(height))) {
+  // Already generated, return true. Not exists(): every branch below opens the destination for
+  // writing before it knows the conversion will succeed, so a failed, cancelled or
+  // power-interrupted run leaves a 0-byte or truncated file. Answering "already generated" for
+  // that husk made the failure permanent AND invisible -- the caller drew a placeholder forever
+  // while this function reported success and never attempted the thumbnail again.
+  if (bmpCacheIsUsable("EBP", getThumbBmpPath(height))) {
     return true;
   }
 

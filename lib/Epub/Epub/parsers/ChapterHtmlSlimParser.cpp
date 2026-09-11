@@ -2353,7 +2353,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
-  const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
+  // skipUntilDepth: text inside a skipped subtree (display:none, the HTML hidden attribute)
+  // never reaches the layout, so counting it would shift every later page's offset away from
+  // the text actually on screen -- and that offset is what KOReader sync resolves against.
+  const bool insideSkippedSubtree = self->skipUntilDepth < self->depth;
+  const bool countVisibleOffsets =
+      self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData && !insideSkippedSubtree;
   const uint32_t callbackVisibleOffset = self->visibleTextOffset;
   if (countVisibleOffsets) {
     const unsigned char* ptr = reinterpret_cast<const unsigned char*>(s);
