@@ -8,11 +8,11 @@
 #include <cstring>
 
 #include "ChapterXPathResolver.h"
-#include "VisibleTextStreamer.h"
 #include "Epub/Section.h"
 #include "Epub/VisibleTextUtils.h"
 #include "Epub/htmlEntities.h"
 #include "Utf8.h"
+#include "VisibleTextStreamer.h"
 
 namespace {
 using namespace koreader_sync;
