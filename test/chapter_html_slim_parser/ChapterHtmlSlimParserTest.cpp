@@ -658,7 +658,6 @@ TEST_F(ChapterHtmlSlimParserTest, DivWithHiddenAttributeContentShouldBeSkipped) 
   ASSERT_EQ(parser.partWordBufferIndex, 0);
 }
 
-
 // visibleTextOffset is the reading position KOReader sync resolves against, so it must count
 // only text that actually reaches the layout. Hidden content is skipped by the renderer; if it
 // still advanced the counter, every page after a hidden block would resolve to a later page than
