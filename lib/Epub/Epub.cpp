@@ -50,50 +50,10 @@ class CancellablePrint final : public Print {
   void* cancelCtx;
 };
 
-// A cached cover/thumbnail counts as generated only if its BMP is whole. Every converter below
-// opens the destination before it knows the decode will succeed, so an interrupted run can leave
-// a non-empty but truncated file -- which hasContent() alone would trust forever, making one bad
-// moment permanent and silent. The header carries the total file size, so it validates itself.
-// Read byte-wise: the buffer is not guaranteed 4-byte aligned and the C3 faults on unaligned
-// multi-byte loads.
-bool hasCompleteBmp(const char* moduleName, const std::string& path) {
-  HalFile file;
-  if (!Storage.openFileForRead(moduleName, path, file)) return false;
-  // 14-byte file header plus a 40-byte BITMAPINFOHEADER: the smallest BMP this code ever writes.
-  constexpr int MIN_BMP_BYTES = 14 + 40;
-  uint8_t header[MIN_BMP_BYTES];
-  if (file.read(header, sizeof(header)) != MIN_BMP_BYTES) return false;
-  if (header[0] != 'B' || header[1] != 'M') return false;
-
-  const auto le32 = [&header](int offset) -> uint32_t {
-    return static_cast<uint32_t>(header[offset]) | (static_cast<uint32_t>(header[offset + 1]) << 8) |
-           (static_cast<uint32_t>(header[offset + 2]) << 16) | (static_cast<uint32_t>(header[offset + 3]) << 24);
-  };
-  const auto le16 = [&header](int offset) -> uint16_t {
-    return static_cast<uint16_t>(header[offset] | (header[offset + 1] << 8));
-  };
-
-  const uint32_t declared = le32(2);
-  const uint32_t pixelOffset = le32(10);
-  const int32_t width = static_cast<int32_t>(le32(18));
-  const int32_t rawHeight = static_cast<int32_t>(le32(22));
-  const uint16_t bitCount = le16(28);
-  if (width <= 0 || rawHeight == 0 || bitCount == 0 || pixelOffset < static_cast<uint32_t>(MIN_BMP_BYTES)) return false;
-
-  // bfSize alone is not enough: a header claiming a small total size passes the length test while
-  // carrying no pixel rows at all, and the renderer then hits short reads. Compute what the
-  // geometry actually requires. 64-bit math throughout so a hostile width/height cannot wrap.
-  const int64_t height = rawHeight < 0 ? -static_cast<int64_t>(rawHeight) : static_cast<int64_t>(rawHeight);
-  const int64_t rowBytes = ((static_cast<int64_t>(width) * bitCount + 31) / 32) * 4;
-  const int64_t required = static_cast<int64_t>(pixelOffset) + rowBytes * height;
-  return declared >= static_cast<uint32_t>(MIN_BMP_BYTES) && static_cast<int64_t>(file.size()) >= required &&
-         static_cast<int64_t>(file.size()) >= static_cast<int64_t>(declared);
-}
-
 // Drops a present-but-incomplete artifact so the conversion that follows retries instead of
 // inheriting the partial file. Absent paths are a no-op.
 bool bmpCacheIsUsable(const char* moduleName, const std::string& path) {
-  if (hasCompleteBmp(moduleName, path)) return true;
+  if (FsHelpers::hasCompleteBmp(moduleName, path)) return true;
   if (Storage.exists(path.c_str())) {
     LOG_ERR("EBP", "Discarding incomplete BMP cache: %s", path.c_str());
     Storage.remove(path.c_str());
@@ -820,7 +780,7 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
 
     // Same completeness bar as the cache guard: a two-byte signature check would accept a
     // truncated copy, cache it as generated and hand a partial cover to the renderer.
-    if (!hasCompleteBmp("EBP", outPath)) {
+    if (!FsHelpers::hasCompleteBmp("EBP", outPath)) {
       LOG_ERR("EBP", "Cover item has .bmp extension but is not a complete BMP, skipping");
       Storage.remove(outPath.c_str());
       return false;

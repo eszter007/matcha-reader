@@ -3595,7 +3595,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // after. Only needed when grayscale actually renders.
       if (!renderer.storeBwBuffer()) {
         LOG_ERR("ERS", "Failed to store BW buffer for grayscale render; skipping grayscale this page");
-        if (absoluteImageGrayscale) renderer.setRenderMode(GfxRenderer::BW);
+        if (absoluteImageGrayscale) {
+          // The absolute base waveform already ran; cancel the pass and re-sync the controller
+          // from the intact BW framebuffer, or the next differential turn draws on stale RAM.
+          renderer.setRenderMode(GfxRenderer::BW);
+          renderer.cleanupGrayscaleWithFrameBuffer();
+        }
         const auto tEnd = millis();
         LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
                 tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);

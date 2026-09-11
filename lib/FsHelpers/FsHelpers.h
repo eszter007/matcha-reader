@@ -18,6 +18,16 @@ inline bool hasContent(const char* moduleName, const char* path) {
 
 inline bool hasContent(const char* moduleName, const std::string& path) { return hasContent(moduleName, path.c_str()); }
 
+// A generated cover/thumbnail counts as usable only if its BMP is whole and in a format the
+// renderer actually supports. Every converter opens its destination before it knows the decode
+// will succeed, so an interrupted run leaves a non-empty but truncated file -- which hasContent()
+// alone would trust forever, making one bad moment permanent and silent.
+bool hasCompleteBmp(const char* moduleName, const char* path);
+
+inline bool hasCompleteBmp(const char* moduleName, const std::string& path) {
+  return hasCompleteBmp(moduleName, path.c_str());
+}
+
 std::string decodeUriEscapes(const std::string& path);
 
 std::string normalisePath(const std::string& path);

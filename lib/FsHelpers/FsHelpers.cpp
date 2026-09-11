@@ -37,6 +37,51 @@ std::string decodeUriEscapes(const std::string& path) {
   return decoded;
 }
 
+bool hasCompleteBmp(const char* moduleName, const char* path) {
+  HalFile file;
+  if (!Storage.openFileForRead(moduleName, path, file)) return false;
+  // 14-byte file header plus a 40-byte BITMAPINFOHEADER: the smallest BMP this code ever writes.
+  constexpr int MIN_BMP_BYTES = 14 + 40;
+  uint8_t header[MIN_BMP_BYTES];
+  // Read byte-wise: the buffer is not guaranteed 4-byte aligned and the C3 faults on unaligned
+  // multi-byte loads.
+  if (file.read(header, sizeof(header)) != MIN_BMP_BYTES) return false;
+  if (header[0] != 'B' || header[1] != 'M') return false;
+
+  const auto le32 = [&header](int offset) -> uint32_t {
+    return static_cast<uint32_t>(header[offset]) | (static_cast<uint32_t>(header[offset + 1]) << 8) |
+           (static_cast<uint32_t>(header[offset + 2]) << 16) | (static_cast<uint32_t>(header[offset + 3]) << 24);
+  };
+  const auto le16 = [&header](int offset) -> uint16_t {
+    return static_cast<uint16_t>(header[offset] | (header[offset + 1] << 8));
+  };
+
+  const uint32_t declared = le32(2);
+  const uint32_t pixelOffset = le32(10);
+  const int32_t width = static_cast<int32_t>(le32(18));
+  const int32_t rawHeight = static_cast<int32_t>(le32(22));
+  const uint16_t bpp = le16(28);
+  const uint32_t compression = le32(30);
+  if (declared < MIN_BMP_BYTES || pixelOffset < MIN_BMP_BYTES) return false;
+
+  // Mirror Bitmap::parseHeaders(): a complete file the renderer cannot decode is not usable, and
+  // caching it as generated would stop the cover ever being rebuilt.
+  if (!(bpp == 1 || bpp == 2 || bpp == 4 || bpp == 8 || bpp == 24 || bpp == 32)) return false;
+  if (!(compression == 0 || (bpp == 32 && compression == 3))) return false;
+
+  // Bound the dimensions before multiplying: these come from a file on the card, and an
+  // unbounded width * height * bpp overflows and lets a short file look complete.
+  constexpr int32_t MAX_BMP_DIMENSION = 20000;
+  if (width <= 0 || width > MAX_BMP_DIMENSION) return false;
+  const int32_t height = rawHeight < 0 ? -rawHeight : rawHeight;
+  if (height <= 0 || height > MAX_BMP_DIMENSION) return false;
+
+  const uint64_t rowBytes = ((static_cast<uint64_t>(width) * bpp + 31) / 32) * 4;
+  const uint64_t required = static_cast<uint64_t>(pixelOffset) + rowBytes * static_cast<uint64_t>(height);
+  const uint64_t actual = static_cast<uint64_t>(file.size());
+  return actual >= required && actual >= declared;
+}
+
 std::string normalisePath(const std::string& path) {
   std::vector<std::string_view> components;
   components.reserve(8);  // Eight nested folders is more than we might expect

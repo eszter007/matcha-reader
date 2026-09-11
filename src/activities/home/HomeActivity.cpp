@@ -115,11 +115,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // send this card back through the generator on every visit.
       const bool coverIsThumb =
           book.coverBmpPath.find("[HEIGHT]") != std::string::npos || UITheme::isGeneratedThumbPath(book.coverBmpPath);
-      // hasContent(), not exists(): SD cards written by earlier builds still carry the 0-byte
-      // sentinel Epub::generateThumbBmp used to leave on failure, and exists() counted it as a
-      // cover -- the card then skipped regeneration and drew a placeholder forever.
+      // hasCompleteBmp(), not exists() or hasContent(): a 0-byte sentinel from an older build,
+      // or a thumbnail truncated by an interrupted conversion, would otherwise count as a cover --
+      // the card then skipped regeneration and drew a placeholder forever.
       const bool coverMissing =
-          !coverIsThumb || !FsHelpers::hasContent("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
+          !coverIsThumb ||
+          !FsHelpers::hasCompleteBmp("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
       if (coverMissing) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {

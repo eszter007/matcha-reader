@@ -3,6 +3,7 @@
 // these tests only exercise the pure path helpers, so the call surface is all that is needed.
 #include <sys/stat.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
@@ -27,6 +28,10 @@ class HalFile {
     fseek(f, cur, SEEK_SET);
     return end > 0 ? static_cast<size_t>(end) : 0;
   }
+  int read(uint8_t* buf, size_t count) {
+    if (!f) return -1;
+    return static_cast<int>(fread(buf, 1, count, f));
+  }
   void close() {
     if (f) fclose(f);
     f = nullptr;
@@ -43,6 +48,9 @@ class HalStorage {
   bool exists(const char* p) {
     struct stat s{};
     return stat(p, &s) == 0;
+  }
+  bool openFileForRead(const char* mod, const char* path, HalFile& file) {
+    return openFileForRead(mod, std::string(path), file);
   }
   bool openFileForRead(const char*, const std::string& path, HalFile& file) {
     FILE* h = fopen(path.c_str(), "rb");
