@@ -913,7 +913,10 @@ void CrossPointWebServer::handleRename() const {
     server->send(400, "text/plain", "New name cannot be empty");
     return;
   }
-  if (newName.indexOf('/') >= 0 || newName.indexOf('\\') >= 0) {
+  // isSafePathComponent subsumes the separator check and also rejects "." and "..".
+  // newName is a bare component that never goes through normalizeWebPath, so without
+  // this a rename to ".." would escape the intended directory.
+  if (!FsHelpers::isSafePathComponent(newName.c_str())) {
     server->send(400, "text/plain", "Invalid file name");
     return;
   }
