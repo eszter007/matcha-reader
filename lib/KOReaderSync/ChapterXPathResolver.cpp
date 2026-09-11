@@ -6,11 +6,11 @@
 #include <Utf8.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
+#include <strings.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <strings.h>
 #include <string>
 #include <utility>
 #include <vector>
