@@ -129,9 +129,19 @@ TEST(KOReaderXPathResolver, CountsVisibleCdataAndIgnoresHiddenCdata) {
 TEST(KOReaderXPathResolver, ReturnsEmptyForUnusableContent) {
   EXPECT_TRUE(ChapterXPathResolver::findXPathForVisibleTextOffset(epubWith(""), 0, 0).empty());
   EXPECT_TRUE(ChapterXPathResolver::findXPathForVisibleTextOffset(epubWith("<html><body><p>broken"), 0, 100).empty());
-  EXPECT_TRUE(ChapterXPathResolver::findXPathForVisibleTextOffset(
-                  epubWith("<html><body><div>not a paragraph or list item</div></body></html>"), 0, 0)
-                  .empty());
+}
+
+// ChapterHtmlSlimParser counts every visible body text node when it builds the offsets resolved
+// here, so heading and bare-div text must resolve too -- restricting resolution to <p>/<li> would
+// leave the two counting in different units and shift every anchor after such text.
+TEST(KOReaderXPathResolver, ResolvesVisibleTextOutsideParagraphs) {
+  const auto epub = epubWith("<html><body><h1>Chapter One</h1><p>Alpha bravo</p></body></html>");
+
+  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 0),
+            "/body/DocFragment[1]/body/h1[1]/text()[1].0");
+  // The paragraph anchor sits after the 11 codepoints of the heading.
+  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 11),
+            "/body/DocFragment[1]/body/p[1]/text()[1].0");
 }
 
 TEST(KOReaderXPathResolver, KeepsParagraphOnlyResolutionUnchanged) {

@@ -460,13 +460,6 @@ class XPathProgressResolver final : public Print {
       nonVisibleDepth++;
     }
 
-    if (name == "p") {
-      paragraphDepth++;
-    }
-    if (name == "li") {
-      liDepth++;
-    }
-
     depth++;
   }
 
@@ -490,19 +483,11 @@ class XPathProgressResolver final : public Print {
     if (nonVisibleDepth > 0) {
       nonVisibleDepth--;
     }
-    if (name == "p" && paragraphDepth > 0) {
-      paragraphDepth--;
-    }
-    if (name == "li" && liDepth > 0) {
-      liDepth--;
-    }
-
     if (!textNodeIndexStack.empty()) {
       textNodeIndexStack.pop_back();
     }
-    if (paragraphDepth > 0 || liDepth > 0) {
-      pendingTextNode = true;
-    }
+    // Text following a closed child element is a new text node of the parent.
+    pendingTextNode = true;
     if (!path.empty()) {
       path.pop_back();
     }
@@ -512,7 +497,11 @@ class XPathProgressResolver final : public Print {
   }
 
   void onCharacterData(const XML_Char* data, const int len) {
-    if (!insideBody || nonVisibleDepth > 0 || (paragraphDepth <= 0 && liDepth <= 0) || len <= 0 || stopped) {
+    // Count every visible body text node, not just paragraph/list text: ChapterHtmlSlimParser
+    // produces the offsets resolved here and counts headings, divs and bare body text too
+    // (ChapterHtmlSlimParser.cpp:2354-2369). Restricting the count here would put the two in
+    // different units, so a page starting in an <h1> would resolve to the wrong anchor.
+    if (!insideBody || nonVisibleDepth > 0 || len <= 0 || stopped) {
       return;
     }
 
@@ -549,7 +538,7 @@ class XPathProgressResolver final : public Print {
   }
 
   void onMarkupBoundary() {
-    if (!insideBody || nonVisibleDepth > 0 || (paragraphDepth <= 0 && liDepth <= 0) || stopped || pendingTextNode) {
+    if (!insideBody || nonVisibleDepth > 0 || stopped || pendingTextNode) {
       return;
     }
 
@@ -565,8 +554,6 @@ class XPathProgressResolver final : public Print {
   bool pendingTextNode = true;
   int depth = 0;
   int bodyDepth = -1;
-  int paragraphDepth = 0;
-  int liDepth = 0;
   uint16_t nonVisibleDepth = 0;
   size_t visibleChars = 0;
   size_t textNodeStartChars = 0;
