@@ -92,8 +92,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Short board-specific names keep pull-request artifacts easy to identify.
-        # The release workflow applies the published crosspoint-<version>-<device>.bin names.
+        # Short board-specific names keep pull-request artifacts easy to identify, and
+        # pr-firmware-links.yml looks them up by exactly these names. They are deliberately
+        # NOT the release asset names: release.yml publishes <board>-firmware.bin (and
+        # x4old-x3-firmware.bin), which is the contract OtaUpdater reads.
         include:
           - env: default
             asset: firmware.bin

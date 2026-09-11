@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <new>
+
 #include "lib/GfxRenderer/BitmapHelpers.h"
 
 namespace {
@@ -9,7 +12,13 @@ thread_local int rowAllocationToFail = -1;
 // Fail one row allocation without changing production allocator APIs.
 void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
   if (rowAllocationToFail >= 0 && rowAllocationToFail-- == 0) return nullptr;
-  return ::operator new[](size);
+  // ::operator new[] throws on failure, and throwing out of a noexcept function terminates.
+  // Catching keeps this override honest about its nothrow contract.
+  try {
+    return ::operator new[](size);
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 TEST(AbsoluteGrayscale, DitherersReportEachRowAllocationFailure) {

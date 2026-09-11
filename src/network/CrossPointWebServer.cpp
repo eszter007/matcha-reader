@@ -372,12 +372,29 @@ CrossPointWebServer::WsUploadStatus CrossPointWebServer::getWsUploadStatus() con
   return status;
 }
 
+// If-None-Match carries a comma-separated list and may use weak validators (W/"..."), so a
+// strict equality test misses cache hits browsers legitimately send and re-downloads the page.
+static bool ifNoneMatchMatches(const String& header, const char* etag) {
+  if (header.isEmpty()) return false;
+  int start = 0;
+  while (start <= static_cast<int>(header.length())) {
+    int comma = header.indexOf(',', start);
+    if (comma < 0) comma = static_cast<int>(header.length());
+    String candidate = header.substring(start, comma);
+    candidate.trim();
+    if (candidate.startsWith("W/")) candidate = candidate.substring(2);
+    if (candidate == "*" || candidate == etag) return true;
+    start = comma + 1;
+  }
+  return false;
+}
+
 static void sendStaticContent(WebServer* server, const char* data, size_t len, const char* etag,
                               const char* contentType) {
   // Content is baked into flash at build time, so the ETag is stable for the
   // lifetime of a firmware image. Honor If-None-Match with a 304 so browsers
   // reuse their cache instead of re-downloading on every navigation.
-  if (server->header("If-None-Match") == etag) {
+  if (ifNoneMatchMatches(server->header("If-None-Match"), etag)) {
     server->sendHeader("ETag", etag);
     server->sendHeader("Cache-Control", "no-cache");
     server->send(304);
