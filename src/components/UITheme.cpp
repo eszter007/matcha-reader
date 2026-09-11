@@ -318,7 +318,10 @@ int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumb
     // the one they asked for. Device report: home drew thumb_226.bmp while the library asked for
     // thumb_207/54 and re-decoded the (undecodable) source on every pass.
     const std::string sibling = findSiblingCoverThumb(coverThumbPath);
-    if (sibling.empty() || !Storage.openFileForRead("HOME", sibling, file)) return 0;
+    // A sibling is chosen by its name alone, so verify the file is a whole BMP before trusting it.
+    if (sibling.empty() || !FsHelpers::hasCompleteBmp("HOME", sibling) ||
+        !Storage.openFileForRead("HOME", sibling, file))
+      return 0;
   }
   Bitmap bitmap(file);
   if (bitmap.parseHeaders() != BmpReaderError::Ok) return 0;

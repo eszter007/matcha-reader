@@ -88,6 +88,20 @@ bool isProtectedItemName(const String& name) {
   return false;
 }
 
+// The handlers below check the item they act on, but a protected directory's *contents* are just
+// as off-limits: without this, "/System Volume Information/<file>" reaches the filesystem because
+// only the last component is a plain name.
+bool pathHasProtectedComponent(const String& path) {
+  int start = 0;
+  while (start < static_cast<int>(path.length())) {
+    int end = path.indexOf('/', start);
+    if (end < 0) end = static_cast<int>(path.length());
+    if (end > start && isProtectedItemName(path.substring(start, end))) return true;
+    start = end + 1;
+  }
+  return false;
+}
+
 }  // namespace
 
 // File listing page template - now using generated headers:
@@ -553,6 +567,10 @@ void CrossPointWebServer::handleFileListData() const {
   if (server->hasArg("path")) {
     currentPath = normalizeWebPath(server->arg("path"));
   }
+  if (pathHasProtectedComponent(currentPath)) {
+    server->send(403, "text/plain", "Cannot access system files");
+    return;
+  }
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
@@ -598,6 +616,10 @@ void CrossPointWebServer::handleDownload() const {
   String itemPath = normalizeWebPath(server->arg("path"));
   if (itemPath.isEmpty() || itemPath == "/") {
     server->send(400, "text/plain", "Invalid path");
+    return;
+  }
+  if (pathHasProtectedComponent(itemPath)) {
+    server->send(403, "text/plain", "Cannot access system files");
     return;
   }
 
@@ -734,6 +756,11 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       state.path = normalizeWebPath(server->arg("path"));
     } else {
       state.path = "/";
+    }
+    if (pathHasProtectedComponent(state.path)) {
+      state.error = "Cannot write to system folders";
+      LOG_DBG("WEB", "[UPLOAD] Rejected protected path: %s", state.path.c_str());
+      return;
     }
 
     LOG_DBG("WEB", "[UPLOAD] START: %s to path: %s", state.fileName.c_str(), state.path.c_str());
@@ -888,6 +915,10 @@ void CrossPointWebServer::handleCreateFolder() const {
   if (server->hasArg("path")) {
     parentPath = normalizeWebPath(server->arg("path"));
   }
+  if (pathHasProtectedComponent(parentPath)) {
+    server->send(403, "text/plain", "Cannot access system files");
+    return;
+  }
 
   // Build full folder path
   String folderPath = parentPath;
@@ -921,6 +952,10 @@ void CrossPointWebServer::handleRename() const {
   String itemPath = normalizeWebPath(server->arg("path"));
   String newName = server->arg("name");
   newName.trim();
+  if (pathHasProtectedComponent(itemPath)) {
+    server->send(403, "text/plain", "Cannot rename protected item");
+    return;
+  }
 
   if (itemPath.isEmpty() || itemPath == "/") {
     server->send(400, "text/plain", "Invalid path");
@@ -1015,8 +1050,7 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
-  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (isProtectedItemName(itemName)) {
+  if (pathHasProtectedComponent(itemPath) || pathHasProtectedComponent(destPath)) {
     server->send(403, "text/plain", "Cannot move protected item");
     return;
   }
@@ -1148,8 +1182,7 @@ void CrossPointWebServer::handleDelete() const {
     // .Trashes). Only the filesystem's own bookkeeping is still refused, and it
     // never lists in the first place; /delete is a public endpoint, so the
     // check stays here rather than resting on the UI not offering it.
-    const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-    if (isProtectedItemName(itemName)) {
+    if (pathHasProtectedComponent(itemPath)) {
       failedItems += itemPath + " (protected file); ";
       allSuccess = false;
       continue;
@@ -1683,6 +1716,11 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
           }
           wsUploadSize = sizeToken.toInt();
           wsUploadPath = normalizeWebPath(msg.substring(secondColon + 1));
+          if (pathHasProtectedComponent(wsUploadPath)) {
+            LOG_DBG("WS", "START rejected: protected path '%s'", wsUploadPath.c_str());
+            wsServer->sendTXT(num, "ERROR:Cannot write to system folders");
+            return;
+          }
           wsUploadReceived = 0;
           wsLastProgressSent = 0;
           wsUploadStartTime = millis();
