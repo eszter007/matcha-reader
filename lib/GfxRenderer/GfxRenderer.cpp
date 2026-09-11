@@ -1632,7 +1632,9 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
 
 bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY, const bool allowUpscale) const {
-  if (fontCacheManager_ && fontCacheManager_->isScanning()) return false;
+  // Deliberately skipped, not failed: a caller that treats false as a render error would show
+  // an error screen for a background font scan that finishes on its own.
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) return true;
   // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
   if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
     return drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight, allowUpscale);

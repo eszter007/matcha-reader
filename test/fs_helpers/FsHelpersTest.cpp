@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <unistd.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>

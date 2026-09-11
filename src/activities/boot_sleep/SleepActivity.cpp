@@ -831,7 +831,7 @@ void SleepActivity::renderCoverSleepScreen() const {
     return (this->*renderNoCoverSleepScreen)();
   }
 
-  // SSD absolute images use the new thresholds; other panels retain legacy tuning.
+  // SSD absolute images keep the original dither thresholds; other panels use the newer tuning.
   const bool originalThresholds =
       renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported() &&
       display.getController() == HalDisplay::Controller::SSD1677 &&

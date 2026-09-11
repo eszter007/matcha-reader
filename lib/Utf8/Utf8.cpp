@@ -26,16 +26,24 @@ uint32_t utf8ComposePair(const uint32_t base, const uint32_t mark) {
 std::string utf8ComposeNfc(const std::string& in) {
   // Fast path: NFC composition can only change text that contains a combining
   // diacritical mark U+0300-036F (UTF-8 lead byte 0xCC or 0xCD) or conjoining
-  // Hangul jamo (lead byte 0xE1 for U+1000-1FFF). Plain ASCII and
-  // already-precomposed (NFC) text -- the vast majority of words -- have none, so
-  // return them untouched without walking codepoints or allocating. A 0xCD or
-  // 0xE1 that is actually a non-composing codepoint (e.g. Georgian, Cherokee)
-  // just falls through to the full pass below.
+  // Hangul jamo U+1100-11FF (E1 84..87). Plain ASCII and already-precomposed
+  // (NFC) text -- the vast majority of words -- have neither, so return them
+  // untouched without walking codepoints or allocating. Matching the jamo block
+  // on both bytes keeps unrelated U+1xxx scripts (Georgian, Cherokee) on the
+  // fast path.
   bool maybeHasMarks = false;
-  for (const unsigned char c : in) {
-    if (c == 0xCC || c == 0xCD || c == 0xE1) {
+  for (size_t i = 0; i < in.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(in[i]);
+    if (c == 0xCC || c == 0xCD) {
       maybeHasMarks = true;
       break;
+    }
+    if (c == 0xE1 && i + 1 < in.size()) {
+      const unsigned char next = static_cast<unsigned char>(in[i + 1]);
+      if (next >= 0x84 && next <= 0x87) {
+        maybeHasMarks = true;
+        break;
+      }
     }
   }
   if (!maybeHasMarks) return in;
