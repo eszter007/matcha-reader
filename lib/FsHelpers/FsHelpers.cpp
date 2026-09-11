@@ -73,7 +73,8 @@ bool hasCompleteBmp(const char* moduleName, const char* path) {
   // unbounded width * height * bpp overflows and lets a short file look complete.
   constexpr int32_t MAX_BMP_DIMENSION = 20000;
   if (width <= 0 || width > MAX_BMP_DIMENSION) return false;
-  const int32_t height = rawHeight < 0 ? -rawHeight : rawHeight;
+  // Widen before negating: -INT32_MIN is signed overflow, and rawHeight comes from the card.
+  const int64_t height = rawHeight < 0 ? -static_cast<int64_t>(rawHeight) : static_cast<int64_t>(rawHeight);
   if (height <= 0 || height > MAX_BMP_DIMENSION) return false;
 
   const uint64_t rowBytes = ((static_cast<uint64_t>(width) * bpp + 31) / 32) * 4;

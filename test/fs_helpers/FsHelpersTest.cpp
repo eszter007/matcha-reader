@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -104,6 +105,11 @@ TEST(HasCompleteBmp, RejectsDimensionsThatWouldOverflowTheSizeCheck) {
   const auto path = writeTemp(bmpHeader(54, 54, 0x7FFFFFFF, 0x7FFFFFFF, 32), 54);
   EXPECT_FALSE(FsHelpers::hasCompleteBmp("TEST", path));
   remove(path.c_str());
+
+  // INT32_MIN as the height: its magnitude must not be taken in int32_t.
+  const auto minHeight = writeTemp(bmpHeader(54, 54, 8, INT32_MIN, 1), 54);
+  EXPECT_FALSE(FsHelpers::hasCompleteBmp("TEST", minHeight));
+  remove(minHeight.c_str());
 }
 
 }  // namespace
