@@ -530,9 +530,9 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
-                                                     int targetHeight, bool oneBit, bool crop,
-                                                     bool originalThresholds, BmpConvertCancelFn shouldCancel,
-                                                     void* cancelCtx, bool* outUnsupported) {
+                                                     int targetHeight, bool oneBit, bool crop, bool originalThresholds,
+                                                     BmpConvertCancelFn shouldCancel, void* cancelCtx,
+                                                     bool* outUnsupported) {
   if (outUnsupported) *outUnsupported = false;
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
@@ -810,6 +810,6 @@ bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Prin
                                                          int targetMaxHeight, BmpConvertCancelFn shouldCancel,
                                                          void* cancelCtx, bool* outUnsupported) {
   // originalThresholds=false: the 1-bit path keeps the dither thresholds it has always used.
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, false,
-                                     shouldCancel, cancelCtx, outUnsupported);
+  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, false, shouldCancel,
+                                     cancelCtx, outUnsupported);
 }

@@ -50,7 +50,6 @@ class Atkinson1BitDitherer {
     delete[] errorRow2;
   }
 
-
   // EXPLICITLY DELETE THE COPY CONSTRUCTOR
   Atkinson1BitDitherer(const Atkinson1BitDitherer& other) = delete;
 
@@ -243,7 +242,6 @@ class FloydSteinbergDitherer {
     delete[] errorCurRow;
     delete[] errorNextRow;
   }
-
 
   // **1. EXPLICITLY DELETE THE COPY CONSTRUCTOR**
   FloydSteinbergDitherer(const FloydSteinbergDitherer& other) = delete;

@@ -1565,16 +1565,10 @@ bool EpubReaderActivity::launchKOReaderSync() {
   const int totalPages = verticalSection ? verticalSection->pageCount
                          : section       ? section->estimatedTotalPages()
                                          : cachedChapterTotalPageCount;
-  std::optional<uint16_t> paragraphIndex;
-  if (section && currentPage >= 0 && currentPage < section->pageCount) {
-    const uint16_t paragraphPage =
-        currentPage > 0 ? static_cast<uint16_t>(currentPage - 1) : static_cast<uint16_t>(currentPage);
-    if (const auto pIdx = section->getParagraphIndexForPage(paragraphPage)) {
-      paragraphIndex = *pIdx;
-    }
-  }
 
   // Pre-compute local KO position and chapter name while Epub is still in RAM.
+  // getCurrentPosition() carries the spine index, page, total, visible text offset and
+  // paragraph index that KOReaderSyncActivity used to take as separate arguments.
   CrossPointPosition localPos = getCurrentPosition();
   SavedProgressPosition localKoPos;
   const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
@@ -1625,14 +1619,8 @@ bool EpubReaderActivity::launchKOReaderSync() {
   LOG_DBG("KOSync", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
 
   activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
-      renderer, mappedInput, savedEpubPath, currentSpineIndex, currentPage, totalPages, std::move(localKoPos),
-      std::move(localChapterName), paragraphIndex));
+      renderer, mappedInput, savedEpubPath, localPos, std::move(localKoPos), std::move(localChapterName)));
   return true;  // acted: launched the sync activity
-}
-
-void EpubReaderActivity::applyInitialOrientation() {
-  ReaderActivity::applyInitialOrientation();
-  appliedOrientation = SETTINGS.orientation;
 }
 
 void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
