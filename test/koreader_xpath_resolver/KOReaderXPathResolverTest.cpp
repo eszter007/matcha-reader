@@ -147,8 +147,7 @@ TEST(KOReaderXPathResolver, ResolvesVisibleTextOutsideParagraphs) {
 TEST(KOReaderXPathResolver, AnchorsTextDirectlyUnderBody) {
   const auto epub = epubWith("<html><body>Bare body text<p>Alpha</p></body></html>");
 
-  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 5),
-            "/body/DocFragment[1]/body/text()[1].5");
+  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 5), "/body/DocFragment[1]/body/text()[1].5");
 }
 
 // findXPathForProgress() measures the target against a total; both must count the same text, or
