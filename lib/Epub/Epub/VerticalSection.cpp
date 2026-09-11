@@ -1,7 +1,5 @@
 #include "VerticalSection.h"
 
-#include "VisibleTextUtils.h"
-
 #include <Arduino.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -21,6 +19,7 @@
 #include "Epub/RubyGlossary.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "GfxRenderer.h"
+#include "VisibleTextUtils.h"
 
 namespace {
 
