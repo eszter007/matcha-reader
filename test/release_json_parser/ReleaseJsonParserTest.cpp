@@ -650,3 +650,96 @@ TEST(ReleaseJsonParser, ChunkedRealisticEveryBoundary) {
     EXPECT_EQ(p.getFirmwareSize(), 9999u) << "split=" << split;
   }
 }
+
+// The asset list this fork actually publishes (see the 1.6.0-nightly-3 release): one bin
+// per board named <board>-firmware.bin, alongside the dictionary/font/language archives.
+// The combined X3/X4 C3 image is "x4old-x3", the one name that is not its board tag, so
+// OtaUpdater special-cases it -- these cases pin that mapping down.
+namespace {
+const char* kMatchaRelease = R"({
+  "tag_name": "1.6.0-nightly-3",
+  "name": "Matcha Reader v1.6.0-nightly-3",
+  "prerelease": true,
+  "assets": [
+    {"name": "japanese-dictionaries.zip", "browser_download_url": "https://example.com/dicts.zip", "size": 32158437},
+    {"name": "japanese-fonts.zip", "browser_download_url": "https://example.com/fonts.zip", "size": 48082411},
+    {"name": "language-packs.zip", "browser_download_url": "https://example.com/lang.zip", "size": 166884},
+    {"name": "papermono-firmware.bin", "browser_download_url": "https://example.com/papermono.bin", "size": 5618048},
+    {"name": "sticky-firmware.bin", "browser_download_url": "https://example.com/sticky.bin", "size": 5495152},
+    {"name": "x4c-firmware.bin", "browser_download_url": "https://example.com/x4c.bin", "size": 5585360},
+    {"name": "x4old-x3-firmware.bin", "browser_download_url": "https://example.com/x4old-x3.bin", "size": 5745584},
+    {"name": "x4pro-firmware.bin", "browser_download_url": "https://example.com/x4pro.bin", "size": 5608576}
+  ]
+})";
+}  // namespace
+
+TEST(ReleaseJsonParser, SelectsTheCombinedX3X4AssetByItsPublishedName) {
+  ReleaseJsonParser p;
+  p.setFirmwareAssetName("x4old-x3-firmware.bin");
+  p.feed(kMatchaRelease, strlen(kMatchaRelease));
+
+  ASSERT_TRUE(p.foundTag());
+  EXPECT_STREQ(p.getTagName(), "1.6.0-nightly-3");
+  ASSERT_TRUE(p.foundFirmware()) << "the X3/X4 board must resolve to x4old-x3-firmware.bin";
+  EXPECT_STREQ(p.getFirmwareUrl(), "https://example.com/x4old-x3.bin");
+  EXPECT_EQ(p.getFirmwareSize(), 5745584u);
+}
+
+TEST(ReleaseJsonParser, SelectsEachBoardsOwnAssetFromTheSameRelease) {
+  struct Case {
+    const char* assetName;
+    const char* url;
+  };
+  // Every board OtaUpdater can ask for, against one release carrying all of them.
+  const Case cases[] = {
+      {"papermono-firmware.bin", "https://example.com/papermono.bin"},
+      {"sticky-firmware.bin", "https://example.com/sticky.bin"},
+      {"x4c-firmware.bin", "https://example.com/x4c.bin"},
+      {"x4old-x3-firmware.bin", "https://example.com/x4old-x3.bin"},
+      {"x4pro-firmware.bin", "https://example.com/x4pro.bin"},
+  };
+  for (const auto& c : cases) {
+    ReleaseJsonParser p;
+    p.setFirmwareAssetName(c.assetName);
+    p.feed(kMatchaRelease, strlen(kMatchaRelease));
+    ASSERT_TRUE(p.foundFirmware()) << c.assetName;
+    EXPECT_STREQ(p.getFirmwareUrl(), c.url) << c.assetName;
+  }
+}
+
+TEST(ReleaseJsonParser, DoesNotSettleForAnotherBoardsAsset) {
+  // Matching is exact: a board whose asset is missing must report no update rather than
+  // flashing a neighbouring board's image. x4c and x4old-x3 share the "x4" prefix, and
+  // x4pro shares it too, so a prefix match here would cross-flash devices.
+  const char* json = R"({
+    "tag_name": "1.6.0",
+    "assets": [
+      {"name": "x4pro-firmware.bin", "browser_download_url": "https://example.com/x4pro.bin", "size": 10},
+      {"name": "x4c-firmware.bin", "browser_download_url": "https://example.com/x4c.bin", "size": 11}
+    ]
+  })";
+  ReleaseJsonParser p;
+  p.setFirmwareAssetName("x4old-x3-firmware.bin");
+  p.feed(json, strlen(json));
+
+  EXPECT_TRUE(p.foundTag());
+  EXPECT_FALSE(p.foundFirmware()) << "no X3/X4 asset in this release, so no update";
+}
+
+TEST(ReleaseJsonParser, FindsTheBoardAssetWhenAssetsPrecedeTheTagName) {
+  // The fork's asset names carry no version, so OtaUpdater configures the name before the
+  // fetch and this ordering is handled without revisiting earlier assets.
+  const char* json = R"({
+    "assets": [
+      {"name": "sticky-firmware.bin", "browser_download_url": "https://example.com/sticky.bin", "size": 5495152}
+    ],
+    "tag_name": "1.6.0"
+  })";
+  ReleaseJsonParser p;
+  p.setFirmwareAssetName("sticky-firmware.bin");
+  p.feed(json, strlen(json));
+
+  EXPECT_TRUE(p.foundTag());
+  ASSERT_TRUE(p.foundFirmware());
+  EXPECT_STREQ(p.getFirmwareUrl(), "https://example.com/sticky.bin");
+}
