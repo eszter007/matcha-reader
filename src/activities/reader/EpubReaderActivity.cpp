@@ -3515,7 +3515,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.waitRefreshComplete();
       if (!scratch) {
         LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * stripRows);
-        if (overlapRefresh || combinedGrayscaleBase) {
+        if (absoluteImageGrayscale) {
+          // displayGrayscaleBase(Absolute) already started a pass and its planes will now never
+          // be written. setRenderMode(BW) is the cancellation path, and without it the next page
+          // inherits absoluteGrayPlanes and the controller's half-filled buffers. Neither
+          // condition below covers this: both require !pageHasImages, which absolute implies.
+          renderer.setRenderMode(GfxRenderer::BW);
+        }
+        if (overlapRefresh || combinedGrayscaleBase || absoluteImageGrayscale) {
           // The BW refresh ran the shadow-free async path, so controller RAM's
           // differential baseline was never rebuilt. Even with AA skipped it must
           // be re-synced from the intact BW framebuffer, or the next differential
@@ -5211,7 +5218,16 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   CrossPointPosition localPos = {currentSpineIndex, currentPage, totalPages};
   localPos.hasResolvedSpineIndex = true;
   localPos.hasMappedPage = true;
-  if (section && currentPage >= 0 && currentPage < section->pageCount) {
+  // The vertical section reports the same offset units as the horizontal one, so a Japanese
+  // book read vertically anchors on exact content like any other. Querying only `section` here
+  // left every vertical position falling back to page/percentage, which re-paginates wrong when
+  // the layout settings change.
+  if (verticalSection && currentPage >= 0 && currentPage < verticalSection->pageCount) {
+    if (const auto offset = verticalSection->getVisibleTextOffsetForPage(currentPage)) {
+      localPos.visibleTextOffset = *offset;
+      localPos.hasVisibleTextOffset = true;
+    }
+  } else if (section && currentPage >= 0 && currentPage < section->pageCount) {
     if (const auto offset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage))) {
       localPos.visibleTextOffset = *offset;
       localPos.hasVisibleTextOffset = true;
