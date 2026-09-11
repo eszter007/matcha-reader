@@ -184,6 +184,8 @@ class ParagraphTextCounter final : public Print {
       if (equalsIgnoreCase(name, "body")) {
         insideBody = true;
         bodyDepth = depth;
+        // <body hidden> is display:none to the layout parser, so none of its text is counted.
+        if (isHiddenElement(atts)) nonVisibleDepth++;
       }
       depth++;
       return;
@@ -477,6 +479,8 @@ class XPathProgressResolver final : public Print {
         // Text directly under <body> needs its own text()[N] counter, or an anchor in it
         // collapses to the body element instead of the offset inside that text.
         textNodeIndexStack.push_back(0);
+        // <body hidden> is display:none to the layout parser, so none of its text is counted.
+        if (isHiddenElement(atts)) nonVisibleDepth++;
       }
       depth++;
       return;

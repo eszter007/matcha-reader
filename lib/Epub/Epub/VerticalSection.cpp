@@ -234,7 +234,25 @@ struct TextExtractor {
   }
 
   static bool isSkipTag(const char* name) {
-    return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0;
+    return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0 ||
+           strcasecmp(name, "title") == 0;
+  }
+
+  // The horizontal parser leaves these subtrees out of visibleTextOffset (ChapterHtmlSlimParser.cpp
+  // :1330, :1962-1970). Vertical offsets are resolved against the same XPath resolver, so counting
+  // them here would put the two layouts in different units -- and hidden text should not be laid
+  // out vertically either.
+  static bool isSkipSubtree(const char** atts) {
+    if (atts == nullptr) return false;
+    for (int i = 0; atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "hidden") == 0) return true;
+      if (!atts[i + 1]) break;
+      if ((strcasecmp(atts[i], "role") == 0 && strcasecmp(atts[i + 1], "doc-pagebreak") == 0) ||
+          (strcasecmp(atts[i], "epub:type") == 0 && strcasecmp(atts[i + 1], "pagebreak") == 0)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // std::move()-ing currentText/currentRuns into the sink hands off their heap buffer and leaves
@@ -397,7 +415,7 @@ struct TextExtractor {
       return;
     }
     if (strcasecmp(name, "body") == 0) self->insideBody = true;
-    if (isSkipTag(name)) {
+    if (isSkipTag(name) || isSkipSubtree(atts)) {
       self->skipDepth = 1;
       return;
     }

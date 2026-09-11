@@ -784,7 +784,12 @@ SavedProgressPosition ProgressMapper::toSavedProgress(const std::shared_ptr<Epub
     }
   }
   if (result.xpath.empty() && pos.hasParagraphIndex && pos.paragraphIndex > 0) {
-    result.xpath = ChapterXPathResolver::findXPathForParagraph(epub, pos.spineIndex, pos.paragraphIndex);
+    // Same length gate: an over-long paragraph anchor is dropped by the client, and leaving it in
+    // result.xpath would stop the shorter fallbacks below ever being tried.
+    auto paragraphXPath = ChapterXPathResolver::findXPathForParagraph(epub, pos.spineIndex, pos.paragraphIndex);
+    if (paragraphXPath.size() <= MAX_SYNC_XPATH_BYTES) {
+      result.xpath = std::move(paragraphXPath);
+    }
   }
   // Fall back to progress-based XPath, then synthetic progress mapping.
   if (result.xpath.empty()) {

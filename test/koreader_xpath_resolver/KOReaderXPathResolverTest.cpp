@@ -185,6 +185,12 @@ TEST(KOReaderXPathResolver, SkipsHiddenSubtrees) {
             "/body/DocFragment[1]/body/p[3]/text()[1].0");
 }
 
+TEST(KOReaderXPathResolver, TreatsHiddenBodyAsInvisible) {
+  const auto epub = epubWith(R"(<html><body hidden=""><p>Alpha</p></body></html>)");
+
+  EXPECT_TRUE(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 0).empty());
+}
+
 TEST(KOReaderXPathResolver, KeepsParagraphOnlyResolutionUnchanged) {
   const auto epub = epubWith(kNestedFixture);
 
