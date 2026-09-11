@@ -12,7 +12,9 @@
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <HalFrontlight.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -384,6 +386,20 @@ void EpubReaderActivity::onReaderEnter() {
   sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
 
   loadCachedBookmarks();
+}
+
+ChapterPosition EpubReaderActivity::chapterPosition() const {
+  if (verticalSection) return {verticalSection->currentPage, verticalSection->pageCount};
+  if (section) return {section->currentPage, section->estimatedTotalPages()};
+  return {nextPageNumber, cachedChapterTotalPageCount};
+}
+
+int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
+  if (!epub || epub->getBookSize() == 0 || !position.hasTotal()) return 0;
+  // The page index can run past the chapter's estimated total while it is still
+  // building, so the fraction is clamped before the cast.
+  const float fraction = epub->calculateProgress(currentSpineIndex, position.chapterFraction());
+  return static_cast<int>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f + 0.5f);
 }
 
 void EpubReaderActivity::onReaderExit() {
@@ -1399,16 +1415,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // Handled in-place by EpubReaderMenuActivity using the live frontlight HAL.
       break;
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
-      float bookProgress = 0.0f;
-      {
-        const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
-        const int pgCount = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
-        if (epub && epub->getBookSize() > 0 && pgCount > 0) {
-          const float chapterProgress = static_cast<float>(curPage) / static_cast<float>(pgCount);
-          bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
-        }
-      }
-      const int initialPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+      const int initialPercent = bookPercentFor(chapterPosition());
       startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent,
                                                                                   /*scrubOnEnter=*/shownPageHasImages_),
                              [this](const ActivityResult& result) {
@@ -1558,16 +1565,10 @@ bool EpubReaderActivity::launchKOReaderSync() {
   const int totalPages = verticalSection ? verticalSection->pageCount
                          : section       ? section->estimatedTotalPages()
                                          : cachedChapterTotalPageCount;
-  std::optional<uint16_t> paragraphIndex;
-  if (section && currentPage >= 0 && currentPage < section->pageCount) {
-    const uint16_t paragraphPage =
-        currentPage > 0 ? static_cast<uint16_t>(currentPage - 1) : static_cast<uint16_t>(currentPage);
-    if (const auto pIdx = section->getParagraphIndexForPage(paragraphPage)) {
-      paragraphIndex = *pIdx;
-    }
-  }
 
   // Pre-compute local KO position and chapter name while Epub is still in RAM.
+  // getCurrentPosition() carries the spine index, page, total, visible text offset and
+  // paragraph index that KOReaderSyncActivity used to take as separate arguments.
   CrossPointPosition localPos = getCurrentPosition();
   SavedProgressPosition localKoPos;
   const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
@@ -1618,8 +1619,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
   LOG_DBG("KOSync", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
 
   activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
-      renderer, mappedInput, savedEpubPath, currentSpineIndex, currentPage, totalPages, std::move(localKoPos),
-      std::move(localChapterName), paragraphIndex));
+      renderer, mappedInput, savedEpubPath, localPos, std::move(localKoPos), std::move(localChapterName)));
   return true;  // acted: launched the sync activity
 }
 
@@ -3303,24 +3303,31 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       !grayscaleRefineOnly && (manualRefreshPending || pagesUntilFullRefresh == 0 || renderer.panelHasGrayPlanes());
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
-  const bool tiledGrayscale = needsAnyGrayscale && renderer.supportsStripGrayscale();
+  const bool absoluteImageGrayscale = pageHasImages && !gpio.deviceIsX3() &&
+                                      display.getController() == HalDisplay::Controller::UC8279 &&
+                                      renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+  const auto grayscale = renderer.grayscaleCapabilities(absoluteImageGrayscale ? HalDisplay::GrayscaleMode::Absolute
+                                                                               : HalDisplay::GrayscaleMode::Overlay);
+  const bool tiledGrayscale = needsAnyGrayscale && grayscale.stripUploads;
   // Paper Mono only (no other panel combines): defer the B/W base activation so
   // the gray planes join it in a single waveform. Displaying the base
   // separately makes the gray pass re-drive the whole text body — a visible
   // flash on every AA page.
-  const bool combinedGrayscaleBase = tiledGrayscale && !pageHasImages && renderer.combinesGrayscaleBase();
+  const bool combinedGrayscaleBase =
+      tiledGrayscale && !pageHasImages && grayscale.base == HalDisplay::GrayscaleBase::Combined;
   // Whole-plane buffering only pays when the BW refresh genuinely runs async
   // underneath it; on blocking panels (X3) it would just spend ~50 KB for the
   // identical serial timing. Image pages take the blocking double-FAST path
   // below (no async refresh is ever started), so they'd spend the buffers with
   // nothing in flight to overlap.
-  const bool overlapRefresh = tiledGrayscale && renderer.supportsAsyncRefresh() && !pageHasImages;
+  const bool overlapRefresh = tiledGrayscale && grayscale.asyncBase && !pageHasImages;
   auto renderGrayscalePass = [&]() {
-    if (needsTextGrayscale) {
+    if (absoluteImageGrayscale || needsTextGrayscale) {
       page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
     } else {
       page->renderImages(renderer, fontId, orientedMarginLeft, orientedMarginTop);
     }
+    if (absoluteImageGrayscale) renderStatusBar();
   };
 
   // Skip the placeholder pre-pass on cold image pages: it caused a visible two-stage update
@@ -3334,7 +3341,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     tBwRender = millis();
   }
 
-  if (!grayscaleRefineOnly && pageHasImages) {
+  if (!grayscaleRefineOnly && absoluteImageGrayscale) {
+    const auto baseMode = cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+    if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, baseMode)) {
+      LOG_ERR("ERS", "Could not start absolute image page; displaying B/W");
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+      return;
+    }
+    LOG_DBG("ERS", "UC8279 image page: absolute quality waveform");
+    pagesUntilFullRefresh = 1;
+  } else if (!grayscaleRefineOnly && pageHasImages) {
     // Put the final image on the panel in one pass. The old selective-blank
     // double refresh showed a white frame and delayed the picture; grayscale
     // now refines separately after the page stays idle.
@@ -3350,10 +3366,23 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // Stash the base without activating; displayGrayBuffer() below commits
     // base + grays as one waveform.
     ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  } else if (!grayscaleRefineOnly && needsAnyGrayscale) {
+    if (pagesUntilFullRefresh <= 1) {
+      // A cleanup refresh settles X3 correctly only when its grayscale
+      // preconditioning waveform runs before the gray planes are written.
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      renderer.preconditionGrayscale();
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    } else if (overlapRefresh) {
+      // Async form: start the waveform and return so the grayscale plane rendering
+      // below overlaps the panel's refresh time instead of following it.
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/true);
+    } else {
+      renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+      pagesUntilFullRefresh--;
+    }
   } else if (!grayscaleRefineOnly) {
-    // Async form: start the waveform and return so the grayscale plane rendering
-    // below overlaps the panel's refresh time instead of following it.
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
   tDisplay = millis();
 
@@ -3400,7 +3429,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         if (shouldCancel()) return false;
         const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
         renderer.beginStripTarget(buf + static_cast<size_t>(y) * gwBytes, y, rows);
-        renderer.clearScreen(0x00);
+        // Absolute planes clear to white; this path only runs for text AA today, where
+        // absoluteImageGrayscale is false, but the encoding must match either way.
+        renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
         renderGrayscalePass();
         renderer.endStripTarget();
       }
@@ -3484,7 +3515,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.waitRefreshComplete();
       if (!scratch) {
         LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * stripRows);
-        if (overlapRefresh || combinedGrayscaleBase) {
+        if (absoluteImageGrayscale) {
+          // displayGrayscaleBase(Absolute) already started a pass and its planes will now never
+          // be written. setRenderMode(BW) is the cancellation path, and without it the next page
+          // inherits absoluteGrayPlanes and the controller's half-filled buffers. Neither
+          // condition below covers this: both require !pageHasImages, which absolute implies.
+          renderer.setRenderMode(GfxRenderer::BW);
+        }
+        if (overlapRefresh || combinedGrayscaleBase || absoluteImageGrayscale) {
           // The BW refresh ran the shadow-free async path, so controller RAM's
           // differential baseline was never rebuilt. Even with AA skipped it must
           // be re-synced from the intact BW framebuffer, or the next differential
@@ -3505,7 +3543,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           }
           const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
           renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(0x00);
+          renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
           renderGrayscalePass();
           renderer.endStripTarget();
           renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
@@ -3521,15 +3559,19 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           }
           const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
           renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(0x00);
+          renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
           renderGrayscalePass();
           renderer.endStripTarget();
           renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
         }
         const auto tGrayMsb = millis();
 
-        renderer.setRenderMode(GfxRenderer::BW);
+        // After displayGrayBuffer, not before: setRenderMode(BW) cancels an unfinished
+        // absolute pass and would discard the planes just uploaded. displayGrayBuffer
+        // clears absoluteGrayPlanes itself, so this is a plain mode switch once the
+        // planes are shown -- and still the wanted cleanup when cancelled.
         if (!cancelled) renderer.displayGrayBuffer();
+        renderer.setRenderMode(GfxRenderer::BW);
         const auto tGrayDisplay = millis();
 
         // BW framebuffer is intact; re-sync controller RAM for the next
@@ -3553,6 +3595,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // after. Only needed when grayscale actually renders.
       if (!renderer.storeBwBuffer()) {
         LOG_ERR("ERS", "Failed to store BW buffer for grayscale render; skipping grayscale this page");
+        if (absoluteImageGrayscale) {
+          // The absolute base waveform already ran; cancel the pass and re-sync the controller
+          // from the intact BW framebuffer, or the next differential turn draws on stale RAM.
+          renderer.setRenderMode(GfxRenderer::BW);
+          renderer.cleanupGrayscaleWithFrameBuffer();
+        }
         const auto tEnd = millis();
         LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
                 tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
@@ -3560,14 +3608,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       }
       const auto tBwStore = millis();
 
-      renderer.clearScreen(0x00);
+      renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
       renderGrayscalePass();
       renderer.copyGrayscaleLsbBuffers();
       const auto tGrayLsb = millis();
 
       // Render and copy to MSB buffer
-      renderer.clearScreen(0x00);
+      renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
       renderGrayscalePass();
       renderer.copyGrayscaleMsbBuffers();
@@ -5173,7 +5221,18 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   }
 
   CrossPointPosition localPos = {currentSpineIndex, currentPage, totalPages};
-  if (section && currentPage >= 0 && currentPage < section->pageCount) {
+  localPos.hasResolvedSpineIndex = true;
+  localPos.hasMappedPage = true;
+  // The vertical section reports the same offset units as the horizontal one, so a Japanese
+  // book read vertically anchors on exact content like any other. Querying only `section` here
+  // left every vertical position falling back to page/percentage, which re-paginates wrong when
+  // the layout settings change.
+  if (verticalSection && currentPage >= 0 && currentPage < verticalSection->pageCount) {
+    if (const auto offset = verticalSection->getVisibleTextOffsetForPage(currentPage)) {
+      localPos.visibleTextOffset = *offset;
+      localPos.hasVisibleTextOffset = true;
+    }
+  } else if (section && currentPage >= 0 && currentPage < section->pageCount) {
     if (const auto offset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage))) {
       localPos.visibleTextOffset = *offset;
       localPos.hasVisibleTextOffset = true;

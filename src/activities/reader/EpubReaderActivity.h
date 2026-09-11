@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "BookmarkEntry.h"
+#include "ChapterPosition.h"
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
@@ -422,6 +423,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  // Live section position, or the values cached before a child screen
+  // released the section.
+  ChapterPosition chapterPosition() const;
+  int bookPercentFor(const ChapterPosition& position) const;
   // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();
   // Toolbar reader menu (see Overlay above).

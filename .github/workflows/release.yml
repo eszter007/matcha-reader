@@ -1,14 +1,20 @@
 name: Compile Release
 
-# Builds every board's release firmware on tag push, with the .bin named
-# exactly as OtaUpdater requests it from the GitHub release: plain
-# firmware.bin for the C3 X4/X3 binary, firmware-<board>.bin for every other
-# board. Attach the artifacts' .bin files to the release as-is.
+# Builds every board's release firmware, with the .bin named exactly as OtaUpdater
+# requests it from the GitHub release: <board>-firmware.bin, and x4old-x3-firmware.bin
+# for the combined C3 X4/X3 image.
+#
+# A bare tag push builds and leaves the results as workflow artifacts. Publishing a
+# release additionally ATTACHES those .bin files to it, which is what makes OTA work:
+# the updater reads releases/latest from the API, and that returns release assets --
+# workflow artifacts are not visible there.
 
 on:
   push:
     tags:
       - '*'
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -20,14 +26,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Asset names are the contract OtaUpdater reads: <board>-firmware.bin, with
+          # the combined X3/X4 C3 image published as x4old-x3. Renaming one here without
+          # the matching change in OtaUpdater.cpp silently breaks over-the-air updates.
           - pio_env: gh_release
-            asset: firmware.bin
+            asset: x4old-x3-firmware.bin
+          - pio_env: x4c-gh_release
+            asset: x4c-firmware.bin
           - pio_env: sticky-gh_release
-            asset: firmware-sticky.bin
+            asset: sticky-firmware.bin
           - pio_env: x4pro-gh_release
-            asset: firmware-x4pro.bin
+            asset: x4pro-firmware.bin
           - pio_env: papermono-gh_release
-            asset: firmware-papermono.bin
+            asset: papermono-firmware.bin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -66,10 +77,8 @@ jobs:
 
       - name: Name release asset
         run: |
-          if [ "${{ matrix.asset }}" != "firmware.bin" ]; then
-            cp ".pio/build/${{ matrix.pio_env }}/firmware.bin" \
-              ".pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}"
-          fi
+          cp ".pio/build/${{ matrix.pio_env }}/firmware.bin" \
+            ".pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -81,6 +90,44 @@ jobs:
             .pio/build/${{ matrix.pio_env }}/firmware.elf
             .pio/build/${{ matrix.pio_env }}/firmware.map
             .pio/build/${{ matrix.pio_env }}/partitions.bin
+
+  publish-release:
+    # Only a published release has somewhere to attach to. On a bare tag push this is
+    # skipped and the artifacts remain available for a manual upload.
+    if: github.event_name == 'release'
+    needs: [build-release, language-packs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the built firmware
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Attach firmware to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Exactly the names OtaUpdater asks for; a missing one means some device would
+          # see no update, so fail loudly rather than publish a half-updatable release.
+          for asset in x4old-x3-firmware.bin x4c-firmware.bin sticky-firmware.bin \
+                       x4pro-firmware.bin papermono-firmware.bin; do
+            path="$(find dist -type f -name "$asset" | head -1)"
+            if [ -z "$path" ]; then
+              echo "No $asset among the built artifacts" >&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          pack="$(find dist -type f -name language-packs.zip | head -1)"
+          if [ -z "$pack" ]; then
+            echo "No language-packs.zip among the built artifacts" >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "$pack" --repo "$GITHUB_REPOSITORY" --clobber
 
   # Languages that are not compiled in ship as .cplang packs for the SD card. A pack is
   # only valid for the firmware it was generated with -- it is indexed by string-key

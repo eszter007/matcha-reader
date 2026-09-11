@@ -1254,10 +1254,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->xpathListItemIndex++;
   }
 
-  // Extract class, style, id, and dir attributes for CSS/RTL processing
+  // Extract class, style, id, dir and hidden attributes for CSS/RTL processing
   std::string classAttr;
   std::string styleAttr;
   std::string dirAttr;
+  bool hasHiddenAttr = false;
   if (atts != nullptr) {
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "class") == 0) {
@@ -1288,6 +1289,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       } else if (strcmp(atts[i], "dir") == 0) {
         dirAttr = atts[i + 1];
+      } else if (strcasecmp(atts[i], "hidden") == 0) {  // attribute names are case-insensitive
+        hasHiddenAttr = true;
       }
     }
   }
@@ -1322,6 +1325,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // headings, captions and small print keep their intended relationship to the body text.
   if (strcasecmp(name, "body") == 0 || strcasecmp(name, "html") == 0) {
     cssStyle.defined.fontSize = 0;
+  }
+
+  // HTML hidden attribute overrides CSS display.
+  if (hasHiddenAttr) {
+    cssStyle.display = CssDisplay::None;
+    cssStyle.defined.display = 1;
   }
 
   // HTML dir attribute overrides CSS direction (case-insensitive per HTML spec)
@@ -2344,7 +2353,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
-  const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
+  // skipUntilDepth: text inside a skipped subtree (display:none, the HTML hidden attribute)
+  // never reaches the layout, so counting it would shift every later page's offset away from
+  // the text actually on screen -- and that offset is what KOReader sync resolves against.
+  const bool insideSkippedSubtree = self->skipUntilDepth < self->depth;
+  const bool countVisibleOffsets =
+      self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData && !insideSkippedSubtree;
   const uint32_t callbackVisibleOffset = self->visibleTextOffset;
   if (countVisibleOffsets) {
     const unsigned char* ptr = reinterpret_cast<const unsigned char*>(s);

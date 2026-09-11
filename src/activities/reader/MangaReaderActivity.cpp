@@ -1118,6 +1118,7 @@ void MangaReaderActivity::renderPanelZoom() {
   config.maxWidth = fitW;
   config.maxHeight = fitH;
   config.useExactDimensions = true;
+  config.allowUpscale = true;  // panel zoom: a small mono crop should fill the screen
   config.useGrayscale = !bwOnly;
   config.useDithering = !bwOnly;
   config.cachePath = cachePath;
@@ -1487,6 +1488,7 @@ void MangaReaderActivity::workerWarmPanel() {
   config.maxWidth = g.fitW;
   config.maxHeight = g.fitH;
   config.useExactDimensions = true;
+  config.allowUpscale = true;  // same panel geometry as the on-screen render above
   config.useGrayscale = true;
   config.useDithering = true;
   config.cacheOnly = true;

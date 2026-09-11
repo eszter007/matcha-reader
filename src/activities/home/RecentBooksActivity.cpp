@@ -1560,7 +1560,9 @@ void RecentBooksActivity::drawShelfRow(const int shelfIdx, const int itemY, cons
   bool hasThumb = false;
   // The shelf-height thumbnail (generated in loadShelves) renders 1:1, avoiding
   // the bitmap downscaler that produces all-black at heavy reductions.
-  if (!shelf.shelfThumbPath.empty()) {
+  // hasCompleteBmp(), not just parseHeaders(): an intact header over a truncated payload would
+  // otherwise reach drawBitmap and fail mid-row after the slot is already part-drawn.
+  if (!shelf.shelfThumbPath.empty() && FsHelpers::hasCompleteBmp("LIB", shelf.shelfThumbPath)) {
     HalFile file;
     if (Storage.openFileForRead("LIB", shelf.shelfThumbPath, file)) {
       Bitmap bitmap(file);
@@ -1570,8 +1572,7 @@ void RecentBooksActivity::drawShelfRow(const int shelfIdx, const int itemY, cons
         const int bh = bitmap.getHeight();
         const int dx = thumbX + (SHELF_THUMB_WIDTH - bw) / 2;
         const int dy = thumbY + (SHELF_THUMB_HEIGHT - bh) / 2;
-        renderer.drawBitmap(bitmap, dx, dy, bw, bh);
-        hasThumb = true;
+        hasThumb = renderer.drawBitmap(bitmap, dx, dy, bw, bh);
       }
       file.close();
     }

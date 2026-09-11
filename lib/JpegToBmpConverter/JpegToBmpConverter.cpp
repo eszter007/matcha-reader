@@ -530,7 +530,7 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
-                                                     int targetHeight, bool oneBit, bool crop,
+                                                     int targetHeight, bool oneBit, bool crop, bool originalThresholds,
                                                      BmpConvertCancelFn shouldCancel, void* cancelCtx,
                                                      bool* outUnsupported) {
   if (outUnsupported) *outUnsupported = false;
@@ -738,20 +738,20 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   if (oneBit) {
     ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
-    if (!ctx.atkinson1BitDitherer || !ctx.atkinson1BitDitherer->valid()) {
+    if (!ctx.atkinson1BitDitherer || !ctx.atkinson1BitDitherer->isValid()) {
       LOG_ERR("JPG", "OOM: Atkinson1BitDitherer");
       return false;
     }
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
-      if (!ctx.atkinsonDitherer || !ctx.atkinsonDitherer->valid()) {
+      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth, originalThresholds);
+      if (!ctx.atkinsonDitherer || !ctx.atkinsonDitherer->isValid()) {
         LOG_ERR("JPG", "OOM: AtkinsonDitherer");
         return false;
       }
     } else if (USE_FLOYD_STEINBERG) {
-      ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
-      if (!ctx.fsDitherer || !ctx.fsDitherer->valid()) {
+      ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth, originalThresholds);
+      if (!ctx.fsDitherer || !ctx.fsDitherer->isValid()) {
         LOG_ERR("JPG", "OOM: FloydSteinbergDitherer");
         return false;
       }
@@ -792,11 +792,11 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 }
 
 // Core function: Convert JPEG file to 2-bit BMP (uses default target size)
-bool JpegToBmpConverter::jpegFileToBmpStream(HalFile& jpegFile, Print& bmpOut, bool crop) {
+bool JpegToBmpConverter::jpegFileToBmpStream(HalFile& jpegFile, Print& bmpOut, bool crop, bool originalThresholds) {
   // Use runtime display dimensions (swapped for portrait cover sizing)
   const int targetWidth = display.getDisplayHeight();
   const int targetHeight = display.getDisplayWidth();
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetWidth, targetHeight, false, crop);
+  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetWidth, targetHeight, false, crop, originalThresholds);
 }
 
 // Convert with custom target size (for thumbnails, 2-bit)
@@ -809,6 +809,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& b
 bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
                                                          int targetMaxHeight, BmpConvertCancelFn shouldCancel,
                                                          void* cancelCtx, bool* outUnsupported) {
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, shouldCancel,
+  // originalThresholds=false: the 1-bit path keeps the dither thresholds it has always used.
+  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, false, shouldCancel,
                                      cancelCtx, outUnsupported);
 }

@@ -6,6 +6,7 @@
 #include <I18n.h>
 #include <MangaPanel.h>
 #include <Memory.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <iterator>
@@ -283,7 +284,9 @@ void FileBrowserActivity::activateSelected(const bool forceDelete) {
 
     std::string heading = tr(STR_DELETE) + std::string("? ");
 
-    startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, entry), handler);
+    // Compose the display copy; `entry` stays raw for the delete path itself.
+    startActivityForResult(
+        std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, utf8ComposeNfc(entry)), handler);
     return;
   } else {
     // --- SHORT PRESS ACTION: OPEN/NAVIGATE ---
@@ -382,6 +385,13 @@ bool FileBrowserActivity::handleButtons() {
 }
 
 std::string getFileName(std::string filename) {
+  // Guard before back(): on an empty name that is undefined behaviour.
+  if (filename.empty()) return filename;
+  // Display copy only — `files[]` keeps the raw directory-entry bytes, because
+  // FAT long-filename lookup is byte-exact: an NFC-normalized path would fail
+  // to open the NFD entry macOS wrote. Composing here fixes rendering (fonts
+  // carry precomposed syllables / letters only) without touching paths.
+  filename = utf8ComposeNfc(filename);
   if (filename.empty()) return filename;
   if (filename.back() == '/') {
     filename.pop_back();
@@ -428,7 +438,11 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     const int pathY =
         band.y + metrics.verticalSpacing / 2 + (band.height - metrics.verticalSpacing / 2 - pathLineHeight) / 2;
     const int pathMaxWidth = band.width - metrics.contentSidePadding * 2;
-    const char* pathStr = basepath.c_str();
+    // Display copy only; basepath stays raw so FAT long-filename lookups keep matching the
+    // bytes on the card. Without this an NFD directory name from macOS shows decomposed Jamo
+    // here even though the row labels are composed.
+    const std::string pathComposed = utf8ComposeNfc(basepath);
+    const char* pathStr = pathComposed.c_str();
     const char* pathDisplay = pathStr;
     char leftTruncBuf[256];
     if (renderer.getTextWidth(SMALL_FONT_ID, pathStr) > pathMaxWidth) {
@@ -490,10 +504,10 @@ void FileBrowserActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  std::string folderName =
-      (mode == Mode::PickFirmware)
-          ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
-          : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
+  std::string folderName = (mode == Mode::PickFirmware)
+                               ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
+                               : ((basepath == "/") ? std::string(tr(STR_SD_CARD))
+                                                    : utf8ComposeNfc(basepath.substr(basepath.rfind('/') + 1)));
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());

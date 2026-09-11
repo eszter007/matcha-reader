@@ -12,6 +12,17 @@ uint8_t quantizeSimple(int gray);
 uint8_t quantize1bit(int gray, int x, int y);
 int adjustPixel(int gray);
 
+struct GrayPlanePixel {
+  bool write;
+  bool black;
+};
+
+// level: 0=black, 1=dark, 2=light, 3=white. drawPixel(true) clears a bit.
+constexpr GrayPlanePixel grayPlanePixel(uint8_t level, bool msb, bool absolute) {
+  if (absolute) return {true, !(level == 3 || level == (msb ? 2 : 1))};
+  return {msb ? (level == 1 || level == 2) : level == 1, false};
+}
+
 enum class BmpRowOrder { BottomUp, TopDown };
 
 // Populates a 1-bit BMP header in the provided memory.
@@ -30,13 +41,14 @@ class Atkinson1BitDitherer {
     errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
   }
 
+  // Callers must check row allocation before processing pixels.
+  bool isValid() const { return errorRow0 && errorRow1 && errorRow2; }
+
   ~Atkinson1BitDitherer() {
     delete[] errorRow0;
     delete[] errorRow1;
     delete[] errorRow2;
   }
-
-  bool valid() const { return errorRow0 && errorRow1 && errorRow2; }
 
   // EXPLICITLY DELETE THE COPY CONSTRUCTOR
   Atkinson1BitDitherer(const Atkinson1BitDitherer& other) = delete;
@@ -107,13 +119,17 @@ class Atkinson1BitDitherer {
 // Less error buildup = fewer artifacts than Floyd-Steinberg
 class AtkinsonDitherer {
  public:
-  explicit AtkinsonDitherer(int width) : width(width) {
-    // nothrow: bare new aborts on OOM under -fno-exceptions. valid() lets the owner reject the
+  explicit AtkinsonDitherer(int width, bool originalThresholds = false)
+      : width(width), originalThresholds(originalThresholds) {
+    // nothrow: bare new aborts on OOM under -fno-exceptions. isValid() lets the owner reject the
     // ditherer and fail the parse gracefully instead of crashing (manga BMP pages can be large).
     errorRow0 = new (std::nothrow) int16_t[width + 4]();  // Current row
     errorRow1 = new (std::nothrow) int16_t[width + 4]();  // Next row
     errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
   }
+
+  // Callers must check row allocation before processing pixels.
+  bool isValid() const { return errorRow0 && errorRow1 && errorRow2; }
 
   ~AtkinsonDitherer() {
     delete[] errorRow0;
@@ -121,9 +137,6 @@ class AtkinsonDitherer {
     delete[] errorRow2;
   }
 
-  // True only if every internal row buffer allocated. Check before use; a false ditherer must be
-  // discarded (the owner treats it as an allocation failure).
-  bool valid() const { return errorRow0 && errorRow1 && errorRow2; }
   // **1. EXPLICITLY DELETE THE COPY CONSTRUCTOR**
   AtkinsonDitherer(const AtkinsonDitherer& other) = delete;
 
@@ -139,7 +152,7 @@ class AtkinsonDitherer {
     // Quantize to 4 levels
     uint8_t quantized;
     int quantizedValue;
-    if (false) {  // original thresholds
+    if (originalThresholds) {
       if (adjusted < 43) {
         quantized = 0;
         quantizedValue = 0;
@@ -153,16 +166,16 @@ class AtkinsonDitherer {
         quantized = 3;
         quantizedValue = 255;
       }
-    } else {  // fine-tuned to X4 eink display
+    } else {  // Legacy panel tuning; slightly darker midtones.
       if (adjusted < 30) {
         quantized = 0;
         quantizedValue = 15;
-      } else if (adjusted < 50) {
+      } else if (adjusted < 55) {
         quantized = 1;
-        quantizedValue = 30;
-      } else if (adjusted < 140) {
+        quantizedValue = 35;
+      } else if (adjusted < 150) {
         quantized = 2;
-        quantizedValue = 80;
+        quantizedValue = 90;
       } else {
         quantized = 3;
         quantizedValue = 210;
@@ -198,10 +211,11 @@ class AtkinsonDitherer {
   }
 
  private:
-  int width;
+  const int width;
   int16_t* errorRow0;
   int16_t* errorRow1;
   int16_t* errorRow2;
+  const bool originalThresholds;
 };
 
 // Floyd-Steinberg error diffusion dithering with serpentine scanning
@@ -214,19 +228,20 @@ class AtkinsonDitherer {
 //      7/16  X
 class FloydSteinbergDitherer {
  public:
-  explicit FloydSteinbergDitherer(int width) : width(width), rowCount(0) {
+  explicit FloydSteinbergDitherer(int width, bool originalThresholds = false)
+      : width(width), rowCount(0), originalThresholds(originalThresholds) {
     // nothrow: see AtkinsonDitherer -- fail the parse gracefully instead of aborting on OOM.
     errorCurRow = new (std::nothrow) int16_t[width + 2]();  // +2 for boundary handling
     errorNextRow = new (std::nothrow) int16_t[width + 2]();
   }
 
+  // Callers must check row allocation before processing pixels.
+  bool isValid() const { return errorCurRow && errorNextRow; }
+
   ~FloydSteinbergDitherer() {
     delete[] errorCurRow;
     delete[] errorNextRow;
   }
-
-  // True only if both internal row buffers allocated (see AtkinsonDitherer::valid).
-  bool valid() const { return errorCurRow && errorNextRow; }
 
   // **1. EXPLICITLY DELETE THE COPY CONSTRUCTOR**
   FloydSteinbergDitherer(const FloydSteinbergDitherer& other) = delete;
@@ -247,7 +262,7 @@ class FloydSteinbergDitherer {
     // Quantize to 4 levels (0, 85, 170, 255)
     uint8_t quantized;
     int quantizedValue;
-    if (false) {  // original thresholds
+    if (originalThresholds) {
       if (adjusted < 43) {
         quantized = 0;
         quantizedValue = 0;
@@ -261,16 +276,16 @@ class FloydSteinbergDitherer {
         quantized = 3;
         quantizedValue = 255;
       }
-    } else {  // fine-tuned to X4 eink display
+    } else {  // Legacy panel tuning; slightly darker midtones.
       if (adjusted < 30) {
         quantized = 0;
         quantizedValue = 15;
-      } else if (adjusted < 50) {
+      } else if (adjusted < 55) {
         quantized = 1;
-        quantizedValue = 30;
-      } else if (adjusted < 140) {
+        quantizedValue = 35;
+      } else if (adjusted < 150) {
         quantized = 2;
-        quantizedValue = 80;
+        quantizedValue = 90;
       } else {
         quantized = 3;
         quantizedValue = 210;
@@ -328,8 +343,9 @@ class FloydSteinbergDitherer {
   }
 
  private:
-  int width;
+  const int width;
   int rowCount;
   int16_t* errorCurRow;
   int16_t* errorNextRow;
+  const bool originalThresholds;
 };

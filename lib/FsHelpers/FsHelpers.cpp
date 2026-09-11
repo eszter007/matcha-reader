@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,56 @@ std::string decodeUriEscapes(const std::string& path) {
   return decoded;
 }
 
+bool hasCompleteBmp(const char* moduleName, const char* path) {
+  HalFile file;
+  if (!Storage.openFileForRead(moduleName, path, file)) return false;
+  // 14-byte file header plus a 40-byte BITMAPINFOHEADER: the smallest BMP this code ever writes.
+  constexpr int MIN_BMP_BYTES = 14 + 40;
+  uint8_t header[MIN_BMP_BYTES];
+  // Read byte-wise: the buffer is not guaranteed 4-byte aligned and the C3 faults on unaligned
+  // multi-byte loads.
+  if (file.read(header, sizeof(header)) != MIN_BMP_BYTES) return false;
+  if (header[0] != 'B' || header[1] != 'M') return false;
+
+  const auto le32 = [&header](int offset) -> uint32_t {
+    return static_cast<uint32_t>(header[offset]) | (static_cast<uint32_t>(header[offset + 1]) << 8) |
+           (static_cast<uint32_t>(header[offset + 2]) << 16) | (static_cast<uint32_t>(header[offset + 3]) << 24);
+  };
+  const auto le16 = [&header](int offset) -> uint16_t {
+    return static_cast<uint16_t>(header[offset] | (header[offset + 1] << 8));
+  };
+
+  const uint32_t declared = le32(2);
+  const uint32_t pixelOffset = le32(10);
+  const uint32_t dibSize = le32(14);
+  const int32_t width = static_cast<int32_t>(le32(18));
+  const int32_t rawHeight = static_cast<int32_t>(le32(22));
+  const uint16_t planes = le16(26);
+  const uint16_t bpp = le16(28);
+  const uint32_t compression = le32(30);
+  if (declared < MIN_BMP_BYTES || pixelOffset < MIN_BMP_BYTES) return false;
+
+  // Mirror Bitmap::parseHeaders(): a complete file the renderer cannot decode is not usable, and
+  // caching it as generated would stop the cover ever being rebuilt.
+  if (dibSize < 40 || planes != 1) return false;
+  if (!(bpp == 1 || bpp == 2 || bpp == 4 || bpp == 8 || bpp == 24 || bpp == 32)) return false;
+  if (!(compression == 0 || (bpp == 32 && compression == 3))) return false;
+
+  // The renderer's own ceilings, which also bound the arithmetic below: the dimensions come from
+  // a file on the card, and an unbounded width * height * bpp overflows.
+  constexpr int32_t MAX_BMP_WIDTH = 2048;
+  constexpr int32_t MAX_BMP_HEIGHT = 3072;
+  if (width <= 0 || width > MAX_BMP_WIDTH) return false;
+  // Widen before negating: -INT32_MIN is signed overflow, and rawHeight comes from the card.
+  const int64_t height = rawHeight < 0 ? -static_cast<int64_t>(rawHeight) : static_cast<int64_t>(rawHeight);
+  if (height <= 0 || height > MAX_BMP_HEIGHT) return false;
+
+  const uint64_t rowBytes = ((static_cast<uint64_t>(width) * bpp + 31) / 32) * 4;
+  const uint64_t required = static_cast<uint64_t>(pixelOffset) + rowBytes * static_cast<uint64_t>(height);
+  const uint64_t actual = static_cast<uint64_t>(file.size());
+  return actual >= required && actual >= declared;
+}
+
 std::string normalisePath(const std::string& path) {
   std::vector<std::string_view> components;
   components.reserve(8);  // Eight nested folders is more than we might expect
@@ -45,7 +96,9 @@ std::string normalisePath(const std::string& path) {
     if (i == path.length() || path[i] == '/') {
       if (i > start) {
         std::string_view component(path.data() + start, i - start);
-        if (component == "..") {
+        if (component == ".") {
+          // Drop no-op segments so "/." canonicalises to root rather than a distinct path.
+        } else if (component == "..") {
           if (!components.empty()) {
             components.pop_back();
           }
@@ -181,6 +234,10 @@ std::string extractFolderPath(const std::string& filePath) {
     return "/";
   }
   return filePath.substr(0, lastSlash);
+}
+
+bool isSafePathComponent(std::string_view name) {
+  return !name.empty() && name.find_first_of("/\\") == std::string_view::npos && name != "." && name != "..";
 }
 
 void sanitizePathComponentForFat32(const char* input, char* output, size_t maxLen) {

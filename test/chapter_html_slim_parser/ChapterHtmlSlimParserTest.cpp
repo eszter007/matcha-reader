@@ -611,4 +611,109 @@ TEST_F(DropCapTest, LeavesAParagraphOpeningWithPunctuationAlone) {
   EXPECT_EQ(stubLineXPos[0][0], SPACE_WIDTH * 3);
 }
 
+TEST_F(ChapterHtmlSlimParserTest, ParagraphWithHiddenAttributeShouldBeSkipped) {
+  const XML_Char* attributes[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  ChapterHtmlSlimParser::startElement(&parser, "p", attributes);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+
+  ASSERT_EQ(parser.partWordBufferIndex, 0);
+}
+
+TEST_F(ChapterHtmlSlimParserTest, HeaderWithHiddenAttributeShouldBeSkipped) {
+  const XML_Char* attributes[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  ChapterHtmlSlimParser::startElement(&parser, "h1", attributes);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+
+  ASSERT_EQ(parser.partWordBufferIndex, 0);
+}
+
+TEST_F(ChapterHtmlSlimParserTest, SpanWithHiddenAttributeShouldBeSkipped) {
+  const XML_Char* attributes[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "Before ", 7);
+  ChapterHtmlSlimParser::startElement(&parser, "span", attributes);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+  ChapterHtmlSlimParser::endElement(&parser, "span");
+  ChapterHtmlSlimParser::characterData(&parser, " After ", 7);
+
+  ASSERT_EQ(parser.currentTextBlock->size(), 2);
+  ASSERT_EQ(parser.currentTextBlock->words[0], "Before");
+  ASSERT_EQ(parser.currentTextBlock->words[1], "After");
+}
+
+TEST_F(ChapterHtmlSlimParserTest, DivWithHiddenAttributeContentShouldBeSkipped) {
+  const XML_Char* attributes[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  ChapterHtmlSlimParser::startElement(&parser, "div", attributes);
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+
+  ASSERT_EQ(parser.partWordBufferIndex, 0);
+}
+
+// visibleTextOffset is the reading position KOReader sync resolves against, so it must count
+// only text that actually reaches the layout. Hidden content is skipped by the renderer; if it
+// still advanced the counter, every page after a hidden block would resolve to a later page than
+// the text the reader can see.
+TEST_F(ChapterHtmlSlimParserTest, HiddenTextDoesNotAdvanceTheVisibleOffset) {
+  const XML_Char* hidden[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  parser.insideBody = true;
+
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "abc", 3);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  const uint32_t afterVisible = parser.visibleTextOffset;
+  ASSERT_EQ(afterVisible, 3u) << "visible text must be counted";
+
+  ChapterHtmlSlimParser::startElement(&parser, "p", hidden);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  EXPECT_EQ(parser.visibleTextOffset, afterVisible) << "hidden text must not advance the offset";
+
+  // ...and the counter resumes from the visible total, not from a position inflated by the
+  // hidden run, so the next page's recorded offset still points at rendered text.
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "de", 2);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  EXPECT_EQ(parser.visibleTextOffset, afterVisible + 2);
+}
+
+TEST_F(ChapterHtmlSlimParserTest, HiddenSubtreeContentDoesNotAdvanceTheVisibleOffset) {
+  const XML_Char* hidden[] = {"hidden", "hidden", nullptr};
+
+  parser.beginParse();
+  parser.insideBody = true;
+
+  // Nested inside the hidden element: the skip covers the whole subtree, not just its own text.
+  ChapterHtmlSlimParser::startElement(&parser, "div", hidden);
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "buried", 6);
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  ChapterHtmlSlimParser::endElement(&parser, "div");
+
+  EXPECT_EQ(parser.visibleTextOffset, 0u);
+}
+
+// HTML attribute names are case-insensitive, and real books do write HIDDEN.
+TEST_F(ChapterHtmlSlimParserTest, UppercaseHiddenAttributeIsAlsoSkipped) {
+  const XML_Char* attributes[] = {"HIDDEN", "HIDDEN", nullptr};
+
+  parser.beginParse();
+  parser.insideBody = true;
+  ChapterHtmlSlimParser::startElement(&parser, "p", attributes);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+
+  ASSERT_EQ(parser.partWordBufferIndex, 0);
+  EXPECT_EQ(parser.visibleTextOffset, 0u);
+}
+
 }  // namespace

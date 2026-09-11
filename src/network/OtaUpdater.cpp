@@ -19,7 +19,10 @@
 #include "FirmwareFlasher.h"
 
 namespace {
-constexpr char latestReleaseUrl[] = "https://api.github.com/repos/crosspoint-reader/crosspoint-reader/releases/latest";
+// This fork ships its own firmware, so updates come from its own releases -- pointing
+// this at upstream would replace Matcha with stock CrossPoint on the next OTA.
+// releases/latest skips pre-releases, so nightlies are never served to OTA.
+constexpr char latestReleaseUrl[] = "https://api.github.com/repos/eszter007/matcha-reader/releases/latest";
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
@@ -31,12 +34,14 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   // OOM there aborts. fetchUrl handles the verified-https GET, redirects, and
   // User-Agent (see HttpDownloader).
   ReleaseJsonParser releaseParser;
-  // Each board updates from its own release asset: plain firmware.bin for the
-  // C3 X4/X3 binary (pre-existing releases), firmware-<board>.bin otherwise.
+  // Each board updates from <board>-firmware.bin, the naming this fork's releases use.
+  // The combined X3/X4 C3 image is published as x4old-x3, the one asset whose name does
+  // not match its board tag. The name carries no version, so it is known before the fetch
+  // and the parser never has to revisit assets that appeared ahead of tag_name.
   const bool isX4 = board_tag::boardNameLen() == 2 && memcmp(board_tag::boardName(), "x4", 2) == 0;
-  char assetName[48] = "firmware.bin";
+  char assetName[48] = "x4old-x3-firmware.bin";
   if (!isX4) {
-    snprintf(assetName, sizeof(assetName), "firmware-%.*s.bin", static_cast<int>(board_tag::boardNameLen()),
+    snprintf(assetName, sizeof(assetName), "%.*s-firmware.bin", static_cast<int>(board_tag::boardNameLen()),
              board_tag::boardName());
   }
   releaseParser.setFirmwareAssetName(assetName);

@@ -210,8 +210,9 @@ bool UITheme::drawCoverThumbFilled(GfxRenderer& renderer, const std::string& cov
   }
   // allowUpscale: thumbnails smaller than the cell (small covers, or a cell bigger than the
   // generated size) must grow into it, or the cell shows white strips.
-  renderer.drawBitmap(bitmap, x, y, boxWidth, boxHeight, cropX, cropY, /*allowUpscale=*/true);
-  return true;
+  // A failed decode must reach the caller, or the placeholder is suppressed and the cell shows
+  // a blank or half-drawn cover.
+  return renderer.drawBitmap(bitmap, x, y, boxWidth, boxHeight, cropX, cropY, /*allowUpscale=*/true);
 }
 
 namespace {
@@ -317,12 +318,15 @@ int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumb
     // the one they asked for. Device report: home drew thumb_226.bmp while the library asked for
     // thumb_207/54 and re-decoded the (undecodable) source on every pass.
     const std::string sibling = findSiblingCoverThumb(coverThumbPath);
-    if (sibling.empty() || !Storage.openFileForRead("HOME", sibling, file)) return 0;
+    // A sibling is chosen by its name alone, so verify the file is a whole BMP before trusting it.
+    if (sibling.empty() || !FsHelpers::hasCompleteBmp("HOME", sibling) ||
+        !Storage.openFileForRead("HOME", sibling, file))
+      return 0;
   }
   Bitmap bitmap(file);
   if (bitmap.parseHeaders() != BmpReaderError::Ok) return 0;
   const int drawWidth = (boxWidth > 0) ? boxWidth : bitmap.getWidth();
-  renderer.drawBitmap(bitmap, x, y, drawWidth, coverHeight, cropX, cropY, /*allowUpscale=*/true);
+  if (!renderer.drawBitmap(bitmap, x, y, drawWidth, coverHeight, cropX, cropY, /*allowUpscale=*/true)) return 0;
   return drawWidth;
 }
 
