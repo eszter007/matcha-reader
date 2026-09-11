@@ -3175,6 +3175,10 @@ void GfxRenderer::restoreBwBuffer(const bool resyncPanelBaseline) {
 
   if (resyncPanelBaseline) {
     display.cleanupGrayscaleBuffers(frameBuffer);
+    // RED RAM now holds the B/W baseline again, so the next page may diff against it.
+    // panelResidue_ deliberately stays: the gray CHARGE is still on the glass and only a
+    // HALF or FULL pass scrubs it.
+    grayPlanesResident_ = false;
   }
 
   freeBwBufferChunks();
@@ -3188,6 +3192,8 @@ void GfxRenderer::restoreBwBuffer(const bool resyncPanelBaseline) {
 void GfxRenderer::cleanupGrayscaleWithFrameBuffer() const {
   if (frameBuffer) {
     display.cleanupGrayscaleBuffers(frameBuffer);
+    // See restoreBwBuffer: the baseline is restored, the charge is not.
+    grayPlanesResident_ = false;
   }
 }
 

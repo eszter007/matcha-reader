@@ -703,4 +703,17 @@ TEST_F(ChapterHtmlSlimParserTest, HiddenSubtreeContentDoesNotAdvanceTheVisibleOf
   EXPECT_EQ(parser.visibleTextOffset, 0u);
 }
 
+// HTML attribute names are case-insensitive, and real books do write HIDDEN.
+TEST_F(ChapterHtmlSlimParserTest, UppercaseHiddenAttributeIsAlsoSkipped) {
+  const XML_Char* attributes[] = {"HIDDEN", "HIDDEN", nullptr};
+
+  parser.beginParse();
+  parser.insideBody = true;
+  ChapterHtmlSlimParser::startElement(&parser, "p", attributes);
+  ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
+
+  ASSERT_EQ(parser.partWordBufferIndex, 0);
+  EXPECT_EQ(parser.visibleTextOffset, 0u);
+}
+
 }  // namespace

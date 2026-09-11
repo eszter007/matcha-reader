@@ -64,7 +64,11 @@ bool hasCompleteBmp(const char* moduleName, const std::string& path) {
   if (header[0] != 'B' || header[1] != 'M') return false;
   const uint32_t declared = static_cast<uint32_t>(header[2]) | (static_cast<uint32_t>(header[3]) << 8) |
                             (static_cast<uint32_t>(header[4]) << 16) | (static_cast<uint32_t>(header[5]) << 24);
-  return declared > 0 && file.size() >= declared;
+  // A BMP cannot be smaller than its 14-byte file header plus a 40-byte DIB header. Without
+  // this floor a six-byte "BM" stub claiming bfSize == 1 satisfies the size test, is cached as
+  // usable, and then fails in Bitmap::parseHeaders() on every render.
+  constexpr uint32_t MIN_BMP_BYTES = 14 + 40;
+  return declared >= MIN_BMP_BYTES && file.size() >= declared;
 }
 
 // Drops a present-but-incomplete artifact so the conversion that follows retries instead of
@@ -795,17 +799,10 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
       return false;
     }
 
-    // Sanity-check header so we don't cache a non-BMP blob forever.
-    HalFile verify;
-    if (!Storage.openFileForRead("EBP", outPath, verify)) {
-      Storage.remove(outPath.c_str());
-      return false;
-    }
-    uint8_t sig[2];
-    const bool ok = verify.read(sig, sizeof(sig)) == static_cast<int>(sizeof(sig)) && sig[0] == 'B' && sig[1] == 'M';
-    verify.close();
-    if (!ok) {
-      LOG_ERR("EBP", "Cover item has .bmp extension but is not a BMP, skipping");
+    // Same completeness bar as the cache guard: a two-byte signature check would accept a
+    // truncated copy, cache it as generated and hand a partial cover to the renderer.
+    if (!hasCompleteBmp("EBP", outPath)) {
+      LOG_ERR("EBP", "Cover item has .bmp extension but is not a complete BMP, skipping");
       Storage.remove(outPath.c_str());
       return false;
     }

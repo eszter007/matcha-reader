@@ -1289,7 +1289,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       } else if (strcmp(atts[i], "dir") == 0) {
         dirAttr = atts[i + 1];
-      } else if (strcmp(atts[i], "hidden") == 0) {
+      } else if (strcasecmp(atts[i], "hidden") == 0) {  // attribute names are case-insensitive
         hasHiddenAttr = true;
       }
     }

@@ -438,7 +438,11 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     const int pathY =
         band.y + metrics.verticalSpacing / 2 + (band.height - metrics.verticalSpacing / 2 - pathLineHeight) / 2;
     const int pathMaxWidth = band.width - metrics.contentSidePadding * 2;
-    const char* pathStr = basepath.c_str();
+    // Display copy only; basepath stays raw so FAT long-filename lookups keep matching the
+    // bytes on the card. Without this an NFD directory name from macOS shows decomposed Jamo
+    // here even though the row labels are composed.
+    const std::string pathComposed = utf8ComposeNfc(basepath);
+    const char* pathStr = pathComposed.c_str();
     const char* pathDisplay = pathStr;
     char leftTruncBuf[256];
     if (renderer.getTextWidth(SMALL_FONT_ID, pathStr) > pathMaxWidth) {
@@ -503,7 +507,8 @@ void FileBrowserActivity::drawChrome() {
   std::string folderName =
       (mode == Mode::PickFirmware)
           ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
-          : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
+          : ((basepath == "/") ? std::string(tr(STR_SD_CARD))
+                               : utf8ComposeNfc(basepath.substr(basepath.rfind('/') + 1)));
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
