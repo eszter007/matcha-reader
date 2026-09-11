@@ -275,8 +275,12 @@ class ParagraphStreamer final : public Print {
   char skipAttrValue[MAX_ATTR_VALUE] = {};
   uint8_t skipAttrNameLen = 0;
   uint8_t skipAttrValueLen = 0;
-  enum SkipAttrState { SKIP_ATTR_NAME, SKIP_ATTR_PRE_EQ, SKIP_ATTR_PRE_VALUE, SKIP_ATTR_VALUE } skipAttrState =
-      SKIP_ATTR_NAME;
+  enum SkipAttrState {
+    SKIP_ATTR_NAME,
+    SKIP_ATTR_PRE_EQ,
+    SKIP_ATTR_PRE_VALUE,
+    SKIP_ATTR_VALUE
+  } skipAttrState = SKIP_ATTR_NAME;
   char skipAttrQuote = 0;
   bool tagStartsSkippedSubtree = false;
   bool tagSelfClosing = false;

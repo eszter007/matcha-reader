@@ -1,11 +1,10 @@
+#include <Epub/VisibleTextUtils.h>
 #include <gtest/gtest.h>
 
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <Epub/VisibleTextUtils.h>
 
 #include "ChapterXPathResolver.h"
 
