@@ -504,11 +504,10 @@ void FileBrowserActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  std::string folderName =
-      (mode == Mode::PickFirmware)
-          ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
-          : ((basepath == "/") ? std::string(tr(STR_SD_CARD))
-                               : utf8ComposeNfc(basepath.substr(basepath.rfind('/') + 1)));
+  std::string folderName = (mode == Mode::PickFirmware)
+                               ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
+                               : ((basepath == "/") ? std::string(tr(STR_SD_CARD))
+                                                    : utf8ComposeNfc(basepath.substr(basepath.rfind('/') + 1)));
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
