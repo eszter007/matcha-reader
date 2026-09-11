@@ -1050,6 +1050,7 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
+  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
   if (pathHasProtectedComponent(itemPath) || pathHasProtectedComponent(destPath)) {
     server->send(403, "text/plain", "Cannot move protected item");
     return;
