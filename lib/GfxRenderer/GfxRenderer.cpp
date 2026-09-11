@@ -3042,6 +3042,12 @@ bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDispla
   absoluteGrayPlanes = false;
   if (!display.displayGrayscaleBase(mode, fallback, fadingFix)) return false;
   absoluteGrayPlanes = mode == HalDisplay::GrayscaleMode::Absolute;
+  // Same tracking as the other base/displayGrayBuffer paths: the plane passes that
+  // follow leave gray charge no single HALF scrubs, and RED RAM now holds a gray
+  // plane rather than the B/W baseline. panelHasGrayPlanes() drives the clean-base
+  // decision for the NEXT image page, so this path must set it too.
+  panelResidue_ = true;
+  grayPlanesResident_ = true;
   return true;
 }
 

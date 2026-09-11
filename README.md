@@ -114,7 +114,17 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 
 > No Python needed. [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) converts dictionaries, fonts and manga in your browser and hands back a zip laid out for the card. Files stay on your machine, except manga OCR, where panels go to Gemini under your own key. ([source](https://github.com/eszter007/matcha-reader-tools))
 
-**1. Flash the firmware** with the standard CrossPoint process, see the [upstream docs](https://github.com/crosspoint-reader/crosspoint-reader).
+**1. Flash the firmware** with the standard CrossPoint process, see the [upstream docs](https://github.com/crosspoint-reader/crosspoint-reader). Take the build for your device from [this repository's releases](https://github.com/eszter007/matcha-reader/releases) — not upstream's:
+
+| Device | Asset |
+| --- | --- |
+| X3, and X4 (old) | `x4old-x3-firmware.bin` |
+| X4C (new) | `x4c-firmware.bin` |
+| X4 Pro | `x4pro-firmware.bin` |
+| Sticky | `sticky-firmware.bin` |
+| Papermono | `papermono-firmware.bin` |
+
+Once flashed, **Settings → Update** checks this repository's releases and downloads the asset matching your device, so an update keeps the Matcha features rather than replacing them with stock CrossPoint. Pre-releases (nightlies) are never offered over the air — install those by flashing.
 
 **2. Install dictionaries.** Word lookup needs at least a vocabulary dictionary.
 

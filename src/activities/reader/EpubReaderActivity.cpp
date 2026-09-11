@@ -3429,7 +3429,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         if (shouldCancel()) return false;
         const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
         renderer.beginStripTarget(buf + static_cast<size_t>(y) * gwBytes, y, rows);
-        renderer.clearScreen(0x00);
+        // Absolute planes clear to white; this path only runs for text AA today, where
+        // absoluteImageGrayscale is false, but the encoding must match either way.
+        renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
         renderGrayscalePass();
         renderer.endStripTarget();
       }
@@ -3534,7 +3536,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           }
           const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
           renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(0x00);
+          renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
           renderGrayscalePass();
           renderer.endStripTarget();
           renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
@@ -3550,15 +3552,19 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           }
           const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
           renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(0x00);
+          renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
           renderGrayscalePass();
           renderer.endStripTarget();
           renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
         }
         const auto tGrayMsb = millis();
 
-        renderer.setRenderMode(GfxRenderer::BW);
+        // After displayGrayBuffer, not before: setRenderMode(BW) cancels an unfinished
+        // absolute pass and would discard the planes just uploaded. displayGrayBuffer
+        // clears absoluteGrayPlanes itself, so this is a plain mode switch once the
+        // planes are shown -- and still the wanted cleanup when cancelled.
         if (!cancelled) renderer.displayGrayBuffer();
+        renderer.setRenderMode(GfxRenderer::BW);
         const auto tGrayDisplay = millis();
 
         // BW framebuffer is intact; re-sync controller RAM for the next
