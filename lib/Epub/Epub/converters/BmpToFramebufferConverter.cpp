@@ -57,7 +57,6 @@ bool BmpToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   // mode, and routes 1-bit BMPs through drawBitmap1Bit automatically. allowUpscale (manga panel
   // zoom) opts into upscaling so a mono crop smaller than the target box fills it instead of
   // rendering at 1:1; without it the fit stays shrink-only (full pages, which never upscale).
-  renderer.drawBitmap(bmp, config.x, config.y, config.maxWidth, config.maxHeight, 0.0f, 0.0f,
-                      config.allowUpscale);
+  renderer.drawBitmap(bmp, config.x, config.y, config.maxWidth, config.maxHeight, 0.0f, 0.0f, config.allowUpscale);
   return true;
 }
