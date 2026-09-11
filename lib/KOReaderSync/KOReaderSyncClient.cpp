@@ -8,6 +8,7 @@
 
 #include <string>
 
+#include "CrossPointPosition.h"
 #include "KOReaderCredentialStore.h"
 
 int KOReaderSyncClient::lastHttpCode = 0;
@@ -235,8 +236,8 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
     pos["page"] = p.pageNumber;
     pos["pages"] = p.totalPages;
     if (p.paragraphIndex.has_value()) pos["para"] = *p.paragraphIndex;
-    // Server rejects the whole position object if xpath exceeds 120 bytes.
-    if (!p.xpath.empty() && p.xpath.size() <= 120) pos["xpath"] = p.xpath;
+    // Server rejects the whole position object if the xpath is too long.
+    if (!p.xpath.empty() && p.xpath.size() <= MAX_SYNC_XPATH_BYTES) pos["xpath"] = p.xpath;
   }
 
   std::string body;

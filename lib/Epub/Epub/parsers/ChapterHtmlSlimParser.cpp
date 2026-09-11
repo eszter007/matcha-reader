@@ -2871,10 +2871,12 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->listItemBulletOnly = false;
     }
   }
-  if (strcmp(name, "body") == 0) {
+  // startElement() matches these case-insensitively; closing them exactly meant a chapter written
+  // <BODY> never left the body, counting trailing text the resolver does not.
+  if (strcasecmp(name, "body") == 0) {
     self->insideBody = false;
   }
-  if (strcmp(name, "html") == 0) {
+  if (strcasecmp(name, "html") == 0) {
     self->htmlEnded_ = true;
   }
 }

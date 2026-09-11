@@ -19,6 +19,7 @@
 #include "Epub/RubyGlossary.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "GfxRenderer.h"
+#include "VisibleTextUtils.h"
 
 namespace {
 
@@ -234,7 +235,21 @@ struct TextExtractor {
   }
 
   static bool isSkipTag(const char* name) {
-    return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0;
+    return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0 ||
+           strcasecmp(name, "title") == 0;
+  }
+
+  // Shared with the horizontal parser and the KOSync resolver: hidden and pagebreak subtrees are
+  // not counted, or vertical offsets would be in different units from the anchors resolved against
+  // them -- and hidden text should not be laid out vertically either.
+  static bool isSkipSubtree(const char** atts) {
+    if (atts == nullptr) return false;
+    for (int i = 0; atts[i]; i += 2) {
+      const char* value = atts[i + 1] ? atts[i + 1] : "";
+      if (VisibleTextUtils::isSkippedSubtreeAttribute(atts[i], value)) return true;
+      if (!atts[i + 1]) break;
+    }
+    return false;
   }
 
   // std::move()-ing currentText/currentRuns into the sink hands off their heap buffer and leaves
@@ -396,11 +411,13 @@ struct TextExtractor {
       self->skipDepth++;
       return;
     }
-    if (strcasecmp(name, "body") == 0) self->insideBody = true;
-    if (isSkipTag(name)) {
+    if (isSkipTag(name) || isSkipSubtree(atts)) {
+      // Before the insideBody flag: a hidden <body> stays outside it, or the skipDepth path in
+      // endElement() would return before the body reset and count trailing text as visible.
       self->skipDepth = 1;
       return;
     }
+    if (strcasecmp(name, "body") == 0) self->insideBody = true;
     if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
       if (self->resolveBlockStyle(name, atts, params) &&
