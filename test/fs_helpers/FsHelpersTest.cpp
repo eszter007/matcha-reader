@@ -43,8 +43,8 @@ TEST(NormalisePath, DropsCurrentDirectoryComponents) {
 }
 
 // Minimal 54-byte BMP header. Callers tweak fields to model the corruptions seen on real cards.
-std::vector<uint8_t> bmpHeader(uint32_t fileSize, uint32_t pixelOffset, int32_t width, int32_t height,
-                               uint16_t bpp, uint32_t compression = 0) {
+std::vector<uint8_t> bmpHeader(uint32_t fileSize, uint32_t pixelOffset, int32_t width, int32_t height, uint16_t bpp,
+                               uint32_t compression = 0) {
   std::vector<uint8_t> h(54, 0);
   const auto put32 = [&h](size_t at, uint32_t v) {
     h[at] = v & 0xFF;
