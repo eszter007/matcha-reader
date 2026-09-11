@@ -658,7 +658,13 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
   const bool absolute = hasGreyscale && !preserveBackground &&
                         renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
   if (absolute) {
-    if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) return;
+    if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) {
+      // The B/W sleep image is already in the framebuffer; show that rather than leaving the
+      // previous screen up.
+      LOG_ERR("SLEEP", "Absolute grayscale base failed; showing the B/W sleep image");
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      return;
+    }
   } else if (hasGreyscale) {
     // OEM grayscale pipeline base. Must stay HALF: the gray nudge LUT is
     // calibrated against the pixel state the single-pass HALF waveform leaves

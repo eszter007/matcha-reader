@@ -59,6 +59,7 @@ std::vector<uint8_t> bmpHeader(uint32_t fileSize, uint32_t pixelOffset, int32_t 
   put32(2, fileSize);
   put32(10, pixelOffset);
   put32(14, 40);
+  h[26] = 1;  // planes
   put32(18, static_cast<uint32_t>(width));
   put32(22, static_cast<uint32_t>(height));
   h[28] = bpp & 0xFF;

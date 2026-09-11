@@ -210,8 +210,9 @@ bool UITheme::drawCoverThumbFilled(GfxRenderer& renderer, const std::string& cov
   }
   // allowUpscale: thumbnails smaller than the cell (small covers, or a cell bigger than the
   // generated size) must grow into it, or the cell shows white strips.
-  renderer.drawBitmap(bitmap, x, y, boxWidth, boxHeight, cropX, cropY, /*allowUpscale=*/true);
-  return true;
+  // A failed decode must reach the caller, or the placeholder is suppressed and the cell shows
+  // a blank or half-drawn cover.
+  return renderer.drawBitmap(bitmap, x, y, boxWidth, boxHeight, cropX, cropY, /*allowUpscale=*/true);
 }
 
 namespace {
@@ -322,7 +323,7 @@ int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumb
   Bitmap bitmap(file);
   if (bitmap.parseHeaders() != BmpReaderError::Ok) return 0;
   const int drawWidth = (boxWidth > 0) ? boxWidth : bitmap.getWidth();
-  renderer.drawBitmap(bitmap, x, y, drawWidth, coverHeight, cropX, cropY, /*allowUpscale=*/true);
+  if (!renderer.drawBitmap(bitmap, x, y, drawWidth, coverHeight, cropX, cropY, /*allowUpscale=*/true)) return 0;
   return drawWidth;
 }
 

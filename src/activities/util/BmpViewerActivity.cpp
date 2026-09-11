@@ -167,7 +167,13 @@ void BmpViewerActivity::onEnter() {
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       if (bitmap.hasGreyscale()) {
         const bool absolute = renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
-        if (absolute && !renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) return;
+        if (absolute && !renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) {
+          // Fall back to the B/W framebuffer already rendered, rather than staying on the
+          // previous screen.
+          LOG_ERR("BMP", "Absolute grayscale base failed; showing the B/W image");
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+          return;
+        }
         if (!absolute) renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
         bool planesReady = true;
         for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {

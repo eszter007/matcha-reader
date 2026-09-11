@@ -1570,8 +1570,7 @@ void RecentBooksActivity::drawShelfRow(const int shelfIdx, const int itemY, cons
         const int bh = bitmap.getHeight();
         const int dx = thumbX + (SHELF_THUMB_WIDTH - bw) / 2;
         const int dy = thumbY + (SHELF_THUMB_HEIGHT - bh) / 2;
-        renderer.drawBitmap(bitmap, dx, dy, bw, bh);
-        hasThumb = true;
+        hasThumb = renderer.drawBitmap(bitmap, dx, dy, bw, bh);
       }
       file.close();
     }

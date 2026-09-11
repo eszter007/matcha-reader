@@ -58,24 +58,28 @@ bool hasCompleteBmp(const char* moduleName, const char* path) {
 
   const uint32_t declared = le32(2);
   const uint32_t pixelOffset = le32(10);
+  const uint32_t dibSize = le32(14);
   const int32_t width = static_cast<int32_t>(le32(18));
   const int32_t rawHeight = static_cast<int32_t>(le32(22));
+  const uint16_t planes = le16(26);
   const uint16_t bpp = le16(28);
   const uint32_t compression = le32(30);
   if (declared < MIN_BMP_BYTES || pixelOffset < MIN_BMP_BYTES) return false;
 
   // Mirror Bitmap::parseHeaders(): a complete file the renderer cannot decode is not usable, and
   // caching it as generated would stop the cover ever being rebuilt.
+  if (dibSize < 40 || planes != 1) return false;
   if (!(bpp == 1 || bpp == 2 || bpp == 4 || bpp == 8 || bpp == 24 || bpp == 32)) return false;
   if (!(compression == 0 || (bpp == 32 && compression == 3))) return false;
 
-  // Bound the dimensions before multiplying: these come from a file on the card, and an
-  // unbounded width * height * bpp overflows and lets a short file look complete.
-  constexpr int32_t MAX_BMP_DIMENSION = 20000;
-  if (width <= 0 || width > MAX_BMP_DIMENSION) return false;
+  // The renderer's own ceilings, which also bound the arithmetic below: the dimensions come from
+  // a file on the card, and an unbounded width * height * bpp overflows.
+  constexpr int32_t MAX_BMP_WIDTH = 2048;
+  constexpr int32_t MAX_BMP_HEIGHT = 3072;
+  if (width <= 0 || width > MAX_BMP_WIDTH) return false;
   // Widen before negating: -INT32_MIN is signed overflow, and rawHeight comes from the card.
   const int64_t height = rawHeight < 0 ? -static_cast<int64_t>(rawHeight) : static_cast<int64_t>(rawHeight);
-  if (height <= 0 || height > MAX_BMP_DIMENSION) return false;
+  if (height <= 0 || height > MAX_BMP_HEIGHT) return false;
 
   const uint64_t rowBytes = ((static_cast<uint64_t>(width) * bpp + 31) / 32) * 4;
   const uint64_t required = static_cast<uint64_t>(pixelOffset) + rowBytes * static_cast<uint64_t>(height);
