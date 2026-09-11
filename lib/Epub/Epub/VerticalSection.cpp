@@ -411,11 +411,13 @@ struct TextExtractor {
       self->skipDepth++;
       return;
     }
-    if (strcasecmp(name, "body") == 0) self->insideBody = true;
     if (isSkipTag(name) || isSkipSubtree(atts)) {
+      // Before the insideBody flag: a hidden <body> stays outside it, or the skipDepth path in
+      // endElement() would return before the body reset and count trailing text as visible.
       self->skipDepth = 1;
       return;
     }
+    if (strcasecmp(name, "body") == 0) self->insideBody = true;
     if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
       if (self->resolveBlockStyle(name, atts, params) &&

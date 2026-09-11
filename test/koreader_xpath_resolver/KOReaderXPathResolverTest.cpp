@@ -204,6 +204,11 @@ TEST(VisibleTextUtils, SkippedSubtreeAttributeRule) {
   EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("role", "doc-chapter"));
   EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("epub:type", "footnote"));
   EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("id", "pagebreak"));
+
+  // Values are compared exactly, matching ChapterHtmlSlimParser: a laxer rule here would skip
+  // text the layout counted.
+  EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("role", "DOC-PAGEBREAK"));
+  EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("epub:type", "PageBreak"));
 }
 
 TEST(KOReaderXPathResolver, KeepsParagraphOnlyResolutionUnchanged) {
