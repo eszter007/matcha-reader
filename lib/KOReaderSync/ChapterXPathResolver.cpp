@@ -159,9 +159,6 @@ class ParagraphTextCounter final : public Print {
     if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name)) {
       nonVisibleDepth++;
     }
-    if (name == "p") {
-      paragraphDepth++;
-    }
     depth++;
   }
 
@@ -182,13 +179,12 @@ class ParagraphTextCounter final : public Print {
     if (nonVisibleDepth > 0) {
       nonVisibleDepth--;
     }
-    if (name == "p" && paragraphDepth > 0) {
-      paragraphDepth--;
-    }
   }
 
   void onCharacterData(const XML_Char* data, const int len) {
-    if (!insideBody || nonVisibleDepth > 0 || paragraphDepth <= 0 || len <= 0) {
+    // Same rule as XPathProgressResolver below: the total and the target it is measured against
+    // must count the same text, or a percentage resolves to an anchor before the intended one.
+    if (!insideBody || nonVisibleDepth > 0 || len <= 0) {
       return;
     }
 
@@ -202,7 +198,6 @@ class ParagraphTextCounter final : public Print {
   bool stopped = false;
   int depth = 0;
   int bodyDepth = -1;
-  int paragraphDepth = 0;
   uint16_t nonVisibleDepth = 0;
   size_t visibleChars = 0;
 };
@@ -445,6 +440,9 @@ class XPathProgressResolver final : public Print {
         insideBody = true;
         bodyDepth = depth;
         parentStates.emplace_back();
+        // Text directly under <body> needs its own text()[N] counter, or an anchor in it
+        // collapses to the body element instead of the offset inside that text.
+        textNodeIndexStack.push_back(0);
       }
       depth++;
       return;

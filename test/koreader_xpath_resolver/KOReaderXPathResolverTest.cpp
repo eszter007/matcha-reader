@@ -144,6 +144,23 @@ TEST(KOReaderXPathResolver, ResolvesVisibleTextOutsideParagraphs) {
             "/body/DocFragment[1]/body/p[1]/text()[1].0");
 }
 
+TEST(KOReaderXPathResolver, AnchorsTextDirectlyUnderBody) {
+  const auto epub = epubWith("<html><body>Bare body text<p>Alpha</p></body></html>");
+
+  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 5),
+            "/body/DocFragment[1]/body/text()[1].5");
+}
+
+// findXPathForProgress() measures the target against a total; both must count the same text, or
+// a percentage resolves to an anchor before the intended one.
+TEST(KOReaderXPathResolver, ProgressCountsVisibleTextOutsideParagraphs) {
+  // 11 heading codepoints + 5 paragraph codepoints: full progress must reach the paragraph's end,
+  // not the point 100% of the paragraph-only total would give.
+  const auto epub = epubWith("<html><body><h1>Chapter One</h1><p>Alpha</p></body></html>");
+
+  EXPECT_EQ(ChapterXPathResolver::findXPathForProgress(epub, 0, 1.0f), "/body/DocFragment[1]/body/p[1]/text()[1].5");
+}
+
 TEST(KOReaderXPathResolver, KeepsParagraphOnlyResolutionUnchanged) {
   const auto epub = epubWith(kNestedFixture);
 
