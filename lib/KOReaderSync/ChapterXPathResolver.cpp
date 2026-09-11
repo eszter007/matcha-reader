@@ -24,6 +24,26 @@ std::string stripPrefix(const XML_Char* name) {
   return local ? std::string(local + 1) : std::string(name);
 }
 
+// The layout parser compares tag names case-insensitively (ChapterHtmlSlimParser.cpp:1228), so a
+// chapter written with <BODY> must be recognised here too or nothing resolves at all.
+bool equalsIgnoreCase(const std::string& name, const std::string_view tag) {
+  return VisibleTextUtils::equalsTag(name, tag);
+}
+
+// The layout parser skips role="doc-pagebreak" / epub:type="pagebreak" subtrees
+// (ChapterHtmlSlimParser.cpp:1962-1970). Their text must not advance the offsets resolved here, or
+// an anchor after a textual pagebreak lands inside it.
+bool isPagebreakElement(const XML_Char** atts) {
+  if (atts == nullptr) return false;
+  for (int i = 0; atts[i] && atts[i + 1]; i += 2) {
+    if ((std::strcmp(atts[i], "role") == 0 && std::strcmp(atts[i + 1], "doc-pagebreak") == 0) ||
+        (std::strcmp(atts[i], "epub:type") == 0 && std::strcmp(atts[i + 1], "pagebreak") == 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 struct NameCounter {
   std::string name;
   int count;
@@ -129,9 +149,9 @@ class ParagraphTextCounter final : public Print {
   size_t totalVisibleChars() const { return visibleChars; }
 
  private:
-  static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char**) {
+  static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
     auto* self = static_cast<ParagraphTextCounter*>(userData);
-    self->onStartElement(name);
+    self->onStartElement(name, atts);
   }
 
   static void XMLCALL endElement(void* userData, const XML_Char* name) {
@@ -144,11 +164,11 @@ class ParagraphTextCounter final : public Print {
     self->onCharacterData(data, len);
   }
 
-  void onStartElement(const XML_Char* rawName) {
+  void onStartElement(const XML_Char* rawName, const XML_Char** atts) {
     const std::string name = stripPrefix(rawName);
 
     if (!insideBody) {
-      if (name == "body") {
+      if (equalsIgnoreCase(name, "body")) {
         insideBody = true;
         bodyDepth = depth;
       }
@@ -156,7 +176,7 @@ class ParagraphTextCounter final : public Print {
       return;
     }
 
-    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name)) {
+    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts)) {
       nonVisibleDepth++;
     }
     depth++;
@@ -170,7 +190,7 @@ class ParagraphTextCounter final : public Print {
       return;
     }
 
-    if (depth == bodyDepth && name == "body") {
+    if (depth == bodyDepth && equalsIgnoreCase(name, "body")) {
       insideBody = false;
       nonVisibleDepth = 0;
       return;
@@ -269,7 +289,7 @@ class XPathParagraphResolver final : public Print {
     const std::string name = stripPrefix(rawName);
 
     if (!insideBody) {
-      if (name == "body") {
+      if (equalsIgnoreCase(name, "body")) {
         insideBody = true;
         bodyDepth = depth;
         parentStates.emplace_back();
@@ -307,7 +327,7 @@ class XPathParagraphResolver final : public Print {
       return;
     }
 
-    if (depth == bodyDepth && name == "body") {
+    if (depth == bodyDepth && equalsIgnoreCase(name, "body")) {
       insideBody = false;
       parentStates.clear();
       path.clear();
@@ -397,9 +417,9 @@ class XPathProgressResolver final : public Print {
   int spineIndex = 0;
 
  private:
-  static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char**) {
+  static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
     auto* self = static_cast<XPathProgressResolver*>(userData);
-    self->onStartElement(name);
+    self->onStartElement(name, atts);
   }
 
   static void XMLCALL endElement(void* userData, const XML_Char* name) {
@@ -432,11 +452,11 @@ class XPathProgressResolver final : public Print {
     self->onMarkupBoundary();
   }
 
-  void onStartElement(const XML_Char* rawName) {
+  void onStartElement(const XML_Char* rawName, const XML_Char** atts) {
     const std::string name = stripPrefix(rawName);
 
     if (!insideBody) {
-      if (name == "body") {
+      if (equalsIgnoreCase(name, "body")) {
         insideBody = true;
         bodyDepth = depth;
         parentStates.emplace_back();
@@ -454,7 +474,7 @@ class XPathProgressResolver final : public Print {
     textNodeIndexStack.push_back(0);
     pendingTextNode = true;
 
-    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name)) {
+    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts)) {
       nonVisibleDepth++;
     }
 
@@ -469,7 +489,7 @@ class XPathProgressResolver final : public Print {
       return;
     }
 
-    if (depth == bodyDepth && name == "body") {
+    if (depth == bodyDepth && equalsIgnoreCase(name, "body")) {
       insideBody = false;
       parentStates.clear();
       path.clear();

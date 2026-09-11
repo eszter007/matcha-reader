@@ -160,6 +160,22 @@ TEST(KOReaderXPathResolver, ProgressCountsVisibleTextOutsideParagraphs) {
   EXPECT_EQ(ChapterXPathResolver::findXPathForProgress(epub, 0, 1.0f), "/body/DocFragment[1]/body/p[1]/text()[1].5");
 }
 
+TEST(KOReaderXPathResolver, ResolvesInsideUppercaseBody) {
+  const auto epub = epubWith("<html><BODY><p>Alpha bravo</p></BODY></html>");
+
+  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 6),
+            "/body/DocFragment[1]/body/p[1]/text()[1].6");
+}
+
+TEST(KOReaderXPathResolver, SkipsPagebreakSubtrees) {
+  // The layout parser skips pagebreak markers, so their text must not advance the offset.
+  const auto epub =
+      epubWith(R"(<html><body><p>Alpha</p><span epub:type="pagebreak">99</span><p>Bravo</p></body></html>)");
+
+  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 5),
+            "/body/DocFragment[1]/body/p[2]/text()[1].0");
+}
+
 TEST(KOReaderXPathResolver, KeepsParagraphOnlyResolutionUnchanged) {
   const auto epub = epubWith(kNestedFixture);
 
