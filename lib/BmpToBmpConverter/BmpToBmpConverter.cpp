@@ -99,6 +99,10 @@ bool BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(HalFile& srcFile, Print& 
     return false;
   }
   Atkinson1BitDitherer dither(targetWidth);
+  if (!dither.isValid()) {
+    LOG_ERR("BMP", "OOM allocating dither rows for %d px", targetWidth);
+    return false;
+  }
   const bool restoreTone = src.is1Bit();
 
   const bool topDown = src.isTopDown();

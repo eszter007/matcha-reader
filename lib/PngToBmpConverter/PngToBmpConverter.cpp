@@ -703,7 +703,8 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     // UI task, so without this a button press waits for the whole image.
     if (shouldCancel && shouldCancel(cancelCtx)) {
       LOG_DBG("PNG", "PNG->BMP conversion cancelled");
-      return false;
+      success = false;
+      break;
     }
     // Decode one scanline
     if (!decodeScanline(ctx)) {

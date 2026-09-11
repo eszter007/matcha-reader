@@ -46,7 +46,9 @@ std::string normalisePath(const std::string& path) {
     if (i == path.length() || path[i] == '/') {
       if (i > start) {
         std::string_view component(path.data() + start, i - start);
-        if (component == "..") {
+        if (component == ".") {
+          // Drop no-op segments so "/." canonicalises to root rather than a distinct path.
+        } else if (component == "..") {
           if (!components.empty()) {
             components.pop_back();
           }

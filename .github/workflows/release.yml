@@ -95,7 +95,7 @@ jobs:
     # Only a published release has somewhere to attach to. On a bare tag push this is
     # skipped and the artifacts remain available for a manual upload.
     if: github.event_name == 'release'
-    needs: build-release
+    needs: [build-release, language-packs]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -122,6 +122,12 @@ jobs:
             fi
             gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY" --clobber
           done
+          pack="$(find dist -type f -name language-packs.zip | head -1)"
+          if [ -z "$pack" ]; then
+            echo "No language-packs.zip among the built artifacts" >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "$pack" --repo "$GITHUB_REPOSITORY" --clobber
 
   # Languages that are not compiled in ship as .cplang packs for the SD card. A pack is
   # only valid for the firmware it was generated with -- it is indexed by string-key

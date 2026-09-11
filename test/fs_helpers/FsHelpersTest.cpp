@@ -33,4 +33,9 @@ TEST(NormalisePath, CollapsesParentReferenceWithinPath) {
 
 TEST(NormalisePath, DropsLeadingParentReferencesPastRoot) { EXPECT_EQ(FsHelpers::normalisePath("/../../etc"), "etc"); }
 
+TEST(NormalisePath, DropsCurrentDirectoryComponents) {
+  EXPECT_EQ(FsHelpers::normalisePath("/."), "");
+  EXPECT_EQ(FsHelpers::normalisePath("/./Books/./a.epub"), "Books/a.epub");
+}
+
 }  // namespace
