@@ -59,16 +59,35 @@ class CancellablePrint final : public Print {
 bool hasCompleteBmp(const char* moduleName, const std::string& path) {
   HalFile file;
   if (!Storage.openFileForRead(moduleName, path, file)) return false;
-  uint8_t header[6];
-  if (file.read(header, sizeof(header)) != static_cast<int>(sizeof(header))) return false;
+  // 14-byte file header plus a 40-byte BITMAPINFOHEADER: the smallest BMP this code ever writes.
+  constexpr int MIN_BMP_BYTES = 14 + 40;
+  uint8_t header[MIN_BMP_BYTES];
+  if (file.read(header, sizeof(header)) != MIN_BMP_BYTES) return false;
   if (header[0] != 'B' || header[1] != 'M') return false;
-  const uint32_t declared = static_cast<uint32_t>(header[2]) | (static_cast<uint32_t>(header[3]) << 8) |
-                            (static_cast<uint32_t>(header[4]) << 16) | (static_cast<uint32_t>(header[5]) << 24);
-  // A BMP cannot be smaller than its 14-byte file header plus a 40-byte DIB header. Without
-  // this floor a six-byte "BM" stub claiming bfSize == 1 satisfies the size test, is cached as
-  // usable, and then fails in Bitmap::parseHeaders() on every render.
-  constexpr uint32_t MIN_BMP_BYTES = 14 + 40;
-  return declared >= MIN_BMP_BYTES && file.size() >= declared;
+
+  const auto le32 = [&header](int offset) -> uint32_t {
+    return static_cast<uint32_t>(header[offset]) | (static_cast<uint32_t>(header[offset + 1]) << 8) |
+           (static_cast<uint32_t>(header[offset + 2]) << 16) | (static_cast<uint32_t>(header[offset + 3]) << 24);
+  };
+  const auto le16 = [&header](int offset) -> uint16_t {
+    return static_cast<uint16_t>(header[offset] | (header[offset + 1] << 8));
+  };
+
+  const uint32_t declared = le32(2);
+  const uint32_t pixelOffset = le32(10);
+  const int32_t width = static_cast<int32_t>(le32(18));
+  const int32_t rawHeight = static_cast<int32_t>(le32(22));
+  const uint16_t bitCount = le16(28);
+  if (width <= 0 || rawHeight == 0 || bitCount == 0 || pixelOffset < static_cast<uint32_t>(MIN_BMP_BYTES)) return false;
+
+  // bfSize alone is not enough: a header claiming a small total size passes the length test while
+  // carrying no pixel rows at all, and the renderer then hits short reads. Compute what the
+  // geometry actually requires. 64-bit math throughout so a hostile width/height cannot wrap.
+  const int64_t height = rawHeight < 0 ? -static_cast<int64_t>(rawHeight) : static_cast<int64_t>(rawHeight);
+  const int64_t rowBytes = ((static_cast<int64_t>(width) * bitCount + 31) / 32) * 4;
+  const int64_t required = static_cast<int64_t>(pixelOffset) + rowBytes * height;
+  return declared >= static_cast<uint32_t>(MIN_BMP_BYTES) && static_cast<int64_t>(file.size()) >= required &&
+         static_cast<int64_t>(file.size()) >= static_cast<int64_t>(declared);
 }
 
 // Drops a present-but-incomplete artifact so the conversion that follows retries instead of
