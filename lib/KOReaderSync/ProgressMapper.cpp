@@ -266,6 +266,20 @@ class ParagraphStreamer final : public Print {
   char attrQuoteChar = 0;
   uint8_t nonVisibleDepth = 0;
   bool insideBody = false;
+
+  // Attribute scan for the shared skipped-subtree rule. onOpenTag() fires at the end of the tag
+  // NAME, before any attribute is seen, so the decision is applied at '>' instead.
+  static constexpr int MAX_ATTR_NAME = 12;
+  static constexpr int MAX_ATTR_VALUE = 16;
+  char skipAttrName[MAX_ATTR_NAME] = {};
+  char skipAttrValue[MAX_ATTR_VALUE] = {};
+  uint8_t skipAttrNameLen = 0;
+  uint8_t skipAttrValueLen = 0;
+  enum SkipAttrState { SKIP_ATTR_NAME, SKIP_ATTR_PRE_EQ, SKIP_ATTR_PRE_VALUE, SKIP_ATTR_VALUE } skipAttrState =
+      SKIP_ATTR_NAME;
+  char skipAttrQuote = 0;
+  bool tagStartsSkippedSubtree = false;
+  bool tagSelfClosing = false;
   bool targetBodyText = false;
 
   bool isNonVisibleTag() const { return VisibleTextUtils::isNonVisibleElement(tagName); }
@@ -389,6 +403,73 @@ class ParagraphStreamer final : public Print {
         } else if (currentAttrIsId) {
           appendCapturedAnchorId(c);
         }
+        break;
+    }
+  }
+
+  void resetSkipAttrScan() {
+    skipAttrState = SKIP_ATTR_NAME;
+    skipAttrNameLen = 0;
+    skipAttrValueLen = 0;
+    skipAttrQuote = 0;
+  }
+
+  void evaluateSkipAttribute() {
+    skipAttrName[skipAttrNameLen] = '\0';
+    skipAttrValue[skipAttrValueLen] = '\0';
+    if (skipAttrNameLen > 0 && VisibleTextUtils::isSkippedSubtreeAttribute(skipAttrName, skipAttrValue)) {
+      tagStartsSkippedSubtree = true;
+    }
+  }
+
+  // Walks an open tag's attributes byte by byte: name, optional ="value". Names and values longer
+  // than the buffers cannot match any rule, so truncation only ever fails to skip.
+  void scanSkipAttribute(const uint8_t c) {
+    switch (skipAttrState) {
+      case SKIP_ATTR_NAME:
+        if (isAttrWhitespace(c) || c == '=' || c == '/') {
+          if (skipAttrNameLen > 0) {
+            if (c == '=') {
+              skipAttrState = SKIP_ATTR_PRE_VALUE;
+            } else {
+              evaluateSkipAttribute();
+              skipAttrState = isAttrWhitespace(c) ? SKIP_ATTR_PRE_EQ : SKIP_ATTR_NAME;
+              if (skipAttrState == SKIP_ATTR_NAME) resetSkipAttrScan();
+            }
+          }
+          break;
+        }
+        if (skipAttrNameLen + 1 < MAX_ATTR_NAME) skipAttrName[skipAttrNameLen++] = static_cast<char>(c);
+        break;
+      case SKIP_ATTR_PRE_EQ:
+        if (isAttrWhitespace(c)) break;
+        if (c == '=') {
+          skipAttrState = SKIP_ATTR_PRE_VALUE;
+          break;
+        }
+        // A bare attribute (<p hidden>) followed by the next name.
+        evaluateSkipAttribute();
+        resetSkipAttrScan();
+        if (!isAttrWhitespace(c) && c != '/') skipAttrName[skipAttrNameLen++] = static_cast<char>(c);
+        break;
+      case SKIP_ATTR_PRE_VALUE:
+        if (isAttrWhitespace(c)) break;
+        if (c == '"' || c == '\'') {
+          skipAttrQuote = static_cast<char>(c);
+          skipAttrState = SKIP_ATTR_VALUE;
+          break;
+        }
+        skipAttrQuote = 0;
+        skipAttrState = SKIP_ATTR_VALUE;
+        if (skipAttrValueLen + 1 < MAX_ATTR_VALUE) skipAttrValue[skipAttrValueLen++] = static_cast<char>(c);
+        break;
+      case SKIP_ATTR_VALUE:
+        if ((skipAttrQuote != 0 && c == skipAttrQuote) || (skipAttrQuote == 0 && isAttrWhitespace(c))) {
+          evaluateSkipAttribute();
+          resetSkipAttrScan();
+          break;
+        }
+        if (skipAttrValueLen + 1 < MAX_ATTR_VALUE) skipAttrValue[skipAttrValueLen++] = static_cast<char>(c);
         break;
     }
   }
@@ -618,6 +699,18 @@ class ParagraphStreamer final : public Print {
         }
         break;
       case TAG_ATTRS:
+        if (!tagIsClose) {
+          scanSkipAttribute(c);
+          if (!inAttrQuote) {
+            // A self-closing tag has no matching close tag, so a skip started here would never
+            // be cleared.
+            if (c == '/') {
+              tagSelfClosing = true;
+            } else if (!isAttrWhitespace(c)) {
+              tagSelfClosing = false;
+            }
+          }
+        }
         // Track quoted attribute values so '/' inside them is not mistaken for self-closing.
         if (!inAttrQuote) {
           if (c == '"' || c == '\'') {
@@ -707,10 +800,15 @@ class ParagraphStreamer final : public Print {
       tagIsClose = false;
       capturingAnchorTag = false;
       resetAnchorAttrScan();
+      resetSkipAttrScan();
+      tagStartsSkippedSubtree = false;
+      tagSelfClosing = false;
       inAttrQuote = false;
       attrQuoteChar = 0;
     } else if (c == '>') {
       if (tagState == TAG_ATTRS) {
+        // A bare final attribute (<p hidden>) has not been evaluated yet.
+        if (!tagIsClose && skipAttrNameLen > 0) evaluateSkipAttribute();
         endAnchorIdScan();
       }
       globalInTag = false;
@@ -723,6 +821,19 @@ class ParagraphStreamer final : public Print {
           onOpenTag();
         tagNameLen = 0;
       }
+      // A self-closing tag with attributes (<br />) fires onOpenTag() when its name ends but has
+      // no close tag, so htmlDepth -- and any nonVisibleDepth inside a skipped subtree -- would
+      // never unwind. tagName still holds the name here.
+      if (tagState == TAG_ATTRS && tagSelfClosing && !tagIsClose) {
+        onCloseTag();
+      }
+      // onOpenTag() ran before the attributes were seen, so the shared skipped-subtree rule is
+      // applied here. onCloseTag() unwinds nonVisibleDepth symmetrically.
+      if (tagStartsSkippedSubtree && !tagIsClose && !tagSelfClosing) {
+        nonVisibleDepth++;
+      }
+      tagStartsSkippedSubtree = false;
+      tagSelfClosing = false;
       tagState = TAG_IDLE;
     } else if (globalInTag) {
       processByteInTag(c);

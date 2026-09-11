@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include <Epub/VisibleTextUtils.h>
+
 #include "ChapterXPathResolver.h"
 
 namespace {
@@ -189,6 +191,20 @@ TEST(KOReaderXPathResolver, TreatsHiddenBodyAsInvisible) {
   const auto epub = epubWith(R"(<html><body hidden=""><p>Alpha</p></body></html>)");
 
   EXPECT_TRUE(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 0).empty());
+}
+
+// The shared rule every offset counter uses: the layout parsers, the resolver above and
+// ProgressMapper's reverse streamer must agree on which subtrees are skipped.
+TEST(VisibleTextUtils, SkippedSubtreeAttributeRule) {
+  EXPECT_TRUE(VisibleTextUtils::isSkippedSubtreeAttribute("hidden", ""));
+  EXPECT_TRUE(VisibleTextUtils::isSkippedSubtreeAttribute("HIDDEN", "hidden"));
+  EXPECT_TRUE(VisibleTextUtils::isSkippedSubtreeAttribute("role", "doc-pagebreak"));
+  EXPECT_TRUE(VisibleTextUtils::isSkippedSubtreeAttribute("epub:type", "pagebreak"));
+
+  EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("class", "hidden"));
+  EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("role", "doc-chapter"));
+  EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("epub:type", "footnote"));
+  EXPECT_FALSE(VisibleTextUtils::isSkippedSubtreeAttribute("id", "pagebreak"));
 }
 
 TEST(KOReaderXPathResolver, KeepsParagraphOnlyResolutionUnchanged) {

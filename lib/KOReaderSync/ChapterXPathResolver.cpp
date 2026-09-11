@@ -6,7 +6,6 @@
 #include <Utf8.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
-#include <strings.h>
 
 #include <algorithm>
 #include <cmath>
@@ -31,27 +30,12 @@ bool equalsIgnoreCase(const std::string& name, const std::string_view tag) {
   return VisibleTextUtils::equalsTag(name, tag);
 }
 
-// The layout parser skips role="doc-pagebreak" / epub:type="pagebreak" subtrees
-// (ChapterHtmlSlimParser.cpp:1962-1970). Their text must not advance the offsets resolved here, or
-// an anchor after a textual pagebreak lands inside it.
-bool isPagebreakElement(const XML_Char** atts) {
-  if (atts == nullptr) return false;
-  for (int i = 0; atts[i] && atts[i + 1]; i += 2) {
-    if ((std::strcmp(atts[i], "role") == 0 && std::strcmp(atts[i + 1], "doc-pagebreak") == 0) ||
-        (std::strcmp(atts[i], "epub:type") == 0 && std::strcmp(atts[i + 1], "pagebreak") == 0)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// The layout parser gives the HTML hidden attribute display:none (ChapterHtmlSlimParser.cpp:1330)
-// and leaves that subtree out of visibleTextOffset, so counting it here would shift every later
-// anchor. Attribute names are case-insensitive in HTML, matching the parser's strcasecmp.
-bool isHiddenElement(const XML_Char** atts) {
+// Attribute-driven skips share one rule with the layout parser and the vertical extractor.
+bool startsSkippedSubtree(const XML_Char** atts) {
   if (atts == nullptr) return false;
   for (int i = 0; atts[i]; i += 2) {
-    if (strcasecmp(atts[i], "hidden") == 0) return true;
+    const char* value = atts[i + 1] ? atts[i + 1] : "";
+    if (VisibleTextUtils::isSkippedSubtreeAttribute(atts[i], value)) return true;
     if (!atts[i + 1]) break;
   }
   return false;
@@ -185,14 +169,13 @@ class ParagraphTextCounter final : public Print {
         insideBody = true;
         bodyDepth = depth;
         // <body hidden> is display:none to the layout parser, so none of its text is counted.
-        if (isHiddenElement(atts)) nonVisibleDepth++;
+        if (startsSkippedSubtree(atts)) nonVisibleDepth++;
       }
       depth++;
       return;
     }
 
-    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts) ||
-        isHiddenElement(atts)) {
+    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || startsSkippedSubtree(atts)) {
       nonVisibleDepth++;
     }
     depth++;
@@ -480,7 +463,7 @@ class XPathProgressResolver final : public Print {
         // collapses to the body element instead of the offset inside that text.
         textNodeIndexStack.push_back(0);
         // <body hidden> is display:none to the layout parser, so none of its text is counted.
-        if (isHiddenElement(atts)) nonVisibleDepth++;
+        if (startsSkippedSubtree(atts)) nonVisibleDepth++;
       }
       depth++;
       return;
@@ -492,8 +475,7 @@ class XPathProgressResolver final : public Print {
     textNodeIndexStack.push_back(0);
     pendingTextNode = true;
 
-    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts) ||
-        isHiddenElement(atts)) {
+    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || startsSkippedSubtree(atts)) {
       nonVisibleDepth++;
     }
 

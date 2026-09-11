@@ -1,5 +1,7 @@
 #include "VerticalSection.h"
 
+#include "VisibleTextUtils.h"
+
 #include <Arduino.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -238,170 +240,15 @@ struct TextExtractor {
            strcasecmp(name, "title") == 0;
   }
 
-  // The horizontal parser leaves these subtrees out of visibleTextOffset (ChapterHtmlSlimParser.cpp
-  // :1330, :1962-1970). Vertical offsets are resolved against the same XPath resolver, so counting
-  // them here would put the two layouts in different units -- and hidden text should not be laid
-  // out vertically either.
+  // Shared with the horizontal parser and the KOSync resolver: hidden and pagebreak subtrees are
+  // not counted, or vertical offsets would be in different units from the anchors resolved
+  // against them -- and hidden text should not be laid out vertically either.
   static bool isSkipSubtree(const char** atts) {
     if (atts == nullptr) return false;
     for (int i = 0; atts[i]; i += 2) {
-      if (strcasecmp(atts[i], "hidden") == 0) return true;
+      const char* value = atts[i + 1] ? atts[i + 1] : "";
+      if (VisibleTextUtils::isSkippedSubtreeAttribute(atts[i], value)) return true;
       if (!atts[i + 1]) break;
-      if ((strcasecmp(atts[i], "role") == 0 && strcasecmp(atts[i + 1], "doc-pagebreak") == 0) ||
-          (strcasecmp(atts[i], "epub:type") == 0 && strcasecmp(atts[i + 1], "pagebreak") == 0)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // std::move()-ing currentText/currentRuns into the sink hands off their heap buffer and leaves
-  // the local variable at capacity 0 -- so without a reserve() right after, the NEXT run/paragraph
-  // has to regrow from scratch via std::string/vector's own doubling, one malloc+free cycle at a
-  // time. For furigana-dense text (ruby annotations on nearly every kanji, e.g. "kyokasho"-style
-  // textbook readings) that's dozens to hundreds of tiny alloc/free cycles per paragraph -- exactly
-  // the kind of churn that fragments a ~220KB heap. These hints are small requests sized for the
-  // common case (a handful of CJK characters / a handful of runs between markup boundaries), not a
-  // correctness requirement -- an unusually long run still grows normally via doubling.
-  static constexpr size_t TEXT_RESERVE_HINT = 128;  // bytes
-  static constexpr size_t RUBY_RESERVE_HINT = 32;   // bytes
-  static constexpr size_t RUNS_RESERVE_HINT = 16;   // elements
-
-  void flushCurrentText() {
-    if (!currentText.empty()) {
-      // COPY, don't move: moving handed currentText's grown buffer to a transient RubyRun and
-      // restarted this one at TEXT_RESERVE_HINT, so every paragraph re-grew it by doubling
-      // (alloc-copy-free per step, hundreds of times per chapter) -- the main planter of the
-      // persistent fragments that shredded maxAlloc on long single-file books. The copy is a
-      // transient that coalesces back; currentText's capacity now lives for the whole build.
-      currentRuns.push_back(RubyRun{currentText, {}, currentStyle(), hasEmphasis(), currentTextOffset});
-      currentText.clear();
-    }
-  }
-
-  // Streaming accumulation bounds: hand runs to the sink every ~SOFT_FLUSH_BYTES (or
-  // SOFT_FLUSH_RUNS for furigana-dense text) as a seamless paragraph CONTINUATION, instead of
-  // buffering whole paragraphs SAX-side. A 238KB single-file novel accumulated 16KB text +
-  // its RubyRun copies here per forced-split "paragraph" -- transient peaks and buffer growth
-  // that shredded the heap's largest block. With a ~2KB cadence every buffer on this layer
-  // stays small and stable for the whole build.
-  static constexpr size_t SOFT_FLUSH_BYTES = 2048;
-  static constexpr size_t SOFT_FLUSH_RUNS = 48;
-  bool midParagraph = false;
-
-  static bool isAsciiWordByte(const unsigned char c) {
-    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
-  }
-
-  // Whether `s` ends mid-token, i.e. inside something the layout must see whole. Byte-level testing is
-  // not enough: Japanese books write years in FULLWIDTH digits (１９３８), and U+FF10-U+FF19 encode as
-  // EF BC 90..99, whose tail byte is not an ASCII word byte. Cutting there hands the layout two
-  // 2-digit batches and each is set as its own tate-chu-yoko pair -- 19 stacked over 38 rather than one
-  // rotated run.
-  static bool endsMidToken(const std::string& s) {
-    if (s.empty()) return false;
-    const auto last = static_cast<unsigned char>(s.back());
-    if (isAsciiWordByte(last)) return true;
-    return s.size() >= 3 && static_cast<unsigned char>(s[s.size() - 3]) == 0xEF &&
-           static_cast<unsigned char>(s[s.size() - 2]) == 0xBC && last >= 0x90 && last <= 0x99;
-  }
-
-  // paragraphEnds=false streams a partial paragraph: the sink lays it out with no break
-  // recorded, and the next emit continues it seamlessly (continuesPrevious=true).
-  void emitRuns(const bool paragraphEnds) {
-    // A soft flush is a cadence, not a deadline. If the text so far ends inside a Latin word or a number,
-    // skip this one and let the next take it: the vertical layout gathers a rotated run only within one
-    // batch, so cutting here renders "authority" as "au", a blank cell, then "thority". Deferring is
-    // bounded -- the paragraph's own end always flushes -- and the triggers retry on the next character
-    // or run.
-    //
-    // The tail is in currentText, or, when the run-COUNT trigger fires from the </ruby> handler, in the
-    // last run already pushed.
-    if (!paragraphEnds) {
-      const std::string& tail =
-          !currentText.empty() ? currentText : (currentRuns.empty() ? currentText : currentRuns.back().baseText);
-      if (endsMidToken(tail)) return;
-    }
-    flushCurrentText();
-    if (!currentRuns.empty()) {
-      if (sink) {
-        // Diagnostic: bisects where a chapter's heap actually drops -- was the paragraph itself
-        // already large/run-heavy going INTO onParagraph (accumulation phase, this SAX callback
-        // layer), or does the drop happen INSIDE onParagraph (stream-building/layout phase,
-        // VerticalParsedText)? Remove once the sparse-page root cause is found.
-        size_t totalBytes = 0;
-        for (const auto& r : currentRuns) totalBytes += r.baseText.size() + r.rubyText.size();
-        LOG_DBG("VSC", "flushParagraph: %u runs, %u bytes, maxAlloc=%u before onParagraph",
-                static_cast<unsigned>(currentRuns.size()), static_cast<unsigned>(totalBytes), ESP.getMaxAllocHeap());
-        // By reference: onParagraph moves the individual runs' strings out and clear()s the
-        // vector, handing its capacity back -- currentRuns keeps one stable buffer for the
-        // whole build instead of re-growing from RUNS_RESERVE_HINT every paragraph.
-        sink->onParagraph(currentRuns, midParagraph);
-        LOG_DBG("VSC", "flushParagraph: maxAlloc=%u after onParagraph", ESP.getMaxAllocHeap());
-      }
-      currentRuns.clear();
-      midParagraph = !paragraphEnds;
-    } else if (paragraphEnds) {
-      midParagraph = false;
-    }
-  }
-
-  void flushParagraph() { emitRuns(true); }
-
-  static bool isBlockTag(const char* name) {
-    static constexpr const char* blockTags[] = {"p",       "div",     "h1",    "h2",     "h3",
-                                                "h4",      "h5",      "h6",    "li",     "blockquote",
-                                                "section", "article", "aside", "figure", "figcaption"};
-    for (const auto* tag : blockTags) {
-      if (strcasecmp(name, tag) == 0) return true;
-    }
-    return false;
-  }
-
-  // Merge every matching styled-block entry for this element into params. Supports the selector
-  // forms the CSS map stores: "tag", ".class", "tag.class" (case-insensitive, class-attr token
-  // match). Returns true if anything matched.
-  bool resolveBlockStyle(const char* name, const char** atts, VerticalBlockParams& params) const {
-    if (!blockStyles || blockStyles->empty()) return false;
-    bool matched = false;
-    for (const auto& [sel, vs] : *blockStyles) {
-      if (sel.empty()) continue;
-      bool hit = false;
-      if (sel[0] == '.') {
-        hit = hasClass(atts, sel.c_str() + 1);
-      } else {
-        const size_t dot = sel.find('.');
-        if (dot == std::string::npos) {
-          hit = strcasecmp(sel.c_str(), name) == 0;
-        } else {
-          hit =
-              strlen(name) == dot && strncasecmp(sel.c_str(), name, dot) == 0 && hasClass(atts, sel.c_str() + dot + 1);
-        }
-      }
-      if (!hit) continue;
-      matched = true;
-      if (vs.startEm > 0) params.startEm = vs.startEm;
-      if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
-      if (vs.afterEm > 0) params.afterEm = vs.afterEm;
-      if (vs.hangEm > 0) params.hangEm = vs.hangEm;
-      params.alignCenter = params.alignCenter || vs.alignCenter;
-      if (vs.borderEdges != 0) params.borderEdges = vs.borderEdges;
-    }
-    return matched;
-  }
-
-  static bool hasClass(const char** atts, const char* cls) {
-    if (!atts) return false;
-    for (int i = 0; atts[i]; i += 2) {
-      if (strcasecmp(atts[i], "class") == 0 && atts[i + 1]) {
-        const char* val = atts[i + 1];
-        const size_t clsLen = strlen(cls);
-        while (*val) {
-          while (*val == ' ') val++;
-          if (strncasecmp(val, cls, clsLen) == 0 && (val[clsLen] == ' ' || val[clsLen] == '\0')) return true;
-          while (*val && *val != ' ') val++;
-        }
-      }
     }
     return false;
   }
