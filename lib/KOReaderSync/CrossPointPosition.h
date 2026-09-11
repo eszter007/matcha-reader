@@ -1,10 +1,15 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 /**
  * CrossPoint position representation.
  */
+// The sync server rejects a whole position object whose xpath exceeds this, so every producer
+// has to check before preferring a longer, more precise anchor over a shorter one.
+inline constexpr size_t MAX_SYNC_XPATH_BYTES = 120;
+
 struct CrossPointPosition {
   int spineIndex;                  // Current spine item (chapter) index
   int pageNumber;                  // Current page within the spine item
