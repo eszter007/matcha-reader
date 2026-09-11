@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <strings.h>
 #include <string>
 #include <utility>
 #include <vector>
@@ -40,6 +41,18 @@ bool isPagebreakElement(const XML_Char** atts) {
         (std::strcmp(atts[i], "epub:type") == 0 && std::strcmp(atts[i + 1], "pagebreak") == 0)) {
       return true;
     }
+  }
+  return false;
+}
+
+// The layout parser gives the HTML hidden attribute display:none (ChapterHtmlSlimParser.cpp:1330)
+// and leaves that subtree out of visibleTextOffset, so counting it here would shift every later
+// anchor. Attribute names are case-insensitive in HTML, matching the parser's strcasecmp.
+bool isHiddenElement(const XML_Char** atts) {
+  if (atts == nullptr) return false;
+  for (int i = 0; atts[i]; i += 2) {
+    if (strcasecmp(atts[i], "hidden") == 0) return true;
+    if (!atts[i + 1]) break;
   }
   return false;
 }
@@ -176,7 +189,8 @@ class ParagraphTextCounter final : public Print {
       return;
     }
 
-    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts)) {
+    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts) ||
+        isHiddenElement(atts)) {
       nonVisibleDepth++;
     }
     depth++;
@@ -474,7 +488,8 @@ class XPathProgressResolver final : public Print {
     textNodeIndexStack.push_back(0);
     pendingTextNode = true;
 
-    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts)) {
+    if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name) || isPagebreakElement(atts) ||
+        isHiddenElement(atts)) {
       nonVisibleDepth++;
     }
 

@@ -176,6 +176,15 @@ TEST(KOReaderXPathResolver, SkipsPagebreakSubtrees) {
             "/body/DocFragment[1]/body/p[2]/text()[1].0");
 }
 
+TEST(KOReaderXPathResolver, SkipsHiddenSubtrees) {
+  // The layout parser treats the HTML hidden attribute as display:none and leaves its text out of
+  // visibleTextOffset, so the resolver must not count it either.
+  const auto epub = epubWith(R"(<html><body><p>Alpha</p><p hidden="">Skipped</p><p>Bravo</p></body></html>)");
+
+  EXPECT_EQ(ChapterXPathResolver::findXPathForVisibleTextOffset(epub, 0, 5),
+            "/body/DocFragment[1]/body/p[3]/text()[1].0");
+}
+
 TEST(KOReaderXPathResolver, KeepsParagraphOnlyResolutionUnchanged) {
   const auto epub = epubWith(kNestedFixture);
 

@@ -776,8 +776,8 @@ SavedProgressPosition ProgressMapper::toSavedProgress(const std::shared_ptr<Epub
       (pos.totalPages > 1) ? static_cast<float>(pos.pageNumber) / static_cast<float>(pos.totalPages - 1) : 0.0f;
   result.percentage = epub->calculateProgress(pos.spineIndex, intra);
   if (pos.hasVisibleTextOffset) {
-    // Only when it fits: the full-ancestry anchor is the longest form, and one the server would
-    // drop is worse than the shorter paragraph anchor below, which often still fits.
+    // Only when it fits: the full-ancestry anchor is the longest form, and one that the server
+    // would drop is worse than the shorter paragraph anchor below, which often still fits.
     auto offsetXPath = ChapterXPathResolver::findXPathForVisibleTextOffset(epub, pos.spineIndex, pos.visibleTextOffset);
     if (offsetXPath.size() <= MAX_SYNC_XPATH_BYTES) {
       result.xpath = std::move(offsetXPath);
