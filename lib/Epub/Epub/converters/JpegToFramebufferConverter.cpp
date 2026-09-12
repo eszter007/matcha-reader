@@ -9,6 +9,7 @@
 #include <Memory.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <new>
 
@@ -65,22 +66,43 @@ struct JpegContext {
   uint32_t lastYieldMs{0};  // throttle state for yieldDuringDecode()
 };
 
-// File I/O callbacks use pFile->fHandle to access the HalFile*,
-// avoiding the need for global file state.
+// Buffered source for the decoder's file reads, reached through pFile->fHandle (no global state).
+//
+// JPEGDEC refills its own 2KB window (JPEG_FILE_BUF_SIZE) and asks for whatever is left of it, so
+// a 660KB image arrives as ~420 reads averaging 1.5KB. Each HalFile::read costs ~4ms almost
+// regardless of size -- measured 3.97ms for these 1.5KB reads and 3.9ms for the 4KB reads on the
+// .pxc path -- because the storage mutex, SdFat's cache block and the interleaved .pxc writes are
+// all per-call costs. That made SD reads HALF of a 3341ms decode. Refilling in one large read
+// collapses the call count instead.
+constexpr int32_t JPEG_SOURCE_BUF_SIZE = 8192;
+
+struct JpegSource {
+  HalFile file;
+  std::unique_ptr<uint8_t[]> buf;
+  int32_t bufFileOff = 0;  // file offset of buf[0]
+  int32_t bufLen = 0;      // valid bytes in buf
+  int32_t pos = 0;         // logical file position handed to the decoder
+  int32_t size = 0;
+};
+
 void* jpegOpen(const char* filename, int32_t* size) {
-  HalFile* f = new HalFile();
-  if (!Storage.openFileForRead("JPG", std::string(filename), *f)) {
-    delete f;
+  JpegSource* s = new (std::nothrow) JpegSource();
+  if (!s) return nullptr;
+  if (!Storage.openFileForRead("JPG", std::string(filename), s->file)) {
+    delete s;
     return nullptr;
   }
-  *size = f->size();
-  return f;
+  s->size = s->file.size();
+  *size = s->size;
+  // Optional: a null buffer just means every read goes straight to SD, exactly as before.
+  s->buf = makeUniqueNoThrow<uint8_t[]>(JPEG_SOURCE_BUF_SIZE);
+  return s;
 }
 
 void jpegClose(void* handle) {
-  HalFile* f = reinterpret_cast<HalFile*>(handle);
+  JpegSource* f = reinterpret_cast<JpegSource*>(handle);
   if (f) {
-    f->close();
+    f->file.close();
     delete f;
   }
 }
@@ -90,18 +112,48 @@ void jpegClose(void* handle) {
 // MUST maintain iPos to match the actual file position, otherwise progressive
 // JPEGs with large headers fail during parsing.
 int32_t jpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return 0;
-  int32_t bytesRead = f->read(pBuf, len);
-  if (bytesRead < 0) return 0;
-  pFile->iPos += bytesRead;
-  return bytesRead;
+  JpegSource* f = reinterpret_cast<JpegSource*>(pFile->fHandle);
+  if (!f || len <= 0) return 0;
+
+  if (!f->buf) {  // unbuffered fallback (allocation declined at open)
+    const int32_t n = f->file.read(pBuf, len);
+    if (n <= 0) return 0;
+    f->pos += n;
+    pFile->iPos = f->pos;
+    return n;
+  }
+
+  int32_t done = 0;
+  while (done < len) {
+    const int32_t inBuf = f->pos - f->bufFileOff;  // consumed offset within buf
+    if (inBuf >= 0 && inBuf < f->bufLen) {
+      int32_t take = f->bufLen - inBuf;
+      if (take > len - done) take = len - done;
+      memcpy(pBuf + done, f->buf.get() + inBuf, (size_t)take);
+      done += take;
+      f->pos += take;
+      continue;
+    }
+    if (f->pos >= f->size) break;  // EOF
+
+    // Refill: one large read replaces the many small ones the decoder would otherwise make.
+    if (!f->file.seek(f->pos)) break;
+    const int32_t n = f->file.read(f->buf.get(), JPEG_SOURCE_BUF_SIZE);
+    if (n <= 0) break;
+    f->bufFileOff = f->pos;
+    f->bufLen = n;
+  }
+
+  pFile->iPos = f->pos;
+  return done;
 }
 
 int32_t jpegSeek(JPEGFILE* pFile, int32_t pos) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
+  JpegSource* f = reinterpret_cast<JpegSource*>(pFile->fHandle);
   if (!f) return -1;
-  if (!f->seek(pos)) return -1;
+  // Seeking inside the buffered window costs nothing; the next read serves from RAM. Anything
+  // else just moves the logical position and lets the next read refill.
+  f->pos = pos;
   pFile->iPos = pos;
   return pos;
 }
@@ -109,7 +161,9 @@ int32_t jpegSeek(JPEGFILE* pFile, int32_t pos) {
 // JPEGDEC object is ~17 KB due to internal decode buffers.
 // Heap-allocate on demand so memory is only used during active decode.
 constexpr size_t JPEG_DECODER_APPROX_SIZE = 20 * 1024;
-constexpr size_t MIN_FREE_HEAP_FOR_JPEG = JPEG_DECODER_APPROX_SIZE + 16 * 1024;
+// Includes the source read buffer: it is allocated for the length of the decode, so the gate has
+// to cover it or a decode is admitted that cannot afford its own input path.
+constexpr size_t MIN_FREE_HEAP_FOR_JPEG = JPEG_DECODER_APPROX_SIZE + JPEG_SOURCE_BUF_SIZE + 16 * 1024;
 
 // Choose JPEGDEC's built-in scale factor for coarse downscaling.
 // Returns the scale denominator (1, 2, 4, or 8) and sets jpegScaleOption.
