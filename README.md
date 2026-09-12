@@ -188,6 +188,7 @@ Set `--language` on every book. It splits your reading time by language, and it 
 | `--no-ocr` | Panel boxes only, no Gemini calls, no text or translations. |
 | `--ltr` | Read panels left-to-right, for western comics and strips. Default is manga order. |
 | `--trim-margins` | Crop the blank paper border and page number off scanned pages. |
+| `--webtoon` | Vertical-scroll manhwa or webcomic. Re-cuts the strip into screen-shaped pages. |
 | `--max-pages N` | Convert the first N pages as a cheap test. |
 | `--title` / `--author` | Override metadata. |
 | `--language` | Book language tag. See above. |
@@ -197,6 +198,8 @@ Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-det
 Western comics work too. Pass `--ltr` so panels within a row are walked left-to-right. The panel detector was trained on manga but handles strip layouts well; page turn direction is a device setting (Reverse page turn), not a conversion one.
 
 OCR follows `--language`, so it works on any of them. The prompt names the language it should expect, which is what stops the model hallucinating Japanese out of a German speech bubble, and a book already in English gets transcription without a pointless English-to-English translation. Set the tag even if you don't care about reading stats.
+
+Manhwa and other vertical-scroll webcomics need `--webtoon`. A webtoon is one continuous strip, and distributors ship it pre-sliced into fixed-height tiles whose cuts land wherever the slicer's counter reached — often through a face. This reassembles the strip and re-cuts it at the artwork's own gutters into pages shaped to your screen, so no page opens or closes mid-panel. Panels are then the art blocks between gutters, read top to bottom, and the manga panel detector is skipped: it looks for bordered rectangles in a grid and there are none. A 48-tile chapter came out as 42 pages filling 90% of the screen on average.
 
 Add `--trim-margins` for anything scanned from print. It crops the paper border away before panels are detected, which both fills the screen and measurably improves detection: a Moomin page that came back as 9 panels untrimmed, with one whole strip undivided, split into all 11 once the margin was gone.
 

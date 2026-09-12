@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Self-check for panel reading order and the OCR prompt.
+"""Self-check for panel reading order, webtoon page cuts and the OCR prompt.
 No deps -- run: python3 test_panel_order.py
 
 Boxes are [x1, y1, x2, y2]. Each ordering case lists panels in an arbitrary
 input order and asserts the sequence the reader should walk them in.
 """
 
-from convert_manga import build_panel_ocr_prompt, sort_panels_reading_order
+from convert_manga import _webtoon_cut_points, build_panel_ocr_prompt, sort_panels_reading_order
 
 
 def order(panels, named, rtl):
@@ -102,6 +102,52 @@ def test_ocr_prompt_normalizes_the_tag():
     for tag, name in (("zh-Hant", "Chinese"), ("ko", "Korean")):
         p = build_panel_ocr_prompt(tag, rtl=True)
         assert f"comic page in {name}" in p and "manga" not in p, tag
+
+
+def _strip(blocks):
+    """A webtoon row profile from (art_height, gutter_height) pairs."""
+    rows = []
+    for art, gutter in blocks:
+        rows += [False] * art + [True] * gutter
+    return rows
+
+
+def test_webtoon_cuts_land_in_the_gutters():
+    """Panels a bit shorter than a screen: every cut should fall in a gutter."""
+    rows = _strip([(700, 40)] * 8)
+    cuts = _webtoon_cut_points(rows, 800)
+    for c in cuts[1:-1]:
+        assert rows[c], f"cut at {c} is inside artwork"
+
+
+def test_webtoon_never_exceeds_the_screen():
+    """A stretch of art taller than the screen has to be cut mid-panel, but the
+    page must still fit the display."""
+    rows = _strip([(5000, 30), (900, 30)])
+    cuts = _webtoon_cut_points(rows, 800)
+    heights = [cuts[i + 1] - cuts[i] for i in range(len(cuts) - 1)]
+    assert max(heights) <= 800, heights
+
+
+def test_webtoon_covers_the_whole_strip_once():
+    """No row may be dropped between pages, and none may be emitted twice."""
+    rows = _strip([(613, 25), (1500, 40), (222, 60), (990, 15)])
+    cuts = _webtoon_cut_points(rows, 800)
+    assert cuts[0] == 0 and cuts[-1] == len(rows)
+    assert cuts == sorted(cuts), cuts
+    assert all(cuts[i + 1] > cuts[i] for i in range(len(cuts) - 1)), cuts
+
+
+def test_webtoon_short_strip_is_one_page():
+    assert _webtoon_cut_points(_strip([(300, 0)]), 800) == [0, 300]
+
+
+def test_webtoon_prefers_the_latest_usable_gutter():
+    """Two gutters in reach: taking the earlier one would waste half a screen."""
+    # Gutters at rows 400-419 and 750-769; their midpoints are 410 and 760.
+    rows = _strip([(400, 20), (330, 20), (900, 0)])
+    cuts = _webtoon_cut_points(rows, 800)
+    assert cuts[1] == 760, cuts
 
 
 if __name__ == "__main__":
