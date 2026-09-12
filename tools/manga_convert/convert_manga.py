@@ -457,6 +457,166 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
     return images
 
 
+# ── Webtoon / manhwa re-pagination ──────────────────────────────
+#
+# A webtoon is one continuous vertical strip. Distributors ship it pre-sliced into
+# fixed-height tiles, and those cuts land wherever the slicer's counter happened to
+# reach -- straight through a face as often as not. Treating a tile as a page inherits
+# every one of those cuts, so the strip is reassembled and re-cut at its own gutters.
+
+WEBTOON_BLANK_LEVEL = 244  # a row this bright across its width is gutter, not art
+WEBTOON_MIN_GUTTER = 10  # px; shorter blank runs are spacing inside a panel
+WEBTOON_MIN_PAGE_FRAC = 0.45  # never cut earlier than this fraction of a full screen
+
+
+def _blank_rows(img, sample_step: int = 8) -> list[bool]:
+    """Which rows of img are blank across their full width."""
+    gray = img.convert("L")
+    px = gray.load()
+    xs = range(0, gray.width, sample_step)
+    return [all(px[x, y] > WEBTOON_BLANK_LEVEL for x in xs) for y in range(gray.height)]
+
+
+def _webtoon_cut_points(rows: list[bool], page_h: int) -> list[int]:
+    """Cut offsets for a strip whose blank rows are `rows`, one screenful apart.
+
+    Walks down the strip taking the LAST gutter that falls within a screen's reach,
+    so a page ends on a panel break wherever the art allows one. A stretch of art
+    taller than the screen has no gutter to find and is cut at the screen height --
+    unavoidable, and better than shrinking the page until the whole run fits.
+    """
+    height = len(rows)
+    cuts = [0]
+    y = 0
+    while height - y > page_h:
+        lo, hi = y + int(page_h * WEBTOON_MIN_PAGE_FRAC), y + page_h
+        best = None
+        run_start = None
+        for i in range(lo, hi):
+            if rows[i] and run_start is None:
+                run_start = i
+            elif not rows[i] and run_start is not None:
+                if i - run_start >= WEBTOON_MIN_GUTTER:
+                    best = (run_start + i) // 2
+                run_start = None
+        # A gutter still open at the window's end reaches past it: cut at the edge,
+        # which is inside that gutter and so still a clean break.
+        if run_start is not None and hi - run_start >= WEBTOON_MIN_GUTTER:
+            best = hi
+        y = best if best is not None else hi
+        cuts.append(y)
+    cuts.append(height)
+    return cuts
+
+
+def assemble_webtoon_pages(paths: list[str], work_dir: str, target) -> list[str]:
+    """Re-cut a pre-sliced webtoon into screen-shaped pages at its own gutters.
+
+    Returns paths to the new page images, in reading order. Tiles are scaled to the
+    most common width first, since a chapter's title banner often arrives at another
+    size and would otherwise offset every row below it.
+
+    ponytail: holds only the tiles overlapping the page being written, so peak memory
+    is a screenful rather than the whole strip; the row profile for a 50,000px chapter
+    is ~50KB of bools. A second decode pass is the price. Cache the decoded tiles if
+    conversion time ever matters more than memory.
+    """
+    from PIL import Image
+
+    out_dir = os.path.join(work_dir, "webtoon_pages")
+    os.makedirs(out_dir, exist_ok=True)
+
+    widths: dict[int, int] = {}
+    for p in paths:
+        with Image.open(p) as im:
+            widths[im.width] = widths.get(im.width, 0) + 1
+    width = max(widths, key=lambda w: widths[w])
+
+    def load(idx: int):
+        img = normalize_for_output(Image.open(paths[idx]))
+        if img.width != width:
+            img = img.resize((width, max(1, round(img.height * width / img.width))), Image.LANCZOS)
+        return img
+
+    # Pass 1: row profile and tile offsets, one tile in memory at a time.
+    rows: list[bool] = []
+    offsets = []
+    for idx in range(len(paths)):
+        img = load(idx)
+        offsets.append((len(rows), img.height))
+        rows.extend(_blank_rows(img))
+        img.close()
+
+    tw, th = target if target else DEVICE_TARGETS["x4"]
+    page_h = max(1, round(width * th / tw))
+    cuts = _webtoon_cut_points(rows, page_h)
+
+    # Pass 2: paste each page from the tiles it spans.
+    out_paths = []
+    cache: dict[int, object] = {}
+    for n in range(len(cuts) - 1):
+        top, bottom = cuts[n], cuts[n + 1]
+        # Blank rows at a page's head are the tail of the gutter it was cut from; keeping
+        # them would open every page with a band of empty paper.
+        while top < bottom and rows[top]:
+            top += 1
+        if top >= bottom:
+            continue
+        page = Image.new("RGB", (width, bottom - top), (255, 255, 255))
+        for idx, (start, height) in enumerate(offsets):
+            if start >= bottom or start + height <= top:
+                continue
+            if idx not in cache:
+                cache[idx] = load(idx)
+            page.paste(cache[idx], (0, start - top))
+        for idx in [i for i in cache if offsets[i][0] + offsets[i][1] <= bottom]:
+            cache.pop(idx).close()
+        out = os.path.join(out_dir, f"webtoon_{len(out_paths):04d}.png")
+        page.save(out, "PNG")
+        page.close()
+        out_paths.append(out)
+
+    for img in cache.values():
+        img.close()
+
+    snapped = sum(1 for c in cuts[1:-1] if rows[c - 1] or rows[min(c, len(rows) - 1)])
+    print(f"Webtoon: {len(paths)} tiles ({len(rows)}px tall) re-cut into {len(out_paths)} pages "
+          f"of up to {page_h}px, {snapped} of {max(0, len(cuts) - 2)} cuts landing in a gutter")
+    return out_paths
+
+
+def detect_webtoon_panels(img) -> list[list[int]]:
+    """Panels of a re-cut webtoon page: the art blocks between its gutters.
+
+    A webtoon is a single column, so a panel is a band of full-width rows with blank
+    rows above and below it. That is exactly what the format guarantees, and it needs
+    no model -- the manga panel detector looks for bordered rectangles in a grid and
+    has nothing to find here. Returns the whole page when it has no internal gutter.
+    """
+    rows = _blank_rows(img)
+    blocks = []
+    start = None
+    for y, blank in enumerate(rows):
+        if not blank and start is None:
+            start = y
+        elif blank and start is not None:
+            blocks.append((start, y))
+            start = None
+    if start is not None:
+        blocks.append((start, len(rows)))
+    # Blocks under a gutter's height are stray specks, not panels: fold them into the
+    # block above so no artwork is left out of every panel.
+    merged: list[list[int]] = []
+    for top, bottom in blocks:
+        if merged and (top - merged[-1][1] < WEBTOON_MIN_GUTTER or bottom - top < WEBTOON_MIN_GUTTER):
+            merged[-1][1] = bottom
+        else:
+            merged.append([top, bottom])
+    if not merged:
+        return [[0, 0, img.width, img.height]]
+    return [[0, top, img.width, bottom] for top, bottom in merged]
+
+
 def _extract_pdf_pages(pdf_path: str, work_dir: str) -> list[str]:
     """Rasterize each PDF page to a PNG, in document order (page 1 first)."""
     try:
@@ -1340,6 +1500,14 @@ def main():
     parser.add_argument("--panel-margin", type=int, default=10, help="Pixels of margin added around cropped panels")
     parser.add_argument("--max-pages", type=int, help="Only process the first N pages (for testing)")
     parser.add_argument(
+        "--webtoon",
+        action="store_true",
+        help="Treat the input as a vertical-scroll webtoon (manhwa, manhua, webcomic): reassemble "
+             "the distributor's fixed-height tiles into one strip and re-cut it at the artwork's "
+             "own gutters into screen-shaped pages, so no page starts or ends mid-panel. Panels "
+             "are then the art blocks between gutters, read top to bottom.",
+    )
+    parser.add_argument(
         "--trim-margins",
         action="store_true",
         help="Crop the blank paper border (and the page number sitting in it) off every page "
@@ -1431,6 +1599,15 @@ def main():
             toc_entries = parse_toc_file(args.toc_file)
             print(f"Using {len(toc_entries)} chapter(s) from --toc-file")
 
+        if args.webtoon:
+            # Re-cutting changes how many pages there are, so a TOC resolved above now
+            # points at the wrong ones. Dropping it beats shipping wrong chapter marks.
+            if toc_entries:
+                print("Warning: --webtoon re-cuts the pages, so the source table of contents no "
+                      "longer matches and is dropped", file=sys.stderr)
+                toc_entries = []
+            pages = assemble_webtoon_pages(pages, work_dir, device_target)
+
         if args.max_pages:
             pages = pages[: args.max_pages]
         print(f"Found {len(pages)} pages")
@@ -1448,7 +1625,10 @@ def main():
         if meta_title or meta_author or meta_language:
             write_meta(args.output_dir, meta_title, meta_author, meta_language)
 
-        ocr_prompt = build_panel_ocr_prompt(meta_language, rtl=not args.ltr)
+        # Webtoon panels are a single top-to-bottom column with horizontal text, so the
+        # right-to-left hint that suits a manga page is wrong for them however the book
+        # is tagged.
+        ocr_prompt = build_panel_ocr_prompt(meta_language, rtl=not (args.ltr or args.webtoon))
         if api_key and not meta_language:
             print("Note: no --language set; the OCR prompt will not name a source language. "
                   "Pass --language for better text recognition.", file=sys.stderr)
@@ -1531,8 +1711,13 @@ def main():
                 else:
                     shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
-            boxes = detect_panels(img)
-            boxes = sort_panels_reading_order(boxes, rtl=not args.ltr)
+            if args.webtoon:
+                # Already one top-to-bottom column, cut at its own gutters -- reordering a
+                # single column can only move boxes away from what the cut established.
+                boxes = detect_webtoon_panels(img)
+            else:
+                boxes = detect_panels(img)
+                boxes = sort_panels_reading_order(boxes, rtl=not args.ltr)
 
             # Crop and save every panel first (fast, local) before dispatching
             # the slow network calls concurrently -- OCR is I/O-bound (network
