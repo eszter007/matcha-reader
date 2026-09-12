@@ -124,6 +124,16 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       if (coverMissing) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
+          // Coalesce the heap BEFORE the load, not just before the cover extraction below. Both
+          // halves of this block are heap-hungry and both fail the same way arriving here from a
+          // reader: the stylesheet parse gates on 64KB free per file, and the cover inflates
+          // through a 32KB zip window. Measured on device: the parse skipped its last stylesheet
+          // at 45904 bytes free and then DISCARDED the whole parse (correctly -- a partial rule
+          // set must not be cached as complete), throwing away ~3.5s of work that would be redone
+          // and re-discarded on the next visit. The XTC branch below does the same release for the
+          // same reason. Font caches reload on demand.
+          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+
           Epub epub(book.path, "/.crosspoint");
           // Build the CSS cache alongside the first cover while the loading UI is already
           // active, so the later book click does not synchronously parse every stylesheet.
@@ -135,6 +145,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+          // Again before the extraction itself: the load above may have refilled the heap with
+          // rule data, and the 32KB inflate window is what failed here on device ("Inflate window
+          // OOM (32768 bytes): heap 11584 free/6132 max"). That failure is recoverable by design
+          // -- the cover path is kept rather than recording "no cover" -- but the retry repeats
+          // the whole load first, so it is worth not failing in the first place.
+          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
           const bool success = epub.generateThumbBmp(coverHeight);
           if (success) {
             // Also covers the recovery case: a book whose path was cleared by an earlier build
