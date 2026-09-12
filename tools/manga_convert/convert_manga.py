@@ -128,21 +128,89 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 GEMINI_MODEL = "gemini-3.6-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
-PANEL_OCR_PROMPT = """This image is a single panel cropped from a Japanese manga page.
+# Language the panel translations are produced in. The device shows them alongside the
+# original text as a reading aid, so a panel already in this language gets no translation.
+TRANSLATION_TARGET = "English"
+
+# Names for the --language tag, used to tell the OCR model what it is looking at. Only the
+# primary subtag is looked up ("zh-Hant" -> "zh"), and an unlisted tag just yields a prompt
+# that doesn't name a language, which reads fine and still works.
+OCR_LANGUAGE_NAMES = {
+    "ja": "Japanese", "en": "English", "de": "German", "fr": "French", "es": "Spanish",
+    "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "sv": "Swedish", "fi": "Finnish",
+    "da": "Danish", "no": "Norwegian", "pl": "Polish", "cs": "Czech", "hu": "Hungarian",
+    "ru": "Russian", "uk": "Ukrainian", "tr": "Turkish", "ko": "Korean", "zh": "Chinese",
+    "ar": "Arabic", "he": "Hebrew", "th": "Thai", "vi": "Vietnamese", "id": "Indonesian",
+}
+
+PANEL_OCR_PROMPT_TEMPLATE = """This image is a single panel cropped from {page_desc}.
 List every piece of text/dialogue visible in this panel, in the order a
-reader would read them (top-to-bottom, right-to-left for manga). Then give
-a single natural English translation of all of it combined, in the same
-reading order, as it would read in an English localization of this manga.
+reader would read them ({reading_order}). {translation_instruction}
 
 Return ONLY a JSON object, no other text:
-{"blocks": [{"text": "<the Japanese text, line breaks as \\n>",
-             "bbox_2d": [ymin, xmin, ymax, xmax]}, ...],
- "translation": "<natural English translation of all the panel's text combined, in reading order>"}
+{{"blocks": [{{"text": "<the {text_desc}, line breaks as \\n>",
+             "bbox_2d": [ymin, xmin, ymax, xmax]}}, ...],
+ "translation": {translation_field}}}
 
 bbox_2d is each text region's bounding box normalized to a 0-1000 scale
 (0,0 = top-left of the panel image, 1000,1000 = bottom-right). If you
 cannot determine a precise box, omit bbox_2d for that entry.
-If there is no text in the panel, return {"blocks": [], "translation": ""}."""
+If there is no text in the panel, return {{"blocks": [], "translation": ""}}."""
+
+
+def build_panel_ocr_prompt(language: str = "", rtl: bool = True) -> str:
+    """The OCR prompt for a book in `language`, read right-to-left or not.
+
+    Telling the model which language to expect matters: asked for "the Japanese text",
+    it will hallucinate Japanese out of a German speech bubble rather than transcribe
+    what is there. A book already in the translation target gets no translation asked
+    for at all -- the device shows translations as a reading aid, and "Oh no!" rendered
+    into English is noise.
+
+    An unknown language yields a prompt that names none, which the model handles fine.
+    Reading order follows the panel order (--ltr), not the language: it is a property of
+    the layout, and the same language appears in books of both conventions.
+    """
+    primary = language.strip().lower().replace("_", "-").partition("-")[0]
+    name = OCR_LANGUAGE_NAMES.get(primary, "")
+    # "manga" only for Japanese (and for an unset language, where right-to-left panel order
+    # is the strong hint). Chinese and Korean comics are manhua and manhwa; calling them manga
+    # tells the model something false about the page for no gain.
+    if primary == "ja":
+        page_desc = "a Japanese manga page"
+    elif not primary and rtl:
+        page_desc = "a manga page"
+    elif name:
+        page_desc = f"a comic page in {name}"
+    else:
+        page_desc = "a comic page"
+
+    reading_order = "top-to-bottom, right-to-left" if rtl else "left-to-right, top-to-bottom"
+    text_desc = f"{name} text" if name else "text exactly as it appears"
+
+    if name == TRANSLATION_TARGET:
+        # Nothing to translate -- say so explicitly, or the model invents a paraphrase.
+        translation_instruction = (
+            f"The text is already in {TRANSLATION_TARGET}, so no translation is needed."
+        )
+        translation_field = '""'
+    else:
+        target_phrase = f"a {name} comic" if name else "this comic"
+        translation_instruction = (
+            f"Then give\na single natural {TRANSLATION_TARGET} translation of all of it combined, in the same\n"
+            f"reading order, as it would read in an {TRANSLATION_TARGET} localization of {target_phrase}."
+        )
+        translation_field = (
+            f'"<natural {TRANSLATION_TARGET} translation of all the panel\'s text combined, in reading order>"'
+        )
+
+    return PANEL_OCR_PROMPT_TEMPLATE.format(
+        page_desc=page_desc,
+        reading_order=reading_order,
+        translation_instruction=translation_instruction,
+        text_desc=text_desc,
+        translation_field=translation_field,
+    )
 
 
 # ── Page collection / ordering ───────────────────────────────────
@@ -551,8 +619,8 @@ def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
 
 def _snap_to_unclaimed_edges(boxes: list[list[int]], page_w: int, page_h: int,
                              max_gap_frac: float = 0.15) -> list[list[int]]:
-    """Extend a panel's edge to the page boundary when it falls short by a
-    plausible amount AND no other detected panel claims that space.
+    """Extend a panel's edge to the edge of the page's CONTENT when it falls
+    short by a plausible amount AND no other detected panel claims that space.
 
     The detector sometimes underestimates a panel's true extent near the
     page edge (e.g. missing a speech bubble that reaches close to the
@@ -560,9 +628,24 @@ def _snap_to_unclaimed_edges(boxes: list[list[int]], page_w: int, page_h: int,
     being a deliberate gutter. Only snap small gaps (<15% of the page
     dimension) and only when nothing else occupies the overlapping range,
     so real gutters between adjacent panels are left alone.
+
+    The target is the union of all detected boxes, NOT the paper edge, so a
+    printed page's own margins are respected. Snapping to the paper edge
+    swallowed those margins whenever they were narrower than the threshold:
+    a scanned comic page with a 13% side margin had every panel stretched
+    into it, and a page with a footer had its bottom row stretched over the
+    page number. Both produce panel crops padded with blank paper, which is
+    exactly the screen area panel zoom exists to reclaim.
     """
     original = [tuple(b) for b in boxes]
     result = [list(b) for b in boxes]
+    if not original:
+        return result
+
+    left = min(b[0] for b in original)
+    top = min(b[1] for b in original)
+    right = max(b[2] for b in original)
+    bottom = max(b[3] for b in original)
 
     def claimed_beyond(i: int, axis: str, beyond) -> bool:
         ox1, oy1, ox2, oy2 = original[i]
@@ -580,18 +663,18 @@ def _snap_to_unclaimed_edges(boxes: list[list[int]], page_w: int, page_h: int,
         return False
 
     for i, (x1, y1, x2, y2) in enumerate(original):
-        if 0 < page_w - x2 < page_w * max_gap_frac and \
+        if 0 < right - x2 < page_w * max_gap_frac and \
            not claimed_beyond(i, "x", lambda j1, j2, o1, o2: j2 > o2):
-            result[i][2] = page_w
-        if 0 < x1 < page_w * max_gap_frac and \
+            result[i][2] = right
+        if 0 < x1 - left < page_w * max_gap_frac and \
            not claimed_beyond(i, "x", lambda j1, j2, o1, o2: j1 < o1):
-            result[i][0] = 0
-        if 0 < page_h - y2 < page_h * max_gap_frac and \
+            result[i][0] = left
+        if 0 < bottom - y2 < page_h * max_gap_frac and \
            not claimed_beyond(i, "y", lambda j1, j2, o1, o2: j2 > o2):
-            result[i][3] = page_h
-        if 0 < y1 < page_h * max_gap_frac and \
+            result[i][3] = bottom
+        if 0 < y1 - top < page_h * max_gap_frac and \
            not claimed_beyond(i, "y", lambda j1, j2, o1, o2: j1 < o1):
-            result[i][1] = 0
+            result[i][1] = top
 
     return result
 
@@ -710,18 +793,23 @@ def _y_overlap_frac(a: list[int], b: list[int]) -> float:
     return max(0.0, overlap) / max(1, min_h)
 
 
-def sort_panels_manga_order(panels: list[list[int]]) -> list[list[int]]:
-    """Sort panel boxes in manga reading order via a "reads-before" graph,
-    then a topological sort -- robust to mixed-size grids (e.g. one tall
-    panel beside two stacked shorter ones), which simple row-clustering by
+def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True) -> list[list[int]]:
+    """Sort panel boxes in reading order via a "reads-before" graph, then a
+    topological sort -- robust to mixed-size grids (e.g. one tall panel
+    beside two stacked shorter ones), which simple row-clustering by
     Y-center gets wrong.
 
     For every pair of panels: if their vertical extents overlap
-    substantially, they're in the same tier and read right-to-left; if not,
+    substantially, they're in the same tier and read horizontally; if not,
     whichever is higher up reads first (the other dimension doesn't matter
     once there's no vertical overlap). This produces a partial order;
     topological sort resolves the full reading sequence, with same-rank
-    ties broken top-to-bottom then right-to-left.
+    ties broken top-to-bottom then along the horizontal direction.
+
+    rtl=True is manga order (right-to-left within a tier); rtl=False is
+    western comics and strips -- Moomin, Peanuts -- which read left-to-right.
+    The direction only affects within-tier ordering: tiers themselves always
+    run top-to-bottom, in both conventions.
     """
     n = len(panels)
     if n <= 1:
@@ -738,7 +826,7 @@ def sort_panels_manga_order(panels: list[list[int]]) -> list[list[int]]:
             a, b = panels[i], panels[j]
             if _y_overlap_frac(a, b) > OVERLAP_THRESHOLD:
                 a_cx, b_cx = (a[0] + a[2]) / 2, (b[0] + b[2]) / 2
-                if a_cx > b_cx:  # same tier: right-to-left
+                if (a_cx > b_cx) if rtl else (a_cx < b_cx):  # same tier
                     edges[i].append(j)
                     in_degree[j] += 1
             else:
@@ -749,7 +837,8 @@ def sort_panels_manga_order(panels: list[list[int]]) -> list[list[int]]:
 
     def tie_break_key(i: int):
         x1, y1, x2, y2 = panels[i]
-        return ((y1 + y2) / 2, -(x1 + x2) / 2)
+        cx = (x1 + x2) / 2
+        return ((y1 + y2) / 2, -cx if rtl else cx)
 
     available = [i for i in range(n) if in_degree[i] == 0]
     result: list[int] = []
@@ -773,7 +862,8 @@ def sort_panels_manga_order(panels: list[list[int]]) -> list[list[int]]:
 # ── Gemini OCR (invoked via curl, key never embedded in code) ───
 
 
-def call_gemini_panel_ocr(image_path: str, api_key: str, timeout: int = 60, retries: int = 3) -> dict:
+def call_gemini_panel_ocr(image_path: str, api_key: str, prompt: str,
+                          timeout: int = 60, retries: int = 3) -> dict:
     """Ask Gemini what text appears in a panel image, plus an English
     translation of it. Returns {"blocks": [{"text", "bbox_2d"}, ...],
     "translation": str}. Retries on transient errors (503/429/network) with
@@ -782,7 +872,7 @@ def call_gemini_panel_ocr(image_path: str, api_key: str, timeout: int = 60, retr
     rather than aborting the whole run.
     """
     for attempt in range(retries):
-        result = _call_gemini_panel_ocr_once(image_path, api_key, timeout)
+        result = _call_gemini_panel_ocr_once(image_path, api_key, prompt, timeout)
         if result is not None:
             return result
         if attempt < retries - 1:
@@ -790,7 +880,7 @@ def call_gemini_panel_ocr(image_path: str, api_key: str, timeout: int = 60, retr
     return {"blocks": [], "translation": ""}
 
 
-def _call_gemini_panel_ocr_once(image_path: str, api_key: str, timeout: int) -> dict | None:
+def _call_gemini_panel_ocr_once(image_path: str, api_key: str, prompt: str, timeout: int) -> dict | None:
     """Single attempt. Returns None (not the empty dict) on a transient
     failure so the retry loop above can distinguish "retry" from "this
     panel genuinely has no text" (the latter is a successful empty result)."""
@@ -802,7 +892,7 @@ def _call_gemini_panel_ocr_once(image_path: str, api_key: str, timeout: int) -> 
     payload = {
         "contents": [{
             "parts": [
-                {"text": PANEL_OCR_PROMPT},
+                {"text": prompt},
                 {"inline_data": {"mime_type": mime, "data": image_b64}},
             ]
         }],
@@ -1238,6 +1328,36 @@ def normalize_for_output(img):
     return img
 
 
+def trim_page_margins(img, threshold: int = 230, pad: int = 2):
+    """Crop the blank paper border off a scanned page, keeping the artwork.
+
+    Printed comics and manga carry a white margin plus a page number that the
+    device has no reason to render: it eats screen area on a page that is
+    already small, and it is the difference between a page filling the display
+    and floating in the middle of it. The crop happens before panel detection,
+    so every coordinate downstream already lives in the trimmed page's space.
+
+    Detects content as "pixels darker than `threshold`" and keeps `pad` pixels
+    of paper around the result. Returns img unchanged when the page is blank or
+    has no margin to remove.
+
+    ponytail: a single global threshold, so a dark scan edge or heavy dust
+    along one border blocks the trim on that side. That fails safe (no crop),
+    and per-side row/column voting is the upgrade if real scans need it.
+    """
+    gray = img.convert("L")
+    bbox = gray.point(lambda p: 255 if p < threshold else 0, mode="1").getbbox()
+    if not bbox:
+        return img
+    x1 = max(0, bbox[0] - pad)
+    y1 = max(0, bbox[1] - pad)
+    x2 = min(img.width, bbox[2] + pad)
+    y2 = min(img.height, bbox[3] + pad)
+    if (x1, y1, x2, y2) == (0, 0, img.width, img.height):
+        return img
+    return img.crop((x1, y1, x2, y2))
+
+
 def fit_to_device(img, target):
     """Downscale img to fit the device screen box; never upscale, never change aspect.
 
@@ -1281,6 +1401,21 @@ def main():
     parser.add_argument("--no-ocr", action="store_true", help="Skip Gemini OCR -- panel boxes only, no text")
     parser.add_argument("--panel-margin", type=int, default=10, help="Pixels of margin added around cropped panels")
     parser.add_argument("--max-pages", type=int, help="Only process the first N pages (for testing)")
+    parser.add_argument(
+        "--trim-margins",
+        action="store_true",
+        help="Crop the blank paper border (and the page number sitting in it) off every page "
+             "before anything else, so the artwork fills the screen instead of floating in the "
+             "middle of it. Scanned print comics and manga usually have one; digital-native "
+             "releases usually don't, and are left alone.",
+    )
+    parser.add_argument(
+        "--ltr",
+        action="store_true",
+        help="Order panels left-to-right within a row, for western comics and newspaper strips "
+             "(Moomin, Peanuts). Default is manga order, right-to-left. Page order is unaffected; "
+             "set the device's Reverse page turn setting for that.",
+    )
     parser.add_argument(
         "--toc-file",
         help='Chapter list: one per line, "<page_index>\\t<title>" (0-based, referring to the FINAL '
@@ -1368,9 +1503,17 @@ def main():
         auto_title, auto_author, auto_language = extract_metadata(args.input, work_dir)
         meta_title = args.title if args.title else auto_title
         meta_author = args.author if args.author else auto_author
-        meta_language = args.language if args.language else auto_language
+        # Normalised here rather than only inside write_meta, because the OCR prompt is built
+        # from the same tag and 'jp' must reach it as 'ja'. normalize_language is idempotent,
+        # so write_meta's own call is a no-op and prints no second note.
+        meta_language = normalize_language(args.language if args.language else auto_language)
         if meta_title or meta_author or meta_language:
             write_meta(args.output_dir, meta_title, meta_author, meta_language)
+
+        ocr_prompt = build_panel_ocr_prompt(meta_language, rtl=not args.ltr)
+        if api_key and not meta_language:
+            print("Note: no --language set; the OCR prompt will not name a source language. "
+                  "Pass --language for better text recognition.", file=sys.stderr)
 
         idx_records = []
         dat_chunks = []
@@ -1390,6 +1533,18 @@ def main():
             # progressive even though the user passed --x4 precisely to avoid that. Note it here,
             # while `img` is still the file as opened.
             src_is_progressive = bool(img.info.get("progressive") or img.info.get("progression"))
+            if args.trim_margins:
+                trimmed = trim_page_margins(img)
+                if trimmed is not img:
+                    # The cropped page no longer matches the source file, so the verbatim
+                    # copy below must not be taken -- force a re-encode by the same route a
+                    # resize does.
+                    was_trimmed = True
+                    img = trimmed
+                else:
+                    was_trimmed = False
+            else:
+                was_trimmed = False
             # Downscale FIRST, before panel detection: every coordinate downstream (panel boxes,
             # crop rects, OCR text boxes, the page dims in panels.idx) then lives in the resized
             # space, matching the page/crop files actually written -- nothing needs rescaling.
@@ -1421,7 +1576,7 @@ def main():
                     img.convert("RGB").save(
                         os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
                     )
-                elif was_resized or src_is_progressive:
+                elif was_resized or was_trimmed or src_is_progressive:
                     # Resized: the source file no longer matches -- re-encode in the source's own
                     # format so the output keeps its extension (PNG stays PNG, JPEG stays JPEG).
                     # Progressive: the bytes still match, but re-encode anyway so the page lands on
@@ -1439,7 +1594,7 @@ def main():
                     shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
             boxes = detect_panels(img)
-            boxes = sort_panels_manga_order(boxes)
+            boxes = sort_panels_reading_order(boxes, rtl=not args.ltr)
 
             # Crop and save every panel first (fast, local) before dispatching
             # the slow network calls concurrently -- OCR is I/O-bound (network
@@ -1484,7 +1639,7 @@ def main():
                 # Only call Gemini for panels that have a crop file;
                 # full-page panels (no crop) get an empty result directly.
                 def _ocr_or_empty(p):
-                    return call_gemini_panel_ocr(p, api_key) if p else {"blocks": [], "translation": ""}
+                    return call_gemini_panel_ocr(p, api_key, ocr_prompt) if p else {"blocks": [], "translation": ""}
                 with ThreadPoolExecutor(max_workers=min(8, max(1, len(panel_paths)))) as pool:
                     ocr_results = list(pool.map(_ocr_or_empty, panel_paths))
             else:

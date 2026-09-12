@@ -177,7 +177,7 @@ python3 tools/manga_convert/convert_manga.py \
   --x4
 ```
 
-Set `--language` on every manga. It is what splits your reading time by language, and most manga carries no language of its own. The tag is read at conversion time, so a book converted without it counts as unknown until you convert it again.
+Set `--language` on every book. It splits your reading time by language, and it tells the OCR pass which language to expect. Most manga carries no language of its own. The tag is read at conversion time, so a book converted without it counts as unknown until you convert it again.
 
 `--input` takes an image folder, `.cbz`, `.zip`, `.epub` or PDF. The flags worth knowing:
 
@@ -186,11 +186,19 @@ Set `--language` on every manga. It is what splits your reading time by language
 | `--x4` / `--x3` | Scale to the device screen. Smaller files, faster page turns, nothing lost. |
 | `--mono` | 1-bit dithered BMP. Good for line art, less so for heavy screentone. |
 | `--no-ocr` | Panel boxes only, no Gemini calls, no text or translations. |
+| `--ltr` | Read panels left-to-right, for western comics and strips. Default is manga order. |
+| `--trim-margins` | Crop the blank paper border and page number off scanned pages. |
 | `--max-pages N` | Convert the first N pages as a cheap test. |
 | `--title` / `--author` | Override metadata. |
 | `--language` | Book language tag. See above. |
 
 Panels are found with a YOLO model trained on Manga109 ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)), falling back to a white-gutter heuristic without `ultralytics`. Gemini then reads and translates each panel.
+
+Western comics work too. Pass `--ltr` so panels within a row are walked left-to-right. The panel detector was trained on manga but handles strip layouts well; page turn direction is a device setting (Reverse page turn), not a conversion one.
+
+OCR follows `--language`, so it works on any of them. The prompt names the language it should expect, which is what stops the model hallucinating Japanese out of a German speech bubble, and a book already in English gets transcription without a pointless English-to-English translation. Set the tag even if you don't care about reading stats.
+
+Add `--trim-margins` for anything scanned from print. It crops the paper border away before panels are detected, which both fills the screen and measurably improves detection: a Moomin page that came back as 9 panels untrimmed, with one whole strip undivided, split into all 11 once the margin was gone.
 
 The output is a folder of images, panel crops and three small index files. Drop it anywhere on the card, the Library finds any folder containing `panels.idx`.
 
