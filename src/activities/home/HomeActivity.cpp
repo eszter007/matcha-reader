@@ -135,6 +135,15 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+          // Same coalescing the XTC branch below does, for the same reason: extracting the cover
+          // inflates it through a 32KB zip window, and arriving here straight from a reader leaves
+          // the heap fragmented enough that the window cannot be placed -- measured on device as
+          // "Inflate window OOM (32768 bytes): heap 11584 free/6132 max". The failure is
+          // recoverable (the path is kept and retried), but the retry re-runs the epub.load()
+          // above, which costs ~3.5s of CSS parsing on the way back to Home and then fails the
+          // same way. Releasing the font caches first turns that loop into one success: measured
+          // maxAlloc 57332 -> 114676 for the same release in the reader.
+          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
           const bool success = epub.generateThumbBmp(coverHeight);
           if (success) {
             // Also covers the recovery case: a book whose path was cleared by an earlier build
