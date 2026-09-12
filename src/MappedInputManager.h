@@ -157,11 +157,15 @@ class MappedInputManager {
   bool wasPowerConfirmClick() const;
 #endif
   void rememberTouchHeldTime() const;
-  void suppressNextRelease(Button button) const;
+  // Bitmask of HalGPIO button indices, not of Button values -- see pressedRawButtons().
+  uint16_t pressedRawButtons() const;
+  void suppressNextRelease(uint16_t rawButtons) const;
 
   mutable bool touchHeldOverrideValid = false;
   mutable unsigned long touchHeldOverrideMs = 0;
   mutable unsigned long touchHeldOverrideAt = 0;
+  // Both are masks of PHYSICAL HalGPIO button indices. A hold keeps its identity across an action
+  // that remaps the logical buttons (orientation change), which a logical mask cannot.
   mutable uint16_t longPressFiredButtons = 0;
   mutable uint16_t suppressedReleaseButtons = 0;
 #if FREEINK_CAP_TOUCH
