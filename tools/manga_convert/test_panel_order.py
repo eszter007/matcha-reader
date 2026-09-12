@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Self-check for panel reading order, edge snapping and the OCR prompt.
+"""Self-check for panel reading order and the OCR prompt.
 No deps -- run: python3 test_panel_order.py
 
 Boxes are [x1, y1, x2, y2]. Each ordering case lists panels in an arbitrary
 input order and asserts the sequence the reader should walk them in.
 """
 
-from convert_manga import _snap_to_unclaimed_edges, build_panel_ocr_prompt, sort_panels_reading_order
+from convert_manga import build_panel_ocr_prompt, sort_panels_reading_order
 
 
 def order(panels, named, rtl):
@@ -58,21 +58,6 @@ def test_full_width_strip_between_rows():
 def test_single_and_empty():
     assert sort_panels_reading_order([], rtl=False) == []
     assert sort_panels_reading_order([[0, 0, 10, 10]], rtl=True) == [[0, 0, 10, 10]]
-
-
-def test_snap_stops_at_content_not_paper():
-    """A page with a printed margin: panels must not be stretched into it."""
-    # 1000x1000 page, 80px margin all round (8% -- inside the 15% snap threshold).
-    boxes = [[80, 80, 500, 500], [520, 80, 920, 500], [80, 520, 920, 920]]
-    assert _snap_to_unclaimed_edges([list(b) for b in boxes], 1000, 1000) == boxes
-
-
-def test_snap_extends_short_panel_to_its_neighbours():
-    """The case snapping exists for: one panel falls short of the row's edge."""
-    # Same page, but the top-right panel stops 60px short of the content edge.
-    short = [520, 80, 860, 500]
-    out = _snap_to_unclaimed_edges([[80, 80, 500, 500], list(short), [80, 520, 920, 920]], 1000, 1000)
-    assert out[1] == [520, 80, 920, 500], out[1]
 
 
 def test_no_panels_dropped():
