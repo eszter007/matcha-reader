@@ -3,7 +3,7 @@ _language_code: "FA"
 _order: "35"
 _bcp47: "fa"
 
-STR_CROSSPOINT: "CrossPoint"
+STR_CROSSPOINT: "Matcha"
 STR_BOOTING: "در حال راه‌اندازی"
 STR_SLEEPING: "در حالت خواب"
 STR_ENTERING_SLEEP: "در حال ورود به حالت خواب"
