@@ -15,9 +15,21 @@ namespace fui = freeink::ui;
 
 void MappedInputManager::update() const {
   gpio.update();
-  for (uint8_t value = 0; value <= static_cast<uint8_t>(Button::ScreenDown); ++value) {
-    if (!isPressed(static_cast<Button>(value))) longPressFiredButtons &= ~(1u << value);
+  longPressFiredButtons &= pressedRawButtons();
+}
+
+// The physical buttons held right now. Long-press bookkeeping is keyed on these rather than on the
+// logical Button the caller asked about, because the logical-to-physical mapping is not stable
+// across a single hold: an action can rotate the screen (the ORIENTATION_CHANGE long press), and
+// isNavDirectionSwapped() then hands the still-held button to a DIFFERENT logical name. Latching
+// logically let that renamed button re-arm and fire again, rotating over and over for as long as it
+// was held.
+uint16_t MappedInputManager::pressedRawButtons() const {
+  uint16_t mask = 0;
+  for (uint8_t raw = 0; raw <= HalGPIO::BTN_POWER; ++raw) {
+    if (gpio.isPressed(raw)) mask |= 1u << raw;
   }
+  return mask;
 }
 
 bool MappedInputManager::isNavDirectionSwapped() const {
@@ -368,24 +380,22 @@ bool MappedInputManager::wasReleased(const Button button) const {
 
 bool MappedInputManager::wasLongPressed(const Button button, const unsigned long thresholdMs) const {
   if (!isPressed(button)) return false;
-  const uint16_t bit = 1u << static_cast<uint8_t>(button);
-  if ((longPressFiredButtons & bit) != 0 || getHeldTime() < thresholdMs) return false;
-  longPressFiredButtons |= bit;
-  suppressNextRelease(button);
+  const uint16_t held = pressedRawButtons();
+  if ((longPressFiredButtons & held) != 0 || getHeldTime() < thresholdMs) return false;
+  longPressFiredButtons |= held;
+  suppressNextRelease(held);
   return true;
 }
 
-void MappedInputManager::suppressNextRelease(const Button button) const {
-  suppressedReleaseButtons |= 1u << static_cast<uint8_t>(button);
+void MappedInputManager::suppressNextRelease(const uint16_t rawButtons) const {
+  suppressedReleaseButtons |= rawButtons;
 }
 
 bool MappedInputManager::consumeSuppressedRelease() const {
   uint16_t released = 0;
-  for (uint8_t value = 0; value <= static_cast<uint8_t>(Button::ScreenDown); ++value) {
-    const uint16_t bit = 1u << value;
-    if ((suppressedReleaseButtons & bit) != 0 && mapButton(static_cast<Button>(value), &HalGPIO::wasReleased)) {
-      released |= bit;
-    }
+  for (uint8_t raw = 0; raw <= HalGPIO::BTN_POWER; ++raw) {
+    const uint16_t bit = 1u << raw;
+    if ((suppressedReleaseButtons & bit) != 0 && gpio.wasReleased(raw)) released |= bit;
   }
   suppressedReleaseButtons &= ~released;
   return released != 0;
