@@ -617,68 +617,6 @@ def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
     return boxes
 
 
-def _snap_to_unclaimed_edges(boxes: list[list[int]], page_w: int, page_h: int,
-                             max_gap_frac: float = 0.15) -> list[list[int]]:
-    """Extend a panel's edge to the edge of the page's CONTENT when it falls
-    short by a plausible amount AND no other detected panel claims that space.
-
-    The detector sometimes underestimates a panel's true extent near the
-    page edge (e.g. missing a speech bubble that reaches close to the
-    border), leaving a gap that should belong to that panel rather than
-    being a deliberate gutter. Only snap small gaps (<15% of the page
-    dimension) and only when nothing else occupies the overlapping range,
-    so real gutters between adjacent panels are left alone.
-
-    The target is the union of all detected boxes, NOT the paper edge, so a
-    printed page's own margins are respected. Snapping to the paper edge
-    swallowed those margins whenever they were narrower than the threshold:
-    a scanned comic page with a 13% side margin had every panel stretched
-    into it, and a page with a footer had its bottom row stretched over the
-    page number. Both produce panel crops padded with blank paper, which is
-    exactly the screen area panel zoom exists to reclaim.
-    """
-    original = [tuple(b) for b in boxes]
-    result = [list(b) for b in boxes]
-    if not original:
-        return result
-
-    left = min(b[0] for b in original)
-    top = min(b[1] for b in original)
-    right = max(b[2] for b in original)
-    bottom = max(b[3] for b in original)
-
-    def claimed_beyond(i: int, axis: str, beyond) -> bool:
-        ox1, oy1, ox2, oy2 = original[i]
-        for j, (jx1, jy1, jx2, jy2) in enumerate(original):
-            if j == i:
-                continue
-            if axis == "x":
-                overlaps = not (jy2 <= oy1 or jy1 >= oy2)
-                if overlaps and beyond(jx1, jx2, ox1, ox2):
-                    return True
-            else:
-                overlaps = not (jx2 <= ox1 or jx1 >= ox2)
-                if overlaps and beyond(jy1, jy2, oy1, oy2):
-                    return True
-        return False
-
-    for i, (x1, y1, x2, y2) in enumerate(original):
-        if 0 < right - x2 < page_w * max_gap_frac and \
-           not claimed_beyond(i, "x", lambda j1, j2, o1, o2: j2 > o2):
-            result[i][2] = right
-        if 0 < x1 - left < page_w * max_gap_frac and \
-           not claimed_beyond(i, "x", lambda j1, j2, o1, o2: j1 < o1):
-            result[i][0] = left
-        if 0 < bottom - y2 < page_h * max_gap_frac and \
-           not claimed_beyond(i, "y", lambda j1, j2, o1, o2: j2 > o2):
-            result[i][3] = bottom
-        if 0 < y1 - top < page_h * max_gap_frac and \
-           not claimed_beyond(i, "y", lambda j1, j2, o1, o2: j1 < o1):
-            result[i][1] = top
-
-    return result
-
-
 def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
     """Collapse boundary points that would create a too-small segment.
 
