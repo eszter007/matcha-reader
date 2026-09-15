@@ -45,6 +45,11 @@ void ReadingStatsActivity::onEnter() {
 
 void ReadingStatsActivity::onExit() { Activity::onExit(); }
 
+// startActivityForResult, not replace, so this screen keeps its scroll and month.
+void ReadingStatsActivity::openLanguageStats() {
+  startActivityForResult(std::make_unique<LanguageStatsActivity>(renderer, mappedInput), [](const ActivityResult&) {});
+}
+
 void ReadingStatsActivity::loop() {
   // Tap leaves Insights, hold goes home; same gesture as the language screen.
   if (backLongPressFired) {
@@ -62,11 +67,22 @@ void ReadingStatsActivity::loop() {
     finish();
     return;
   }
-  // startActivityForResult, not replace, so this screen keeps its scroll and month.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    startActivityForResult(std::make_unique<LanguageStatsActivity>(renderer, mappedInput),
-                           [](const ActivityResult&) {});
+    openLanguageStats();
     return;
+  }
+  // Same destination for the Details button. Touch boards have no front buttons,
+  // so the Confirm above reaches them only through the power click, and only when
+  // the user has bound it to Confirm -- which is not the default. Without this the
+  // language screen was effectively unreachable on an X4 Pro.
+  if (detailsButton.width > 0) {
+    int tx = 0;
+    int ty = 0;
+    if (mappedInput.wasScreenTapped(tx, ty) && tx >= detailsButton.x && tx < detailsButton.x + detailsButton.width &&
+        ty >= detailsButton.y && ty < detailsButton.y + detailsButton.height) {
+      openLanguageStats();
+      return;
+    }
   }
   // Left/Right to navigate calendar months
   if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
@@ -162,6 +178,27 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // ==================== CALENDAR ====================
   const StatsWidgets::MonthSource source{nullptr, overallMonthStatus, overallDaysReadInMonth};
   y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source);
+
+  // ==================== DETAILS BUTTON ====================
+  // Touch boards only. They have no front buttons, so the Confirm the hints row
+  // names is a key that does not exist there -- and drawButtonHints() draws nothing
+  // on touch anyway, so the hint itself never appears. Button boards keep Confirm
+  // and would only get a duplicate control. Drawn inside the scrolled content, so
+  // it sits under the calendar rather than floating over it.
+  detailsButton = Rect{};
+  if (mappedInput.hasTouch()) {
+    constexpr int buttonHeight = 48;
+    constexpr int buttonGap = 12;
+    detailsButton = Rect{cardX, y + buttonGap, cardW, buttonHeight};
+    renderer.drawRoundedRect(detailsButton.x, detailsButton.y, detailsButton.width, detailsButton.height, 2,
+                             StatsWidgets::CARD_RADIUS, true);
+    const char* label = tr(STR_VIEW_DETAILS);
+    const int labelWidth = renderer.getTextWidth(UI_12_FONT_ID, label);
+    const int labelHeight = renderer.getLineHeight(UI_12_FONT_ID);
+    renderer.drawText(UI_12_FONT_ID, detailsButton.x + (detailsButton.width - labelWidth) / 2,
+                      detailsButton.y + (detailsButton.height - labelHeight) / 2, label, true);
+    y += buttonGap + buttonHeight;
+  }
 
   // Compute max scroll: content bottom minus the visible area.
   const int contentEndY = y + 10;                                            // 10px bottom margin

@@ -1,5 +1,6 @@
 #pragma once
 #include "activities/Activity.h"
+#include "components/themes/BaseTheme.h"
 #include "util/ButtonNavigator.h"
 
 class ReadingStatsActivity final : public Activity {
@@ -13,9 +14,16 @@ class ReadingStatsActivity final : public Activity {
   // it stays 0 until the first frame, which is also when maxScrollOffset is
   // still 0, so an early swipe is a no-op either way.
   int scrollPageHeight = 0;
+  // Touch boards have no front buttons, so the Confirm that opens the language
+  // screen does not exist there and its hint is never drawn. render() lays this
+  // button out under the calendar and loop() hit-tests it; it scrolls with the
+  // content, so the rect is recomputed every frame. Empty on button boards.
+  Rect detailsButton{};
   // Calendar month navigation
   uint16_t calYear = 0;
   uint8_t calMonth = 1;
+
+  void openLanguageStats();
 
  public:
   explicit ReadingStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
