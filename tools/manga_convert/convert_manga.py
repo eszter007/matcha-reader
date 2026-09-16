@@ -798,10 +798,10 @@ def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], pag
     return expanded
 
 
-def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
-    """Detect panels with the YOLO26-nano Manga109 model. Returns None if
-    the model isn't available (caller should fall back to the grid
-    heuristic)."""
+def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[list[int]]] | None:
+    """Detect panels with the YOLO26-nano Manga109 model. Returns
+    (frames, text boxes), or None if the model isn't available (caller should
+    fall back to the grid heuristic)."""
     model = _load_yolo_model()
     if model is None:
         return None
@@ -824,8 +824,8 @@ def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
 
     boxes = _dedupe_boxes(boxes_with_conf)
     if not boxes:
-        return [[0, 0, img.width, img.height]]
-    return expand_panels_over_text(boxes, text_boxes, img.width, img.height)
+        return [[0, 0, img.width, img.height]], []
+    return boxes, text_boxes
 
 
 def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
@@ -923,12 +923,20 @@ def _detect_panels_grid(img) -> list[list[int]]:
     return panels
 
 
-def detect_panels(img) -> list[list[int]]:
-    """Detect panel rectangles -- YOLO model if available, else grid heuristic."""
-    boxes = _detect_panels_yolo(img)
-    if boxes is not None:
-        return boxes
-    return _detect_panels_grid(img)
+def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
+    """Detect panel rectangles -- YOLO model if available, else grid heuristic.
+
+    Returns (frames, text boxes). The frames are the borders as drawn, which is
+    what reading order must be derived from; the text boxes are what
+    expand_panels_over_text() then grows the CROP rectangles over. Keeping the
+    two apart matters: a bubble pulling a panel's box sideways across a gutter
+    would otherwise move its centre and could retier the page. The grid
+    heuristic has no text detection, so it returns no text boxes.
+    """
+    detected = _detect_panels_yolo(img)
+    if detected is not None:
+        return detected
+    return _detect_panels_grid(img), []
 
 
 def _y_overlap_frac(a: list[int], b: list[int]) -> float:
@@ -1767,8 +1775,12 @@ def main():
                 # single column can only move boxes away from what the cut established.
                 boxes = detect_webtoon_panels(img)
             else:
-                boxes = detect_panels(img)
-                boxes = sort_panels_reading_order(boxes, rtl=not args.ltr)
+                frames, text_boxes = detect_panels(img)
+                # Order on the frames as drawn, then grow the crops over the
+                # bubbles -- expand_panels_over_text() is index-preserving, so
+                # the reading order established here survives the expansion.
+                frames = sort_panels_reading_order(frames, rtl=not args.ltr)
+                boxes = expand_panels_over_text(frames, text_boxes, img_w, img_h)
 
             # Crop and save every panel first (fast, local) before dispatching
             # the slow network calls concurrently -- OCR is I/O-bound (network
