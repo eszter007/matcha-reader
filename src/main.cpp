@@ -18,8 +18,8 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <XteinkDetect.h>
-#include <esp_sntp.h>
 #include <builtinFonts/all.h>
+#include <esp_sntp.h>
 
 #include <cstring>
 
