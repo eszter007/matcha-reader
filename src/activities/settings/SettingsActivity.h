@@ -1,6 +1,7 @@
 #pragma once
 #include <I18n.h>
 
+#include <algorithm>
 #include <functional>
 #include <span>
 #include <string>
@@ -96,10 +97,8 @@ struct SettingInfo {
   }
   uint8_t slotFromStored(const uint8_t stored) const {
     if (enumOrder.empty()) return stored;
-    for (uint8_t i = 0; i < enumOrder.size(); ++i) {
-      if (enumOrder[i] == stored) return i;
-    }
-    return 0;
+    const auto it = std::find(enumOrder.begin(), enumOrder.end(), stored);
+    return it != enumOrder.end() ? static_cast<uint8_t>(it - enumOrder.begin()) : 0;
   }
   // The labels in menu order. Returned by value: the popup wants a contiguous array and the
   // reordered view does not exist anywhere else. At most SIDE_BUTTON_ACTION_COUNT entries.
