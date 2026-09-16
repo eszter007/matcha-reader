@@ -11,6 +11,7 @@ from convert_manga import (
     build_panel_ocr_prompt,
     expand_panels_over_text,
     sort_panels_reading_order,
+    split_frames_over_subpanels,
     text_pad_px,
 )
 
@@ -219,6 +220,42 @@ def test_growth_does_not_cascade_between_panels():
 def test_pad_scales_with_the_page():
     """A thumbnail scan and a full scan get proportional air, not the same px."""
     assert text_pad_px(290, 420) < text_pad_px(1024, 1449) < text_pad_px(1364, 2000)
+
+
+def test_a_merged_row_is_split_into_its_subpanels():
+    """A strip the model returned as one frame, but also saw three panels in."""
+    frame = [0, 0, 900, 300]
+    kids = [[0, 0, 290, 300], [300, 0, 590, 300], [600, 0, 900, 300]]
+    assert split_frames_over_subpanels([frame], kids + [frame]) == kids
+
+
+def test_a_frame_seen_twice_is_not_split():
+    """The same panel detected at two scales must stay one panel -- the second
+    box is not meaningfully smaller, so it is no evidence of a subdivision."""
+    frame = [0, 0, 900, 300]
+    again = [4, 3, 896, 297]
+    assert split_frames_over_subpanels([frame], [frame, again]) == [frame]
+
+
+def test_one_stray_box_never_splits_a_frame():
+    """A weak detection inside a real panel is not a sub-panel."""
+    frame = [0, 0, 900, 300]
+    stray = [100, 60, 300, 240]
+    assert split_frames_over_subpanels([frame], [frame, stray]) == [frame]
+
+
+def test_subpanels_must_account_for_the_frame():
+    """Two small boxes in a corner are not a subdivision of the whole frame."""
+    frame = [0, 0, 900, 300]
+    kids = [[0, 0, 150, 100], [160, 0, 310, 100]]
+    assert split_frames_over_subpanels([frame], kids + [frame]) == [frame]
+
+
+def test_overlapping_subpanels_are_rejected():
+    """Children must tile the frame, not restate the same region."""
+    frame = [0, 0, 900, 300]
+    kids = [[0, 0, 600, 300], [100, 0, 700, 300]]
+    assert split_frames_over_subpanels([frame], kids + [frame]) == [frame]
 
 
 if __name__ == "__main__":
