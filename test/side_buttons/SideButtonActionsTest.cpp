@@ -10,8 +10,7 @@ TEST(SideButtonActions, CustomizedOnlyWhenLeavingDefault) {
   EXPECT_FALSE(side_button::customized(d, d));
   EXPECT_TRUE(side_button::customized(static_cast<uint8_t>(A::Sleep), d));
   EXPECT_TRUE(side_button::customized(d, static_cast<uint8_t>(A::NextPage)));
-  EXPECT_TRUE(side_button::customized(static_cast<uint8_t>(A::PrevPage),
-                                      static_cast<uint8_t>(A::WordLookup)));
+  EXPECT_TRUE(side_button::customized(static_cast<uint8_t>(A::PrevPage), static_cast<uint8_t>(A::WordLookup)));
 }
 
 // A setting that also governs the front pair or touch must not be hidden just because ONE side
@@ -33,11 +32,9 @@ TEST(SideButtonActions, ClampKeepsRangeAndDefaultsOverflow) {
   for (uint8_t v = 0; v < static_cast<uint8_t>(A::Count); ++v) {
     EXPECT_EQ(side_button::clampAction(v), v);
   }
-  EXPECT_EQ(side_button::clampAction(static_cast<uint8_t>(A::Count)),
-            static_cast<uint8_t>(A::Default));
+  EXPECT_EQ(side_button::clampAction(static_cast<uint8_t>(A::Count)), static_cast<uint8_t>(A::Default));
   // "Off" is a custom action like any other: it must suppress the shared roles.
-  EXPECT_TRUE(side_button::customized(static_cast<uint8_t>(A::None),
-                                      static_cast<uint8_t>(A::Default)));
+  EXPECT_TRUE(side_button::customized(static_cast<uint8_t>(A::None), static_cast<uint8_t>(A::Default)));
   EXPECT_EQ(side_button::clampAction(255), static_cast<uint8_t>(A::Default));
 }
 
@@ -66,4 +63,3 @@ TEST(SideButtonActions, LoneReleaseNeedsQuietFrontButtons) {
   EXPECT_TRUE(side_button::loneRelease(50, 0xFFFFFF00UL));
   EXPECT_FALSE(side_button::loneRelease(0xFFFFFF80UL, 0xFFFFFF00UL));
 }
-
