@@ -11,6 +11,7 @@ from convert_manga import (
     build_panel_ocr_prompt,
     expand_panels_over_text,
     sort_panels_reading_order,
+    text_pad_px,
 )
 
 
@@ -156,10 +157,27 @@ def test_webtoon_prefers_the_latest_usable_gutter():
 
 
 def test_bubble_overhanging_the_frame_grows_the_crop():
-    """A caption drawn above the frame border must not be sliced off."""
+    """A caption drawn above the frame border must not be sliced off, and the
+    crop edge must clear its outline rather than land on it."""
+    pad = text_pad_px(800, 800)
     panel = [100, 100, 500, 500]
     caption = [120, 60, 300, 140]  # top half sits outside the frame
-    assert expand_panels_over_text([panel], [caption], 800, 800) == [[100, 60, 500, 500]]
+    assert expand_panels_over_text([panel], [caption], 800, 800) == [[100, 60 - pad, 500, 500]]
+
+
+def test_a_bubble_inside_the_panel_never_moves_the_crop():
+    """Padding is breathing room for a breached border, not a blanket inset --
+    a bubble drawn just inside the frame must leave the crop exactly as it is."""
+    panel = [100, 100, 500, 500]
+    bubble = [104, 104, 300, 180]  # within `pad` of the border, but inside it
+    assert expand_panels_over_text([panel], [bubble], 800, 800) == [panel]
+
+
+def test_only_the_breached_side_grows():
+    panel = [100, 100, 500, 500]
+    caption = [120, 60, 300, 140]
+    grown = expand_panels_over_text([panel], [caption], 800, 800)[0]
+    assert grown[0] == panel[0] and grown[2] == panel[2] and grown[3] == panel[3], grown
 
 
 def test_bubble_in_a_gutter_goes_to_the_panel_holding_most_of_it():
@@ -167,8 +185,9 @@ def test_bubble_in_a_gutter_goes_to_the_panel_holding_most_of_it():
     left = [0, 100, 300, 500]
     right = [320, 100, 620, 500]
     bubble = [250, 200, 420, 260]  # 50px in the left panel, 100px in the right
+    pad = text_pad_px(800, 800)
     grown = expand_panels_over_text([left, right], [bubble], 800, 800)
-    assert grown == [[0, 100, 300, 500], [250, 100, 620, 500]], grown
+    assert grown == [[0, 100, 300, 500], [250 - pad, 100, 620, 500]], grown
 
 
 def test_text_outside_every_panel_is_ignored():
@@ -181,7 +200,8 @@ def test_text_outside_every_panel_is_ignored():
 def test_growth_never_leaves_the_page():
     panel = [10, 100, 500, 500]
     caption = [-40, 60, 300, 200]  # bleeds off the left edge of the page
-    assert expand_panels_over_text([panel], [caption], 800, 800) == [[0, 60, 500, 500]]
+    pad = text_pad_px(800, 800)
+    assert expand_panels_over_text([panel], [caption], 800, 800) == [[0, 60 - pad, 500, 500]]
 
 
 def test_growth_does_not_cascade_between_panels():
@@ -189,10 +209,16 @@ def test_growth_does_not_cascade_between_panels():
     next panel's text -- ownership is decided on the original boxes."""
     left = [0, 100, 300, 500]
     right = [320, 100, 620, 500]
-    overhang = [250, 200, 420, 260]  # pulls `right` back to x=250
+    overhang = [250, 200, 420, 260]  # pulls `right` back past x=250
     inner = [60, 300, 200, 360]  # squarely inside `left`
+    pad = text_pad_px(800, 800)
     grown = expand_panels_over_text([left, right], [overhang, inner], 800, 800)
-    assert grown == [[0, 100, 300, 500], [250, 100, 620, 500]], grown
+    assert grown == [[0, 100, 300, 500], [250 - pad, 100, 620, 500]], grown
+
+
+def test_pad_scales_with_the_page():
+    """A thumbnail scan and a full scan get proportional air, not the same px."""
+    assert text_pad_px(290, 420) < text_pad_px(1024, 1449) < text_pad_px(1364, 2000)
 
 
 if __name__ == "__main__":

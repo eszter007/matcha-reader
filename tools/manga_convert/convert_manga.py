@@ -758,6 +758,21 @@ def is_sliver_panel(box: list[int], page_w: int, page_h: int) -> bool:
 # a caption sitting in the margin) that no panel should be stretched to reach.
 TEXT_OWNERSHIP_MIN_FRAC = 0.25
 
+# Breathing room added around a text box before a panel is grown over it, as a
+# fraction of the page's short side (with a floor for thumbnail-sized scans).
+# The detector boxes the GLYPHS, not the balloon holding them: unioning on the
+# bare box lands the crop edge on the bubble's own outline, which reads as a
+# second cut. Measured on a 1024px-wide page, the drawn caption border sits
+# 12-18px outside the detected text, so 2% clears it and leaves a visible gap.
+TEXT_PAD_FRAC_OF_PAGE = 0.02
+TEXT_PAD_MIN = 6
+
+
+def text_pad_px(page_w: int, page_h: int) -> int:
+    """Padding to put around a text box before growing a panel over it. Scaled
+    to the page so it behaves the same on a 290px thumbnail and a 2000px scan."""
+    return max(TEXT_PAD_MIN, round(min(page_w, page_h) * TEXT_PAD_FRAC_OF_PAGE))
+
 
 def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], page_w: int,
                             page_h: int) -> list[list[int]]:
@@ -771,11 +786,14 @@ def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], pag
     overlaps most and that panel's box is unioned with it.
 
     Ownership is decided against the ORIGINAL panel boxes, so one panel's growth
-    can never make it the owner of the next panel's bubbles.
+    can never make it the owner of the next panel's bubbles. Ownership also uses
+    the bare text box, so the padding can never drag in a bubble that would
+    otherwise belong to a neighbour.
     """
     if not texts:
         return panels
 
+    pad = text_pad_px(page_w, page_h)
     expanded = [list(p) for p in panels]
     for text in texts:
         text_area = _box_area(text)
@@ -788,7 +806,18 @@ def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], pag
                 owner, best_overlap = i, overlap
         if owner < 0 or best_overlap < text_area * TEXT_OWNERSHIP_MIN_FRAC:
             continue
-        expanded[owner] = _union_box(expanded[owner], text)
+        # Grow only on the sides the bubble actually breaches, and clear it by
+        # `pad` when doing so. A bubble sitting just inside the border must not
+        # push the crop out into the gutter.
+        base, box = panels[owner], expanded[owner]
+        if text[0] < base[0]:
+            box[0] = min(box[0], text[0] - pad)
+        if text[1] < base[1]:
+            box[1] = min(box[1], text[1] - pad)
+        if text[2] > base[2]:
+            box[2] = max(box[2], text[2] + pad)
+        if text[3] > base[3]:
+            box[3] = max(box[3], text[3] + pad)
 
     for box in expanded:
         box[0] = max(0, box[0])
