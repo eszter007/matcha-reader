@@ -6,7 +6,12 @@ Boxes are [x1, y1, x2, y2]. Each ordering case lists panels in an arbitrary
 input order and asserts the sequence the reader should walk them in.
 """
 
-from convert_manga import _webtoon_cut_points, build_panel_ocr_prompt, sort_panels_reading_order
+from convert_manga import (
+    _webtoon_cut_points,
+    build_panel_ocr_prompt,
+    expand_panels_over_text,
+    sort_panels_reading_order,
+)
 
 
 def order(panels, named, rtl):
@@ -148,6 +153,46 @@ def test_webtoon_prefers_the_latest_usable_gutter():
     rows = _strip([(400, 20), (330, 20), (900, 0)])
     cuts = _webtoon_cut_points(rows, 800)
     assert cuts[1] == 760, cuts
+
+
+def test_bubble_overhanging_the_frame_grows_the_crop():
+    """A caption drawn above the frame border must not be sliced off."""
+    panel = [100, 100, 500, 500]
+    caption = [120, 60, 300, 140]  # top half sits outside the frame
+    assert expand_panels_over_text([panel], [caption], 800, 800) == [[100, 60, 500, 500]]
+
+
+def test_bubble_in_a_gutter_goes_to_the_panel_holding_most_of_it():
+    """A bubble straddling two panels belongs to one of them, not both."""
+    left = [0, 100, 300, 500]
+    right = [320, 100, 620, 500]
+    bubble = [250, 200, 420, 260]  # 50px in the left panel, 100px in the right
+    grown = expand_panels_over_text([left, right], [bubble], 800, 800)
+    assert grown == [[0, 100, 300, 500], [250, 100, 620, 500]], grown
+
+
+def test_text_outside_every_panel_is_ignored():
+    """A page number in the margin must not stretch the nearest panel to it."""
+    panel = [100, 100, 500, 500]
+    page_number = [470, 700, 520, 740]
+    assert expand_panels_over_text([panel], [page_number], 800, 800) == [panel]
+
+
+def test_growth_never_leaves_the_page():
+    panel = [10, 100, 500, 500]
+    caption = [-40, 60, 300, 200]  # bleeds off the left edge of the page
+    assert expand_panels_over_text([panel], [caption], 800, 800) == [[0, 60, 500, 500]]
+
+
+def test_growth_does_not_cascade_between_panels():
+    """One panel growing across the gutter must not make it the owner of the
+    next panel's text -- ownership is decided on the original boxes."""
+    left = [0, 100, 300, 500]
+    right = [320, 100, 620, 500]
+    overhang = [250, 200, 420, 260]  # pulls `right` back to x=250
+    inner = [60, 300, 200, 360]  # squarely inside `left`
+    grown = expand_panels_over_text([left, right], [overhang, inner], 800, 800)
+    assert grown == [[0, 100, 300, 500], [250, 100, 620, 500]], grown
 
 
 if __name__ == "__main__":

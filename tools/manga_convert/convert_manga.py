@@ -752,6 +752,52 @@ def is_sliver_panel(box: list[int], page_w: int, page_h: int) -> bool:
     return area_frac < 0.025 and aspect > 4.0
 
 
+# Fraction of a text box's area that must fall inside a panel before that panel
+# is grown to cover it. A bubble straddling a gutter belongs to whichever panel
+# holds most of it; anything below this is page furniture (page numbers, credits,
+# a caption sitting in the margin) that no panel should be stretched to reach.
+TEXT_OWNERSHIP_MIN_FRAC = 0.25
+
+
+def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], page_w: int,
+                            page_h: int) -> list[list[int]]:
+    """Grow each panel box to cover the speech bubbles and caption boxes that
+    belong to it.
+
+    Manga bubbles routinely overhang the frame they are spoken in -- they are
+    drawn on top of the border, or pushed out into the gutter. Cropping on the
+    detected frame rectangle alone slices the text off mid-word, which is exactly
+    what panel zoom must not do. Each text box is assigned to the panel it
+    overlaps most and that panel's box is unioned with it.
+
+    Ownership is decided against the ORIGINAL panel boxes, so one panel's growth
+    can never make it the owner of the next panel's bubbles.
+    """
+    if not texts:
+        return panels
+
+    expanded = [list(p) for p in panels]
+    for text in texts:
+        text_area = _box_area(text)
+        if text_area <= 0:
+            continue
+        owner, best_overlap = -1, 0
+        for i, panel in enumerate(panels):
+            overlap = _overlap_area(panel, text)
+            if overlap > best_overlap:
+                owner, best_overlap = i, overlap
+        if owner < 0 or best_overlap < text_area * TEXT_OWNERSHIP_MIN_FRAC:
+            continue
+        expanded[owner] = _union_box(expanded[owner], text)
+
+    for box in expanded:
+        box[0] = max(0, box[0])
+        box[1] = max(0, box[1])
+        box[2] = min(page_w, box[2])
+        box[3] = min(page_h, box[3])
+    return expanded
+
+
 def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
     """Detect panels with the YOLO26-nano Manga109 model. Returns None if
     the model isn't available (caller should fall back to the grid
@@ -762,11 +808,16 @@ def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
 
     results = model.predict(img, conf=conf, iou=0.5, verbose=False)
     boxes_with_conf = []
+    text_boxes = []
     for box in results[0].boxes:
-        if int(box.cls) != 0:  # 0=panel, 1=text -- we only want panels here
-            continue
+        cls = int(box.cls)  # 0=panel, 1=text
         x1, y1, x2, y2 = box.xyxy[0].tolist()
         xy_box = [int(x1), int(y1), int(x2), int(y2)]
+        if cls == 1:
+            text_boxes.append(xy_box)
+            continue
+        if cls != 0:
+            continue
         if is_sliver_panel(xy_box, img.width, img.height):
             continue
         boxes_with_conf.append((xy_box, float(box.conf)))
@@ -774,7 +825,7 @@ def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
     boxes = _dedupe_boxes(boxes_with_conf)
     if not boxes:
         return [[0, 0, img.width, img.height]]
-    return boxes
+    return expand_panels_over_text(boxes, text_boxes, img.width, img.height)
 
 
 def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
