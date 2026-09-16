@@ -491,11 +491,20 @@
         pwrBtnFootnoteBackRow.style.display = 'none';
       }
     }
+    // Mirrors the on-device rule: only the shared side-button arrangement becomes meaningless,
+    // and only once BOTH side buttons are remapped away from Default.
+    const upperVal = getControlValue('upperSideButtonAction');
+    const lowerVal = getControlValue('lowerSideButtonAction');
+    const sideFullyCustomized = upperVal > 0 && lowerVal > 0;
+    const lookupSideRow = document.getElementById('row-setting-wordLookupSideButtons');
+    if (lookupSideRow) {
+      lookupSideRow.style.display = sideFullyCustomized ? 'none' : '';
+    }
   }
 
   function handleSettingChanged(key) {
     syncQuickResumeTimeoutForSleepScreen(key === 'sleepScreen', key === 'quickResumeSleepScreen');
-    if (key === 'shortPwrBtn') {
+    if (key === 'shortPwrBtn' || key === 'upperSideButtonAction' || key === 'lowerSideButtonAction') {
       updateSettingsVisibility();
     }
     markChanged();

@@ -602,8 +602,9 @@ void MangaReaderActivity::loop() {
 
   // Handle short power button press for word lookup (mirrors the EPUB reader's shortcut).
   // Skipped when Down is also released so the screenshot combo doesn't trigger it.
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN)) {
+  if ((SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
+       mappedInput.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN)) ||
+      ReaderUtils::wordLookupSideToggle(mappedInput)) {
     launchWordLookupCurrentView();
     return;
   }

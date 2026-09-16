@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "util/HomeButtonInput.h"
+#include "util/SideButtonActions.h"
 
 class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:
@@ -95,9 +96,33 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     FRONT_BUTTON_HARDWARE_COUNT
   };
 
-  // Side button layout options
-  // Default: Up = Previous, Down = Next
-  enum SIDE_BUTTON_LAYOUT { PREV_NEXT = 0, NEXT_PREV = 1, SIDE_BUTTONS_DISABLED = 2, SIDE_BUTTON_LAYOUT_COUNT };
+  // Per-button action for the X3/X4 edge side buttons. DEFAULT keeps the fixed
+  // page-turn role (Up = previous page, Down = next page); any other value
+  // replaces it on that physical button. Persisted by index: append only.
+  enum SIDE_BUTTON_ACTION {
+    SIDE_BTN_DEFAULT = 0,
+    SIDE_BTN_SLEEP = 1,
+    SIDE_BTN_PREV_PAGE = 2,
+    SIDE_BTN_NEXT_PAGE = 3,
+    SIDE_BTN_REFRESH = 4,
+    SIDE_BTN_FOOTNOTES = 5,
+    SIDE_BTN_WORD_LOOKUP = 6,
+    SIDE_BTN_NONE = 7,
+    SIDE_BUTTON_ACTION_COUNT
+  };
+  static_assert(static_cast<uint8_t>(SideButtonAction::Default) == SIDE_BTN_DEFAULT);
+  static_assert(static_cast<uint8_t>(SideButtonAction::Sleep) == SIDE_BTN_SLEEP);
+  static_assert(static_cast<uint8_t>(SideButtonAction::PrevPage) == SIDE_BTN_PREV_PAGE);
+  static_assert(static_cast<uint8_t>(SideButtonAction::NextPage) == SIDE_BTN_NEXT_PAGE);
+  static_assert(static_cast<uint8_t>(SideButtonAction::Refresh) == SIDE_BTN_REFRESH);
+  static_assert(static_cast<uint8_t>(SideButtonAction::Footnotes) == SIDE_BTN_FOOTNOTES);
+  static_assert(static_cast<uint8_t>(SideButtonAction::WordLookup) == SIDE_BTN_WORD_LOOKUP);
+  static_assert(static_cast<uint8_t>(SideButtonAction::None) == SIDE_BTN_NONE);
+  static_assert(static_cast<uint8_t>(SideButtonAction::Count) == SIDE_BUTTON_ACTION_COUNT);
+
+  // Pre-1.5 single "Side Button Layout" setting, kept only so fromJson() can migrate a stored
+  // value into the per-button actions. Not offered anywhere in the UI.
+  enum LEGACY_SIDE_BUTTON_LAYOUT { LEGACY_PREV_NEXT = 0, LEGACY_NEXT_PREV = 1, LEGACY_SIDE_DISABLED = 2 };
 
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
   enum FONT_FAMILY { NOTOSERIF = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
@@ -151,6 +176,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // index and Matcha already shipped WORD_LOOKUP there, so taking 5 would silently turn
     // every existing Word Lookup setting into Confirm.
     PWR_CONFIRM = 6,
+    // Previous Page is appended at the end for the same reason: inserting it
+    // beside PAGE_TURN would shift every stored index after it.
+    PWR_PREV_PAGE = 7,
     SHORT_PWRBTN_COUNT
   };
 
@@ -271,7 +299,18 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t rotateMangaPanels = 1;
   // Button layouts (front layout retained for migration only)
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
-  uint8_t sideButtonLayout = PREV_NEXT;
+  // X3/X4 only (see SettingsList): Upper = BTN_UP, Lower = BTN_DOWN.
+  uint8_t upperSideButtonAction = SIDE_BTN_DEFAULT;
+  uint8_t lowerSideButtonAction = SIDE_BTN_DEFAULT;
+
+  // Thin wrappers over util/SideButtonActions.h -- that header holds the only copy of the logic
+  // (and is what the unit tests exercise); duplicating it here once let the two drift.
+  bool sideButtonsCustomized() const { return side_button::customized(upperSideButtonAction, lowerSideButtonAction); }
+  bool sideButtonsFullyCustomized() const {
+    return side_button::fullyCustomized(upperSideButtonAction, lowerSideButtonAction);
+  }
+  uint8_t sideButtonActionForUp() const { return side_button::clampAction(upperSideButtonAction); }
+  uint8_t sideButtonActionForDown() const { return side_button::clampAction(lowerSideButtonAction); }
 
   // Right-to-left page turning for vertical (tategaki) EPUBs and manga. Global rather than a
   // ReaderPrefs entry: it lives in the Controls screen, which a book cannot reach, so a per-book

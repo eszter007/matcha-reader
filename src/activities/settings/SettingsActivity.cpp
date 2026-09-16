@@ -109,6 +109,12 @@ void SettingsActivity::rebuildSettingsLists() {
         SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
       continue;
     }
+    // Only this row is about arranging the SHARED side-button roles, so only it becomes
+    // meaningless -- and only once BOTH side buttons are remapped away. Reversed page turn and
+    // the long-press behaviour also govern the front pair, touch and tilt, so they stay.
+    if (SETTINGS.sideButtonsFullyCustomized() && setting.valuePtr == &CrossPointSettings::wordLookupSideButtons) {
+      continue;
+    }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       // The sunlight fading fix is a grayscale-waveform compensation that does
       // not apply on the X4 Pro / X4 Classic (plain OTP waveform, same panels).
@@ -493,12 +499,17 @@ void SettingsActivity::toggleCurrentSetting() {
     return;
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
-    const auto enumLabels = setting.enumLabels();
-    if (enumLabels.size() > 2) {
+    // The popup works in MENU slots, which are stored values only when the row asked for no
+    // custom order -- see SettingInfo::enumOrder.
+    const auto orderedLabels = setting.orderedEnumLabels();
+    if (orderedLabels.size() > 2) {
       const auto valuePtr = setting.valuePtr;
-      optionPopup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), currentValue,
-                       [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
-                         SETTINGS.*valuePtr = idx;
+      const auto order = setting.enumOrder;
+      optionPopup.show(setting.nameId, orderedLabels.data(), static_cast<int>(orderedLabels.size()),
+                       setting.slotFromStored(currentValue),
+                       [this, valuePtr, order, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
+                         SETTINGS.*valuePtr = order.empty() ? static_cast<uint8_t>(idx)
+                                                            : order[idx < static_cast<int>(order.size()) ? idx : 0];
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
                          saveSettings();
                          rebuildSettingsLists();
@@ -507,7 +518,8 @@ void SettingsActivity::toggleCurrentSetting() {
       requestUpdate();
       return;
     }
-    SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(enumLabels.size());
+    SETTINGS.*(setting.valuePtr) =
+        setting.storedFromSlot((setting.slotFromStored(currentValue) + 1) % static_cast<uint8_t>(orderedLabels.size()));
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
     const uint8_t totalValues = setting.enumStringValues.empty()
                                     ? static_cast<uint8_t>(setting.enumLabels().size())

@@ -191,6 +191,28 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     sleepTimeoutMinutes = sleepTimeoutEnumToMinutes(legacyValue);
     needsResave = true;
   }
+  // Pre-1.5 "Side Button Layout" -> the per-button actions. Only when the new keys are absent,
+  // so a device that has already been through the new screen is never overwritten. Prev/Next was
+  // the default and needs nothing; Next/Prev becomes an explicit swap, Disabled becomes Off on
+  // both buttons. Dropping the key without this silently reset every non-default side layout.
+  if (boardHasCustomSideButtons() && doc["upperSideButtonAction"].isNull() && doc["lowerSideButtonAction"].isNull() &&
+      !doc["sideButtonLayout"].isNull()) {
+    switch (doc["sideButtonLayout"] | (uint8_t)LEGACY_PREV_NEXT) {
+      case LEGACY_NEXT_PREV:
+        upperSideButtonAction = SIDE_BTN_NEXT_PAGE;
+        lowerSideButtonAction = SIDE_BTN_PREV_PAGE;
+        needsResave = true;
+        break;
+      case LEGACY_SIDE_DISABLED:
+        upperSideButtonAction = SIDE_BTN_NONE;
+        lowerSideButtonAction = SIDE_BTN_NONE;
+        needsResave = true;
+        break;
+      default:
+        break;
+    }
+  }
+
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =

@@ -109,6 +109,18 @@ class MappedInputManager {
   // has a frontlight. ActivityManager consumes it before activity input.
   bool wasLightPanelGesture() const;
   bool wasAnyPressed() const;
+  // True when a side-button edge right now is plausibly deliberate: no front
+  // (group-1) button press, hold, or release within the ghost window. A front
+  // press can echo onto the side pin, and the echo can lag the real release.
+  bool sideReleaseAlone() const;
+  // True when the X3/X4 side button bound to `action` fired a deliberate release this tick.
+  // The single entry point for every custom side action -- readers, word lookup and main's
+  // Sleep/Refresh all ask this, so the power/ghost guards cannot drift apart between them.
+  bool sideActionFired(uint8_t action) const;
+  // Reader context. While set, a side button carrying a custom action stops answering to the
+  // shared logical names (Up/Down and everything that resolves to them). Set from the main loop,
+  // so leaving the reader restores ordinary list navigation on both side buttons.
+  void setSideActionsActive(const bool active) const { sideActionsActive = active; }
   // See HalGPIO::anyButtonDownRaw() -- for cancelling long background work.
   bool anyButtonDownRaw() const { return gpio.anyButtonDownRaw(); }
   bool wasAnyReleased() const;
@@ -170,6 +182,13 @@ class MappedInputManager {
   uint16_t pressedRawButtons() const;
   void suppressNextRelease(uint16_t rawButtons) const;
 
+  // Last millis() with front-button activity (press, hold, or release). Stamped
+  // in update(); sideReleaseAlone() reads it. Starts "long ago" so a side edge
+  // in the first milliseconds after boot is not misread as a ghost.
+  static constexpr unsigned long SIDE_GHOST_WINDOW_MS = 150;
+  mutable unsigned long lastFrontActivityMs = static_cast<unsigned long>(-1000);
+  mutable bool sideActionsActive = false;
+  bool sideRoleSuppressed(uint8_t physical) const;
   mutable HomeButtonInput homeButtonInput;
   mutable HomeButtonAction homeAction = HomeButtonAction::Ignore;
   mutable HomeButtonAction deferredHomeAction = HomeButtonAction::Ignore;

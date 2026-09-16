@@ -464,11 +464,11 @@ Constraint: Physical button positions are fixed on hardware, but their logical f
    
    - `Button::Right` → Maps to `SETTINGS.frontButtonRight`
 
-3. **Reader-Specific** (Page navigation with optional swap):
+3. **Reader-Specific** (Page navigation with per-button X3/X4 actions):
    
-   - `Button::PageBack` → Uses side button (swappable via `SETTINGS.sideButtonLayout`)
+   - `Button::PageBack` → Uses side button (Up = previous; silent when that button has a custom `upperSideButtonAction`/`lowerSideButtonAction`)
    
-   - `Button::PageForward` → Uses side button (swappable)
+   - `Button::PageForward` → Uses side button (Down = next; silent when customized)
 
 **Implementation**:
 

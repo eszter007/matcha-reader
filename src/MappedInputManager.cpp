@@ -10,11 +10,20 @@
 
 #include "CrossPointSettings.h"
 #include "components/UITheme.h"
+#include "util/SideButtonActions.h"
 
 namespace fui = freeink::ui;
 
 void MappedInputManager::update(const bool deferHomeButtonAction) const {
   gpio.update();
+  // Any front-button press, hold, or release restarts the ghost window that
+  // sideReleaseAlone() enforces for custom side-button actions.
+  if (gpio.isPressed(HalGPIO::BTN_BACK) || gpio.isPressed(HalGPIO::BTN_CONFIRM) || gpio.isPressed(HalGPIO::BTN_LEFT) ||
+      gpio.isPressed(HalGPIO::BTN_RIGHT) || gpio.wasReleased(HalGPIO::BTN_BACK) ||
+      gpio.wasReleased(HalGPIO::BTN_CONFIRM) || gpio.wasReleased(HalGPIO::BTN_LEFT) ||
+      gpio.wasReleased(HalGPIO::BTN_RIGHT)) {
+    lastFrontActivityMs = millis();
+  }
   homeAction = HomeButtonAction::Ignore;
   if (gpio.hasHomeKey()) {
     homeAction = homeButtonInput.update(millis(), gpio.wasHomeKeyTapped(), gpio.wasHomeKeyLongPressed(),
@@ -136,9 +145,38 @@ MappedInputManager::Button MappedInputManager::frontPairNext(const uint8_t orien
   return mapScreenDirectionFor(dir, orientation);
 }
 
-bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
-  const auto sideLayout = SETTINGS.sideButtonLayout;
+namespace {
+// The X3/X4 per-button action bound to a physical side button. Off-X3/X4 boards hide those rows,
+// so both read Default there.
+uint8_t sideActionOf(const uint8_t physical) {
+  if (physical == HalGPIO::BTN_UP) return SETTINGS.sideButtonActionForUp();
+  if (physical == HalGPIO::BTN_DOWN) return SETTINGS.sideButtonActionForDown();
+  return CrossPointSettings::SIDE_BTN_DEFAULT;
+}
+}  // namespace
 
+// A side button carrying a custom action answers to NO shared logical name while the reader is up:
+// not Up/Down, and so not PageBack/PageForward, Screen*, or Nav* either, since all of those resolve
+// through here. Suppressing it in one place is what keeps a remapped button from doing its own job
+// AND the shared one in the same tick -- an Upper bound to "Next Page" used to also step the word
+// cursor backwards through ScreenUp, and the two cancelled out. Outside the reader the flag is
+// clear and the side buttons keep their ordinary list-navigation role.
+bool MappedInputManager::sideRoleSuppressed(const uint8_t physical) const {
+  return sideActionsActive && sideActionOf(physical) != CrossPointSettings::SIDE_BTN_DEFAULT;
+}
+
+// A side button's custom action fired this tick: the right button was released, no front-button
+// ghost surrounds it, and the power button is idle so the Power+Down screenshot combo cannot also
+// trip the Lower action. Deliberately reads raw GPIO -- the logical names are suppressed above.
+bool MappedInputManager::sideActionFired(const uint8_t action) const {
+  if (action == CrossPointSettings::SIDE_BTN_DEFAULT || action == CrossPointSettings::SIDE_BTN_NONE) return false;
+  if (gpio.isPressed(HalGPIO::BTN_POWER) || gpio.wasReleased(HalGPIO::BTN_POWER)) return false;
+  if (!sideReleaseAlone()) return false;
+  return (SETTINGS.sideButtonActionForUp() == action && gpio.wasReleased(HalGPIO::BTN_UP)) ||
+         (SETTINGS.sideButtonActionForDown() == action && gpio.wasReleased(HalGPIO::BTN_DOWN));
+}
+
+bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
   switch (button) {
     case Button::Back:
       // Logical Back maps to user-configured front button.
@@ -154,35 +192,20 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       return (gpio.*fn)(SETTINGS.frontButtonRight);
     case Button::Up:
       // Side buttons remain fixed for Up/Down.
-      return (gpio.*fn)(HalGPIO::BTN_UP);
+      return !sideRoleSuppressed(HalGPIO::BTN_UP) && (gpio.*fn)(HalGPIO::BTN_UP);
     case Button::Down:
       // Side buttons remain fixed for Up/Down.
-      return (gpio.*fn)(HalGPIO::BTN_DOWN);
+      return !sideRoleSuppressed(HalGPIO::BTN_DOWN) && (gpio.*fn)(HalGPIO::BTN_DOWN);
     case Button::Power:
       // Power button bypasses remapping.
       return (gpio.*fn)(HalGPIO::BTN_POWER);
     case Button::PageBack:
-      // Reader page navigation uses side buttons and can be swapped via settings.
-      switch (sideLayout) {
-        case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
-        case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
-        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
-        default:
-          return false;
-      }
+      // Reader page navigation uses the side buttons (Up = previous, Down = next, swapped when
+      // the orientation flips them). Routed through Up/Down rather than raw GPIO so the custom
+      // action suppression above applies here too, in one place.
+      return mapButton(isNavDirectionSwapped() ? Button::Down : Button::Up, fn);
     case Button::PageForward:
-      // Reader page navigation uses side buttons and can be swapped via settings.
-      switch (sideLayout) {
-        case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
-        case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
-        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
-        default:
-          return false;
-      }
+      return mapButton(isNavDirectionSwapped() ? Button::Up : Button::Down, fn);
     case Button::NavNext:
       // Logical "next item": whichever buttons point down and right ON THE ROTATED SCREEN.
       // Deferring to the screen directions covers all four orientations; the isNavDirectionSwapped()
@@ -423,6 +446,10 @@ bool MappedInputManager::consumeSuppressedRelease() const {
 bool MappedInputManager::isPressed(const Button button) const { return mapButton(button, &HalGPIO::isPressed); }
 
 bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
+
+bool MappedInputManager::sideReleaseAlone() const {
+  return side_button::loneRelease(millis(), lastFrontActivityMs, SIDE_GHOST_WINDOW_MS);
+}
 
 bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
 

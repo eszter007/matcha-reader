@@ -734,6 +734,33 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
     return false;
   }
 
+  // A side button bound to Word Lookup walks the same path as the power-button shortcut: the
+  // click that opened this screen looks the highlighted word up, and only the NEXT one, from the
+  // definition view, leaves. Two clicks in, one click out -- closing straight from here would
+  // make the button that opened word lookup unable to reach a definition at all.
+  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
+    // Same parked-move guard as the power click below: looking up the word being left behind
+    // would be the wrong entry.
+    if (pending.kind == PendingMove::Kind::None || provisionalGlyph != SIZE_MAX) {
+      enterDefinition();
+      return false;
+    }
+    return true;
+  }
+  // Remapped page bindings (side buttons and the power button) step the word cursor here.
+  // Returns: the release is theirs, and letting it fall through would let a second binding
+  // claim the same press.
+  switch (ReaderUtils::lookupPanelStep(mappedInput)) {
+    case ReaderUtils::PanelStep::Previous:
+      moveSelection(-1);
+      return true;
+    case ReaderUtils::PanelStep::Next:
+      moveSelection(1);
+      return true;
+    case ReaderUtils::PanelStep::None:
+      break;
+  }
+
   // On the page, a short power click SELECTS -- the same thing Look Up does. It is the one button
   // reachable without moving the hand off the side buttons that step words, and this view draws
   // no labels to say so. It only leaves the panel from the definition view (handleDefinitionInput),
@@ -1348,8 +1375,27 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     return false;
   }
 
-  const bool sideButtonsForLookup =
-      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  // The second click of the same side button, now that the definition is up, leaves the panel.
+  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return false;
+  }
+  // Remapped page bindings move through the entry: sections in the paged view, words otherwise.
+  const auto panelStep = ReaderUtils::lookupPanelStep(mappedInput);
+  if (panelStep != ReaderUtils::PanelStep::None) {
+    const int delta = panelStep == ReaderUtils::PanelStep::Next ? 1 : -1;
+    if (pagedDefinition()) {
+      moveSection(delta);
+    } else {
+      moveCursor(delta);
+    }
+    return true;
+  }
+
+  const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0 && !SETTINGS.sideButtonsFullyCustomized();
   // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
   // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
   // way guarantees the two roles land on different buttons in every orientation. Reaching for the

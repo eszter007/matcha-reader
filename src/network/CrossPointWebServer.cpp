@@ -1251,10 +1251,12 @@ void CrossPointWebServer::handleGetSettings() const {
       }
       case SettingType::ENUM: {
         doc["type"] = "enum";
+        // The wire protocol is the OPTION INDEX, so a row with a custom menu order must send
+        // both its options and its value in that order -- see SettingInfo::enumOrder.
         if (s.valuePtr) {
-          doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
+          doc["value"] = static_cast<int>(s.slotFromStored(SETTINGS.*(s.valuePtr)));
         } else if (s.valueGetter) {
-          doc["value"] = static_cast<int>(s.valueGetter());
+          doc["value"] = static_cast<int>(s.slotFromStored(s.valueGetter()));
         }
         JsonArray options = doc["options"].to<JsonArray>();
         if (!s.enumStringValues.empty()) {
@@ -1262,7 +1264,7 @@ void CrossPointWebServer::handleGetSettings() const {
             options.add(opt);
           }
         } else {
-          for (const auto& opt : s.enumLabels()) {
+          for (const auto& opt : s.orderedEnumLabels()) {
             options.add(I18N.get(opt));
           }
         }
@@ -1347,10 +1349,11 @@ void CrossPointWebServer::handlePostSettings() {
         const int maxVal = s.enumStringValues.empty() ? static_cast<int>(s.enumLabels().size())
                                                       : static_cast<int>(s.enumStringValues.size());
         if (val >= 0 && val < maxVal) {
+          const uint8_t stored = s.storedFromSlot(static_cast<uint8_t>(val));
           if (s.valuePtr) {
-            SETTINGS.*(s.valuePtr) = static_cast<uint8_t>(val);
+            SETTINGS.*(s.valuePtr) = stored;
           } else if (s.valueSetter) {
-            s.valueSetter(static_cast<uint8_t>(val));
+            s.valueSetter(stored);
           }
           applied++;
         }

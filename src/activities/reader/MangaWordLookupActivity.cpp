@@ -331,8 +331,29 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
-  const bool sideButtonsForLookup =
-      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  // A side button bound to Word Lookup mirrors the power-button shortcut: the click that opened
+  // this screen looks the highlighted word up, and only a click with a definition already showing
+  // leaves. Two clicks in, one click out. This view draws the cursor and the definition together,
+  // so "a definition is showing" IS hasResult -- the same thing Confirm produces above.
+  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
+    if (!hasResult) {
+      performLookup();
+      return;
+    }
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+  // Remapped page bindings (side buttons and the power button) move the word cursor here.
+  const auto step = ReaderUtils::lookupPanelStep(mappedInput);
+  if (step != ReaderUtils::PanelStep::None) {
+    moveCursor(step == ReaderUtils::PanelStep::Next ? 1 : -1);
+    return;
+  }
+
+  const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0 && !SETTINGS.sideButtonsFullyCustomized();
   // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
   // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
   // way guarantees the two roles land on different buttons in every orientation. Reaching for the

@@ -358,8 +358,9 @@ open a list when selected.
 #### 3.6.3 Controls
 
 - **Shortcuts**: Opens the button-shortcut settings, gathered on one screen: **Long-Press Button Behavior**,
-  **Long-press Menu**, **Short Power Button Click**, **Quick-return from footnotes** and **Short Back to File
-  Browser**, plus **Double-Click Power for Light** on the X4 Pro and **Tilt Page Turn** on the X3. Each is described
+  **Long-press Menu**, **Short Power Button Click** and **Quick-return from footnotes**, plus **Upper Side Button
+  in Reader** and **Lower Side Button in Reader** on the X3/X4, **Double-Click Power for Light** on the X4 Pro and
+  **Tilt Page Turn** on the X3, with **Short Back to File Browser** last. Each is described
   below; the remaining entries in this section stay in the Controls list itself.
 
 - **Remap Front Buttons**: A menu for customising the function of each bottom edge button.
@@ -367,8 +368,7 @@ open a list when selected.
 - **Front Buttons Follow Orientation** (on by default): Directional buttons act on the direction you *see*, not the direction they point on the case. Rotate to landscape and the pair that used to move left/right moves up/down instead, with the on-screen hints relabelled to match — so page turns, list scrolling, the keyboard and the word lookup all keep working the way the screen is facing. Rotating swaps which axis each pair of buttons serves, so in landscape the front buttons take the up/down axis and the side buttons take left/right. Switch it off to keep every button fixed to its portrait meaning however the screen is turned. Devices with a touchscreen always follow the orientation and ignore this setting.
 
 - **Navigate with Side Buttons in Word Lookup** (on by default): Lets the side buttons step between words during
-  Word Lookup. Has no effect when **Side Button Layout (reader)** is set to Disabled — turning the side buttons off
-  for reading takes them out of word selection too. See [Word Lookup](#62-word-lookup).
+  Word Lookup. See [Word Lookup](#62-word-lookup).
 
 - **Reversed page turn (Vertical & Manga)** (off by default): Flips which button turns the page forward, for the two things that are read right-to-left.
 
@@ -378,7 +378,29 @@ open a list when selected.
 
   This affects **page turning only**. Menus, the reader menu and Word Lookup keep their normal directions. It applies to the front buttons and the side buttons together. Unlike the per-book text settings this one is global: it lives in the Controls screen, so it is the same for every book. Touch page turns have their own setting — see **Touch Reader Controls**, which offers inverted tap and swipe modes for the same reason.
 
-- **Side Button Layout (reader)**: Swap the order of the up and down side buttons from "Prev/Next" (default) to "Next/Prev". You can also disable them entirely. This change is only in effect when reading.
+- **Upper / Lower Side Button in Reader** (X3/X4 only, in Shortcuts): Rebinds what the upper (Side Up) or
+  lower (Side Down) button does while reading. Each offers Default (previous page on Upper, next page on Lower),
+  Sleep, Previous Page, Next Page, Refresh Screen, Footnotes, Word Lookup and Off — so swapping the page-turn order
+  is Upper = Next Page plus Lower = Previous Page, and Off on both is the old "Side Button Layout = Disabled".
+  A device upgrading from an earlier version carries its old Side Button Layout over automatically.
+
+  A button with a custom action does that action and nothing else: it no longer turns pages or steps lists under
+  the shared roles, so it cannot fire two things at once. Outside the reader both buttons keep their ordinary
+  navigation role. Inside Word Lookup the page bindings move the cursor — Previous Page steps back, Next Page
+  steps forward, in the word list and through a definition's entries alike. A button bound to Word Lookup walks
+  the same path as the power-button shortcut: the first click opens word selection, the second looks the
+  highlighted word up, and a click in the definition view closes the dictionary — two clicks in, one click out,
+  without moving your reading hand. The **Short Power Button Click** page bindings work inside Word Lookup too,
+  so Power set to "Previous Page" steps back there as well.
+
+  **Reversed Page Turn does not apply to a remapped button.** A button you set to "Next Page" advances in a
+  vertical or manga book exactly as it does in a horizontal one — you named the direction yourself, so nothing
+  flips it behind your back. The same holds for the Power button's page bindings. Reversed Page Turn keeps
+  reversing the buttons still doing their *shared* page-turn job, which is what it is for.
+
+  Only **Navigate with Side Buttons in Word Lookup** is hidden, and only once *both* side buttons are remapped —
+  it is the one setting that merely arranges the shared side-button roles. **Reversed Page Turn** and
+  **Long-Press Button Behavior** stay visible, since they also govern the front buttons, touch and tilt.
 
 - **Long-Press Button Behavior**: Set whether long-pressing page turn buttons skips to the next/previous chapter:
   
@@ -394,11 +416,12 @@ open a list when selected.
   
   - "Ignore" (default) - Require a long press to turn off the device
   - "Sleep" - A short press puts the device into sleep mode
-  - "Page Turn" - A short press in reading mode turns to the next page; a long press turns the device off
+  - "Next Page" - A short press in reading mode turns to the next page; a long press turns the device off
+  - "Previous Page" - A short press in reading mode turns back one page
   - "Footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
   - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
-  - "Confirm" - A short press acts as the Confirm button. Only offered on touch devices, which have no front Confirm key.
+  - "Confirm" - A short press acts as the Confirm button. It earns its place on touch devices, which have no front Confirm key.
 
 - **Touch Reader Controls**: How the touchscreen turns pages while reading (touch devices only):
   
@@ -721,9 +744,10 @@ Once you have opened a book, the button layout changes to facilitate reading.
 | **Previous Page** | Press **Left** _or_ **Side Up**    |
 | **Next Page**     | Press **Right** _or_ **Side Down** |
 
-The role of the side buttons can be swapped in the **[Controls Settings](#363-controls)**.
+The side buttons can be rebound per button in **Settings → Controls → Shortcuts** (Upper / Lower Side Button in
+Reader, X3/X4 only).
 
-If the **Short Power Button Click** setting is set to "Page Turn", you can also turn to the next page by briefly pressing the Power button.
+If the **Short Power Button Click** setting is set to "Next Page", you can also turn to the next page by briefly pressing the Power button ("Previous Page" turns back).
 
 ### Chapter Navigation
 
@@ -877,8 +901,8 @@ screen, so selecting the part you can see gives the whole word. The highlight st
 the characters that are actually there.
 
 Enable **Settings → Controls → Navigate with Side Buttons in Word Lookup** to use the side buttons for moving
-between words and the front Left / Right buttons for scrolling. The default mapping above remains active when
-**Side Button Layout** is set to **Disabled**.
+between words and the front Left / Right buttons for scrolling. The swap is unavailable once both side buttons
+have custom actions, since there is then no shared side-button role left to arrange.
 
 In Reader Settings, **Word Lookup Font Size** offers Tiny, Small (default), Medium, and Large definition text.
 

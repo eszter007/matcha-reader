@@ -133,7 +133,8 @@ inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const 
   // portrait, up/down in landscape. Naming ScreenLeft/ScreenRight outright would bind the SIDE
   // buttons in landscape -- they already turn pages through PageBack/PageForward, so the front
   // buttons would simply do nothing, which is what happened. It also must not reach the side
-  // buttons by another name: their page-turn role is the user's to disable via sideButtonLayout.
+  // buttons by another name: their page-turn role is the user's to rebind via the per-button
+  // side actions.
   const auto prevButton = orientationOverride >= 0 ? input.frontPairPrevious(static_cast<uint8_t>(orientationOverride))
                                                    : input.frontPairPrevious();
   const auto nextButton =
@@ -143,14 +144,24 @@ inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const 
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
   };
   const bool prev =
-      tiltPrev || (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
-  const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                         input.wasReleased(MappedInputManager::Button::Power);
+      tiltPrev || pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton);
   const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext ||
-                    pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
-                    pageButtonTriggered(nextButton);
-  if (reversed) return {next, prev, tiltPrev || tiltNext};
-  return {prev, next, tiltPrev || tiltNext};
+                    pageButtonTriggered(MappedInputManager::Button::PageForward) || pageButtonTriggered(nextButton);
+  // Explicit page bindings: the X3/X4 per-button side actions and the power-button page
+  // shortcuts. These name a DIRECTION the user chose by hand, so Reversed Page Turn does not
+  // apply to them -- they are added after the swap below, and a button set to "Next Page"
+  // advances in a tategaki book exactly as it does in a horizontal one. The shared roles keep
+  // being reversed, which is what that setting is for.
+  const bool explicitPrev =
+      input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE) ||
+      (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE &&
+       input.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN));
+  const bool explicitNext = input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE) ||
+                            (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
+                             input.wasReleased(MappedInputManager::Button::Power));
+  const bool tilt = tiltPrev || tiltNext;
+  if (reversed) return {next || explicitPrev, prev || explicitNext, tilt};
+  return {prev || explicitPrev, next || explicitNext, tilt};
 }
 
 // Page turns resolved against the live orientation -- the normal case.
@@ -185,6 +196,30 @@ inline PageTurnResult detectPageTurnForOrientation(const MappedInputManager& inp
 inline bool wordLookupPowerClick(const MappedInputManager& input) {
   return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
          input.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN);
+}
+
+// Stepping inside a panel that has no pages of its own (word select, a definition): the X3/X4
+// side actions and the power-button page shortcuts all say "previous/next page", so inside a panel
+// they move its cursor. One helper for all three lookup views, so a binding cannot work in one and
+// be missing from another -- power-as-Previous used to reach none of them.
+enum class PanelStep : uint8_t { None, Previous, Next };
+
+inline PanelStep lookupPanelStep(const MappedInputManager& input) {
+  if (input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE)) return PanelStep::Previous;
+  if (input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE)) return PanelStep::Next;
+  // Skipped when Down is also released so the screenshot combo does not step the cursor.
+  if (!input.wasReleased(MappedInputManager::Button::Power) || gpio.wasReleased(HalGPIO::BTN_DOWN)) {
+    return PanelStep::None;
+  }
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE) return PanelStep::Previous;
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN) return PanelStep::Next;
+  return PanelStep::None;
+}
+
+// A side button bound to Word Lookup: it opens the panel from the reader and closes it from
+// inside, so the one button toggles.
+inline bool wordLookupSideToggle(const MappedInputManager& input) {
+  return input.sideActionFired(CrossPointSettings::SIDE_BTN_WORD_LOOKUP);
 }
 
 struct TouchPageTurn {

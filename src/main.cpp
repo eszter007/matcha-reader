@@ -693,6 +693,10 @@ void loop() {
                                                      CrossPointSettings::SHORT_PWRBTN::PWR_CONFIRM &&
                                                  SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::IGNORE);
   mappedInputManager.update();
+  // Refreshed every tick, before any consumer asks: the custom X3/X4 side actions are reader-only,
+  // and the same physical buttons must go back to list navigation the moment the reader is gone.
+  // The word-lookup panel sits on the reader's stack, so it counts as reader too.
+  mappedInputManager.setSideActionsActive(activityManager.isReaderActivity());
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
@@ -840,6 +844,14 @@ void loop() {
     return;
   }
 
+  // Custom X3/X4 side-button Sleep action on the fixed physical pair.
+  if (mappedInputManager.sideActionFired(CrossPointSettings::SIDE_BTN_SLEEP)) {
+    LOG_DBG("MAIN", "Side button sleep triggered");
+    enterDeepSleep();
+    // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
+    return;
+  }
+
 #if FREEINK_DEVICE_PAPERMONO
   // Paper Mono reports the PMIC power button as a one-tick click, so the held
   // path above cannot fire. With the default Ignore action, retain the normal
@@ -856,9 +868,12 @@ void loop() {
   if (mappedInputManager.homeButtonAction() == HomeButtonAction::ToggleFrontlight) {
     toggleFrontlight();
   }
+  // Custom X3/X4 side-button Refresh action.
+  const bool sideRefresh = mappedInputManager.sideActionFired(CrossPointSettings::SIDE_BTN_REFRESH);
   if (mappedInputManager.homeButtonAction() == HomeButtonAction::Refresh ||
       (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
-       mappedInputManager.wasReleased(MappedInputManager::Button::Power))) {
+       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) ||
+      sideRefresh) {
     LOG_DBG("MAIN", "Manual screen refresh triggered");
     if (!activityManager.handleForcedRefresh()) {
       RenderLock lock;

@@ -222,6 +222,21 @@ inline std::vector<StrId> buildLongPressMenuValues() {
 // from the active family rather than a fixed enum.
 // categoryFilter/includeTextSettingsEntries let embedded device screens copy only
 // entries they can display while the reader keeps its memory-heavy state alive.
+// The per-button side actions exist only on the C3 X3/X4 boards (plain X4,
+// X3, X3 UC8279 run), whose two side keys are a fixed physical pair.
+inline bool boardHasCustomSideButtons() {
+  const auto board = BoardConfig::ACTIVE.board;
+  return board == BoardConfig::Board::XteinkX4 || board == BoardConfig::Board::XteinkX3 ||
+         board == BoardConfig::Board::XteinkX3Uc8279;
+}
+
+// The single test for "this row is a per-button side action". Both the menu builders and the
+// persistence walk go through it -- the two must agree on exactly which keys exist on a board,
+// or settingHiddenByBoard() would stop a key from ever being written.
+inline bool isSideButtonActionRow(const StrId nameId) {
+  return nameId == StrId::STR_UPPER_SIDE_BUTTON || nameId == StrId::STR_LOWER_SIDE_BUTTON;
+}
+
 // The settings table itself, built once. Exposed separately from getSettingsList() so the
 // persistence path can walk it WITHOUT materializing a copy -- see forEachPersistableSetting().
 inline const std::vector<SettingInfo>& settingsBaseList() {
@@ -348,9 +363,6 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                             "wordLookupSideButtons", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_REVERSED_PAGE_TURN, &CrossPointSettings::reversePageTurn, "reversePageTurn",
                             StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
-                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
-                          StrId::STR_CAT_CONTROLS),
         // Index 4 (Inverted Swipe) is Matcha-only, for right-to-left vertical reading.
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_TAP, StrId::STR_STATE_SWIPE,
@@ -373,26 +385,49 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         // Erased below unless the board is an X4 Pro.
         SettingInfo::Toggle(StrId::STR_DBL_CLICK_PWR_LIGHT, &CrossPointSettings::doubleClickPwrLight,
                             "doubleClickPwrLight", StrId::STR_CAT_SHORTCUTS),
-#if FREEINK_CAP_TOUCH
         // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
-        // Confirm is appended at 6 (upstream put it at 5) and only offered here, on touch
-        // boards, which is where a power-button Confirm earns its place.
+        // Confirm is appended at 6 (upstream put it at 5); Previous Page is appended at 7.
+        // The indices are identical on touch and button boards so a stored value keeps its
+        // meaning across them; Confirm simply has no handler where a front Confirm key exists.
+        // Labels stay indexed BY STORED VALUE; withEnumOrder() only decides what the menu offers
+        // first. Previous Page sits at 7 because appending was the only safe place for it, and
+        // reading it seven rows below Next Page was confusing -- so the two are offered together.
         SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-                          {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH,
-                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM},
-                          "shortPwrBtn", StrId::STR_CAT_SHORTCUTS),
-#else
-        SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-                          {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH,
-                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP},
-                          "shortPwrBtn", StrId::STR_CAT_SHORTCUTS),
-#endif
+                          {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
+                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE},
+                          "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
+            .withEnumOrder({CrossPointSettings::IGNORE, CrossPointSettings::PWR_PREV_PAGE,
+                            CrossPointSettings::PAGE_TURN, CrossPointSettings::SLEEP, CrossPointSettings::FORCE_REFRESH,
+                            CrossPointSettings::FOOTNOTES, CrossPointSettings::WORD_LOOKUP,
+                            CrossPointSettings::PWR_CONFIRM}),
         // Erased below unless the QMI8658 IMU is present (X3).
         SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
                           {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED}, "tiltPageTurn",
                           StrId::STR_CAT_SHORTCUTS),
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_SHORTCUTS),
+        // X3/X4 only, last in the Shortcuts sub-screen: fixed physical mapping
+        // (Upper = BTN_UP, Lower = BTN_DOWN). Erased below on other boards; the
+        // option order matches SIDE_BUTTON_ACTION.
+        SettingInfo::Enum(
+            StrId::STR_UPPER_SIDE_BUTTON, &CrossPointSettings::upperSideButtonAction,
+            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
+             StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
+            "upperSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+            .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
+                            CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
+                            CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
+                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_NONE}),
+        SettingInfo::Enum(
+            StrId::STR_LOWER_SIDE_BUTTON, &CrossPointSettings::lowerSideButtonAction,
+            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
+             StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
+            "lowerSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+            .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
+                            CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
+                            CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
+                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_NONE}),
+        // Last row in Shortcuts.
         SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
                             "backShortToFileBrowser", StrId::STR_CAT_SHORTCUTS),
 
@@ -526,6 +561,11 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
     const auto eraseEntry = [&v](const StrId nameId) {
       v.erase(std::find_if(v.begin(), v.end(), [nameId](const SettingInfo& s) { return s.nameId == nameId; }));
     };
+    // Per-button side actions only exist on the C3 X3/X4 boards.
+    if (!boardHasCustomSideButtons()) {
+      eraseEntry(StrId::STR_UPPER_SIDE_BUTTON);
+      eraseEntry(StrId::STR_LOWER_SIDE_BUTTON);
+    }
     // Double-click power frontlight shortcut only exists on the X4 Pro.
     if (!BoardConfig::isX4Pro()) eraseEntry(StrId::STR_DBL_CLICK_PWR_LIGHT);
     // Tilt page turn needs the QMI8658 IMU (X3).
@@ -539,6 +579,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
 // persistence walk applies exactly the same set -- a divergence here would change WHICH keys get
 // written to the settings file on a given board.
 inline bool settingHiddenByBoard(const SettingInfo& s) {
+  if (!boardHasCustomSideButtons() && isSideButtonActionRow(s.nameId)) return true;
   if (!BoardConfig::hasTouch() &&
       (s.nameId == StrId::STR_TOUCH_READER_CONTROLS || s.nameId == StrId::STR_READER_MENU_STYLE)) {
     return true;
