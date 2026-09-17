@@ -24,6 +24,18 @@ namespace {
 uint8_t resolveSdCardStyle(const SdCardFont& font, const EpdFontFamily::Style style) {
   return font.resolveStyle(static_cast<uint8_t>(style));
 }
+
+uint16_t getSdCardSpaceAdvance(SdCardFont& font, const EpdFontFamily::Style style) {
+  const uint8_t resolvedStyle = resolveSdCardStyle(font, style);
+  const uint16_t advance = font.getAdvance(' ', resolvedStyle);
+  if (advance != 0) return advance;
+
+  // Zero means uncached (full table, style not prewarmed, or failed
+  // preparation): read the glyph, as the per-codepoint slow path does.
+  const EpdFont* epdFont = font.getEpdFont(resolvedStyle);
+  const EpdGlyph* glyph = epdFont ? epdFont->getGlyph(' ') : nullptr;
+  return glyph ? glyph->advanceX : 0;
+}
 }  // namespace
 
 namespace {
@@ -2423,12 +2435,13 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
-    const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    int32_t advFP = sdIt->second->getAdvance(' ', resolvedStyle);
-    // A CJK-only SD font (UDDigiKyokasho) has no space glyph: 0 here collapsed every word gap
-    // and Latin text rendered overlapping. The companion's advance table supplies the space
-    // without any SD I/O.
-    if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
+    // getSdCardSpaceAdvance() answers "what is this font's space", including the uncached case
+    // where the advance table reports 0 but the glyph exists. Zero after that means the font has
+    // no space glyph AT ALL -- a CJK-only face (UDDigiKyokasho) -- which collapsed every word gap
+    // and rendered Latin text overlapping. The companion supplies it then, through the same
+    // helper so its own table misses are recovered too.
+    int32_t advFP = getSdCardSpaceAdvance(*sdIt->second, style);
+    if (advFP == 0 && fallbackSdFont_) advFP = getSdCardSpaceAdvance(*fallbackSdFont_, style);
     if (advFP != 0) return textAdvance::withLetterSpacing(fp4::toPixel(advFP), 1, letterSpacing);
   }
 
@@ -2454,9 +2467,8 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   // so we return just the space advance without kerning.
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
-    const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    int32_t advFP = sdIt->second->getAdvance(' ', resolvedStyle);
-    if (advFP == 0 && fallbackSdFont_) advFP = fallbackSdFont_->getAdvance(' ', resolvedStyle);
+    int32_t advFP = getSdCardSpaceAdvance(*sdIt->second, style);
+    if (advFP == 0 && fallbackSdFont_) advFP = getSdCardSpaceAdvance(*fallbackSdFont_, style);
     if (advFP != 0)
       return textAdvance::withLetterSpacing(fp4::toPixel(advFP), 1,
                                             letterSpacing);  // 0 = no space glyph anywhere: fallback chain below

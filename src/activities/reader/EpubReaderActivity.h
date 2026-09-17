@@ -190,6 +190,12 @@ class EpubReaderActivity final : public ReaderActivity {
   // overlay, letting panel->toolbar steps restore the page without a full
   // re-render. Discarded on close / whenever the page under the overlay changes.
   bool overlayPageStored = false;
+  // True while a deferred overlay chrome refresh (pushOverlayRefresh) may still
+  // be running on the panel. settleOverlayRefresh() must run before the
+  // framebuffer is touched or another differential refresh is pushed.
+  bool overlayRefreshPending = false;
+  void pushOverlayRefresh();
+  void settleOverlayRefresh();
   int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
   std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
 
@@ -581,6 +587,9 @@ class EpubReaderActivity final : public ReaderActivity {
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                               bool allowFastInitialRefresh)
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
+  // Defined out of line: it settles a pending overlay refresh and drops the overlay's page
+  // snapshot, so the activity cannot be destroyed with the framebuffer half-painted.
+  ~EpubReaderActivity() override;
   void render(RenderLock&& lock) override;
   // Full CPU speed + fast loop ticks while a section build runs: at the low-power
   // frequency a giant chapter's background rebuild stretches from ~40s to many
