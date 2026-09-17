@@ -488,7 +488,7 @@ void EpubReaderActivity::showBuildPopup() {
 
 void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
   if (isJapaneseBook()) {
-    openWordLookupPanel(pageOnScreen);
+    openWordLookupPanel(pageOnScreen, lookupAtX, lookupAtY);
     return;
   }
   std::string dictionaryFolder;
@@ -852,9 +852,10 @@ void EpubReaderActivity::readerLoop() {
   // longPressMenuFunction: that setting assigns the *key* hold (Confirm, or the
   // Home key on boards without one), and a press on the glass is a different
   // gesture that means "what is this word". Ahead of the link and menu zones so
-  // a hold never reads as the tap those handle. Japanese books keep their own
-  // vertical panel, which segments rather than splitting on spaces.
-  if (!atEndOfBook && mappedInput.hasTouch() && !isJapaneseBook()) {
+  // a hold never reads as the tap those handle. Japanese books go the same way
+  // (#278): their own vertical panel opens on the word under the finger, which
+  // segments rather than splitting on spaces.
+  if (!atEndOfBook && mappedInput.hasTouch()) {
     int pressX = 0;
     int pressY = 0;
     if (mappedInput.wasScreenLongPress(pressX, pressY)) {
@@ -4069,7 +4070,7 @@ bool EpubReaderActivity::repaintVerticalPageForPanel() {
   return true;
 }
 
-void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
+void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
   requestVerticalBuildNotice();
   if (!epub || !DictIndex::isAvailable()) return;
   // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
@@ -4086,6 +4087,10 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen) {
     selectCtx.marginLeft += SETTINGS.screenMargin;
     selectCtx.repaintPage = &EpubReaderActivity::repaintVerticalPageForPanelThunk;
     selectCtx.repaintCtx = this;
+    // Where the finger was, when a long press opened this. The panel replays it as a tap on
+    // that word; -1 (the menu and key paths) leaves it to place its own cursor.
+    selectCtx.lookupAtX = lookupAtX;
+    selectCtx.lookupAtY = lookupAtY;
     // Only when the framebuffer really holds what the panel shows. It does not after a chapter
     // build: the early render put the page on the e-ink, then the build borrowed the buffer's
     // bytes as inflate scratch. Skipping the repaint there composites the cursor onto whatever

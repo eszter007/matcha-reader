@@ -214,8 +214,15 @@ void EpubReaderWordLookupActivity::onEnter() {
   // all: the constructor's burst already stopped at the first selectable word, and the cursor is
   // drawn over pixels that are on screen. The definition read waits for Confirm.
   if (mode == Mode::Select) {
+    // A long press names its own word, so it beats both the restored position and the
+    // middle-of-page default: the user pointed at something.
+    if (selectCtx.lookupAtX >= 0 && selectCtx.lookupAtY >= 0) {
+      openAtX = selectCtx.lookupAtX;
+      openAtY = selectCtx.lookupAtY;
+      if (resolveOpenPoint()) return;
+    }
     // A restored position wins: it is where this reader actually was on this page.
-    if (!restored) {
+    if (openAtX < 0 && !restored) {
       cursorIndex = 0;
       selectMiddleOfPage();
     }
@@ -855,6 +862,21 @@ int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, Highl
   return count;
 }
 
+bool EpubReaderWordLookupActivity::resolveOpenPoint() {
+  const int hit = selectableIndexAtPoint(openAtX, openAtY);
+  if (hit < 0) return false;  // not segmented there yet (or no word at all) -- retried from loop()
+  openAtX = -1;
+  openAtY = -1;
+  // Same as a tap in select mode: the point names its target, so no parked move can be holding
+  // a different word that a lookup would wrongly read.
+  pending.kind = PendingMove::Kind::None;
+  provisionalGlyph = SIZE_MAX;
+  cursorIndex = hit;
+  refreshCursorBoxes();
+  enterDefinition();
+  return true;
+}
+
 int EpubReaderWordLookupActivity::selectableIndexAtPoint(const int x, const int y) const {
   // Linear over the page's selectable words, rebuilding each candidate's boxes through
   // buildBoxesFor so the hit test and the drawn highlight can never disagree. A few hundred
@@ -1310,6 +1332,21 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 }
 
 void EpubReaderWordLookupActivity::loop() {
+  // The word under the opening long press, as soon as the scan can name it. Before input, so a
+  // page that segments mid-tick opens its definition on this tick rather than the next.
+  if (openAtX >= 0 && mode == Mode::Select) {
+    if (resolveOpenPoint()) return;
+    // The whole page is mapped and nothing lives under that point (a margin, a gutter, an image).
+    // Stop retrying and leave the panel on the page, where the cursor can still be moved.
+    if (scan.isDone()) {
+      openAtX = -1;
+      openAtY = -1;
+      selectMiddleOfPage();
+      refreshCursorBoxes();
+      requestUpdate();
+    }
+  }
+
   if (mode == Mode::Select) {
     if (!handleSelectInput()) return;
   } else if (!handleDefinitionInput()) {
@@ -1362,6 +1399,33 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     finish();
     return false;
   }
+  // Outside the card is "put it away", exactly as in the English panel (#278): the card floats
+  // over the page, so a tap on the page around it reads as dismissing it rather than as paging a
+  // definition the finger is not even on. Closes the whole panel rather than stepping back to
+  // select mode -- the gesture means "back to the book", and Back is still there for the page.
+  // Checked before paging so the two cannot both claim the same contact.
+  int tapX = 0;
+  int tapY = 0;
+  if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
+    const auto box = DictionaryPanel::compute(renderer).box;
+    if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
+      finish();
+      return false;
+    }
+  }
+
+  // Paging follows whatever the reader is set to -- tap zones, inverted zones, swipes, inverted
+  // swipes, or nothing when touch reader controls are off -- rather than a second scheme to
+  // learn (#278). Same helper the page turns use, and the same one the English panel calls.
+  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  if (touchTurn.prev || touchTurn.next) {
+    stepDefinitionPage(touchTurn.next ? 1 : -1);
+    return false;
+  }
+
   if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
@@ -1437,6 +1501,23 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     }
   });
   return true;
+}
+
+// One screenful of the entry in `delta`'s direction, rolling on to the neighbouring source when
+// the current one runs out -- so a touch gesture walks the whole lookup, sources included, the
+// way the English panel's pages do.
+void EpubReaderWordLookupActivity::stepDefinitionPage(const int delta) {
+  if (!hasResult) return;
+  const int step = std::max(1, visibleCapacity);
+  const int target = scrollOffset + delta * step;
+  if (target >= 0 && target <= maxScroll && (delta > 0 ? scrollOffset < maxScroll : scrollOffset > 0)) {
+    scrollOffset = std::clamp(target, 0, maxScroll);
+    requestUpdate();
+    return;
+  }
+  // At the end of this source: the next one, if the entry has several. moveSection() is a hard
+  // stop at both ends, so the last page of the last source simply stays put.
+  moveSection(delta);
 }
 
 void EpubReaderWordLookupActivity::moveSection(const int delta) {

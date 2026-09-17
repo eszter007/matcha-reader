@@ -475,7 +475,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
-  void openWordLookupPanel(bool pageOnScreen);
+  void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
   // Repaints the current vertical page (body + status bar) for the word-lookup panel's select
   // view, which owns no page of its own -- a VerticalPage copy would cost ~15KB, the same
   // headroom the scan and the dictionary caches need. Called from the panel's render(), i.e.

@@ -39,6 +39,11 @@ struct VerticalSelectContext {
   // and just place the cursor -- this is what makes opening the panel feel instant. False when
   // the panel is opened from the reader menu, which left its own pixels on screen.
   bool pageOnScreen = false;
+  // Screen point of the long press that opened the panel, or -1 when it was opened from the
+  // menu or a key. The panel selects the word under it and goes straight to the definition,
+  // which is what a hold means on the glass (#278).
+  int lookupAtX = -1;
+  int lookupAtY = -1;
   bool valid() const { return repaintPage != nullptr && cellPx > 0; }
 };
 
@@ -130,6 +135,16 @@ class EpubReaderWordLookupActivity final : public Activity {
   // The reader opens the panel on a long press, so the Confirm release that follows belongs to
   // that press, not to a selection. Ignore it until a fresh press is seen.
   bool confirmPressSeen = false;
+
+  // The touch long press that opened the panel, replayed here as if it were a tap in select
+  // mode. Held rather than applied once, because the page is segmented progressively: the point
+  // may name text the scan has not reached yet, so it is retried from loop() until a word
+  // answers or the scan finishes without one. -1 = nothing to replay.
+  int openAtX = -1;
+  int openAtY = -1;
+  // Select the word under the stored point and open its definition. False while no word there
+  // is known yet, which leaves the point to be retried.
+  bool resolveOpenPoint();
 
   // A move the user has already asked for that the sequential scan has not reached yet. Page
   // positions are known for every cell from the moment the page loads, but which cell STARTS a
@@ -240,6 +255,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   int currentSection = 0;
   void splitDefinitionIntoSections();
   void moveSection(int delta);
+  // A screenful of the definition per touch gesture, continuing into the next/previous source.
+  void stepDefinitionPage(int delta);
   // Text and footer label for what is on screen: the current section in tategaki, the whole
   // merged definition otherwise.
   const std::string& visibleDefinition() const;
