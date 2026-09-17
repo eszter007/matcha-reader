@@ -127,6 +127,9 @@ class SdCardFontSystem {
   /// "the built-in reader font, nothing to load". This is a runtime substitution only —
   /// SETTINGS.sdFontFamilyName keeps naming what the user actually picked.
   std::string resolveSelectedFamily() const;
+  // True when the named face ships `pt` exactly (empty name = a built-in family). Drives the
+  // stand-in choice in resolveSelectedFamily(): a size only a stand-in has must render with it.
+  bool faceShipsSize(const std::string& familyName, uint8_t pt) const;
 
   void ensureJpFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);

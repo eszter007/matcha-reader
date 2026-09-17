@@ -395,6 +395,17 @@ std::vector<uint8_t> SdCardFontSystem::rowPointSizes() const {
   return readerFontPointSizes(&registry_, SETTINGS.sdFontFamilyName, standIns, count);
 }
 
+// Does the face this row renders with ship `pt` itself? An empty name is a built-in family,
+// which exists at exactly BUILTIN_READER_POINT_SIZES.
+bool SdCardFontSystem::faceShipsSize(const std::string& familyName, const uint8_t pt) const {
+  if (familyName.empty()) {
+    return std::find(std::begin(BUILTIN_READER_POINT_SIZES), std::end(BUILTIN_READER_POINT_SIZES), pt) !=
+           std::end(BUILTIN_READER_POINT_SIZES);
+  }
+  const auto* family = registry_.findFamily(familyName);
+  return family && family->hasSize(pt);
+}
+
 std::string SdCardFontSystem::resolveSelectedFamily() const {
   const std::string selected = SETTINGS.sdFontFamilyName;
   // A book that needs Japanese keeps the base as-is. The companion ensureJpFallback() is about
@@ -404,7 +415,24 @@ std::string SdCardFontSystem::resolveSelectedFamily() const {
   if (jpFallbackNeeded_) return selected;
   const std::string base = selected.empty() ? builtinFamilyDirName(SETTINGS.fontFamily) : selected;
   const auto* variant = findCoverageVariant(&registry_, base);
-  return variant ? variant->name : selected;
+  const std::string resolved = variant ? variant->name : selected;
+  if (faceShipsSize(resolved, SETTINGS.fontPointSize)) return resolved;
+
+  // The row offers sizes its own face does not have: readerFontPointSizes() widens the list with
+  // every size the stand-ins ship, because a book one of them renders is rendered at exactly that
+  // size. Nothing used to reach that for a Latin book -- the stand-in was consulted for Japanese
+  // only -- so picking such a size snapped silently back to the nearest built-in one and 18 and
+  // 20 drew the same pixels. Render with the stand-in that has the size instead.
+  //
+  // Safe for any book: a stand-in is a superset of the row's Latin coverage by construction -- a
+  // coverage variant widens its base, and the JP extensions are latin-ext + cjk-ext.
+  const SdCardFontFamilyInfo* standIns[MAX_STAND_INS];
+  const uint8_t count =
+      readerStandInFamilies(&registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, MAX_STAND_INS);
+  for (uint8_t i = 0; i < count; i++) {
+    if (standIns[i] && faceShipsSize(standIns[i]->name, SETTINGS.fontPointSize)) return standIns[i]->name;
+  }
+  return resolved;
 }
 
 bool SdCardFontSystem::loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name,
