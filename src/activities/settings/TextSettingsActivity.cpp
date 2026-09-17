@@ -325,7 +325,8 @@ void TextSettingsActivity::render(RenderLock&&) {
                              ? sizes_[currentSizeIndex_].name.c_str()
                              : "";
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, familyName, sizeName);
+                              previewHeight, familyName, sizeName,
+                              sdFontSystem.effectiveReaderFontId(japaneseBook_ || verticalText_));
 
   // Tab bar + active tab's list draw inside the screen builder.
   renderUi();

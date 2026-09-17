@@ -50,6 +50,14 @@ class SdCardFontSystem {
   /// positioning derives from a font that actually contains the glyphs.
   int companionFontId() const;
 
+  /// The font a book of this script actually renders with: the selected face when it can carry
+  /// the script, and the substitute when it cannot -- the companion for a Japanese book whose
+  /// font has no CJK, the built-in serif for a Latin book whose font has no Latin (a CJK-only
+  /// family; the companion is chosen for Japanese and would set an English book in a Japanese
+  /// face). EVERY site that renders book text must ask this rather than getReaderFontId():
+  /// layout, drawing and the settings preview alike, or they disagree about both face and size.
+  int effectiveReaderFontId(bool jpBook) const;
+
   /// True when the currently selected reader font covers the codepoint. Built-in fonts are
   /// treated as Latin-complete and CJK-less (their CJK subset is a degraded fallback, not
   /// proper coverage).
@@ -127,6 +135,12 @@ class SdCardFontSystem {
   /// "the built-in reader font, nothing to load". This is a runtime substitution only —
   /// SETTINGS.sdFontFamilyName keeps naming what the user actually picked.
   std::string resolveSelectedFamily() const;
+
+  /// Below this largest-free-block figure, ensureJpFallback() drops the glyph caches before
+  /// loading the companion. Set above the biggest single block that load asks for -- a broad CJK
+  /// face's interval table at a large point size, measured at 26,592 B for NotoSansJP 20 -- so
+  /// the release happens while it can still help rather than after the failure.
+  static constexpr uint32_t COMPANION_LOAD_HEADROOM = 40 * 1024;
 
   void ensureJpFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);

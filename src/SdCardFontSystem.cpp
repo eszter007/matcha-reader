@@ -297,6 +297,20 @@ void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int
   if (builtinIt != renderer.getFontMap().end()) renderer.setFamilyFallback(sdFontId, &builtinIt->second);
 }
 
+int SdCardFontSystem::effectiveReaderFontId(const bool jpBook) const {
+  if (!selectedFontCovers(jpBook ? 0x3042 : 'a')) {
+    if (jpBook) {
+      const int companion = companionFontId();
+      // 0 means no companion is resident -- it can fail to load under heap pressure. Fall
+      // through to the selected font rather than returning 0, which reads as "no font".
+      if (companion != 0) return companion;
+    } else {
+      return SETTINGS.getBuiltinSerifReaderFontId();
+    }
+  }
+  return SETTINGS.getReaderFontId();
+}
+
 int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*/) const {
   // The manager holds exactly one reader-size font, already selected for
   // SETTINGS.fontPointSize, so the size argument is implicit — always return
@@ -462,12 +476,35 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
   }
 
   for (const auto* fam : candidates) {
+    // Which size the companion will actually be asked for: findNearestSize() may land below the
+    // point size the picker offered, which is the difference between a size change taking effect
+    // and silently doing nothing.
+    const auto* want = fam->findNearestSize(pointSize);
+    LOG_DBG("SDFS", "Companion candidate %s: asked %u -> nearest %u", fam->name.c_str(), pointSize,
+            want ? want->pointSize : 0);
     // Already loaded at the right size? Keep it.
     if (fallbackManager_.currentFamilyName() == fam->name) {
       const auto* wanted = fam->findNearestSize(pointSize);
       if (wanted && wanted->pointSize == fallbackManager_.currentPointSize()) return;
     }
-    if (!fallbackManager_.loadFamily(*fam, renderer, pointSize)) continue;
+    // Make room before asking, the same way ensureSelectedLoaded() does for the selected family.
+    // The companion's interval table is one contiguous block -- 26 KB for a broad CJK face at a
+    // large size -- and this load runs while a book is open, so the heap is fragmented rather
+    // than empty: 70 KB free behind a 20 KB largest block was enough to fail. The glyph slabs
+    // are a cache and are refilled on demand, so releasing them costs redraw time, not content.
+    if (ESP.getMaxAllocHeap() < COMPANION_LOAD_HEADROOM) {
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        const uint32_t before = ESP.getMaxAllocHeap();
+        fcm->releaseAllFontMemory();
+        LOG_DBG("SDFS", "Freed font caches for companion load: maxAlloc %u -> %u", before,
+                static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      }
+    }
+    if (!fallbackManager_.loadFamily(*fam, renderer, pointSize)) {
+      LOG_ERR("SDFS", "Companion %s failed to load at %u (free=%u largest=%u)", fam->name.c_str(), pointSize,
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      continue;
+    }
     if (loadedFamilyCovers(fallbackManager_, fam->name, 0x3042) &&
         loadedFamilyCovers(fallbackManager_, fam->name, 'a')) {
       LOG_DBG("SDFS", "Companion fallback font: %s", fam->name.c_str());
@@ -477,6 +514,10 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
     fallbackManager_.unloadAll(renderer);
   }
 
+  LOG_ERR("SDFS",
+          "No companion could be loaded at %u -- a Japanese book will fall back to the "
+          "selected font and its size",
+          pointSize);
   if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
 }
 

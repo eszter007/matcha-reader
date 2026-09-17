@@ -4025,30 +4025,10 @@ ReaderRenderSpec EpubReaderActivity::readerSpec(const uint16_t viewportWidth, co
 }
 
 int EpubReaderActivity::effectiveReaderFontId() const {
-  const bool jpBook = isJapaneseBook() || useVerticalText();
-  const bool coversPrimary = sdFontSystem.selectedFontCovers(jpBook ? 0x3042 : 'a');
-  if (!coversPrimary) {
-    // The selected family cannot carry this book's primary script. Substitute a
-    // font that can -- which one depends on the direction of the miss:
-    //  - Japanese book, selected font has no CJK -> the companion, which
-    //    ensureJpFallback() picked as the Noto Serif JP family.
-    //  - Latin book, selected font has no Latin (a CJK-only family such as
-    //    UDDigiKyokasho) -> the BUILT-IN Noto Serif, not the companion.
-    //    The companion is chosen for Japanese, so using it here renders an
-    //    English book in a Japanese typeface.
-    if (jpBook) {
-      const int companion = sdFontSystem.companionFontId();
-      if (companion != 0) {
-        LOG_DBG("ERS", "Effective font: companion %d (jp book, selected lacks CJK)", companion);
-        return companion;
-      }
-    } else {
-      const int builtin = SETTINGS.getBuiltinSerifReaderFontId();
-      LOG_DBG("ERS", "Effective font: built-in %d (latin book, selected lacks Latin)", builtin);
-      return builtin;
-    }
-  }
-  return SETTINGS.getReaderFontId();
+  // The substitution itself lives on SdCardFontSystem so the settings preview reaches the same
+  // answer -- it used to ask getReaderFontId() directly and drew a Japanese book in the built-in
+  // face at a size the built-in does not have, disagreeing with the page on both counts.
+  return sdFontSystem.effectiveReaderFontId(isJapaneseBook() || useVerticalText());
 }
 
 bool EpubReaderActivity::repaintVerticalPageForPanelThunk(void* ctx) {

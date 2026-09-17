@@ -4,6 +4,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Utf8.h>
+#include <esp_heap_caps.h>
 
 #include <algorithm>
 #include <climits>
@@ -731,10 +732,77 @@ bool SdCardFont::load(const char* path) {
       return false;
     }
 
-    if (canUseBmp16) {
+    // Regular/bold/italic weights of the same family almost always cover the identical codepoint
+    // set, so a later style's table is usually a byte-for-byte copy of an earlier one's. Compare
+    // BEFORE allocating and alias on a match: allocating first and de-duplicating afterwards
+    // costs a PEAK of one table per style for a copy that is about to be freed, and on a broad
+    // CJK font that peak is what fails. Measured on NotoSansJP at 20pt: 4432 intervals = 26592 B
+    // per style, against a largest free block of ~32 KB -- one table fits, two never do, so the
+    // font could not load at all for a duplicate it would have discarded a moment later.
+    // freeStyleAll() skips delete[] when intervalsShared is set, so only the owner frees.
+    for (uint8_t k = 0; k < i && !s.intervalsShared; k++) {
+      auto& owner = styles_[k];
+      if (!owner.present || owner.residentIntervalCount != s.residentIntervalCount) continue;
+      if (owner.intervalsAreBmp16 != canUseBmp16) continue;
+      if (!owner.bmpIntervals && !owner.fullIntervals) continue;
+
+      // Streamed in small batches: the whole point is to not need a second table's worth of
+      // heap, so the comparison buffer stays on the stack and well inside the task's budget.
+      static constexpr uint32_t CMP_BATCH = 16;
+      EpdUnicodeInterval cmp[CMP_BATCH];
+      bool identical = true;
+      for (uint32_t done = 0; done < s.residentIntervalCount && identical;) {
+        const uint32_t batch = std::min(CMP_BATCH, s.residentIntervalCount - done);
+        const size_t wantBytes = batch * sizeof(EpdUnicodeInterval);
+        if (file.read(reinterpret_cast<uint8_t*>(cmp), wantBytes) != static_cast<int>(wantBytes)) {
+          identical = false;
+          break;
+        }
+        for (uint32_t b = 0; b < batch; ++b) {
+          const EpdUnicodeInterval& f = cmp[b];
+          const uint32_t at = done + b;
+          const bool same = canUseBmp16
+                                ? (owner.bmpIntervals[at].first == f.first && owner.bmpIntervals[at].last == f.last &&
+                                   owner.bmpIntervals[at].offset == f.offset)
+                                : (owner.fullIntervals[at].first == f.first && owner.fullIntervals[at].last == f.last &&
+                                   owner.fullIntervals[at].offset == f.offset);
+          if (!same) {
+            identical = false;
+            break;
+          }
+        }
+        done += batch;
+      }
+
+      if (identical) {
+        s.bmpIntervals = owner.bmpIntervals;
+        s.fullIntervals = owner.fullIntervals;
+        s.intervalsAreBmp16 = owner.intervalsAreBmp16;
+        s.intervalsShared = true;
+        LOG_DBG("SDCF", "Style %u: sharing style %u's %u-interval table (%u B not allocated)", i, k,
+                s.residentIntervalCount,
+                s.residentIntervalCount * (canUseBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))));
+      }
+      // Either way the compare consumed the table; the allocate-and-read path below re-seeks.
+      if (!identical && !file.seekSet(s.intervalsFileOffset)) {
+        LOG_ERR("SDCF", "Failed to re-seek intervals for style %u", i);
+        freeAll();
+        return false;
+      }
+    }
+
+    if (s.intervalsShared) {
+      // Fall through to the per-style stub/metadata setup below without touching the table.
+    } else if (canUseBmp16) {
       s.bmpIntervals = new (std::nothrow) PerStyle::BmpInterval16[s.residentIntervalCount];
       if (!s.bmpIntervals) {
-        LOG_ERR("SDCF", "Failed to allocate compact intervals for style %u", i);
+        // Size AND heap state: a failure here says nothing on its own -- the table is a few
+        // hundred bytes for a typical CJK font, so the interesting number is what the heap
+        // could still hand out when even that did not fit.
+        LOG_ERR("SDCF", "Failed to allocate compact intervals for style %u: %u x 6 = %u B (free=%u largest=%u)", i,
+                s.residentIntervalCount, s.residentIntervalCount * 6u,
+                static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
         freeAll();
         return false;
       }
@@ -751,7 +819,10 @@ bool SdCardFont::load(const char* path) {
     } else {
       s.fullIntervals = new (std::nothrow) EpdUnicodeInterval[s.residentIntervalCount];
       if (!s.fullIntervals) {
-        LOG_ERR("SDCF", "Failed to allocate %u intervals for style %u", s.residentIntervalCount, i);
+        LOG_ERR("SDCF", "Failed to allocate %u intervals for style %u: %u B (free=%u largest=%u)",
+                s.residentIntervalCount, i, static_cast<unsigned>(s.residentIntervalCount * sizeof(EpdUnicodeInterval)),
+                static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
         freeAll();
         return false;
       }
@@ -778,39 +849,6 @@ bool SdCardFont::load(const char* path) {
 
     s.epdFont.data = &s.stubData;
     applyGlyphMissCallback(i);
-  }
-
-  // Regular/bold/italic weights of the same family almost always cover the identical
-  // codepoint set. That interval table is tens of KB per style for a broad-coverage CJK
-  // font, so once a later style matches an earlier one exactly, drop its own copy and alias
-  // the earlier style's table instead of paying for it twice. freeStyleAll() skips delete[]
-  // for a style with intervalsShared set, so only the style that originally allocated the
-  // table ever frees it.
-  for (uint8_t i = 1; i < MAX_STYLES; i++) {
-    auto& s = styles_[i];
-    if (!s.present || s.intervalsShared) continue;
-    for (uint8_t k = 0; k < i; k++) {
-      auto& owner = styles_[k];
-      if (!owner.present || owner.residentIntervalCount != s.residentIntervalCount ||
-          owner.intervalsAreBmp16 != s.intervalsAreBmp16) {
-        continue;
-      }
-      const bool identical =
-          s.intervalsAreBmp16
-              ? memcmp(s.bmpIntervals, owner.bmpIntervals, s.residentIntervalCount * sizeof(PerStyle::BmpInterval16)) ==
-                    0
-              : memcmp(s.fullIntervals, owner.fullIntervals, s.residentIntervalCount * sizeof(EpdUnicodeInterval)) == 0;
-      if (!identical) continue;
-      if (s.intervalsAreBmp16) {
-        delete[] s.bmpIntervals;
-        s.bmpIntervals = owner.bmpIntervals;
-      } else {
-        delete[] s.fullIntervals;
-        s.fullIntervals = owner.fullIntervals;
-      }
-      s.intervalsShared = true;
-      break;
-    }
   }
 
   loaded_ = true;
