@@ -12,6 +12,7 @@
 
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/RenderLock.h"
@@ -287,11 +288,15 @@ void CrossPointWebServerActivity::startWebServer() {
   // rendered since onEnter(), and a CJK SSID repopulates the SD-font caches.
   {
     RenderLock lock;
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      LOG_DBG("WEBACT", "Free heap before font cache release: %d bytes", ESP.getFreeHeap());
-      fcm->releaseAllFontMemory();
-      LOG_DBG("WEBACT", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
-    }
+    LOG_DBG("WEBACT", "Free heap before font release: %d bytes", ESP.getFreeHeap());
+    // releaseAllResidentFonts(), not just the glyph caches: this screen renders no book text, and
+    // the resident SD families are the larger half -- a broad CJK face holds a multi-KB interval
+    // table plus its kern tables for the whole session. The web server starts with barely 30 KB
+    // free, and lwIP takes its send buffers from that same heap; the shortfall is what turns a
+    // large asset into a stalled socket. ensureLoaded() restores the fonts when text is rendered
+    // again, and the JP-fallback policy is untouched.
+    sdFontSystem.releaseAllResidentFonts(renderer);
+    LOG_DBG("WEBACT", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
   }
 
   // Create the web server instance

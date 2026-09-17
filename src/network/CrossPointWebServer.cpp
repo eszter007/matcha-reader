@@ -403,6 +403,17 @@ static bool ifNoneMatchMatches(const String& header, const char* etag) {
   return false;
 }
 
+// Below this much free heap, a large asset is refused instead of attempted. lwIP allocates its
+// send buffers from the same heap, and when it cannot, send() returns EAGAIN: NetworkClient then
+// retries ten times at a one-second select() each, per chunk, with the main loop blocked
+// throughout -- a single asset turns into a multi-second freeze and the page never arrives.
+// Measured on device: 28 KB of gzipped JS served fine at 26 KB free / 22 KB largest block, and
+// wedged at 14 KB free / 7.6 KB largest. The floor sits between the two.
+static constexpr size_t MIN_FREE_HEAP_FOR_LARGE_ASSET = 20 * 1024;
+// Only assets big enough to matter are gated; a few hundred bytes of HTML always goes out, so an
+// error page can still be delivered on the heap that refused the asset.
+static constexpr size_t LARGE_ASSET_BYTES = 8 * 1024;
+
 static void sendStaticContent(WebServer* server, const char* data, size_t len, const char* etag,
                               const char* contentType) {
   // Content is baked into flash at build time, so the ETag is stable for the
@@ -412,6 +423,17 @@ static void sendStaticContent(WebServer* server, const char* data, size_t len, c
     server->sendHeader("ETag", etag);
     server->sendHeader("Cache-Control", "no-cache");
     server->send(304);
+    return;
+  }
+  // Checked AFTER the 304 path: a conditional GET that can be answered with an empty response
+  // costs nothing and must keep working however tight the heap is.
+  if (len >= LARGE_ASSET_BYTES && ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_LARGE_ASSET) {
+    LOG_ERR("WEB", "Refusing %u-byte asset: free heap %u < %u; would stall the socket", static_cast<unsigned>(len),
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(MIN_FREE_HEAP_FOR_LARGE_ASSET));
+    // 503 + Retry-After rather than a silent failure: the browser reports it, and a reload once
+    // the reader has released its caches usually succeeds.
+    server->sendHeader("Retry-After", "5");
+    server->send(503, "text/plain", "Low memory, retry");
     return;
   }
   server->sendHeader("Content-Encoding", "gzip");
