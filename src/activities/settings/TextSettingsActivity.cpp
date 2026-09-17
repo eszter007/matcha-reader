@@ -324,9 +324,14 @@ void TextSettingsActivity::render(RenderLock&&) {
   const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
                              ? sizes_[currentSizeIndex_].name.c_str()
                              : "";
+  // The two flags are independent: a Japanese book read horizontally is (true, false), and the
+  // reader passes isJapaneseBook() and useVerticalText() separately. cppcheck sees only ctor
+  // sites where they happen to agree and calls the operands the same value.
+  // cppcheck-suppress knownConditionTrueFalse
+  const bool japaneseFace = japaneseBook_ || verticalText_;
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
                               previewHeight, familyName, sizeName,
-                              sdFontSystem.effectiveReaderFontId(japaneseBook_ || verticalText_));
+                              sdFontSystem.effectiveReaderFontId(japaneseFace));
 
   // Tab bar + active tab's list draw inside the screen builder.
   renderUi();
