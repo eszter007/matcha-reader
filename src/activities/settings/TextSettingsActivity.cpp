@@ -330,8 +330,7 @@ void TextSettingsActivity::render(RenderLock&&) {
   // cppcheck-suppress knownConditionTrueFalse
   const bool japaneseFace = japaneseBook_ || verticalText_;
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, familyName, sizeName,
-                              sdFontSystem.effectiveReaderFontId(japaneseFace));
+                              previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(japaneseFace));
 
   // Tab bar + active tab's list draw inside the screen builder.
   renderUi();
