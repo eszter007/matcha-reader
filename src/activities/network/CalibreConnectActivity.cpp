@@ -1,5 +1,6 @@
 #include "CalibreConnectActivity.h"
 
+#include <DictIndex.h>
 #include <ESPmDNS.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -8,8 +9,6 @@
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
-#include <DictIndex.h>
-
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
