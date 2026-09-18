@@ -52,7 +52,10 @@ jobs:
 
       - name: Validate release version
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          # A release event carries the tag in the payload; a bare tag push has no payload, so
+          # fall back to ref_name, which IS the tag there. Without the fallback this compares an
+          # empty string and every tag-push build fails before it starts.
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           # The tag must name the version the tagged commit actually carries. Upstream compares a
           # prerelease against "<version>rc"; this fork tags prereleases with their full version
