@@ -7,8 +7,9 @@
 // comes back exactly as it was, regardless of the Restore Light on Wake
 // preference.
 
-void silentRestart();          // home screen
-void silentRestartToReader();  // currently-open EPUB (APP_STATE.openEpubPath)
+void silentRestart();            // home screen
+void silentRestartToReader();    // currently-open EPUB (APP_STATE.openEpubPath)
+void silentRestartToSettings();  // settings screen
 
 // Straight into the Translation activity, re-reading the page text the activity
 // stashed at TRANSLATE_STASH_PATH before restarting. Used when the TLS/WiFi heap
