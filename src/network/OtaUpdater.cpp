@@ -12,6 +12,7 @@
 // clang-format on
 
 #include <algorithm>
+#include <cstdio>  // sscanf, in parseSemver
 #include <cstring>
 #include <string>
 
@@ -78,19 +79,58 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   return OK;
 }
 
+namespace {
+
+// major.minor.patch out of a version string, skipping anything before the first digit.
+// A version is not always bare semver: a fork prefixes its own name ("matcha-1.6.0-RC-4") and a
+// release tag may carry a leading "v". sscanf() on the raw string matches NOTHING in those
+// cases, and the three ints it was meant to fill stay uninitialized -- the comparison below then
+// reads whatever was on the stack and offers, or withholds, an update at random.
+// False means "no version found here", which the caller must treat as "cannot tell".
+bool parseSemver(const char* version, int& major, int& minor, int& patch) {
+  if (!version) return false;
+  const char* digits = version;
+  while (*digits != '\0' && (*digits < '0' || *digits > '9')) digits++;
+  if (*digits == '\0') return false;
+  return sscanf(digits, "%d.%d.%d", &major, &minor, &patch) == 3;
+}
+
+// Case-insensitive search for a pre-release marker. The tag is written "-rc" in some releases
+// and "-RC" in others, and missing it makes a release candidate compare equal to the release it
+// precedes -- so the device never offers the upgrade off it.
+bool hasPreReleaseMarker(const char* version) {
+  for (const char* p = version; *p != '\0'; p++) {
+    if (*p != '-') continue;
+    if ((p[1] == 'r' || p[1] == 'R') && (p[2] == 'c' || p[2] == 'C')) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 bool OtaUpdater::isUpdateNewer() const {
   if (!updateAvailable || latestVersion.empty() || latestVersion == CROSSPOINT_VERSION) {
     return false;
   }
 
-  int currentMajor, currentMinor, currentPatch;
-  int latestMajor, latestMinor, latestPatch;
+  int currentMajor = 0;
+  int currentMinor = 0;
+  int currentPatch = 0;
+  int latestMajor = 0;
+  int latestMinor = 0;
+  int latestPatch = 0;
 
   const auto currentVersion = CROSSPOINT_VERSION;
 
   // semantic version check (only match on 3 segments)
-  sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch);
-  sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch);
+  if (!parseSemver(latestVersion.c_str(), latestMajor, latestMinor, latestPatch) ||
+      !parseSemver(currentVersion, currentMajor, currentMinor, currentPatch)) {
+    // Refuse rather than guess: an unreadable version on either side used to fall through to a
+    // comparison of uninitialized ints.
+    LOG_ERR("OTA", "Unparseable version (current '%s', latest '%s'); not offering an update", currentVersion,
+            latestVersion.c_str());
+    return false;
+  }
 
   /*
    * Compare major versions.
@@ -114,7 +154,7 @@ bool OtaUpdater::isUpdateNewer() const {
   // If we reach here, it means all segments are equal.
   // One final check, if we're on an RC build (contains "-rc"), we should consider the latest version as newer even if
   // the segments are equal, since RC builds are pre-release versions.
-  if (strstr(currentVersion, "-rc") != nullptr) {
+  if (hasPreReleaseMarker(currentVersion)) {
     return true;
   }
 
