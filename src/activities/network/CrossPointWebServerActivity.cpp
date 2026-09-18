@@ -1,6 +1,7 @@
 #include "CrossPointWebServerActivity.h"
 
 #include <DNSServer.h>
+#include <DictIndex.h>
 #include <ESPmDNS.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -296,8 +297,14 @@ void CrossPointWebServerActivity::startWebServer() {
     // large asset into a stalled socket. ensureLoaded() restores the fonts when text is rendered
     // again, and the JP-fallback policy is untouched.
     sdFontSystem.releaseAllResidentFonts(renderer);
-    LOG_DBG("WEBACT", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
   }
+  // The dictionary's resident caches go too: the miss memo is 8KB and each open dictionary holds
+  // a coarse table plus a fine slice, none of which this screen reads. releaseCaches() also drops
+  // the RESOLVED dictionary filenames, which matters beyond the memory -- a user who uploads or
+  // replaces a dictionary through this very server would otherwise keep the old paths and open
+  // handles for the rest of the session.
+  DictIndex::releaseCaches();
+  LOG_DBG("WEBACT", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
 
   // Create the web server instance
   webServer = makeUniqueNoThrow<CrossPointWebServer>();

@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Files - Matcha Reader</title>
-  <script src="/js/jszip.min.js"></script>
   <style>
     :root {
       --font-color: #333;
@@ -2373,10 +2372,35 @@
   // ============================================================================
 
   /**
+   * JSZip is 28KB gzipped and only three EPUB paths ever touch it, but it used to load with the
+   * page -- on a device that starts its web server with ~30KB of heap free, and whose lwIP takes
+   * its send buffers from that same heap. Fetching it on demand keeps the file listing, which is
+   * what the page is usually opened for, off that cliff entirely.
+   * Resolves false when the script cannot be fetched; every caller already handles its absence.
+   */
+  let jsZipLoader = null;
+  function ensureJSZip() {
+    if (typeof JSZip !== 'undefined') return Promise.resolve(true);
+    if (jsZipLoader) return jsZipLoader;           // in flight: share it, never fetch twice
+    jsZipLoader = new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = '/js/jszip.min.js';
+      script.onload = () => resolve(typeof JSZip !== 'undefined');
+      script.onerror = () => {
+        jsZipLoader = null;                        // let a later attempt retry
+        resolve(false);
+      };
+      document.head.appendChild(script);
+    });
+    return jsZipLoader;
+  }
+
+  /**
    * Extract images from EPUB for preview
    * Returns array of {path, name, dataUrl, width, height}
    */
   async function extractImagesForPreview(file) {
+    await ensureJSZip();
     const zip = await JSZip.loadAsync(file);
     const imageExtensions = ['.png', '.gif', '.webp', '.bmp', '.jpg', '.jpeg'];
 
@@ -2717,7 +2741,8 @@
    * Show image picker after EPUB file selection
    */
   async function showImagePicker(file) {
-    // Check if JSZip is available
+    // Fetched on demand; the branch below still covers a device too low on memory to serve it.
+    await ensureJSZip();
     if (typeof JSZip === 'undefined') {
       console.error('JSZip not loaded');
       alert('JSZip library not available. Conversion will proceed without image picker.');
@@ -3912,7 +3937,7 @@ function buildMetadataFilename(title, author) {
 }
 
 async function getMetadataFilenameForEpub(file) {
-  if (typeof JSZip === 'undefined') return '';
+  if (!(await ensureJSZip())) return '';
   const zip = await JSZip.loadAsync(file);
   const opfPath = await findOPFPath(zip);
   if (!opfPath || !zip.files[opfPath]) return '';
