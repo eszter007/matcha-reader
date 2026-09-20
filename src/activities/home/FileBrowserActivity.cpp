@@ -72,18 +72,15 @@ void formatFileName(const std::string& filename, char* buffer, const size_t buff
     return;
   }
   const bool isDirectory = filename.back() == '/';
-  // Display copy only -- files[] keeps the raw directory-entry bytes, because FAT long-filename
-  // lookup is byte-exact and an NFC-normalized path would fail to open the NFD entry macOS
-  // wrote. Composing here fixes rendering (the fonts carry precomposed forms only).
-  const std::string composed = utf8ComposeNfc(filename);
-  if (composed.empty()) {
-    buffer[0] = '\0';
-    return;
-  }
-  const size_t dot = isDirectory ? composed.size() - 1 : composed.rfind('.');
-  const int length = static_cast<int>(dot == std::string::npos ? composed.size() : dot);
+  const size_t dot = isDirectory ? filename.size() - 1 : filename.rfind('.');
+  const int length = static_cast<int>(dot == std::string::npos ? filename.size() : dot);
   const char* format = isDirectory && !UITheme::getInstance().getTheme().showsFileIcons() ? "[%.*s]" : "%.*s";
-  snprintf(buffer, bufferSize, format, length, composed.c_str());
+  snprintf(buffer, bufferSize, format, length, filename.c_str());
+  // Display copy only -- files[] keeps the raw directory-entry bytes, because FAT long-filename
+  // lookup is byte-exact and an NFC-normalized path would fail to open the NFD entry macOS wrote.
+  // Composing here fixes rendering (the fonts carry precomposed forms only), in the row buffer
+  // rather than a std::string per row.
+  utf8ComposeNfcInPlace(buffer);
 }
 
 void formatFileExtension(const std::string& filename, char* buffer, const size_t bufferSize) {
