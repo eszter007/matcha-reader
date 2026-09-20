@@ -16,10 +16,11 @@ from convert_manga import (
 )
 
 
-def order(panels, named, rtl):
+def order(panels, named, rtl=True, column_major=False):
     """Return the sorted panels as their names from `named` ({name: box})."""
     by_box = {tuple(b): n for n, b in named.items()}
-    return [by_box[tuple(b)] for b in sort_panels_reading_order(panels, rtl=rtl)]
+    return [by_box[tuple(b)]
+            for b in sort_panels_reading_order(panels, rtl=rtl, column_major=column_major)]
 
 
 def test_strip_page_ltr():
@@ -32,6 +33,50 @@ def test_strip_page_ltr():
     assert order(panels, named, rtl=False) == [f"r{r}c{c}" for r in range(4) for c in range(3)]
     # Same page read as manga: tiers still top-to-bottom, columns reversed.
     assert order(panels, named, rtl=True) == [f"r{r}c{c}" for r in range(4) for c in (2, 1, 0)]
+
+
+def test_yonkoma_reads_down_each_column():
+    """A 4-koma page: two columns of four. Read down the right column, then down
+    the left -- never across, which is what the row-major rule would do."""
+    named = {}
+    for col in range(2):
+        for row in range(4):
+            named[f"c{col}r{row}"] = [col * 450 + 60, row * 330 + 60, col * 450 + 420, row * 330 + 300]
+    panels = list(named.values())[::-1]
+    # Right column (c1) first, top to bottom, then the left one.
+    assert order(panels, named, column_major=True) == [f"c{c}r{r}" for c in (1, 0) for r in range(4)]
+    # Western strips read the columns the other way, still downwards.
+    assert order(panels, named, rtl=False, column_major=True) == [f"c{c}r{r}" for c in (0, 1) for r in range(4)]
+    # Without the flag the same page interleaves the columns, row by row.
+    assert order(panels, named) == [f"c{c}r{r}" for r in range(4) for c in (1, 0)]
+
+
+def test_yonkoma_title_page_with_a_full_height_panel():
+    """A first page: a full-height illustration on the left, four strip panels on
+    the right. The tall panel is its own column and reads last."""
+    named = {
+        "art": [30, 90, 500, 1500],
+        "r0": [520, 90, 1000, 430],
+        "r1": [520, 440, 1000, 780],
+        "r2": [520, 790, 1000, 1140],
+        "r3": [520, 1150, 1000, 1500],
+    }
+    panels = [named["art"], named["r2"], named["r0"], named["r3"], named["r1"]]
+    assert order(panels, named, column_major=True) == ["r0", "r1", "r2", "r3", "art"]
+
+
+def test_yonkoma_keeps_every_panel():
+    """Ragged columns: still a permutation of the input, in column order."""
+    named = {
+        "c1r0": [470, 100, 900, 400],
+        "c1r1": [470, 410, 900, 700],
+        "c0r0": [0, 100, 460, 250],
+        "c0r1": [0, 260, 460, 700],
+    }
+    panels = list(named.values())
+    out = order(panels, named, column_major=True)
+    assert sorted(out) == sorted(named)
+    assert out == ["c1r0", "c1r1", "c0r0", "c0r1"]
 
 
 def test_tall_panel_beside_stacked_pair():
