@@ -1063,7 +1063,16 @@ def _y_overlap_frac(a: list[int], b: list[int]) -> float:
     return max(0.0, overlap) / max(1, min_h)
 
 
-def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True) -> list[list[int]]:
+def _x_overlap_frac(a: list[int], b: list[int]) -> float:
+    """Fraction of the narrower panel's width that the two panels' horizontal extents overlap.
+    The column equivalent of _y_overlap_frac, for yonkoma ordering."""
+    overlap = min(a[2], b[2]) - max(a[0], b[0])
+    min_w = min(a[2] - a[0], b[2] - b[0])
+    return max(0.0, overlap) / max(1, min_w)
+
+
+def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True,
+                              column_major: bool = False) -> list[list[int]]:
     """Sort panel boxes in reading order via a "reads-before" graph, then a
     topological sort -- robust to mixed-size grids (e.g. one tall panel
     beside two stacked shorter ones), which simple row-clustering by
@@ -1080,6 +1089,15 @@ def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True) -> list
     western comics and strips -- Moomin, Peanuts -- which read left-to-right.
     The direction only affects within-tier ordering: tiers themselves always
     run top-to-bottom, in both conventions.
+
+    column_major=True is yonkoma (4-koma) order: the same rule with the axes
+    swapped. A tier is a COLUMN -- panels whose horizontal extents overlap --
+    read top to bottom, and the columns run right to left, or left to right when
+    rtl=False. A strip page is read down one column and then down the next,
+    never across, so the row-major rule above interleaves the two columns. A
+    column whose panels differ in height (a title page's full-height panel
+    beside four short ones) falls out of the same overlap test that makes the
+    row-major case robust.
     """
     n = len(panels)
     if n <= 1:
@@ -1094,21 +1112,27 @@ def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True) -> list
             if i == j:
                 continue
             a, b = panels[i], panels[j]
-            if _y_overlap_frac(a, b) > OVERLAP_THRESHOLD:
-                a_cx, b_cx = (a[0] + a[2]) / 2, (b[0] + b[2]) / 2
-                if (a_cx > b_cx) if rtl else (a_cx < b_cx):  # same tier
-                    edges[i].append(j)
-                    in_degree[j] += 1
-            else:
-                a_cy, b_cy = (a[1] + a[3]) / 2, (b[1] + b[3]) / 2
-                if a_cy < b_cy:  # different tiers: top-to-bottom
-                    edges[i].append(j)
-                    in_degree[j] += 1
+            a_cx, b_cx = (a[0] + a[2]) / 2, (b[0] + b[2]) / 2
+            a_cy, b_cy = (a[1] + a[3]) / 2, (b[1] + b[3]) / 2
+            if column_major:
+                if _x_overlap_frac(a, b) > OVERLAP_THRESHOLD:  # same column
+                    reads_first = a_cy < b_cy  # down the column
+                else:  # different columns: right-to-left, or left-to-right
+                    reads_first = (a_cx > b_cx) if rtl else (a_cx < b_cx)
+            elif _y_overlap_frac(a, b) > OVERLAP_THRESHOLD:  # same tier
+                reads_first = (a_cx > b_cx) if rtl else (a_cx < b_cx)
+            else:  # different tiers: top-to-bottom
+                reads_first = a_cy < b_cy
+            if reads_first:
+                edges[i].append(j)
+                in_degree[j] += 1
 
     def tie_break_key(i: int):
         x1, y1, x2, y2 = panels[i]
-        cx = (x1 + x2) / 2
-        return ((y1 + y2) / 2, -cx if rtl else cx)
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        if column_major:
+            return (-cx if rtl else cx, cy)
+        return (cy, -cx if rtl else cx)
 
     available = [i for i in range(n) if in_degree[i] == 0]
     result: list[int] = []
@@ -1740,6 +1764,13 @@ def main():
              "releases usually don't, and are left alone.",
     )
     parser.add_argument(
+        "--yonkoma",
+        action="store_true",
+        help="4-koma layout: read each column top to bottom, then the next column to the left "
+             "(to the right with --ltr). Without it a strip page is read across the columns, "
+             "interleaving the two strips.",
+    )
+    parser.add_argument(
         "--ltr",
         action="store_true",
         help="Order panels left-to-right within a row, for western comics and newspaper strips "
@@ -1944,7 +1975,7 @@ def main():
                 # Order on the frames as drawn, then grow the crops over the
                 # bubbles -- expand_panels_over_text() is index-preserving, so
                 # the reading order established here survives the expansion.
-                frames = sort_panels_reading_order(frames, rtl=not args.ltr)
+                frames = sort_panels_reading_order(frames, rtl=not args.ltr, column_major=args.yonkoma)
                 boxes = expand_panels_over_text(frames, text_boxes, img_w, img_h)
 
             # Crop and save every panel first (fast, local) before dispatching
