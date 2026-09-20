@@ -858,6 +858,17 @@ def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], pag
 # the caller's `conf` are corroboration only, never panels in their own right.
 PANEL_WEAK_CONF = 0.15
 
+# A second pass at a larger input when the first one barely finds anything. The model's panel
+# head is scale-sensitive: a small, sparsely inked page (a hand-drawn 4-koma, say) letterboxed
+# into the default 640 can come back as a single box covering a tenth of the page, while the
+# same page at 1600 is fully panelled -- measured 1 panel at 9% against 8 panels at 77%. Pages
+# the model already reads well (75-97% across every sample tried, test fixtures included) never
+# reach the retry, and a genuine full-page splash keeps its single box: one panel covering the
+# page is high coverage, not low.
+PANEL_IMGSZ = 640
+PANEL_RETRY_IMGSZ = 1600
+PANEL_RETRY_COVER_FRAC = 0.5
+
 # A frame is replaced by the sub-panels found inside it only when the split is
 # convincing on every count: each child is meaningfully smaller than the frame,
 # sits almost entirely within it, the children between them account for most of
@@ -901,20 +912,22 @@ def split_frames_over_subpanels(frames: list[list[int]],
     return out
 
 
-def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[list[int]]] | None:
-    """Detect panels with the YOLO26-nano Manga109 model. Returns
-    (frames, text boxes), or None if the model isn't available (caller should
-    fall back to the grid heuristic).
+def _panel_cover_frac(boxes: list[list[int]], width: int, height: int) -> float:
+    """Fraction of the page the given boxes cover, overlaps counted twice.
 
-    The model is queried well below `conf`. A box under that bar is never a
-    panel on its own -- it is only kept as corroboration that a confident frame
-    is really several panels; see split_frames_over_subpanels().
+    Only ever compared against a threshold to judge whether a detection pass saw the page at
+    all, so double-counting an overlap is not worth the cost of a union.
     """
-    model = _load_yolo_model()
-    if model is None:
-        return None
+    return sum(_box_area(b) for b in boxes) / max(1, width * height)
 
-    results = model.predict(img, conf=PANEL_WEAK_CONF, iou=0.5, verbose=False)
+
+def _detect_panels_yolo_at(model, img, conf: float, imgsz: int) -> tuple[list[list[int]], list[list[int]], float]:
+    """One pass of the model at one input size. Returns (frames, text boxes, page coverage).
+
+    Coverage is measured on the CONFIDENT boxes, not on the full-page frame the empty case
+    falls back to: that frame covers the page by construction and would mask a failed pass.
+    """
+    results = model.predict(img, conf=PANEL_WEAK_CONF, iou=0.5, imgsz=imgsz, verbose=False)
     boxes_with_conf = []
     candidates = []
     text_boxes = []
@@ -936,9 +949,35 @@ def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[l
             boxes_with_conf.append((xy_box, confidence))
 
     boxes = _dedupe_boxes(boxes_with_conf)
+    cover = _panel_cover_frac(boxes, img.width, img.height)
     if not boxes:
-        return [[0, 0, img.width, img.height]], text_boxes
-    return split_frames_over_subpanels(boxes, candidates), text_boxes
+        return [[0, 0, img.width, img.height]], text_boxes, cover
+    return split_frames_over_subpanels(boxes, candidates), text_boxes, cover
+
+
+def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[list[int]]] | None:
+    """Detect panels with the YOLO26-nano Manga109 model. Returns
+    (frames, text boxes), or None if the model isn't available (caller should
+    fall back to the grid heuristic).
+
+    The model is queried well below `conf`. A box under that bar is never a
+    panel on its own -- it is only kept as corroboration that a confident frame
+    is really several panels; see split_frames_over_subpanels().
+
+    A pass that leaves most of the page uncovered is retried at a larger input, and whichever
+    pass saw more of the page wins; see PANEL_RETRY_IMGSZ.
+    """
+    model = _load_yolo_model()
+    if model is None:
+        return None
+
+    frames, texts, cover = _detect_panels_yolo_at(model, img, conf, PANEL_IMGSZ)
+    if cover >= PANEL_RETRY_COVER_FRAC:
+        return frames, texts
+    retry_frames, retry_texts, retry_cover = _detect_panels_yolo_at(model, img, conf, PANEL_RETRY_IMGSZ)
+    if retry_cover > cover:
+        return retry_frames, retry_texts
+    return frames, texts
 
 
 def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
