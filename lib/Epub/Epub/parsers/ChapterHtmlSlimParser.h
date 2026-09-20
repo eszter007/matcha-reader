@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 #include <expat.h>
 
+#include <array>
 #include <climits>
 #include <functional>
 #include <memory>
@@ -40,6 +41,10 @@ class ChapterHtmlSlimParser {
   char partWordBuffer[MAX_WORD_SIZE + 1] = {};
   int partWordBufferIndex = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
+  // French verb-subject inversion splitting (flushPartWordBuffer): -1 = not yet computed,
+  // 0 = no, 1 = yes. Cached lazily so epub->getLanguage() is looked up once per chapter
+  // instead of once per flushed word.
+  int8_t frenchBookCache = -1;
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   // Ruby text state
   bool inRuby = false;
@@ -60,12 +65,17 @@ class ChapterHtmlSlimParser {
   bool boxShrinkToContent = false;
   bool boxContinued = false;          // continued from the previous page: omit the top edge
   bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
+  // Bottom of the last line placed inside the open box. emitBoxRect() pulls its closing edge up
+  // toward the text, and this is the floor it must not cross -- see the comment there.
+  int16_t boxLastLineBottomY = 0;
   // Inverted-block panel tracking (CSS color/background-color, see CssInkMode). Each line of an
   // inverted block gets a filled PageBox pushed just before it, so the panel survives a page break
   // and needs no knowledge of the block's total height. Only the block's own padding needs
   // stitching on: the top pad onto the first line, the bottom pad onto the last.
-  int16_t pendingPanelTopPad = 0;                   // consumed by the first panel line of the block
-  std::shared_ptr<PageBox> lastPanelBox = nullptr;  // grown by the bottom pad once the block closes
+  int16_t pendingPanelTopPad = 0;  // consumed by the first panel line of the block
+  // Non-owning back-reference: the Page owns its elements (unique_ptr since upstream #3518).
+  // Only valid until the page is completed, which is also the last moment it is used.
+  PageBox* lastPanelBox = nullptr;  // grown by the bottom pad once the block closes
   void emitInvertedPanel(const BlockStyle& blockStyle, int16_t lineHeight);
 
   // --- CSS page-break control (see BlockStyle::pageBreaks) -------------------------------------
@@ -91,7 +101,7 @@ class ChapterHtmlSlimParser {
   int16_t keepWithNextReserve = 0;  // room to leave after the block for `after: avoid`
   // Buffered (line, first-word visible offset) pairs; the offset replays through
   // addLineToPage so content positions survive the keep-together delay.
-  std::vector<std::pair<std::shared_ptr<TextBlock>, uint32_t>> keepBuffer;
+  std::vector<std::pair<std::unique_ptr<TextBlock>, uint32_t>> keepBuffer;
   void breakPage();
   void beginKeepTogether(const BlockStyle& blockStyle);
   void finishKeepTogether();
@@ -137,6 +147,9 @@ class ChapterHtmlSlimParser {
     CssTextDecoration textDecoration = CssTextDecoration::None;
     bool hasDirection = false;
     CssTextDirection direction = CssTextDirection::Ltr;
+    bool setsParagraphDirection = false;
+    bool hasTextAlign = false;
+    CssTextAlign textAlign = CssTextAlign::Left;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
     bool hasEmphasis = false;
@@ -157,6 +170,8 @@ class ChapterHtmlSlimParser {
   CssTextDecoration effectiveTextDecoration = CssTextDecoration::None;
   bool effectiveDirectionDefined = false;
   CssTextDirection effectiveDirection = CssTextDirection::Ltr;
+  bool effectiveTextAlignDefined = false;
+  CssTextAlign effectiveTextAlign = CssTextAlign::Left;
   bool effectiveSup = false;
   bool effectiveSub = false;
   // Active text-emphasis mark (JP bouten) -- rendered as synthetic per-glyph ruby.
@@ -177,9 +192,18 @@ class ChapterHtmlSlimParser {
   ListCtx listStack[kMaxListDepth];
   int listDepth = 0;
 
+  static constexpr size_t MAX_GRID_TABLE_COLUMNS = 4;
+  static constexpr size_t MAX_GRID_TABLE_CELL_WORDS = 32;
+  static constexpr size_t MAX_GRID_TABLE_CELL_BYTES = 512;
   int tableDepth = 0;
-  int tableRowIndex = 0;
-  int tableColIndex = 0;
+  bool insideTableCell = false;
+  bool tableRowStacked = false;
+  bool tableRowRtl = false;
+  uint16_t tableRowsSpannedRemaining = 0;
+  size_t tableCellTextBytes = 0;
+  std::vector<std::unique_ptr<ParsedText>> tableRowCells;
+  std::array<std::vector<std::unique_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
+  std::vector<uint32_t> tableLineVisibleOffsets;
   bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
@@ -199,6 +223,7 @@ class ChapterHtmlSlimParser {
   uint32_t currentPageVisibleOffset = 0;
   bool currentPageVisibleOffsetSet = false;
   bool insideBody = false;
+  bool htmlEnded_ = false;
   bool syntheticCharacterData = false;
   uint16_t nonVisibleTextDepth = 0;
 
@@ -219,6 +244,7 @@ class ChapterHtmlSlimParser {
   // Footnote link tracking
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;
+  uint8_t currentFootnoteLinkId = 0;
   FootnoteEntry currentFootnote = {};
   int currentFootnoteLinkTextLen = 0;
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
@@ -236,14 +262,45 @@ class ChapterHtmlSlimParser {
 
   void updateEffectiveInlineStyle();
   void startNewTextBlock(const BlockStyle& blockStyle);
+  // Tallest drop cap this engine will lay out. Beyond four lines the enlarged letter starts
+  // to dominate a 480px-tall page, and every line beside it is one more line broken to a
+  // narrowed width by the greedy fill rather than the optimal one.
+  static constexpr int MAX_DROP_CAP_LINES = 4;
+  // Tokens a paragraph may already hold and still have its next span treated as an initial.
+  // Two covers the real openings (`--` + no-break space, guillemet + space); the bound is what
+  // keeps a large span in mid-sentence from ever being considered.
+  static constexpr size_t MAX_DROP_CAP_PREFIX_WORDS = 3;
+  // Turn the block just opened into a drop cap paragraph if CSS asked for one. Decides only
+  // the line COUNT; ParsedText resolves the glyph, its magnification and the column width,
+  // where the font metrics and the line height are known.
+  void applyDropCap(const char* tagName, const std::string& classAttr);
+  // The other way books spell a drop cap: markup rather than a pseudo-element, an enlarged
+  // `<span class="lettrine">L</span>` opening the paragraph. Claimed when the span opens (the
+  // block must still be empty) and released at its close unless it turned out to hold exactly
+  // one character -- see dropCapSpanDepth.
+  void applyInlineDropCap(const CssStyle& style);
+  void releaseInlineDropCapIfNotSingleLetter();
+  // Depth of the inline element that claimed a drop cap, or -1. A span is only a drop cap if it
+  // wraps ONE character: an enlarged span opening a paragraph is otherwise just big text, and
+  // blowing its first letter up four lines tall would wreck the page. The count is not knowable
+  // when the span opens, so the claim is provisional until the close tag confirms it.
+  int dropCapSpanDepth = -1;
+  uint32_t dropCapSpanStartOffset = 0;
+
   void flushPendingAnchor();
   void flushPartWordBuffer();
+  void fallbackTableRowToStacked();
+  void closeTableCell();
+  void finishTableRow();
+  void addTableRowSeparator();
   void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextTransformToEntry(StyleStackEntry& entry, const CssStyle& css);
+  static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);
+  void pushTableTextStyleEntry(const CssStyle& cssStyle);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
   // XML callbacks
@@ -302,7 +359,7 @@ class ChapterHtmlSlimParser {
   bool finishParse();  // flush the trailing page and tear down; returns true
   void abortParse();   // tear down without flushing (error / abandon)
 
-  void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleOffset);
+  void addLineToPage(std::unique_ptr<TextBlock> line, uint32_t visibleOffset);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
   // Every footnote reference in the section with the page it appears on (same page counter as
   // getAnchors), for the section-wide footnote table -- see Section::loadSectionFootnotes().

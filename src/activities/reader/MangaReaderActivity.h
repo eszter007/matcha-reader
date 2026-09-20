@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../../BookmarkEntry.h"
+#include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
@@ -20,9 +21,8 @@ class Reader;
 
 class MangaReaderActivity final : public Activity {
  public:
-  explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                               std::unique_ptr<manga::MangaBook> book)
-      : Activity("MangaReader", renderer, mappedInput), book(std::move(book)) {}
+  explicit MangaReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath)
+      : Activity("MangaReader", renderer, mappedInput), pendingBookPath(std::move(bookPath)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -32,7 +32,10 @@ class MangaReaderActivity final : public Activity {
   ScreenshotInfo getScreenshotInfo() const override;
 
  private:
+  std::string pendingBookPath;
   std::unique_ptr<manga::MangaBook> book;
+  std::unique_ptr<EndOfBookOptions> endOfBookOptions;
+  std::atomic<bool> endOfBookOptionsReady{false};
 
   uint32_t currentPage = 0;
   int currentPanel = -1;  // -1 = full page view, 0+ = zoomed panel
@@ -88,6 +91,88 @@ class MangaReaderActivity final : public Activity {
   };
   // NOTE: sets the renderer orientation when rotation is needed -- the caller must restore
   // savedOrientation when done.
+  // Whether what is currently on screen was drawn rotated. The render paths
+  // apply the rotation and restore the base orientation before returning, so by
+  // the time loop() runs the renderer no longer knows -- and the touch zones
+  // were being split along the reading orientation's axis rather than the one
+  // the page is actually displayed on.
+  bool displayedRotated_ = false;
+  // Where the page (or zoomed panel) was drawn, in the frame it was drawn in, and which region of
+  // the page image that is -- so a hold can be mapped back onto the page's text lines. Written by
+  // the render task alongside displayedRotated_ and read under the same lock. valid is false for
+  // views with no page image behind them (text overlay, end of book), and for a zoomed panel
+  // whose crop region is unknown (volumes converted before panels.dat v3).
+  struct HoldMap {
+    bool valid = false;
+    int dx = 0, dy = 0, dw = 0, dh = 0;  // drawn rect
+    int sx = 0, sy = 0, sw = 0, sh = 0;  // page-image region it shows
+  };
+  HoldMap displayedMap_;
+  // A hold at (x, y) in the drawn frame: the text under it, as the view's combined lookup text
+  // plus the character index inside it. False when no line is near enough to mean anything.
+  bool holdTarget(int x, int y, std::string& text, int& glyph) const;
+  void launchWordLookupAt(std::string text, int glyph);
+
+  // Word selection on the page itself: the page stays on screen with an outline around one word,
+  // stepped with the buttons, and Confirm looks it up -- the hold's precision for boards (and
+  // readers) without touch. An outline rather than an inverted block, so the word stays legible.
+  // Only for views whose text carries v3 line boxes; older volumes keep the text-only lookup.
+  // All of it is written by the main task under the render lock and read by render().
+  struct SelectWord {
+    uint16_t glyph;  // first character in selectText_ (line breaks not counted)
+    uint8_t len;     // characters the dictionary match covers
+  };
+  struct GlyphCell {
+    int16_t block = -1;  // which text block and line the character is set in; -1 = no geometry
+    int16_t line = -1;
+    uint16_t x = 0, y = 0, w = 0, h = 0;  // its cell on the page image
+  };
+  bool wordSelect_ = false;
+  std::string selectText_;
+  std::vector<SelectWord> selectWords_;
+  std::vector<GlyphCell> selectCells_;
+  int selectCursor_ = 0;
+  // The view the words were collected from. Turning the page or panel leaves the selection: its
+  // words are no longer on screen, and an outline must never land on the next view's artwork.
+  uint32_t selectPage_ = 0;
+  int selectPanel_ = -1;
+  bool selectionIsCurrent() const { return wordSelect_ && selectPage_ == currentPage && selectPanel_ == currentPanel; }
+  // Builds the view's words and character cells and enters the mode; false when the view has no
+  // line geometry (or no dictionary words), so the caller can fall back to the text-only lookup.
+  bool enterWordSelect();
+  // Looks the outlined word up; the selection stays, so closing the lookup returns to it.
+  void lookUpSelectedWord();
+  // While words are being selected, the Home key picks the outlined one: on the X4 Pro it is the
+  // only front key, and leaving for Home mid-selection is what Back is for.
+  bool handleHomeGesture() override;
+  // inPlace erases just the outline; pass false when the view changed and a full render is coming.
+  void exitWordSelect(bool inPlace);
+  // True when the mode consumed this tick's input.
+  bool handleWordSelectInput();
+  // Outline around the selected word, in the frame the page is being drawn in. Render task only.
+  // The outline is XOR-inverted into the framebuffer rather than drawn in black: it stays visible
+  // over black ink, and inverting the same boxes again restores the page exactly. That is what
+  // lets entering, moving and leaving the selection update only the outline -- one FAST wave, no
+  // decode and no grayscale passes, so the image on the glass keeps its gray levels.
+  struct OutlineBox {
+    int16_t x, y, w, h;
+  };
+  // Records that the framebuffer holds this page render, then outlines the current word into it.
+  void drawWordOutline();
+  void outlineBoxes(int cursor, std::vector<OutlineBox>& out) const;
+  void invertBoxes(const std::vector<OutlineBox>& boxes) const;
+  // Swaps the drawn outline for the current one in place. False when the framebuffer does not hold
+  // the page (the caller then renders in full).
+  bool updateOutlineInPlace();
+  // The boxes currently inverted into the framebuffer. Kept apart from selectWords_ so the outline
+  // can still be erased after leaving the selection has cleared the words.
+  std::vector<OutlineBox> drawnOutline_;
+  // True while the framebuffer holds the page the last render drew, with drawnOutline_ on it.
+  bool pageInFramebuffer_ = false;
+  // Set by entering, moving or leaving the selection: the next render only swaps the outline.
+  bool outlineOnlyUpdate_ = false;
+  std::vector<const manga::TextBlock*> viewTextBlocks() const;
+
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
   // Pure fit/rotate math shared by applyFullPageGeometry (render path) and the prefetch worker.
   // Touches NO renderer state: rotation is just a screen-dim swap here, which matches what
@@ -283,6 +368,12 @@ class MangaReaderActivity final : public Activity {
   void nextPage(bool keepPanelMode = false);
   void prevPage(bool keepPanelMode = false);
   int findPanelWithCrop(int start, int step) const;
+  bool isAtEndOfBook() const;
+  void clearEndOfBookOptionsIfNeeded();
+  bool handleEndOfBookMenu();
+  bool handleEndOfBookPageTurn(bool prevTriggered, bool nextTriggered);
+  void onReturnFromEndOfBook();
+  bool renderEndOfBook();
 
   void saveProgress() const;
   void loadProgress();

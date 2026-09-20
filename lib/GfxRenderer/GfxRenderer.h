@@ -43,6 +43,7 @@ class GfxRenderer {
 
   HalDisplay& display;
   RenderMode renderMode;
+  mutable bool absoluteGrayPlanes = false;
   Orientation orientation;
   bool fadingFix;
   uint8_t* frameBuffer = nullptr;
@@ -57,6 +58,9 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  // The SD font a string measured under `fontId` actually resolves to: that font, or the SD
+  // fallback registered for a built-in primary. See the definition for why this matters.
+  SdCardFont* sdFontForWarmup(int fontId) const;
   SdCardFont* fallbackSdFont_ = nullptr;
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
 
@@ -74,6 +78,26 @@ class GfxRenderer {
   // display path is const).
   mutable bool panelResidue_ = false;
 
+  // Narrower than panelResidue_, and for a different failure: a grayscale pass leaves the
+  // controller's RED RAM holding a gray PLANE instead of the previous B/W frame (the SDK tracks
+  // the same thing as _redRamSynced). A FAST refresh is a differential update against that RAM,
+  // so the next one diffs against a gray plane and the old picture survives underneath the new
+  // one. Only a HALF/FULL pass, which drives every pixel to its target, restores a usable
+  // baseline. panelResidue_ cannot answer this: any FAST refresh sets it, so it is true almost
+  // always and would force a scrub on every image page.
+  mutable bool grayPlanesResident_ = false;
+  // True while the framebuffer's bytes do not hold what the panel is showing. A build lends those
+  // bytes out as inflate scratch (releaseFrameBufferForBuild), so after the loan the e-ink still
+  // displays the last page while the buffer behind it holds whatever the inflate left. Anything
+  // that composites onto the current frame instead of repainting it has to check this first.
+  mutable bool frameBufferContentsStale_ = false;
+  // One-shot refresh promotion (see promoteNextRefresh). Mutable because
+  // displayBuffer() is const but must consume the flag.
+  mutable bool promotedRefreshPending_ = false;
+  mutable HalDisplay::RefreshMode promotedRefresh_ = HalDisplay::FAST_REFRESH;
+  // Swap in (and clear) the promoted mode, if one is pending.
+  HalDisplay::RefreshMode applyPromotedRefresh(HalDisplay::RefreshMode refreshMode) const;
+
   // Tiled grayscale strip target. When active, drawPixel()/clearScreen()
   // operate on a caller-owned scratch holding one horizontal band of physical
   // rows [_stripY0, _stripY0 + _stripRows) (panelWidthBytes wide) instead of
@@ -85,6 +109,10 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  mutable int clipLeft_ = 0;
+  mutable int clipTop_ = 0;
+  mutable int clipRight_ = 32767;
+  mutable int clipBottom_ = 32767;
 
   // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
   // size-matched SD-card font id that carries CJK glyphs. When a string drawn
@@ -99,6 +127,17 @@ class GfxRenderer {
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+
+  // Batch-load `text`'s glyphs into an SD-card font's resident mini tables
+  // before a per-glyph measure/draw loop runs. Called when resolveTextFontId
+  // redirected a string to the SD fallback: UI screens (file browser, home)
+  // draw those strings without the reader's PrewarmScope, and every glyph
+  // would otherwise fault through SdCardFont::onGlyphMiss — one .cpfont file
+  // open + seek + read per glyph, per redraw, through an 8-slot overflow ring
+  // (#2725). One prewarm per string costs a single file open; re-measuring or
+  // re-drawing resident glyphs is a RAM-only subset check. No-op for built-in
+  // fonts.
+  void ensureSdGlyphsResident(int fontId, const char* text, EpdFontFamily::Style style, bool metadataOnly) const;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
@@ -118,11 +157,6 @@ class GfxRenderer {
   explicit GfxRenderer(HalDisplay& halDisplay)
       : display(halDisplay), renderMode(BW), orientation(Portrait), fadingFix(false) {}
   ~GfxRenderer() { freeBwBufferChunks(); }
-
-  static constexpr int VIEWABLE_MARGIN_TOP = 9;
-  static constexpr int VIEWABLE_MARGIN_RIGHT = 3;
-  static constexpr int VIEWABLE_MARGIN_BOTTOM = 3;
-  static constexpr int VIEWABLE_MARGIN_LEFT = 3;
 
   // Setup
   void begin();  // must be called right after display.begin()
@@ -145,6 +179,21 @@ class GfxRenderer {
 
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
+  // Batch-prewarm CJK fallback glyphs for a screenful of static strings in ONE
+  // SD pass. List screens redraw every visible row on each repaint; without an
+  // up-front batch each row's draw prewarms per-string, and under heap
+  // pressure (union merge disabled) each string evicts the previous one — SD
+  // reads on every repaint forever. Call once when the screen's strings are
+  // known (data load); later measures/draws become RAM-only subset hits.
+  // No-op when nothing routes to an SD fallback.
+  // The getter form fetches strings one at a time (allocation-free — callers
+  // must NOT build a concatenated std::string: its bare-new growth aborts on
+  // the heap-tight screens this exists for). A null getter result skips that
+  // index.
+  using TextGetter = const char* (*)(const void* ctx, uint32_t index);
+  void prewarmFallbackText(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                           EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  void prewarmFallbackText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   // Point one registered family's glyph fallback at another. Used to give an SD font loaded
@@ -200,6 +249,19 @@ class GfxRenderer {
   // writes) that a static screen -- the sleep image -- would freeze in place.
   // Cleared by any HALF or FULL pass. See panelResidue_.
   [[nodiscard]] bool panelHasResidue() const { return panelResidue_; }
+  // True while the controller's RED RAM still holds a grayscale plane rather than a B/W
+  // baseline, so a FAST (differential) refresh would diff against it. Callers that are about to
+  // put a fresh full-screen image up must take a HALF pass instead. See grayPlanesResident_.
+  [[nodiscard]] bool panelHasGrayPlanes() const { return grayPlanesResident_; }
+  // One-shot: the next displayBuffer()/displayBufferAsync() call uses `mode`
+  // instead of what its caller asked for, then the override clears itself.
+  // Lets a closing overlay (the control center's refresh tile) hand a
+  // ghost-cleanup waveform to the repaint of whatever screen is underneath,
+  // which it cannot reach directly.
+  void promoteNextRefresh(const HalDisplay::RefreshMode mode) const {
+    promotedRefreshPending_ = true;
+    promotedRefresh_ = mode;
+  }
   // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
   // grayscale strip rendering) can overlap the panel's refresh time. The
   // framebuffer must stay untouched until waitRefreshComplete(). Falls back to
@@ -211,6 +273,12 @@ class GfxRenderer {
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
   bool supportsAsyncRefresh() const;
+  // True when the display can overlap an ordinary B/W refresh with grayscale
+  // composition without bypassing a required grayscale base waveform.
+  HalDisplay::GrayscaleCapabilities grayscaleCapabilities(
+      HalDisplay::GrayscaleMode mode = HalDisplay::GrayscaleMode::Overlay) const;
+  // Compatibility queries for Overlay mode.
+  bool supportsAsyncGrayscaleBase() const;
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   // void displayWindow(int x, int y, int width, int height) const;
   void invertScreen() const;
@@ -243,6 +311,13 @@ class GfxRenderer {
   int getWriteRows() const { return _stripActive ? _stripRows : panelHeight; }
 
   // Drawing
+  // UI drawing clip in logical coordinates; independent of panel orientation.
+  void setClipRect(int x, int y, int width, int height) const {
+    clipLeft_ = x;
+    clipTop_ = y;
+    clipRight_ = x + width;
+    clipBottom_ = y + height;
+  }
   void drawPixel(int x, int y, bool state = true) const;
   void drawLine(int x1, int y1, int x2, int y2, bool state = true) const;
   void drawLine(int x1, int y1, int x2, int y2, int lineWidth, bool state) const;
@@ -254,6 +329,12 @@ class GfxRenderer {
                        bool roundTopRight, bool roundBottomLeft, bool roundBottomRight, bool state) const;
   void maskRoundedRectOutsideCorners(int x, int y, int width, int height, int radius, Color color = Color::White) const;
   void fillRect(int x, int y, int width, int height, bool state = true) const;
+  // XOR-invert exactly the given logical rectangle, leaving what is under it legible in reverse
+  // video. Self-inverse: inverting the same rectangle a second time restores the original pixels
+  // bit for bit, so a moving selection cursor needs no saved copy of what it covered and no
+  // re-render of the content beneath it. Edge-exact (head/tail bit masks), unlike the 8px-aligned
+  // readFramebufferRegion/writeFramebufferRegion pair.
+  void invertRect(int x, int y, int width, int height) const;
   void fillRectDither(int x, int y, int width, int height, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
@@ -263,9 +344,12 @@ class GfxRenderer {
   // screens rely on this); pass true to also grow a source smaller than the box up to fill it
   // (manga panel zoom). Only wired through the 1-bit path -- the grayscale path always shrink-fits.
   void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
-  void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
-                  bool allowUpscale = false) const;
-  void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, bool allowUpscale = false) const;
+  bool drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
+                  bool allowUpscale = false, bool whiteAsTransparent = false) const;
+  bool drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, bool allowUpscale = false) const;
+  // Counter-invert content images in the logical framebuffer so output-level
+  // dark mode leaves their original polarity unchanged.
+  void preserveImagePolarity(int x, int y, int width, int height) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Snapshot / restore a screen-coordinate framebuffer region (byte-aligned in
@@ -307,6 +391,17 @@ class GfxRenderer {
   bool getGlyphMetrics(int fontId, uint32_t cp, EpdFontFamily::Style style, int* left, int* width, int* top,
                        int* height) const;
   int getFontAscenderSize(int fontId) const;
+  // Vertical extent the glyphs actually occupy: ascender above the baseline plus descender below.
+  // Distinct from getLineHeight(), which is the font's newline advance -- several of the built-in
+  // faces set that SMALLER than their own ink, so a line advance taken from it alone lets a
+  // descender on one line run into an ascender on the next.
+  int getFontInkHeight(int fontId) const;
+  // The y drawText() will put `text`'s baseline at, given the same `y`. Text containing CJK is
+  // routed to a registered SD fallback whose metrics differ from fontId's, and drawText adds a
+  // line-height correction on top -- so a caller that has to place something on the SAME line as
+  // drawn text (vertical-text ruby aligning a rotated mark with its upright neighbours) cannot
+  // get there from getFontAscenderSize(fontId) alone.
+  int textBaselineOffset(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getLineHeight(int fontId) const;
   int getLineHeightScaled(int fontId, uint16_t scale) const;
   int getLineHeight(int fontId, float compression) const;
@@ -323,6 +418,24 @@ class GfxRenderer {
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void drawTextRotated90CCW(int fontId, int x, int y, const char* text, bool black = true,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // Renders one codepoint magnified by an integer factor, its INK box placed at
+  // (inkLeftX, inkTopY): the glyph bitmap's top-left lands exactly there, and the glyph's own
+  // left/top bearings are deliberately NOT added. The caller is positioning the visible mark
+  // directly, so a caller that wants the glyph on a baseline applies the bearings itself (see
+  // ParsedText::prepareDropCap, which derives inkTop from the ascender and the top bearing) --
+  // adding them here as well would shift every drop cap by its own bearing twice.
+  //
+  // Integer nearest-neighbour block replication: each source pixel becomes a scale x scale
+  // square. It needs no intermediate buffer (a 4x 18pt capital would be a ~5KB one) and, on a
+  // 1-bit panel, cannot introduce the half-lit edge pixels a resampling filter would, which
+  // would just be dithered back to hard black or white anyway.
+  //
+  // Reports the ink size actually drawn so layout can reserve exactly that column; drawing is
+  // skipped and false returned when the font or the glyph is missing.
+  bool drawCharUpscaled(int fontId, uint32_t cp, int scale, int inkLeftX, int inkTopY, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR, int* inkWidthOut = nullptr,
+                        int* inkHeightOut = nullptr) const;
+
   // Renders a single upright codepoint flush to the top-right corner of the
   // cell box [cellLeftX, cellLeftX+cellSize] × [cellTopY, cellTopY+cellSize],
   // using the glyph's own metrics. Used for vertical-text small kana.
@@ -342,7 +455,7 @@ class GfxRenderer {
   int getTextHeight(int fontId) const;
 
   // Grayscale functions
-  void setRenderMode(const RenderMode mode) { this->renderMode = mode; }
+  void setRenderMode(RenderMode mode);
   RenderMode getRenderMode() const { return renderMode; }
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload
   // takes the gray region in LOGICAL screen coordinates and rotates it to the
@@ -354,17 +467,33 @@ class GfxRenderer {
   // follows (X3: OEM differential base waveform; others: plain display with
   // `fallback`).
   void displayGrayscaleBase(HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
+  bool displayGrayscaleBase(HalDisplay::GrayscaleMode mode,
+                            HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
+  // Active input encoding, used when drawing monochrome overlays into planes.
+  bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+
   // numRows)), bypassing the framebuffer. supportsStripGrayscale() gates use.
   void writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const;
   bool supportsStripGrayscale() const;
-  bool storeBwBuffer();    // Returns true if buffer was stored successfully
-  void restoreBwBuffer();  // Restore and free the stored buffer
+  // Paper Mono: the base activation is deferred so base + gray planes go out
+  // as one waveform. Route the base through displayGrayscaleBase() when true.
+  bool combinesGrayscaleBase() const;
+  bool storeBwBuffer();  // Returns true if buffer was stored successfully
+  // Restore and free the stored buffer. resyncPanelBaseline rewrites the
+  // controller's differential baseline to the restored frame — correct after
+  // a grayscale render (the glass matches the stored BW plane), WRONG when
+  // the glass shows content painted after the store (overlay chrome): the
+  // next differential would treat that content as already erased and leave
+  // it on the glass. Such callers pass false so the baseline keeps tracking
+  // what was last pushed.
+  void restoreBwBuffer(bool resyncPanelBaseline = true);
+  // Free a stored buffer without restoring it (the page under it changed).
+  void discardStoredBwBuffer() { freeBwBufferChunks(); }
   void cleanupGrayscaleWithFrameBuffer() const;
 
   // Font helpers
@@ -380,6 +509,9 @@ class GfxRenderer {
   void releaseFrameBufferForBuild();
   bool restoreFrameBufferAfterBuild();
   bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+  // Whether the framebuffer's CONTENTS can be trusted -- hasFrameBuffer() only answers for the
+  // pointer, which comes back intact after a build loan even though the pixels did not.
+  bool frameBufferContentsStale() const { return frameBufferContentsStale_; }
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

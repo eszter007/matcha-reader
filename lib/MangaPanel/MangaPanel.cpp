@@ -217,10 +217,11 @@ bool MangaBook::loadIndex() {
   }
 
   uint32_t version = readU32(header);
-  if (version != FORMAT_VERSION) {
+  if (version < MIN_FORMAT_VERSION || version > FORMAT_VERSION) {
     LOG_ERR("MNG", "Unsupported panel format version: %u", version);
     return false;
   }
+  formatVersion = version;
 
   pageCount = readU32(header + 4);
   if (pageCount == 0 || pageCount > 10000) {
@@ -422,6 +423,18 @@ bool MangaBook::loadPagePanels(uint32_t pageIdx, std::vector<Panel>& panels) con
     panel.translation.assign(reinterpret_cast<const char*>(buf.get() + pos), translationLen);
     pos += translationLen;
 
+    if (formatVersion >= 3) {
+      if (pos + 8 > pi.dataLength) {
+        LOG_ERR("MNG", "Crop rect overrun at panel %u", p);
+        return false;
+      }
+      panel.cropX = readU16(buf.get() + pos);
+      panel.cropY = readU16(buf.get() + pos + 2);
+      panel.cropW = readU16(buf.get() + pos + 4);
+      panel.cropH = readU16(buf.get() + pos + 6);
+      pos += 8;
+    }
+
     panel.textBlocks.reserve(textCount);
 
     for (uint8_t t = 0; t < textCount; t++) {
@@ -445,6 +458,26 @@ bool MangaBook::loadPagePanels(uint32_t pageIdx, std::vector<Panel>& panels) con
 
       tb.text.assign(reinterpret_cast<const char*>(buf.get() + pos), textLen);
       pos += textLen;
+
+      if (formatVersion >= 3) {
+        if (pos + 2 > pi.dataLength) {
+          LOG_ERR("MNG", "Line header overrun at text %u", t);
+          return false;
+        }
+        const uint8_t lineCount = buf[pos];
+        tb.vertical = (buf[pos + 1] & 0x01) != 0;
+        pos += 2;
+        if (pos + static_cast<size_t>(lineCount) * 8 > pi.dataLength) {
+          LOG_ERR("MNG", "Line data overrun: %u lines", lineCount);
+          return false;
+        }
+        tb.lines.reserve(lineCount);
+        for (uint8_t l = 0; l < lineCount; l++) {
+          tb.lines.push_back(LineBox{readU16(buf.get() + pos), readU16(buf.get() + pos + 2),
+                                     readU16(buf.get() + pos + 4), readU16(buf.get() + pos + 6)});
+          pos += 8;
+        }
+      }
       panel.textBlocks.push_back(std::move(tb));
     }
 

@@ -10,17 +10,30 @@
 
 namespace manga {
 
-static constexpr uint32_t FORMAT_VERSION = 2;  // v2 adds per-panel translation string
+static constexpr uint32_t FORMAT_VERSION = 3;      // v2: per-panel translation. v3: per-block line boxes
+static constexpr uint32_t MIN_FORMAT_VERSION = 2;  // volumes converted before line boxes still load
+
+// One printed line of a text block -- a column, for vertical text -- in page-image pixels.
+struct LineBox {
+  uint16_t x, y, w, h;
+};
 
 struct TextBlock {
-  uint16_t x, y, w, h;
+  uint16_t x, y, w, h;  // only meaningful from v3: earlier converters wrote the far corner here
   std::string text;
+  // v3: one box per '\n'-separated segment of `text`, in order. Empty for v2 volumes, and for a
+  // block whose OCR gave no usable line geometry -- lookups then fall back to the whole block.
+  std::vector<LineBox> lines;
+  bool vertical = false;
 };
 
 struct Panel {
   uint16_t x, y, w, h;
   std::vector<TextBlock> textBlocks;
   std::string translation;  // pre-extracted English translation, may be empty
+  // v3: the page region the panel's crop image shows (the panel plus the converter's margin), for
+  // mapping a point on a zoomed panel back onto the page. cropW == 0 when unknown (v2).
+  uint16_t cropX = 0, cropY = 0, cropW = 0, cropH = 0;
 };
 
 struct PageInfo {
@@ -100,6 +113,7 @@ class MangaBook {
   std::string author;
   std::string language;
   uint32_t pageCount = 0;
+  uint32_t formatVersion = 0;
   std::vector<PageInfo> pageIndex;
   std::vector<std::string> imageFiles;
   std::vector<TocEntry> tocEntries;

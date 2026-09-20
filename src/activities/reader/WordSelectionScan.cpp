@@ -4,8 +4,10 @@
 #include <DictIndex.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WordLookup.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "Epub/Kinsoku.h"
@@ -202,9 +204,12 @@ void WordSelectionScan::reset() {
   selectToAllIdx.clear();
   phase = Phase::Scan;
   scanPos = 0;
+  recordFrom = 0;
+  scannedBits.clear();
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
+  contextStart = 0;
 }
 
 void WordSelectionScan::restartStepScan() {
@@ -214,6 +219,10 @@ void WordSelectionScan::restartStepScan() {
   selectToAllIdx.clear();
   phase = Phase::Scan;
   scanPos = 0;
+  recordFrom = 0;
+  // Every cell is unsegmented again: the re-walk rebuilds selectableGlyphs from scratch.
+  std::fill(scannedBits.begin(), scannedBits.end(), 0);
+  markContextScanned();
   skipUntil = 0;
   scanTruncated = false;
   restoredCursorIndex = kNoRestoredCursor;
@@ -224,7 +233,7 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
   reserveGlyphsSafe(allGlyphs, page.glyphs.size());
   for (const auto& g : page.glyphs) {
     if (g.renderKind == VerticalGlyph::RotatedRun) continue;
-    GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, false};
+    GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, 0};
     if (!pushGlyphSafe(allGlyphs, ref)) {
       scanTruncated = true;
       break;
@@ -235,6 +244,51 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  contextStart = allGlyphs.size();
+  allocScannedBits();
+}
+
+void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint32_t paragraphIndex) {
+  const bool hadBits = !scannedBits.empty();
+  contextStart = allGlyphs.size();
+  int added = 0;
+  for (size_t i = 0; i < utf8.size() && added < kLookupContextChars;) {
+    const auto lead = static_cast<unsigned char>(utf8[i]);
+    size_t len = 1;
+    uint32_t cp = lead;
+    if ((lead & 0xE0) == 0xC0) {
+      len = 2;
+      cp = lead & 0x1F;
+    } else if ((lead & 0xF0) == 0xE0) {
+      len = 3;
+      cp = lead & 0x0F;
+    } else if ((lead & 0xF8) == 0xF0) {
+      len = 4;
+      cp = lead & 0x07;
+    }
+    if (i + len > utf8.size()) break;  // truncated trailing sequence
+    for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(utf8[i + k]) & 0x3F);
+    // Zero position: these are never drawn and never selectable, so there is nothing to place --
+    // every consumer of a glyph's geometry stops at onPageGlyphCount().
+    // NOT scanTruncated on failure: the context is optional and the on-page glyph stream is
+    // intact, so the scan result is still complete and still worth caching.
+    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, paragraphIndex, 0})) break;
+    i += len;
+    added++;
+  }
+  if (allGlyphs.size() == contextStart) return;  // nothing appended: leave the bitmap alone
+  // The bitmap is sized from allGlyphs, so it has to be re-sized to cover the appended cells even
+  // though the walk never records them -- isGlyphMapped() is consulted by index.
+  allocScannedBits();
+  if (hadBits && scannedBits.empty()) {
+    // The longer bitmap did not fit. It is worth more than the optional context -- without it the
+    // walk drops to a strictly sequential pass and select mode loses its column jumps -- so drop
+    // the context and go back to the size that already fitted.
+    allGlyphs.resize(contextStart);
+    allocScannedBits();
+    return;
+  }
+  markContextScanned();
 }
 
 void WordSelectionScan::initFromPage(const Page& page) {
@@ -247,26 +301,50 @@ void WordSelectionScan::initFromPage(const Page& page) {
   };
   uint32_t lastCp = 0;
   bool oom = false;
+  bool joinToPrevious = false;  // previous line ended on a layout hyphen; see below
   for (const auto& el : page.elements) {
     if (oom) break;
-    if (el->getTag() != TAG_PageLine) continue;
+    // Layout hyphenation only ever continues onto the IMMEDIATELY following text line, so
+    // anything else in between (an image, a line with no block) disarms the join.
+    if (el->getTag() != TAG_PageLine) {
+      joinToPrevious = false;
+      continue;
+    }
     const auto& line = static_cast<const PageLine&>(*el);
-    if (!line.getBlock()) continue;
+    if (!line.getBlock()) {
+      joinToPrevious = false;
+      continue;
+    }
     const TextBlock& block = *line.getBlock();
+    bool lineHadWord = false;
     for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
       if (oom) break;
       // The arena stores words as NUL-terminated spans, not std::strings (upstream 1.5.0).
       // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
-      const std::string_view word{block.wordText(wi), block.wordTextLen(wi)};
+      std::string_view word{block.wordText(wi), block.wordTextLen(wi)};
       if (word.empty()) continue;
-      // Insert a separating space only between two ASCII-word boundaries.
-      if (lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&
+      lineHadWord = true;
+      // A word broken by layout hyphenation ends the line with a hyphen the AUTHOR never wrote
+      // ("Mu-" / "sik"), and the two halves reach the scan as separate words. Drop that hyphen and
+      // suppress the space after it, so the lookup text reads "Musik" and the word resolves (#225).
+      //
+      // Only a LINE-FINAL hyphen qualifies, which is the strongest signal available here: the
+      // layout's own continuation flag lives in ParsedText and does not survive into the page. A
+      // real hyphen falling at a line end is therefore joined too. That is deliberate -- a wrong
+      // join simply finds nothing, exactly as today, while the right one is the whole feature.
+      const bool lineFinal = wi + 1 == block.wordCount();
+      const bool joinHyphen = lineFinal && word.size() > 1 && word.back() == '-';
+      if (joinHyphen) word.remove_suffix(1);
+      // Insert a separating space only between two ASCII-word boundaries -- unless the previous
+      // line ended mid-word, where a space is exactly what must not appear.
+      if (!joinToPrevious && lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&
           isAsciiWord(static_cast<unsigned char>(word[0]))) {
-        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, ' ', 0, false})) {
+        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, ' ', 0, 0})) {
           oom = true;
           break;
         }
       }
+      joinToPrevious = joinHyphen;
       size_t b = 0;
       while (b < word.size()) {
         auto c0 = static_cast<unsigned char>(word[b]);
@@ -286,13 +364,16 @@ void WordSelectionScan::initFromPage(const Page& page) {
                (static_cast<unsigned char>(word[b + 2]) & 0x3F) << 6 | (static_cast<unsigned char>(word[b + 3]) & 0x3F);
           b += 4;
         }
-        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, false})) {
+        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, 0})) {
           oom = true;
           break;
         }
         lastCp = cp;
       }
     }
+    // A line that emitted nothing (an empty block) is still a line in between: the pending join
+    // cannot reach across it.
+    if (!lineHadWord) joinToPrevious = false;
   }
   scanTruncated = oom;
   // No upfront reserve for selectableGlyphs: only ~5% of positions become selectable, so
@@ -300,6 +381,8 @@ void WordSelectionScan::initFromPage(const Page& page) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  contextStart = allGlyphs.size();
+  allocScannedBits();
 }
 
 void WordSelectionScan::initFromUtf8Text(const std::string& text) {
@@ -324,7 +407,7 @@ void WordSelectionScan::initFromUtf8Text(const std::string& text) {
       b += 4;
     }
     if (cp == '\n' || cp == '\r') continue;
-    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, false})) {
+    if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, 0})) {
       scanTruncated = true;
       break;
     }
@@ -334,14 +417,86 @@ void WordSelectionScan::initFromUtf8Text(const std::string& text) {
   // lifetime -- exactly the margin the font decompressor needed while rendering definitions
   // (confirmed crash_report: FDC 16KB temp buffers failing). pushGlyphSafe grows the vector
   // with guarded doubling instead.
+  contextStart = allGlyphs.size();
+  allocScannedBits();
+}
+
+void WordSelectionScan::allocScannedBits() {
+  scannedBits.clear();
+  if (allGlyphs.empty()) return;
+  const size_t bytes = (allGlyphs.size() + 7) / 8;
+  // Guard BEFORE growing, exactly as reserveGlyphsSafe() does: with -fno-exceptions a reserve
+  // that cannot be served aborts the device, so a capacity() check afterwards never runs. The
+  // bitmap is optional -- leaving it empty drops the walk to a strictly sequential pass (see
+  // aimAtGlyph() and step()), which is slower but complete.
+  if (ESP.getMaxAllocHeap() < bytes + SMALL_ALLOC_MARGIN) {
+    LOG_ERR("WLS", "Skipping scanned bitmap (%u bytes doesn't fit, maxAlloc=%u); walk stays sequential",
+            static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
+    return;
+  }
+  scannedBits.assign(bytes, 0);
+}
+
+size_t WordSelectionScan::nextUnscanned(const size_t from) const {
+  for (size_t i = from; i < allGlyphs.size(); i++) {
+    if (!isGlyphMapped(i)) return i;
+  }
+  return allGlyphs.size();
+}
+
+void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
+  if (glyphIndex >= allGlyphs.size() || phase == Phase::Done) return;
+  // No bitmap (allocation failed): nothing records what has been done, so a jump would skip the
+  // cells it passed over and they would never be revisited. Stay sequential instead -- slower to
+  // reach the target, but complete.
+  if (scannedBits.empty()) return;
+  // Already segmented: nothing to aim at, and re-reading it would only cost SD time.
+  if (isGlyphMapped(glyphIndex)) return;
+  // The walk is already within context range of this target, so it will reach it on its own in
+  // the next few positions. Re-aiming would rewind scanPos by kMaxLookupChars to re-read context
+  // the walk is about to read anyway -- and a caller that re-aims on EVERY tick (the parked
+  // column jump in resolvePendingMove(), whose nearest-unmapped target shifts by one cell as each
+  // is mapped) then cancels out exactly what stepScan() advances. The frontier stops dead, so the
+  // scan never finishes, so the move never resolves, and handleSelectInput() swallows Confirm the
+  // whole time: the panel is frozen (device: scanPos pinned at 36/90 for as long as it was left).
+  // A genuine jump -- backwards, or far enough ahead to be worth skipping to -- still re-aims.
+  if (glyphIndex >= scanPos && glyphIndex - scanPos <= static_cast<size_t>(kMaxLookupChars)) return;
+  recordFrom = glyphIndex;
+  // Back up for context so a word overlapping the target is segmented as that word rather than
+  // as a fragment starting mid-way through it. kMaxLookupChars bounds how far back a word can
+  // begin, so this is always far enough.
+  scanPos = glyphIndex > static_cast<size_t>(kMaxLookupChars) ? glyphIndex - kMaxLookupChars : 0;
+  skipUntil = scanPos;
 }
 
 bool WordSelectionScan::step(const uint32_t maxMillis) {
   const uint32_t start = millis();
   while (phase != Phase::Done) {
-    if (scanPos >= allGlyphs.size()) {
-      phase = Phase::Done;
-      break;
+    // Walked off the end, or onto cells another pass already did: pick up the next unfinished
+    // cell wherever it is. Searching from 0 keeps the sweep in page order once the demand-driven
+    // jumps have filled in the parts the reader actually looked at.
+    // contextStart, not allGlyphs.size(): the walk records selectable words, and the cells past
+    // contextStart are off-page context that can be MATCHED into but never pointed at.
+    if (scanPos >= contextStart || (scanPos >= recordFrom && isGlyphMapped(scanPos))) {
+      // Without the bitmap the walk is a single sequential pass, so the end of the page IS the
+      // end of the work. Consulting nextUnscanned() here would restart at 0 forever, since with
+      // no bits every cell reports unmapped.
+      if (scannedBits.empty()) {
+        phase = Phase::Done;
+        break;
+      }
+      // contextStart, not allGlyphs.size(): the context cells past it are never walked, so they
+      // never get marked scanned -- treating a resume there as the end keeps the sweep from
+      // returning to them forever.
+      const size_t resume = nextUnscanned(0);
+      if (resume >= contextStart) {
+        phase = Phase::Done;
+        break;
+      }
+      recordFrom = resume;
+      scanPos = resume > static_cast<size_t>(kMaxLookupChars) ? resume - kMaxLookupChars : 0;
+      skipUntil = scanPos;
+      continue;
     }
     scanOnePosition();
     if (millis() - start >= maxMillis) break;
@@ -350,9 +505,51 @@ bool WordSelectionScan::step(const uint32_t maxMillis) {
 }
 
 namespace {
+// Multi-page container. The old format held exactly ONE page per book, so every page turn
+// evicted the previous page's scan and Word Lookup re-burst (~300ms) on essentially every open --
+// a cache that only ever hit if you reopened the very same page. Entries are tiny (a 16-byte
+// header plus 5 bytes per selectable word, so ~130 bytes for a typical page), so keeping the last
+// few costs well under a kilobyte of SD and no extra RAM.
+//
+// A distinct magic from the single-page format: an old wlscan.bin simply fails the check and is
+// rebuilt, which is the right outcome for a disposable cache.
+//
+// Bump this whenever a change alters what a scan of the SAME page produces. The entry is
+// validated on glyphHash (codepoints + paragraph indices) and dictSize, neither of which moves
+// when the segmentation logic changes -- so a cache written by a version that segmented wrongly
+// still validates and is served back, and the fix never reaches the reader. That happened with
+// the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
+// "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
+// cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x324D4C57;  // "WLM2" -- was "WLSM" before the tcy fix
+constexpr uint16_t WLSCAN_MAX_PAGES = 8;
+constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
+
+struct WlscanFileHeader {
+  uint32_t magic;
+  uint16_t entryCount;
+  uint16_t reserved;
+} __attribute__((packed));
+
+// Per-entry header: one cached page. `magic` is the original single-page value, kept so a
+// truncated or corrupt container is detected entry-by-entry rather than trusted.
+struct Header {
+  uint32_t magic;
+  uint16_t spine;
+  uint16_t page;
+  uint32_t glyphHash;
+  uint32_t dictSize;
+  uint16_t count;
+  uint16_t lastCursor;
+} __attribute__((packed));
+
 constexpr uint32_t WLSCAN_MAGIC =
-    0x44534C57;  // "WLSD" -- POS_READING-flagged collision suppression (reconverted dicts keep
-                 // their byte size, so the size-based dictFingerprint can't catch the swap)
+    0x45534C57;  // "WLSE" -- records now carry the match's cell span (GlyphRef::matchLen) after
+                 // the glyph index; a "WLSD" file has 4-byte records and cannot be read as these
+
+// One cached selectable entry on disk: a 4-byte allGlyphs index followed by the match's cell
+// span. Written and read byte-wise -- see the memcpy in tryLoadCache/saveCache.
+constexpr size_t kRecordBytes = sizeof(uint32_t) + sizeof(uint8_t);
 
 // Cheap fingerprint of the dictionary content: a changed/replaced vocab index (vocab.idx, or
 // legacy jmdict.idx -- whichever resolves) invalidates cached scans (segmentation depends on
@@ -386,35 +583,70 @@ uint32_t WordSelectionScan::glyphContentHash() const {
 
 bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex) {
   HalFile f;
-  if (!Storage.openFileForRead("WLS", path, f)) return false;
+  if (!Storage.openFileForRead("WLS", path, f)) {
+    LOG_INF("WLS", "INSTR cache miss: no file %s", path.c_str());
+    return false;
+  }
 
-  struct Header {
-    uint32_t magic;
-    uint16_t spine;
-    uint16_t page;
-    uint32_t glyphHash;
-    uint32_t dictSize;
-    uint16_t count;
-    uint16_t lastCursor;
-  } __attribute__((packed)) hdr;
-  if (f.read(reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr)) != static_cast<int>(sizeof(hdr))) return false;
-  if (hdr.magic != WLSCAN_MAGIC || hdr.spine != spineIndex || hdr.page != pageIndex) return false;
-  if (hdr.glyphHash != glyphContentHash() || hdr.dictSize != dictFingerprint()) return false;
-  if (hdr.count > allGlyphs.size()) return false;
+  Header hdr;
+  WlscanFileHeader fileHdr;
+  if (f.read(reinterpret_cast<uint8_t*>(&fileHdr), sizeof(fileHdr)) != static_cast<int>(sizeof(fileHdr)) ||
+      fileHdr.magic != WLSCAN_MULTI_MAGIC) {
+    return false;  // absent, truncated, or the old single-page format -- rebuild
+  }
+  // Walk the entries, skipping over the records of the ones that do not match. Entries are small
+  // and there are at most WLSCAN_MAX_PAGES, so this costs a read or two.
+  const uint32_t wantHash = glyphContentHash();
+  const uint32_t wantDict = dictFingerprint();
+  bool found = false;
+  for (uint16_t e = 0; e < fileHdr.entryCount && e < WLSCAN_MAX_PAGES; e++) {
+    if (f.read(reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr)) != static_cast<int>(sizeof(hdr))) return false;
+    if (hdr.magic != WLSCAN_MAGIC) return false;
+    if (hdr.spine == spineIndex && hdr.page == pageIndex && hdr.glyphHash == wantHash && hdr.dictSize == wantDict &&
+        hdr.count <= allGlyphs.size()) {
+      found = true;
+      break;
+    }
+    if (!f.seekSet(f.position() + static_cast<uint32_t>(hdr.count) * kRecordBytes)) return false;
+  }
+  if (!found) return false;
 
   selectableGlyphs.clear();
   selectToAllIdx.clear();
   reserveGlyphsSafe(selectableGlyphs, hdr.count);
-  selectToAllIdx.reserve(hdr.count);
+  // Same guard as reserveGlyphsSafe, for the same reason: reserve() allocates through `new`,
+  // which aborts the device under -fno-exceptions rather than returning null. A cache load must
+  // never be able to do that -- the worst it may do is miss and let the page be rescanned.
+  if (hdr.count > selectToAllIdx.capacity()) {
+    const size_t requestBytes = static_cast<size_t>(hdr.count) * sizeof(size_t);
+    if (ESP.getMaxAllocHeap() >= requestBytes + SMALL_ALLOC_MARGIN) {
+      selectToAllIdx.reserve(hdr.count);
+    } else {
+      LOG_ERR("WLS", "Skipping index reserve (%u bytes doesn't fit, maxAlloc=%u); growing incrementally",
+              static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
+    }
+  }
   for (uint16_t i = 0; i < hdr.count; i++) {
-    uint32_t idx;
-    if (f.read(reinterpret_cast<uint8_t*>(&idx), sizeof(idx)) != static_cast<int>(sizeof(idx)) ||
-        idx >= allGlyphs.size()) {
+    // Read as bytes and memcpy the index out: a record is 5 bytes, so every second one starts
+    // off a 4-byte boundary, and this target faults on unaligned multi-byte loads.
+    uint8_t rec[kRecordBytes];
+    if (f.read(rec, sizeof(rec)) != static_cast<int>(sizeof(rec))) {
       selectableGlyphs.clear();
       selectToAllIdx.clear();
       return false;
     }
-    if (!pushGlyphSafe(selectableGlyphs, allGlyphs[idx])) {
+    uint32_t idx;
+    memcpy(&idx, rec, sizeof(idx));
+    if (idx >= allGlyphs.size()) {
+      selectableGlyphs.clear();
+      selectToAllIdx.clear();
+      return false;
+    }
+    // The glyph itself comes from the freshly rebuilt allGlyphs (positions are re-derived from
+    // the page every open); only the span is restored from the record.
+    GlyphRef entry = allGlyphs[idx];
+    entry.matchLen = rec[sizeof(idx)];
+    if (!pushGlyphSafe(selectableGlyphs, entry)) {
       selectableGlyphs.clear();
       selectToAllIdx.clear();
       return false;
@@ -430,7 +662,10 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
 
 bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineIndex, const uint16_t pageIndex,
                                   const uint16_t cursorIndex) const {
-  if (!isDone()) return false;
+  if (!isDone()) {
+    LOG_INF("WLS", "INSTR not saving: scan not done");
+    return false;
+  }
   // Never persist a scan that ran out of heap mid-build: allGlyphs (or selectableGlyphs) was
   // truncated, so it found too few -- often zero -- selectable words. Caching that would make
   // "no matches" stick on this page for every future open, even once the heap recovers (the
@@ -440,18 +675,53 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
             static_cast<unsigned>(selectToAllIdx.size()));
     return false;
   }
+  // Carry the other pages forward. Read them BEFORE reopening the file for write, which
+  // truncates it. Bounded buffer, guarded allocation: failing to carry costs only the older
+  // pages' cached scans, never this one.
+  auto carry = makeUniqueNoThrow<uint8_t[]>(WLSCAN_MAX_CARRY_BYTES);
+  // Offsets are taken from this typed pointer rather than from carry.get() inline: cppcheck
+  // cannot resolve makeUniqueNoThrow's element type and reads .get() as void*, reporting
+  // arithOperationsOnVoidPointer on every offset expression.
+  uint8_t* const carryBuf = carry.get();
+  size_t carryBytes = 0;
+  uint16_t carryCount = 0;
+  if (carryBuf != nullptr) {
+    HalFile in;
+    if (Storage.openFileForRead("WLS", path, in)) {
+      WlscanFileHeader oldHdr;
+      if (in.read(reinterpret_cast<uint8_t*>(&oldHdr), sizeof(oldHdr)) == static_cast<int>(sizeof(oldHdr)) &&
+          oldHdr.magic == WLSCAN_MULTI_MAGIC) {
+        for (uint16_t e = 0; e < oldHdr.entryCount && e < WLSCAN_MAX_PAGES && carryCount + 1 < WLSCAN_MAX_PAGES; e++) {
+          Header old;
+          if (in.read(reinterpret_cast<uint8_t*>(&old), sizeof(old)) != static_cast<int>(sizeof(old))) break;
+          if (old.magic != WLSCAN_MAGIC) break;
+          const size_t bodyBytes = static_cast<size_t>(old.count) * kRecordBytes;
+          // This page is being rewritten as the newest entry; drop the stale copy.
+          if (old.spine == spineIndex && old.page == pageIndex) {
+            if (!in.seekSet(in.position() + bodyBytes)) break;
+            continue;
+          }
+          if (carryBytes + sizeof(old) + bodyBytes > WLSCAN_MAX_CARRY_BYTES) break;
+          memcpy(carryBuf + carryBytes, &old, sizeof(old));
+          carryBytes += sizeof(old);
+          if (in.read(carryBuf + carryBytes, bodyBytes) != static_cast<int>(bodyBytes)) {
+            carryBytes -= sizeof(old);  // drop the half-read entry rather than write a corrupt one
+            break;
+          }
+          carryBytes += bodyBytes;
+          carryCount++;
+        }
+      }
+      in.close();  // must close before reopening the same path for write
+    }
+  }
+
   HalFile f;
   if (!Storage.openFileForWrite("WLS", path, f)) return false;
+  const WlscanFileHeader fileHdr{WLSCAN_MULTI_MAGIC, static_cast<uint16_t>(carryCount + 1), 0};
+  f.write(reinterpret_cast<const uint8_t*>(&fileHdr), sizeof(fileHdr));
 
-  struct Header {
-    uint32_t magic;
-    uint16_t spine;
-    uint16_t page;
-    uint32_t glyphHash;
-    uint32_t dictSize;
-    uint16_t count;
-    uint16_t lastCursor;
-  } __attribute__((packed)) hdr;
+  Header hdr;
   hdr.magic = WLSCAN_MAGIC;
   hdr.spine = spineIndex;
   hdr.page = pageIndex;
@@ -460,10 +730,19 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
   hdr.count = static_cast<uint16_t>(selectToAllIdx.size());
   hdr.lastCursor = cursorIndex < hdr.count ? cursorIndex : 0;
   f.write(reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
-  for (const size_t idx : selectToAllIdx) {
-    const uint32_t v = static_cast<uint32_t>(idx);
-    f.write(reinterpret_cast<const uint8_t*>(&v), sizeof(v));
+  for (size_t i = 0; i < selectToAllIdx.size(); i++) {
+    // Byte buffer + memcpy, matching the read side: the 5-byte record leaves every second index
+    // unaligned, which this target cannot load or store directly.
+    uint8_t rec[kRecordBytes];
+    const uint32_t idx = static_cast<uint32_t>(selectToAllIdx[i]);
+    memcpy(rec, &idx, sizeof(idx));
+    rec[sizeof(idx)] = i < selectableGlyphs.size() ? selectableGlyphs[i].matchLen : 0;
+    f.write(rec, sizeof(rec));
   }
+  // Newest first, then the pages carried over -- so the oldest falls off the end naturally.
+  if (carryBytes > 0) f.write(carryBuf, carryBytes);
+  LOG_INF("WLS", "Scan cached for spine=%u page=%u (%u selectable, %u other page(s) kept)", spineIndex, pageIndex,
+          static_cast<unsigned>(selectToAllIdx.size()), carryCount);
   return true;
 }
 
@@ -474,6 +753,9 @@ bool WordSelectionScan::saveCache(const std::string& path, const uint16_t spineI
 void WordSelectionScan::scanOnePosition() {
   const size_t i = scanPos;
   scanPos++;
+  // Cells before recordFrom are read for context only (see aimAtGlyph): whoever owns them still
+  // has to scan them, so neither their matches nor their bits are claimed here.
+  if (i >= recordFrom) markScanned(i);
 
   const auto& g = allGlyphs[i];
   if (i < skipUntil) return;
@@ -544,6 +826,12 @@ void WordSelectionScan::scanOnePosition() {
   int charCount = 0;
   for (size_t j = scanStart; j < allGlyphs.size() && charCount < kMaxLookupChars; j++) {
     if (allGlyphs[j].paragraphIndex != paraIdx) break;
+    // A tate-chu-yoko run is ONE glyph carrying codepoint 0 (its text lives in the run string,
+    // see VerticalParsedText). Encoding it writes a NUL, which truncates the C string the
+    // dictionary is given while the window kept counting -- the match then claimed cells past
+    // the punctuation and swallowed the word after it (受験 behind a 「!?」 run). It is a word
+    // boundary in any case: no entry spans it.
+    if (allGlyphs[j].codepoint == 0) break;
     encodeUtf8(allGlyphs[j].codepoint, text);
     charCount++;
   }
@@ -559,8 +847,9 @@ void WordSelectionScan::scanOnePosition() {
   // っ-start positions accept exact entries only (see the small-kana skip above): a deinflected
   // hit there is a conjugation fragment (って→う), not the quotative って.
   if (sokuonTeStart && hasMatch && result.deinflected) hasMatch = false;
+  // Declared out here so the push below can record the match's cell span (see GlyphRef::matchLen).
+  int matchChars = 0;
   if (hasMatch) {
-    int matchChars = 0;
     stripTrailingParticle(text, result, needDef);
     size_t pos = 0;
     while (pos < result.matchLength && pos < text.size()) {
@@ -723,10 +1012,20 @@ void WordSelectionScan::scanOnePosition() {
   // filter runs here (not as a later pass) so partial results shown during a progressive scan
   // never lose entries afterwards. Note the skipUntil bookkeeping above stays in effect for
   // filtered-out matches too, exactly like the previous scan-then-filter split behaved.
-  if (hasMatch && passesDisplayFilter(i)) {
+  if (hasMatch && passesDisplayFilter(i, matchChars, text, result.matchLength) && i >= recordFrom) {
+    // The selectable entry starts at i (the digit run, when there is one), so its span is the
+    // digits plus the dictionary match. Recorded now because the caller drawing a highlight over
+    // the page must not have to repeat the lookup just to learn how many cells to cover.
+    GlyphRef entry = g;
+    size_t span = static_cast<size_t>(digitGlyphs) + static_cast<size_t>(std::max(matchChars, 1));
+    // A word running into the next page matches in full but is only PRESENT up to the boundary,
+    // and matchLen is what draws the highlight box -- so clamp it to the cells that exist here.
+    // The match itself is untouched: the whole point is that the split word still resolves.
+    if (i + span > contextStart) span = contextStart - i;
+    entry.matchLen = static_cast<uint8_t>(std::min<size_t>(span, 255));
     // Push selectableGlyphs first -- if it can't grow, the heap is exhausted, so stop the scan
     // rather than push a mismatched selectToAllIdx entry with no corresponding glyph.
-    if (!pushGlyphSafe(selectableGlyphs, g)) {
+    if (!pushGlyphSafe(selectableGlyphs, entry)) {
       scanPos = allGlyphs.size();  // abort the remainder of the scan
       scanTruncated = true;        // partial result -- don't let saveCache() persist it
       return;
@@ -792,7 +1091,8 @@ bool isDisplayNoise(uint32_t cp) {
 
 // Examine a matched position the way performLookup() would display it; false = display noise
 // (bare particles, conjugation fragments) that should not become a selectable entry.
-bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
+bool WordSelectionScan::passesDisplayFilter(const size_t allIdx, const int matchChars, const std::string& lookupText,
+                                            const size_t matchBytes) const {
   const uint32_t paraIdx = allGlyphs[allIdx].paragraphIndex;
 
   // Multi-char conjugation suffixes that are never standalone words.
@@ -817,41 +1117,15 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
     return false;
   };
 
-  // Build lookup text from this position
-  std::string ltext;
-  int lcount = 0;
-  for (size_t j = allIdx; j < allGlyphs.size() && lcount < kMaxLookupChars; j++) {
-    if (allGlyphs[j].paragraphIndex != paraIdx) break;
-    encodeUtf8(allGlyphs[j].codepoint, ltext);
-    lcount++;
-  }
-  WordLookupResult lr;
-  // Only the match length is consulted below -- skip definition fetches.
-  if (!ltext.empty() && WordLookup::lookup(ltext, 0, lr, /*needDefinition=*/false)) {
-    stripTrailingParticle(ltext, lr, /*needDefinition=*/false);
-    // Count matched chars
-    int mc = 0;
-    size_t p = 0;
-    while (p < lr.matchLength && p < ltext.size()) {
-      auto c = static_cast<unsigned char>(ltext[p]);
-      if (c < 0x80)
-        p += 1;
-      else if ((c & 0xE0) == 0xC0)
-        p += 2;
-      else if ((c & 0xF0) == 0xE0)
-        p += 3;
-      else
-        p += 4;
-      mc++;
-    }
+  if (!lookupText.empty() && matchBytes > 0) {
     // Filter: a SHORT match whose every char is an individually-noise kana (は, が, には, では)
     // is a stray particle / particle-combo, not a lookup-worthy word. Cap this at <=2 chars: the
     // noise list is a set of single kana, and many real 3-4 char words are built entirely from
     // them -- mimetics like ふんふん/きらきら and words like とても/ところ. Filtering those by the
     // per-char list dropped them from the page (reported: ふんふん skipped). A genuine 3+ char
     // dictionary match is kept.
-    bool allNoise = mc <= 2;
-    for (size_t ci = allIdx; allNoise && ci < allIdx + static_cast<size_t>(mc) && ci < allGlyphs.size(); ci++) {
+    bool allNoise = matchChars <= 2;
+    for (size_t ci = allIdx; allNoise && ci < allIdx + static_cast<size_t>(matchChars) && ci < allGlyphs.size(); ci++) {
       if (!isDisplayNoise(allGlyphs[ci].codepoint)) {
         allNoise = false;
         break;
@@ -865,7 +1139,6 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
     // そうに/そうな/そうだ are the ～そう "seeming/appears" auxiliary (心配そうに); their only
     // dictionary hit is the rare homophone 僧尼 ("monks and nuns") and no grammar entry covers
     // them, so as standalone lookups they are just misleading -- filter them out.
-    const std::string matchedText = ltext.substr(0, lr.matchLength);
     static const char* const exactNoise[] = {"\xe3\x81\xa1\xe3\x82\x83",              // ちゃ
                                              "\xe3\x81\x98\xe3\x82\x83",              // じゃ
                                              "\xe3\x81\xa1\xe3\x82\x83\xe3\x81\x86",  // ちゃう
@@ -875,7 +1148,8 @@ bool WordSelectionScan::passesDisplayFilter(const size_t allIdx) const {
                                              "\xe3\x81\x9d\xe3\x81\x86\xe3\x81\xa0",  // そうだ
                                              nullptr};
     for (int e = 0; exactNoise[e]; e++) {
-      if (matchedText == exactNoise[e]) return false;
+      const size_t noiseBytes = strlen(exactNoise[e]);
+      if (matchBytes == noiseBytes && lookupText.compare(0, matchBytes, exactNoise[e]) == 0) return false;
     }
   }
   if (isConjugationNoise()) {

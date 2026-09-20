@@ -10,9 +10,11 @@ There are three ways to install fonts:
 ### Option 1: Download from device (recommended)
 
 1. Connect your CrossPoint reader to Wi-Fi
-2. Go to **Settings > System > Manage Fonts**
+2. Go to **Settings > Reader > Manage Fonts**
 3. Browse available font families and tap to download
 4. Downloaded fonts appear immediately in **Settings > Reader > Font Family**
+   (see [Coverage variants](#coverage-variants) for the families that share a
+   row with the font they widen)
 
 ### Option 2: Upload via web browser
 
@@ -51,6 +53,35 @@ There are three ways to install fonts:
                └── ...
 
 3. Insert the SD card and power on your CrossPoint reader
+
+## Coverage variants
+
+Some families exist only to widen another family's character set:
+`NotoSerifExtended` is Noto Serif plus Greek, Cyrillic and the phonetic block,
+and a `…IPA` cut adds the phonetic block alone. Listing them next to the family
+they widen puts the same typeface on the font list twice, so they are folded
+into the base row instead — one typeface, one entry.
+
+A family is treated as a variant when its name is another family's name plus
+`Extended` or `IPA`, **and** that base family exists: either a built-in
+(`NotoSerif`, `NotoSans`) or another family installed on the card. A variant
+whose base is not installed keeps its own row, so hiding a row can never put
+its characters out of reach.
+
+Which of the two is loaded depends on the book:
+
+| Book | Reader font | SD fonts resident |
+| --- | --- | --- |
+| Latin, Greek, Cyrillic, phonetic | the variant | 1 (the variant) |
+| Japanese | the base, paired with the Japanese font | 1 (the Japanese font) |
+
+Japanese books take the base because the Japanese companion font already
+carries their text; standing the variant in as well would mean two resident SD
+fonts, which does not reliably fit the ESP32-C3 heap.
+
+The selection stored in settings always names the base — the substitution is
+made at load time, so moving the card to a device without the variant simply
+falls back to the base.
 
 ## CJK in the User Interface
 
@@ -149,6 +180,7 @@ To convert your own TrueType/OpenType fonts:
 | `greek` | Greek + Extended Greek |
 | `cyrillic` | Cyrillic + Supplement |
 | `hebrew` | Hebrew + Alphabetic Presentation Forms |
+| `arabic` | Arabic + Supplement + Extended-A + Presentation Forms A/B (RTL, contextual shaping) |
 | `georgian` | Georgian + Georgian Supplement |
 | `armenian` | Armenian |
 | `ethiopic` | Ethiopic + Extended |

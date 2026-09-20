@@ -10,8 +10,11 @@
 
 #include "CrossPointSettings.h"
 #include "ReaderUtils.h"
+#include "SdCardFontSystem.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DictHtmlPages.h"
 #include "util/HtmlToPlainText.h"
 
 namespace {
@@ -20,19 +23,95 @@ namespace {
 // (far below this); only pathological unbreakable tokens are split at this cap.
 constexpr size_t MAX_LINE_BYTES = 191;
 
-// Body text left/right inset, matching the reader's default feel.
-constexpr int SIDE_PADDING = 20;
+// Styled-path ceiling: the laid-out Pages keep the whole definition resident
+// (TextBlock arenas ≈ text + ~7 bytes/word plus per-line objects), roughly
+// doubling the string's footprint while this activity is stacked over the
+// reader and word-select. Bigger definitions take the span-based plain-text
+// path, which holds no per-page copies.
+constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
 
 }  // namespace
 
+// Serif at the Word Lookup Font Size. The Japanese panels stay on the sans faces -- their text
+// is CJK, which the Latin serif does not carry -- so only this path is remapped. There is no 8pt
+// serif, so Tiny lands on the 12pt face.
+int DictionaryDefinitionActivity::definitionFontId() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return NOTOSERIF_14_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return NOTOSERIF_16_FONT_ID;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+    default:
+      return NOTOSERIF_12_FONT_ID;
+  }
+}
+
+uint8_t DictionaryDefinitionActivity::definitionPointSize() {
+  switch (SETTINGS.wordLookupFontSize) {
+    case CrossPointSettings::WORD_LOOKUP_FONT_MEDIUM:
+      return 14;
+    case CrossPointSettings::WORD_LOOKUP_FONT_LARGE:
+      return 16;
+    case CrossPointSettings::WORD_LOOKUP_FONT_TINY:
+    case CrossPointSettings::WORD_LOOKUP_FONT_SMALL:
+    default:
+      return 12;
+  }
+}
+
+void DictionaryDefinitionActivity::ensureGlyphFallback() const {
+  sdFontSystem.ensureWordLookupFallback(renderer, definitionFontId(), definitionPointSize());
+}
+
 void DictionaryDefinitionActivity::onEnter() {
+  ensureGlyphFallback();
   Activity::onEnter();
   // Normalize StarDict multi-type separators so the wrap loop and the
   // C-string font APIs below both see the whole definition.
   std::replace(definition.begin(), definition.end(), '\0', '\n');
-  definition = htmlToPlainText(definition);
-  wrapText();
+  if (!(htmlDefinition && definition.size() <= MAX_STYLED_HTML_BYTES && layoutHtmlPages())) {
+    definition = htmlToPlainText(definition);
+    wrapText();
+  }
   requestUpdate();
+}
+
+void DictionaryDefinitionActivity::onExit() {
+  Activity::onExit();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+  }
+}
+
+DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
+  const auto body = DictionaryPanel::compute(renderer).body;
+  return {body.width, body.height};
+}
+
+// Styled path: lay the HTML definition out through the EPUB chapter parser
+// into reader-identical Pages. Frees `definition` on success (the page arenas
+// own the text); any failure leaves state untouched for the plain-text path.
+bool DictionaryDefinitionActivity::layoutHtmlPages() {
+  const BodyArea body = bodyArea();
+  if (body.width <= 0 || body.height <= 0) return false;
+  // Warm the advance table for this exact text BEFORE the parser measures it. Layout prices
+  // non-resident glyphs at 0 (it reads advance tables and resident glyphs only, never the
+  // on-demand SD loader), while drawing resolves them for real -- so an entry carrying glyphs
+  // outside the resident set, such as the IPA in a pronunciation, measured as almost nothing,
+  // never wrapped, and drew its characters on top of each other. REGULAR|BOLD|ITALIC: the
+  // normalizer emits all three.
+  renderer.ensureSdCardFontReady(definitionFontId(), definition.c_str(), 0x07);
+  if (!buildDictionaryHtmlPages(renderer, definition, static_cast<uint16_t>(body.width),
+                                static_cast<uint16_t>(body.height), definitionFontId(), pages)) {
+    return false;
+  }
+  definition.clear();
+  definition.shrink_to_fit();
+  totalPages = static_cast<int>(pages.size());
+  currentPage = 0;
+  return true;
 }
 
 int DictionaryDefinitionActivity::measureSpan(const int fontId, const char* text, size_t len) const {
@@ -51,25 +130,17 @@ void DictionaryDefinitionActivity::wrapText() {
   lines.clear();
   lines.reserve(definition.size() / 32 + 8);
 
-  const int fontId = SETTINGS.getReaderFontId();
+  const int fontId = definitionFontId();
   // SD-card fonts: merge every definition codepoint into the persistent
   // advance table up front. Otherwise each unseen codepoint measured below
   // falls back to an on-demand glyph load from SD (8-slot overflow ring).
   renderer.ensureSdCardFontReady(fontId, definition.c_str(), 0x01 /* REGULAR */);
 
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto orientation = renderer.getOrientation();
-  const bool isLandscape = orientation == GfxRenderer::Orientation::LandscapeClockwise ||
-                           orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = isLandscape ? metrics.sideButtonHintsWidth : 0;
-  const int maxWidth = renderer.getScreenWidth() - hintGutterWidth - 2 * SIDE_PADDING;
+  const BodyArea body = bodyArea();
+  const int maxWidth = body.width;
   const int spaceWidth = renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR);
-
   const int lineHeight = renderer.getLineHeight(fontId);
-  const int topArea = (isInverted ? metrics.buttonHintsHeight : 0) + metrics.topPadding + metrics.headerHeight;
-  const int bottomArea = metrics.buttonHintsHeight + metrics.verticalSpacing;
-  linesPerPage = std::max(1, (renderer.getScreenHeight() - topArea - bottomArea) / lineHeight);
+  linesPerPage = std::max(1, body.height / lineHeight);
 
   const char* text = definition.c_str();
   const uint32_t n = static_cast<uint32_t>(definition.size());
@@ -160,26 +231,58 @@ void DictionaryDefinitionActivity::wrapText() {
 }
 
 void DictionaryDefinitionActivity::loop() {
-  // The power click steps back one screen, exactly like Back: from the definition to the word
-  // selection, and from there out to the page. Two clicks leave the dictionary entirely without
-  // the reading hand ever moving.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+  // Back steps up to the word selection. The power click leaves the dictionary outright: from
+  // the selection it opened this view, so from here it closes the whole flow -- two clicks in
+  // and back out, without the reading hand moving.
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
   }
 
-  // Same tap zones as the reader page turns: left third = previous page,
-  // the rest = next. Back is the usual left-edge swipe.
+  // Outside the card is "put it away": the panel floats over the page, so a tap
+  // on the page around it reads as dismissing it rather than as paging a
+  // definition the finger is not even on. Checked before paging so the two
+  // cannot both claim the same contact.
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
-    if (tx < renderer.getScreenWidth() / 3) {
-      if (currentPage > 0) {
-        currentPage--;
-        requestUpdate();
-      }
-    } else if (currentPage + 1 < totalPages) {
+    const auto box = DictionaryPanel::compute(renderer).box;
+    if (tx < box.x || tx >= box.x + box.width || ty < box.y || ty >= box.y + box.height) {
+      finish();
+      return;
+    }
+  }
+
+  // Paging follows whatever the reader is set to, rather than a second scheme
+  // to learn: tap zones, inverted zones, swipes or inverted swipes, and nothing
+  // at all when touch reader controls are off. Same helper the page turns use,
+  // so the definition answers the gesture the reader already taught.
+  // Up/down swipes scroll a long definition whatever the page-turn setting says -- the same
+  // gesture as the Japanese panel, so an entry that does not fit reads the same way everywhere.
+  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
+    if (scroll > 0 && currentPage + 1 < totalPages) {
+      currentPage++;
+      requestUpdate();
+    } else if (scroll < 0 && currentPage > 0) {
+      currentPage--;
+      requestUpdate();
+    }
+    return;
+  }
+
+  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  if (touchTurn.prev || touchTurn.next) {
+    if (touchTurn.prev && currentPage > 0) {
+      currentPage--;
+      requestUpdate();
+    } else if (touchTurn.next && currentPage + 1 < totalPages) {
       currentPage++;
       requestUpdate();
     }
@@ -201,10 +304,15 @@ void DictionaryDefinitionActivity::loop() {
   });
 }
 
-// Draws the current page's line spans (copied into a stack buffer for NUL
+// Draws the current page: a styled Page when the HTML layout succeeded,
+// otherwise the wrapped line spans (copied into a stack buffer for NUL
 // termination). Called twice per render: once in font-cache scan mode, once
 // for the real paint.
 void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const int startY) const {
+  if (!pages.empty()) {
+    pages[currentPage]->render(renderer, fontId, x, startY);
+    return;
+  }
   const int lineHeight = renderer.getLineHeight(fontId);
   char buf[MAX_LINE_BYTES + 1];
   const int firstLine = currentPage * linesPerPage;
@@ -219,41 +327,27 @@ void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const
 }
 
 void DictionaryDefinitionActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto orientation = renderer.getOrientation();
-  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? metrics.sideButtonHintsWidth : 0;
-  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
-  const int contentWidth = renderer.getScreenWidth() - hintGutterWidth;
-  const int contentY = isInverted ? metrics.buttonHintsHeight : 0;
-
-  // Header: matched headword left, page counter right.
-  const int headerY = contentY + metrics.topPadding + 10;
-  renderer.drawText(UI_12_FONT_ID, contentX + SIDE_PADDING, headerY, headword.c_str(), true, EpdFontFamily::BOLD);
+  // No clearScreen: the panel floats over the page the word-select activity left in the
+  // framebuffer, and its own fill is opaque, so a re-render overwrites the previous one.
+  char counter[16] = "";
   if (totalPages > 1) {
-    char counter[16];
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
-    const int counterWidth = renderer.getTextWidth(UI_10_FONT_ID, counter);
-    renderer.drawText(UI_10_FONT_ID, contentX + contentWidth - SIDE_PADDING - counterWidth, headerY, counter);
   }
+  const auto layout = DictionaryPanel::draw(renderer, headword.c_str(), dictName.c_str(), counter);
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
   // of one on-demand overflow read per character on every page turn.
-  const int fontId = SETTINGS.getReaderFontId();
-  const int bodyStartY = contentY + metrics.topPadding + metrics.headerHeight;
+  const int fontId = definitionFontId();
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  drawBody(fontId, contentX + SIDE_PADDING, bodyStartY);  // scan pass: records codepoints only
+  drawBody(fontId, layout.body.x, layout.body.y);  // scan pass: records codepoints only
   scope.endScanAndPrewarm();
-  drawBody(fontId, contentX + SIDE_PADDING, bodyStartY);
+  drawBody(fontId, layout.body.x, layout.body.y);
 
   const auto labels =
       mappedInput.mapLabels(tr(STR_BACK), "", (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
+  DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

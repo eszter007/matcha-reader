@@ -54,13 +54,15 @@ inline void flushReadingStats(unsigned long& sessionStartMs, const bool force = 
   if (!force && elapsed < READING_STATS_FLUSH_MS) return;
   const uint16_t minutes = static_cast<uint16_t>(elapsed / 60000UL);
   if (minutes == 0) return;
-  // Local-midnight day boundary: shift by the user's display UTC offset so an evening
-  // session doesn't get logged against "tomorrow" (UTC midnight is 9am in Japan).
-  // gmtime_r into a stack tm: gmtime()'s shared static buffer is not safe with the
-  // render task also converting time (matches HalClock's usage).
-  const time_t now = HalClock::localEpoch(SETTINGS.clockUtcOffsetQ);
+  // Local-midnight day boundary, so an evening session doesn't get logged against
+  // "tomorrow" (UTC midnight is 9am in Japan). Reads the process TZ rule that
+  // timezones::applyToClock() installs, which is DST-aware and follows the zone the
+  // user picked in Settings > System > Clock -- clockUtcOffsetQ is legacy and no
+  // longer tracks that choice. localtime_r into a stack tm: the shared static buffer
+  // is not safe with the render task also converting time.
+  const time_t now = time(nullptr);
   struct tm t = {};
-  gmtime_r(&now, &t);
+  localtime_r(&now, &t);
   const bool loadOk = READING_STATS_STORE.loadFromFile();
   READING_STATS_STORE.addMinutes(static_cast<uint16_t>(t.tm_year + 1900), static_cast<uint8_t>(t.tm_mon + 1),
                                  static_cast<uint8_t>(t.tm_mday), minutes);
@@ -114,24 +116,66 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
-inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
+// orientationOverride (>= 0) resolves the front pair against that orientation instead of the live
+// one, for a viewer that rotates the display to fit its content. reversed swaps what "previous" and
+// "next" mean, for content that reads right-to-left; it is applied to the RESULT rather than to the
+// button lookups, so it covers the front pair and the side buttons together and cannot fall out of
+// step with them, and tilt turns swap with them for the same reason.
+//
+// Private: callers use detectPageTurn() or detectPageTurnForOrientation() below, which cannot be
+// confused for one another at a call site.
+inline PageTurnResult detectPageTurnImpl(const MappedInputManager& input, const bool reversed,
+                                         const int orientationOverride) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool swapFront = input.isNavDirectionSwapped();
-  const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
-  const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+  // The FRONT pair turns pages, whichever screen axis that pair currently serves: left/right in
+  // portrait, up/down in landscape. Naming ScreenLeft/ScreenRight outright would bind the SIDE
+  // buttons in landscape -- they already turn pages through PageBack/PageForward, so the front
+  // buttons would simply do nothing, which is what happened. It also must not reach the side
+  // buttons by another name: their page-turn role is the user's to rebind via the per-button
+  // side actions.
+  const auto prevButton = orientationOverride >= 0 ? input.frontPairPrevious(static_cast<uint8_t>(orientationOverride))
+                                                   : input.frontPairPrevious();
+  const auto nextButton =
+      orientationOverride >= 0 ? input.frontPairNext(static_cast<uint8_t>(orientationOverride)) : input.frontPairNext();
+  const auto pageButtonTriggered = [&](const MappedInputManager::Button button) {
+    if (usePress) return input.wasPressed(button);
+    return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
+  };
   const bool prev =
-      tiltPrev ||
-      (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) || input.wasPressed(prevButton))
-                : (input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(prevButton)));
-  const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                         input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = tiltNext || (usePress ? (input.wasPressed(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasPressed(nextButton))
-                                          : (input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasReleased(nextButton)));
-  return {prev, next, tiltPrev || tiltNext};
+      tiltPrev || pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton);
+  const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext ||
+                    pageButtonTriggered(MappedInputManager::Button::PageForward) || pageButtonTriggered(nextButton);
+  // Explicit page bindings: the X3/X4 per-button side actions and the power-button page
+  // shortcuts. These name a DIRECTION the user chose by hand, so Reversed Page Turn does not
+  // apply to them -- they are added after the swap below, and a button set to "Next Page"
+  // advances in a tategaki book exactly as it does in a horizontal one. The shared roles keep
+  // being reversed, which is what that setting is for.
+  const bool explicitPrev =
+      input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE) ||
+      (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE &&
+       input.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN));
+  const bool explicitNext = input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE) ||
+                            (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
+                             input.wasReleased(MappedInputManager::Button::Power));
+  const bool tilt = tiltPrev || tiltNext;
+  if (reversed) return {next || explicitPrev, prev || explicitNext, tilt};
+  return {prev || explicitPrev, next || explicitNext, tilt};
+}
+
+// Page turns resolved against the live orientation -- the normal case.
+inline PageTurnResult detectPageTurn(const MappedInputManager& input, const bool reversed = false) {
+  return detectPageTurnImpl(input, reversed, -1);
+}
+
+// Page turns resolved against an explicit orientation, for a viewer that rotates the DISPLAY to fit
+// its content. A separate name rather than a defaulted parameter on detectPageTurn(): an extra
+// numeric argument there would bind silently to whatever the parameter happens to be, so a caller
+// passing an orientation could compile into something else entirely.
+inline PageTurnResult detectPageTurnForOrientation(const MappedInputManager& input, const bool reversed,
+                                                   const uint8_t orientation) {
+  return detectPageTurnImpl(input, reversed, static_cast<int>(orientation));
 }
 
 // A short power-button click closes the dictionary / word-lookup screens, but only when that same
@@ -146,9 +190,36 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 // release that arrives in the SAME input update as a Down release is the Power+Down screenshot
 // combo being let go, not a request to leave, so the screen survives being screenshotted. Down held
 // on its own is not consulted -- only the two releases coinciding.
-inline bool powerClickLeavesWordLookup(const MappedInputManager& input) {
+// A short power click inside the word-lookup panel, when the user has bound the short click to
+// Word Lookup. What it DOES depends on the view: on the page it selects the highlighted word;
+// in the definition it closes the dictionary outright.
+inline bool wordLookupPowerClick(const MappedInputManager& input) {
   return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::WORD_LOOKUP &&
-         input.wasReleased(MappedInputManager::Button::Power) && !input.wasReleased(MappedInputManager::Button::Down);
+         input.wasReleased(MappedInputManager::Button::Power) && !gpio.wasReleased(HalGPIO::BTN_DOWN);
+}
+
+// Stepping inside a panel that has no pages of its own (word select, a definition): the X3/X4
+// side actions and the power-button page shortcuts all say "previous/next page", so inside a panel
+// they move its cursor. One helper for all three lookup views, so a binding cannot work in one and
+// be missing from another -- power-as-Previous used to reach none of them.
+enum class PanelStep : uint8_t { None, Previous, Next };
+
+inline PanelStep lookupPanelStep(const MappedInputManager& input) {
+  if (input.sideActionFired(CrossPointSettings::SIDE_BTN_PREV_PAGE)) return PanelStep::Previous;
+  if (input.sideActionFired(CrossPointSettings::SIDE_BTN_NEXT_PAGE)) return PanelStep::Next;
+  // Skipped when Down is also released so the screenshot combo does not step the cursor.
+  if (!input.wasReleased(MappedInputManager::Button::Power) || gpio.wasReleased(HalGPIO::BTN_DOWN)) {
+    return PanelStep::None;
+  }
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_PREV_PAGE) return PanelStep::Previous;
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN) return PanelStep::Next;
+  return PanelStep::None;
+}
+
+// A side button bound to Word Lookup: it opens the panel from the reader and closes it from
+// inside, so the one button toggles.
+inline bool wordLookupSideToggle(const MappedInputManager& input) {
+  return input.sideActionFired(CrossPointSettings::SIDE_BTN_WORD_LOOKUP);
 }
 
 struct TouchPageTurn {
@@ -157,9 +228,28 @@ struct TouchPageTurn {
   unsigned long heldMs;
 };
 
-inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInputManager& input) {
+inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const MappedInputManager& input) {
   TouchPageTurn result{false, false, 0};
   if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
+    return result;
+  }
+
+  const bool swipeMode = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_SWIPE ||
+                         SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_SWIPE;
+  if (swipeMode) {
+    // Horizontal swipes turn pages; taps remain free for the centered reader-menu
+    // zone. A slow swipe never becomes a long-press chapter skip.
+    // Inverted reverses which way advances, the same choice INVERTED_TAP offers for taps:
+    // vertical Japanese text reads right-to-left, so the advancing gesture runs the other way.
+    const bool invertedSwipe = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_SWIPE;
+    const auto dir = input.wasSwipe();
+    if (dir == MappedInputManager::SwipeDir::Left) {
+      result.next = !invertedSwipe;
+      result.prev = invertedSwipe;
+    } else if (dir == MappedInputManager::SwipeDir::Right) {
+      result.prev = !invertedSwipe;
+      result.next = invertedSwipe;
+    }
     return result;
   }
 
@@ -171,11 +261,14 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
 
   const int16_t width = static_cast<int16_t>(renderer.getScreenWidth());
   const int16_t height = static_cast<int16_t>(renderer.getScreenHeight());
-  const int16_t previousZoneWidth = width / 3;
+  // Outer thirds only: the center column contains the reader-menu tap target
+  // (isTouchMenuTap below), so it must not double as a page turn.
+  const int16_t zoneWidth = width / 3;
+  const bool inverted = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_TAP;
   const freeink::ui::TapZone zones[] = {
-      {freeink::ui::Rect{0, 0, previousZoneWidth, height}, READER_TOUCH_PREV},
-      {freeink::ui::Rect{previousZoneWidth, 0, static_cast<int16_t>(width - previousZoneWidth), height},
-       READER_TOUCH_NEXT},
+      {freeink::ui::Rect{0, 0, zoneWidth, height}, inverted ? READER_TOUCH_NEXT : READER_TOUCH_PREV},
+      {freeink::ui::Rect{static_cast<int16_t>(width - zoneWidth), 0, zoneWidth, height},
+       inverted ? READER_TOUCH_PREV : READER_TOUCH_NEXT},
   };
 
   for (const auto& zone : zones) {
@@ -188,9 +281,56 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
   return result;
 }
 
-// Reader menu opens on a downward swipe from the top edge (replaces the old center tap-and-hold).
-inline bool isTouchMenuGesture(const MappedInputManager& input) {
-  return SETTINGS.touchReaderControls && input.hasTouch() && input.wasMenuGesture();
+// Tap in the center third of the screen: the tap path into the reader menu on
+// every touch board. The page-turn tap zones are the outer horizontal thirds,
+// so the centered rectangle remains free in tap mode. The Off/Swipe Up
+// alternatives are only surfaced on home-key boards (SettingsList), where the
+// menu stays reachable through the key's long-press function.
+inline bool isTouchMenuTap(const GfxRenderer& renderer, const MappedInputManager& input) {
+  if (!input.hasTouch()) return false;
+  if (SETTINGS.showReaderMenu != CrossPointSettings::READER_MENU_TAP) return false;
+  int x = 0;
+  int y = 0;
+  if (!input.wasScreenTapped(x, y)) return false;
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const int zoneWidth = width / 3;
+  const int zoneHeight = height / 3;
+  return x >= zoneWidth && x < width - zoneWidth && y >= zoneHeight && y < height - zoneHeight;
+}
+
+// Reader menu opens on the menu edge-swipe or a center-third tap. Home-key
+// actions are configured separately from screen gestures.
+// Menu gestures honor showReaderMenu independently of touchReaderControls,
+// which only gates page-turn touch zones in detectTouchPageTurn().
+// A vertical swipe inside a dictionary panel: +1 to read further down a long entry (finger moves
+// up, as when scrolling on a phone), -1 to go back up, 0 otherwise. Independent of
+// touchReaderControls on purpose -- that setting chooses how PAGES turn, and scrolling an entry
+// that does not fit is a different gesture that should work whatever it is set to. Horizontal
+// swipes are left to detectTouchPageTurn, and edge-anchored swipes to their own gestures (Home,
+// menu, light panel), so neither is stolen here.
+inline int definitionScrollSwipe(const MappedInputManager& input) {
+  if (!input.hasTouch()) return 0;
+  if (input.wasHomeGesture() || input.wasMenuGesture() || input.wasLightPanelGesture()) return 0;
+  switch (input.wasSwipe()) {
+    case MappedInputManager::SwipeDir::Up:
+      return 1;
+    case MappedInputManager::SwipeDir::Down:
+      return -1;
+    default:
+      return 0;
+  }
+}
+
+inline bool isTouchMenuGesture(const GfxRenderer& renderer, const MappedInputManager& input) {
+  if (!input.hasTouch()) return false;
+  if (input.wasMenuGesture()) return true;
+  // Bottom-edge up-swipe variant: only selectable on home-key boards, where
+  // Home is the capacitive key and the bottom edge is otherwise unused.
+  if (SETTINGS.showReaderMenu == CrossPointSettings::READER_MENU_SWIPE_UP && input.wasReaderMenuSwipeUp()) {
+    return true;
+  }
+  return isTouchMenuTap(renderer, input);
 }
 
 // One helper, blocking or deferred: the async form starts the refresh and
@@ -212,6 +352,25 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   }
 }
 
+// Display the B/W base of a page whose grayscale pass follows. Panels that
+// combine the base (Paper Mono) defer the activation so base + gray planes go
+// out as one waveform — displaying the base separately makes the gray pass
+// re-drive the whole text body (a visible flash). Other panels display
+// normally. Same refresh-cadence bookkeeping as displayWithRefreshCycle.
+inline void displayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+  if (renderer.grayscaleCapabilities().base != HalDisplay::GrayscaleBase::Combined) {
+    displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    return;
+  }
+  const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  renderer.displayGrayscaleBase(mode);
+  if (pagesUntilFullRefresh <= 1) {
+    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+  } else {
+    pagesUntilFullRefresh--;
+  }
+}
+
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build
 // the grayscale buffer. Only the content callback is re-rendered — status bars
 // and other overlays should be drawn before calling this.
@@ -220,6 +379,10 @@ template <typename RenderFn>
 void renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
   if (!renderer.storeBwBuffer()) {
     LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing");
+    // A combined-base panel may still hold a deferred B/W activation; flush it
+    // so the page reaches the panel even without its grays.
+    if (renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined)
+      renderer.cleanupGrayscaleWithFrameBuffer();
     return;
   }
 
@@ -253,23 +416,27 @@ struct BackNavCallback {
 // - with backShortToFileBrowser: go to file browser.
 inline bool handleBackNavigation(const MappedInputManager& mappedInput, ActivityManager& activityManager,
                                  const char* filePath, BackNavCallback goHome) {
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS) {
-    if (SETTINGS.backShortToFileBrowser) {
-      goHome.fn(goHome.ctx);
-    } else {
-      activityManager.goToFileBrowser(filePath);
-    }
-    return true;
+  // The reading surface deliberately has no left-edge swipe-to-exit path: in
+  // swipe page-turn mode a right swipe must page back instead. Home remains
+  // available through the board's dedicated Home gesture/key. Back swipes stay
+  // available in menus and other activities; only this reader-surface handler
+  // ignores them. Physical Back buttons are unaffected: isPressed() is
+  // button-only, and this guard skips just the gesture's own release frame.
+  if (mappedInput.wasBackGesture()) {
+    return false;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < GO_BACK_OR_HOME_MS) {
-    if (SETTINGS.backShortToFileBrowser) {
-      activityManager.goToFileBrowser(filePath);
-    } else {
-      goHome.fn(goHome.ctx);
-    }
-    return true;
+
+  const bool backTriggered = mappedInput.wasLongPressed(MappedInputManager::Button::Back, GO_BACK_OR_HOME_MS) ||
+                             mappedInput.wasReleased(MappedInputManager::Button::Back);
+  if (!backTriggered) return false;
+
+  const bool longPress = mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS;
+  if (longPress != SETTINGS.backShortToFileBrowser) {
+    activityManager.goToFileBrowser(filePath);
+  } else {
+    goHome.fn(goHome.ctx);
   }
-  return false;
+  return true;
 }
 
 }  // namespace ReaderUtils

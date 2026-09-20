@@ -5,7 +5,7 @@
 
 namespace NextBookFinder {
 
-// Collects up to maxCount book files that order after currentBookPath's filename
+// Collects up to maxCount book entries that order after currentBookPath's name
 // (natural sort, same ordering as the file browser) within the same folder.
 // Returns bare filenames in sorted order; the current file itself is excluded.
 // Single directory pass keeping only the maxCount best matches, so memory stays

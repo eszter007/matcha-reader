@@ -18,6 +18,9 @@
 
 namespace textsettings {
 
+PreviewLayout::PreviewLayout() = default;
+PreviewLayout::~PreviewLayout() = default;
+
 namespace {
 
 // Map the paragraph-alignment setting to the engine's CssTextAlign (BOOK_STYLE = justified)
@@ -54,13 +57,13 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
 
   parsed.layoutAndExtractLines(
       renderer, fontId, static_cast<uint16_t>(textWidth),
-      [&layout](std::shared_ptr<TextBlock> line, uint32_t) { layout.lines.push_back(std::move(line)); });
+      [&layout](std::unique_ptr<TextBlock> line, uint32_t) { layout.lines.push_back(std::move(line)); });
 }
 
 }  // namespace
 
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName) {
+                   int height, const char* familyName, const char* sizeName, const int fontId) {
   const int left = previewPadding;
   const int width = renderer.getScreenWidth() - (previewPadding * 2);
   if (width <= 0 || height <= 0) return;
@@ -73,7 +76,6 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
   const int labelY = top + height - previewPadding - labelH;
   renderer.drawText(UI_10_FONT_ID, left, labelY, labelBuf);
 
-  const int fontId = SETTINGS.getReaderFontId();
   if (fontId == 0) return;
 
   const int lineH = renderer.getTextHeight(fontId);

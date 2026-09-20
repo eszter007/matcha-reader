@@ -29,6 +29,16 @@ class FontDecompressor {
   // slab re-fills lazily afterwards.
   void freeGlyphSlab();
 
+  // Suspend the persistent glyph slab and hand its SLAB_BYTES back. The slab accelerates REPEAT
+  // renders of stray fallback glyphs, which is a UI-text optimisation -- by its own contract
+  // "during reading it only ever holds stray fallback glyphs", so inside a reading/lookup session
+  // it buys little and costs 24KB of the contiguous heap those sessions are starved of (device:
+  // maxAlloc falling to 4596 mid-session, font caches thrashing, the advance table failing to
+  // allocate at all). Suspended it also refuses to re-fill, so it cannot creep back during the
+  // session. Restore with setSlabEnabled(true) on the way out.
+  void setSlabEnabled(bool enabled);
+  bool slabEnabled() const { return slabEnabled_; }
+
   // Pre-scan UTF-8 text and extract needed glyph bitmaps into a flat page buffer.
   // Each group is decompressed once into a temp buffer; only needed glyphs are kept.
   // Returns the number of glyphs that couldn't be loaded (0 on full success).
@@ -124,6 +134,7 @@ class FontDecompressor {
     uint32_t glyphIndex;
     uint32_t offset;  // into slabBuf
   };
+  bool slabEnabled_ = true;
   uint8_t* slabBuf = nullptr;
   SlabEntry* slabEntries = nullptr;
   uint16_t slabEntryCount = 0;

@@ -25,12 +25,18 @@ struct PreviewKey {
 
 // Cached engine preview lines + the key that produced them
 struct PreviewLayout {
-  std::vector<std::shared_ptr<TextBlock>> lines;
+  PreviewLayout();
+  ~PreviewLayout();
+
+  std::vector<std::unique_ptr<TextBlock>> lines;
   PreviewKey key;
 };
 
-// Draws the sample-text pane via the reader engine, reusing layout across redraws
+// Draws the sample-text pane via the reader engine, reusing layout across redraws.
+// `fontId` is the caller's EFFECTIVE reader font, not SETTINGS.getReaderFontId(): for a book
+// whose script the selected face cannot carry, the page renders with a substitute, and a preview
+// that resolved its own font would promise a face and a size the page will not use.
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName);
+                   int height, const char* familyName, const char* sizeName, int fontId);
 
 }  // namespace textsettings

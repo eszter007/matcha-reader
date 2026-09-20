@@ -2,10 +2,13 @@
 
 #include <Epub/VerticalParsedText.h>
 #include <GfxRenderer.h>
+#include <I18n.h>
+#include <freertos/FreeRTOS.h>
 
 struct Rect;
 class Page;
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -13,20 +16,60 @@ class Page;
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
+// What the vertical reader hands the panel so the word cursor can be shown ON the page (select
+// mode) instead of opening straight into the definition view.
+//
+// The panel deliberately does NOT own a copy of the page: a VerticalPage runs to ~15KB of glyphs,
+// which is the same headroom the scan and the dictionary caches need. It works from the page
+// geometry below plus the pixels the reader already left in the framebuffer, and when those
+// pixels are gone (returning from a definition) it asks the reader to paint them again.
+struct VerticalSelectContext {
+  int marginLeft = 0;
+  int marginTop = 0;
+  // Kihon-hanmen cell, measured by the reader while its fonts were still resident. Measuring it
+  // in the panel would probe a released SD font and silently fall back to the line height.
+  int cellPx = 0;
+  // Repaints the reader's current page (body + status bar) into the framebuffer. Called from the
+  // panel's render(), i.e. under the render lock, which is what the shared page slot requires.
+  // Returns false when the page could not be drawn (slot not re-faultable), so the panel can
+  // retry on the next render instead of leaving a blank frame with a cursor on it.
+  bool (*repaintPage)(void*) = nullptr;
+  void* repaintCtx = nullptr;
+  // The framebuffer already holds that page, so the first render can skip the repaint entirely
+  // and just place the cursor -- this is what makes opening the panel feel instant. False when
+  // the panel is opened from the reader menu, which left its own pixels on screen.
+  bool pageOnScreen = false;
+  // Screen point of the long press that opened the panel, or -1 when it was opened from the
+  // menu or a key. The panel selects the word under it and goes straight to the definition,
+  // which is what a hold means on the glass (#278).
+  int lookupAtX = -1;
+  int lookupAtY = -1;
+  bool valid() const { return repaintPage != nullptr && cellPx > 0; }
+};
+
 class EpubReaderWordLookupActivity final : public Activity {
  public:
   // Progressive open (see WordSelectionScan): the constructor only scans far enough to show the
   // first word (~300ms); the rest of the page is mapped in the background from loop(). When
   // scanCachePath is given, a completed scan is persisted there keyed by (spine, page) -- a
   // later re-open of the same unchanged page loads it back and skips scanning entirely.
-  // Vertical (tategaki) reading mode.
+  // Vertical (tategaki) reading mode. With a valid selectContext the panel opens in SELECT mode:
+  // the page stays on screen with the current word highlighted, and the definition view is only
+  // entered on Confirm. Without one it opens straight into the definition view (the horizontal
+  // and manga behaviour).
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         const VerticalPage& page, std::string scanCachePath = "",
-                                        uint16_t spineIndex = 0, uint16_t pageIndex = 0);
+                                        uint16_t spineIndex = 0, uint16_t pageIndex = 0,
+                                        const VerticalSelectContext& selectContext = {},
+                                        // Start of the next page, so a word split across the page
+                                        // boundary still resolves. See appendLookupContext().
+                                        const std::string& lookupContext = "", uint32_t lookupContextParagraph = 0);
   // Horizontal (yokogaki) reading mode.
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Page& page,
-                                        std::string scanCachePath = "", uint16_t spineIndex = 0,
-                                        uint16_t pageIndex = 0);
+                                        std::string scanCachePath = "", uint16_t spineIndex = 0, uint16_t pageIndex = 0,
+                                        // See the vertical constructor: start of the next page, so
+                                        // a word split across the boundary still resolves.
+                                        const std::string& lookupContext = "");
 
   void onEnter() override;
   void onExit() override;
@@ -39,18 +82,207 @@ class EpubReaderWordLookupActivity final : public Activity {
  private:
   WordSelectionScan scan;
 
+  // Select: the page with a highlight box on the current word. Definition: the full-screen
+  // dictionary entry. Confirm moves Select -> Definition, Back moves back.
+  enum class Mode : uint8_t { Select, Definition };
+  Mode mode = Mode::Definition;
+  VerticalSelectContext selectCtx;
+
+  // --- Select mode state -------------------------------------------------------------------
+  // The framebuffer holds the page, so a cursor move only has to XOR two boxes.
+  // The last lookup found entries but could not load them for want of contiguous heap, even
+  // after a font-cache reclaim. Reported as low memory instead of "no match", which would be a
+  // false statement about the word.
+  bool lowMemoryResult = false;
+  // Set when a lookup was actually defeated by the heap. Gates the pre-emptive font release in
+  // performLookup(), so the reload it causes is paid only after a real failure.
+  bool lastLookupHeapLimited = false;
+  // Latched when a font-cache release proved unable to free anything contiguous, so the panel
+  // stops paying for a reclaim that cannot help. Per-activity by design -- see reclaimFontHeap().
+  bool reclaimIsFutile = false;
+  bool selectPageDrawn = false;
+  // Whether the framebuffer holds the reader's page for the definition card to float over. Unlike
+  // selectPageDrawn it survives the definition being drawn -- the card covers only its own box --
+  // and it matters on the path that never renders select mode: a long press opens the definition
+  // directly, so after a chapter build (which borrows the framebuffer as scratch, hence
+  // pageOnScreen = false) nothing else would ever repaint the page behind the card. Render task
+  // only, apart from its initialization in the constructor.
+  bool pageBehindCard = false;
+  // A column jump must be immediate even on a cold page. Until dictionary segmentation catches
+  // up, highlight the nearest raw text cell and allow it to be looked up directly.
+  size_t provisionalGlyph = SIZE_MAX;
+
+  // Highlight geometry in screen coordinates. Computed on the main task whenever the cursor
+  // moves and read by the render task: the render path deliberately does NOT index the scan's
+  // vectors, because the background walk grows them from the main task and a reallocation under
+  // a render would be a use-after-free.
+  struct HighlightBox {
+    int16_t x = 0;
+    int16_t y = 0;
+    int16_t w = 0;
+    int16_t h = 0;
+  };
+  // A match spans one column, or two when it wraps a column break; the cap only bites on an
+  // implausibly long digit run, where dropping the tail of the box is purely cosmetic.
+  static constexpr int kMaxHighlightBoxes = 4;
+  HighlightBox cursorBoxes[kMaxHighlightBoxes];
+  int cursorBoxCount = 0;
+  // Guards cursorBoxes/cursorBoxCount only, and only for the copy in and the copy out: the two
+  // tasks must never pair one move's count with another move's rectangles. A ~32-byte copy is
+  // short enough for a critical section, and far cheaper than making the main loop wait on the
+  // render lock, which is held across a full e-ink refresh.
+  portMUX_TYPE boxMux = portMUX_INITIALIZER_UNLOCKED;
+  // What is XOR-ed into the framebuffer right now, owned by the render task alone. Kept separate
+  // from cursorBoxes so the erase always matches what was actually drawn, even if the cursor
+  // moved while a render was in flight -- an erase against the wrong rectangle would leave
+  // inverted debris on the page.
+  HighlightBox drawnBoxes[kMaxHighlightBoxes];
+  int drawnBoxCount = 0;
+
+  // The reader opens the panel on a long press, so the Confirm release that follows belongs to
+  // that press, not to a selection. Ignore it until a fresh press is seen.
+  bool confirmPressSeen = false;
+
+  // The touch long press that opened the panel, replayed here as if it were a tap in select
+  // mode. Held rather than applied once, because the page is segmented progressively: the point
+  // may name text the scan has not reached yet, so it is retried from loop() until a word
+  // answers or the scan finishes without one. -1 = nothing to replay.
+  int openAtX = -1;
+  int openAtY = -1;
+  // Select the word under the stored point and open its definition. False while no word there
+  // is known yet, which leaves the point to be retried.
+  bool resolveOpenPoint();
+
+  // A move the user has already asked for that the sequential scan has not reached yet. Page
+  // positions are known for every cell from the moment the page loads, but which cell STARTS a
+  // word is only known below the scan frontier -- so a jump into unmapped text is parked here
+  // and completed from loop() as the frontier passes it, instead of blocking the activity (Back
+  // and further presses keep working) or refusing the move. This is what makes the bottom and
+  // the left of a page reachable while the page is still being mapped.
+  struct PendingMove {
+    enum class Kind : uint8_t { None, Word, Column };
+    Kind kind = Kind::None;
+    int delta = 0;              // direction, in words or in columns
+    uint16_t targetColumn = 0;  // Column: the column being entered
+    uint16_t anchorRow = 0;     // Column: the row to land nearest to
+    uint32_t startedAt = 0;     // Column: device timing for the cold-jump performance log
+  };
+  PendingMove pending;
+  // How long a parked move may hold the panel before it is abandoned. handleSelectInput()
+  // deliberately swallows Confirm while a move is outstanding, so a wait that cannot finish
+  // quickly makes the whole view look frozen -- and the column walk's re-aim can keep the scan
+  // frontier crawling for tens of seconds on a dictionary-dense page. Generous enough that a
+  // normal cold jump (hundreds of ms on device) always completes.
+  static constexpr uint32_t kPendingMoveTimeoutMs = 2500;
+  // When the parked move was first SEEN waiting. Deliberately not PendingMove::startedAt: that
+  // field exists for the cold-jump performance log and only one of the three paths that park a
+  // Column move fills it in, so keying the timeout on it left the hanging paths unguarded.
+  // 0 = no move outstanding.
+  uint32_t pendingWaitSinceMs = 0;
+
+  void renderSelect();
+  // Screen boxes for one selectable word, written into `out` (at most kMaxHighlightBoxes),
+  // returning how many. The single source of truth for glyph->screen geometry: both the drawn
+  // highlight and the tap hit-test go through it, so they cannot drift apart. Main task only
+  // (it reads the scan vectors).
+  int buildBoxesFor(int selectableIndex, HighlightBox* out) const;
+  // Selectable index whose word covers the screen point, or -1 for a tap that missed every word
+  // (a gutter, a margin, unscanned text). Main task only.
+  int selectableIndexAtPoint(int x, int y) const;
+  // Selectable index whose boxes lie closest to the point, with that gap in pixels (0 = inside).
+  // -1 when the page has no selectable words. Main task only.
+  int nearestSelectableToPoint(int x, int y, int& outDistance) const;
+  // Rebuild cursorBoxes for the current cursor. Main task only (it reads the scan vectors).
+  // A match that wraps from the foot of one column to the head of the next becomes one box per
+  // column, so the highlight never covers the gutter between them.
+  void refreshCursorBoxes();
+  // XOR the given boxes. Self-inverse -- the same call over the same boxes erases them.
+  void invertBoxes(const HighlightBox* boxes, int count) const;
+  void enterDefinition();
+  void returnToSelect();
+  bool handleSelectInput();
+  bool handleDefinitionInput();
+  void moveSelection(int delta);
+  void jumpColumn(int direction);
+  // Index math for a reading-order step, WITHOUT the dictionary read moveCursor() does. Returns
+  // false when the step needs text the scan has not mapped yet, leaving outIndex unchanged.
+  bool stepCursor(int delta, int& outIndex);
+  void resolvePendingMove();
+  // First and last allGlyphs index of a column, or false when the page has no such column.
+  bool columnRange(uint16_t column, size_t& first, size_t& last) const;
+  // Unmapped cell in a column nearest the row where a jump wants to land.
+  bool closestUnmappedInColumn(uint16_t column, uint16_t anchorRow, size_t& outGlyph, int& outDistance) const;
+  bool closestGlyphInColumn(uint16_t column, uint16_t anchorRow, size_t& outGlyph) const;
+  // Lowest and highest column on the page. Layout data, known as soon as the page loads.
+  bool columnBounds(uint16_t& outMin, uint16_t& outMax) const;
+  // Point the walk at the next column in `direction` so a second jump the same way finds it
+  // already segmented. Costs nothing when that column is done: aimAtGlyph() ignores it.
+  void prefetchColumn(uint16_t fromColumn, uint16_t anchorRow, int direction);
+  // Selectable entry in `column` nearest `anchorRow`; -1 when the column has none (mapped).
+  int selectableInColumn(uint16_t column, uint16_t anchorRow) const;
+  // Open the cursor mid-page instead of at the first word, so any word on the page is at most
+  // half a page of presses away (the horizontal picker does the same). Parks as a pending column
+  // move when the walk has not reached the middle yet.
+  void selectMiddleOfPage();
+  // Middle column/row of the page and the allGlyphs index that column starts at -- where the
+  // wrapped walk begins. False when the page has no glyphs. Layout data only, no dictionary work.
+  bool middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outFirstGlyph) const;
+
   int cursorIndex = 0;
 
   bool hasResult = false;
+  // Which dictionary the shown entry came from, for the panel footer. A literal, not a tr()
+  // string: these are the dictionaries' own names, the same way the English panel shows the
+  // .ifo's bookname. Null until a lookup lands.
+  const char* resultSource = nullptr;
+  std::string resultDictionaryLabel;
+  const char* dictionaryLabel() const {
+    return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();
+  }
   std::string resultHeadword;
   std::string resultDefinition;
+  std::string resultReading;
+  std::string resultGrammar;
   int resultMatchLen = 0;
   bool hasGrammar = false;
   std::string grammarHeadword;
   std::string grammarDefinition;
-  int scrollOffset = 0;  // lines scrolled within current entry
-  int totalLines = 0;    // total lines in current definition
-  int maxScroll = 0;     // max scroll offset (leaves a screenful visible)
+  // Tategaki shows ONE source per page: the merged definition is split at the separators the
+  // dictionaries put between entries, each piece keeping the attribution line it ended with as
+  // its footer label. Left/Right walk these; the word cursor does not move from the definition
+  // view here, which is what horizontal and manga use those buttons for.
+  std::vector<std::string> sectionText;
+  std::vector<std::string> sectionLabel;
+  std::vector<std::string> sectionReading;
+  std::vector<std::string> sectionGrammar;
+  // Which Japanese index answered each piece: several can answer one lookup, so the panel names
+  // it. StrId rather than a string: these are UI words, not the dictionaries' own titles.
+  std::vector<StrId> sectionKind;
+  // Headword to show for a piece when it is not the word that was looked up: the grammar index
+  // answers with a pattern of its own (なんて for a lookup of なんて言う), and naming it in the
+  // panel header is clearer than repeating the surface word above an entry about the pattern.
+  std::vector<std::string> sectionHead;
+  int currentSection = 0;
+  void splitDefinitionIntoSections();
+  void moveSection(int delta);
+  // Text and footer label for what is on screen: the current section in tategaki, the whole
+  // merged definition otherwise.
+  const std::string& visibleDefinition() const;
+  const char* visibleLabel() const;
+  const char* visibleKind() const;
+  const char* visibleHeadword() const;
+  const char* visibleReading() const;
+  const char* visibleGrammar() const;
+
+  int scrollOffset = 0;     // lines scrolled within current entry
+  int totalLines = 0;       // total lines in current definition
+  int maxScroll = 0;        // max scroll offset (leaves a screenful visible)
+  int visibleCapacity = 1;  // body lines that fit at once; the step size in paged mode
+
+  // Vertical (tategaki) reading pages the definition a screenful at a time and shows a page
+  // counter, instead of the free scrolling the horizontal and manga panels keep. scrollOffset
+  // is still the source of truth -- paging just quantizes it to whole screenfuls.
+  bool pagedDefinition() const { return selectCtx.valid(); }
 
   ButtonNavigator buttonNavigator;
 
@@ -81,11 +313,14 @@ class EpubReaderWordLookupActivity final : public Activity {
   // True while performLookup() is executing; render() shows "Loading..." instead of
   // "No match found" so fast navigation never flashes a false negative.
   bool lookupInFlight = false;
-  std::string buildLookupText(size_t startIdx) const;
+  std::atomic<bool> noMatchPopupPending{false};
+  size_t currentAllGlyphIndex() const;
+  std::string buildLookupText() const;
 
   bool initialRenderDone = false;
   int fastRefreshCount = 0;
   static constexpr int kFullRefreshInterval = 10;
 
-  void renderContentArea(const Rect& screen, int contentTop);
+  // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
+  void renderContentArea(const Rect& body);
 };

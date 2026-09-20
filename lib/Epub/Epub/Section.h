@@ -1,4 +1,6 @@
 #pragma once
+#include <HalPowerManager.h>
+
 #include <functional>
 #include <memory>
 #include <optional>
@@ -54,7 +56,18 @@ class Section {
     // the EMA is stepped once per build advance (not per redraw) to damp that wobble.
     float smoothedEstimate = 0;
     uint32_t smoothedAtConsumed = 0;
+    // Held for the whole build, not per tick. Laying out pages is not "idle" just because no
+    // button was pressed: the main loop drops the CPU to LOW_POWER_FREQ after
+    // IDLE_POWER_SAVING_MS of no input (10 MHz against 160 on the C3). A per-tick lock let the
+    // throttle re-engage in the gaps between ticks -- measured as six drop/restore cycles inside
+    // one 4.6s chapter build, each spending ~62ms at a sixteenth of the clock. Living in
+    // BuildContext ties it to exactly the span that must stay at full speed.
+    HalPowerManager::Lock powerLock;
   };
+  // Opens the committed section file for the read-only probes, quietly when it is absent.
+  // See the definition: a missing file is expected there, and the SDK logs unconditionally.
+  bool openCommittedFile(HalFile& f) const;
+
   std::unique_ptr<BuildContext> build_;
   bool buildComplete_ = false;
   // Pages laid out by the active build (== build_->lut.size()). Distinct from pageCount,
@@ -106,7 +119,17 @@ class Section {
   bool startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);
   // Lay out up to maxPages more pages (maxPages <= 0 = build to completion). Returns
   // false on error (the build is abandoned). Sets isBuildComplete() when finished.
-  bool buildSomeMore(int maxPages);
+  //
+  // maxMillis (0 = no limit) additionally ends the call once that much wall time has passed,
+  // checked between parse steps. Background ticks run on the loop task, so whatever one call
+  // costs is exactly how long input handling is delayed; pacing on pages alone bounds that only
+  // as well as pages happen to be uniform, and they are not. The build keeps its state and
+  // resumes next tick, so this is a yield, not a cancellation.
+  //
+  // Deliberately a clock, not an input check: reading the buttons from in here means calling
+  // InputManager::getState(), which runs the touch state machine as a side effect and consumes
+  // the very edge events the loop task is waiting to handle.
+  bool buildSomeMore(int maxPages, uint32_t maxMillis = 0);
   bool isBuilding() const { return static_cast<bool>(build_); }
   bool isBuildComplete() const { return buildComplete_; }
   // Best-known total page count: the exact pageCount once finalized, or a smoothed byte-based

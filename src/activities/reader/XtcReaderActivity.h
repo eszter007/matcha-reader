@@ -9,22 +9,20 @@
 
 #include <Xtc.h>
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "BookmarkEntry.h"
-#include "EndOfBookOptions.h"
-#include "activities/Activity.h"
+#include "ReaderActivity.h"
 #include "activities/reader/EpubReaderMenuActivity.h"
 
-class XtcReaderActivity final : public Activity {
+class XtcReaderActivity final : public ReaderActivity {
   std::shared_ptr<Xtc> xtc;
 
   uint32_t currentPage = 0;
-  int pagesUntilFullRefresh = 0;
-  // Session start for reading-stats recording (mirrors EpubReaderActivity).
-  unsigned long readingSessionStartMs = 0;
 
   // Reader menu / bookmarks / screenshot state (page-based, mirrors the manga reader).
   std::vector<BookmarkEntry> cachedBookmarks;
@@ -50,9 +48,6 @@ class XtcReaderActivity final : public Activity {
   size_t pageBufferSize = 0;
   bool ensurePageBuffer(size_t needed);
   void freePageBuffer();
-  // Next-book suggestion menu for the End-of-Book screen
-  EndOfBookOptions endOfBookOptions;
-
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {
     int currentPage;
@@ -66,24 +61,21 @@ class XtcReaderActivity final : public Activity {
   void saveProgress() const;
   void loadProgress();
 
+  bool loadBook() override;
+  bool hasBook() const override { return xtc != nullptr; }
+  std::string getBookTitle() const override { return xtc ? xtc->getTitle() : ""; }
+  std::string getBookAuthor() const override { return xtc ? xtc->getAuthor() : ""; }
+  std::string getBookThumbBmpPath() const override { return xtc ? xtc->getThumbBmpPath() : ""; }
+  void onReaderEnter() override;
+  void onReaderExit() override;
+  void readerLoop() override;
+  bool isAtEndOfBook() const override;
+  void onReturnFromEndOfBook() override;
+
  public:
-  explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Xtc> xtc,
-                             int initialRefreshCountdown)
-      : Activity("XtcReader", renderer, mappedInput),
-        xtc(std::move(xtc)),
-        pagesUntilFullRefresh(initialRefreshCountdown) {}
-  void onEnter() override;
-  void onExit() override;
-  void loop() override;
+  explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                             bool allowFastInitialRefresh)
+      : ReaderActivity("XtcReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   void render(RenderLock&&) override;
-  bool isReaderActivity() const override { return true; }
-  bool handleForcedRefresh() override {
-    {
-      RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
-    }
-    requestUpdate();
-    return true;
-  }
   ScreenshotInfo getScreenshotInfo() const override;
 };

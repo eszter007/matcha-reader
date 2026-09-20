@@ -33,17 +33,30 @@ class SdCardFontSystem {
   /// Applies immediately (loads/unloads the fallback and recomputes the global fallback).
   void setJpFallbackNeeded(GfxRenderer& renderer, bool needed);
 
-  /// Release every resident SD font while an image-only reader owns the screen. Manga JPEG/PNG
-  /// decoders need a 36-60 KB allocation and cannot coexist reliably with the selected reader
-  /// font plus its size-matched UI fallbacks on the ESP32-C3 heap. The saved selection is kept;
-  /// ensureLoaded() restores it when text rendering is needed again.
-  void releaseForImageDecode(GfxRenderer& renderer);
+  /// Release every resident SD font -- the selected family, its companion fallback, their
+  /// size-matched UI fallback registrations, and the glyph slabs FontCacheManager holds for
+  /// them. For any screen that needs a large allocation and does not render book text: manga
+  /// JPEG/PNG decoders (a 36-60 KB block) and the WiFi-backed font catalog (esp_wifi_init plus
+  /// two TLS sessions) both call it. Strictly more than FontCacheManager::releaseAllFontMemory(),
+  /// which frees the glyph slabs but leaves the SdCardFont objects themselves allocated. The
+  /// saved selection is kept, and so is the JP-fallback policy; ensureLoaded() restores both when
+  /// text rendering is needed again. To drop the Japanese companion for good, the caller says so
+  /// with setJpFallbackNeeded(renderer, false) -- releasing memory does not decide policy.
+  void releaseAllResidentFonts(GfxRenderer& renderer);
 
   /// Font ID of the loaded companion/fallback font (0 when none). See effective-reader-font
   /// substitution in EpubReaderActivity: when the SELECTED font can't carry a book's primary
   /// script, the companion becomes the reader font for that book so all layout and vertical
   /// positioning derives from a font that actually contains the glyphs.
   int companionFontId() const;
+
+  /// The font a book of this script actually renders with: the selected face when it can carry
+  /// the script, and the substitute when it cannot -- the companion for a Japanese book whose
+  /// font has no CJK, the built-in serif for a Latin book whose font has no Latin (a CJK-only
+  /// family; the companion is chosen for Japanese and would set an English book in a Japanese
+  /// face). EVERY site that renders book text must ask this rather than getReaderFontId():
+  /// layout, drawing and the settings preview alike, or they disagree about both face and size.
+  int effectiveReaderFontId(bool jpBook) const;
 
   /// True when the currently selected reader font covers the codepoint. Built-in fonts are
   /// treated as Latin-complete and CJK-less (their CJK subset is a degraded fallback, not
@@ -54,6 +67,26 @@ class SdCardFontSystem {
   /// NotoSerifJP): hidden from font pickers and used automatically as the Japanese glyph
   /// fallback instead of being selected directly.
   static bool isBuiltinJpExtension(const std::string& familyName);
+
+  /// Families hidden from the picker that can nonetheless end up rendering the row named by
+  /// `sdFamilyName` (empty for the built-in family `fontFamily`): the coverage variant that
+  /// stands in for it (resolveSelectedFamily), and on a built-in row the JP companion that
+  /// carries a Japanese book (ensureJpFallback + EpubReaderActivity::effectiveReaderFontId).
+  /// Their installed sizes are therefore selectable on that row -- see readerFontPointSizes().
+  ///
+  /// Writes up to `cap` entries into `out` and returns how many. Static and registry-driven so
+  /// the settings UI can ask without owning a font system.
+  static constexpr uint8_t MAX_STAND_INS = 2;
+  static uint8_t readerStandInFamilies(const SdCardFontRegistry* registry, const char* sdFamilyName, uint8_t fontFamily,
+                                       const SdCardFontFamilyInfo** out, uint8_t cap);
+
+  /// True for SD families that only widen the coverage of a family the device already offers
+  /// (NotoSerifExtended over the built-in Noto Serif, PagellaIPA over an installed Pagella).
+  /// The picker shows the base alone and resolveSelectedFamily() decides which of the two is
+  /// resident, so one typeface is one row. A variant whose base is NOT installed stays
+  /// visible: collapsing a row must never make its glyphs unreachable. `registry` is where the
+  /// base is looked up; a null registry can only match the built-in bases.
+  static bool isCoverageVariant(const std::string& familyName, const SdCardFontRegistry* registry);
 
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
@@ -84,6 +117,34 @@ class SdCardFontSystem {
   ///    card (extension families first) at the reader size and use that
   ///  - no CJK family on the card -> the built-in jōyō-subset fallback captured at begin()
   void ensureSelectedLoaded(GfxRenderer& renderer);
+
+  /// Base family a coverage variant widens ("NotoSerifExtended" -> "NotoSerif"), or empty when
+  /// the name carries none of the known suffixes. Does not check that the base exists.
+  static std::string coverageVariantBase(const std::string& familyName);
+
+  /// Installed variant standing in for `baseName`, or nullptr when the card has none.
+  static const SdCardFontFamilyInfo* findCoverageVariant(const SdCardFontRegistry* registry,
+                                                         const std::string& baseName);
+
+  /// Point sizes the current reader row offers: its own family's sizes widened by its
+  /// stand-ins'. The same set the pickers show, so a size the user can select is never snapped
+  /// away by a load.
+  std::vector<uint8_t> rowPointSizes() const;
+
+  /// Family that should be resident for the current selection and reading context. Empty means
+  /// "the built-in reader font, nothing to load". This is a runtime substitution only —
+  /// SETTINGS.sdFontFamilyName keeps naming what the user actually picked.
+  std::string resolveSelectedFamily() const;
+  // True when the named face ships `pt` exactly (empty name = a built-in family). Drives the
+  // stand-in choice in resolveSelectedFamily(): a size only a stand-in has must render with it.
+  bool faceShipsSize(const std::string& familyName, uint8_t pt) const;
+
+  /// Below this largest-free-block figure, ensureJpFallback() drops the glyph caches before
+  /// loading the companion. Set above the biggest single block that load asks for -- a broad CJK
+  /// face's interval table at a large point size, measured at 26,592 B for NotoSansJP 20 -- so
+  /// the release happens while it can still help rather than after the failure.
+  static constexpr uint32_t COMPANION_LOAD_HEADROOM = 40 * 1024;
+
   void ensureJpFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);
   bool loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name, uint32_t cp) const;
@@ -92,10 +153,11 @@ class SdCardFontSystem {
   const EpdFontFamily* defaultGlobalFallback_ = nullptr;
   bool jpFallbackNeeded_ = false;
   // Load the active SD family at the built-in UI point sizes and register each
-  // as a size-matched CJK fallback for the corresponding UI font, so CJK book
-  // titles/list rows render at the same size as the surrounding Latin UI text.
-  // No-op when no SD family is loaded. Safe to call repeatedly (sizes already
-  // loaded are reused).
+  // as a size-matched script fallback for the corresponding UI font, so book
+  // titles/list rows in scripts the built-ins lack (CJK, Greek, Cyrillic, ...)
+  // render at the same size as the surrounding Latin UI text. No-op when no SD
+  // family is loaded. Safe to call repeatedly (sizes already loaded are
+  // reused).
   void setupUiFallbacks(GfxRenderer& renderer);
 
   SdCardFontRegistry registry_;

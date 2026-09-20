@@ -5,8 +5,21 @@ on:
 
 jobs:
   build-release-candidate:
-    if: startsWith(github.ref_name, 'release/')
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pio_env: gh_release_rc
+            asset: firmware.bin
+          - pio_env: sticky-gh_release_rc
+            asset: firmware-sticky.bin
+          - pio_env: x4pro-gh_release_rc
+            asset: firmware-x4pro.bin
+          - pio_env: x4c-gh_release_rc
+            asset: firmware-x4c.bin
+          - pio_env: papermono-gh_release_rc
+            asset: firmware-papermono.bin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -26,38 +39,63 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        # littlefs-python alongside the core: the espressif32 builder imports `littlefs`
-        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from
-        # system site-packages while installing its own dependencies into a penv the builder
-        # never sees. Without it every build and cppcheck job dies with ModuleNotFoundError.
         run: |
           uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
-          uv pip install --system littlefs-python fatfs-ng pyyaml
+          # platform-espressif32's builder/main.py imports these unconditionally; its own
+          # penv bootstrap (builder/penv_setup.py) is supposed to install them automatically
+          # but isn't picking them up reliably in this runner image, so pin them explicitly.
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-${{ runner.os }}-
+          key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio6119s481-${{ runner.os }}-
 
       - name: Extract env
         run: |
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
           echo "BRANCH_SUFFIX=${GITHUB_REF_NAME#release/}" >> $GITHUB_ENV
 
+      - name: Pin the Core inside the platform's penv
+        run: |
+          set -euo pipefail
+          # platform-espressif32 runs the second stage of a custom_sdkconfig build through the
+          # PlatformIO Core in its OWN penv, which penv_setup.py installs as
+          # `pioarduino>=6.1.19` with --upgrade -- so it drifts past the Core pinned above.
+          # 6.1.19 pins tool-scons 4.8.1 (the platform's own pin), 6.2.0 pins 4.11.1, and both
+          # unpack into ~/.platformio/packages/tool-scons: the second install replaces the
+          # package under a running build and the link step dies in the half-swapped directory
+          # ("No module named 'SCons.Tool.FortranCommon'"). Pinning the penv keeps one SCons.
+          pio pkg install -e ${{ matrix.pio_env }}
+          penv_python="$HOME/.platformio/penv/bin/python"
+          test -x "$penv_python" || { echo "No penv Python at $penv_python"; exit 1; }
+          uv pip install --python "$penv_python" "pioarduino==6.1.19"
+          "$penv_python" -c "import platformio; print('penv Core', platformio.VERSION)"
+
       - name: Build CrossPoint Release Candidate
         env:
           CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
-        run: pio run -e gh_release_rc
+        run: pio run -e ${{ matrix.pio_env }} -j1
+
+      - name: Name release asset
+        run: |
+          if [ "${{ matrix.asset }}" != "firmware.bin" ]; then
+            cp ".pio/build/${{ matrix.pio_env }}/firmware.bin" \
+              ".pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}"
+          fi
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: CrossPoint-RC-${{ env.BRANCH_SUFFIX }}
+          name: CrossPoint-RC-${{ env.BRANCH_SUFFIX }}-${{ matrix.pio_env }}
           path: |
-            .pio/build/gh_release_rc/bootloader.bin
-            .pio/build/gh_release_rc/firmware.bin
-            .pio/build/gh_release_rc/firmware.elf
-            .pio/build/gh_release_rc/firmware.map
-            .pio/build/gh_release_rc/partitions.bin
+            .pio/build/${{ matrix.pio_env }}/bootloader.bin
+            .pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}
+            .pio/build/${{ matrix.pio_env }}/firmware.elf
+            .pio/build/${{ matrix.pio_env }}/firmware.map
+            .pio/build/${{ matrix.pio_env }}/partitions.bin

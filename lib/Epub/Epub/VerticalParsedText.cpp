@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include "GfxRenderer.h"
 #include "Kinsoku.h"
@@ -30,6 +31,51 @@ constexpr uint32_t SMALL_ALLOC_MARGIN = 8 * 1024;
 // -fno-exceptions, so nothing may be requested without first checking it fits. `margin` is what
 // the request must leave behind for everything else.
 inline bool heapCanAfford(const size_t bytes, const uint32_t margin) { return ESP.getMaxAllocHeap() >= bytes + margin; }
+
+// Cushion for the per-run reserves in addAnnotatedParagraph, which are a few hundred bytes each --
+// far below MIN_FREE_HEAP_FOR_RESERVE, sized for the multi-KB page and stream reserves. Charging
+// those a 4 KB margin refuses requests that fit with room to spare, and the doubling growth that
+// follows costs more allocations than the one it withheld: exactly what MIN_FREE_HEAP_FOR_RESERVE's
+// own comment warns against. This has only to cover what another task may take between the check
+// and the reserve; the fit itself is already guaranteed by getMaxAllocHeap().
+constexpr uint32_t PER_RUN_RESERVE_MARGIN = 1024;
+
+// Bulk reserve obeying that rule: skipped when the request would not fit, leaving the vector to
+// grow incrementally rather than aborting the process.
+template <typename T>
+void reserveIfAffordable(std::vector<T>& vec, const size_t count) {
+  if (count <= vec.capacity()) return;  // reserve() would not allocate; skip the heap query
+  // A count big enough to wrap the byte figure -- either in the multiply here or in
+  // heapCanAfford's margin add -- would compare as a SMALL request, pass the check, and abort in
+  // reserve(): the very failure this helper exists to prevent. Refuse it instead; the vector then
+  // grows incrementally, which is the same fallback an unaffordable request already takes.
+  if (count > (SIZE_MAX - PER_RUN_RESERVE_MARGIN) / sizeof(T)) return;
+  if (heapCanAfford(count * sizeof(T), PER_RUN_RESERVE_MARGIN)) vec.reserve(count);
+}
+
+// Upper bound on the entries a UTF-8 decode of `text` can append: one per decode step (one per
+// codepoint for well-formed UTF-8; malformed/truncated bytes still count as one step). One pass,
+// no allocation. Japanese sits at ~3 bytes per codepoint, where reserving by byte count instead
+// asks for ~3x the heap.
+size_t countUtf8Codepoints(const std::string& text) {
+  size_t count = 0;
+  for (size_t i = 0; i < text.size();) {
+    const unsigned char c0 = static_cast<unsigned char>(text[i]);
+    size_t consumed = 1;
+    if (c0 < 0x80) {
+      consumed = 1;
+    } else if ((c0 & 0xE0) == 0xC0 && i + 1 < text.size()) {
+      consumed = 2;
+    } else if ((c0 & 0xF0) == 0xE0 && i + 2 < text.size()) {
+      consumed = 3;
+    } else if ((c0 & 0xF8) == 0xF0 && i + 3 < text.size()) {
+      consumed = 4;
+    }
+    i += consumed;
+    count++;
+  }
+  return count;
+}
 
 // Make room for one more push_back. Tries a doubling first (amortised growth), then a small
 // linear step at each margin in turn, most protective first -- so a heap too tight for the
@@ -575,9 +621,12 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     // character. Parallel to baseCps/baseOffsets.
     std::vector<uint32_t> baseCpIndex;
     std::vector<size_t> breakBeforeBaseIndex;
-    baseOffsets.reserve(run.baseText.size());
-    baseCps.reserve(run.baseText.size());
-    baseCpIndex.reserve(run.baseText.size());
+    // One entry per codepoint bounds all three: the decode below only ever drops entries
+    // (newlines, the second half of a composed kana diacritic), never adds one.
+    const size_t maxEntries = countUtf8Codepoints(run.baseText);
+    reserveIfAffordable(baseOffsets, maxEntries);
+    reserveIfAffordable(baseCps, maxEntries);
+    reserveIfAffordable(baseCpIndex, maxEntries);
     {
       size_t i = 0;
       uint32_t cpIndex = 0;

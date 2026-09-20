@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Files - Matcha Reader</title>
-  <script src="/js/jszip.min.js"></script>
   <style>
     :root {
       --font-color: #333;
@@ -1804,7 +1803,7 @@
     <h3>✏️ Rename File</h3>
     <div class="folder-form">
       <p class="file-info">Renaming <strong id="renameItemName"></strong></p>
-      <input type="text" id="renameNewName" class="folder-input" placeholder="New file name...">
+      <input type="text" id="renameNewName" class="folder-input" placeholder="New name...">
       <input type="hidden" id="renameItemPath">
       <button class="rename-btn-confirm" onclick="confirmRename()">Rename</button>
       <button class="delete-btn-cancel" onclick="closeRenameModal()">Cancel</button>
@@ -2053,7 +2052,7 @@
           fileTableContent += `<td><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a></td>`;
           fileTableContent += '<td><span class="folder-badge">FOLDER</span></td>';
           fileTableContent += '<td>-</td>';
-          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${folderPath.replaceAll("'", "\\'")}', true)" title="Delete folder">🗑️</button></div></td>`;
+          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="rename-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Rename folder">✏️</button><button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Delete folder">🗑️</button></div></td>`;
           fileTableContent += '</tr>';
         } else {
           let filePath = currentPath;
@@ -2074,9 +2073,9 @@
           fileTableContent += file.isEpub ? '<td><span class="epub-badge">EPUB</span></td>' : `<td>${escapeHtml(file.name.split('.').pop().toUpperCase())}</td>`;
           fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
           fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
-          fileTableContent += `<button class="move-btn" onclick="openMoveModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="Move file">📂</button>`;
-          fileTableContent += `<button class="rename-btn" onclick="openRenameModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="Rename file">✏️</button>`;
-          fileTableContent += `<button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}', false)" title="Delete file">🗑️</button>`;
+          fileTableContent += `<button class="move-btn" data-action="move" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Move file">📂</button>`;
+          fileTableContent += `<button class="rename-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Rename file">✏️</button>`;
+          fileTableContent += `<button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" data-folder="false" title="Delete file">🗑️</button>`;
           fileTableContent += `</div></td>`;
           fileTableContent += '</tr>';
         }
@@ -2373,10 +2372,35 @@
   // ============================================================================
 
   /**
+   * JSZip is 28KB gzipped and only three EPUB paths ever touch it, but it used to load with the
+   * page -- on a device that starts its web server with ~30KB of heap free, and whose lwIP takes
+   * its send buffers from that same heap. Fetching it on demand keeps the file listing, which is
+   * what the page is usually opened for, off that cliff entirely.
+   * Resolves false when the script cannot be fetched; every caller already handles its absence.
+   */
+  let jsZipLoader = null;
+  function ensureJSZip() {
+    if (typeof JSZip !== 'undefined') return Promise.resolve(true);
+    if (jsZipLoader) return jsZipLoader;           // in flight: share it, never fetch twice
+    jsZipLoader = new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = '/js/jszip.min.js';
+      script.onload = () => resolve(typeof JSZip !== 'undefined');
+      script.onerror = () => {
+        jsZipLoader = null;                        // let a later attempt retry
+        resolve(false);
+      };
+      document.head.appendChild(script);
+    });
+    return jsZipLoader;
+  }
+
+  /**
    * Extract images from EPUB for preview
    * Returns array of {path, name, dataUrl, width, height}
    */
   async function extractImagesForPreview(file) {
+    await ensureJSZip();
     const zip = await JSZip.loadAsync(file);
     const imageExtensions = ['.png', '.gif', '.webp', '.bmp', '.jpg', '.jpeg'];
 
@@ -2717,7 +2741,8 @@
    * Show image picker after EPUB file selection
    */
   async function showImagePicker(file) {
-    // Check if JSZip is available
+    // Fetched on demand; the branch below still covers a device too low on memory to serve it.
+    await ensureJSZip();
     if (typeof JSZip === 'undefined') {
       console.error('JSZip not loaded');
       alert('JSZip library not available. Conversion will proceed without image picker.');
@@ -2971,12 +2996,27 @@
 
   // Initialize quality settings handlers
   document.addEventListener('DOMContentLoaded', function() {
-    // Delegated so it survives file-table re-renders (avoids inline onclick with untrusted names).
+    // Delegated so it survives file-table re-renders. Names and paths are
+    // user-controlled text, so they travel as data attributes rather than
+    // being interpolated into inline onclick strings.
     document.getElementById('file-table').addEventListener('click', function(e) {
       const link = e.target.closest('.image-preview-link');
-      if (!link) return;
-      e.preventDefault();
-      openImagePreview(link.getAttribute('href'), link.textContent);
+      if (link) {
+        e.preventDefault();
+        openImagePreview(link.getAttribute('href'), link.textContent);
+        return;
+      }
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const name = btn.dataset.name;
+      const path = btn.dataset.path;
+      if (btn.dataset.action === 'move') {
+        openMoveModal(name, path);
+      } else if (btn.dataset.action === 'rename') {
+        openRenameModal(name, path, btn.dataset.folder === 'true');
+      } else if (btn.dataset.action === 'delete') {
+        openDeleteModal(name, path, btn.dataset.folder === 'true');
+      }
     });
 
     const qualitySlider = document.getElementById('qualitySlider');
@@ -3897,7 +3937,7 @@ function buildMetadataFilename(title, author) {
 }
 
 async function getMetadataFilenameForEpub(file) {
-  if (typeof JSZip === 'undefined') return '';
+  if (!(await ensureJSZip())) return '';
   const zip = await JSZip.loadAsync(file);
   const opfPath = await findOPFPath(zip);
   if (!opfPath || !zip.files[opfPath]) return '';
@@ -3993,6 +4033,64 @@ function resolvePath(basePath, href) {
   return resolved.replace(/\/+/g, '/');
 }
 
+/** Remove XML comments from XHTML source text. Returns {text, count, bytes}. */
+function stripComments(xml) {
+  const SKIPPED = [
+    { open: '<![CDATA[', close: ']]>' },
+    { open: '<?', close: '?>' },
+  ];
+
+  const encoder = new TextEncoder();
+  const out = [];
+  let i = 0;
+  let count = 0;
+  let bytes = 0;
+
+  const doctypeEnd = (from) => {
+    const gt = xml.indexOf('>', from);
+    const subset = xml.indexOf('[', from);
+    if (subset < 0 || (gt >= 0 && subset > gt)) return gt < 0 ? xml.length : gt + 1;
+    const close = xml.indexOf(']>', subset);
+    return close < 0 ? xml.length : close + 2;
+  };
+
+  while (i < xml.length) {
+    const next = xml.indexOf('<', i);
+    if (next < 0) { out.push(xml.slice(i)); break; }
+    if (next > i) out.push(xml.slice(i, next));
+
+    if (xml.startsWith('<!--', next)) {
+      const close = xml.indexOf('-->', next + 4);
+      const end = close < 0 ? xml.length : close + 3;
+      count++;
+      bytes += encoder.encode(xml.slice(next, end)).length;
+      i = end;
+      continue;
+    }
+
+    if (xml.startsWith('<!DOCTYPE', next)) {
+      const end = doctypeEnd(next + 9);
+      out.push(xml.slice(next, end));
+      i = end;
+      continue;
+    }
+
+    const skipped = SKIPPED.find(s => xml.startsWith(s.open, next));
+    if (skipped) {
+      const close = xml.indexOf(skipped.close, next + skipped.open.length);
+      const end = close < 0 ? xml.length : close + skipped.close.length;
+      out.push(xml.slice(next, end));
+      i = end;
+      continue;
+    }
+
+    out.push('<');
+    i = next + 1;
+  }
+
+  return { text: out.join(''), count, bytes };
+}
+
 /**
  * Serialize an XML doc back to string, preserving the original <?xml?> declaration
  * and cleaning up XMLSerializer namespace prefix noise (xmlns:ns0 etc).
@@ -4069,12 +4167,79 @@ function syncNCXIdentifier(ncxText, mainIdentifier) {
   return t;
 }
 
+// ===== Embedded font removal =====
+// CrossPoint renders with built-in / SD-card fonts and never loads fonts
+// embedded in an EPUB, so they are dead weight (often 100KB-2MB per book).
+const FONT_EXT_REGEX = /\.(ttf|otf|woff2?|eot)$/;
+const FONT_MEDIA_TYPE_REGEX = /^(font\/|application\/font-|application\/x-font-|application\/vnd\.ms-(opentype|fontobject)$)/i;
+
+// Returns a Set of zip-root-relative paths of embedded font files, detected by
+// file extension and by OPF manifest media-type (catches odd extensions).
+function collectFontPaths(zip, opfContent, opfPath) {
+  const fontPaths = new Set();
+  zip.forEach(p => { if (FONT_EXT_REGEX.test(p.toLowerCase())) fontPaths.add(p); });
+
+  if (opfContent && opfPath) {
+    try {
+      const doc = new DOMParser().parseFromString(opfContent, 'application/xml');
+      if (!doc.querySelector('parsererror')) {
+        for (const item of [...doc.getElementsByTagNameNS('*', 'item')]) {
+          const type = item.getAttribute('media-type') || '';
+          const href = item.getAttribute('href') || '';
+          if (href && FONT_MEDIA_TYPE_REGEX.test(type)) {
+            const resolved = resolvePath(opfPath, decodeHref(href));
+            if (zip.files[resolved]) fontPaths.add(resolved);
+          }
+        }
+      }
+    } catch (e) {
+      // Extension-based detection already covers the common cases
+    }
+  }
+  return fontPaths;
+}
+
+// Strips all @font-face rules from CSS. Rules can also embed fonts directly as
+// multi-hundred-KB data: URIs, so this is a size win even without font files.
+function stripFontFaceRules(css) {
+  let count = 0;
+  const stripped = css.replace(/@font-face(?:\s|\/\*[\s\S]*?\*\/)*\{[^{}]*\}/gi, () => { count++; return ''; });
+  return { css: stripped, count };
+}
+
+// Removes font-obfuscation <EncryptedData> entries from META-INF/encryption.xml.
+// Returns { dropFile: true } when nothing meaningful remains, { modified, xml }
+// when some entries were removed, or { modified: false } to keep the file as-is.
+function stripFontEncryptionEntries(xmlText, fontPaths) {
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    if (doc.querySelector('parsererror')) return { modified: false };
+    const entries = [...doc.getElementsByTagNameNS('*', 'EncryptedData')];
+    let removed = 0;
+    for (const entry of entries) {
+      const ref = entry.getElementsByTagNameNS('*', 'CipherReference')[0];
+      const uri = ref ? decodeHref(ref.getAttribute('URI') || '') : '';
+      if (fontPaths.has(uri.replace(/^\//, ''))) {
+        entry.parentNode.removeChild(entry);
+        removed++;
+      }
+    }
+    if (!removed) return { modified: false };
+    const remaining = doc.getElementsByTagNameNS('*', 'EncryptedData').length +
+                      doc.getElementsByTagNameNS('*', 'EncryptedKey').length;
+    if (remaining === 0) return { dropFile: true };
+    return { modified: true, xml: safeSerialize(doc, xmlText) };
+  } catch (e) {
+    return { modified: false };
+  }
+}
+
 /**
  * Fix OPF content: fix media-types, strip svg properties,
- * update split image manifest entries, ensure cover meta.
- * DOMParser with regex fallback.
+ * update split image manifest entries, remove stripped font
+ * entries, ensure cover meta. DOMParser with regex fallback.
  */
-function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}) {
+function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}, fontPaths = null) {
   let t = opfText;
 
   try {
@@ -4101,6 +4266,15 @@ function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}) {
         const newProps = props.split(/\s+/).filter(p => p !== 'svg').join(' ').trim();
         if (newProps) item.setAttribute('properties', newProps);
         else item.removeAttribute('properties');
+      }
+    }
+
+    // Remove manifest entries for stripped embedded fonts
+    if (fontPaths && fontPaths.size) {
+      for (const item of items) {
+        const href = decodeHref(item.getAttribute('href') || '');
+        const full = resolvePath((opfDir ? opfDir + '/' : '') + 'x', href);
+        if (fontPaths.has(full)) item.parentNode.removeChild(item);
       }
     }
 
@@ -4139,6 +4313,13 @@ function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}) {
     t = t.replace(/(<(?:\w+:)?item\b[^>]*href="[^"]+\.bmp"[^>]*)media-type="image\/(png|gif|webp|jpe?g)"/g, '$1media-type="image/bmp"');
     t = t.replace(/(<(?:\w+:)?item\b[^>]*)media-type="image\/(png|gif|webp|jpe?g)"([^>]*href="[^"]+\.bmp")/g, '$1media-type="image/bmp"$3');
     t = t.replace(/\s+svg(?=["'\s>])/g, '');
+    if (fontPaths && fontPaths.size) {
+      for (const p of fontPaths) {
+        const href = opfDir && p.startsWith(opfDir + '/') ? p.substring(opfDir.length + 1) : p;
+        const itemRegex = new RegExp(`<(?:\\w+:)?item\\b[^>]*href=["']${escapeRegex(href)}["'][^>]*\\/?>\\s*`, 'gi');
+        t = t.replace(itemRegex, '');
+      }
+    }
     for (const [splitKey, splitInfo] of Object.entries(splitImages)) {
       const parts = splitInfo.parts || splitInfo;
       let origHref = opfDir && splitKey.startsWith(opfDir + '/') ? splitKey.substring(opfDir.length + 1) : splitKey;
@@ -5278,10 +5459,26 @@ async function convertEpubFile(file, progressCallback) {
     if (progressCallback) progressCallback((i / entries.length) * 60);
   }
 
+  // Embedded fonts are dropped entirely — CrossPoint never renders with them.
+  // Counters cover font files, @font-face rules (incl. data: URI fonts), and
+  // encryption.xml shrinkage; they count uncompressed content bytes removed
+  // (the final archive-size delta is reported separately by logSummary).
+  const fontPaths = collectFontPaths(zip, opfContent, opfPath);
+  let removedFontCount = 0;
+  let removedFontBytes = 0;
+  let removedFontFaceRules = 0;
+
   // Second pass: update XHTML using DOMParser
   for (const [xhtmlPath, content] of Object.entries(xhtmlFiles)) {
     if (operationCancelled) throw new Error('Cancelled by user');
     let t = content;
+
+    const stripped = stripComments(t);
+    if (stripped.count) {
+      t = stripped.text;
+      logFix(`Comments (${stripped.count}, ${formatBytes(stripped.bytes)})`, xhtmlPath.split('/').pop());
+    }
+
     const r = fixSvgCover(t);
     if (r.fixed) { t = r.c; logFix('SVG cover', xhtmlPath.split('/').pop()); }
 
@@ -5429,6 +5626,17 @@ async function convertEpubFile(file, progressCallback) {
       console.warn('DOMParser error for', xhtmlPath, e.message);
     }
 
+    // Strip @font-face rules from inline <style> blocks — embedded font files
+    // are removed, so leftover rules would reference missing resources
+    t = t.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (m, open, css, close) => {
+      const ff = stripFontFaceRules(css);
+      if (!ff.count) return m;
+      removedFontFaceRules += ff.count;
+      removedFontBytes += new TextEncoder().encode(css).length - new TextEncoder().encode(ff.css).length;
+      logFix('@font-face', `${ff.count} rule(s) removed from ${escapeHtml(xhtmlPath.split('/').pop())}`);
+      return open + ff.css + close;
+    });
+
     // Inject universal image constraint — prevents overflow on e-ink displays
     if (t.includes('</head>')) {
       t = t.replace('</head>', DEFENSIVE_STYLE + '</head>');
@@ -5449,7 +5657,7 @@ async function convertEpubFile(file, progressCallback) {
       t = t.split(o.split('/').pop()).join(n.split('/').pop());
     }
     const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/')) : '';
-    t = fixOPF(t, opfContent, opfDir, splitImages);
+    t = fixOPF(t, opfContent, opfDir, splitImages, fontPaths);
     if (t !== opfContent) logFix('OPF', 'manifest updated');
     out.file(opfPath, t, { compression: 'DEFLATE', compressionOptions: { level: 8 }, createFolders: false });
   }
@@ -5461,13 +5669,42 @@ async function convertEpubFile(file, progressCallback) {
     const low = path.toLowerCase();
     if (low.match(/\.(png|gif|webp|bmp|jpg|jpeg)$/) || low.match(/\.(xhtml|html|htm)$/) || low.endsWith('.opf')) continue;
 
+    if (fontPaths.has(path)) {
+      const fontData = await fileObj.async('arraybuffer');
+      removedFontCount++;
+      removedFontBytes += fontData.byteLength;
+      log(`${escapeHtml(path.split('/').pop())} <span class="log-detail">(${formatBytes(fontData.byteLength)})</span>`, 'success', 'REMOVE');
+      continue;
+    }
+
     let data = await fileObj.async('arraybuffer');
     if (low.endsWith('.css')) {
       let t = await safeReadText(fileObj);
       for (const [o, n] of Object.entries(renamed)) {
         t = t.split(o.split('/').pop()).join(n.split('/').pop());
       }
+      const ff = stripFontFaceRules(t);
+      if (ff.count) {
+        removedFontFaceRules += ff.count;
+        removedFontBytes += new TextEncoder().encode(t).length - new TextEncoder().encode(ff.css).length;
+        t = ff.css;
+        logFix('@font-face', `${ff.count} rule(s) removed from ${escapeHtml(path.split('/').pop())}`);
+      }
       data = new TextEncoder().encode(t);
+    } else if (path === 'META-INF/encryption.xml' && fontPaths.size) {
+      const t = await safeReadText(fileObj);
+      const enc = stripFontEncryptionEntries(t, fontPaths);
+      if (enc.dropFile) {
+        removedFontBytes += data.byteLength;
+        logFix('encryption.xml', 'removed (contained only font obfuscation entries)');
+        continue;
+      }
+      if (enc.modified) {
+        const encoded = new TextEncoder().encode(enc.xml);
+        removedFontBytes += Math.max(0, data.byteLength - encoded.length);
+        data = encoded;
+        logFix('encryption.xml', 'font obfuscation entries removed');
+      }
     } else if (low.endsWith('.ncx')) {
       let t = await safeReadText(fileObj);
       for (const [o, n] of Object.entries(renamed)) {
@@ -5479,6 +5716,10 @@ async function convertEpubFile(file, progressCallback) {
       data = new TextEncoder().encode(t);
     }
     out.file(path, data, { compression: 'DEFLATE', compressionOptions: { level: 8 }, createFolders: false });
+  }
+
+  if (removedFontCount > 0 || removedFontFaceRules > 0) {
+    log(`Removed ${removedFontCount} embedded font(s) and ${removedFontFaceRules} @font-face rule(s), ${formatBytes(removedFontBytes)} of font data`, '', 'INFO');
   }
 
   if (progressCallback) progressCallback(100);
@@ -6073,8 +6314,10 @@ function retryAllFailedUploads() {
   }
 
   // Rename functions
-  function openRenameModal(name, path) {
-    document.getElementById('renameItemName').textContent = '📄 ' + name;
+  function openRenameModal(name, path, isFolder) {
+    // The icon follows the row the rename came from -- folders are renameable too, and the
+    // server carries the reading state of every book inside one.
+    document.getElementById('renameItemName').textContent = (isFolder ? '📁 ' : '📄 ') + name;
     document.getElementById('renameItemPath').value = path;
     document.getElementById('renameNewName').value = name;
     document.getElementById('renameModal').classList.add('open');

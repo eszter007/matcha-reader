@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <SdSystemDir.h>
 #include <SecureHttpClient.h>
 #include <WiFi.h>
 #include <esp_crt_bundle.h>
@@ -44,7 +45,7 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 // no public API to ask ESP-IDF's WiFi driver "do you have enough heap", so this margin is a
 // conservative empirical floor above the crash point, not a documented ESP-IDF constant.
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
-constexpr const char* API_KEY_PATH = "/system/gemini.key";
+static std::string apiKeyPath() { return sdsystem::findUserFile("gemini.key"); }
 constexpr const char* GEMINI_MODEL = "gemini-3.6-flash";
 
 }  // namespace
@@ -64,7 +65,7 @@ EpubReaderTranslationActivity::EpubReaderTranslationActivity(GfxRenderer& render
 
 bool EpubReaderTranslationActivity::stashAndRestart() {
   HalFile stash;
-  if (!Storage.openFileForWrite("XLAT", TRANSLATE_STASH_PATH, stash)) {
+  if (!Storage.openFileForWrite("XLAT", translateStashPath().c_str(), stash)) {
     LOG_ERR("XLAT", "Could not write translation stash; showing low-memory error instead");
     return false;
   }
@@ -73,7 +74,7 @@ bool EpubReaderTranslationActivity::stashAndRestart() {
   if (written != sourceText.size()) {
     LOG_ERR("XLAT", "Short write on translation stash (%u/%u); showing low-memory error instead",
             static_cast<unsigned>(written), static_cast<unsigned>(sourceText.size()));
-    Storage.remove(TRANSLATE_STASH_PATH);
+    Storage.remove(translateStashPath().c_str());
     return false;
   }
   LOG_DBG("XLAT", "Stashed %u bytes; restarting for a fresh heap", static_cast<unsigned>(sourceText.size()));
@@ -148,7 +149,7 @@ bool EpubReaderTranslationActivity::readApiKey(std::string& keyOut) {
   // still more than three times the longest key Google issues (a current AI Studio key is ~53
   // characters, the older AIza form 39).
   char buf[192];
-  size_t len = Storage.readFileToBuffer(API_KEY_PATH, buf, sizeof(buf));
+  size_t len = Storage.readFileToBuffer(apiKeyPath().c_str(), buf, sizeof(buf));
   if (len == 0) return false;
   // readFileToBuffer stops at bufferSize-1 and reports the truncated length, so a key longer
   // than the buffer arrives silently cut in half and is rejected by the API as malformed. A
@@ -349,13 +350,13 @@ void EpubReaderTranslationActivity::loop() {
   }
 
   if (state == SHOWING_RESULT) {
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
       if (scrollOffset < maxScrollOffset) {
         scrollOffset++;
         requestUpdate();
       }
     });
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
       if (scrollOffset > 0) {
         scrollOffset--;
         requestUpdate();

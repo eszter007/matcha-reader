@@ -5,6 +5,7 @@
 #include <Logging.h>
 #include <SdCardFont.h>
 #include <SdCardFontRegistry.h>
+#include <esp_heap_caps.h>
 
 SdCardFontManager::~SdCardFontManager() {
   for (auto& lf : loaded_) {
@@ -29,6 +30,12 @@ int SdCardFontManager::computeFontId(uint32_t contentHash, const char* familyNam
 }
 
 int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer) {
+  // The heap as the load STARTS. A load that fails part-way leaves a heap that has already been
+  // churned by its own partial allocations, so the state at the failure site alone cannot say
+  // whether there was ever room; this is the before picture.
+  LOG_DBG("SDMGR", "Loading %s (free=%u largest=%u)", file.path.c_str(),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
   auto* font = new (std::nothrow) SdCardFont();
   if (!font) {
     LOG_ERR("SDMGR", "Failed to allocate SdCardFont for %s", file.path.c_str());
@@ -36,7 +43,9 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
   }
 
   if (!font->load(file.path.c_str())) {
-    LOG_ERR("SDMGR", "Failed to load %s", file.path.c_str());
+    LOG_ERR("SDMGR", "Failed to load %s (free=%u largest=%u)", file.path.c_str(),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
     delete font;
     return 0;
   }

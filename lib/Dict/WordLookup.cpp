@@ -63,7 +63,17 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
     const size_t windowEnd = advanceChars(paragraphText, byteOffset, windowChars);
     if (windowEnd <= byteOffset) continue;
 
-    const std::string window = paragraphText.substr(byteOffset, windowEnd - byteOffset);
+    std::string window = paragraphText.substr(byteOffset, windowEnd - byteOffset);
+    // A NUL ends the window. lookupExact() takes a C string, so a NUL already truncated what the
+    // dictionary saw -- but matchLength below is measured from windowEnd and would have claimed
+    // the bytes past it too, handing the caller a match far longer than the text that matched.
+    // Vertical layout puts one in reach: a tate-chu-yoko run is a single glyph with codepoint 0,
+    // and a scanner encoding that glyph writes a NUL. Trimming here keeps the window, the
+    // dictionary key and matchLength describing the same bytes.
+    if (const size_t nul = window.find('\0'); nul != std::string::npos) {
+      window.resize(nul);
+      if (window.empty()) continue;
+    }
 
     // Try exact match first. jmdict and grammar always (grammar has single-char entries, so no
     // length gating); jmnedict only when the window could actually be a name.
@@ -73,7 +83,7 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
     DictEntry entry;
     if (DictIndex::lookupExact(window.c_str(), entry, dictMask, needDefinition)) {
       out.entry = std::move(entry);
-      out.matchLength = windowEnd - byteOffset;
+      out.matchLength = window.size();
       out.deinflected = false;
       return true;
     }
@@ -121,7 +131,9 @@ bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, Wor
       // Deinflected forms are conjugated verbs/adjectives -> only ever in jmdict.
       if (DictIndex::lookupExact(candidates[i].text.c_str(), entry, DictIndex::DICT_JMDICT, needDefinition, posMask)) {
         out.entry = std::move(entry);
-        out.matchLength = windowEnd - byteOffset;
+        // window.size(), not windowEnd - byteOffset: the deinflection path reads the same window,
+        // so a NUL trimmed above must shorten this match too.
+        out.matchLength = window.size();
         out.deinflected = true;
         return true;
       }

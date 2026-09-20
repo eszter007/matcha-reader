@@ -10,6 +10,8 @@ Reads YAML files from a translations directory (one file per language) and gener
 Each YAML file must contain:
   _language_name: "Native Name"     (e.g. "Español")
   _language_code: "ENUM_NAME"       (e.g. "ES")
+  _order: "N"                       (e.g. "1"; historical metadata, unused)
+  _bcp47: "tag"                     (e.g. "es"; drives Language enum order)
   STR_KEY: "translation text"
 
 The English file is the reference. Missing keys in other languages are
@@ -29,6 +31,8 @@ Examples:
     python gen_i18n.py --strip-unused --src-dirs src lib/EpdFont
 """
 
+import hashlib
+import struct
 import sys
 import os
 import re
@@ -113,15 +117,16 @@ def parse_yaml_file(filepath: str) -> Dict[str, str]:
 def load_translations(
     translations_dir: str,
     verbose: bool = False,
-) -> Tuple[List[str], List[str], List[str], Dict[str, List[str]], List[Set[str]]]:
+) -> Tuple[List[str], List[str], List[str], List[str], Dict[str, List[str]], List[Set[str]]]:
     """
     Read every YAML file in *translations_dir* and return:
         language_codes   e.g. ["EN", "ES", ...]
         language_names   e.g. ["English", "Español", ...]
+        language_bcp47   e.g. ["en", "es", ...]
         string_keys      ordered list of STR_* keys (from English)
         translations     {key: [translation_per_language]}
 
-    English is always first;
+    English is always first; the rest are sorted by _bcp47.
     """
     yaml_dir = Path(translations_dir)
     if not yaml_dir.is_dir():
@@ -146,48 +151,51 @@ def load_translations(
     if english_file is None:
         raise ValueError("No YAML file with _language_code: EN found")
 
-    duplicate_orders: Dict[str, List[str]] = {}
-    order_to_files: Dict[str, List[str]] = {}
     for fname, data in parsed.items():
-        order = data.get("_order")
-        if not order:
-            continue
-        order_to_files.setdefault(order, []).append(fname)
+        if not data.get("_bcp47"):
+            raise ValueError(f"{fname}: missing _bcp47")
 
-    for order, files in order_to_files.items():
-        if len(files) > 1:
-            duplicate_orders[order] = sorted(files)
+    def _check_unique(field: str) -> None:
+        """Raise if any two files share the same value for *field* (e.g. "_order", "_bcp47")."""
+        files_by_value: Dict[str, List[str]] = {}
+        for fname, data in parsed.items():
+            value = data.get(field)
+            if not value:
+                continue
+            files_by_value.setdefault(value, []).append(fname)
 
-    if duplicate_orders:
-        duplicate_messages = [
-            f"_order {order}: {', '.join(files)}"
-            for order, files in sorted(
-                duplicate_orders.items(), key=lambda item: int(item[0])
+        duplicates = {value: sorted(files) for value, files in files_by_value.items() if len(files) > 1}
+        if duplicates:
+            duplicate_messages = [
+                f"{field} {value}: {', '.join(files)}" for value, files in sorted(duplicates.items())
+            ]
+            raise ValueError(
+                f"Duplicate {field} values found:\n  "
+                + "\n  ".join(duplicate_messages)
+                + f"\nEach {field} value must be unique to ensure a deterministic language order."
             )
-        ]
-        raise ValueError(
-            "Duplicate _order values found:\n  "
-            + "\n  ".join(duplicate_messages)
-            + "\nEach _order value must be unique to ensure a deterministic language order."
-        )
 
-    # Order: English first, then by _order metadata (falls back to filename)
-    def sort_key(fname: str) -> Tuple[int, int, str]:
-        """English always first (0), then by _order, then by filename."""
+    _check_unique("_order")
+    _check_unique("_bcp47")
+
+    # Order: English first (enum value 0), then by _bcp47 tag alphabetically.
+    # This assigns the Language enum ordinal and also drives the visible
+    # Settings menu order (see SORTED_LANGUAGE_INDICES). It has no effect on
+    # stored user preferences, since settings.json persists the
+    # _language_code string, not the ordinal. _order is retained as metadata
+    # and still validated for uniqueness, but no longer drives enum assignment.
+    def sort_key(fname: str) -> Tuple[int, str]:
+        """English always first (0), then by BCP47 tag."""
         if fname == english_file:
-            return (0, 0, fname)
-        order = parsed[fname].get("_order", "999")
-        try:
-            order_int = int(order)
-        except ValueError:
-            order_int = 999
-        return (1, order_int, fname)
+            return (0, "")
+        return (1, parsed[fname]["_bcp47"])
 
     ordered_files = sorted(parsed, key=sort_key)
 
     # Extract metadata
     language_codes: List[str] = []
     language_names: List[str] = []
+    language_bcp47: List[str] = []
     for fname in ordered_files:
         data = parsed[fname]
         code = data.get("_language_code")
@@ -196,6 +204,7 @@ def load_translations(
             raise ValueError(f"{fname}: missing _language_code or _language_name")
         language_codes.append(code)
         language_names.append(name)
+        language_bcp47.append(data["_bcp47"])
 
     # String keys come from English (order matters)
     english_data = parsed[english_file]
@@ -239,7 +248,7 @@ def load_translations(
 
     if verbose:
         print(f"Loaded {len(language_codes)} languages, {len(string_keys)} string keys")
-    return language_codes, language_names, string_keys, translations, inherited_sets
+    return language_codes, language_names, language_bcp47, string_keys, translations, inherited_sets
 
 
 # ---------------------------------------------------------------------------
@@ -438,9 +447,12 @@ def compute_character_set(translations: Dict[str, List[str]], lang_index: int) -
 def generate_keys_header(
     languages: List[str],
     language_names: List[str],
+    language_bcp47: List[str],
     string_keys: List[str],
+    table_fingerprint: str,
     output_path: str,
     verbose: bool = False,
+    builtin: Optional[Set[str]] = None,
 ) -> None:
     """Generate I18nKeys.h."""
     lines: List[str] = [
@@ -454,18 +466,26 @@ def generate_keys_header(
         "namespace i18n_strings {",
     ]
 
+    builtin = builtin if builtin is not None else set(languages)
     for code in languages:
+        if code not in builtin:
+            continue
         lines.append(f"extern const char STRINGS_{code}_DATA[];")
         lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+    lines.append(f"void requireTable_{table_fingerprint}();")
+    lines.append(
+        f"inline void requireCurrentTable() {{ requireTable_{table_fingerprint}(); }}"
+    )
 
     lines.append("}  // namespace i18n_strings")
     lines.append("")
 
     # Language enum
-    lines.append("// Language enum")
+    lines.append("// Language enum (ordered by _bcp47, English first)")
     lines.append("enum class Language : uint8_t {")
-    for i, lang in enumerate(languages):
-        lines.append(f"  {lang} = {i},")
+    code_width = max(len(lang) for lang in languages)
+    for i, (lang, bcp47) in enumerate(zip(languages, language_bcp47)):
+        lines.append(f"  {lang:<{code_width}} = {i},  // {bcp47}")
     lines.append("  _COUNT")
     lines.append("};")
     lines.append("")
@@ -506,10 +526,15 @@ def generate_keys_header(
     lines.append("  switch (lang) {")
     for code in languages:
         lines.append(f"    case Language::{code}:")
-        lines.append(
-            f"      return {{i18n_strings::STRINGS_{code}_DATA, i18n_strings::OFFSETS_{code}}};"
-        )
-    first_code = languages[0]
+        if code in builtin:
+            lines.append(
+                f"      return {{i18n_strings::STRINGS_{code}_DATA, i18n_strings::OFFSETS_{code}}};"
+            )
+        else:
+            # Not compiled in: I18n loads this language's pack from the SD card and
+            # supplies the pointers itself. A null pair means "needs a pack".
+            lines.append("      return {nullptr, nullptr};")
+    first_code = "EN" if "EN" in builtin else sorted(builtin)[0]
     lines.append("    default:")
     lines.append(
         f"      return {{i18n_strings::STRINGS_{first_code}_DATA, i18n_strings::OFFSETS_{first_code}}};"
@@ -526,17 +551,33 @@ def generate_keys_header(
     )
     lines.append("")
 
+    # Which languages have their strings compiled in. The rest ship as .cplang packs
+    # on the SD card; I18n::setLanguage() loads one on demand.
+    lines.append("// True when this language's strings are compiled into the firmware.")
+    lines.append("// The others need their .cplang pack on the SD card -- see I18n::setLanguage().")
+    lines.append("constexpr bool isLanguageBuiltIn(Language lang) {")
+    lines.append("  switch (lang) {")
+    for code in languages:
+        if code in builtin:
+            lines.append(f"    case Language::{code}:")
+    lines.append("      return true;")
+    lines.append("    default:")
+    lines.append("      return false;")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("")
+
     # Sorted language indices for display order
-    # (English first, then by native language name alphabetically)
+    # (English first, then by _bcp47 tag alphabetically)
     english_idx = languages.index("EN")
     rest = sorted(
         (i for i in range(len(languages)) if i != english_idx),
-        key=lambda i: language_names[i],
+        key=lambda i: language_bcp47[i],
     )
     sorted_indices = [english_idx] + rest
-    lines.append("// Sorted language indices by native name (auto-generated by gen_i18n.py)")
+    lines.append("// Sorted language indices by _bcp47 (auto-generated by gen_i18n.py)")
     for rank, idx in enumerate(sorted_indices):
-        lines.append(f"//   {rank:>2}: {languages[idx]:<4} {language_names[idx]}")
+        lines.append(f"//   {rank:>2}: {languages[idx]:<4} {language_bcp47[idx]:<8} {language_names[idx]}")
     lines.append(
         "constexpr uint8_t SORTED_LANGUAGE_INDICES[] = {"
         f"{', '.join(str(i) for i in sorted_indices)}"
@@ -573,6 +614,7 @@ def generate_strings_header(
     language_names: List[str],
     output_path: str,
     verbose: bool = False,
+    builtin: Optional[Set[str]] = None,
 ) -> None:
     """Generate I18nStrings.h."""
     lines: List[str] = [
@@ -586,7 +628,10 @@ def generate_strings_header(
         "",
     ]
 
+    builtin = builtin if builtin is not None else set(languages)
     for code in languages:
+        if code not in builtin:
+            continue
         lines.append(f"extern const char STRINGS_{code}_DATA[];")
         lines.append(f"extern const uint16_t OFFSETS_{code}[];")
 
@@ -600,10 +645,18 @@ def generate_strings_cpp(
     language_names: List[str],
     string_keys: List[str],
     translations: Dict[str, List[str]],
+    table_fingerprint: str,
     output_path: str,
     verbose: bool = False,
-) -> None:
-    """Generate I18nStrings.cpp."""
+    builtin: Optional[Set[str]] = None,
+) -> Dict[str, Tuple[List[int], List[str]]]:
+    """Generate I18nStrings.cpp.
+
+    Blobs and offset tables are computed for every language, but only the ones in
+    `builtin` are emitted into the firmware. The rest are returned so the caller can
+    write them out as .cplang packs -- their offsets still reference the English blob
+    through bit 15, which is why English must always be built in.
+    """
     lines: List[str] = [
         "// THIS FILE IS AUTO-GENERATED BY gen_i18n.py. DO NOT EDIT.",
         "// clang-format off",
@@ -644,6 +697,8 @@ def generate_strings_cpp(
     lines.append("namespace i18n_strings {")
     lines.append("")
 
+    builtin = builtin if builtin is not None else set(languages)
+    pack_tables: Dict[str, Tuple[List[int], List[str]]] = {}
     en_strings = [translations[key][0] for key in string_keys]
     en_offsets: List[int] = []
 
@@ -682,6 +737,11 @@ def generate_strings_cpp(
                     "15-bit offset limit (32767)"
                 )
 
+        pack_tables[code] = (list(offsets), list(blob_strings))
+        if code not in builtin:
+            # Shipped as an SD pack instead; nothing goes into the binary.
+            continue
+
         # Flat string data blob — all strings concatenated with \0 separators.
         lines.append(f"const char STRINGS_{code}_DATA[] =")
         for text in blob_strings:
@@ -700,12 +760,16 @@ def generate_strings_cpp(
         lines.append("};")
         lines.append("")
 
+    lines.append(f"void requireTable_{table_fingerprint}() {{}}")
+    lines.append("")
     lines.append("}  // namespace i18n_strings")
     lines.append("")
 
     # Compile-time size checks
     lines.append("// Compile-time validation of array sizes")
     for code in languages:
+        if code not in builtin:
+            continue
         lines.append(
             f"static_assert(sizeof(i18n_strings::OFFSETS_{code}) "
             f"/ sizeof(i18n_strings::OFFSETS_{code}[0]) =="
@@ -714,6 +778,7 @@ def generate_strings_cpp(
         lines.append(f'              "OFFSETS_{code} size mismatch");')
 
     _write_file(output_path, lines, verbose)
+    return pack_tables
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +789,7 @@ def generate_strings_cpp(
 def _print_language_table(
     language_codes: List[str],
     language_names: List[str],
+    language_bcp47: List[str],
     inherited_sets: List[Set[str]],
     string_keys: List[str],
     unused_keys: Set[str],
@@ -731,20 +797,20 @@ def _print_language_table(
 ) -> None:
     """Print a per-language summary table."""
     total = len(string_keys)
-    headers = ("Language", "Code", "Own", "Fallback", "Unused", "Data (B)")
+    headers = ("Language", "Code", "BCP47", "Own", "Fallback", "Unused", "Data (B)")
 
     rows = []
-    for code, name, inherited, size in zip(
-        language_codes, language_names, inherited_sets, data_sizes
+    for code, name, bcp47, inherited, size in zip(
+        language_codes, language_names, language_bcp47, inherited_sets, data_sizes
     ):
         own = total - len(inherited)
         fallback = len(inherited)
         # strings this language translated but the code never calls
         unused = len(unused_keys - inherited)
-        rows.append((name, code, str(own), str(fallback), str(unused), str(size)))
+        rows.append((name, code, bcp47, str(own), str(fallback), str(unused), str(size)))
 
-    # EN first, then alphabetically by ISO code
-    rows.sort(key=lambda r: (0 if r[1] == "EN" else 1, r[1]))
+    # EN first, then alphabetically by _bcp47 (matches the Language enum order)
+    rows.sort(key=lambda r: (0 if r[1] == "EN" else 1, r[2]))
 
     col_widths = [len(h) for h in headers]
     for row in rows:
@@ -805,10 +871,27 @@ def _append_string_entry(lines: List[str], text: str, comment: str = "") -> None
     lines.extend(formatted)
 
 
+def _table_fingerprint(
+    languages: List[str],
+    language_names: List[str],
+    string_keys: List[str],
+    translations: Dict[str, List[str]],
+    builtin: Set[str],
+) -> str:
+    values = [*languages, *language_names, *sorted(builtin), *string_keys]
+    for key in string_keys:
+        values.extend(translations[key])
+    return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()[:16]
+
+
 def _write_file(path: str, lines: List[str], verbose: bool = False) -> None:
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines))
-        f.write("\n")
+    content = ("\n".join(lines) + "\n").encode("utf-8")
+    output = Path(path)
+    if output.is_file() and output.read_bytes() == content:
+        if verbose:
+            print(f"Unchanged: {path}")
+        return
+    output.write_bytes(content)
     if verbose:
         print(f"Generated: {path}")
 
@@ -818,12 +901,94 @@ def _write_file(path: str, lines: List[str], verbose: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Language packs
+# ---------------------------------------------------------------------------
+
+# Bumped whenever the on-disk layout changes. The firmware rejects any other value.
+LANG_PACK_VERSION = 1
+LANG_PACK_MAGIC = b"CPLANG\0\0"
+
+
+def resolve_builtin_langs(spec: Optional[str], languages: List[str]) -> Set[str]:
+    """Language codes whose strings are compiled into the firmware.
+
+    `spec` is a comma-separated list of codes (case-insensitive); None or "all" keeps
+    every language built in, which is the pre-pack behaviour. English is always added:
+    it backs the bit-15 offsets every other language's table uses, and it is the only
+    UI left if the SD card is absent.
+    """
+    if not spec or spec.strip().lower() == "all":
+        return set(languages)
+    wanted = {c.strip().upper() for c in spec.split(",") if c.strip()}
+    unknown = wanted - set(languages)
+    if unknown:
+        raise ValueError(
+            f"Unknown language code(s) in builtin list: {', '.join(sorted(unknown))}. "
+            f"Known: {', '.join(languages)}"
+        )
+    wanted.add("EN")
+    return wanted
+
+
+def write_language_packs(
+    pack_dir: str,
+    languages: List[str],
+    language_names: List[str],
+    pack_tables: Dict[str, Tuple[List[int], List[str]]],
+    builtin: Set[str],
+    key_count: int,
+) -> int:
+    """Write one .cplang pack per non-built-in language.
+
+    Layout (little-endian), mirroring what the firmware compiles in so the loader can
+    point LangStrings straight at the buffer:
+
+        magic   8 bytes  "CPLANG\0\0"
+        version u16      LANG_PACK_VERSION
+        keyCount u16     must equal StrId::_COUNT at load time
+        blobLen u16
+        code    4 bytes  NUL-padded language code, e.g. "RU\0\0"
+        offsets u16 * keyCount
+        blob    blobLen bytes
+
+    keyCount is the compatibility guard: a pack built against a different string table
+    is refused outright rather than read with offsets that no longer line up.
+    """
+    os.makedirs(pack_dir, exist_ok=True)
+    written = 0
+    for idx, code in enumerate(languages):
+        if code in builtin:
+            continue
+        offsets, blob_strings = pack_tables[code]
+        blob = b"".join(s.encode("utf-8") + b"\0" for s in blob_strings)
+        if len(blob) > 0x7FFF:
+            raise ValueError(f"Language {code}: pack blob too large ({len(blob)} bytes)")
+        if len(offsets) != key_count:
+            raise ValueError(
+                f"Language {code}: offset count {len(offsets)} != key count {key_count}"
+            )
+        header = (
+            LANG_PACK_MAGIC
+            + struct.pack("<HHH", LANG_PACK_VERSION, key_count, len(blob))
+            + code.encode("ascii")[:4].ljust(4, b"\0")
+        )
+        body = struct.pack(f"<{key_count}H", *offsets) + blob
+        with open(os.path.join(pack_dir, f"{code}.cplang"), "wb") as f:
+            f.write(header + body)
+        written += 1
+    return written
+
+
+
 def main(
     translations_dir: Optional[str] = None,
     output_dir: Optional[str] = None,
     src_dirs: Optional[List[str]] = None,
     strip_unused: bool = False,
     verbose: bool = False,
+    builtin_langs: Optional[str] = None,
+    pack_dir: Optional[str] = None,
 ) -> None:
     # Default paths (relative to project root)
     default_translations_dir = "lib/I18n/translations"
@@ -856,7 +1021,7 @@ def main(
         print()
 
     try:
-        languages, language_names, string_keys, translations, inherited_sets = (
+        languages, language_names, language_bcp47, string_keys, translations, inherited_sets = (
             load_translations(translations_dir, verbose)
         )
 
@@ -900,6 +1065,7 @@ def main(
         _print_language_table(
             languages,
             language_names,
+            language_bcp47,
             inherited_sets,
             string_keys,
             unused_set,
@@ -921,25 +1087,41 @@ def main(
             inherited_sets = [s - unused_set for s in inherited_sets]
             print(f"  Stripping {len(unused_set)} unused string(s) from output.")
 
+        builtin = resolve_builtin_langs(builtin_langs, languages)
+        table_fingerprint = _table_fingerprint(
+            languages, language_names, string_keys, translations, builtin
+        )
+
         out = Path(output_dir)
         generate_keys_header(
-            languages, language_names, string_keys, str(out / "I18nKeys.h"), verbose
+            languages, language_names, language_bcp47, string_keys, table_fingerprint,
+            str(out / "I18nKeys.h"), verbose,
+            builtin,
         )
         generate_strings_header(
-            languages, language_names, str(out / "I18nStrings.h"), verbose
+            languages, language_names, str(out / "I18nStrings.h"), verbose, builtin
         )
-        generate_strings_cpp(
+        pack_tables = generate_strings_cpp(
             languages,
             language_names,
             string_keys,
             translations,
+            table_fingerprint,
             str(out / "I18nStrings.cpp"),
             verbose,
+            builtin,
         )
+
+        if pack_dir:
+            written = write_language_packs(
+                pack_dir, languages, language_names, pack_tables, builtin, len(string_keys)
+            )
+            print(f"  Language packs: {written} written to {pack_dir}")
 
         print()
         print("Code generation complete!")
-        print(f"  Languages: {len(languages)}")
+        print(f"  Languages: {len(languages)} "
+              f"({len(builtin)} built in, {len(languages) - len(builtin)} as SD packs)")
         print(f"  String keys: {len(string_keys)}")
         if unused_set and not strip_unused:
             print(
@@ -982,6 +1164,22 @@ if __name__ == "__main__":
         help="Remove unused STR_* keys from the generated output",
     )
     parser.add_argument(
+        "--builtin-langs",
+        metavar="CODES",
+        default=None,
+        help=(
+            "Comma-separated language codes to compile into the firmware "
+            "(e.g. 'en,ja,es,fr,de'). EN is always included. Omit or pass 'all' "
+            "to build every language in, as before."
+        ),
+    )
+    parser.add_argument(
+        "--pack-dir",
+        metavar="DIR",
+        default=None,
+        help="Write .cplang packs for every language not built in, into DIR",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -994,10 +1192,19 @@ if __name__ == "__main__":
         args.src_dirs,
         args.strip_unused,
         args.verbose,
+        args.builtin_langs,
+        args.pack_dir,
     )
 else:
     try:
         Import("env")
-        main(strip_unused=True)
+        # custom_i18n_builtin_langs in platformio.ini decides which languages are compiled
+        # in; everything else ships as a .cplang pack on the SD card. Unset means "all",
+        # which is the pre-pack behaviour.
+        try:
+            _builtin = env.GetProjectOption("custom_i18n_builtin_langs", None)
+        except Exception:
+            _builtin = None
+        main(strip_unused=True, builtin_langs=_builtin)
     except NameError:
         pass

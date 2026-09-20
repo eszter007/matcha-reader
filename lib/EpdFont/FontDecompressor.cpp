@@ -41,8 +41,22 @@ const uint8_t* FontDecompressor::slabLookup(const EpdFontData* fontData, const u
   return nullptr;
 }
 
+void FontDecompressor::setSlabEnabled(const bool enabled) {
+  slabEnabled_ = enabled;
+  if (enabled || !slabBuf) return;
+  // Free the slab itself only -- NOT via freeGlyphSlab(), which also clearCache()s the page
+  // buffers and hot group a render in flight may be drawing from.
+  free(slabBuf);
+  free(slabEntries);
+  slabBuf = nullptr;
+  slabEntries = nullptr;
+  slabEntryCount = 0;
+  slabUsed = 0;
+}
+
 const uint8_t* FontDecompressor::slabInsert(const EpdFontData* fontData, const uint32_t glyphIndex, const uint8_t* data,
                                             const uint32_t len) {
+  if (!slabEnabled_) return nullptr;
   if (len == 0 || len > SLAB_BYTES) return nullptr;
   if (!slabBuf) {
     // Lazy allocation: the slab only costs RAM once non-prewarmed compressed-font glyphs are
@@ -262,13 +276,31 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     hotGroupFont = nullptr;
     hotGroupIndex = UINT16_MAX;
     if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
-      hotGroupFailNeeded = group.uncompressedSize;
-      hotGroupFailMaxAlloc = ESP.getMaxAllocHeap();
-      starvedGlyphs++;
-      LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u (backing off until heap > %u)",
-              group.uncompressedSize, groupIndex, hotGroupFailMaxAlloc);
-      stats.getBitmapTimeUs += micros() - tStart;
-      return nullptr;
+      // Last resort before dropping the glyph. The persistent glyph slab is SLAB_BYTES of pure
+      // cache -- a repeat-render accelerator for stray fallback glyphs -- and nothing in drawing
+      // THIS glyph needs it, so handing it back usually clears room for the group. Dropping the
+      // glyph instead punches a hole in the rendered text (a dictionary entry that looks
+      // half-loaded), and the back-off latch below then keeps every later glyph of the same group
+      // out as well, so one shortage costs a whole run of characters. Freed directly rather than
+      // via freeGlyphSlab(), which also clears the page buffers this render is drawing from.
+      if (slabBuf) {
+        free(slabBuf);
+        free(slabEntries);
+        slabBuf = nullptr;
+        slabEntries = nullptr;
+        slabEntryCount = 0;
+        slabUsed = 0;
+        LOG_INF("FDC", "Released glyph slab to fit hot group %u (maxAlloc=%u)", groupIndex, ESP.getMaxAllocHeap());
+      }
+      if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
+        hotGroupFailNeeded = group.uncompressedSize;
+        hotGroupFailMaxAlloc = ESP.getMaxAllocHeap();
+        starvedGlyphs++;
+        LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u (backing off until heap > %u)",
+                group.uncompressedSize, groupIndex, hotGroupFailMaxAlloc);
+        stats.getBitmapTimeUs += micros() - tStart;
+        return nullptr;
+      }
     }
     hotGroupFailNeeded = 0;  // a success proves the heap recovered
 
@@ -337,6 +369,20 @@ int32_t FontDecompressor::findGlyphIndex(const EpdFontData* fontData, uint32_t c
 
 int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8Text) {
   if (!fontData || !fontData->groups || !utf8Text) return 0;
+
+  // One slot per font, enforced here: getBitmap() consults only the FIRST slot whose fontData
+  // matches and stops there ("don't check other slots"), so a second slot for the same font is
+  // never read -- its decompressed glyphs are dead memory, and it costs a slot that a DIFFERENT
+  // font then cannot have. That is the whole failure mode this guard removes: measured on device,
+  // one screen claimed six slots for four distinct fonts (a font reached through two ids, plus a
+  // fallback family shared by two others) and the last two fonts were refused.
+  //
+  // Returning here leaves any glyph this call needed but the existing slot lacks to the
+  // hot-group path -- exactly where a second slot would have left it anyway, since it could
+  // never be read.
+  for (uint8_t i = 0; i < pageSlotCount; i++) {
+    if (pageSlots[i].fontData == fontData && pageSlots[i].glyphCount > 0) return 0;
+  }
 
   // Allocate the next available slot (caller must call freePageBuffer/clearCache to reset)
   if (pageSlotCount >= MAX_PAGE_SLOTS) {

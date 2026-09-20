@@ -17,6 +17,8 @@
 namespace {
 
 constexpr unsigned long POPUP_DURATION_MS = 1500;
+constexpr unsigned long WORD_REPEAT_START_MS = 500;
+constexpr unsigned long WORD_REPEAT_INTERVAL_MS = 500;
 
 // A token is selectable when it has an ASCII alphanumeric or a non-ASCII
 // codepoint outside U+2000-U+206F (dashes, bullets and other General
@@ -53,6 +55,23 @@ void DictionaryWordSelectActivity::onEnter() {
     const int initial = closestInRow(rowCount / 2, renderer.getScreenWidth() / 2);
     if (initial >= 0) selected = initial;
   }
+  // Opened by a long press on a word: start there and show the definition
+  // straight away. A miss (the press landed between words) falls through to
+  // ordinary selection rather than closing, so the gesture is never a dead end.
+  if (!words.empty() && lookupAtX >= 0 && lookupAtY >= 0) {
+    const int hit = wordAt(lookupAtX, lookupAtY);
+    if (hit >= 0) {
+      selected = hit;
+      requestUpdate();
+      performLookup();
+      return;
+    }
+    // Missed: from here this is ordinary selection, which the reader is now driving themselves.
+    // Forgetting the press keeps the close behaviour ordinary too -- otherwise a definition they
+    // opened by hand would still return to the page instead of back to the words.
+    lookupAtX = -1;
+    lookupAtY = -1;
+  }
   requestUpdate();
 }
 
@@ -69,15 +88,27 @@ void DictionaryWordSelectActivity::extractWords() {
   std::string pageText;
   pageText.reserve(2048);
   uint8_t styleMask = 0;
+  int16_t pendingHyphen = -1;  // line-final word ending in '-', awaiting its remainder
 
   for (const auto& element : page->elements) {
-    if (element->getTag() != TAG_PageLine) continue;
+    // Layout hyphenation only ever continues onto the IMMEDIATELY following text line, so
+    // anything else in between (an image, a line with no usable block) disarms the join.
+    if (element->getTag() != TAG_PageLine) {
+      pendingHyphen = -1;
+      continue;
+    }
     const auto* line = static_cast<const PageLine*>(element.get());
-    const auto& block = line->getBlock();
-    if (!block || !block->valid()) continue;
+    const auto* block = line->getBlock();
+    if (!block || !block->valid()) {
+      // Reset the pending hyphen too: a skipped line must not let a hyphenated word join across
+      // the gap it leaves.
+      pendingHyphen = -1;
+      continue;
+    }
 
     bool rowHasWords = false;
     const int lineFontId = block->getBlockStyle().resolveFontId(fontId);
+    const uint16_t lastWordIndex = block->wordCount() > 0 ? static_cast<uint16_t>(block->wordCount() - 1) : 0;
     const int ascender = renderer.getFontAscenderSize(lineFontId);
     const int rubyShift = block->getRubyShift(ascender);
     for (uint16_t i = 0; i < block->wordCount(); i++) {
@@ -95,14 +126,32 @@ void DictionaryWordSelectActivity::extractWords() {
       // word alone, exactly as TextBlock::render resolves it. 0 = no override.
       const int32_t wordFont = block->wordFont(i);
       box.fontId = wordFont != 0 ? static_cast<int>(wordFont) : lineFontId;
+      // Link a hyphenated pair as it is discovered: the prefix was remembered when its line ended,
+      // and this is the first selectable word of the next line -- the remainder.
+      if (pendingHyphen >= 0) {
+        words[static_cast<size_t>(pendingHyphen)].joinNext = static_cast<int16_t>(words.size());
+        box.joinPrev = pendingHyphen;
+        pendingHyphen = -1;
+      }
       words.push_back(box);
+      // A trailing hyphen on the LINE'S last word is layout hyphenation, not the author's text.
+      // Remember it so the next line's first word can be joined to it.
+      if (i == lastWordIndex) {
+        const size_t len = strlen(text);
+        if (len > 1 && text[len - 1] == '-') pendingHyphen = static_cast<int16_t>(words.size() - 1);
+      }
       rowHasWords = true;
 
       pageText.append(text);
       pageText.push_back(' ');
       styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(box.style) & 0x03));
     }
-    if (rowHasWords) rowCount++;
+    if (rowHasWords) {
+      rowCount++;
+    } else {
+      // A line with nothing selectable on it: same rule, the pending prefix cannot reach past it.
+      pendingHyphen = -1;
+    }
   }
 
   if (styleMask == 0) styleMask = 0x01;  // REGULAR
@@ -110,6 +159,36 @@ void DictionaryWordSelectActivity::extractWords() {
   for (auto& word : words) {
     word.width = static_cast<int16_t>(renderer.getTextAdvanceX(word.fontId, word.text, word.style));
   }
+}
+
+// Either half of a hyphenated pair looks up the whole word: "any-" joins the remainder that
+// follows it, "one" joins the prefix before it. The hyphen itself is dropped -- layout put it
+// there, the author did not. Words that are not part of a split are returned untouched, with no
+// allocation.
+const char* DictionaryWordSelectActivity::lookupTextFor(const size_t index, std::string& scratch) const {
+  const WordBox& box = words[index];
+  const WordBox* prefix = nullptr;
+  const WordBox* remainder = nullptr;
+  if (box.joinNext >= 0 && static_cast<size_t>(box.joinNext) < words.size()) {
+    prefix = &box;
+    remainder = &words[static_cast<size_t>(box.joinNext)];
+  } else if (box.joinPrev >= 0 && static_cast<size_t>(box.joinPrev) < words.size()) {
+    prefix = &words[static_cast<size_t>(box.joinPrev)];
+    remainder = &box;
+  } else {
+    return box.text;
+  }
+  scratch.assign(prefix->text);
+  if (!scratch.empty() && scratch.back() == '-') scratch.pop_back();
+  scratch.append(remainder->text);
+  return scratch.c_str();
+}
+
+const DictionaryWordSelectActivity::WordBox* DictionaryWordSelectActivity::joinedPartner(const size_t index) const {
+  const WordBox& box = words[index];
+  const int16_t other = box.joinNext >= 0 ? box.joinNext : box.joinPrev;
+  if (other < 0 || static_cast<size_t>(other) >= words.size()) return nullptr;
+  return &words[static_cast<size_t>(other)];
 }
 
 int DictionaryWordSelectActivity::wordHeight(const WordBox& word) const {
@@ -160,18 +239,17 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
 }
 
 void DictionaryWordSelectActivity::performLookup() {
-  popup = Popup::Busy;
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
-    dictOpenOk = dict.open(folderName.c_str());
+    dictOpenOk = dict.open(folderName.c_str(), language.c_str());
     // needsIndex() opens and validates the .qidx sidecar, so ask it once per
     // open rather than once per word: the answer only changes when we build
     // the sidecar ourselves, which is handled below.
     dictNeedsIndex = dictOpenOk && dict.needsIndex();
   }
-  popupMsg = dictNeedsIndex ? StrId::STR_DICT_INDEXING : StrId::STR_DICT_LOOKING_UP;
-  requestUpdateAndWait();  // paint the page + busy popup before blocking on SD
-
+  // No busy popup: the lookup is fast enough that one only flashes, and the definition panel
+  // draws over the page without clearing it, so a popup painted here would survive underneath
+  // as debris. Failures still get their own popup below.
   {
     RenderLock lock;
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
@@ -188,13 +266,31 @@ void DictionaryWordSelectActivity::performLookup() {
   std::string definition;
   std::string headword;
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  const bool found = ok && dict.lookup(words[selected].text, definition, headword, &result);
+  std::string joined;
+  const bool found =
+      ok && dict.lookup(lookupTextFor(static_cast<size_t>(selected), joined), definition, headword, &result);
 
   if (found) {
     popup = Popup::None;
-    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                                          std::move(definition)),
-                           [this](const ActivityResult&) { requestUpdate(); });
+    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
+                               renderer, mappedInput, std::move(headword), std::move(definition),
+                               dict.definitionsAreHtml(), dict.getBookName()),
+                           [this](const ActivityResult& result) {
+                             // The definition view cancels when its power click asked to leave the dictionary
+                             // entirely, rather than step back to this selection.
+                             if (result.isCancelled) {
+                               finish();
+                               return;
+                             }
+                             // A long press opened the definition directly, so closing it returns to the
+                             // page. Word selection was never a step the reader asked for, and stopping
+                             // here would strand them in a screen they did not open.
+                             if (lookupAtX >= 0 && lookupAtY >= 0) {
+                               finish();
+                               return;
+                             }
+                             requestUpdate();
+                           });
     return;
   }
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but
@@ -250,13 +346,24 @@ void DictionaryWordSelectActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+  // The power click looks the highlighted word up rather than leaving, matching the vertical
+  // panel: while a word is selected the button means "show me this", and it only closes the
+  // dictionary from the definition itself. Two clicks still leave without the hand moving.
+  if (ReaderUtils::wordLookupPowerClick(mappedInput)) {
+    if (!words.empty()) {
+      performLookup();
+      return;
+    }
     finish();
     return;
   }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    finish();
+    return;
+  }
+  // The reader can enter this activity while Confirm is still held after a long press. Ignore
+  // that stale release until a fresh press has happened here.
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmPressSeen && !words.empty()) {
     performLookup();
     return;
@@ -286,11 +393,20 @@ void DictionaryWordSelectActivity::loop() {
   }
 
   const bool hasNextWord = selected + 1 < static_cast<int>(words.size());
-  if (mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft) && selected > 0) {
+  const unsigned long now = millis();
+  const bool repeat =
+      mappedInput.getHeldTime() >= WORD_REPEAT_START_MS && now - lastHorizontalMoveTime >= WORD_REPEAT_INTERVAL_MS;
+  const bool moveLeft = mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft) ||
+                        (repeat && mappedInput.isPressed(MappedInputManager::Button::ScreenLeft));
+  const bool moveRight = mappedInput.wasPressed(MappedInputManager::Button::ScreenRight) ||
+                         (repeat && mappedInput.isPressed(MappedInputManager::Button::ScreenRight));
+  if (moveLeft && selected > 0) {
     selected--;
+    lastHorizontalMoveTime = now;
     requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenRight) && hasNextWord) {
+  } else if (moveRight && hasNextWord) {
     selected++;
+    lastHorizontalMoveTime = now;
     requestUpdate();
   } else if (mappedInput.wasPressed(MappedInputManager::Button::ScreenUp)) {
     moveVertical(-1);
@@ -305,6 +421,11 @@ void DictionaryWordSelectActivity::loop() {
 // next cursor move must do a full repaint.
 bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   const WordBox& word = words[selected];
+  // A hyphenated word is highlighted in both halves, so the reader sees the whole word they are
+  // looking up rather than the fragment on this line. The second box sits on another line, which
+  // one saved region cannot restore -- so the snapshot fast path is skipped and the next cursor
+  // move repaints fully. That costs a refresh only on the rare split word.
+  const WordBox* partner = joinedPartner(static_cast<size_t>(selected));
   int hx = word.x - 2;
   int hy = word.y - 2;
   int hw = word.width + 4;
@@ -320,7 +441,7 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   }
 
   bool saved = false;
-  if (snapshot && hw > 0 && hh > 0) {
+  if (!partner && snapshot && hw > 0 && hh > 0) {
     saved = renderer.readFramebufferRegion(hx, hy, hw, hh, snapshot.get(), SNAPSHOT_CAPACITY) > 0;
   }
   snapshotX = static_cast<int16_t>(hx);
@@ -334,6 +455,24 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   // word out in, so drawing it in a different size spills white glyphs past the black panel and
   // over the neighbouring words (the page's own ink is only erased inside the box).
   renderer.drawText(word.fontId, word.x, word.y, word.text, false, word.style);
+  if (partner) {
+    int px = partner->x - 2;
+    int py = partner->y - 2;
+    int pw = partner->width + 4;
+    int ph = wordHeight(*partner) + 4;
+    if (px < 0) {
+      pw += px;
+      px = 0;
+    }
+    if (py < 0) {
+      ph += py;
+      py = 0;
+    }
+    if (pw > 0 && ph > 0) {
+      renderer.fillRect(px, py, pw, ph, true);
+      renderer.drawText(partner->fontId, partner->x, partner->y, partner->text, false, partner->style);
+    }
+  }
   return saved;
 }
 

@@ -36,11 +36,17 @@ class Epub {
   contentaccess::HandlePtr itemSource;
   // User-presentable reason load() refused the book (empty otherwise).
   std::string accessError;
+  // Set by generateThumbBmp() via the converter's outUnsupported flag; see coverUnsupported().
+  mutable bool coverUnsupported_ = false;
 
+  // Two orthogonal sets of optional arguments meet here. shouldCancel/cancelCtx let a long parse
+  // abort on a button press (the cover loader). metadataOnly/sharedZip let the library indexer
+  // read title and author without the spine, reusing one open ZipFile across every book.
   bool findContentOpfFile(std::string* contentOpfFile, BmpConvertCancelFn shouldCancel = nullptr,
-                          void* cancelCtx = nullptr) const;
+                          void* cancelCtx = nullptr, ZipFile* sharedZip = nullptr) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
-                       BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr);
+                       BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr, bool metadataOnly = false,
+                       ZipFile* sharedZip = nullptr);
   bool parseTocNcxFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   bool parseTocNavFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   void discoverCssFilesFromZip();
@@ -55,17 +61,23 @@ class Epub {
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false, BmpConvertCancelFn shouldCancel = nullptr,
             void* cancelCtx = nullptr);
+  bool loadMetadata(std::string& title, std::string& author);
   bool clearCache() const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;
   const std::string& getPath() const;
   // Empty unless load() refused the book because its content is not readable here.
   const std::string& getAccessError() const { return accessError; }
+  // True when the last generateThumbBmp() failed because the cover image itself can never be
+  // converted by this build (currently: beyond the JPEG decoder's dimension limits) -- as
+  // opposed to a low-heap moment, a cancellation, or a decode error, which are all retryable.
+  // Lets a caller record "no usable cover" instead of re-attempting it on every pass forever.
+  bool coverUnsupported() const { return coverUnsupported_; }
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
-  std::string getCoverBmpPath(bool cropped = false) const;
-  bool generateCoverBmp(bool cropped = false) const;
+  std::string getCoverBmpPath(bool cropped = false, bool originalThresholds = false) const;
+  bool generateCoverBmp(bool cropped = false, bool originalThresholds = false) const;
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   // Whether the book declares a cover image at all. Lets callers tell a permanent "there is

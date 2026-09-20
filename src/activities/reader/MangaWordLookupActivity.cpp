@@ -10,17 +10,23 @@
 #include <SdCardFontSystem.h>
 #include <WordLookup.h>
 
+#include <algorithm>
+#include <cstdint>
+
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  const std::string& panelText, std::string scanCachePath,
-                                                 const uint16_t pageIndex, const uint16_t panelIndex)
+                                                 const uint16_t pageIndex, const uint16_t panelIndex,
+                                                 const int targetGlyph)
     : Activity("MangaWordLookup", renderer, mappedInput),
+      targetGlyph(targetGlyph),
       scanCachePath(std::move(scanCachePath)),
       scanPage(pageIndex),
       scanPanel(panelIndex) {
@@ -66,6 +72,17 @@ void MangaWordLookupActivity::onEnter() {
   Activity::onEnter();
   // Heap telemetry for the word-lookup OOM crash hunt -- see EpubReaderWordLookupActivity.
   LOG_INF("MWLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  // A hold on the page names its own character, which beats both the remembered position and the
+  // first match: the reader pointed at something.
+  if (targetGlyph >= 0) {
+    const int hit = selectableForGlyph(static_cast<size_t>(targetGlyph));
+    if (hit >= 0) {
+      cursorIndex = hit;
+      performLookup();
+      requestUpdate();
+      return;
+    }
+  }
   // A scan-cache hit remembers the last cursor position for this exact panel/page text -- see
   // EpubReaderWordLookupActivity::onEnter().
   if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
@@ -82,6 +99,30 @@ void MangaWordLookupActivity::onEnter() {
   }
   if (cursorIndex > maxIdx) cursorIndex = 0;
   requestUpdate();
+}
+
+int MangaWordLookupActivity::selectableForGlyph(const size_t glyph) {
+  // Segmentation is sequential, so the word covering `glyph` is known once the scan has mapped a
+  // word starting past it (or finished). A view's text is a few bubbles, so this is short --
+  // moveCursor() scans ahead synchronously the same way.
+  auto mappedPast = [&] { return !scan.selectToAllIdx.empty() && scan.selectToAllIdx.back() > glyph; };
+  while (!scan.isDone() && !mappedPast()) scan.step(50);
+
+  int nearest = -1;
+  size_t nearestDistance = SIZE_MAX;
+  for (size_t i = 0; i < scan.selectToAllIdx.size(); i++) {
+    const size_t start = scan.selectToAllIdx[i];
+    const size_t span = std::max<size_t>(scan.selectableGlyphs[i].matchLen, 1);
+    if (glyph >= start && glyph < start + span) return static_cast<int>(i);
+    // A character no word covers (punctuation, a particle the dictionary skipped): the closest
+    // word by position, preferring the one it ends -- the same snap the book panel makes.
+    const size_t distance = glyph >= start + span ? glyph - (start + span - 1) : start - glyph;
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = static_cast<int>(i);
+    }
+  }
+  return nearest;
 }
 
 void MangaWordLookupActivity::onExit() {
@@ -162,7 +203,11 @@ void MangaWordLookupActivity::performLookup() {
 void MangaWordLookupActivity::performLookupImpl() {
   hasResult = false;
   resultHeadword.clear();
+  resultSource = nullptr;
   resultDefinition.clear();
+  resultReading.clear();
+  resultGrammar.clear();
+  resultDictionaryLabel.clear();
   resultMatchLen = 0;
   scrollOffset = 0;
   totalLines = 9999;
@@ -170,12 +215,44 @@ void MangaWordLookupActivity::performLookupImpl() {
   std::string text = buildLookupText(static_cast<size_t>(cursorIndex));
   if (text.empty()) return;
 
+  // A number is selected together with its counter (360度, ３人) -- the scan's selectable entry
+  // starts at the digits -- but the dictionary knows the counter, not "360度". Look up what
+  // follows the digits and show the digits as a prefix, as the book panel does. Without this every
+  // number-plus-counter word in manga answered "No match found".
+  std::string digitPrefix;
+  {
+    size_t b = 0;
+    while (b < text.size()) {
+      const auto c = static_cast<unsigned char>(text[b]);
+      if (c >= '0' && c <= '9') {
+        b += 1;
+      } else if (c == 0xEF && b + 2 < text.size() && static_cast<unsigned char>(text[b + 1]) == 0xBC &&
+                 static_cast<unsigned char>(text[b + 2]) >= 0x90 && static_cast<unsigned char>(text[b + 2]) <= 0x99) {
+        b += 3;  // fullwidth ０-９
+      } else {
+        break;
+      }
+    }
+    if (b > 0 && b < text.size()) {
+      digitPrefix = text.substr(0, b);
+      text = text.substr(b);
+    }
+  }
+
   WordLookupResult result;
   if (WordLookup::lookup(text, 0, result)) {
     WordSelectionScan::stripTrailingParticle(text, result);
     hasResult = true;
-    resultHeadword = result.entry.headword;
+    resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
+    DefinitionText::EntryMetadata metadata;
+    DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
+    resultReading = std::move(metadata.reading);
+    resultGrammar = std::move(metadata.grammar);
+    resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
+                   : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
+                                                                        : "JMdict";
+    resultDictionaryLabel = std::move(metadata.source);
 
     int chars = 0;
     size_t pos = 0;
@@ -221,6 +298,12 @@ void MangaWordLookupActivity::performLookupImpl() {
         if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
           resultDefinition = std::move(gramEntry.definition);
+          DefinitionText::EntryMetadata grammarMetadata;
+          DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
+          resultReading = std::move(grammarMetadata.reading);
+          resultGrammar = std::move(grammarMetadata.grammar);
+          resultDictionaryLabel = std::move(grammarMetadata.source);
+          resultSource = "Grammar";
         }
       }
     }
@@ -292,12 +375,14 @@ void MangaWordLookupActivity::performLookupImpl() {
     }
   }
 
+  DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
+                                                        ? resultHeadword
+                                                        : std::string());
   requestUpdate();
 }
 
 void MangaWordLookupActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      ReaderUtils::powerClickLeavesWordLookup(mappedInput)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) || ReaderUtils::wordLookupPowerClick(mappedInput)) {
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));
@@ -310,19 +395,83 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
-  const bool sideButtonsForLookup =
-      SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-  const bool swapFrontButtons = mappedInput.isNavDirectionSwapped();
+  // A side button bound to Word Lookup mirrors the power-button shortcut: the click that opened
+  // this screen looks the highlighted word up, and only a click with a definition already showing
+  // leaves. Two clicks in, one click out. This view draws the cursor and the definition together,
+  // so "a definition is showing" IS hasResult -- the same thing Confirm produces above.
+  if (ReaderUtils::wordLookupSideToggle(mappedInput)) {
+    if (!hasResult) {
+      performLookup();
+      return;
+    }
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+  // Remapped page bindings (side buttons and the power button) move the word cursor here.
+  const auto step = ReaderUtils::lookupPanelStep(mappedInput);
+  if (step != ReaderUtils::PanelStep::None) {
+    moveCursor(step == ReaderUtils::PanelStep::Next ? 1 : -1);
+    return;
+  }
+
+  const bool sideButtonsForLookup = SETTINGS.wordLookupSideButtons != 0 && !SETTINGS.sideButtonsFullyCustomized();
+  // Both roles are named by SCREEN direction, never by a physical button. The rotation hands the
+  // horizontal pair to one set of buttons and the vertical pair to the other, so naming both this
+  // way guarantees the two roles land on different buttons in every orientation. Reaching for the
+  // physical side buttons (PageBack/PageForward) for entries collided in landscape, where
+  // ScreenLeft/Right resolve to those very buttons -- scrolling and entry navigation ended up on
+  // the same pair and the front buttons did nothing.
+  //
+  // The setting keeps its meaning: it swaps which AXIS carries which role, so in portrait it still
+  // moves entry navigation onto the side buttons and scrolling onto the front pair.
   const auto nextEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::PageForward : MappedInputManager::Button::Right;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenDown : MappedInputManager::Button::ScreenRight;
   const auto previousEntryButton =
-      sideButtonsForLookup ? MappedInputManager::Button::PageBack : MappedInputManager::Button::Left;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenUp : MappedInputManager::Button::ScreenLeft;
   const auto scrollDownButton =
-      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Left : MappedInputManager::Button::Right)
-                           : MappedInputManager::Button::Down;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
   const auto scrollUpButton =
-      sideButtonsForLookup ? (swapFrontButtons ? MappedInputManager::Button::Right : MappedInputManager::Button::Left)
-                           : MappedInputManager::Button::Up;
+      sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
+  // Outside the card is "put it away", as in the English and Japanese panels: the card floats
+  // over the page, so a tap around it reads as dismissing it. Checked before the paging below so
+  // the two cannot both claim one contact.
+  int tapX = 0;
+  int tapY = 0;
+  if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
+    const auto box = DictionaryPanel::compute(renderer).box;
+    if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
+      finish();
+      return;
+    }
+  }
+
+  // Tap zones, inverted zones, swipes or inverted swipes -- whatever the reader is set to, through
+  // the same helper the page turns and the other panels use. A turn steps to the previous/next
+  // word, as this panel's own left/right buttons do: the entry itself scrolls on the vertical
+  // swipe below.
+  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  if (touchTurn.prev || touchTurn.next) {
+    moveCursor(touchTurn.next ? 1 : -1);
+    return;
+  }
+
+  // Up/down swipes scroll a long definition a screenful at a time, whatever the page-turn setting
+  // says -- the same gesture as the EPUB panels.
+  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
+    const int target = std::clamp(scrollOffset + scroll * visibleCapacity, 0, maxScroll);
+    if (hasResult && target != scrollOffset) {
+      scrollOffset = target;
+      requestUpdate();
+    }
+    return;
+  }
+
   buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
   buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
@@ -353,8 +502,7 @@ void MangaWordLookupActivity::loop() {
   }
 }
 
-void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentTop) {
-  auto metrics = UITheme::getInstance().getMetrics();
+void MangaWordLookupActivity::renderContentArea(const Rect& body) {
   // Built-in font on purpose, NOT SETTINGS.getReaderFontId(): the lookup panel's definitions
   // and UI already render in built-in fonts, so an SD reader font (e.g. UD Digi Kyokasho) made
   // the headword a different typeface than the rest of the view -- and pulled whole SD font
@@ -372,91 +520,81 @@ void MangaWordLookupActivity::renderContentArea(const Rect& screen, int contentT
   if (hasResult) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->clearCache();
-      // Scoped to the exact style each is drawn with below (headword: BOLD; definition: REGULAR)
-      // -- a blanket "all 4 styles" request can itself exhaust the font decompressor's 4-slot
-      // page buffer (each style, plus one more per style if the font has a fallback), same trap
-      // found and fixed for vertical-page rendering earlier this session.
-      fcm->prewarmCache(defFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
-      renderer.prewarmText(defFont, resultDefinition.c_str(), 1 << EpdFontFamily::REGULAR);
+      // Regular plus the exact bold lines use at most the compressed font's four page slots.
+      // Italic Latin translations are cheap to load on demand.
+      DefinitionText::prewarmStyledText(renderer, defFont, resultDefinition);
     }
   }
 
   if (scan.selectableGlyphs.empty() || !hasResult) {
     const bool stillWorking = lookupInFlight || !scan.isDone();
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2,
+    UITheme::drawCenteredText(renderer, body, UI_12_FONT_ID, body.y + body.height / 2,
                               stillWorking ? tr(STR_LOADING) : tr(STR_NO_MATCH), true);
     return;
   }
 
-  const int maxWidth = screen.width - metrics.contentSidePadding * 2;
-  const int textX = screen.x + metrics.contentSidePadding;
-  int defY;
-
-  if (scrollOffset == 0) {
-    renderer.drawTextScaled(defFont, textX, contentTop, resultHeadword.c_str(), defScale, true, EpdFontFamily::BOLD);
-    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + metrics.verticalSpacing;
-  } else {
-    std::string scrollInfo = resultHeadword;
-    renderer.drawTextScaled(defFont, textX, contentTop, scrollInfo.c_str(), defScale, true);
-    defY = contentTop + renderer.getLineHeightScaled(defFont, defScale) + 4;
-  }
-
+  DefinitionText::EntryMetadata metadata{resultReading, resultGrammar};
   const int defLineH = renderer.getLineHeightScaled(defFont, defScale);
-  const int maxDefY = screen.y + screen.height - 2;
-  const int firstDefY = defY;
-  const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
-                                                maxDefY, scrollOffset, defScale);
+  const int metadataLines = DefinitionText::entryMetadataLineCount(renderer, body, defFont, defScale, metadata);
+  const int definitionScroll = std::max(0, scrollOffset - metadataLines);
+  Rect definitionBody = body;
+  const int metadataEndY =
+      DefinitionText::drawEntryMetadata(renderer, body, defFont, defScale, metadata, scrollOffset, defLineH);
+  definitionBody.y = metadataEndY - std::min(scrollOffset, metadataLines) * defLineH;
+  definitionBody.height = std::max(0, body.y + body.height - definitionBody.y);
 
-  totalLines = wrap.totalLines;
-  const int visibleCapacity = (maxDefY - firstDefY) / defLineH;
+  const int maxWidth = definitionBody.width;
+  const int textX = definitionBody.x;
+  const int defY = definitionBody.y;
+
+  const int maxDefY = definitionBody.y + definitionBody.height;
+  const auto wrap = DefinitionText::drawWrapped(renderer, defFont, resultDefinition, textX, defY, defLineH, maxWidth,
+                                                maxDefY, definitionScroll, defScale);
+
+  totalLines = metadataLines + wrap.totalLines;
+  visibleCapacity = std::max(1, body.height / defLineH);
   maxScroll = std::max(0, totalLines - visibleCapacity);
 }
 
 void MangaWordLookupActivity::render(RenderLock&&) {
-  auto& theme = UITheme::getInstance();
-  auto metrics = theme.getMetrics();
-  Rect screen = theme.getScreenSafeArea(renderer, true, false);
-
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-
-  std::string posText;
+  // Manga keeps the free-scrolling definition, so the counter stays the word position within
+  // the page (35/50); its total is unknown until the progressive scan finishes.
+  std::string counterText;
   if (hasResult && !scan.selectableGlyphs.empty()) {
-    posText = std::to_string(cursorIndex + 1) + "/" +
-              (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
+    counterText = std::to_string(cursorIndex + 1) + "/" +
+                  (scan.isDone() ? std::to_string(scan.selectableGlyphs.size()) : std::string("\xe2\x80\xa6"));
   }
-  const Rect headerRect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight};
 
-  if (!initialRenderDone) {
-    renderer.clearScreen();
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    renderContentArea(screen, contentTop);
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
-    initialRenderDone = true;
-    fastRefreshCount = 0;
-  } else {
-    const int physBottom = renderer.getScreenHeight();
-    renderer.fillRect(0, contentTop, renderer.getScreenWidth(), physBottom - contentTop, false);
-    GUI.drawHeader(renderer, headerRect, tr(STR_WORD_LOOKUP), posText.empty() ? nullptr : posText.c_str());
-    const bool sideButtonsForLookup =
-        SETTINGS.wordLookupSideButtons != 0 && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
-    const auto labels2 =
-        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), sideButtonsForLookup ? tr(STR_DIR_UP) : tr(STR_DIR_LEFT),
-                              sideButtonsForLookup ? tr(STR_DIR_DOWN) : tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels2.btn1, labels2.btn2, labels2.btn3, labels2.btn4);
-    renderContentArea(screen, contentTop);
-
-    fastRefreshCount++;
-    if (fastRefreshCount >= kFullRefreshInterval) {
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-      fastRefreshCount = 0;
-    } else {
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  if (hasResult) {
+    constexpr int kPanelHeaderFont = NOTOSERIF_12_FONT_ID;
+    sdFontSystem.ensureWordLookupFallback(renderer, kPanelHeaderFont, 12);
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+      renderer.prewarmText(kPanelHeaderFont, resultHeadword.c_str(), 1 << EpdFontFamily::BOLD);
     }
   }
+
+  // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
+  // previous one; the manga page stays visible around it instead of being cleared away.
+  const char* kind = resultSource == nullptr
+                         ? nullptr
+                         : I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
+                                    : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
+                                                                            : StrId::STR_DICT_KIND_VOCAB);
+  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
+                                            counterText.empty() ? nullptr : counterText.c_str(), kind);
+  renderContentArea(layout.body);
+
+  // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
+  // direction on the rotated screen, which a fixed left/right pair cannot do.
+  const auto labels = mappedInput.mapDirectionalLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT),
+                                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  DictionaryPanel::clearButtonHints(renderer);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+
+  // FAST only, the first render included. The framebuffer holds just the page's BW plane -- its
+  // grays exist only on the glass -- so a full or half refresh would repaint the whole manga page
+  // from that plane: a black flash, then the image in a different tone. A FAST wave drives only the
+  // pixels that change, the panel's, and leaves the page around it as it was.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }

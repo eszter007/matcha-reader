@@ -5,6 +5,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <Utf8.h>
 
 #include <cstring>
 
@@ -52,8 +53,9 @@ void TextBlock::bindArenaPointers() {
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle,
-                     std::vector<std::string> rubyTexts, const std::vector<int32_t>& wordFonts)
-    : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)) {
+                     std::vector<std::string> rubyTexts, const std::vector<int32_t>& wordFonts,
+                     std::vector<LinkSpan> linkSpans)
+    : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)), linkSpans(std::move(linkSpans)) {
   // Same invariant as deserialize(): a block never holds an all-empty rubyTexts, so a
   // ruby-less line costs nothing beyond its arena. The layout engine hands one over for
   // every line it extracts, ruby or not; release it here rather than carrying it for the
@@ -166,6 +168,21 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
 
   const bool scanning = renderer.isFontCacheScanning();
   const int ascender = renderer.getFontAscenderSize(fontId);
+
+  // Drop cap: the words on this line and the ones beneath it were already positioned clear of
+  // its column at layout time, so it only has to be drawn. Both offsets are relative to the
+  // block's origin and were resolved against the same font metrics the layout used.
+  if (dropCap.present()) {
+    if (dropCap.prefixCp != 0) {
+      // Body size, on the first line's own top edge -- it belongs to the text it opens, not to
+      // the magnified letter beside it.
+      char prefix[5] = {};
+      utf8EncodeCodepoint(dropCap.prefixCp, prefix);
+      renderer.drawText(fontId, x, y, prefix, inkBlack, static_cast<EpdFontFamily::Style>(dropCap.style));
+    }
+    renderer.drawCharUpscaled(fontId, dropCap.cp, dropCap.scale, x + dropCap.inkLeft, y + dropCap.inkTop, inkBlack,
+                              static_cast<EpdFontFamily::Style>(dropCap.style));
+  }
 
   // Resolve ruby collisions left-to-right to prevent adjacent ruby texts from overlapping
   struct RubyDrawInfo {
@@ -300,7 +317,11 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
     const int wordX = xposArr[i] + x;
     // Inline font-size override: this word was MEASURED with its own font (see
     // ParsedText::calculateWordWidths), so it must draw with the same one.
-    const int wordFontId = (fontsPresent && wordFontArr[i] != 0) ? wordFontArr[i] : fontId;
+    const int32_t fontSlot = fontsPresent ? wordFontArr[i] : 0;
+    const bool wordScaled = isWordScaleTag(fontSlot);
+    // A scale tag means the block's own font drawn smaller/larger, not a different font.
+    const uint16_t wordScale = wordScaled ? static_cast<uint16_t>(-fontSlot) : WORD_SCALE_ONE;
+    const int wordFontId = (!wordScaled && fontSlot != 0) ? fontSlot : fontId;
     const EpdFontFamily::Style currentStyle = wordStyle(i);
     const auto baseDir =
         static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
@@ -311,6 +332,15 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
     //   SUP: raise by 40% of ascender — sits clearly above the cap-height
     //   SUB: lower by 25% of ascender — descends below baseline without clashing with ascenders below
     int wordY = y + rubyShift;
+    // drawTextScaled treats y as the top of a line box drawn ENTIRELY at `scale`, so it puts the
+    // baseline at y + ascender*scale. That holds for the dictionary popup, which scales whole
+    // paragraphs and scales their line advance to match. Here the line box is the block's own
+    // height and only this word is scaled, so that baseline is wrong in both directions: an
+    // enlarged word (a lettrine) sinks a full extra ascender and overlaps the line below, and a
+    // shrunk one (a small-caps run) floats above its neighbours. Shift back onto the line's
+    // baseline so a scaled word sits on the same one as the text around it.
+    // Rounds the way GfxRenderer's own scaleSigned does, so the shift cancels its offset exactly.
+    if (wordScaled) wordY += ascender - static_cast<int>((ascender * wordScale + 128) / WORD_SCALE_ONE);
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
       wordY -= ascender * 2 / 5;
     } else if ((currentStyle & EpdFontFamily::SUB) != 0) {
@@ -333,12 +363,14 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
           std::min<size_t>({static_cast<size_t>(boundary), static_cast<size_t>(wordTextLen(i)), sizeof(boldBuf) - 1});
       memcpy(boldBuf, word, boldLen);
       boldBuf[boldLen] = '\0';
-      renderer.drawText(wordFontId, drawX, wordY, boldBuf, inkBlack, boldStyle, baseDir, blockStyle.letterSpacing);
+      renderer.drawTextScaled(wordFontId, drawX, wordY, boldBuf, wordScale, inkBlack, boldStyle, baseDir,
+                              blockStyle.letterSpacing);
       const int suffixX = drawX + focusSuffixXArr[i];
-      renderer.drawText(wordFontId, suffixX, wordY, word + boldLen, inkBlack, currentStyle, baseDir,
-                        blockStyle.letterSpacing);
+      renderer.drawTextScaled(wordFontId, suffixX, wordY, word + boldLen, wordScale, inkBlack, currentStyle, baseDir,
+                              blockStyle.letterSpacing);
     } else {
-      renderer.drawText(wordFontId, drawX, wordY, word, inkBlack, currentStyle, baseDir, blockStyle.letterSpacing);
+      renderer.drawTextScaled(wordFontId, drawX, wordY, word, wordScale, inkBlack, currentStyle, baseDir,
+                              blockStyle.letterSpacing);
     }
 
     // Horizontal ruby text rendering
@@ -357,7 +389,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
 
     if (EpdFontFamily::hasTextDecoration(currentStyle)) {
       int lineStartX = drawX;
-      int lineWidth = renderer.getTextWidth(wordFontId, word, currentStyle, baseDir, blockStyle.letterSpacing);
+      int lineWidth =
+          renderer.getTextWidthScaled(wordFontId, word, wordScale, currentStyle, baseDir, blockStyle.letterSpacing);
 
       if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
         lineWidth = (lineWidth + 1) / 2;
@@ -368,7 +401,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
           static_cast<uint8_t>(word[2]) == 0x83) {
         const char* visibleText = word + 3;
         lineStartX += renderer.getTextAdvanceX(wordFontId, "\xe2\x80\x83", currentStyle, blockStyle.letterSpacing);
-        lineWidth = renderer.getTextWidth(wordFontId, visibleText, currentStyle, baseDir, blockStyle.letterSpacing);
+        lineWidth = renderer.getTextWidthScaled(wordFontId, visibleText, wordScale, currentStyle, baseDir,
+                                                blockStyle.letterSpacing);
         if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
           lineWidth = (lineWidth + 1) / 2;
         }
@@ -442,6 +476,15 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.letterSpacing);
   serialization::writePod(file, blockStyle.inkMode);
   serialization::writePod(file, blockStyle.inkModeDefined);
+
+  // Drop cap. Written on every line (cp 0 = none) rather than behind a flag byte: the record
+  // stays fixed-width, which is what lets deserialize() read it back without a framing branch.
+  serialization::writePod(file, dropCap.cp);
+  serialization::writePod(file, dropCap.prefixCp);
+  serialization::writePod(file, dropCap.inkLeft);
+  serialization::writePod(file, dropCap.inkTop);
+  serialization::writePod(file, dropCap.scale);
+  serialization::writePod(file, dropCap.style);
 
   return true;
 }
@@ -552,6 +595,18 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   // A corrupt byte must not commit the line to white-on-nothing: only the exact Inverted value
   // survives, anything else falls back to the always-legible Normal.
   if (blockStyle.inkMode != CssInkMode::Inverted) blockStyle.inkMode = CssInkMode::Normal;
+
+  serialization::readPod(file, block->dropCap.cp);
+  serialization::readPod(file, block->dropCap.prefixCp);
+  serialization::readPod(file, block->dropCap.inkLeft);
+  serialization::readPod(file, block->dropCap.inkTop);
+  serialization::readPod(file, block->dropCap.scale);
+  serialization::readPod(file, block->dropCap.style);
+  block->dropCap.style &= DROP_CAP_STYLE_MASK;
+  // Bound what a corrupt record can ask the glyph scaler for: an absurd scale would blow up
+  // the block-replication loop (and paint over the page) rather than fail. The cap matches the
+  // ceiling ParsedText applies when it chooses the scale.
+  if (block->dropCap.scale > MAX_DROP_CAP_SCALE) block->dropCap = DropCap{};
 
   return block;
 }

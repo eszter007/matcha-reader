@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace {
@@ -54,6 +55,17 @@ struct CoarseEntry {
 // Diagnostic counters (declared before the spx helpers that touch them). Temporary instrumentation
 // for the Word Lookup slowness investigation; see DictIndex::logAndResetStats().
 uint32_t g_lookupExactCalls = 0;
+// Set when an entry (or a merge) was dropped purely because the heap could not hold it, so a
+// caller can tell "this word has no definition" apart from "we could not load it right now".
+bool g_heapLimited = false;
+// Set when a search reached no verdict -- an .idx/.dat read failed, or every candidate definition
+// was skipped for want of heap -- rather than establishing that the headword is absent. The
+// difference matters only to the negative memo: recording such a lookup would state "this word
+// does not exist" for the rest of the session on the strength of one bad moment, and would also
+// answer the caller's release-fonts-and-retry from the memo before it could reach the SD card.
+// Reset at the top of every lookupExact().
+bool g_lookupIncomplete = false;
+static uint32_t g_missMemoHits = 0;  // lookups answered from the negative memo (no SD traffic)
 uint32_t g_recordCacheHits = 0;
 uint32_t g_recordCacheMisses = 0;
 uint32_t g_fineReads = 0;  // fine-window SD reads (spx tier)
@@ -126,16 +138,13 @@ DictFileHandles g_vocabHandles;
 DictFileHandles g_grammarHandles;
 DictFileHandles g_namesHandles;
 
+// Classified by filename, not full path: the folder is resolved at runtime (/dictionaries/jp,
+// /.dictionaries/jp or /dict), so only the leaf is fixed.
 DictFileHandles& handlesFor(const char* idxPath) {
-  if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::OLD_GRAMMAR_IDX_PATH) == 0)
-    return g_grammarHandles;
-  if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::JP_LEGACY_NAMES_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::OLD_NAMES_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::LEGACY_NAMES_IDX_PATH) == 0) {
-    return g_namesHandles;
-  }
+  const char* slash = std::strrchr(idxPath, '/');
+  const char* leaf = slash ? slash + 1 : idxPath;
+  if (std::strcmp(leaf, "grammar.idx") == 0) return g_grammarHandles;
+  if (std::strcmp(leaf, "names.idx") == 0 || std::strcmp(leaf, "jmnedict.idx") == 0) return g_namesHandles;
   return g_vocabHandles;
 }
 
@@ -145,10 +154,69 @@ DictFileHandles& handlesFor(const char* idxPath) {
 const char* g_vocabIdxResolved = nullptr;
 const char* g_namesIdxResolved = nullptr;
 const char* g_grammarIdxResolved = nullptr;
+// The .dat paired with each resolved .idx. Same folder and stem, so derived from it rather than
+// from a constant: the folder may be /.dictionaries/jp, which no constant spells.
+std::string g_vocabDat;
+std::string g_namesDat;
+std::string g_grammarDat;
+
+const char* datFor(const char* idxPath, std::string& cache) {
+  if (cache.empty()) {
+    cache = idxPath;
+    const size_t len = cache.size();
+    if (len > 4 && cache.compare(len - 4, 4, ".idx") == 0) cache.replace(len - 4, 4, ".dat");
+  }
+  return cache.c_str();
+}
+
+// The folder the Japanese dictionary lives in. Two spellings are accepted, the same way the font
+// registry accepts /.fonts beside /fonts: the dotted one keeps the folder out of the file browser
+// (hidden by default) and is preferred when both exist. Resolved once and cleared by
+// releaseCaches(), so a dictionary uploaded mid-session into the other root is picked up next
+// session rather than never.
+std::string g_jpRootResolved;
+
+const char* jpRoot() {
+  if (g_jpRootResolved.empty()) {
+    g_jpRootResolved = Storage.exists("/.dictionaries/jp") ? "/.dictionaries/jp" : "/dictionaries/jp";
+  }
+  return g_jpRootResolved.c_str();
+}
+
+// A DictIndex path constant rewritten under the resolved root. The constants stay full paths
+// because a host-side tool reads them directly; only the folder half is substituted here.
+std::string underJpRoot(const char* path) {
+  const char* leaf = strrchr(path, '/');
+  return std::string(jpRoot()) + (leaf ? leaf : "/");
+}
+
+// Storage.exists() on the path as it will actually be opened -- under the resolved root.
+bool existsUnderRoot(const char* path, std::string& out) {
+  out = underJpRoot(path);
+  return Storage.exists(out.c_str());
+}
 
 const char* resolveIdxPath(const char*& cache, const char* preferred, const char* jpLegacy, const char* old,
                            const char* legacy) {
   if (cache) return cache;
+  // Probed under the resolved root; the winner is interned so the returned pointer stays valid.
+  static std::vector<std::unique_ptr<std::string>> interned;
+  std::string candidate;
+  const auto intern = [](std::string&& v) -> const char* {
+    interned.push_back(std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v))));
+    return interned.back() ? interned.back()->c_str() : nullptr;
+  };
+  for (const char* p : {preferred, jpLegacy, old, legacy}) {
+    if (!p) continue;
+    if (existsUnderRoot(p, candidate)) {
+      if (const char* held = intern(std::move(candidate))) {
+        if (p == legacy) LOG_INF("DICT", "Using legacy dictionary filename: %s", held);
+        cache = held;
+        return cache;
+      }
+      break;  // OOM interning: fall through to the plain paths below
+    }
+  }
   if (Storage.exists(preferred)) {
     cache = preferred;
   } else if (jpLegacy && Storage.exists(jpLegacy)) {
@@ -180,6 +248,71 @@ bool spxPathFor(const char* idxPath, char* out, size_t outSize) {
   std::memcpy(out, idxPath, len + 1);
   std::memcpy(out + len - 4, ".spx", 4);
   return true;
+}
+
+// The coarse tier is sampled from keys scattered the whole length of the .spx, so building it
+// costs one seek+read per entry -- 128 of them per dictionary, and seek latency dominates
+// (measured: 177ms jmdict, 192ms jmnedict, 38ms grammar at 15 coarse; ~400ms of a ~613ms Word
+// Lookup open). The keys only change when the .spx does, so cache them next to it and read the
+// whole tier back in ONE sequential read. Purely additive: a missing, stale or unreadable sidecar
+// just falls back to the scattered build, which then rewrites it.
+constexpr uint8_t SPXC_MAGIC[8] = {'C', 'P', 'S', 'P', 'C', '1', 0, 0};
+constexpr size_t SPXC_HEADER_SIZE = 24;  // magic(8) + fineCount + cstride + coarseCount + entrySize
+
+bool spxcPathFor(const char* idxPath, char* out, size_t outSize) {
+  const size_t len = std::strlen(idxPath);
+  // len + 1 (not + 2): the copy below writes exactly len+1 bytes including the NUL, and the
+  // suffix swapped in is the same 4 chars as the one it replaces. Requiring an extra byte
+  // needlessly disabled the sidecar for paths that fit exactly.
+  if (len < 4 || len + 1 > outSize) return false;
+  if (std::memcmp(idxPath + len - 4, ".idx", 4) != 0) return false;
+  std::memcpy(out, idxPath, len + 1);
+  std::memcpy(out + len - 4, ".spc", 4);
+  return true;
+}
+
+// One read of the whole coarse tier. False = no usable sidecar; caller builds it the slow way.
+bool loadCoarseSidecar(const char* idxPath, CoarseEntry* coarse, uint32_t fineCount, uint32_t cstride,
+                       size_t coarseCount) {
+  char path[64];
+  if (!spxcPathFor(idxPath, path, sizeof(path))) return false;
+  HalFile f;
+  if (!Storage.openFileForRead("DICT", path, f)) return false;
+  uint8_t header[SPXC_HEADER_SIZE];
+  if (f.read(header, SPXC_HEADER_SIZE) != static_cast<int>(SPXC_HEADER_SIZE)) return false;
+  if (std::memcmp(header, SPXC_MAGIC, sizeof(SPXC_MAGIC)) != 0) return false;
+  uint32_t gotFine, gotCStride, gotCount, gotEntry;
+  std::memcpy(&gotFine, header + 8, 4);
+  std::memcpy(&gotCStride, header + 12, 4);
+  std::memcpy(&gotCount, header + 16, 4);
+  std::memcpy(&gotEntry, header + 20, 4);
+  // Every field the tier's meaning depends on: a regenerated .spx changes fineCount, and a
+  // different build of the firmware could change the entry layout.
+  if (gotFine != fineCount || gotCStride != cstride || gotCount != coarseCount || gotEntry != sizeof(CoarseEntry)) {
+    return false;
+  }
+  const size_t bytes = coarseCount * sizeof(CoarseEntry);
+  return f.read(reinterpret_cast<uint8_t*>(coarse), bytes) == static_cast<int>(bytes);
+}
+
+void saveCoarseSidecar(const char* idxPath, const CoarseEntry* coarse, uint32_t fineCount, uint32_t cstride,
+                       size_t coarseCount) {
+  char path[64];
+  if (!spxcPathFor(idxPath, path, sizeof(path))) return;
+  HalFile f;
+  if (!Storage.openFileForWrite("DICT", path, f)) return;
+  uint8_t header[SPXC_HEADER_SIZE];
+  std::memset(header, 0, sizeof(header));
+  std::memcpy(header, SPXC_MAGIC, sizeof(SPXC_MAGIC));
+  const uint32_t entrySize = sizeof(CoarseEntry);
+  const uint32_t count32 = static_cast<uint32_t>(coarseCount);
+  std::memcpy(header + 8, &fineCount, 4);
+  std::memcpy(header + 12, &cstride, 4);
+  std::memcpy(header + 16, &count32, 4);
+  std::memcpy(header + 20, &entrySize, 4);
+  if (f.write(header, SPXC_HEADER_SIZE) != static_cast<int>(SPXC_HEADER_SIZE)) return;
+  const size_t bytes = coarseCount * sizeof(CoarseEntry);
+  f.write(reinterpret_cast<const uint8_t*>(coarse), bytes);
 }
 
 // Load and validate the .spx sidecar for h, building the RAM coarse tier. Sets h.spxOk.
@@ -218,13 +351,18 @@ void loadSpx(DictFileHandles& h, const char* idxPath, size_t recordCount) {
             static_cast<unsigned>(fineBytes));
     return;
   }
-  for (size_t c = 0; c < coarseCount; c++) {
-    const uint32_t fineIdx = static_cast<uint32_t>(c) * cstride;  // < fineCount by construction
-    h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fineIdx) * SPX_KEY_SIZE);
-    if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) != static_cast<int>(SPX_KEY_SIZE)) {
-      return;  // partial -> leave spxOk false
+  if (!loadCoarseSidecar(idxPath, coarse.get(), fineCount, cstride, coarseCount)) {
+    for (size_t c = 0; c < coarseCount; c++) {
+      const uint32_t fineIdx = static_cast<uint32_t>(c) * cstride;  // < fineCount by construction
+      h.spxFile.seek(SPX_HEADER_SIZE + static_cast<size_t>(fineIdx) * SPX_KEY_SIZE);
+      if (h.spxFile.read(reinterpret_cast<uint8_t*>(coarse[c].key), SPX_KEY_SIZE) != static_cast<int>(SPX_KEY_SIZE)) {
+        return;  // partial -> leave spxOk false
+      }
+      coarse[c].fineIdx = fineIdx;
     }
-    coarse[c].fineIdx = fineIdx;
+    // Only a COMPLETE tier is cached: a partial build returned above, so reaching here means
+    // every key was read.
+    saveCoarseSidecar(idxPath, coarse.get(), fineCount, cstride, coarseCount);
   }
 
   h.coarse = std::move(coarse);
@@ -335,32 +473,17 @@ const char* DictIndex::vocabIdxPath() {
   return resolveIdxPath(g_vocabIdxResolved, VOCAB_IDX_PATH, JP_LEGACY_VOCAB_IDX_PATH, OLD_VOCAB_IDX_PATH,
                         LEGACY_VOCAB_IDX_PATH);
 }
-const char* DictIndex::vocabDatPath() {
-  // Pair the .dat with whichever .idx was resolved -- never mix legacy and preferred halves.
-  const char* path = vocabIdxPath();
-  return std::strcmp(path, JP_LEGACY_VOCAB_IDX_PATH) == 0 ? JP_LEGACY_VOCAB_DAT_PATH
-         : std::strcmp(path, LEGACY_VOCAB_IDX_PATH) == 0  ? LEGACY_VOCAB_DAT_PATH
-         : std::strcmp(path, OLD_VOCAB_IDX_PATH) == 0     ? OLD_VOCAB_DAT_PATH
-                                                          : VOCAB_DAT_PATH;
-}
+// Each .dat pairs with whichever .idx was resolved -- never mix legacy and preferred halves.
+const char* DictIndex::vocabDatPath() { return datFor(vocabIdxPath(), g_vocabDat); }
 const char* DictIndex::namesIdxPath() {
   return resolveIdxPath(g_namesIdxResolved, NAMES_IDX_PATH, JP_LEGACY_NAMES_IDX_PATH, OLD_NAMES_IDX_PATH,
                         LEGACY_NAMES_IDX_PATH);
 }
-const char* DictIndex::namesDatPath() {
-  const char* path = namesIdxPath();
-  return std::strcmp(path, JP_LEGACY_NAMES_IDX_PATH) == 0 ? JP_LEGACY_NAMES_DAT_PATH
-         : std::strcmp(path, LEGACY_NAMES_IDX_PATH) == 0  ? LEGACY_NAMES_DAT_PATH
-         : std::strcmp(path, OLD_NAMES_IDX_PATH) == 0     ? OLD_NAMES_DAT_PATH
-                                                          : NAMES_DAT_PATH;
-}
+const char* DictIndex::namesDatPath() { return datFor(namesIdxPath(), g_namesDat); }
 const char* DictIndex::grammarIdxPath() {
   return resolveIdxPath(g_grammarIdxResolved, GRAMMAR_IDX_PATH, nullptr, OLD_GRAMMAR_IDX_PATH, nullptr);
 }
-const char* DictIndex::grammarDatPath() {
-  const char* path = grammarIdxPath();
-  return std::strcmp(path, OLD_GRAMMAR_IDX_PATH) == 0 ? OLD_GRAMMAR_DAT_PATH : GRAMMAR_DAT_PATH;
-}
+const char* DictIndex::grammarDatPath() { return datFor(grammarIdxPath(), g_grammarDat); }
 
 bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
 
@@ -425,6 +548,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   while (lo < hi) {
     const size_t mid = lo + (hi - lo) / 2;
     if (!readIndexRecord(h, mid, recordCount, rec)) {
+      g_lookupIncomplete = true;
       break;
     }
 
@@ -456,7 +580,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       size_t first = mid;
       while (first > 0 && (mid - first) < kMaxRunScan) {
         DictIndexRecord prevRec;
-        if (!readIndexRecord(h, first - 1, recordCount, prevRec)) break;
+        if (!readIndexRecord(h, first - 1, recordCount, prevRec)) {
+          g_lookupIncomplete = true;
+          break;
+        }
         if (std::memcmp(key, prevRec.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         first--;
       }
@@ -493,7 +620,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         uint8_t bestPosFlags = 0;
         for (size_t idx = first; idx < scanEnd; idx++) {
           DictIndexRecord r;
-          if (!readIndexRecord(h, idx, recordCount, r)) break;
+          if (!readIndexRecord(h, idx, recordCount, r)) {
+            g_lookupIncomplete = true;
+            break;
+          }
           if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
           if (!posAccept(r.posFlags)) continue;
           if (!found || r.priority > bestPriority) {
@@ -527,7 +657,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
       sibs.reserve(kMaxSiblingScan);
       for (size_t idx = first; idx < scanEnd; idx++) {
         DictIndexRecord r;
-        if (!readIndexRecord(h, idx, recordCount, r)) break;
+        if (!readIndexRecord(h, idx, recordCount, r)) {
+          g_lookupIncomplete = true;
+          break;
+        }
         if (std::memcmp(key, r.headword, DictIndexRecord::HEADWORD_SIZE) != 0) break;
         if (!posAccept(r.posFlags)) continue;  // wrong word class for this deinflection candidate
         // Keep the top kMaxSiblingScan by PRIORITY across the whole run, inserting so the vector
@@ -559,6 +692,8 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         // rejects a corrupt/misread record length before it becomes a huge allocation request.
         constexpr uint32_t MAX_DEF_BYTES = 16 * 1024;
         if (sibs[s].length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < sibs[s].length + 8 * 1024) {
+          g_heapLimited = true;
+          g_lookupIncomplete = true;
           LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(sibs[s].length),
                   ESP.getMaxAllocHeap());
           if (entries.empty()) continue;  // keep trying: a lower-priority sibling may be smaller
@@ -567,8 +702,10 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         datFile.seek(sibs[s].offset);
         std::string def;
         def.resize(sibs[s].length);
-        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) != static_cast<int>(sibs[s].length))
+        if (datFile.read(reinterpret_cast<uint8_t*>(def.data()), sibs[s].length) != static_cast<int>(sibs[s].length)) {
+          g_lookupIncomplete = true;
           continue;
+        }
         if (entries.empty()) bestFlags = sibs[s].posFlags;
         entries.push_back({std::move(def), sibs[s].priority});
       }
@@ -587,6 +724,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         size_t mergedLen = 0;
         for (const auto& en : entries) mergedLen += en.def.size() + 8;
         if (ESP.getMaxAllocHeap() < mergedLen + 8 * 1024) {
+          g_heapLimited = true;
           LOG_ERR("DICT", "Skipping entry merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
           out.definition = std::move(entries[0].def);
         } else {
@@ -605,9 +743,63 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
   return false;
 }
 
+namespace {
+// --- Negative lookup memo ---------------------------------------------------------------------
+// A page scan asks lookupExact() the same question over and over: WordLookup walks 8 window
+// lengths per position and up to 64 deinflection candidates per window, and a position that
+// matches nothing pays every one of them. Measured on one 125-character vertical page: 75,831
+// lookupExact and 32,460 SD reads, ~230 s, during which the reader is unusable.
+//
+// Misses dominate that traffic, and a miss is stable for as long as the dictionary files stay
+// open, so remembering one is free in correctness terms. Direct-mapped, one 64-bit fingerprint
+// per slot over (headword, dictMask, posMask). needDefinition is deliberately NOT in the key: it
+// changes what a HIT returns, never whether the headword exists.
+//
+// Only a lookup that actually established absence may be recorded. A search cut short by an SD
+// read error, or one whose every candidate definition was skipped for want of heap, returns the
+// same `false` but has proven nothing (g_lookupIncomplete marks it) -- memoizing that would make
+// one transient failure the permanent answer for the rest of the lookup session.
+//
+// The 64-bit tag is what makes this safe. A tag collision would silently hide a real word; at
+// this table's occupancy that is ~1e-10 across a whole page, where a 32-bit tag would be a
+// near-certainty. The table is freed by releaseCaches() with the rest of the lookup state, so it
+// never outlives a lookup session, and it is allocated lazily -- if the allocation fails under
+// pressure the memo simply stays off.
+constexpr size_t kMissMemoSlots = 1024;
+std::unique_ptr<uint64_t[]> g_missMemo;
+
+uint64_t missTagFor(const char* headword, const uint8_t dictMask, const uint8_t posMask) {
+  uint64_t h = 1469598103934665603ull;
+  for (const char* p = headword; *p; ++p) {
+    h ^= static_cast<unsigned char>(*p);
+    h *= 1099511628211ull;
+  }
+  h ^= dictMask;
+  h *= 1099511628211ull;
+  h ^= posMask;
+  h *= 1099511628211ull;
+  return h ? h : 1;  // 0 marks an empty slot, so no real key may be 0
+}
+
+void rememberMiss(const uint64_t tag) {
+  if (!g_missMemo) {
+    g_missMemo = makeUniqueNoThrow<uint64_t[]>(kMissMemoSlots);
+    if (!g_missMemo) return;  // no memo under pressure; results are unaffected either way
+    std::fill_n(g_missMemo.get(), kMissMemoSlots, 0ull);
+  }
+  g_missMemo[tag % kMissMemoSlots] = tag;
+}
+}  // namespace
+
 bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMask, bool needDefinition,
                             uint8_t posMask) {
   g_lookupExactCalls++;
+  g_lookupIncomplete = false;
+  const uint64_t missTag = missTagFor(headword, dictMask, posMask);
+  if (g_missMemo && g_missMemo[missTag % kMissMemoSlots] == missTag) {
+    g_missMemoHits++;
+    return false;
+  }
   // No Storage.exists() pre-checks needed here -- lookupInFile()'s own open-once cache already
   // makes a missing optional dictionary (grammar, jmnedict) a cheap no-op after the first attempt,
   // and an existence check would itself be a filesystem call repeated on every lookup otherwise.
@@ -625,10 +817,19 @@ bool DictIndex::lookupExact(const char* headword, DictEntry& out, uint8_t dictMa
     out.sourceDict = DICT_NAMES;
     return true;
   }
+  if (!g_lookupIncomplete) rememberMiss(missTag);
   return false;
 }
 
+bool DictIndex::consumeHeapLimited() {
+  const bool limited = g_heapLimited;
+  g_heapLimited = false;
+  return limited;
+}
+
 void DictIndex::releaseCaches() {
+  g_jpRootResolved.clear();  // re-probe /.dictionaries vs /dictionaries next session
+  g_missMemo.reset();
   g_vocabHandles.release();
   g_grammarHandles.release();
   g_namesHandles.release();
@@ -637,13 +838,18 @@ void DictIndex::releaseCaches() {
   g_vocabIdxResolved = nullptr;
   g_namesIdxResolved = nullptr;
   g_grammarIdxResolved = nullptr;
+  g_vocabDat.clear();
+  g_namesDat.clear();
+  g_grammarDat.clear();
 }
 
 void DictIndex::logAndResetStats(const char* label) {
-  LOG_INF("DICT", "%s: %u lookupExact, idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)", label,
-          g_lookupExactCalls, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
+  LOG_INF("DICT",
+          "%s: %u lookupExact (%u memoized misses), idx %u hits/%u reads, fine %u hits/%u reads (total %u SD reads)",
+          label, g_lookupExactCalls, g_missMemoHits, g_recordCacheHits, g_recordCacheMisses, g_fineHits, g_fineReads,
           g_recordCacheMisses + g_fineReads);
   g_lookupExactCalls = 0;
+  g_missMemoHits = 0;
   g_recordCacheHits = 0;
   g_recordCacheMisses = 0;
   g_fineReads = 0;

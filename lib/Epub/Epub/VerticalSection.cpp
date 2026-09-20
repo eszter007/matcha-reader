@@ -4,6 +4,7 @@
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -18,6 +19,7 @@
 #include "Epub/RubyGlossary.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "GfxRenderer.h"
+#include "VisibleTextUtils.h"
 
 namespace {
 
@@ -233,7 +235,21 @@ struct TextExtractor {
   }
 
   static bool isSkipTag(const char* name) {
-    return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0;
+    return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0 ||
+           strcasecmp(name, "title") == 0;
+  }
+
+  // Shared with the horizontal parser and the KOSync resolver: hidden and pagebreak subtrees are
+  // not counted, or vertical offsets would be in different units from the anchors resolved against
+  // them -- and hidden text should not be laid out vertically either.
+  static bool isSkipSubtree(const char** atts) {
+    if (atts == nullptr) return false;
+    for (int i = 0; atts[i]; i += 2) {
+      const char* value = atts[i + 1] ? atts[i + 1] : "";
+      if (VisibleTextUtils::isSkippedSubtreeAttribute(atts[i], value)) return true;
+      if (!atts[i + 1]) break;
+    }
+    return false;
   }
 
   // std::move()-ing currentText/currentRuns into the sink hands off their heap buffer and leaves
@@ -395,11 +411,13 @@ struct TextExtractor {
       self->skipDepth++;
       return;
     }
-    if (strcasecmp(name, "body") == 0) self->insideBody = true;
-    if (isSkipTag(name)) {
+    if (isSkipTag(name) || isSkipSubtree(atts)) {
+      // Before the insideBody flag: a hidden <body> stays outside it, or the skipDepth path in
+      // endElement() would return before the body reset and count trailing text as visible.
       self->skipDepth = 1;
       return;
     }
+    if (strcasecmp(name, "body") == 0) self->insideBody = true;
     if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
       if (self->resolveBlockStyle(name, atts, params) &&
@@ -975,9 +993,15 @@ struct LayoutPageSink final : ParagraphSink {
   void (*earlyRenderFn)(void*, const VerticalPage&, int) = nullptr;
   void* earlyRenderCtx = nullptr;
   std::atomic<int>* pageRequest = nullptr;
-  std::atomic<bool>* backTurnFlag = nullptr;
+  std::atomic<bool>* noticeFlag = nullptr;
   void (*buildNoticeFn)(void*) = nullptr;
   void* buildNoticeCtx = nullptr;
+  // Speculative-build cancellation; see VerticalSection::setBuildCancelHook(). Polled in
+  // writeOne, so once per laid-out page. `cancelled` rides alongside `failed` -- both stop the
+  // build, but only `failed` means something went wrong.
+  bool (*cancelFn)(const void*) = nullptr;
+  const void* cancelCtx = nullptr;
+  bool cancelled = false;
   uint64_t lastRefusedAttemptKey = 0;  // see servePageRequest()
   int fontReleasedForReq_ = -1;        // one font-cache release per starved request; see servePageRequest()
 
@@ -1118,8 +1142,20 @@ struct LayoutPageSink final : ParagraphSink {
   // BATCH_CHARS trigger below, onImage()'s pre-image flush) must pass false so a batch boundary
   // that lands mid-page continues that page on the next call instead of finalizing it early. See
   // VerticalParsedText::layoutPages()'s isFinalFlush doc comment for the full rationale.
+  // True once the cancel hook has fired; latches `cancelled`/`failed` so every guarded path
+  // (flushText, onImage, the parse loop) stops. Polled here as well as in writeOne because a
+  // page can take seconds to lay out, and a cancel that only lands on page boundaries makes the
+  // reader wait out the whole of the current page.
+  bool checkCancelled() {
+    if (failed) return true;
+    if (!cancelFn || !cancelFn(cancelCtx)) return false;
+    cancelled = true;
+    failed = true;
+    return true;
+  }
+
   void flushText(bool isFinalFlush = false) {
-    if (failed) return;
+    if (checkCancelled()) return;
     if (!isFinalFlush && layout.pendingCount() == 0) return;
     // Streaming pages out via callback as they're finalized keeps at most ~2 pages' worth of
     // glyph buffers resident at once instead of the whole batch's -- see PageReadyCallback in
@@ -1136,6 +1172,35 @@ struct LayoutPageSink final : ParagraphSink {
   static constexpr size_t kPageBufCap = 12 * 1024;
 
   void writeOne(const VerticalPage& p) {
+    if (failed) return;  // a cancel latched mid-batch: the rest of this batch is discarded too
+    if (pageOffsets.size() == pageOffsets.capacity()) {
+      // std::vector's automatic doubling throws/aborts when the heap is fragmented, so grow by a
+      // bounded step that still leaves working headroom. Step down through smaller ones rather
+      // than giving up on the first refusal: a smaller step costs extra reallocations, while
+      // giving up costs the whole chapter -- every page after this one is lost and the reader
+      // shows a page-load error. A long chapter of early-broken pages reaches this with the
+      // generous step unaffordable and a modest one perfectly affordable.
+      static constexpr size_t kGrowthSteps[] = {256, 64, 16};
+      static constexpr uint32_t kHeadrooms[] = {4 * 1024, 1024, 512};
+      static constexpr size_t kStepCount = sizeof(kGrowthSteps) / sizeof(kGrowthSteps[0]);
+      bool grew = false;
+      for (size_t i = 0; i < kStepCount; i++) {
+        const size_t nextCapacity = pageOffsets.capacity() + kGrowthSteps[i];
+        const size_t requestBytes = nextCapacity * sizeof(uint32_t);
+        if (ESP.getMaxAllocHeap() >= requestBytes + kHeadrooms[i] &&
+            ESP.getFreeHeap() >= requestBytes + kHeadrooms[i]) {
+          pageOffsets.reserve(nextCapacity);
+          grew = true;
+          break;
+        }
+      }
+      if (!grew) {
+        LOG_ERR("VSC", "OOM: page offset index (%zu pages, maxAlloc=%u, free=%u)", pageOffsets.size(),
+                ESP.getMaxAllocHeap(), ESP.getFreeHeap());
+        failed = true;
+        return;
+      }
+    }
     pageOffsets.push_back(static_cast<uint32_t>(out.position()));
     // TRANSIENT staging buffer: allocated for this one write, freed before layout resumes.
     // Holding it resident across the whole build deepened the layout's low-heap dips by
@@ -1161,7 +1226,10 @@ struct LayoutPageSink final : ParagraphSink {
       failed = true;
     }
 
-    if (ok) servePageRequest(p, static_cast<int>(pageOffsets.size()) - 1);
+    if (!ok) return;
+    // Poll BEFORE serving: a cancelled speculative build has no reader waiting on its pages.
+    if (checkCancelled()) return;
+    servePageRequest(p, static_cast<int>(pageOffsets.size()) - 1);
   }
 
   // Show-the-page-during-the-build engine, shared by the initial early first render (the
@@ -1177,7 +1245,7 @@ struct LayoutPageSink final : ParagraphSink {
     if (!pageRequest || !earlyRenderFn) return;
     // A backward turn the build cannot serve. Drawn here rather than where the press is read:
     // the framebuffer has one owner, and mid-build that is this task.
-    if (backTurnFlag && backTurnFlag->exchange(false, std::memory_order_relaxed) && buildNoticeFn) {
+    if (noticeFlag && noticeFlag->exchange(false, std::memory_order_relaxed) && buildNoticeFn) {
       buildNoticeFn(buildNoticeCtx);
     }
     const int req = pageRequest->load(std::memory_order_relaxed);
@@ -1317,8 +1385,17 @@ struct LayoutPageSink final : ParagraphSink {
           GfxRenderer::FrameBufferLoan loan(renderer);
           // Prefer 16KB chunks when the framebuffer loan is available or the heap is already
           // roomy; SD write throughput is per-chunk-latency bound. 4KB remains the fallback.
-          const bool useFastChunks = canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024;
-          const size_t chunkSize = useFastChunks ? 16384 : 4096;
+          // The loan feeds InflateStream's 32KB window and state through buildscratch, but the
+          // two chunkSize buffers readItemContentsToStream allocates (file read + inflate output)
+          // are plain heap, so a loan alone does NOT make the fast path affordable. Require room
+          // for both before choosing it: on device, at maxAlloc=31732 the first 16KB buffer
+          // succeeded and the second failed, and the chapter then did not render at all --
+          // "Failed to allocate memory for output buffer" -> "Failed to stream chapter HTML" ->
+          // "Failed to build vertical section". The 4KB fallback would have loaded it fine.
+          constexpr size_t kFastChunk = 16384;
+          const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
+                                     ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
+          const size_t chunkSize = useFastChunks ? kFastChunk : 4096;
           extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
         }
         cachedFile.flush();
@@ -1373,10 +1450,29 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
 
 }  // namespace
 
+// Largest block the styled-block table needs before it is attempted. The table is all-or-nothing
+// (a partial one silently drops whichever selectors sit late in the file), so it is skipped rather
+// than truncated.
+//
+// Derived from what the table actually costs rather than guessed. collectVerticalStyles() now
+// reserves its cap in ONE allocation, so the contiguous requirement is exactly that reservation;
+// the selector strings it copies are many small allocations that need free heap, not a big block.
+// The old flat 48KB predated SD CJK fonts, and a resident CJK font cache holds maxAlloc under it
+// for a whole session: on device this book was skipped -- and so rendered unstyled -- with 46996
+// bytes still available in the largest free block, a miss of barely 4KB.
+constexpr size_t STYLED_BLOCK_TABLE_ENTRIES = 256;  // must match collectVerticalStyles()'s maxOut default
+constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS =
+    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)) +
+    12 * 1024;
+
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
                                            const uint16_t viewportHeight, const uint8_t lineSpacing,
                                            const bool furiganaEnabled) {
   lastBuildDroppedForHeap_ = false;
+  lastBuildUnstyledForHeap_ = false;
+  // Same reason as Section::buildSomeMore: a chapter layout outlasts IDLE_POWER_SAVING_MS, and
+  // the throttle would otherwise land in the middle of it.
+  HalPowerManager::Lock powerLock;
   // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
   // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
   // whether that low contiguous budget is a fresh drop from THIS chapter's own parsing, or whether
@@ -1416,8 +1512,12 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     {
       const bool canLendFrameBuffer = renderer.hasFrameBuffer();
       GfxRenderer::FrameBufferLoan loan(renderer);
-      const bool useFastChunks = canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024;
-      const size_t chunkSize = useFastChunks ? 16384 : PARSE_BUFFER_SIZE;
+      // Same reasoning as the image path above: the loan does not cover the two chunkSize heap
+      // buffers, so ask for them explicitly rather than inferring affordability from the loan.
+      constexpr size_t kFastChunk = 16384;
+      const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
+                                 ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
+      const size_t chunkSize = useFastChunks ? kFastChunk : PARSE_BUFFER_SIZE;
       success = epub->readItemContentsToStream(localPath, tmpHtml, chunkSize);
     }
     tmpHtml.close();
@@ -1468,9 +1568,11 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // recorded while the build runs simply overwrite it (latest wins).
   buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
   sink.pageRequest = &buildPageRequest_;
-  sink.backTurnFlag = &backTurnDuringBuild_;
+  sink.noticeFlag = &buildNoticePending_;
   sink.buildNoticeFn = buildNoticeFn_;
   sink.buildNoticeCtx = buildNoticeCtx_;
+  sink.cancelFn = cancelFn_;
+  sink.cancelCtx = cancelCtx_;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
@@ -1489,12 +1591,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     // Binary decision, no partial cap: the collector fills in CACHE order, so a reduced cap
     // silently drops whichever selectors happen to sit late in the file (confirmed earlier:
     // .k-solid boxes vanishing at a 64-entry cap). Either the full table fits, or the build
-    // runs unstyled AND is stamped stale so a later, roomier open rebuilds it properly.
+    // runs unstyled -- text-complete and still cached, see lastBuildUnstyledForHeap_.
     const uint32_t maxAllocNow = ESP.getMaxAllocHeap();
-    if (maxAllocNow < 48 * 1024) {
-      LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u); building unstyled, marked for rebuild",
-              maxAllocNow);
-      lastBuildDroppedForHeap_ = true;  // reuse the stale-stamp path: version 0 -> rebuild next open
+    LOG_DBG("VSC", "styled-block table needs %u bytes contiguous (%u entries x %u); maxAlloc=%u",
+            static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS), static_cast<unsigned>(STYLED_BLOCK_TABLE_ENTRIES),
+            static_cast<unsigned>(sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)), maxAllocNow);
+    if (maxAllocNow < MIN_MAX_ALLOC_FOR_STYLED_BLOCKS) {
+      LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u, need %u); building unstyled", maxAllocNow,
+              static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));
+      lastBuildUnstyledForHeap_ = true;
     } else {
       epub->getCssParser()->collectVerticalStyles(blockStyles);
       if (!blockStyles.empty()) {
@@ -1517,7 +1622,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   extractor.currentRuns.reserve(TextExtractor::SOFT_FLUSH_RUNS + 8);
   extractor.rubyBase.reserve(TextExtractor::RUBY_RESERVE_HINT);
   extractor.rubyAnnotation.reserve(TextExtractor::RUBY_RESERVE_HINT);
-  pageOffsets_.reserve(640);  // 2.5KB; a 240KB chapter yields ~500 pages
+  // Initial allocation is guarded for the same reason as LayoutPageSink::writeOne()'s growth.
+  constexpr size_t kInitialOffsetCapacity = 640;  // 2.5KB; a 240KB chapter yields ~500 pages
+  constexpr size_t kOffsetHeadroom = 4 * 1024;
+  constexpr size_t kInitialOffsetBytes = kInitialOffsetCapacity * sizeof(uint32_t);
+  if (pageOffsets_.capacity() < kInitialOffsetCapacity &&
+      ESP.getMaxAllocHeap() >= kInitialOffsetBytes + kOffsetHeadroom &&
+      ESP.getFreeHeap() >= kInitialOffsetBytes + kOffsetHeadroom) {
+    pageOffsets_.reserve(kInitialOffsetCapacity);
+  }
 
   XML_Parser parser = XML_ParserCreate(nullptr);
   if (!parser) {
@@ -1561,6 +1674,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
       parseOk = false;
       break;
     }
+    // A cancelled or failed sink drops every page the rest of this file would produce, so
+    // parsing on is pure waste -- and for a cancel the whole point is to hand the task back.
+    if (sink.failed) break;
   } while (!done);
 
   htmlFile.close();
@@ -1572,6 +1688,11 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   extractor.flushParagraph();
   sink.flushText(/*isFinalFlush=*/true);
 
+  if (sink.cancelled) {
+    lastBuildCancelled_ = true;
+    LOG_INF("VSC", "Speculative build cancelled after %zu pages (spine=%d)", pageOffsets_.size(), spineIndex);
+    return false;
+  }
   if (sink.failed) return false;
 
   // OR, don't assign: the styled-block collect above may already have flagged this build
@@ -1606,6 +1727,7 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   pageOffsets_.clear();
   loadedPageIndex_ = -1;
   pageCount = 0;
+  lastBuildCancelled_ = false;
 
   HalFile file;
   if (!Storage.openFileForWrite("VSC", filePath, file)) {
@@ -1649,6 +1771,14 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   }
   serialization::writePod(file, pageCount);
   serialization::writePod(file, indexOffset);
+  // Styling was skipped but every character is present, so the file is correct as text and is
+  // kept valid. Restamping it stale would rebuild the chapter on every open for a cosmetic
+  // difference -- and while a large SD CJK font is resident the condition never clears, so the
+  // rebuild would never win. Reported apart from a content drop because the two are not alike.
+  if (lastBuildUnstyledForHeap_ && !lastBuildDroppedForHeap_) {
+    LOG_INF("VSC", "Chapter cached without block styling (text complete)");
+  }
+
   // A build that dropped content on low heap produced sparse pages. Keep the file usable for
   // THIS session (offsets are in RAM, pages read back fine) but stamp version 0 so the next
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,

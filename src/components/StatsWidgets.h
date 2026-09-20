@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+#include "themes/BaseTheme.h"  // Rect
+
 // Cards shared by the Insights, per-book and per-language stats screens.
 // Free functions over a renderer: nothing to allocate, nothing to keep alive.
 namespace StatsWidgets {
@@ -60,9 +62,21 @@ struct MonthSource {
   int (*daysReadInMonth)(const void* ctx, uint16_t year, uint8_t month);
 };
 
+// Tap targets for the two month chevrons, filled in by drawMonthCalendar for callers that route
+// touch. The chevrons themselves are 6px glyphs, far under a finger; these are padded out to
+// MONTH_CHEVRON_TOUCH_SIZE around each one. Left zeroed when the caller passes no out-parameter.
+constexpr int MONTH_CHEVRON_TOUCH_SIZE = 44;
+struct MonthNav {
+  // Braced defaults, not bare members: Rect's constructor is explicit, so a MonthNav{} would
+  // otherwise fail to copy-initialise them.
+  Rect prev{};
+  Rect next{};
+};
+
 // Month card: title with chevrons, subtitle, weekday headers, grid. Returns height consumed.
-// `today` is outlined when it falls in the drawn month.
+// `today` is outlined when it falls in the drawn month. Pass `navOut` to receive the chevron tap
+// targets; the geometry is only known here, and re-deriving it in each caller would drift.
 int drawMonthCalendar(const GfxRenderer& renderer, int x, int y, int w, uint16_t calYear, uint8_t calMonth,
-                      const Today& today, const MonthSource& source);
+                      const Today& today, const MonthSource& source, MonthNav* navOut = nullptr);
 
 }  // namespace StatsWidgets

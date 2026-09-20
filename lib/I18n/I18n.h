@@ -1,8 +1,9 @@
 #pragma once
 
-#include <cstdint>
+#include <I18nKeys.h>
 
-#include "I18nKeys.h"
+#include <cstdint>
+#include <memory>
 /**
  * Internationalization (i18n) system for CrossPoint Reader
  */
@@ -21,7 +22,18 @@ class I18n {
   const char* operator[](StrId id) const { return get(id); }
 
   Language getLanguage() const { return _language; }
-  void setLanguage(Language lang);
+  /// Select the UI language. A language whose strings are compiled in switches with no I/O; any
+  /// other one needs its .cplang pack on the SD card, which is read into a single heap buffer
+  /// here. A missing or unusable pack leaves the language unchanged and returns false, so the UI
+  /// never ends up pointing at strings that were not loaded.
+  bool setLanguage(Language lang);
+
+  /// True when `lang` can be selected right now: either compiled in, or its pack is on the card.
+  /// Used by the language picker to mark which entries need a pack download.
+  static bool isLanguageAvailable(Language lang);
+
+  /// Directory holding the .cplang packs, alongside the SD font roots.
+  static constexpr const char* PACK_DIR = "/.crosspoint/lang";
   const char* getLanguageName(Language lang) const;
   static Language languageFromCode(const char* code);
   // Endonym for a language tag, case-insensitive and ignoring any region subtag ("ja-JP" ->
@@ -35,9 +47,18 @@ class I18n {
   static const char* getCharacterSet(Language lang);
 
  private:
-  I18n() : _language(Language::EN) {}
+  I18n() : _language(Language::EN) { i18n_strings::requireCurrentTable(); }
+
+  // Reads PACK_DIR/<CODE>.cplang into _packBuffer and points _packStrings at it.
+  // Leaves both untouched and returns false on any rejection.
+  bool loadPack(Language lang);
 
   Language _language;
+  // Backing store for a language that is not compiled in. Held for as long as that language is
+  // selected: get() runs in the render loop and must resolve by pointer, never by reading the
+  // card. Null whenever the active language is built in.
+  std::unique_ptr<uint8_t[]> _packBuffer;
+  LangStrings _packStrings{nullptr, nullptr};
 };
 
 // Convenience macros

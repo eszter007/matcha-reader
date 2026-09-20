@@ -48,6 +48,9 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
+          # 3.13, not 3.14: PlatformIO Core 6.1.19 cannot build its penv on 3.14
+          # ("Failed to install Python dependencies into penv"), which fails every job
+          # before a single file is compiled. Raise only once pio can create its env there.
           python-version: '3.13'
 
       - name: Install uv
@@ -57,29 +60,56 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        # The espressif32 builder imports `littlefs` and `fatfs` at module scope
-        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from system
-        # site-packages while installing its own dependencies into a penv the builder never sees.
-        # Without them every build and cppcheck job dies with ModuleNotFoundError. These are the
-        # only two: every other import in that builder is stdlib, platformio, SCons (a tool
-        # package) or semantic_version (a core dependency).
         run: |
           uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
-          uv pip install --system littlefs-python fatfs-ng pyyaml
+          # platform-espressif32's builder/main.py imports these unconditionally; its own
+          # penv bootstrap (builder/penv_setup.py) is supposed to install them automatically
+          # but isn't picking them up reliably in this runner image, so pin them explicitly.
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-${{ runner.os }}-
+          # Bump the prefix whenever the Core pin moves: a ~/.platformio restored from a
+          # run on a different Core carries that Core's tool-scons, which then fights the
+          # platform's over the same package directory.
+          key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio6119s481-${{ runner.os }}-
+
+      - name: Install cppcheck runtime dependency
+        run: |
+          # pioarduino's Linux cppcheck binary links against libpcre.so.3.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpcre3
 
       - name: Run cppcheck
         run: pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
 
-  build-default:
-    name: Build default
+  build:
+    name: Build ${{ matrix.env }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Short board-specific names keep pull-request artifacts easy to identify, and
+        # pr-firmware-links.yml looks them up by exactly these names. They are deliberately
+        # NOT the release asset names: release.yml publishes <board>-firmware.bin (and
+        # x4old-x3-firmware.bin), which is the contract OtaUpdater reads.
+        include:
+          - env: default
+            asset: firmware.bin
+          - env: sticky
+            asset: firmware-sticky.bin
+          - env: x4pro
+            asset: firmware-x4pro.bin
+          - env: x4c
+            asset: firmware-x4c.bin
+          - env: papermono
+            asset: firmware-papermono.bin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -87,6 +117,9 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
+          # 3.13, not 3.14: PlatformIO Core 6.1.19 cannot build its penv on 3.14
+          # ("Failed to install Python dependencies into penv"), which fails every job
+          # before a single file is compiled. Raise only once pio can create its env there.
           python-version: '3.13'
 
       - name: Install uv
@@ -96,30 +129,53 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        # The espressif32 builder imports `littlefs` and `fatfs` at module scope
-        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from system
-        # site-packages while installing its own dependencies into a penv the builder never sees.
-        # Without them every build and cppcheck job dies with ModuleNotFoundError. These are the
-        # only two: every other import in that builder is stdlib, platformio, SCons (a tool
-        # package) or semantic_version (a core dependency).
         run: |
           uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
-          uv pip install --system littlefs-python fatfs-ng pyyaml
+          # platform-espressif32's builder/main.py imports these unconditionally; its own
+          # penv bootstrap (builder/penv_setup.py) is supposed to install them automatically
+          # but isn't picking them up reliably in this runner image, so pin them explicitly.
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-${{ runner.os }}-
+          # Bump the prefix whenever the Core pin moves: a ~/.platformio restored from a
+          # run on a different Core carries that Core's tool-scons, which then fights the
+          # platform's over the same package directory.
+          key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio6119s481-${{ runner.os }}-
 
-      - name: Build default firmware
+      - name: Pin the Core inside the platform's penv
         run: |
           set -euo pipefail
-          pio run -e default | tee pio.log
+          # platform-espressif32 runs the second stage of a custom_sdkconfig build through a
+          # SECOND PlatformIO Core -- the one in its own penv, installed by penv_setup.py as
+          # `pioarduino>=6.1.19` with --upgrade, so it drifts to whatever is newest regardless
+          # of the Core pinned above. Core 6.1.19 pins tool-scons 4.8.1 (the platform's own
+          # pin); 6.2.0 pins 4.11.1. Both unpack into ~/.platformio/packages/tool-scons, so the
+          # penv Core replaces the package under a build already running against it and the
+          # link step dies inside the half-swapped directory:
+          #   ModuleNotFoundError: No module named 'SCons.Tool.FortranCommon'
+          # That is why only `default` and `sticky` ever failed: they are the only envs
+          # extending firmware_tuned* and so the only ones that reach the second stage.
+          # pkg install creates the penv (platform.configure_default_packages); pinning it
+          # afterwards leaves >=6.1.19 satisfied, so the next run installs nothing.
+          pio pkg install -e ${{ matrix.env }}
+          penv_python="$HOME/.platformio/penv/bin/python"
+          test -x "$penv_python" || { echo "No penv Python at $penv_python"; exit 1; }
+          uv pip install --python "$penv_python" "pioarduino==6.1.19"
+          "$penv_python" -c "import platformio; print('penv Core', platformio.VERSION)"
+
+      - name: Build ${{ matrix.env }} firmware
+        run: |
+          set -euo pipefail
+          pio run -e ${{ matrix.env }} | tee pio.log
 
       - name: Extract firmware stats
-
         run: |
           set -euo pipefail
           ram_line="$(grep -E "RAM:\\s" -m1 pio.log || true)"
@@ -127,71 +183,61 @@ jobs:
           echo "ram_line=${ram_line}" >> "$GITHUB_OUTPUT"
           echo "flash_line=${flash_line}" >> "$GITHUB_OUTPUT"
           {
-            echo "## Firmware build stats"
+            echo "## ${{ matrix.env }} firmware build stats"
             if [ -n "$ram_line" ]; then echo "- ${ram_line}"; else echo "- RAM: not found"; fi
             if [ -n "$flash_line" ]; then echo "- ${flash_line}"; else echo "- Flash: not found"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload firmware.bin artifact
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v6
         with:
-          name: firmware.bin
-          path: .pio/build/default/firmware.bin
+          name: ${{ matrix.asset }}
+          path: .pio/build/${{ matrix.env }}/firmware.bin
           if-no-files-found: error
 
-  build-sticky:
-    name: Build sticky
+  # Languages outside custom_i18n_builtin_langs ship as .cplang packs for the SD card, and a pack
+  # is only valid for the firmware it was generated with. Building them here keeps a translation
+  # change from reaching a release as a pack that no device will load, and puts a downloadable
+  # set on every PR for testing.
+  language-packs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-          enable-cache: false
-
-      - name: Install PlatformIO Core
-        # The espressif32 builder imports `littlefs` and `fatfs` at module scope
-        # (platforms/espressif32/builder/main.py), and with --system PlatformIO runs from system
-        # site-packages while installing its own dependencies into a penv the builder never sees.
-        # Without them every build and cppcheck job dies with ModuleNotFoundError. These are the
-        # only two: every other import in that builder is stdlib, platformio, SCons (a tool
-        # package) or semantic_version (a core dependency).
-        run: |
-          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
-          uv pip install --system littlefs-python fatfs-ng pyyaml
-
-      - name: Cache PlatformIO packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-${{ runner.os }}-
-
-      - name: Build sticky firmware
+      - name: Generate language packs
         run: |
           set -euo pipefail
-          pio run -e sticky | tee pio.log
+          # Read the built-in set from platformio.ini so the packs are exactly the complement
+          # of what the firmware carries.
+          BUILTIN=$(sed -n 's/^custom_i18n_builtin_langs *= *//p' platformio.ini | head -1)
+          if [ -z "$BUILTIN" ]; then
+            echo "custom_i18n_builtin_langs missing from platformio.ini" >&2
+            exit 1
+          fi
+          echo "Built-in languages: $BUILTIN"
+          # --strip-unused matches the pre-build hook, so the key count agrees with the firmware.
+          python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ \
+            --strip-unused --builtin-langs "$BUILTIN" --pack-dir dist/lang
 
-      - name: Extract firmware stats
+      - name: Validate packs against the generated key table
+        run: python3 scripts/check_language_packs.py lib/I18n/I18nKeys.h dist/lang
+
+      - name: Bundle packs
         run: |
           set -euo pipefail
-          ram_line="$(grep -E "RAM:\\s" -m1 pio.log || true)"
-          flash_line="$(grep -E "Flash:\\s" -m1 pio.log || true)"
-          echo "ram_line=${ram_line}" >> "$GITHUB_OUTPUT"
-          echo "flash_line=${flash_line}" >> "$GITHUB_OUTPUT"
-          {
-            echo "## Sticky firmware build stats"
-            if [ -n "$ram_line" ]; then echo "- ${ram_line}"; else echo "- RAM: not found"; fi
-            if [ -n "$flash_line" ]; then echo "- ${flash_line}"; else echo "- Flash: not found"; fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          cd dist
+          zip -r ../language-packs.zip lang
+
+      - name: Upload language packs
+        uses: actions/upload-artifact@v6
+        with:
+          name: language-packs
+          path: language-packs.zip
+          if-no-files-found: error
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -225,10 +271,10 @@ jobs:
   test-status:
     name: Test Status
     needs:
-      - build-default
-      - build-sticky
+      - build
       - clang-format
       - cppcheck
+      - language-packs
       - unit-tests
     if: always()
     runs-on: ubuntu-latest

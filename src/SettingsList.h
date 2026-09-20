@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "HomeButtonSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "ReaderFontSizes.h"
 #include "SdCardFontSystem.h"
@@ -34,6 +35,9 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
     for (const auto& f : families) {
       // Hidden everywhere the picker hides them -- see SdCardFontSystem::isBuiltinJpExtension.
       if (SdCardFontSystem::isBuiltinJpExtension(f.name)) continue;
+      // Likewise for a wider-coverage cut of a family already listed: the base row stands for
+      // both -- see SdCardFontSystem::isCoverageVariant.
+      if (SdCardFontSystem::isCoverageVariant(f.name, registry)) continue;
       enumStringValues.push_back(f.name);
     }
   }
@@ -93,16 +97,19 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   return s;
 }
 
-// Build the font size setting dynamically: the options are the point sizes the
-// active family actually ships, so an SD family built at 10/12/14 offers three
-// sizes and a family built at 8..18 offers six. The selected point size persists
-// in SETTINGS.fontPointSize (saved/loaded manually in CrossPointSettings::
-// toJson/fromJson — the generic loop skips dynamic entries), while the ENUM
-// contract shared with the web UI stays index-based.
+// Build the font size setting dynamically: the options are the point sizes this row can
+// actually be rendered at — the active family's, plus those of the hidden families that stand
+// in for it — so an SD family built at 10/12/14 offers three sizes and a family built at 8..18
+// offers six. The selected point size persists in SETTINGS.fontPointSize (saved/loaded manually
+// in CrossPointSettings::toJson/fromJson — the generic loop skips dynamic entries), while the
+// ENUM contract shared with the web UI stays index-based.
 inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
-  // Captured by copy: getSettingsList() returns by value and the lambdas outlive
-  // this call, so they must not reference the registry.
-  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName);
+  // `sizes` is captured by copy below: getSettingsList() returns by value and the lambdas
+  // outlive this call, so they must not reference the registry.
+  const SdCardFontFamilyInfo* standIns[SdCardFontSystem::MAX_STAND_INS];
+  const uint8_t standInCount = SdCardFontSystem::readerStandInFamilies(
+      registry, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, SdCardFontSystem::MAX_STAND_INS);
+  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName, standIns, standInCount);
 
   // "pt" is deliberately not translated — see the matching note in
   // TextSettingsActivity::rebuildSizeList().
@@ -196,6 +203,13 @@ inline SettingInfo buildWordLookupFontSizeSetting() {
                            "wordLookupFontSize", StrId::STR_CAT_READER);
 }
 
+inline std::vector<StrId> buildLongPressMenuValues() {
+  static constexpr StrId VALUES[] = {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION,
+                                     StrId::STR_DICTIONARY, StrId::STR_READER_MENU};
+  const size_t count = BoardConfig::hasHomeKey() ? std::size(VALUES) : std::size(VALUES) - 1;
+  return {VALUES, VALUES + count};
+}
+
 // Shared settings list used by both the device settings UI and the web settings API.
 // Each entry has a key (for JSON API) and category (for grouping).
 // ACTION-type entries and entries without a key are device-only.
@@ -208,12 +222,27 @@ inline SettingInfo buildWordLookupFontSizeSetting() {
 // from the active family rather than a fixed enum.
 // categoryFilter/includeTextSettingsEntries let embedded device screens copy only
 // entries they can display while the reader keeps its memory-heavy state alive.
-inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
-                                                const std::vector<DictionaryEntry>* dictionaries = nullptr,
-                                                const StrId categoryFilter = StrId::STR_NONE_OPT,
-                                                const bool includeTextSettingsEntries = true,
-                                                const std::string& bookLanguage = {},
-                                                const bool showAppliedDictionary = false) {
+
+// The two side keys sit one above the other on most boards -- including the plain X4 and the X3 --
+// but the X4 Pro and the X4 Classic wear them to the left and the right of the screen, where
+// "upper" and "lower" name nothing the reader can see. Only the label changes: the same GPIOs, the
+// same settings keys, the same order (the upper row is BTN_UP, which is the left key on those two
+// boards). Read once, when the settings list is first built -- by then the board is known, and it
+// does not change under a running device.
+inline bool sideButtonsReadLeftRight() {
+  const auto board = BoardConfig::ACTIVE.board;
+  return board == BoardConfig::Board::XteinkX4Pro || board == BoardConfig::Board::XteinkX4Classic;
+}
+inline StrId upperSideButtonLabel() {
+  return sideButtonsReadLeftRight() ? StrId::STR_LEFT_SIDE_BUTTON : StrId::STR_UPPER_SIDE_BUTTON;
+}
+inline StrId lowerSideButtonLabel() {
+  return sideButtonsReadLeftRight() ? StrId::STR_RIGHT_SIDE_BUTTON : StrId::STR_LOWER_SIDE_BUTTON;
+}
+
+// The settings table itself, built once. Exposed separately from getSettingsList() so the
+// persistence path can walk it WITHOUT materializing a copy -- see forEachPersistableSetting().
+inline const std::vector<SettingInfo>& settingsBaseList() {
   static const std::vector<SettingInfo> baseList = [] {
     // Enum settings are persisted as numeric values. Assign these labels by enum
     // value so a reordered menu or enum cannot silently swap their behavior.
@@ -225,9 +254,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     sleepScreenValues[CrossPointSettings::COVER_CUSTOM] = StrId::STR_COVER_CUSTOM;
     sleepScreenValues[CrossPointSettings::BLANK] = StrId::STR_NONE_OPT;
     sleepScreenValues[CrossPointSettings::QUICK_RESUME] = StrId::STR_QUICK_RESUME;
-    // Fork-only mode; upstream's table stops at QUICK_RESUME, which would leave this slot
-    // default-constructed now that SLEEP_SCREEN_MODE_COUNT counts it.
-    sleepScreenValues[CrossPointSettings::TRANSPARENT] = StrId::STR_TRANSPARENT;
+    sleepScreenValues[CrossPointSettings::TRANSPARENT_CUSTOM] = StrId::STR_TRANSPARENT;
 
     std::vector<StrId> statusBarClockValues(CrossPointSettings::STATUS_BAR_CLOCK_MODE_COUNT);
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_HIDE] = StrId::STR_HIDE;
@@ -235,29 +262,45 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
 
     std::vector<SettingInfo> v = {
-        // --- Display ---
+        // --- Sleep ---
+        // STR_CAT_SLEEP is not one of the four tabs: these rows are reached through the Sleep row
+        // in Display, which opens SettingsActivity on this category alone. Listed in the order
+        // they appear there.
         SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen, std::move(sleepScreenValues),
-                          "sleepScreen", StrId::STR_CAT_DISPLAY),
+                          "sleepScreen", StrId::STR_CAT_SLEEP),
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
-                          {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY),
+                          {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_SLEEP),
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
                           {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED},
-                          "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY),
+                          "sleepScreenCoverFilter", StrId::STR_CAT_SLEEP),
         SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
-                          StrId::STR_CAT_DISPLAY),
+                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen", StrId::STR_CAT_SLEEP),
+        SettingInfo::Value(
+            StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
+            {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
+            "sleepTimeoutMinutes", StrId::STR_CAT_SLEEP),
+        SettingInfo::Toggle(StrId::STR_RESTORE_LIGHT_ON_WAKE, &CrossPointSettings::frontlightRestoreOnWake,
+                            "frontlightRestoreOnWake", StrId::STR_CAT_SLEEP),
+
+        // --- Display ---
         SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
                           {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
                           StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(
-            StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
-            {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
-            "refreshFrequency", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
+                          {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
+                           StrId::STR_PAGES_30, StrId::STR_NEVER},
+                          "refreshFrequency", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
                           {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
                            StrId::STR_THEME_ROUNDEDRAFF},
                           "uiTheme", StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
+                            StrId::STR_CAT_DISPLAY),
+#if FREEINK_CAP_FRONTLIGHT
+#endif
+        // Night mode = inverted output polarity everywhere (ActivityManager
+        // applies it to every activity), so it lives in the Display category.
+        SettingInfo::Toggle(StrId::STR_NIGHT_MODE, &CrossPointSettings::screenInverted, "screenInverted",
                             StrId::STR_CAT_DISPLAY),
 
         // --- Reader ---
@@ -271,7 +314,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // fixes the setting's position in the Reader category.
         SettingInfo::Enum(StrId::STR_FONT_SIZE, nullptr, {}, "fontSize", StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
-                          {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE}, "lineSpacing", StrId::STR_CAT_READER)
+                          {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE}, "lineSpacing",
+                          StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin,
                            {CrossPointSettings::SCREEN_MARGIN_MIN, CrossPointSettings::SCREEN_MARGIN_MAX,
@@ -310,43 +354,103 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                           {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                           "imageRendering", StrId::STR_CAT_READER),
+        SettingInfo::Enum(StrId::STR_READER_MENU_STYLE, &CrossPointSettings::readerMenuStyle,
+                          {StrId::STR_MENU_STYLE_LIST, StrId::STR_MENU_STYLE_TOOLBAR}, "readerMenuStyle",
+                          StrId::STR_CAT_READER),
         // --- Controls ---
-        SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
-                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
-                          StrId::STR_CAT_CONTROLS),
-        SettingInfo::Toggle(StrId::STR_WORD_LOOKUP_SIDE_BUTTONS, &CrossPointSettings::wordLookupSideButtons,
-                            "wordLookupSideButtons", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        // Front buttons first, then the side buttons, then the touch equivalents. The Shortcuts
+        // and Remap rows are actions, inserted ahead of these in SettingsActivity.
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
                             "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Toggle(StrId::STR_WORD_LOOKUP_SIDE_BUTTONS, &CrossPointSettings::wordLookupSideButtons,
+                            "wordLookupSideButtons", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Toggle(StrId::STR_REVERSED_PAGE_TURN, &CrossPointSettings::reversePageTurn, "reversePageTurn",
+                            StrId::STR_CAT_CONTROLS),
+        // Index 4 (Inverted Swipe) is Matcha-only, for right-to-left vertical reading.
+        SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
+                          {StrId::STR_STATE_OFF, StrId::STR_STATE_TAP, StrId::STR_STATE_SWIPE,
+                           StrId::STR_STATE_INVERTED_TAP, StrId::STR_STATE_INVERTED_SWIPE},
+                          "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        // Persisted under the legacy "tapForReaderMenu" key: old saves map
+        // 0 = Off, 1 = Tap.
+        SettingInfo::Enum(StrId::STR_SHOW_READER_MENU, &CrossPointSettings::showReaderMenu,
+                          {StrId::STR_STATE_OFF, StrId::STR_STATE_TAP, StrId::STR_STATE_SWIPE_UP}, "tapForReaderMenu",
+                          StrId::STR_CAT_CONTROLS),
+        // --- Shortcuts ---
+        // STR_CAT_SHORTCUTS is not one of the four tabs: these rows are reached through the
+        // Shortcuts row in Controls, which opens SettingsActivity on this category alone.
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
                            StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
-                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
+                          "longPressButtonBehavior", StrId::STR_CAT_SHORTCUTS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
-                          {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY},
-                          "longPressMenuFunction", StrId::STR_CAT_CONTROLS),
+                          buildLongPressMenuValues(), "longPressMenuFunction", StrId::STR_CAT_SHORTCUTS),
+        // Erased below unless the board is an X4 Pro.
+        SettingInfo::Toggle(StrId::STR_DBL_CLICK_PWR_LIGHT, &CrossPointSettings::doubleClickPwrLight,
+                            "doubleClickPwrLight", StrId::STR_CAT_SHORTCUTS),
+        // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
+        // Confirm is appended at 6 (upstream put it at 5); Previous Page is appended at 7.
+        // The indices are identical on touch and button boards so a stored value keeps its
+        // meaning across them; Confirm simply has no handler where a front Confirm key exists.
+        // Labels stay indexed BY STORED VALUE; withEnumOrder() only decides what the menu offers
+        // first. Previous Page sits at 7 because appending was the only safe place for it, and
+        // reading it seven rows below Next Page was confusing -- so the two are offered together.
         SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-                          {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH,
-                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP},
-                          "shortPwrBtn", StrId::STR_CAT_CONTROLS),
+                          {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
+                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE},
+                          "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
+            .withEnumOrder({CrossPointSettings::IGNORE, CrossPointSettings::PWR_PREV_PAGE,
+                            CrossPointSettings::PAGE_TURN, CrossPointSettings::SLEEP, CrossPointSettings::FORCE_REFRESH,
+                            CrossPointSettings::FOOTNOTES, CrossPointSettings::WORD_LOOKUP,
+                            CrossPointSettings::PWR_CONFIRM}),
+        // Erased below unless the QMI8658 IMU is present (X3).
+        SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
+                          {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED}, "tiltPageTurn",
+                          StrId::STR_CAT_SHORTCUTS),
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
-                            "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
+                            "pwrBtnFootnoteBack", StrId::STR_CAT_SHORTCUTS),
+        // Last in the Shortcuts sub-screen: fixed physical mapping (Upper = BTN_UP,
+        // Lower = BTN_DOWN). Every board profile defines that pair and sideActionFired() reads
+        // those two keys directly, so the rows are offered everywhere -- they were X3/X4 only for
+        // no reason the input path shares. The option order matches SIDE_BUTTON_ACTION.
+        SettingInfo::Enum(
+            upperSideButtonLabel(), &CrossPointSettings::upperSideButtonAction,
+            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
+             StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
+            "upperSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+            .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
+                            CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
+                            CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
+                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_NONE}),
+        SettingInfo::Enum(
+            lowerSideButtonLabel(), &CrossPointSettings::lowerSideButtonAction,
+            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
+             StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
+            "lowerSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+            .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
+                            CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
+                            CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
+                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_NONE}),
+        // Last row in Shortcuts.
         SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
-                            "backShortToFileBrowser", StrId::STR_CAT_CONTROLS),
+                            "backShortToFileBrowser", StrId::STR_CAT_SHORTCUTS),
 
         // --- System ---
-        SettingInfo::Value(
-            StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
-            {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
-            "sleepTimeoutMinutes", StrId::STR_CAT_SYSTEM),
         SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
-                            StrId::STR_CAT_SYSTEM),
+                            StrId::STR_CAT_DISPLAY),
+        // STR_CAT_LIBRARY is not one of the four tabs: these rows are reached through the
+        // Library row in Display, which opens SettingsActivity on this category alone. Listed
+        // in the order they appear there, with the Rebuild action injected after the first.
+        // Which screen the Library entry opens; see CrossPointSettings::LIBRARY_VIEW.
+        SettingInfo::Enum(StrId::STR_LIBRARY_VIEW, &CrossPointSettings::libraryView,
+                          {StrId::STR_LIBRARY_VIEW_COVERS, StrId::STR_LIBRARY_VIEW_LIST}, "libraryView",
+                          StrId::STR_CAT_LIBRARY),
         SettingInfo::Toggle(StrId::STR_REMOVE_READ_FROM_RECENTS, &CrossPointSettings::removeReadBooksFromRecents,
-                            "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM),
+                            "removeReadBooksFromRecents", StrId::STR_CAT_LIBRARY),
         SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,
-                            "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM),
+                            "moveFinishedToReadFolder", StrId::STR_CAT_LIBRARY),
+        SettingInfo::Toggle(StrId::STR_LIBRARY_USE_METADATA, &CrossPointSettings::libraryUseMetadata,
+                            "libraryUseMetadata", StrId::STR_CAT_LIBRARY),
 
         // OPDS download folder: persisted + web-exposed, but category-less so it
         // is hidden from the on-device Settings screen (edited via OPDS UI).
@@ -357,6 +461,15 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,
                           {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
                           "opdsFilenameFormat"),
+
+        // Frontlight quick-panel state: persisted and web-exposed, but hidden
+        // from the on-device Settings screen because the swipe panel owns it.
+        SettingInfo::Value(StrId::STR_BRIGHTNESS, &CrossPointSettings::frontlightBrightness, {0, 100, 5},
+                           "frontlightBrightness"),
+#if FREEINK_CAP_WARMLIGHT
+        SettingInfo::Value(StrId::STR_WARMTH, &CrossPointSettings::frontlightWarmth, {0, 100, 5}, "frontlightWarmth"),
+#endif
+        SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightOn, "frontlightOn"),
 
         // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
         SettingInfo::DynamicString(
@@ -423,34 +536,79 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_XTC_STATUS_BAR, &CrossPointSettings::xtcStatusBarMode,
                           {StrId::STR_HIDE, StrId::STR_BOTTOM, StrId::STR_TOP}, "xtcStatusBarMode",
                           StrId::STR_CUSTOMISE_STATUS_BAR),
-        // Clock entries (web settings only; device UI uses ClockOffsetActivity for the offset).
-        // Range 0..104 = quarter-hour steps from UTC-12:00 to UTC+14:00, biased by 48.
+        // Clock entries (persistence + web settings; the device UI is
+        // ClockSettingsActivity under System settings).
         SettingInfo::Enum(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, std::move(statusBarClockValues),
                           "statusBarClock", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Value(StrId::STR_CLOCK_UTC_OFFSET, &CrossPointSettings::clockUtcOffsetQ, {0, 104, 1},
-                           "clockUtcOffsetQ", StrId::STR_CUSTOMISE_STATUS_BAR),
+        // LEGACY: retired quarter-hour UTC offset (biased by 48). Persisted so
+        // timezones::activeIndex() can migrate it into clockTimezone.
+        SettingInfo::Value(StrId::STR_CLOCK, &CrossPointSettings::clockUtcOffsetQ, {0, 104, 1}, "clockUtcOffsetQ",
+                           StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_CLOCK_FORMAT, &CrossPointSettings::clockFormat,
                           {StrId::STR_CLOCK_FORMAT_24H, StrId::STR_CLOCK_FORMAT_12H}, "clockFormat",
                           StrId::STR_CUSTOMISE_STATUS_BAR),
+        // Index into the append-only table in src/util/Timezones.cpp; 255 = unset.
+        SettingInfo::Value(StrId::STR_TIMEZONE, &CrossPointSettings::clockTimezone, {0, 255, 1}, "clockTimezone",
+                           StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_CLOCK_DST, &CrossPointSettings::clockDst,
+                          {StrId::STR_CLOCK_DST_AUTO, StrId::STR_STATE_ON, StrId::STR_STATE_OFF}, "clockDst",
+                          StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Toggle(StrId::STR_CLOCK_IN_HEADER, &CrossPointSettings::clockShowInHeader, "clockShowHeader",
+                            StrId::STR_CUSTOMISE_STATUS_BAR),
         // Persistence flag for NTP debounce. Resetting from the web UI forces a re-sync
         // on next WiFi connect, which is useful when crossing time zones.
         SettingInfo::Toggle(StrId::STR_CLOCK_SYNCED, &CrossPointSettings::clockHasBeenSynced, "clockHasBeenSynced",
                             StrId::STR_CUSTOMISE_STATUS_BAR),
     };
-    // Only show tilt page turn setting when the QMI8658 IMU is present (X3)
-    if (halTiltSensor.isAvailable()) {
-      // Insert after the short power button setting (end of Controls section)
-      for (auto it = v.begin(); it != v.end(); ++it) {
-        if (it->nameId == StrId::STR_SHORT_PWR_BTN) {
-          v.insert(it + 1, SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
-                                             {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED},
-                                             "tiltPageTurn", StrId::STR_CAT_CONTROLS));
-          break;
-        }
-      }
-    }
+    // Erasing keeps the list at its initial allocation; inserting into a full
+    // vector would reallocate it at double capacity for the process lifetime.
+    const auto eraseEntry = [&v](const StrId nameId) {
+      v.erase(std::find_if(v.begin(), v.end(), [nameId](const SettingInfo& s) { return s.nameId == nameId; }));
+    };
+    // Double-click power frontlight shortcut only exists on the X4 Pro.
+    if (!BoardConfig::isX4Pro()) eraseEntry(StrId::STR_DBL_CLICK_PWR_LIGHT);
+    // Tilt page turn needs the QMI8658 IMU (X3).
+    if (!halTiltSensor.isAvailable()) eraseEntry(StrId::STR_TILT_PAGE_TURN);
     return v;
   }();
+  return baseList;
+}
+
+// Board-dependent rows that getSettingsList() strips from what it returns. Factored out so the
+// persistence walk applies exactly the same set -- a divergence here would change WHICH keys get
+// written to the settings file on a given board.
+inline bool settingHiddenByBoard(const SettingInfo& s) {
+  if (!BoardConfig::hasTouch() &&
+      (s.nameId == StrId::STR_TOUCH_READER_CONTROLS || s.nameId == StrId::STR_READER_MENU_STYLE)) {
+    return true;
+  }
+  if (!BoardConfig::hasHomeKey() && s.nameId == StrId::STR_SHOW_READER_MENU) return true;
+  if (BoardConfig::hasTouch() &&
+      (s.nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION || s.nameId == StrId::STR_SUNLIGHT_FADING_FIX ||
+       s.nameId == StrId::STR_BACK_SHORT_TO_FILE_BROWSER)) {
+    return true;
+  }
+  return false;
+}
+
+// NOTE for the persistence path (CrossPointSettings::toJson/fromJson): walk settingsBaseList()
+// directly, skipping settingHiddenByBoard(), rather than calling getSettingsList(). Those two read
+// only each entry's key and value pointer, and the substitutions getSettingsList() applies (font
+// family, font size) keep both, while the row it inserts (dictionary) has no key and serialization
+// skips it anyway -- so the copy buys nothing there. That copy is one large contiguous allocation
+// from std::vector, which under -fno-exceptions abort()s the firmware instead of failing:
+// confirmed on device, abort inside _M_allocate_and_copy while saving settings as the reader tore
+// down, with maxAlloc at 5876. Saving settings must never be the thing that crashes.
+
+// categoryFilter/includeTextSettingsEntries let embedded device screens copy only
+// entries they can display while the reader keeps its memory-heavy state alive.
+inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
+                                                const std::vector<DictionaryEntry>* dictionaries = nullptr,
+                                                const StrId categoryFilter = StrId::STR_NONE_OPT,
+                                                const bool includeTextSettingsEntries = true,
+                                                const std::string& bookLanguage = {},
+                                                const bool showAppliedDictionary = false) {
+  const std::vector<SettingInfo>& baseList = settingsBaseList();
 
   const auto shouldInclude = [categoryFilter, includeTextSettingsEntries](const SettingInfo& setting) {
     const bool categoryMatches = categoryFilter == StrId::STR_NONE_OPT || setting.category == categoryFilter;
@@ -471,15 +629,34 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     }
   }
   if (!BoardConfig::hasTouch()) {
+    // The reader menu style stays available on button boards (the toolbar
+    // chrome is button-navigable); only the touch controls are hidden.
     v.erase(std::remove_if(v.begin(), v.end(),
                            [](const SettingInfo& s) { return s.nameId == StrId::STR_TOUCH_READER_CONTROLS; }),
             v.end());
+  }
+  // The reader-menu gesture choice only makes sense where the menu stays
+  // reachable without the tap and the bottom edge is free (the capacitive
+  // Home key); everywhere else the bottom-edge up-swipe is Home and the
+  // center tap is the primary path, so the setting stays at its Tap default.
+  if (!BoardConfig::hasHomeKey()) {
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [](const SettingInfo& s) { return s.nameId == StrId::STR_SHOW_READER_MENU; }),
+            v.end());
+  }
+  if (BoardConfig::hasHomeKey()) {
+    v.reserve(v.size() + 3);
+    for (unsigned i = 0; i < 3; ++i) {
+      v.push_back(SettingInfo::StaticEnum(home_button::GESTURE_LABELS[i], home_button::FIELDS[i],
+                                          home_button::ACTION_LABELS, home_button::KEYS[i], StrId::STR_CAT_CONTROLS));
+    }
   }
   if (BoardConfig::hasTouch()) {
     v.erase(std::remove_if(v.begin(), v.end(),
                            [](const SettingInfo& s) {
                              return s.nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION ||
-                                    s.nameId == StrId::STR_SUNLIGHT_FADING_FIX;
+                                    s.nameId == StrId::STR_SUNLIGHT_FADING_FIX ||
+                                    s.nameId == StrId::STR_BACK_SHORT_TO_FILE_BROWSER;
                            }),
             v.end());
   }
@@ -516,4 +693,23 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     }
   }
   return v;
+}
+
+// Every row whose value belongs in the settings file, without materializing the menu copy (which
+// aborts the firmware on a fragmented heap, and persistence runs while the reader is tearing
+// down). That is the static table PLUS the rows getSettingsList() only adds to its copy: the
+// home-button gestures and the word-lookup font size. Those two were menu-only, so their keys
+// were never written and came back as defaults on the next boot -- the Home long-press in
+// particular fell back to the pre-1.5 longPressMenuFunction migration, which is why it kept
+// reverting to Dictionary. Callers still apply settingHiddenByBoard().
+template <typename Fn>
+inline void forEachPersistableSetting(Fn&& fn) {
+  for (const auto& info : settingsBaseList()) fn(info);
+  if (BoardConfig::hasHomeKey()) {
+    for (unsigned i = 0; i < 3; ++i) {
+      fn(SettingInfo::StaticEnum(home_button::GESTURE_LABELS[i], home_button::FIELDS[i], home_button::ACTION_LABELS,
+                                 home_button::KEYS[i], StrId::STR_CAT_CONTROLS));
+    }
+  }
+  fn(buildWordLookupFontSizeSetting());
 }

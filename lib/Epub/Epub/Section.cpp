@@ -7,6 +7,7 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include "Epub/FootnoteHrefIo.h"
 #include "Epub/RubyGlossary.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
@@ -21,7 +22,16 @@ void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, 
   if (!HalStorage::getInstance().openFileForRead("SCT", path, f)) return;
   constexpr char NEEDLE[] = "class=\"";
   constexpr size_t NLEN = sizeof(NEEDLE) - 1;
-  uint8_t buf[512];
+  constexpr size_t READ_CHUNK = 512;
+  // Heap, not stack: 512 bytes is twice the project's stack-local ceiling, and this
+  // runs on the ActivityManagerRender task, which also carries full page rendering
+  // (GfxRenderer, font cache, SD I/O) in the same 8 KB. A crash dump from a chapter
+  // build showed this buffer's contents live on that stack.
+  auto buf = makeUniqueNoThrow<uint8_t[]>(READ_CHUNK);
+  if (!buf) {
+    LOG_ERR("SCT", "OOM: %u bytes for class scan", static_cast<unsigned>(READ_CHUNK));
+    return;  // out stays empty: the caller then loads the CSS cache unfiltered, as before
+  }
   size_t matched = 0;
   bool inValue = false;
   std::string token;
@@ -36,9 +46,12 @@ void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, 
     if (out.size() < maxOut) out.push_back(token);
     token.clear();
   };
-  size_t n;
-  while ((n = f.read(buf, sizeof(buf))) > 0 && out.size() < maxOut) {
-    for (size_t i = 0; i < n; i++) {
+  // Signed: HalFile::read() returns -1 on a read error, and an unsigned n would turn
+  // that into 0xFFFFFFFF -- passing the `> 0` test and sending the inner loop 4 GB
+  // past a 512-byte buffer.
+  int n;
+  while ((n = f.read(buf.get(), READ_CHUNK)) > 0 && out.size() < maxOut) {
+    for (int i = 0; i < n; i++) {
       const char c = static_cast<char>(buf[i]);
       if (inValue) {
         if (c == '"') {
@@ -61,6 +74,13 @@ void collectHtmlClasses(const std::string& path, std::vector<std::string>& out, 
         matched = (c == NEEDLE[0]) ? 1 : 0;
       }
     }
+  }
+  if (n < 0) {
+    // A partial list is worse than none: the caller filters the CSS cache on it, so
+    // missing classes drop rules and the chapter gets cached UNSTYLED -- one bad read
+    // frozen into a permanent layout. Fall back to unfiltered, as the OOM path does.
+    LOG_ERR("SCT", "class scan read failed, discarding partial list: %s", path.c_str());
+    out.clear();
   }
 }
 }  // namespace
@@ -161,7 +181,77 @@ namespace {
 // v75: a font-size on <html>/<body> is ignored -- it restates the base size, which IS the
 //      reader's own font here, so honouring it sized whole books off the user's setting.
 //      Cached pages hold the shrunken layout and its line positions.
-constexpr uint8_t SECTION_FILE_VERSION = 75;
+// v76: upstream merge (their v37): FootnoteEntry::href grew from 96 to 256 bytes for long
+//      calibre paths, so every cached footnote record shifts by 160 bytes and a v75 file
+//      mis-parses under v76 framing.
+// v77: upstream merge (their v38): Focus Reading line breaking changed — a visible hyphen/dash inside a word is now a
+//      break opportunity, and hyphenation of a focus-split word considers the whole word
+//      instead of only its regular-weight suffix. Pages cached by older versions were laid
+//      out with the previous, more restrictive break set and no longer match.
+// v78: upstream merge (their v39): image top margin is clamped so a full-viewport-height
+//      image cannot overflow the page bottom; older caches can hold placements that panels
+//      with no bottom inset refuse to draw.
+// v79: upstream merge (their v40): a group ruby no longer allows a break inside it
+//      (wordNoSpaceBefore cleared) and a text block no longer soft-flushes while the
+//      parser is inside <ruby>. Both change where lines break, so pages cached by
+//      older versions no longer match.
+// v80: a ruby base wrapped in a styleless inline element (Calibre's
+//      <ruby><span class="xhtml_rb">base</span><rt>...</rt></ruby> rendering of <rb>) is now
+//      flushed at that element's close, so the annotation attaches to its own base instead of
+//      to the preceding word. Annotated words reserve leading for their ruby, so lines move and
+//      pages cached under v79 hold the wrong positions -- and the wrong furigana.
+// v81: upstream merge (their v41): simple HTML table rows are laid out as positioned columns
+//      instead of flattened paragraphs with synthetic row/cell labels, so any cached page
+//      holding a table has the wrong geometry.
+// v82: upstream merge (their v42): a text block restarted at a block element's close drops the
+//      parent style's top and bottom margins, so paragraph positions shift on any page whose
+//      blocks nest.
+// v83: upstream merge (their v43 and v44): paragraph base direction no longer follows a
+//      direction change on an inline element, and each page now stores the internal-link
+//      rectangles touch navigation taps. The first moves RTL lines, the second extends the
+//      serialized page body, so older caches neither match nor parse.
+// v84: keeps the v83 serialized layout unchanged. In French books, a word ending in a hyphenated
+//      subject pronoun ("songeai-je", "pense-t-il") is now split into extra word tokens so the
+//      verb and pronoun are independently selectable for dictionary lookup, changing the token
+//      count and positions on any cached page containing one.
+// v85: each text block's record gains a drop cap trailer (codepoint, ink origin, glyph scale;
+//      zeroed on every line that has none), and a paragraph whose CSS declares
+//      `::first-letter { font-size: ... }` now reserves a column for the enlarged letter, so
+//      its opening lines are broken to a narrower width and their words sit at new positions.
+// v86: `::first-letter` is now also recognised in its CSS 2.1 one-colon spelling, so a book that
+//      uses it gains drop caps -- and with them the reserved column and the reflowed opening
+//      lines a v85 cache was built without.
+// v87: a paragraph opened by an enlarged single-letter span (`<p><span class="let">L</span>...`)
+//      is treated as an initial too, which is how many trade EPUBs mark one up instead of using
+//      a pseudo-element at all. Its own version rather than an amendment to v86: v86 was already
+//      built and run, so a v86 section on disk was laid out by a parser that did not know about
+//      the span form, and reusing it would leave those books looking exactly as unfixed as
+//      before -- with nothing to indicate why.
+// v88: the initial no longer has to be the paragraph's FIRST token -- a French chapter opening
+//      (`--<nbsp><span class="let">L</span>`) tokenizes the dash and the space ahead of it, and
+//      those paragraphs now get the reserved column and reflowed opening lines too.
+// v89: the drop cap record gains the opening mark's codepoint (u32, 0 when there is none), so
+//      the record grew by 4 bytes and a v88 record cannot be read with the v89 framing. The mark
+//      a paragraph opens with (`--` before a lettrine) now leaves the text flow WITH the initial
+//      and is drawn at body size beside it, so those opening lines are broken differently too.
+// v90: an inline font-size the font ladder cannot serve (a single-size SD-card reader font has
+//      no 12/14/16/18pt siblings) is now honoured by scaling the glyph bitmap, snapped to an
+//      eighth. `<small>` runs that used to render at body size are narrower, so every line
+//      holding one breaks and positions differently. The per-word font slot carries the scale as
+//      a negative tag, so the framing is unchanged.
+// v91: a bordered block's closing edge is no longer pulled up past the bottom of the last line
+//      inside it, so a block with little or no trailing spacing gets a slightly taller box.
+//      PageBox height is computed at layout time and stored, so cached geometry must be rebuilt.
+//      The framing is unchanged.
+// v92: a drop cap is sized against the vertical advance its neighbouring lines are actually
+//      emitted with (reader line spacing and the block's CSS line-height) instead of the raw
+//      font leading. Tighter leading used to make the letter taller than the column it reserved,
+//      so it ran through the first full-width line below it. The framing is unchanged.
+// v93: a line's advance is floored at the ink its glyphs occupy plus a minimum gap, so a face
+//      whose advanceY is under its own ascender + descender no longer lets a descender meet the
+//      ascender below it. Line heights are computed at layout time and stored, so cached geometry
+//      must be rebuilt. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 93;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -308,8 +398,45 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
         spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled) {
+      // Name the field(s). A mismatch here throws the whole chapter away and rebuilds it, and on a
+      // build long enough to be SUSPENDED (which persists a partial) an unexplained rejection is
+      // indistinguishable from an infinite rebuild loop -- reported in #209 as the orientation
+      // flip "indexing" three times, with the persisted page count going 164 -> 138 -> 126 as each
+      // restart discarded work it already had. Which field disagrees is the whole diagnosis, and
+      // it cost nothing to record.
+      char why[224];
+      size_t at = 0;
+      const auto note = [&](const char* name, const long long want, const long long got) {
+        if (at + 1 >= sizeof(why)) return;
+        const int n = snprintf(why + at, sizeof(why) - at, "%s %lld!=%lld ", name, want, got);
+        if (n > 0) at += static_cast<size_t>(n) < sizeof(why) - at ? static_cast<size_t>(n) : sizeof(why) - at - 1;
+      };
+      if (spec.fontId != fileFontId) note("fontId", spec.fontId, fileFontId);
+      if (spec.lineCompression != fileLineCompression) {
+        if (at + 1 < sizeof(why)) {
+          const int n = snprintf(why + at, sizeof(why) - at, "lineCompression %.3f!=%.3f ",
+                                 static_cast<double>(spec.lineCompression), static_cast<double>(fileLineCompression));
+          if (n > 0) at += static_cast<size_t>(n) < sizeof(why) - at ? static_cast<size_t>(n) : sizeof(why) - at - 1;
+        }
+      }
+      if (spec.extraParagraphSpacing != fileExtraParagraphSpacing)
+        note("extraParagraphSpacing", spec.extraParagraphSpacing, fileExtraParagraphSpacing);
+      if (spec.paragraphAlignment != fileParagraphAlignment)
+        note("paragraphAlignment", spec.paragraphAlignment, fileParagraphAlignment);
+      if (spec.viewportWidth != fileViewportWidth) note("viewportWidth", spec.viewportWidth, fileViewportWidth);
+      if (spec.viewportHeight != fileViewportHeight) note("viewportHeight", spec.viewportHeight, fileViewportHeight);
+      if (spec.hyphenationEnabled != fileHyphenationEnabled)
+        note("hyphenation", spec.hyphenationEnabled, fileHyphenationEnabled);
+      if (spec.embeddedStyle != fileEmbeddedStyle) note("embeddedStyle", spec.embeddedStyle, fileEmbeddedStyle);
+      if (spec.imageRendering != fileImageRendering) note("imageRendering", spec.imageRendering, fileImageRendering);
+      if (spec.focusReadingEnabled != fileFocusReadingEnabled)
+        note("focusReading", spec.focusReadingEnabled, fileFocusReadingEnabled);
+      if (spec.honorBookInsets != fileHonorBookInsets)
+        note("honorBookInsets", spec.honorBookInsets, fileHonorBookInsets);
+      if (spec.furiganaEnabled != fileFuriganaEnabled) note("furigana", spec.furiganaEnabled, fileFuriganaEnabled);
+      why[at] = '\0';
       file.close();
-      LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
+      LOG_ERR("SCT", "Cache rejected (%s): want!=file %s", filePartial ? "partial" : "complete", why);
       clearCache();
       return false;
     }
@@ -391,6 +518,13 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
     return false;
+  }
+  // Reclaim rebuildable font caches before CSS and layout allocations. Upstream calls
+  // releaseSdFontCaches() here; this fork renamed and widened that to releaseAllFontMemory(),
+  // which additionally surrenders the FontDecompressor glyph slab (~24KB) -- strictly more of
+  // what this call site wants, and what the fork's other heap-critical paths already use.
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->releaseAllFontMemory();
   }
   buildComplete_ = false;
   builtPageCount_ = 0;
@@ -597,7 +731,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   return true;
 }
 
-bool Section::buildSomeMore(const int maxPages) {
+bool Section::buildSomeMore(const int maxPages, const uint32_t maxMillis) {
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
@@ -606,6 +740,7 @@ bool Section::buildSomeMore(const int maxPages) {
   // pageCount stays pinned at the partial's watermark until the build passes it, which
   // would otherwise turn one "small" chunk into a blocking rebuild of the whole watermark.
   const int startCount = builtPageCount_;
+  const uint32_t startMs = millis();
   for (;;) {
     const auto status = build_->parser->parseStep();
     if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
@@ -626,8 +761,15 @@ bool Section::buildSomeMore(const int maxPages) {
     if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
       return finalizeBuild();
     }
-    // ParseStatus::More: yield once we've laid out the requested number of pages.
+    // ParseStatus::More: yield once we've laid out the requested number of pages, or once the
+    // caller's time budget is spent -- whichever comes first. One parse step is the floor: a
+    // single slow page still runs to completion, so this bounds the tick at roughly one page
+    // rather than the full maxPages worth.
     if (maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) {
+      build_->bytesConsumed = build_->parser->parseBytesConsumed();
+      return true;
+    }
+    if (maxMillis > 0 && millis() - startMs >= maxMillis) {
       build_->bytesConsumed = build_->parser->parseBytesConsumed();
       return true;
     }
@@ -778,7 +920,7 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
       if (asPartial && pageIdx >= builtPageCount_) continue;
       serialization::writePod(file, pageIdx);
       file.write(reinterpret_cast<const uint8_t*>(fn.number), sizeof(fn.number));
-      file.write(reinterpret_cast<const uint8_t*>(fn.href), sizeof(fn.href));
+      writeFootnoteHref(file, fn.href);
     }
     serialization::writePod(file, footnoteTableOffset);
   }
@@ -800,8 +942,19 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
 
   // Swap into place. A crash between remove and rename loses the old file but keeps a
   // fully-committed tmp; the next build just removes it and rebuilds.
-  if (Storage.exists(filePath.c_str())) {
-    Storage.remove(filePath.c_str());
+  //
+  // remove()'s result must be checked: SdFat's rename() won't overwrite an existing
+  // destination, so falling through to rename() after a failed remove() would just fail
+  // rename() too -- and the failure branch below discards the freshly-built tmp as cleanup,
+  // silently throwing away a successful rebuild while leaving the old (usually already-corrupt,
+  // since that's typically why a rebuild was triggered) file in place. Every subsequent load
+  // would then re-detect the same corruption, retrigger the same rebuild, and hit the same
+  // stuck remove() again -- a loop that never makes progress. Bail out here instead so the
+  // failure is reported once rather than repeated forever.
+  if (Storage.exists(filePath.c_str()) && !Storage.remove(filePath.c_str())) {
+    LOG_ERR("SCT", "Failed to remove stale section before swap");
+    Storage.remove(binTmpPath().c_str());
+    return false;
   }
   if (!Storage.rename(binTmpPath().c_str(), filePath.c_str())) {
     LOG_ERR("SCT", "Failed to move built section into place");
@@ -946,9 +1099,21 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const int page) {
 // Read a page from the committed file at filePath (finalized section or partial from a
 // previous session). Uses a local handle so it is safe while a build holds the member
 // `file` open on the tmp .bin.
+// Open the committed section file for one of the read-only probes below.
+//
+// A missing file is the NORMAL case for these, not an error: the chapter may never have been
+// built, or its build may still be running with nothing committed yet. SDCardManager's
+// openFileForRead prints unconditionally on failure (raw Serial, so it is not even filtered by
+// the log level), which turned every such probe into console noise. Check first and stay quiet,
+// exactly as loadSectionFile() already does for the same reason.
+bool Section::openCommittedFile(HalFile& f) const {
+  if (!Storage.exists(filePath.c_str())) return false;
+  return Storage.openFileForRead("SCT", filePath, f);
+}
+
 std::unique_ptr<Page> Section::loadPageAt(const int page) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return nullptr;
   }
 
@@ -1019,7 +1184,7 @@ std::string Section::getTextFromSectionFile() {
 
 std::optional<uint16_t> Section::getCachedPageCount() const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1045,7 +1210,7 @@ std::optional<uint16_t> Section::getCachedPageCount() const {
 
 std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1075,7 +1240,7 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
 
 std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1114,7 +1279,7 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
 
 std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1146,7 +1311,7 @@ std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) c
 
 std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!openCommittedFile(f)) {
     return std::nullopt;
   }
 
@@ -1195,7 +1360,7 @@ std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex)
 bool Section::loadSectionFootnotes(std::vector<std::pair<uint16_t, FootnoteEntry>>& out) {
   out.clear();
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) return false;
+  if (!openCommittedFile(f)) return false;
   const size_t fileSize = f.size();
   if (fileSize < sizeof(uint32_t)) return false;
   f.seek(fileSize - sizeof(uint32_t));
@@ -1213,13 +1378,12 @@ bool Section::loadSectionFootnotes(std::vector<std::pair<uint16_t, FootnoteEntry
     FootnoteEntry fn;
     serialization::readPod(f, pageIdx);
     if (f.read(reinterpret_cast<uint8_t*>(fn.number), sizeof(fn.number)) != sizeof(fn.number) ||
-        f.read(reinterpret_cast<uint8_t*>(fn.href), sizeof(fn.href)) != sizeof(fn.href)) {
+        !readFootnoteHref(f, fn.href)) {
       out.clear();
       return false;
     }
     fn.number[sizeof(fn.number) - 1] = '\0';
-    fn.href[sizeof(fn.href) - 1] = '\0';
-    out.push_back({pageIdx, fn});
+    out.push_back({pageIdx, std::move(fn)});
   }
   return true;
 }
@@ -1230,7 +1394,7 @@ std::optional<uint32_t> Section::getVisibleTextOffsetForPage(const uint16_t page
   }
 
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f) || f.size() < HEADER_SIZE) {
+  if (!openCommittedFile(f) || f.size() < HEADER_SIZE) {
     return std::nullopt;
   }
 
@@ -1286,7 +1450,7 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
   }
 
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f) || f.size() < HEADER_SIZE) {
+  if (!openCommittedFile(f) || f.size() < HEADER_SIZE) {
     return std::nullopt;
   }
 

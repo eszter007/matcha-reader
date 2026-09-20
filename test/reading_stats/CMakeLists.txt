@@ -32,6 +32,8 @@ target_include_directories(ReadingStatsTest BEFORE PRIVATE
   ${REPO_ROOT}/src
   ${I18N_GEN_DIR}
   ${REPO_ROOT}/lib/I18n
+  # makeUniqueNoThrow, used by the language-pack loader. Host-portable as written.
+  ${REPO_ROOT}/lib/Memory
 )
 
 target_link_libraries(ReadingStatsTest PRIVATE

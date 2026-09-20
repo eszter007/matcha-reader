@@ -19,6 +19,23 @@ class ChapterXPathResolver {
   static std::string findXPathForParagraph(const std::shared_ptr<Epub>& epub, int spineIndex, uint16_t paragraphIndex);
 
   /**
+   * Resolve a zero-based visible-codepoint offset in a spine item to its real
+   * XHTML ancestry path plus text-node offset.
+   *
+   * Returns a KOReader-compatible path like:
+   * /body/DocFragment[8]/body/div[2]/section[1]/p[4]/text()[1].0
+   *
+   * The offset counts every visible text node in the body -- headings, bare
+   * body text and divs included -- matching ChapterHtmlSlimParser, which
+   * produces the offsets resolved here.
+   *
+   * An empty string means parsing failed or the offset lies past the chapter's
+   * visible text.
+   */
+  static std::string findXPathForVisibleTextOffset(const std::shared_ptr<Epub>& epub, int spineIndex,
+                                                   uint32_t visibleTextOffset);
+
+  /**
    * Resolve intra-spine progress to a real XHTML ancestry path plus text offset.
    *
    * Returns a KOReader-compatible path like:

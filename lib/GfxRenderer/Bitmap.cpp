@@ -1,5 +1,7 @@
 #include "Bitmap.h"
 
+#include <Logging.h>
+
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -77,6 +79,8 @@ const char* Bitmap::errorToString(BmpReaderError err) {
 
     case BmpReaderError::OomRowBuffer:
       return "OomRowBuffer";
+    case BmpReaderError::OomDitherer:
+      return "OomDitherer";
     case BmpReaderError::ShortReadRow:
       return "ShortReadRow";
   }
@@ -168,21 +172,23 @@ BmpReaderError Bitmap::parseHeaders() {
   //  - High-color + dithering disabled → simple quantization (no error diffusion)
   const bool highColor = !nativePalette;
   if (highColor && dithering) {
-    // nothrow object + valid() guard on its internal row buffers: an OOM here (a large high-color
+    // nothrow object + isValid() guard on its internal row buffers: an OOM here (a large high-color
     // BMP on a tight heap) fails the parse instead of aborting the firmware under -fno-exceptions.
     if (USE_ATKINSON) {
-      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(width);
-      if (!atkinsonDitherer || !atkinsonDitherer->valid()) {
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(width, originalThresholds);
+      if (!atkinsonDitherer || !atkinsonDitherer->isValid()) {
         delete atkinsonDitherer;
         atkinsonDitherer = nullptr;
-        return BmpReaderError::OomRowBuffer;
+        LOG_ERR("BMP", "OOM: Atkinson ditherer or row buffers");
+        return BmpReaderError::OomDitherer;
       }
     } else {
-      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(width);
-      if (!fsDitherer || !fsDitherer->valid()) {
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(width, originalThresholds);
+      if (!fsDitherer || !fsDitherer->isValid()) {
         delete fsDitherer;
         fsDitherer = nullptr;
-        return BmpReaderError::OomRowBuffer;
+        LOG_ERR("BMP", "OOM: Floyd-Steinberg ditherer or row buffers");
+        return BmpReaderError::OomDitherer;
       }
     }
   }

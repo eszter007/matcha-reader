@@ -471,19 +471,55 @@ bool BookMetadataCache::load() {
     return false;
   }
 
-  serialization::readPod(bookFile, lutOffset);
-  serialization::readPod(bookFile, spineCount);
-  serialization::readPod(bookFile, tocCount);
+  // A cache file that cannot be read through is treated as absent, not as a book with empty
+  // metadata: the caller rebuilds it, where a half-loaded cache would be believed and kept.
+  // This is the path that aborted on a device whose SD card was failing mid-read.
+  const bool headerOk = serialization::readPod(bookFile, lutOffset) && serialization::readPod(bookFile, spineCount) &&
+                        serialization::readPod(bookFile, tocCount) &&
+                        serialization::readString(bookFile, coreMetadata.title) &&
+                        serialization::readString(bookFile, coreMetadata.author) &&
+                        serialization::readString(bookFile, coreMetadata.language) &&
+                        serialization::readString(bookFile, coreMetadata.coverItemHref) &&
+                        serialization::readString(bookFile, coreMetadata.textReferenceHref);
+  if (!headerOk) {
+    LOG_ERR("BMC", "Cache header unreadable or corrupt; discarding");
+    bookFile.close();
+    return false;
+  }
 
-  serialization::readString(bookFile, coreMetadata.title);
-  serialization::readString(bookFile, coreMetadata.author);
-  serialization::readString(bookFile, coreMetadata.language);
-  serialization::readString(bookFile, coreMetadata.coverItemHref);
-  serialization::readString(bookFile, coreMetadata.textReferenceHref);
+  // Cache cumulative spine sizes in RAM. The progress bar (every render) and percent
+  // jumps otherwise pay 2 seeks + a heap-allocating SpineEntry read per access. Spine
+  // entries are stored contiguously in index order immediately after the LUTs, so read
+  // them in a single sequential pass.
+  cumulativeSizes.clear();
+  cumulativeSizes.reserve(spineCount);
+  const uint32_t lutSize = (static_cast<uint32_t>(spineCount) + tocCount) * sizeof(uint32_t);
+  bookFile.seek(lutOffset + lutSize);
+  for (uint16_t i = 0; i < spineCount; i++) {
+    // Read the entry by hand rather than via readSpineEntry(): only cumulativeSize is wanted
+    // here, and the full read would allocate and immediately discard a std::string href per
+    // spine item -- spineCount allocate/free pairs at load, on a heap this code exists to
+    // spare. A string is [u32 length][bytes], so the href is skipped with a seek.
+    uint32_t hrefLen = 0;
+    serialization::readPod(bookFile, hrefLen);
+    bookFile.seekCur(static_cast<int32_t>(hrefLen));
+    uint32_t cumulativeSize = 0;
+    serialization::readPod(bookFile, cumulativeSize);
+    int16_t tocIndex = 0;
+    serialization::readPod(bookFile, tocIndex);
+    cumulativeSizes.push_back(cumulativeSize);
+  }
 
   loaded = true;
   LOG_DBG("BMC", "Loaded cache data: %d spine, %d TOC entries", spineCount, tocCount);
   return true;
+}
+
+uint32_t BookMetadataCache::getCumulativeSize(const int index) const {
+  if (index < 0 || index >= static_cast<int>(cumulativeSizes.size())) {
+    return 0;
+  }
+  return cumulativeSizes[index];
 }
 
 BookMetadataCache::SpineEntry BookMetadataCache::getSpineEntry(const int index) {

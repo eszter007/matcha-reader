@@ -10,9 +10,10 @@ A dictionary folder must contain:
 
 - `.idx` — word index (required, **must be uncompressed** — a `.idx.gz` will not work; decompress it on your computer with `gzip -d` first)
 - `.dict` or `.dict.dz` — definition data (`.dict.dz` is supported as-is; entries are decompressed on the fly during lookup)
+- `.syn` — synonym index (optional; maps alternate spellings and irregular forms to their headword)
 - `.ifo` — metadata (optional)
 
-Not supported: `.syn` synonym files (ignored), dictionaries with 64-bit index offsets (`idxoffsetbits=64` in the `.ifo` — rare, and rejected with an error), and HTML-formatted definitions render as raw markup rather than styled text.
+Not supported: dictionaries with 64-bit index offsets (`idxoffsetbits=64` in the `.ifo` — rare, and rejected with an error).
 
 ## Setting Up a Dictionary
 
@@ -24,8 +25,11 @@ The Fallback dictionary row only appears when at least one usable dictionary fol
 
 ## Looking Up a Word
 
-Two ways to start a lookup while reading:
+Three ways to start a lookup while reading:
 
+- **Long-press a word on the screen** (touch devices). The definition opens straight away, with no setting to turn
+  on first. A press that lands between words opens ordinary word selection instead, so the gesture is never a dead
+  end. Closing a definition opened this way returns to the page.
 - Open the reader menu (**Confirm**) and choose **Look Up**.
 - Or set **Settings → Controls → Long-press Menu** to "Dictionary", then hold **Confirm** (~0.4s) on the reading page.
 
@@ -35,20 +39,31 @@ One word on the page becomes highlighted:
 2. Press **Confirm** to look up the highlighted word.
 3. Press **Back** to return to the reader.
 
-On the very first lookup with a dictionary (and again if the dictionary file changes), the reader shows *"Indexing dictionary…"* while it builds a small `.qidx` sidecar file next to the `.idx`. This takes a few seconds for large dictionaries and makes all subsequent lookups fast. The sidecar can be deleted safely at any time — it will simply be rebuilt.
+On the very first lookup with a dictionary (and again whenever the `.idx` or `.syn` source file changes), the reader shows *"Indexing dictionary…"* while it builds small sidecar files next to them — a `.qidx` for the word index, and a `.sidx` when a `.syn` synonym file is present. Each sidecar is rebuilt independently, only when its own source changes. This takes a few seconds for large dictionaries and makes all subsequent lookups fast. The sidecars can be deleted safely at any time — they will simply be rebuilt.
 
 ### How Lookup Works
 
 1. **Direct match** — the word is found as-is (case-insensitive) in the dictionary index. Surrounding punctuation is ignored.
-2. **Stemming** — on a miss, common English word forms are retried automatically: possessives and plurals (`dogs` → `dog`, `stories` → `story`) and verb endings (`walked` → `walk`, `running` → `run`, `making` → `make`).
-3. **Not found** — a short popup appears and you return to word selection.
+2. **Synonyms** — on a miss, if the dictionary ships a `.syn` file, alternate spellings and irregular forms recorded there are resolved to their headword (e.g. `oxen` → `ox`, `colour` → `color`). This step is skipped if the `.sidx` sidecar could not be built (e.g. transient low memory during indexing); the dictionary otherwise stays usable, and the build is retried the next time it is opened.
+3. **Inflection** — still no match: word forms are retried automatically, using the rules for the book's language.
+   - Accented capitals are folded first, in every language, so a word at the start of a sentence (`École`, `Être`, `Über`) reaches its lowercase headword.
+   - **English**, and any language without its own rules: possessives and plurals (`dogs` → `dog`, `stories` → `story`) and verb endings (`walked` → `walk`, `running` → `run`, `making` → `make`).
+   - **French**: elision (`l'eau` → `eau`, `qu'il` → `il`), plurals and feminines (`journaux` → `journal`, `heureuse` → `heureux`, `nouvelle` → `nouveau`), the three regular conjugations across their tenses (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`, `vendu` → `vendre`), the stem-alternating families built on them (`éteignit` → `éteindre`, `connaissons` → `connaître`, `conduisit` → `conduire`), and adjective → adverb (`lentement` → `lent`).
+4. **Not found** — a short popup appears and you return to word selection.
+
+The rules are selected by the book's language tag, falling back to the language folder the dictionary sits in (`/dictionaries/fr/...`) for a book with no tag. They cover regular morphology only: irregular verbs that share no stem with their lemma (French `est`, `ont`, `fut`, `vais`), and a verb's irregular passé simple (French `connus`, `naquit`), are not rule-reachable and need a `.syn`, which resolves them in one step and works in any language.
 
 ## The Definition Screen
 
 When a word is found, the definition screen shows the matched headword at the top and the definition text below, with a page counter for long definitions.
 
+HTML dictionaries that declare `sametypesequence=h` use the EPUB text-layout engine for semantic formatting such as headings, bold, italics, lists, and line breaks. Images and CSS styling are ignored. Definitions that are too large or cannot be laid out within the available memory fall back to plain text.
+
 - **Left/Right** or side **Up/Down** — previous / next page
 - **Back** — return to word selection
+- **Touch** — the card pages the same way the reader itself is set to turn pages (**Settings → Controls → Touch
+  Reader Controls**): tap zones, inverted zones, swipes, inverted swipes, or nothing at all when touch page turns
+  are off. A tap outside the card puts it away.
 
 
 

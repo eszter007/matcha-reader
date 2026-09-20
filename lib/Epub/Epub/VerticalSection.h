@@ -57,6 +57,10 @@ class VerticalSection {
   // file with version 0 so the next open sees a version mismatch and rebuilds the chapter --
   // instead of the truncation living on disk as a permanently sparse chapter.
   bool lastBuildDroppedForHeap_ = false;
+  // Set when only the styled-block table was skipped. The chapter's TEXT is complete; the book's
+  // own block styling is not. Kept apart from lastBuildDroppedForHeap_ because the two differ in
+  // kind: this one is cosmetic and must not be reported, or cached, as lost content.
+  bool lastBuildUnstyledForHeap_ = false;
   // Set by loadSectionFile when the on-disk cache carried the version-0 stale stamp (a prior
   // build dropped glyphs). If THIS build drops again, createSectionFile keeps the best-effort
   // cache valid instead of re-stamping: the drop conditions are deterministic per book, so
@@ -70,11 +74,15 @@ class VerticalSection {
   // See requestPageDuringBuild(). Written by the loop() task, read by the build on the
   // render task; -1 = no pending request.
   std::atomic<int> buildPageRequest_{-1};
-  // See noteBackTurnDuringBuild(). Set by loop(), consumed on the render task between pages so
+  // See requestBuildNotice(). Set by loop(), consumed on the render task between pages so
   // the notice is drawn by the same task that draws pages -- the framebuffer has one owner.
-  std::atomic<bool> backTurnDuringBuild_{false};
+  std::atomic<bool> buildNoticePending_{false};
   void (*buildNoticeFn_)(void*) = nullptr;
   void* buildNoticeCtx_ = nullptr;
+  // See setBuildCancelHook().
+  bool (*cancelFn_)(const void*) = nullptr;
+  const void* cancelCtx_ = nullptr;
+  bool lastBuildCancelled_ = false;
 
  public:
   uint16_t pageCount = 0;
@@ -106,20 +114,28 @@ class VerticalSection {
   // collapse to the final target.
   void requestPageDuringBuild(int pageIndex) { buildPageRequest_.store(pageIndex, std::memory_order_relaxed); }
 
-  // A BACKWARD turn while the build runs. Unlike a forward one it cannot be served: the page is
-  // already behind the build frontier, so showing it needs a cache read-back, and read-back wants
-  // ~10KB contiguous that the layout's own working set does not leave (measured on device:
-  // maxAlloc bottoms near 6KB mid-build). Rather than refuse silently, tell the reader the
-  // chapter is still indexing. Drawn via setBuildNoticeHook() on the render task.
-  void noteBackTurnDuringBuild() { backTurnDuringBuild_.store(true, std::memory_order_relaxed); }
+  // Ask the active build to draw feedback at its next page boundary. Used when a backward turn,
+  // menu, or lookup must wait for the render lock the build owns.
+  void requestBuildNotice() { buildNoticePending_.store(true, std::memory_order_relaxed); }
 
-  // Draws the "still indexing" notice; invoked between pages on the render task. See
-  // noteBackTurnDuringBuild().
+  // Draws the loading notice; invoked between pages on the render task. See requestBuildNotice().
   void setBuildNoticeHook(void* ctx, void (*fn)(void*)) {
-    backTurnDuringBuild_.store(false, std::memory_order_relaxed);
+    buildNoticePending_.store(false, std::memory_order_relaxed);
     buildNoticeCtx_ = ctx;
     buildNoticeFn_ = fn;
   }
+
+  // Cooperative cancellation, polled once per laid-out page (~60ms apart). For SPECULATIVE
+  // builds only -- a build the reader is waiting on must never be cancelled, so the foreground
+  // path leaves this unset. A cancelled build writes no cache file at all: the partial layout is
+  // discarded rather than persisted, so the next attempt starts clean.
+  void setBuildCancelHook(const void* ctx, bool (*fn)(const void*)) {
+    cancelCtx_ = ctx;
+    cancelFn_ = fn;
+  }
+  // True when the last createSectionFile() returned false because the cancel hook fired, as
+  // opposed to a real failure. Lets a speculative caller back off quietly instead of logging.
+  bool lastBuildCancelled() const { return lastBuildCancelled_; }
 
   // furiganaEnabled is part of the cache key: the column gap only has to clear ruby when ruby is
   // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.

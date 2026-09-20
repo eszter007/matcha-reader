@@ -5,12 +5,14 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <MangaPanel.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -107,15 +109,31 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // the raw file of course exists, an exists() check alone reported "cover present" and the
       // card drew the full-size page scaled into the cell. For a dithered manga page that comes
       // out near-black (device report).
-      const bool coverIsThumb = book.coverBmpPath.find("[HEIGHT]") != std::string::npos;
-      // hasContent(), not exists(): SD cards written by earlier builds still carry the 0-byte
-      // sentinel Epub::generateThumbBmp used to leave on failure, and exists() counted it as a
-      // cover -- the card then skipped regeneration and drew a placeholder forever.
+      // Templated, or a concrete thumb_<height>.bmp. The concrete form is what the Library
+      // publishes for a book whose exact size cannot be generated but which still has a
+      // thumbnail at another one -- it is a GENERATED cover, not a raw source, so it must not
+      // send this card back through the generator on every visit.
+      const bool coverIsThumb =
+          book.coverBmpPath.find("[HEIGHT]") != std::string::npos || UITheme::isGeneratedThumbPath(book.coverBmpPath);
+      // hasCompleteBmp(), not exists() or hasContent(): a 0-byte sentinel from an older build,
+      // or a thumbnail truncated by an interrupted conversion, would otherwise count as a cover --
+      // the card then skipped regeneration and drew a placeholder forever.
       const bool coverMissing =
-          !coverIsThumb || !FsHelpers::hasContent("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
+          !coverIsThumb ||
+          !FsHelpers::hasCompleteBmp("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
       if (coverMissing) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
+          // Coalesce the heap BEFORE the load, not just before the cover extraction below. Both
+          // halves of this block are heap-hungry and both fail the same way arriving here from a
+          // reader: the stylesheet parse gates on 64KB free per file, and the cover inflates
+          // through a 32KB zip window. Measured on device: the parse skipped its last stylesheet
+          // at 45904 bytes free and then DISCARDED the whole parse (correctly -- a partial rule
+          // set must not be cached as complete), throwing away ~3.5s of work that would be redone
+          // and re-discarded on the next visit. The XTC branch below does the same release for the
+          // same reason. Font caches reload on demand.
+          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+
           Epub epub(book.path, "/.crosspoint");
           // Build the CSS cache alongside the first cover while the loading UI is already
           // active, so the later book click does not synchronously parse every stylesheet.
@@ -127,6 +145,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+          // Again before the extraction itself: the load above may have refilled the heap with
+          // rule data, and the 32KB inflate window is what failed here on device ("Inflate window
+          // OOM (32768 bytes): heap 11584 free/6132 max"). That failure is recoverable by design
+          // -- the cover path is kept rather than recording "no cover" -- but the retry repeats
+          // the whole load first, so it is worth not failing in the first place.
+          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
           const bool success = epub.generateThumbBmp(coverHeight);
           if (success) {
             // Also covers the recovery case: a book whose path was cleared by an earlier build
@@ -289,7 +313,7 @@ void HomeActivity::loop() {
       case HomeMenuItem::FILE_BROWSER:
         onFileBrowserOpen();
         break;
-      case HomeMenuItem::RECENTS:
+      case HomeMenuItem::LIBRARY:
         onLibraryOpen();
         break;
       case HomeMenuItem::OPDS_BROWSER:
@@ -331,42 +355,34 @@ void HomeActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
-
-  // Back is otherwise unused on the home menu: open the most recently read
-  // book directly (recentBooks is most-recent-first and already pruned of
-  // files missing from the SD card). backPressSeen guards against the stale
-  // release of the Back press that closed the previous activity.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backPressSeen && !recentBooks.empty()) {
-    onSelectBook(recentBooks[0].path);
-    return;
-  }
-
-  int tx = 0;
-  int ty = 0;
-  if (!recentBooks.empty() && mappedInput.wasScreenTouchDown(tx, ty) && tx >= 0 && tx < renderer.getScreenWidth() &&
-      ty >= metrics.homeTopPadding && ty < metrics.homeTopPadding + metrics.homeCoverTileHeight) {
-    if (selectorIndex != 0) {
-      selectorIndex = 0;
-      requestUpdate();
+  const int coverColumnCount = std::max(1, metrics.homeRecentBooksCount);
+  const int recentCount = std::min(static_cast<int>(recentBooks.size()), coverColumnCount);
+  const int coverColumnWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / coverColumnCount;
+  int touchedBook = -1;
+  const auto coverTouch = mappedInput.colTouch(touchedBook, metrics.contentSidePadding, coverColumnWidth, recentCount,
+                                               metrics.homeTopPadding,
+                                               metrics.homeTopPadding + metrics.homeCoverTileHeight, coverColumnWidth);
+  if (coverTouch != MappedInputManager::RowTouch::None) {
+    if (coverTouch == MappedInputManager::RowTouch::Down) {
+      if (selectorIndex != touchedBook) {
+        selectorIndex = touchedBook;
+        requestUpdate();
+      }
+    } else {
+      selectorIndex = touchedBook;
+      activateSelection();
     }
   }
 
-  if (!recentBooks.empty() &&
-      mappedInput.wasTapInRect(0, metrics.homeTopPadding, renderer.getScreenWidth(), metrics.homeCoverTileHeight)) {
-    selectorIndex = 0;
-    activateSelection();
-    return;
-  }
-
   const int menuTop = metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
-  const int renderedMenuSelection =
-      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size();
   const int renderedMenuCount =
       menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
   int menuRow = -1;
-  const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, metrics.menuRowHeight + metrics.menuSpacing,
-                                              renderedMenuCount, 0, INT32_MAX, metrics.menuRowHeight);
+  // Row height from the theme, not the metrics table: RoundedRaff draws
+  // font-derived rows and the touch grid must match the visuals exactly.
+  const int menuRowHeight = GUI.getMenuRowHeight(renderer);
+  const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, menuRowHeight + metrics.menuSpacing, renderedMenuCount,
+                                              0, INT32_MAX, menuRowHeight);
   if (menuTouch != MappedInputManager::RowTouch::None) {
     const int touchedIndex =
         metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());
@@ -444,7 +460,10 @@ void HomeActivity::render(RenderLock&&) {
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding},
+  // Band spans topPadding..homeTopPadding: the cover tile starts at the fixed
+  // homeTopPadding, so the height must shrink by topPadding or the band (and a
+  // centered title, e.g. RoundedRaff's book title) sinks into the tile.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding - metrics.topPadding},
                  metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr);
 
   // Record the tile rect so storeCoverBuffer (called from the theme) knows
@@ -464,20 +483,27 @@ void HomeActivity::render(RenderLock&&) {
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 
-  const auto labels = mappedInput.mapLabels(recentBooks.empty() ? "" : tr(STR_RESUME), tr(STR_SELECT), tr(STR_DIR_UP),
-                                            tr(STR_DIR_DOWN));
+  // Back carries no action on the home menu, so it gets no hint. It used to open
+  // the most recent book, which sits under a button the reader otherwise treats
+  // as "go back" and was too easy to hit by accident.
+  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  // Captured before lastRenderValid is set: it is this fork's firstRenderDone, and the
+  // clean-refresh test below needs the value from *before* this paint.
+  const bool firstPaint = !lastRenderValid;
   lastRenderValid = true;
   lastSelectorIndex = selectorIndex;
-  renderer.displayBuffer();
+  // Splashless wake with no retained Quick Resume frame leaves the sleep image on the glass;
+  // only a HALF pass scrubs it. FAST otherwise, which is what the bare call already defaulted to.
+  renderer.displayBuffer(cleanInitialRefresh && firstPaint ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
 
 void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path, true); }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 
-void HomeActivity::onLibraryOpen() { activityManager.goToRecentBooks(); }
+void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
 
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 

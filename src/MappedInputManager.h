@@ -2,7 +2,14 @@
 
 #include <HalGPIO.h>
 
+#include "util/HomeButtonInput.h"
+
 class GfxRenderer;
+namespace freeink {
+namespace ui {
+enum class ScreenEdge : uint8_t;
+}
+}  // namespace freeink
 
 class MappedInputManager {
  public:
@@ -34,19 +41,37 @@ class MappedInputManager {
 
   MappedInputManager(HalGPIO& gpio, const GfxRenderer& renderer) : gpio(gpio), renderer(renderer) {}
 
-  void update() const { gpio.update(); }
+  // Blocking transfer loops pump physical input themselves. Defer configured
+  // Home-key actions so the next main-loop pass can dispatch them, while the
+  // current action remains available for immediate Home cancellation.
+  void update(bool deferHomeButtonAction = false) const;
+#if FREEINK_CAP_TOUCH
+  // X4 Pro delays a single power click until its frontlight double-click window
+  // expires. The main loop supplies that one-frame event here.
+  void setPowerConfirmClickFrame(const bool clicked) { powerConfirmClickFrame = clicked; }
+#endif
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
+  // One-shot threshold event while the button is down; consumes its release.
+  bool wasLongPressed(Button button, unsigned long thresholdMs) const;
+  bool consumeSuppressedRelease() const;
   bool isPressed(Button button) const;
   bool hasTouch() const;
   bool wasScreenTapped(int& x, int& y) const;
   bool wasScreenTouchDown(int& x, int& y) const;
+  // One-shot long-press from the SDK touch classifier, fired WHILE the finger
+  // is still down (stationary contact held past the SDK threshold). Consuming
+  // it suppresses the remainder of the contact — its continued hold and its
+  // release edge — so the ensuing finger lift can't also tap-dismiss the popup
+  // the long-press opened. The SDK owns that latch and self-clears it once the
+  // contact ends.
+  bool wasScreenLongPress(int& x, int& y) const;
   bool isScreenTouchHeld(int& x, int& y) const;
+  // Raw release edge, also true when the contact ended in a swipe or drag-off
+  // (which wasScreenTapped never reports). InputSnapshot builders forward it
+  // off-target so FreeInkUI routing clears its pressed-element state.
+  bool wasScreenTouchReleased() const;
   bool wasTapInRect(int x, int y, int width, int height) const;
-  bool wasListItemTapped(int& index, int itemCount, int selectedIndex, int listTop, int listHeight,
-                         bool hasSubtitle) const;
-  bool wasListItemTouchedDown(int& index, int itemCount, int selectedIndex, int listTop, int listHeight,
-                              bool hasSubtitle) const;
 
   // Combined touch interaction for a band of equal rows with caller-supplied
   // geometry — the shared hit-test for lists the theme helpers above do not
@@ -61,14 +86,60 @@ class MappedInputManager {
   RowTouch colTouch(int& col, int left, int colStep, int colCount, int yStart, int yEnd, int colWidth = 0) const;
 
   SwipeDir wasSwipe() const;
+  // Back = left-to-right swipe anchored at the left edge. Public so swipe-mode
+  // page turns (reader) can exclude it from a plain SwipeDir::Right.
+  bool wasBackGesture() const;
+  // Home-key boards use a short Home-key tap to exit; their bottom-edge swipe
+  // is intentionally unused. Other boards retain the bottom-edge Home gesture.
+  // The reader menu remains on its existing top-edge gesture and middle tap.
   bool wasHomeGesture() const;
+  // Configured one-frame action, independent of the gesture that triggered it.
+  HomeButtonAction homeButtonAction() const { return homeAction; }
+  void resetHomeButtonInput() const {
+    homeButtonInput.reset();
+    deferredHomeAction = HomeButtonAction::Ignore;
+  }
   bool wasMenuGesture() const;
+  // Bottom-edge up-swipe as the reader-menu gesture (SHOW_READER_MENU's Swipe
+  // Up option). Only meaningful on home-key boards, where Home lives on the
+  // key and the bottom edge is free; elsewhere the same swipe is the Home
+  // gesture and this returns false.
+  bool wasReaderMenuSwipeUp() const;
+  // Top-edge down-swipe opens the light panel when the active board actually
+  // has a frontlight. ActivityManager consumes it before activity input.
+  bool wasLightPanelGesture() const;
   bool wasAnyPressed() const;
+  // True when a side-button edge right now is plausibly deliberate: no front
+  // (group-1) button press, hold, or release within the ghost window. A front
+  // press can echo onto the side pin, and the echo can lag the real release.
+  bool sideReleaseAlone() const;
+  // True when the X3/X4 side button bound to `action` fired a deliberate release this tick.
+  // The single entry point for every custom side action -- readers, word lookup and main's
+  // Sleep/Refresh all ask this, so the power/ghost guards cannot drift apart between them.
+  bool sideActionFired(uint8_t action) const;
+  // Reader context. While set, a side button carrying a custom action stops answering to the
+  // shared logical names (Up/Down and everything that resolves to them). Set from the main loop,
+  // so leaving the reader restores ordinary list navigation on both side buttons.
+  void setSideActionsActive(const bool active) const { sideActionsActive = active; }
   // See HalGPIO::anyButtonDownRaw() -- for cancelling long background work.
   bool anyButtonDownRaw() const { return gpio.anyButtonDownRaw(); }
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   const GfxRenderer& getRenderer() const { return renderer; }
+  // The screen-direction pair that currently lands on the two FRONT direction buttons: left/right
+  // in portrait and inverted, up/down in either landscape (the rotation puts the horizontal pair on
+  // the side buttons there). Lets a caller bind "the front pair" without naming physical buttons --
+  // and without stealing the side buttons, whose page-turn role the user can disable separately.
+  Button frontPairPrevious() const;
+  Button frontPairNext() const;
+  // Same, resolved against an explicit orientation instead of the live one. For a viewer that
+  // rotates the DISPLAY to fit its content (the manga reader turns a panel 90 degrees when its
+  // aspect does not match the screen): that rotation is a content transform, not the reader
+  // picking the device up differently, so input must not follow it. These return an already-
+  // RESOLVED logical button rather than a Screen* direction -- see the definitions.
+  Button frontPairPrevious(uint8_t orientation) const;
+  Button frontPairNext(uint8_t orientation) const;
+
   Labels mapLabels(const char* back, const char* confirm, const char* previous, const char* next) const;
   // Maps four screen-direction labels onto the two physical front-button roles
   // using the same live-orientation transform as ScreenLeft/Right/Up/Down.
@@ -77,10 +148,8 @@ class MappedInputManager {
   // Returns the raw front button index that was pressed this frame (or -1 if none).
   int getPressedFrontButton() const;
 
-  // True when the control axis is flipped relative to the physical buttons: the user opted into
-  // orientation-following front buttons AND the screen is *currently rendered* rotated (INVERTED /
-  // LANDSCAPE_CCW). Keyed on the live renderer orientation rather than the persisted reader setting,
-  // so portrait UI (home, settings) never swaps while the reader and its menus do.
+  // True when the control axis is flipped relative to the physical buttons: always on touch boards,
+  // or when button-only boards opt in, while the screen is currently INVERTED / LANDSCAPE_CCW.
   [[nodiscard]] bool isNavDirectionSwapped() const;
 
  private:
@@ -93,16 +162,44 @@ class MappedInputManager {
   const GfxRenderer& renderer;
 
   Button mapScreenDirection(Button button) const;
+  Button mapScreenDirectionFor(Button button, uint8_t orientation) const;
+  bool frontPairIsVerticalFor(uint8_t orientation) const;
   Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
+  bool frontPairIsVertical() const;
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
-  bool wasBackGesture() const;
+  // SDK edge classification (fui::edgeSwipe) + the shared decode/held-time
+  // bookkeeping; the wrappers below give each edge its board meaning.
+  bool wasEdgeSwipe(freeink::ui::ScreenEdge edge) const;
+  bool wasTopEdgeDownSwipe() const;
+  bool wasBottomEdgeUpSwipe() const;
   // Fetch the pending swipe (if any) and map both endpoints to logical screen coords
   bool decodeSwipe(int& sx, int& sy, int& ex, int& ey) const;
-  bool listItemFromPoint(int x, int y, int& index, int itemCount, int selectedIndex, int listTop, int listHeight,
-                         bool hasSubtitle) const;
+#if FREEINK_CAP_TOUCH
+  bool wasPowerConfirmClick() const;
+#endif
   void rememberTouchHeldTime() const;
+  // Bitmask of HalGPIO button indices, not of Button values -- see pressedRawButtons().
+  uint16_t pressedRawButtons() const;
+  void suppressNextRelease(uint16_t rawButtons) const;
 
+  // Last millis() with front-button activity (press, hold, or release). Stamped
+  // in update(); sideReleaseAlone() reads it. Starts "long ago" so a side edge
+  // in the first milliseconds after boot is not misread as a ghost.
+  static constexpr unsigned long SIDE_GHOST_WINDOW_MS = 150;
+  mutable unsigned long lastFrontActivityMs = static_cast<unsigned long>(-1000);
+  mutable bool sideActionsActive = false;
+  bool sideRoleSuppressed(uint8_t physical) const;
+  mutable HomeButtonInput homeButtonInput;
+  mutable HomeButtonAction homeAction = HomeButtonAction::Ignore;
+  mutable HomeButtonAction deferredHomeAction = HomeButtonAction::Ignore;
   mutable bool touchHeldOverrideValid = false;
   mutable unsigned long touchHeldOverrideMs = 0;
   mutable unsigned long touchHeldOverrideAt = 0;
+  // Both are masks of PHYSICAL HalGPIO button indices. A hold keeps its identity across an action
+  // that remaps the logical buttons (orientation change), which a logical mask cannot.
+  mutable uint16_t longPressFiredButtons = 0;
+  mutable uint16_t suppressedReleaseButtons = 0;
+#if FREEINK_CAP_TOUCH
+  bool powerConfirmClickFrame = false;
+#endif
 };

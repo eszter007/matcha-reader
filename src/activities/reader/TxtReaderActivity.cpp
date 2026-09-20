@@ -6,6 +6,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Memory.h>
 #include <Serialization.h>
 #include <Utf8.h>
 
@@ -14,7 +15,7 @@
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
-#include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -25,58 +26,43 @@ constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 3;          // Increment when cache format changes
 }  // namespace
 
-void TxtReaderActivity::onEnter() {
-  Activity::onEnter();
-
-  readingSessionStartMs = millis();
-
+bool TxtReaderActivity::loadBook() {
+  txt = makeUniqueNoThrow<Txt>(bookPath, "/.crosspoint");
   if (!txt) {
-    return;
+    LOG_ERR("READER", "Failed to allocate TXT object");
+    return false;
   }
+  if (txt->load()) {
+    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    return true;
+  }
+  LOG_ERR("READER", "Failed to load TXT");
+  txt.reset();
+  return false;
+}
 
+std::string TxtReaderActivity::getBookTitle() const {
+  const auto slash = bookPath.rfind('/');
+  return bookPath.substr(slash == std::string::npos ? 0 : slash + 1);
+}
+
+void TxtReaderActivity::onReaderEnter() {
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   txt->setupCacheDir();
-
-  // Save current txt as last opened file and add to recent books
-  auto filePath = txt->getPath();
-  auto fileName = filePath.substr(filePath.rfind('/') + 1);
-  APP_STATE.openEpubPath = filePath;
-  APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(filePath, fileName, "", "");
-  BookStats::recordOpen(filePath.c_str());
-
-  // Trigger first update
-  requestUpdate();
 }
 
-void TxtReaderActivity::onExit() {
-  Activity::onExit();
-
-  // Record the sub-interval tail of the session; whole minutes were already flushed
-  // periodically from loop(). TXT books never counted toward the reading streak at all
-  // before this.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/true, txt ? txt->getPath().c_str() : nullptr);
-
-  // Reset orientation back to portrait for the rest of the UI
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-
+void TxtReaderActivity::onReaderExit() {
   pageOffsets.clear();
   currentPageLines.clear();
-  APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
   txt.reset();
 }
 
-void TxtReaderActivity::loop() {
-  // Crash-proof stats: flush whole minutes every few minutes so an exit path that
-  // never reaches onExit() (hang/reset on sleep, battery pull) can't lose the day.
-  ReaderUtils::flushReadingStats(readingSessionStartMs, /*force=*/false, txt ? txt->getPath().c_str() : nullptr);
+void TxtReaderActivity::readerLoop() {
+  clearEndOfBookOptionsIfNeeded();
+  if (handleEndOfBookMenu()) return;
 
-  if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, txt ? txt->getPath().c_str() : "",
-                                        {this, [](void* ctx) { static_cast<TxtReaderActivity*>(ctx)->onGoHome(); }})) {
-    return;
-  }
+  if (handleBackNavigation()) return;
 
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
@@ -86,6 +72,8 @@ void TxtReaderActivity::loop() {
     return;
   }
 
+  if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
+
   if (prevTriggered && currentPage > 0) {
     currentPage--;
     requestUpdate();
@@ -94,10 +82,17 @@ void TxtReaderActivity::loop() {
       currentPage++;
       requestUpdate();
     } else {
-      onGoHome();
+      currentPage = totalPages;
+      requestUpdate();
     }
   }
 }
+
+bool TxtReaderActivity::isAtEndOfBook() const {
+  return initialized && !pageOffsets.empty() && currentPage >= totalPages;
+}
+
+void TxtReaderActivity::onReturnFromEndOfBook() { currentPage = totalPages > 0 ? totalPages - 1 : 0; }
 
 void TxtReaderActivity::initializeReader() {
   if (initialized) {
@@ -341,6 +336,8 @@ void TxtReaderActivity::render(RenderLock&&) {
     return;
   }
 
+  if (renderEndOfBook("TRS")) return;
+
   // Bounds check
   if (currentPage < 0) currentPage = 0;
   if (currentPage >= totalPages) currentPage = totalPages - 1;
@@ -405,17 +402,19 @@ void TxtReaderActivity::renderPage() {
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  renderLines();  // scan pass — text accumulated, no drawing
+  renderLines();      // scan pass — text accumulated, no drawing
+  renderStatusBar();  // scan: a CJK title joins the batch prewarm
   scope.endScanAndPrewarm();
 
   // BW rendering
   renderLines();
   renderStatusBar();
 
-  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
-
   if (SETTINGS.textAntiAliasing) {
+    ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
     ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
+  } else {
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
   // scope destructor clears font cache via FontCacheManager
 }

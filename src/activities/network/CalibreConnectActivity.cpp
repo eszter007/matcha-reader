@@ -1,11 +1,15 @@
 #include "CalibreConnectActivity.h"
 
+#include <DictIndex.h>
 #include <ESPmDNS.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Memory.h>
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "components/UITheme.h"
@@ -80,7 +84,34 @@ void CalibreConnectActivity::startWebServer() {
     LOG_DBG("CAL", "mDNS started: http://%s.local/", HOSTNAME);
   }
 
-  webServer.reset(new CrossPointWebServer());
+  // Heap-critical allocation: SD-font caches retained for the CJK UI fallback
+  // are rebuildable — release them (again: the WiFi selection screen may have
+  // repopulated them rendering a CJK SSID) so the server object doesn't abort
+  // on OOM. See CrossPointWebServerActivity::startWebServer().
+  {
+    RenderLock lock;
+    LOG_DBG("CAL", "Free heap before font release: %d bytes", ESP.getFreeHeap());
+    // releaseAllResidentFonts(), not just the glyph caches: this screen renders no book text, and
+    // the resident SD families are the larger half -- a broad CJK face holds a multi-KB interval
+    // table plus its kern tables for the whole session. The web server starts with barely 30 KB
+    // free, and lwIP takes its send buffers from that same heap; the shortfall is what turns a
+    // large asset into a stalled socket. ensureLoaded() restores the fonts when text is rendered
+    // again, and the JP-fallback policy is untouched.
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
+  // Same reasoning as CrossPointWebServerActivity::startWebServer(): this screen reads no
+  // dictionary, and its resident caches are several KB on a heap that is about to hand lwIP its
+  // send buffers. Outside the render lock -- it touches no pixels.
+  DictIndex::releaseCaches();
+  LOG_DBG("CAL", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
+
+  webServer = makeUniqueNoThrow<CrossPointWebServer>();
+  if (!webServer) {
+    LOG_ERR("CAL", "Not enough memory to start Calibre server");
+    state = CalibreConnectState::ERROR;
+    requestUpdate();
+    return;
+  }
   webServer->begin();
 
   if (webServer->isRunning()) {

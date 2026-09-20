@@ -17906,7 +17906,14 @@ static const EpdFontData notosansjp_joyo_8_regular = {
     nullptr,
     notosansjp_joyo_8_regularKernLeftClasses,
     notosansjp_joyo_8_regularKernRightClasses,
+    nullptr,  // kernLeftCodepoints: this font keeps the packed class maps above
+    nullptr,  // kernLeftClassIds
+    nullptr,  // kernRightCodepoints
+    nullptr,  // kernRightClassIds
     notosansjp_joyo_8_regularKernMatrix,
+    nullptr,  // kernRowOffsets: this font keeps the dense matrix above
+    nullptr,  // kernSparseCols
+    nullptr,  // kernSparseValues
     449,
     442,
     210,

@@ -9,8 +9,10 @@ extern HalClock halClock;  // Singleton
 class HalClock {
   bool _available = false;
   mutable Rtc _sdkRtc;
-  mutable uint8_t _cachedHour = 0;
-  mutable uint8_t _cachedMinute = 0;
+  // The RTC keeps UTC; local time comes from newlib's localtime_r under the
+  // POSIX TZ rule set via setTimezone(), so zones with DST are correct
+  // year-round. Cached as a UTC epoch to keep the RTC bus quiet.
+  mutable time_t _cachedUtc = 0;
   mutable bool _hasCachedTime = false;
   mutable unsigned long _lastPollMs = 0;
 
@@ -20,19 +22,31 @@ class HalClock {
   // Call after BoardConfig has selected the active device.
   void begin();
 
-  // True if an RTC is present on this device
+  // True if an RTC chip is present on this device. Use hasTime() to decide whether a time
+  // can be shown -- these differ on RTC-less boards, where the system clock still works.
   bool isAvailable() const { return _available; }
 
-  // Get current hour (0-23) and minute (0-59).
+  // True when a time can be reported at all: from the RTC, or from the system clock that
+  // restoreSystemTime() and the NTP resync keep honest on boards without one.
+  bool hasTime() const { return _available || systemTimeValid(); }
+
+  // Set the POSIX TZ rule (e.g. "CET-1CEST,M3.5.0,M10.5.0/3") applied to every
+  // read. nullptr/empty falls back to UTC. Drops the read cache so the change
+  // shows immediately.
+  void setTimezone(const char* posixTz);
+
+  // Current wall-clock time in the configured timezone.
+  // Returns false if RTC is not available.
+  bool localTime(struct tm& out) const;
+
+  // Get current local hour (0-23) and minute (0-59).
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
-  // Format time into a caller-provided buffer.
+  // Format the local time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).
-  // utcOffsetQuarterHoursBiased: biased quarter-hour offset (48 = UTC+0, 0 = UTC-12, 104 = UTC+14).
-  // use12Hour: when true, format as 12-hour clock with AM/PM suffix.
   // Returns false if RTC is not available.
-  bool formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHoursBiased = 48, bool use12Hour = false) const;
+  bool formatTime(char* buf, size_t bufSize, bool use12Hour = false) const;
 
   // Sync the system clock (and the DS3231 RTC when present) from an NTP server. Requires WiFi
   // to be connected. Blocks for up to ~5s while waiting for the SNTP response.
@@ -57,10 +71,6 @@ class HalClock {
   void restoreSystemTime() const;
   // Periodic (and after NTP sync): stash the current epoch to SD when valid.
   void persistSystemTime() const;
-  // Current epoch shifted by the user's display UTC offset (SETTINGS.clockUtcOffsetQ encoding:
-  // biased quarter hours, 48 = UTC+0). Use for DATE decisions (reading-stats day boundaries)
-  // so days flip at local midnight instead of UTC midnight.
-  static time_t localEpoch(uint8_t utcOffsetQuarterHoursBiased);
 
  private:
   bool writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second);

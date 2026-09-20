@@ -85,10 +85,26 @@ Binary format (panels.dat, per page at dataOffset):
         uint8   reserved
         uint16  translationLen    UTF-8 length of the panel's English translation
         bytes   translation[]     UTF-8 translation (translationLen bytes), empty if none
+        -- v3 and later --
+        uint16  cropX, cropY, cropW, cropH
+                                  the page region the panel's crop image shows (the panel
+                                  plus its margin), so a point on a zoomed panel can be
+                                  mapped back to page coordinates
         Per text block (textCount entries):
             uint16  x, y, w, h    text block bounding box (pixels)
             uint16  textLen       UTF-8 text length
             bytes   text[]        UTF-8 text (textLen bytes, not null-terminated)
+            -- v3 and later --
+            uint8   lineCount     printed lines (columns, for vertical text) in the block;
+                                  0 when the OCR gave no usable line geometry
+            uint8   flags         bit 0: vertical (lines are columns, read top to bottom)
+            Per line (lineCount entries), in reading order -- line i is the i-th
+            '\n'-separated segment of text[]:
+                uint16  x, y, w, h  the line's own bounding box (pixels)
+
+Line boxes let the device find the word under a finger: within a printed line, manga
+lettering advances one cell per character (an upright run such as "360" or "!!" sharing
+one cell), so a point along the line maps to a character of the block text.
 """
 
 from __future__ import annotations
@@ -108,7 +124,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-FORMAT_VERSION = 2  # v2 adds a per-panel translation string after the panel header
+FORMAT_VERSION = 3  # v2: per-panel translation string. v3: per-block line boxes + flags
 
 # Panel crops go in this subfolder of --output-dir. Must match MangaReaderActivity's
 # PANEL_CROP_SUBDIR; see the Output section above for why they are not loose in the book folder.
@@ -118,6 +134,10 @@ IDX_HEADER = "<II"  # version(4) + pageCount(4) = 8 bytes
 IDX_RECORD = "<IIHH"  # dataOffset(4) + dataLength(4) + imgWidth(2) + imgHeight(2) = 12 bytes
 PANEL_BOX = "<HHHHBBH"  # x(2)+y(2)+w(2)+h(2)+textCount(1)+pad(1)+translationLen(2) = 12 bytes
 TEXT_BLOCK = "<HHHHH"  # x(2) + y(2) + w(2) + h(2) + textLen(2) = 10 bytes
+LINE_HEADER = "<BB"  # lineCount(1) + flags(1)
+LINE_BOX = "<HHHH"  # x(2) + y(2) + w(2) + h(2) = 8 bytes
+LINE_FLAG_VERTICAL = 0x01
+CROP_BOX = "<HHHH"  # cropX(2) + cropY(2) + cropW(2) + cropH(2) = 8 bytes
 
 TOC_FORMAT_VERSION = 1
 TOC_HEADER = "<II"  # version(4) + entryCount(4) = 8 bytes
@@ -128,21 +148,96 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 GEMINI_MODEL = "gemini-3.6-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
-PANEL_OCR_PROMPT = """This image is a single panel cropped from a Japanese manga page.
+# Language the panel translations are produced in. The device shows them alongside the
+# original text as a reading aid, so a panel already in this language gets no translation.
+TRANSLATION_TARGET = "English"
+
+# Names for the --language tag, used to tell the OCR model what it is looking at. Only the
+# primary subtag is looked up ("zh-Hant" -> "zh"), and an unlisted tag just yields a prompt
+# that doesn't name a language, which reads fine and still works.
+OCR_LANGUAGE_NAMES = {
+    "ja": "Japanese", "en": "English", "de": "German", "fr": "French", "es": "Spanish",
+    "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "sv": "Swedish", "fi": "Finnish",
+    "da": "Danish", "no": "Norwegian", "pl": "Polish", "cs": "Czech", "hu": "Hungarian",
+    "ru": "Russian", "uk": "Ukrainian", "tr": "Turkish", "ko": "Korean", "zh": "Chinese",
+    "ar": "Arabic", "he": "Hebrew", "th": "Thai", "vi": "Vietnamese", "id": "Indonesian",
+}
+
+PANEL_OCR_PROMPT_TEMPLATE = """This image is a single panel cropped from {page_desc}.
 List every piece of text/dialogue visible in this panel, in the order a
-reader would read them (top-to-bottom, right-to-left for manga). Then give
-a single natural English translation of all of it combined, in the same
-reading order, as it would read in an English localization of this manga.
+reader would read them ({reading_order}). {translation_instruction}
+
+Also give every printed line inside each block separately -- for vertical text
+each column is one line -- with its own tight box around just that line's
+glyphs. Exclude furigana (small reading aids beside kanji) from text and boxes.
 
 Return ONLY a JSON object, no other text:
-{"blocks": [{"text": "<the Japanese text, line breaks as \\n>",
-             "bbox_2d": [ymin, xmin, ymax, xmax]}, ...],
- "translation": "<natural English translation of all the panel's text combined, in reading order>"}
+{{"blocks": [{{"text": "<the {text_desc}, its lines joined by \\n>",
+             "bbox_2d": [ymin, xmin, ymax, xmax],
+             "vertical": <true if the lines are vertical columns>,
+             "lines": [{{"text": "<one printed line>",
+                        "bbox_2d": [ymin, xmin, ymax, xmax]}}, ...]}}, ...],
+ "translation": {translation_field}}}
 
 bbox_2d is each text region's bounding box normalized to a 0-1000 scale
 (0,0 = top-left of the panel image, 1000,1000 = bottom-right). If you
 cannot determine a precise box, omit bbox_2d for that entry.
-If there is no text in the panel, return {"blocks": [], "translation": ""}."""
+If there is no text in the panel, return {{"blocks": [], "translation": ""}}."""
+
+
+def build_panel_ocr_prompt(language: str = "", rtl: bool = True) -> str:
+    """The OCR prompt for a book in `language`, read right-to-left or not.
+
+    Telling the model which language to expect matters: asked for "the Japanese text",
+    it will hallucinate Japanese out of a German speech bubble rather than transcribe
+    what is there. A book already in the translation target gets no translation asked
+    for at all -- the device shows translations as a reading aid, and "Oh no!" rendered
+    into English is noise.
+
+    An unknown language yields a prompt that names none, which the model handles fine.
+    Reading order follows the panel order (--ltr), not the language: it is a property of
+    the layout, and the same language appears in books of both conventions.
+    """
+    primary = language.strip().lower().replace("_", "-").partition("-")[0]
+    name = OCR_LANGUAGE_NAMES.get(primary, "")
+    # "manga" only for Japanese (and for an unset language, where right-to-left panel order
+    # is the strong hint). Chinese and Korean comics are manhua and manhwa; calling them manga
+    # tells the model something false about the page for no gain.
+    if primary == "ja":
+        page_desc = "a Japanese manga page"
+    elif not primary and rtl:
+        page_desc = "a manga page"
+    elif name:
+        page_desc = f"a comic page in {name}"
+    else:
+        page_desc = "a comic page"
+
+    reading_order = "top-to-bottom, right-to-left" if rtl else "left-to-right, top-to-bottom"
+    text_desc = f"{name} text" if name else "text exactly as it appears"
+
+    if name == TRANSLATION_TARGET:
+        # Nothing to translate -- say so explicitly, or the model invents a paraphrase.
+        translation_instruction = (
+            f"The text is already in {TRANSLATION_TARGET}, so no translation is needed."
+        )
+        translation_field = '""'
+    else:
+        target_phrase = f"a {name} comic" if name else "this comic"
+        translation_instruction = (
+            f"Then give\na single natural {TRANSLATION_TARGET} translation of all of it combined, in the same\n"
+            f"reading order, as it would read in an {TRANSLATION_TARGET} localization of {target_phrase}."
+        )
+        translation_field = (
+            f'"<natural {TRANSLATION_TARGET} translation of all the panel\'s text combined, in reading order>"'
+        )
+
+    return PANEL_OCR_PROMPT_TEMPLATE.format(
+        page_desc=page_desc,
+        reading_order=reading_order,
+        translation_instruction=translation_instruction,
+        text_desc=text_desc,
+        translation_field=translation_field,
+    )
 
 
 # ── Page collection / ordering ───────────────────────────────────
@@ -389,6 +484,166 @@ def _extract_epub_pages(epub_path: str, work_dir: str) -> list[str]:
     return images
 
 
+# ── Webtoon / manhwa re-pagination ──────────────────────────────
+#
+# A webtoon is one continuous vertical strip. Distributors ship it pre-sliced into
+# fixed-height tiles, and those cuts land wherever the slicer's counter happened to
+# reach -- straight through a face as often as not. Treating a tile as a page inherits
+# every one of those cuts, so the strip is reassembled and re-cut at its own gutters.
+
+WEBTOON_BLANK_LEVEL = 244  # a row this bright across its width is gutter, not art
+WEBTOON_MIN_GUTTER = 10  # px; shorter blank runs are spacing inside a panel
+WEBTOON_MIN_PAGE_FRAC = 0.45  # never cut earlier than this fraction of a full screen
+
+
+def _blank_rows(img, sample_step: int = 8) -> list[bool]:
+    """Which rows of img are blank across their full width."""
+    gray = img.convert("L")
+    px = gray.load()
+    xs = range(0, gray.width, sample_step)
+    return [all(px[x, y] > WEBTOON_BLANK_LEVEL for x in xs) for y in range(gray.height)]
+
+
+def _webtoon_cut_points(rows: list[bool], page_h: int) -> list[int]:
+    """Cut offsets for a strip whose blank rows are `rows`, one screenful apart.
+
+    Walks down the strip taking the LAST gutter that falls within a screen's reach,
+    so a page ends on a panel break wherever the art allows one. A stretch of art
+    taller than the screen has no gutter to find and is cut at the screen height --
+    unavoidable, and better than shrinking the page until the whole run fits.
+    """
+    height = len(rows)
+    cuts = [0]
+    y = 0
+    while height - y > page_h:
+        lo, hi = y + int(page_h * WEBTOON_MIN_PAGE_FRAC), y + page_h
+        best = None
+        run_start = None
+        for i in range(lo, hi):
+            if rows[i] and run_start is None:
+                run_start = i
+            elif not rows[i] and run_start is not None:
+                if i - run_start >= WEBTOON_MIN_GUTTER:
+                    best = (run_start + i) // 2
+                run_start = None
+        # A gutter still open at the window's end reaches past it: cut at the edge,
+        # which is inside that gutter and so still a clean break.
+        if run_start is not None and hi - run_start >= WEBTOON_MIN_GUTTER:
+            best = hi
+        y = best if best is not None else hi
+        cuts.append(y)
+    cuts.append(height)
+    return cuts
+
+
+def assemble_webtoon_pages(paths: list[str], work_dir: str, target) -> list[str]:
+    """Re-cut a pre-sliced webtoon into screen-shaped pages at its own gutters.
+
+    Returns paths to the new page images, in reading order. Tiles are scaled to the
+    most common width first, since a chapter's title banner often arrives at another
+    size and would otherwise offset every row below it.
+
+    ponytail: holds only the tiles overlapping the page being written, so peak memory
+    is a screenful rather than the whole strip; the row profile for a 50,000px chapter
+    is ~50KB of bools. A second decode pass is the price. Cache the decoded tiles if
+    conversion time ever matters more than memory.
+    """
+    from PIL import Image
+
+    out_dir = os.path.join(work_dir, "webtoon_pages")
+    os.makedirs(out_dir, exist_ok=True)
+
+    widths: dict[int, int] = {}
+    for p in paths:
+        with Image.open(p) as im:
+            widths[im.width] = widths.get(im.width, 0) + 1
+    width = max(widths, key=lambda w: widths[w])
+
+    def load(idx: int):
+        img = normalize_for_output(Image.open(paths[idx]))
+        if img.width != width:
+            img = img.resize((width, max(1, round(img.height * width / img.width))), Image.LANCZOS)
+        return img
+
+    # Pass 1: row profile and tile offsets, one tile in memory at a time.
+    rows: list[bool] = []
+    offsets = []
+    for idx in range(len(paths)):
+        img = load(idx)
+        offsets.append((len(rows), img.height))
+        rows.extend(_blank_rows(img))
+        img.close()
+
+    tw, th = target if target else DEVICE_TARGETS["x4"]
+    page_h = max(1, round(width * th / tw))
+    cuts = _webtoon_cut_points(rows, page_h)
+
+    # Pass 2: paste each page from the tiles it spans.
+    out_paths = []
+    cache: dict[int, object] = {}
+    for n in range(len(cuts) - 1):
+        top, bottom = cuts[n], cuts[n + 1]
+        # Blank rows at a page's head are the tail of the gutter it was cut from; keeping
+        # them would open every page with a band of empty paper.
+        while top < bottom and rows[top]:
+            top += 1
+        if top >= bottom:
+            continue
+        page = Image.new("RGB", (width, bottom - top), (255, 255, 255))
+        for idx, (start, height) in enumerate(offsets):
+            if start >= bottom or start + height <= top:
+                continue
+            if idx not in cache:
+                cache[idx] = load(idx)
+            page.paste(cache[idx], (0, start - top))
+        for idx in [i for i in cache if offsets[i][0] + offsets[i][1] <= bottom]:
+            cache.pop(idx).close()
+        out = os.path.join(out_dir, f"webtoon_{len(out_paths):04d}.png")
+        page.save(out, "PNG")
+        page.close()
+        out_paths.append(out)
+
+    for img in cache.values():
+        img.close()
+
+    snapped = sum(1 for c in cuts[1:-1] if rows[c - 1] or rows[min(c, len(rows) - 1)])
+    print(f"Webtoon: {len(paths)} tiles ({len(rows)}px tall) re-cut into {len(out_paths)} pages "
+          f"of up to {page_h}px, {snapped} of {max(0, len(cuts) - 2)} cuts landing in a gutter")
+    return out_paths
+
+
+def detect_webtoon_panels(img) -> list[list[int]]:
+    """Panels of a re-cut webtoon page: the art blocks between its gutters.
+
+    A webtoon is a single column, so a panel is a band of full-width rows with blank
+    rows above and below it. That is exactly what the format guarantees, and it needs
+    no model -- the manga panel detector looks for bordered rectangles in a grid and
+    has nothing to find here. Returns the whole page when it has no internal gutter.
+    """
+    rows = _blank_rows(img)
+    blocks = []
+    start = None
+    for y, blank in enumerate(rows):
+        if not blank and start is None:
+            start = y
+        elif blank and start is not None:
+            blocks.append((start, y))
+            start = None
+    if start is not None:
+        blocks.append((start, len(rows)))
+    # Blocks under a gutter's height are stray specks, not panels: fold them into the
+    # block above so no artwork is left out of every panel.
+    merged: list[list[int]] = []
+    for top, bottom in blocks:
+        if merged and (top - merged[-1][1] < WEBTOON_MIN_GUTTER or bottom - top < WEBTOON_MIN_GUTTER):
+            merged[-1][1] = bottom
+        else:
+            merged.append([top, bottom])
+    if not merged:
+        return [[0, 0, img.width, img.height]]
+    return [[0, top, img.width, bottom] for top, bottom in merged]
+
+
 def _extract_pdf_pages(pdf_path: str, work_dir: str) -> list[str]:
     """Rasterize each PDF page to a PNG, in document order (page 1 first)."""
     try:
@@ -524,76 +779,205 @@ def is_sliver_panel(box: list[int], page_w: int, page_h: int) -> bool:
     return area_frac < 0.025 and aspect > 4.0
 
 
-def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
-    """Detect panels with the YOLO26-nano Manga109 model. Returns None if
-    the model isn't available (caller should fall back to the grid
-    heuristic)."""
+# Fraction of a text box's area that must fall inside a panel before that panel
+# is grown to cover it. A bubble straddling a gutter belongs to whichever panel
+# holds most of it; anything below this is page furniture (page numbers, credits,
+# a caption sitting in the margin) that no panel should be stretched to reach.
+TEXT_OWNERSHIP_MIN_FRAC = 0.25
+
+# Breathing room added around a text box before a panel is grown over it, as a
+# fraction of the page's short side (with a floor for thumbnail-sized scans).
+# The detector boxes the GLYPHS, not the balloon holding them: unioning on the
+# bare box lands the crop edge on the bubble's own outline, which reads as a
+# second cut. Measured on a 1024px-wide page, the drawn caption border sits
+# 12-18px outside the detected text, so 2% clears it and leaves a visible gap.
+TEXT_PAD_FRAC_OF_PAGE = 0.02
+TEXT_PAD_MIN = 6
+
+
+def text_pad_px(page_w: int, page_h: int) -> int:
+    """Padding to put around a text box before growing a panel over it. Scaled
+    to the page so it behaves the same on a 290px thumbnail and a 2000px scan."""
+    return max(TEXT_PAD_MIN, round(min(page_w, page_h) * TEXT_PAD_FRAC_OF_PAGE))
+
+
+def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], page_w: int,
+                            page_h: int) -> list[list[int]]:
+    """Grow each panel box to cover the speech bubbles and caption boxes that
+    belong to it.
+
+    Manga bubbles routinely overhang the frame they are spoken in -- they are
+    drawn on top of the border, or pushed out into the gutter. Cropping on the
+    detected frame rectangle alone slices the text off mid-word, which is exactly
+    what panel zoom must not do. Each text box is assigned to the panel it
+    overlaps most and that panel's box is unioned with it.
+
+    Ownership is decided against the ORIGINAL panel boxes, so one panel's growth
+    can never make it the owner of the next panel's bubbles. Ownership also uses
+    the bare text box, so the padding can never drag in a bubble that would
+    otherwise belong to a neighbour.
+    """
+    if not texts:
+        return panels
+
+    pad = text_pad_px(page_w, page_h)
+    expanded = [list(p) for p in panels]
+    for text in texts:
+        text_area = _box_area(text)
+        if text_area <= 0:
+            continue
+        owner, best_overlap = -1, 0
+        for i, panel in enumerate(panels):
+            overlap = _overlap_area(panel, text)
+            if overlap > best_overlap:
+                owner, best_overlap = i, overlap
+        if owner < 0 or best_overlap < text_area * TEXT_OWNERSHIP_MIN_FRAC:
+            continue
+        # Grow only on the sides the bubble actually breaches, and clear it by
+        # `pad` when doing so. A bubble sitting just inside the border must not
+        # push the crop out into the gutter.
+        base, box = panels[owner], expanded[owner]
+        if text[0] < base[0]:
+            box[0] = min(box[0], text[0] - pad)
+        if text[1] < base[1]:
+            box[1] = min(box[1], text[1] - pad)
+        if text[2] > base[2]:
+            box[2] = max(box[2], text[2] + pad)
+        if text[3] > base[3]:
+            box[3] = max(box[3], text[3] + pad)
+
+    for box in expanded:
+        box[0] = max(0, box[0])
+        box[1] = max(0, box[1])
+        box[2] = min(page_w, box[2])
+        box[3] = min(page_h, box[3])
+    return expanded
+
+
+# Confidence floor the panel model is queried at. Detections between this and
+# the caller's `conf` are corroboration only, never panels in their own right.
+PANEL_WEAK_CONF = 0.15
+
+# A second pass at a larger input when the first one barely finds anything. The model's panel
+# head is scale-sensitive: a small, sparsely inked page (a hand-drawn 4-koma, say) letterboxed
+# into the default 640 can come back as a single box covering a tenth of the page, while the
+# same page at 1600 is fully panelled -- measured 1 panel at 9% against 8 panels at 77%. Pages
+# the model already reads well (75-97% across every sample tried, test fixtures included) never
+# reach the retry, and a genuine full-page splash keeps its single box: one panel covering the
+# page is high coverage, not low.
+PANEL_IMGSZ = 640
+PANEL_RETRY_IMGSZ = 1600
+PANEL_RETRY_COVER_FRAC = 0.5
+
+# A frame is replaced by the sub-panels found inside it only when the split is
+# convincing on every count: each child is meaningfully smaller than the frame,
+# sits almost entirely within it, the children between them account for most of
+# the frame, and they tile rather than restate each other. A frame the model saw
+# twice at different scales fails the first test; a lone weak box inside a real
+# panel fails the third.
+SUBPANEL_MAX_AREA_FRAC = 0.7
+SUBPANEL_INSIDE_FRAC = 0.85
+SUBPANEL_COVER_FRAC = 0.7
+SUBPANEL_SIBLING_OVERLAP_FRAC = 0.3
+
+
+def split_frames_over_subpanels(frames: list[list[int]],
+                                candidates: list[list[int]]) -> list[list[int]]:
+    """Replace a frame with the sub-panels the model also found inside it.
+
+    Neighbouring panels come back as one frame when their shared border is faint
+    or their artwork runs across it -- a whole row of a western strip can arrive
+    as a single box. The model usually does see the individual panels, just below
+    the confidence bar, and _dedupe_boxes() then folds those weaker boxes into the
+    frame that contains them. This recovers them: a weak box is trusted only where
+    a set of siblings tiles a confident frame, so nothing is admitted that the
+    model did not propose and no frame is split on the strength of one stray box.
+    """
+    out: list[list[int]] = []
+    for frame in frames:
+        frame_area = _box_area(frame)
+        children = [
+            box for box in candidates
+            if 0 < _box_area(box) <= SUBPANEL_MAX_AREA_FRAC * frame_area
+            and _overlap_area(box, frame) >= SUBPANEL_INSIDE_FRAC * _box_area(box)
+        ]
+        if len(children) < 2 or sum(_box_area(c) for c in children) < SUBPANEL_COVER_FRAC * frame_area:
+            out.append(frame)
+            continue
+        tiles = all(
+            _overlap_area(a, b) <= SUBPANEL_SIBLING_OVERLAP_FRAC * min(_box_area(a), _box_area(b))
+            for i, a in enumerate(children) for b in children[i + 1:]
+        )
+        out.extend(children if tiles else [frame])
+    return out
+
+
+def _panel_cover_frac(boxes: list[list[int]], width: int, height: int) -> float:
+    """Fraction of the page the given boxes cover, overlaps counted twice.
+
+    Only ever compared against a threshold to judge whether a detection pass saw the page at
+    all, so double-counting an overlap is not worth the cost of a union.
+    """
+    return sum(_box_area(b) for b in boxes) / max(1, width * height)
+
+
+def _detect_panels_yolo_at(model, img, conf: float, imgsz: int) -> tuple[list[list[int]], list[list[int]], float]:
+    """One pass of the model at one input size. Returns (frames, text boxes, page coverage).
+
+    Coverage is measured on the CONFIDENT boxes, not on the full-page frame the empty case
+    falls back to: that frame covers the page by construction and would mask a failed pass.
+    """
+    results = model.predict(img, conf=PANEL_WEAK_CONF, iou=0.5, imgsz=imgsz, verbose=False)
+    boxes_with_conf = []
+    candidates = []
+    text_boxes = []
+    for box in results[0].boxes:
+        cls = int(box.cls)  # 0=panel, 1=text
+        confidence = float(box.conf)
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
+        xy_box = [int(x1), int(y1), int(x2), int(y2)]
+        if cls == 1:
+            if confidence >= conf:  # a weak text box must not grow a crop
+                text_boxes.append(xy_box)
+            continue
+        if cls != 0:
+            continue
+        if is_sliver_panel(xy_box, img.width, img.height):
+            continue
+        candidates.append(xy_box)
+        if confidence >= conf:
+            boxes_with_conf.append((xy_box, confidence))
+
+    boxes = _dedupe_boxes(boxes_with_conf)
+    cover = _panel_cover_frac(boxes, img.width, img.height)
+    if not boxes:
+        return [[0, 0, img.width, img.height]], text_boxes, cover
+    return split_frames_over_subpanels(boxes, candidates), text_boxes, cover
+
+
+def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[list[int]]] | None:
+    """Detect panels with the YOLO26-nano Manga109 model. Returns
+    (frames, text boxes), or None if the model isn't available (caller should
+    fall back to the grid heuristic).
+
+    The model is queried well below `conf`. A box under that bar is never a
+    panel on its own -- it is only kept as corroboration that a confident frame
+    is really several panels; see split_frames_over_subpanels().
+
+    A pass that leaves most of the page uncovered is retried at a larger input, and whichever
+    pass saw more of the page wins; see PANEL_RETRY_IMGSZ.
+    """
     model = _load_yolo_model()
     if model is None:
         return None
 
-    results = model.predict(img, conf=conf, iou=0.5, verbose=False)
-    boxes_with_conf = []
-    for box in results[0].boxes:
-        if int(box.cls) != 0:  # 0=panel, 1=text -- we only want panels here
-            continue
-        x1, y1, x2, y2 = box.xyxy[0].tolist()
-        xy_box = [int(x1), int(y1), int(x2), int(y2)]
-        if is_sliver_panel(xy_box, img.width, img.height):
-            continue
-        boxes_with_conf.append((xy_box, float(box.conf)))
-
-    boxes = _dedupe_boxes(boxes_with_conf)
-    if not boxes:
-        return [[0, 0, img.width, img.height]]
-    return boxes
-
-
-def _snap_to_unclaimed_edges(boxes: list[list[int]], page_w: int, page_h: int,
-                             max_gap_frac: float = 0.15) -> list[list[int]]:
-    """Extend a panel's edge to the page boundary when it falls short by a
-    plausible amount AND no other detected panel claims that space.
-
-    The detector sometimes underestimates a panel's true extent near the
-    page edge (e.g. missing a speech bubble that reaches close to the
-    border), leaving a gap that should belong to that panel rather than
-    being a deliberate gutter. Only snap small gaps (<15% of the page
-    dimension) and only when nothing else occupies the overlapping range,
-    so real gutters between adjacent panels are left alone.
-    """
-    original = [tuple(b) for b in boxes]
-    result = [list(b) for b in boxes]
-
-    def claimed_beyond(i: int, axis: str, beyond) -> bool:
-        ox1, oy1, ox2, oy2 = original[i]
-        for j, (jx1, jy1, jx2, jy2) in enumerate(original):
-            if j == i:
-                continue
-            if axis == "x":
-                overlaps = not (jy2 <= oy1 or jy1 >= oy2)
-                if overlaps and beyond(jx1, jx2, ox1, ox2):
-                    return True
-            else:
-                overlaps = not (jx2 <= ox1 or jx1 >= ox2)
-                if overlaps and beyond(jy1, jy2, oy1, oy2):
-                    return True
-        return False
-
-    for i, (x1, y1, x2, y2) in enumerate(original):
-        if 0 < page_w - x2 < page_w * max_gap_frac and \
-           not claimed_beyond(i, "x", lambda j1, j2, o1, o2: j2 > o2):
-            result[i][2] = page_w
-        if 0 < x1 < page_w * max_gap_frac and \
-           not claimed_beyond(i, "x", lambda j1, j2, o1, o2: j1 < o1):
-            result[i][0] = 0
-        if 0 < page_h - y2 < page_h * max_gap_frac and \
-           not claimed_beyond(i, "y", lambda j1, j2, o1, o2: j2 > o2):
-            result[i][3] = page_h
-        if 0 < y1 < page_h * max_gap_frac and \
-           not claimed_beyond(i, "y", lambda j1, j2, o1, o2: j1 < o1):
-            result[i][1] = 0
-
-    return result
+    frames, texts, cover = _detect_panels_yolo_at(model, img, conf, PANEL_IMGSZ)
+    if cover >= PANEL_RETRY_COVER_FRAC:
+        return frames, texts
+    retry_frames, retry_texts, retry_cover = _detect_panels_yolo_at(model, img, conf, PANEL_RETRY_IMGSZ)
+    if retry_cover > cover:
+        return retry_frames, retry_texts
+    return frames, texts
 
 
 def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
@@ -691,12 +1075,20 @@ def _detect_panels_grid(img) -> list[list[int]]:
     return panels
 
 
-def detect_panels(img) -> list[list[int]]:
-    """Detect panel rectangles -- YOLO model if available, else grid heuristic."""
-    boxes = _detect_panels_yolo(img)
-    if boxes is not None:
-        return boxes
-    return _detect_panels_grid(img)
+def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
+    """Detect panel rectangles -- YOLO model if available, else grid heuristic.
+
+    Returns (frames, text boxes). The frames are the borders as drawn, which is
+    what reading order must be derived from; the text boxes are what
+    expand_panels_over_text() then grows the CROP rectangles over. Keeping the
+    two apart matters: a bubble pulling a panel's box sideways across a gutter
+    would otherwise move its centre and could retier the page. The grid
+    heuristic has no text detection, so it returns no text boxes.
+    """
+    detected = _detect_panels_yolo(img)
+    if detected is not None:
+        return detected
+    return _detect_panels_grid(img), []
 
 
 def _y_overlap_frac(a: list[int], b: list[int]) -> float:
@@ -710,18 +1102,41 @@ def _y_overlap_frac(a: list[int], b: list[int]) -> float:
     return max(0.0, overlap) / max(1, min_h)
 
 
-def sort_panels_manga_order(panels: list[list[int]]) -> list[list[int]]:
-    """Sort panel boxes in manga reading order via a "reads-before" graph,
-    then a topological sort -- robust to mixed-size grids (e.g. one tall
-    panel beside two stacked shorter ones), which simple row-clustering by
+def _x_overlap_frac(a: list[int], b: list[int]) -> float:
+    """Fraction of the narrower panel's width that the two panels' horizontal extents overlap.
+    The column equivalent of _y_overlap_frac, for yonkoma ordering."""
+    overlap = min(a[2], b[2]) - max(a[0], b[0])
+    min_w = min(a[2] - a[0], b[2] - b[0])
+    return max(0.0, overlap) / max(1, min_w)
+
+
+def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True,
+                              column_major: bool = False) -> list[list[int]]:
+    """Sort panel boxes in reading order via a "reads-before" graph, then a
+    topological sort -- robust to mixed-size grids (e.g. one tall panel
+    beside two stacked shorter ones), which simple row-clustering by
     Y-center gets wrong.
 
     For every pair of panels: if their vertical extents overlap
-    substantially, they're in the same tier and read right-to-left; if not,
+    substantially, they're in the same tier and read horizontally; if not,
     whichever is higher up reads first (the other dimension doesn't matter
     once there's no vertical overlap). This produces a partial order;
     topological sort resolves the full reading sequence, with same-rank
-    ties broken top-to-bottom then right-to-left.
+    ties broken top-to-bottom then along the horizontal direction.
+
+    rtl=True is manga order (right-to-left within a tier); rtl=False is
+    western comics and strips -- Moomin, Peanuts -- which read left-to-right.
+    The direction only affects within-tier ordering: tiers themselves always
+    run top-to-bottom, in both conventions.
+
+    column_major=True is yonkoma (4-koma) order: the same rule with the axes
+    swapped. A tier is a COLUMN -- panels whose horizontal extents overlap --
+    read top to bottom, and the columns run right to left, or left to right when
+    rtl=False. A strip page is read down one column and then down the next,
+    never across, so the row-major rule above interleaves the two columns. A
+    column whose panels differ in height (a title page's full-height panel
+    beside four short ones) falls out of the same overlap test that makes the
+    row-major case robust.
     """
     n = len(panels)
     if n <= 1:
@@ -736,20 +1151,27 @@ def sort_panels_manga_order(panels: list[list[int]]) -> list[list[int]]:
             if i == j:
                 continue
             a, b = panels[i], panels[j]
-            if _y_overlap_frac(a, b) > OVERLAP_THRESHOLD:
-                a_cx, b_cx = (a[0] + a[2]) / 2, (b[0] + b[2]) / 2
-                if a_cx > b_cx:  # same tier: right-to-left
-                    edges[i].append(j)
-                    in_degree[j] += 1
-            else:
-                a_cy, b_cy = (a[1] + a[3]) / 2, (b[1] + b[3]) / 2
-                if a_cy < b_cy:  # different tiers: top-to-bottom
-                    edges[i].append(j)
-                    in_degree[j] += 1
+            a_cx, b_cx = (a[0] + a[2]) / 2, (b[0] + b[2]) / 2
+            a_cy, b_cy = (a[1] + a[3]) / 2, (b[1] + b[3]) / 2
+            if column_major:
+                if _x_overlap_frac(a, b) > OVERLAP_THRESHOLD:  # same column
+                    reads_first = a_cy < b_cy  # down the column
+                else:  # different columns: right-to-left, or left-to-right
+                    reads_first = (a_cx > b_cx) if rtl else (a_cx < b_cx)
+            elif _y_overlap_frac(a, b) > OVERLAP_THRESHOLD:  # same tier
+                reads_first = (a_cx > b_cx) if rtl else (a_cx < b_cx)
+            else:  # different tiers: top-to-bottom
+                reads_first = a_cy < b_cy
+            if reads_first:
+                edges[i].append(j)
+                in_degree[j] += 1
 
     def tie_break_key(i: int):
         x1, y1, x2, y2 = panels[i]
-        return ((y1 + y2) / 2, -(x1 + x2) / 2)
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        if column_major:
+            return (-cx if rtl else cx, cy)
+        return (cy, -cx if rtl else cx)
 
     available = [i for i in range(n) if in_degree[i] == 0]
     result: list[int] = []
@@ -773,7 +1195,8 @@ def sort_panels_manga_order(panels: list[list[int]]) -> list[list[int]]:
 # ── Gemini OCR (invoked via curl, key never embedded in code) ───
 
 
-def call_gemini_panel_ocr(image_path: str, api_key: str, timeout: int = 60, retries: int = 3) -> dict:
+def call_gemini_panel_ocr(image_path: str, api_key: str, prompt: str,
+                          timeout: int = 60, retries: int = 3) -> dict:
     """Ask Gemini what text appears in a panel image, plus an English
     translation of it. Returns {"blocks": [{"text", "bbox_2d"}, ...],
     "translation": str}. Retries on transient errors (503/429/network) with
@@ -782,7 +1205,7 @@ def call_gemini_panel_ocr(image_path: str, api_key: str, timeout: int = 60, retr
     rather than aborting the whole run.
     """
     for attempt in range(retries):
-        result = _call_gemini_panel_ocr_once(image_path, api_key, timeout)
+        result = _call_gemini_panel_ocr_once(image_path, api_key, prompt, timeout)
         if result is not None:
             return result
         if attempt < retries - 1:
@@ -790,7 +1213,7 @@ def call_gemini_panel_ocr(image_path: str, api_key: str, timeout: int = 60, retr
     return {"blocks": [], "translation": ""}
 
 
-def _call_gemini_panel_ocr_once(image_path: str, api_key: str, timeout: int) -> dict | None:
+def _call_gemini_panel_ocr_once(image_path: str, api_key: str, prompt: str, timeout: int) -> dict | None:
     """Single attempt. Returns None (not the empty dict) on a transient
     failure so the retry loop above can distinguish "retry" from "this
     panel genuinely has no text" (the latter is a successful empty result)."""
@@ -802,7 +1225,7 @@ def _call_gemini_panel_ocr_once(image_path: str, api_key: str, timeout: int) -> 
     payload = {
         "contents": [{
             "parts": [
-                {"text": PANEL_OCR_PROMPT},
+                {"text": prompt},
                 {"inline_data": {"mime_type": mime, "data": image_b64}},
             ]
         }],
@@ -865,6 +1288,47 @@ def _call_gemini_panel_ocr_once(image_path: str, api_key: str, timeout: int) -> 
 # ── Binary output (same format the device already reads) ────────
 
 
+def block_lines_from_ocr(block: dict, origin_x: int, origin_y: int,
+                         panel_w: int, panel_h: int) -> tuple[str | None, list, bool]:
+    """Page-pixel line boxes for one OCR block, or none when they cannot be trusted.
+
+    Returns (text, lines, vertical). `text` is the block text rebuilt from its lines (so line i
+    is exactly the i-th '\n' segment, which is how the device finds a line's characters), or
+    None to keep the block's own text. Lines are kept only when every one has a box and a
+    non-empty text -- a partial set would shift every later line onto the wrong segment, which
+    is worse than none: the device then falls back to looking the whole block up.
+    """
+    raw = block.get("lines")
+    if not isinstance(raw, list) or not raw:
+        return None, [], False
+    lines = []
+    texts = []
+    for line in raw:
+        if not isinstance(line, dict):
+            return None, [], False
+        text = str(line.get("text", "")).strip()
+        box = line.get("bbox_2d")
+        if not text or "\n" in text or not (isinstance(box, list) and len(box) == 4):
+            return None, [], False
+        try:
+            ymin, xmin, ymax, xmax = (float(v) for v in box)
+        except (TypeError, ValueError):
+            return None, [], False
+        if ymax <= ymin or xmax <= xmin:
+            return None, [], False
+        lines.append([
+            origin_x + int(xmin / 1000 * panel_w), origin_y + int(ymin / 1000 * panel_h),
+            origin_x + int(xmax / 1000 * panel_w), origin_y + int(ymax / 1000 * panel_h),
+        ])
+        texts.append(text)
+    # Trust the model's flag when it gave one; otherwise the shape of the lines decides.
+    vertical = block.get("vertical")
+    if not isinstance(vertical, bool):
+        tall = sum(1 for x1, y1, x2, y2 in lines if (y2 - y1) > (x2 - x1))
+        vertical = tall * 2 >= len(lines)
+    return "\n".join(texts), lines[:255], vertical
+
+
 def encode_page(panels_with_text: list[dict]) -> bytes:
     """Encode one page's panel+text data to binary."""
     buf = bytearray()
@@ -885,14 +1349,25 @@ def encode_page(panels_with_text: list[dict]) -> bytes:
             PANEL_BOX, max(0, x1), max(0, y1), max(0, w), max(0, h), text_count, 0, len(translation_bytes)
         )
         buf += translation_bytes
+        cx1, cy1, cx2, cy2 = panel.get("crop", panel["box"])
+        buf += struct.pack(CROP_BOX, max(0, cx1), max(0, cy1), max(0, cx2 - cx1), max(0, cy2 - cy1))
 
         for tb in text_blocks[:text_count]:
-            tx, ty, tw, th = tb["box"]
+            # Blocks carry corners (x1, y1, x2, y2); the format stores x, y, w, h. Before v3 the
+            # corners were written straight into the w/h fields -- harmless while nothing on the
+            # device read block boxes, but v3's line hit test does, so write the size.
+            tx, ty, tx2, ty2 = tb["box"]
+            tw, th = tx2 - tx, ty2 - ty
             text_bytes = tb["text"].encode("utf-8")
             if len(text_bytes) > 0xFFFF:
                 text_bytes = text_bytes[:0xFFFF]
             buf += struct.pack(TEXT_BLOCK, max(0, tx), max(0, ty), max(0, tw), max(0, th), len(text_bytes))
             buf += text_bytes
+            lines = tb.get("lines", [])[:255]
+            flags = LINE_FLAG_VERTICAL if tb.get("vertical") else 0
+            buf += struct.pack(LINE_HEADER, len(lines), flags)
+            for lx1, ly1, lx2, ly2 in lines:
+                buf += struct.pack(LINE_BOX, max(0, lx1), max(0, ly1), max(0, lx2 - lx1), max(0, ly2 - ly1))
 
     return bytes(buf)
 
@@ -1238,6 +1713,36 @@ def normalize_for_output(img):
     return img
 
 
+def trim_page_margins(img, threshold: int = 230, pad: int = 2):
+    """Crop the blank paper border off a scanned page, keeping the artwork.
+
+    Printed comics and manga carry a white margin plus a page number that the
+    device has no reason to render: it eats screen area on a page that is
+    already small, and it is the difference between a page filling the display
+    and floating in the middle of it. The crop happens before panel detection,
+    so every coordinate downstream already lives in the trimmed page's space.
+
+    Detects content as "pixels darker than `threshold`" and keeps `pad` pixels
+    of paper around the result. Returns img unchanged when the page is blank or
+    has no margin to remove.
+
+    ponytail: a single global threshold, so a dark scan edge or heavy dust
+    along one border blocks the trim on that side. That fails safe (no crop),
+    and per-side row/column voting is the upgrade if real scans need it.
+    """
+    gray = img.convert("L")
+    bbox = gray.point(lambda p: 255 if p < threshold else 0, mode="1").getbbox()
+    if not bbox:
+        return img
+    x1 = max(0, bbox[0] - pad)
+    y1 = max(0, bbox[1] - pad)
+    x2 = min(img.width, bbox[2] + pad)
+    y2 = min(img.height, bbox[3] + pad)
+    if (x1, y1, x2, y2) == (0, 0, img.width, img.height):
+        return img
+    return img.crop((x1, y1, x2, y2))
+
+
 def fit_to_device(img, target):
     """Downscale img to fit the device screen box; never upscale, never change aspect.
 
@@ -1281,6 +1786,36 @@ def main():
     parser.add_argument("--no-ocr", action="store_true", help="Skip Gemini OCR -- panel boxes only, no text")
     parser.add_argument("--panel-margin", type=int, default=10, help="Pixels of margin added around cropped panels")
     parser.add_argument("--max-pages", type=int, help="Only process the first N pages (for testing)")
+    parser.add_argument(
+        "--webtoon",
+        action="store_true",
+        help="Treat the input as a vertical-scroll webtoon (manhwa, manhua, webcomic): reassemble "
+             "the distributor's fixed-height tiles into one strip and re-cut it at the artwork's "
+             "own gutters into screen-shaped pages, so no page starts or ends mid-panel. Panels "
+             "are then the art blocks between gutters, read top to bottom.",
+    )
+    parser.add_argument(
+        "--trim-margins",
+        action="store_true",
+        help="Crop the blank paper border (and the page number sitting in it) off every page "
+             "before anything else, so the artwork fills the screen instead of floating in the "
+             "middle of it. Scanned print comics and manga usually have one; digital-native "
+             "releases usually don't, and are left alone.",
+    )
+    parser.add_argument(
+        "--yonkoma",
+        action="store_true",
+        help="4-koma layout: read each column top to bottom, then the next column to the left "
+             "(to the right with --ltr). Without it a strip page is read across the columns, "
+             "interleaving the two strips.",
+    )
+    parser.add_argument(
+        "--ltr",
+        action="store_true",
+        help="Order panels left-to-right within a row, for western comics and newspaper strips "
+             "(Moomin, Peanuts). Default is manga order, right-to-left. Page order is unaffected; "
+             "set the device's Reverse page turn setting for that.",
+    )
     parser.add_argument(
         "--toc-file",
         help='Chapter list: one per line, "<page_index>\\t<title>" (0-based, referring to the FINAL '
@@ -1358,6 +1893,15 @@ def main():
             toc_entries = parse_toc_file(args.toc_file)
             print(f"Using {len(toc_entries)} chapter(s) from --toc-file")
 
+        if args.webtoon:
+            # Re-cutting changes how many pages there are, so a TOC resolved above now
+            # points at the wrong ones. Dropping it beats shipping wrong chapter marks.
+            if toc_entries:
+                print("Warning: --webtoon re-cuts the pages, so the source table of contents no "
+                      "longer matches and is dropped", file=sys.stderr)
+                toc_entries = []
+            pages = assemble_webtoon_pages(pages, work_dir, device_target)
+
         if args.max_pages:
             pages = pages[: args.max_pages]
         print(f"Found {len(pages)} pages")
@@ -1368,9 +1912,20 @@ def main():
         auto_title, auto_author, auto_language = extract_metadata(args.input, work_dir)
         meta_title = args.title if args.title else auto_title
         meta_author = args.author if args.author else auto_author
-        meta_language = args.language if args.language else auto_language
+        # Normalised here rather than only inside write_meta, because the OCR prompt is built
+        # from the same tag and 'jp' must reach it as 'ja'. normalize_language is idempotent,
+        # so write_meta's own call is a no-op and prints no second note.
+        meta_language = normalize_language(args.language if args.language else auto_language)
         if meta_title or meta_author or meta_language:
             write_meta(args.output_dir, meta_title, meta_author, meta_language)
+
+        # Webtoon panels are a single top-to-bottom column with horizontal text, so the
+        # right-to-left hint that suits a manga page is wrong for them however the book
+        # is tagged.
+        ocr_prompt = build_panel_ocr_prompt(meta_language, rtl=not (args.ltr or args.webtoon))
+        if api_key and not meta_language:
+            print("Note: no --language set; the OCR prompt will not name a source language. "
+                  "Pass --language for better text recognition.", file=sys.stderr)
 
         idx_records = []
         dat_chunks = []
@@ -1390,6 +1945,18 @@ def main():
             # progressive even though the user passed --x4 precisely to avoid that. Note it here,
             # while `img` is still the file as opened.
             src_is_progressive = bool(img.info.get("progressive") or img.info.get("progression"))
+            if args.trim_margins:
+                trimmed = trim_page_margins(img)
+                if trimmed is not img:
+                    # The cropped page no longer matches the source file, so the verbatim
+                    # copy below must not be taken -- force a re-encode by the same route a
+                    # resize does.
+                    was_trimmed = True
+                    img = trimmed
+                else:
+                    was_trimmed = False
+            else:
+                was_trimmed = False
             # Downscale FIRST, before panel detection: every coordinate downstream (panel boxes,
             # crop rects, OCR text boxes, the page dims in panels.idx) then lives in the resized
             # space, matching the page/crop files actually written -- nothing needs rescaling.
@@ -1421,7 +1988,7 @@ def main():
                     img.convert("RGB").save(
                         os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"), "JPEG", quality=92
                     )
-                elif was_resized or src_is_progressive:
+                elif was_resized or was_trimmed or src_is_progressive:
                     # Resized: the source file no longer matches -- re-encode in the source's own
                     # format so the output keeps its extension (PNG stays PNG, JPEG stays JPEG).
                     # Progressive: the bytes still match, but re-encode anyway so the page lands on
@@ -1438,8 +2005,17 @@ def main():
                 else:
                     shutil.copy(src_path, os.path.join(args.output_dir, f"page_{page_idx:04d}{ext}"))
 
-            boxes = detect_panels(img)
-            boxes = sort_panels_manga_order(boxes)
+            if args.webtoon:
+                # Already one top-to-bottom column, cut at its own gutters -- reordering a
+                # single column can only move boxes away from what the cut established.
+                boxes = detect_webtoon_panels(img)
+            else:
+                frames, text_boxes = detect_panels(img)
+                # Order on the frames as drawn, then grow the crops over the
+                # bubbles -- expand_panels_over_text() is index-preserving, so
+                # the reading order established here survives the expansion.
+                frames = sort_panels_reading_order(frames, rtl=not args.ltr, column_major=args.yonkoma)
+                boxes = expand_panels_over_text(frames, text_boxes, img_w, img_h)
 
             # Crop and save every panel first (fast, local) before dispatching
             # the slow network calls concurrently -- OCR is I/O-bound (network
@@ -1447,6 +2023,7 @@ def main():
             # ~N x call_latency into ~call_latency per page.
             panel_paths = []
             panel_rects = []
+            ocr_temp_paths = []
             for panel_idx, box in enumerate(boxes):
                 x1, y1, x2, y2 = box
                 mx1 = max(0, x1 - args.panel_margin)
@@ -1477,16 +2054,34 @@ def main():
                     else:
                         panel_path = os.path.join(panel_dir, f"p{page_idx}_{panel_idx}.jpg")
                         cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
-                panel_paths.append(panel_path)
+                ocr_path = panel_path
+                if ocr_path is None and api_key:
+                    # A full-page panel has no crop, but its text still needs reading: a splash page,
+                    # or every page when detection finds no borders (the grid fallback without YOLO),
+                    # used to come through with no text and so no word lookup at all. OCR the same
+                    # margin rect a crop would have covered, from a temp file that is not kept.
+                    ocr_img = fit_to_device(source_img.crop((
+                        max(0, round(mx1 * panel_scale_x)),
+                        max(0, round(my1 * panel_scale_y)),
+                        min(source_img.width, round(mx2 * panel_scale_x)),
+                        min(source_img.height, round(my2 * panel_scale_y)),
+                    )), device_target)
+                    fd, ocr_path = tempfile.mkstemp(suffix=".jpg")
+                    os.close(fd)
+                    ocr_img.convert("RGB").save(ocr_path, "JPEG", quality=90)
+                    ocr_temp_paths.append(ocr_path)
+                panel_paths.append(ocr_path)
                 panel_rects.append((mx1, my1, mx2, my2))
 
             if api_key:
-                # Only call Gemini for panels that have a crop file;
-                # full-page panels (no crop) get an empty result directly.
+                # Every panel is read: cropped panels from their crop, full-page panels from the
+                # temp copy made above.
                 def _ocr_or_empty(p):
-                    return call_gemini_panel_ocr(p, api_key) if p else {"blocks": [], "translation": ""}
+                    return call_gemini_panel_ocr(p, api_key, ocr_prompt) if p else {"blocks": [], "translation": ""}
                 with ThreadPoolExecutor(max_workers=min(8, max(1, len(panel_paths)))) as pool:
                     ocr_results = list(pool.map(_ocr_or_empty, panel_paths))
+                for temp_path in ocr_temp_paths:
+                    os.unlink(temp_path)
             else:
                 ocr_results = [{"blocks": [], "translation": ""} for _ in panel_paths]
 
@@ -1506,15 +2101,21 @@ def main():
                     bbox = b.get("bbox_2d")
                     if bbox and len(bbox) == 4:
                         ymin, xmin, ymax, xmax = bbox
-                        tx1 = x1 + int(xmin / 1000 * panel_w)
-                        ty1 = y1 + int(ymin / 1000 * panel_h)
-                        tx2 = x1 + int(xmax / 1000 * panel_w)
-                        ty2 = y1 + int(ymax / 1000 * panel_h)
+                        # Relative to the margin crop Gemini was shown (mx1, my1), not the panel
+                        # frame: offsetting from the frame shifted every box by the margin, a third
+                        # of a character on the page -- enough to land a tap on the wrong one.
+                        tx1 = mx1 + int(xmin / 1000 * panel_w)
+                        ty1 = my1 + int(ymin / 1000 * panel_h)
+                        tx2 = mx1 + int(xmax / 1000 * panel_w)
+                        ty2 = my1 + int(ymax / 1000 * panel_h)
                     else:
                         tx1, ty1, tx2, ty2 = x1, y1, x2, y2
-                    text_blocks.append({"box": [tx1, ty1, tx2, ty2], "text": text})
+                    line_text, lines, vertical = block_lines_from_ocr(b, mx1, my1, panel_w, panel_h)
+                    text_blocks.append({"box": [tx1, ty1, tx2, ty2], "text": line_text or text,
+                                        "lines": lines, "vertical": vertical})
 
-                panels_with_text.append({"box": box, "text_blocks": text_blocks, "translation": translation})
+                panels_with_text.append({"box": box, "text_blocks": text_blocks, "translation": translation,
+                                         "crop": [mx1, my1, mx2, my2]})
                 total_panels += 1
                 total_text_blocks += len(text_blocks)
 

@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <SdSystemDir.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -11,7 +12,8 @@
 #include <tuple>
 
 namespace {
-constexpr const char* STATS_DIR = "/system/bookstats";
+// Resolved at use: the folder is "/.system" or "/system" depending on what the card has.
+static std::string statsDir() { return sdsystem::path("bookstats"); }
 constexpr uint8_t MAGIC[4] = {'B', 'K', 'S', 'T'};
 // v2 dropped lastFlushMinutes when sessions moved from flush-gap inference to recordOpen.
 constexpr uint8_t BOOKSTATS_VERSION = 2;
@@ -52,7 +54,7 @@ std::string BookStats::filePathFor(const char* path) {
   // Same 32-bit path hash the library index and cache directories use.
   const auto h = static_cast<uint32_t>(std::hash<std::string>{}(std::string(path ? path : "")));
   char buf[64];
-  snprintf(buf, sizeof(buf), "%s/%08lx.bin", STATS_DIR, static_cast<unsigned long>(h));
+  snprintf(buf, sizeof(buf), "%s/%08lx.bin", statsDir().c_str(), static_cast<unsigned long>(h));
   return std::string(buf);
 }
 
@@ -121,7 +123,7 @@ bool BookStats::load(const char* path) {
 
 bool BookStats::save() const {
   if (bookPath.empty()) return false;
-  Storage.mkdir(STATS_DIR, true);
+  Storage.mkdir(statsDir().c_str(), true);
 
   const std::string file = filePathFor(bookPath.c_str());
   HalFile f;

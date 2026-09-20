@@ -17,13 +17,23 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        std::string folderName, int baseFontId)
+                                        std::string folderName, std::string language, int baseFontId,
+                                        int lookupAtX = -1, int lookupAtY = -1)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
+        lookupAtX(lookupAtX),
+        lookupAtY(lookupAtY),
         page(std::move(page)),
         marginLeft(marginLeft),
         marginTop(marginTop),
         fontId(baseFontId),
-        folderName(std::move(folderName)) {}
+        folderName(std::move(folderName)),
+        language(std::move(language)) {}
+
+  // Screen point to open on: the word under it is selected and looked up
+  // immediately, so a long press on the page goes straight to the definition
+  // instead of dropping the reader into word selection. -1 = normal entry.
+  int lookupAtX = -1;
+  int lookupAtY = -1;
 
   void onEnter() override;
   void loop() override;
@@ -44,9 +54,21 @@ class DictionaryWordSelectActivity final : public Activity {
     // one font and repainting the word with another sizes the highlight for text that is not
     // there -- see drawHighlightWithSnapshot.
     int fontId;
+    // Layout hyphenation splits a word across a line break ("any-" / "one"), and each half reaches
+    // this list as its own selectable token. These link the two halves so either one looks up the
+    // whole word; -1 when the word is not part of a split. Indices into `words`.
+    int16_t joinNext = -1;  // set on the "any-" half: index of the remainder
+    int16_t joinPrev = -1;  // set on the "one" half: index of the hyphenated prefix
   };
+  // The word to look up for a box, joining a hyphenated pair back together. Returns a reference
+  // into `scratch` when a join happened, so the caller owns the storage.
+  const char* lookupTextFor(size_t index, std::string& scratch) const;
+  // The other half of a hyphenated pair, or nullptr. Both halves are highlighted together: the
+  // reader selected one word, and showing only the half they pointed at makes the selection look
+  // like it stopped at the line break.
+  const WordBox* joinedPartner(size_t index) const;
 
-  enum class Popup : uint8_t { None, Busy, NotFound, Error };
+  enum class Popup : uint8_t { None, NotFound, Error };
 
   void extractWords();
   // Hit-test / highlight height for a word: the line height of its own font when CSS gave it
@@ -71,11 +93,16 @@ class DictionaryWordSelectActivity final : public Activity {
   std::vector<WordBox> words;
   int selected = 0;
   uint16_t rowCount = 0;
+  bool confirmPressSeen = false;
+  unsigned long lastHorizontalMoveTime = 0;
 
   Dictionary dict;
   bool dictOpenAttempted = false;
   bool dictOpenOk = false;
   std::string folderName;
+  // The book's EPUB language tag, selecting the dictionary's inflection rules.
+  // Empty for an untagged book, which leaves the folder to decide.
+  std::string language;
   bool dictNeedsIndex = false;
 
   Popup popup = Popup::None;
@@ -95,8 +122,4 @@ class DictionaryWordSelectActivity final : public Activity {
   int16_t snapshotW = 0;
   int16_t snapshotH = 0;
   int snapshotIdx = -1;
-
-  // The activity is entered while Confirm is still held (long-press trigger):
-  // ignore the stale release until a fresh press is seen.
-  bool confirmPressSeen = false;
 };

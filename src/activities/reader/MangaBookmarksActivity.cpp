@@ -34,8 +34,6 @@ void MangaBookmarksActivity::onEnter() {
   requestUpdate();
 }
 
-void MangaBookmarksActivity::onExit() { Activity::onExit(); }
-
 int MangaBookmarksActivity::getGutterBottom(const GfxRenderer& renderer) {
   const auto orientation = renderer.getOrientation();
   const bool isPortrait = orientation == GfxRenderer::Orientation::Portrait;
@@ -208,5 +206,10 @@ void MangaBookmarksActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  // Every manga page is an image, so the page underneath always leaves gray charge a
+  // FAST diff shows through. Unconditional here, unlike the EPUB overlays, which only
+  // scrub when the page they cover actually drew images.
+  const bool scrub = firstPaint_;
+  firstPaint_ = false;
+  renderer.displayBuffer(scrub ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }

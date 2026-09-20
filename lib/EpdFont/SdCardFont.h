@@ -26,6 +26,9 @@
 class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
+  // prewarmStyle: the bitmap arena did not fit the largest free block.
+  // Distinct from a missed-glyph count so the caller can retry smaller.
+  static constexpr int PREWARM_ARENA_TOO_LARGE = -2;
   static constexpr uint8_t MAX_STYLES = 4;
 
   SdCardFont() : fontFileMutex_(xSemaphoreCreateMutex()) {}
@@ -52,8 +55,26 @@ class SdCardFont {
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
   // Default 0x0F = all present styles.
   // When metadataOnly=true, only glyph metrics are loaded (no bitmap data).
+  // Incremental string prewarms accumulate up to MAX_PAGE_GLYPHS so adjacent
+  // UI labels do not evict each other.
+  // Complete render scans pass accumulate=false: rebuild for this page only,
+  // while retaining buffers and allowing a resident subset hit.
   // Returns number of glyphs that couldn't be loaded (0 on full success).
-  int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false);
+  int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false, bool loadKernLig = true,
+              bool accumulate = true);
+
+  // Multi-string variant: extracts codepoints from `textCount` strings fetched
+  // one at a time through `getter` (C-style callback: no std::function bloat,
+  // and callers never build a concatenated copy — a heap-tight screen aborting
+  // in a bare-new string append is exactly what this avoids). A null getter
+  // result skips that index. Unique codepoints cap at MAX_PAGE_GLYPHS.
+  // loadKernLig=false skips kern/ligature loading and the mini kern matrix:
+  // UI fallback text (CJK titles) has no useful kern pairs, and the ~3KB class
+  // tables plus per-rebuild matrix work were enough to OOM the batch on
+  // heap-tight screens. Reader-quality paths keep the default.
+  using TextGetter = const char* (*)(const void* ctx, uint32_t index);
+  int prewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask = 0x0F,
+              bool metadataOnly = false, bool loadKernLig = true, bool accumulate = true);
 
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
@@ -78,7 +99,7 @@ class SdCardFont {
   void clearCache();
 
   // Drop the persistent advance cache. Call when unloading the SD font or
-  // when font/size/family/glyph-table state changes.
+  // when font/size/family/glyph-table state changes, or to recover a failed bitmap allocation.
   void clearPersistentCache();
 
   // Returns pointer to the managed EpdFont for a given style.
@@ -164,6 +185,12 @@ class SdCardFont {
     static_assert(sizeof(BmpInterval16) == 6, "BmpInterval16 must remain compact");
     BmpInterval16* bmpIntervals = nullptr;
     bool intervalsAreBmp16 = false;
+    // True when bmpIntervals/fullIntervals above points at another style's table instead of
+    // this style's own allocation (see the sharing check at the end of the interval-loading
+    // loop in load()). Regular/bold/italic weights of the same family almost always cover the
+    // identical codepoint set, so a CJK font's multi-KB-per-style interval table is otherwise
+    // paid once per style for no reason. freeStyleAll() must not delete[] a borrowed pointer.
+    bool intervalsShared = false;
     // Codepoints above the BMP (rare kanji from JIS X 0213 plane 2) sort after every BMP
     // interval, so they form a tail of the on-disk table. Keeping that tail resident cost
     // ~3.5KB per style -- it also forces every interval to the 12-byte form -- on a heap
@@ -217,6 +244,8 @@ class SdCardFont {
     // underuse-hysteresis signal; 0 = no bitmap built this scope (metadata-only
     // prewarm), which leaves the hysteresis counter untouched.
     uint32_t miniBitmapUsed = 0;
+    // Exact bitmap bytes per glyph of the last requested set, for the arena retry.
+    uint32_t measuredBytesPerGlyph = 0;
     uint8_t miniUnderuseRuns = 0;
     // True when the resident mini was built metadata-only (no bitmaps): it can
     // serve metadata requests but a full render request must rebuild.
@@ -262,17 +291,41 @@ class SdCardFont {
   };
   OverflowContext overflowCtx_[MAX_STYLES] = {};
 
-  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler)
-  static constexpr uint32_t OVERFLOW_CAPACITY = 8;
+  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler).
+  //
+  // Sized against the working set, not "a few spare slots". A chapter build runs with the mini
+  // font cache deliberately released (the layout needs that heap), so EVERY glyph measurement
+  // during layout comes through here. At 8 slots a single line of Latin text overflows the ring,
+  // so each re-measure of the same run reloads every character from SD: measured on device while
+  // laying out one page, 548 loads for 82 distinct codepoints -- U+0020 alone read 164 times --
+  // costing ~6s of the ~7s before the page appeared.
+  //
+  // The larger ring also CHURNS LESS heap, not more: a miss on a full ring frees the evicted
+  // bitmap and allocates a new one, so 8 slots meant ~550 alloc/free pairs of similar sizes per
+  // page, which is exactly the pattern that shreds the largest contiguous block. Steady-state
+  // cost is 48 entries x 28 bytes = 1.3KB per loaded font (one or two are loaded) plus the
+  // resident bitmaps, which for a body-text size are tens to a few hundred bytes each.
+  static constexpr uint32_t OVERFLOW_CAPACITY = 48;
   struct OverflowEntry {
     EpdGlyph glyph;
     uint8_t* bitmap = nullptr;
     uint32_t codepoint = 0;
     uint8_t styleIdx = 0;
   };
+  // Hard ceiling on the bitmap bytes the ring may hold, independent of slot count: 48 slots of
+  // large CJK glyphs are several times 48 slots of Latin, and this cache fills during a chapter
+  // build, the tightest heap moment on the device.
+  //
+  // Set from what the measurement justified, not from what the slots could hold. The thrash this
+  // ring fixes was a Latin working set of ~48 glyphs totalling roughly 3KB, so 4KB keeps the
+  // whole win while capping growth over the old 8-slot ring at about 3KB per loaded font. A
+  // larger budget bought nothing measurable and cost headroom that an OOM abort was already
+  // using up elsewhere (freeink-sdk Credential.cpp allocates with bare `new`).
+  static constexpr uint32_t OVERFLOW_BYTE_BUDGET = 4 * 1024;
   OverflowEntry overflow_[OVERFLOW_CAPACITY] = {};
   uint32_t overflowCount_ = 0;
   uint32_t overflowNext_ = 0;
+  uint32_t overflowBytes_ = 0;  // sum of dataLength over the occupied slots
 
   // Compact advance-only table for layout measurement (per-style).
   // Built by buildAdvanceTable(), queried by getAdvance().
@@ -329,7 +382,8 @@ class SdCardFont {
   template <typename Iter>
   int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
                              const char* extraText = nullptr);
-  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly);
+  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig,
+                   bool accumulate);
 
   // Global helpers
   void freeAll();

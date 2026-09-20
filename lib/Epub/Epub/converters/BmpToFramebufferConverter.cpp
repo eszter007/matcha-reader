@@ -54,10 +54,11 @@ bool BmpToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   // images). Must precede the first row read.
   bmp.preload();
   // drawBitmap fits within maxWidth x maxHeight, draws at config.x/y, honours the current render
-  // mode, and routes 1-bit BMPs through drawBitmap1Bit automatically. useExactDimensions (manga
-  // panel zoom) opts into upscaling so a mono crop smaller than the target box fills it instead of
+  // mode, and routes 1-bit BMPs through drawBitmap1Bit automatically. allowUpscale (manga panel
+  // zoom) opts into upscaling so a mono crop smaller than the target box fills it instead of
   // rendering at 1:1; without it the fit stays shrink-only (full pages, which never upscale).
-  renderer.drawBitmap(bmp, config.x, config.y, config.maxWidth, config.maxHeight, 0.0f, 0.0f,
-                      config.useExactDimensions);
-  return true;
+  // Propagate the result: drawBitmap reports row-read and allocation failures, and returning
+  // true regardless let a failed decode look like a rendered page.
+  return renderer.drawBitmap(bmp, config.x, config.y, config.maxWidth, config.maxHeight, 0.0f, 0.0f,
+                             config.allowUpscale);
 }

@@ -1,6 +1,7 @@
 #include "CrossPointWebServerActivity.h"
 
 #include <DNSServer.h>
+#include <DictIndex.h>
 #include <ESPmDNS.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -12,6 +13,7 @@
 
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/RenderLock.h"
@@ -143,8 +145,19 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     modeName = "Connect to Calibre";
   } else if (mode == NetworkMode::CREATE_HOTSPOT) {
     modeName = "Create Hotspot";
+#if FREEINK_CAP_USB_MSC
+  } else if (mode == NetworkMode::USB_DRIVE) {
+    modeName = "USB Drive";
+#endif
   }
   LOG_DBG("WEBACT", "Network mode selected: %s", modeName);
+
+#if FREEINK_CAP_USB_MSC
+  if (mode == NetworkMode::USB_DRIVE) {
+    activityManager.goToUsbDrive();
+    return;
+  }
+#endif
 
   networkMode = mode;
   isApMode = (mode == NetworkMode::CREATE_HOTSPOT);
@@ -272,6 +285,27 @@ void CrossPointWebServerActivity::startAccessPoint() {
 void CrossPointWebServerActivity::startWebServer() {
   LOG_DBG("WEBACT", "Starting web server...");
 
+  // Repeat the release right before the allocation: the WiFi selection screen
+  // rendered since onEnter(), and a CJK SSID repopulates the SD-font caches.
+  {
+    RenderLock lock;
+    LOG_DBG("WEBACT", "Free heap before font release: %d bytes", ESP.getFreeHeap());
+    // releaseAllResidentFonts(), not just the glyph caches: this screen renders no book text, and
+    // the resident SD families are the larger half -- a broad CJK face holds a multi-KB interval
+    // table plus its kern tables for the whole session. The web server starts with barely 30 KB
+    // free, and lwIP takes its send buffers from that same heap; the shortfall is what turns a
+    // large asset into a stalled socket. ensureLoaded() restores the fonts when text is rendered
+    // again, and the JP-fallback policy is untouched.
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
+  // The dictionary's resident caches go too: the miss memo is 8KB and each open dictionary holds
+  // a coarse table plus a fine slice, none of which this screen reads. releaseCaches() also drops
+  // the RESOLVED dictionary filenames, which matters beyond the memory -- a user who uploads or
+  // replaces a dictionary through this very server would otherwise keep the old paths and open
+  // handles for the rest of the session.
+  DictIndex::releaseCaches();
+  LOG_DBG("WEBACT", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
+
   // Create the web server instance
   webServer = makeUniqueNoThrow<CrossPointWebServer>();
   if (!webServer) {
@@ -374,11 +408,11 @@ void CrossPointWebServerActivity::loop() {
         // Yield and check for exit button every 64 iterations
         if ((i & 0x3F) == 0x3F) {
           yield();
-          // Force trigger an update of which buttons are being pressed so be have accurate state
-          // for back button checking
-          mappedInput.update();
-          // Check for exit button inside loop for responsiveness
-          if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+          // Pump input inside this blocking loop so exit events remain responsive.
+          mappedInput.update(true);
+          // Home remains available now; other configured actions are deferred
+          // to the next main-loop pass.
+          if (mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasHomeGesture()) {
             onGoHome();
             return;
           }
@@ -387,8 +421,8 @@ void CrossPointWebServerActivity::loop() {
       lastHandleClientTime = millis();
     }
 
-    // Handle exit on Back button (also check outside loop)
-    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    // Also check outside the request-processing loop.
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasHomeGesture()) {
       onGoHome();
       return;
     }

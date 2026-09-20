@@ -1,19 +1,25 @@
 #include "EpubReaderMenuActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalFrontlight.h>
 #include <I18n.h>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "ReaderUtils.h"
 #include "components/UITheme.h"
-#include "fontIds.h"
+#include "components/UiAppHelpers.h"
+
+namespace fui = freeink::ui;
 
 EpubReaderMenuActivity::EpubReaderMenuActivity(
     GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title, const int currentPage,
     const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
     const bool hasBookmarks, const bool hasWordLookup, const bool verticalEnabled, const bool furiganaEnabled,
     const bool hasPageText, const bool imageReaderMinimal, const bool mangaMode, const bool hideGenericLookup,
-    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled)
-    : Activity("EpubReaderMenu", renderer, mappedInput),
+    const bool showPanelsOnlyToggle, const bool panelsOnlyEnabled, const bool scrubOnEnter)
+    : UiListActivity("EpubReaderMenu", renderer, mappedInput),
+      scrubOnEnter_(scrubOnEnter),
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasWordLookup, imageReaderMinimal, mangaMode,
                                hideGenericLookup, showPanelsOnlyToggle)),
       hasPageText(hasPageText),
@@ -24,13 +30,47 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       panelsOnlyEnabled(panelsOnlyEnabled),
       currentPage(currentPage),
       totalPages(totalPages),
-      bookProgressPercent(bookProgressPercent) {}
+      bookProgressPercent(bookProgressPercent) {
+  buildMenuRowItems();
+}
+
+// Populates menuRowItems's labels/actionValue from menuItems. Called once
+// here since menuItems (and thus which rows exist) never changes after
+// construction; buildScreen() only touches the two rows with a live value.
+void EpubReaderMenuActivity::buildMenuRowItems() {
+  for (size_t i = 0; i < menuItems.size() && i < MAX_MENU_ITEMS; i++) {
+    fui::ListItem item;
+    item.label = I18N.get(menuItems[i].labelId);
+    item.actionValue = static_cast<int16_t>(i);
+    // Actions that need text on the current page stay listed but disabled when there is none,
+    // so their row positions never shift page-to-page (see hasPageText in the header).
+    switch (menuItems[i].action) {
+      case MenuAction::WORD_LOOKUP:
+      case MenuAction::TRANSLATE_PAGE:
+      case MenuAction::DISPLAY_QR:
+        item.enabled = hasPageText;
+        break;
+      case MenuAction::TOGGLE_PANELS_ONLY:
+        item.toggle = true;
+        item.toggleChecked = panelsOnlyEnabled;
+        break;
+      // On/off rows carry a switch, like every on/off row in Settings. The state is refreshed
+      // in buildScreen(), since it changes without the menu closing.
+      case MenuAction::NIGHT_MODE:
+        item.toggle = true;
+        break;
+      default:
+        break;
+    }
+    menuRowItems[i] = item;
+  }
+}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(
     bool hasFootnotes, bool hasBookmarks, bool hasWordLookup, bool imageReaderMinimal, bool mangaMode,
     bool hideGenericLookup, bool showPanelsOnlyToggle) {
   std::vector<MenuItem> items;
-  items.reserve(16);
+  items.reserve(MAX_MENU_ITEMS);
 
   // Minimal menu for the image readers (XTC): a page-based format has no text/footnotes/vertical
   // toggles, so only chapter select (when present), Go-to-page, bookmarks, screenshot and
@@ -65,11 +105,17 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+  items.push_back({MenuAction::NIGHT_MODE, StrId::STR_NIGHT_MODE});
+  if (Frontlight.present()) {
+    items.push_back({MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT});
+  }
   // Free-form dictionary lookup doesn't apply to manga (Word Lookup covers OCR'd text) or to
   // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense.
   if (!mangaMode && !hideGenericLookup) {
     items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
   }
+  // Text Settings is not re-added here even though upstream lists it: this fork reaches it
+  // through READER_SETTINGS above, which manga can open too.
   // Reading Orientation removed from this quick menu entirely; it's a proper setting under
   // Settings > Reader (SettingsList.h, tied to CrossPointSettings::orientation directly) for
   // every reader type now that Reader Settings is reachable from manga too (see above) --
@@ -85,24 +131,10 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   return items;
 }
 
-void EpubReaderMenuActivity::onEnter() {
-  Activity::onEnter();
-  requestUpdate();
-}
-
-void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
-
 void EpubReaderMenuActivity::closeCancelled() {
   ActivityResult result;
   result.isCancelled = true;
-  // The toggles must ride along on EVERY exit path. Vertical Text and Furigana don't close the
-  // menu when pressed -- they flip a pending flag and redraw -- so leaving with Back IS how the
-  // user commits them. Omitting them here leaves MenuResult's -1 defaults, which the reader
-  // reads as "unchanged", and the toggle silently does nothing. (Upstream added this early Back
-  // handler; the fork's own Back branch further down carried the flags and became unreachable.)
-  result.data =
-      MenuResult{-1, pendingOrientation, selectedPageTurnOption, static_cast<int8_t>(pendingVerticalEnabled ? 1 : 0),
-                 static_cast<int8_t>(pendingFuriganaEnabled ? 1 : 0)};
+  result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
   setResult(std::move(result));
   finish();
 }
@@ -112,175 +144,178 @@ bool EpubReaderMenuActivity::handleHomeGesture() {
   return true;
 }
 
-void EpubReaderMenuActivity::loop() {
-  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) {
-    // The popup acts on button press; if that input closed it, the trailing
-    // release must be swallowed below (Back would close the menu, Confirm
-    // would re-activate the selected item).
-    popupClosing = !optionPopup.isActive();
-    return;
-  }
-  if (popupClosing) {
-    if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
-        mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
-      return;  // closing press still held
-    }
-    popupClosing = false;
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      return;  // swallow the release that closed the popup
-    }
-  }
+void EpubReaderMenuActivity::activateIndex(const int index) {
+  if (optionPopup.isActive() || !menuRowItems[index].enabled) return;
+  // The activated row leaves this screen (popup or finish); a lingering flash
+  // would gray an unrelated element on the next render.
+  app.clearTapFlash();
+  nav.selected = index;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    closeCancelled();
-    return;
-  }
-
-  auto activateSelected = [this] {
-    const auto selectedAction = menuItems[selectedIndex].action;
-    if (selectedAction == MenuAction::ROTATE_SCREEN) {
-      optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
-                       pendingOrientation, [this](int idx) {
-                         pendingOrientation = idx;
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
-
-    if (selectedAction == MenuAction::AUTO_PAGE_TURN) {
-      optionPopup.show(I18N.get(StrId::STR_AUTO_TURN_PAGES_PER_MIN), pageTurnLabels.data(),
-                       static_cast<int>(pageTurnLabels.size()), selectedPageTurnOption, [this](int idx) {
-                         selectedPageTurnOption = idx;
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
-
-    if (selectedAction == MenuAction::TOGGLE_VERTICAL) {
-      pendingVerticalEnabled = !pendingVerticalEnabled;
-      requestUpdate();
-      return;
-    }
-
-    if (selectedAction == MenuAction::TOGGLE_FURIGANA) {
-      pendingFuriganaEnabled = !pendingFuriganaEnabled;
-      requestUpdate();
-      return;
-    }
-
-    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption,
-                         static_cast<int8_t>(pendingVerticalEnabled ? 1 : 0),
-                         static_cast<int8_t>(pendingFuriganaEnabled ? 1 : 0)});
-    finish();
-  };
-
-  auto metrics = UITheme::getInstance().getMetrics();
-  Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const int contentTop =
-      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
-  switch (handleListTouch(selectedIndex, static_cast<int>(menuItems.size()), contentTop, contentHeight, false)) {
-    case ListTouchResult::Activated:
-      activateSelected();
-      return;
-    case ListTouchResult::Consumed:
-      return;
-    case ListTouchResult::None:
-      break;
-  }
-
-  const auto swipe = mappedInput.wasSwipe();
-  if (swipe == MappedInputManager::SwipeDir::Up) {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-    return;
-  }
-  if (swipe == MappedInputManager::SwipeDir::Down) {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
+  const auto selectedAction = menuItems[index].action;
+  if (selectedAction == MenuAction::ROTATE_SCREEN) {
+    optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
+                     pendingOrientation, [this](int idx) {
+                       pendingOrientation = idx;
+                       // Rotate the menu immediately. Only the renderer turns;
+                       // SETTINGS.orientation stays unchanged so the reader's
+                       // result handler still detects the change and reflows.
+                       ReaderUtils::applyOrientation(renderer, pendingOrientation);
+                       app.setDevice(uiTarget.deviceContext());  // hit rects follow the new frame
+                       requestUpdate(true);
+                     });
     requestUpdate();
     return;
   }
 
-  // Handle navigation
-  buttonNavigator.onNext([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+  if (selectedAction == MenuAction::AUTO_PAGE_TURN) {
+    optionPopup.show(I18N.get(StrId::STR_AUTO_TURN_PAGES_PER_MIN), pageTurnLabels.data(),
+                     static_cast<int>(pageTurnLabels.size()), selectedPageTurnOption, [this](int idx) {
+                       selectedPageTurnOption = idx;
+                       requestUpdate();
+                     });
     requestUpdate();
-  });
-
-  buttonNavigator.onPrevious([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    activateSelected();
     return;
   }
+
+  if (selectedAction == MenuAction::NIGHT_MODE) {
+    SETTINGS.screenInverted = SETTINGS.screenInverted == 0 ? 1 : 0;
+    SETTINGS.saveToFile();
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::FRONTLIGHT) {
+    const bool lightOn = !Frontlight.isOn();
+    Frontlight.setOn(lightOn);
+    SETTINGS.frontlightOn = lightOn ? 1 : 0;
+    SETTINGS.saveToFile();
+    requestUpdate();
+    return;
+  }
+
+  setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
+  finish();
 }
 
-void EpubReaderMenuActivity::render(RenderLock&&) {
-  if (optionPopup.processRender(renderer, mappedInput)) return;
+bool EpubReaderMenuActivity::handleCustomInput() {
+  return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
+}
 
-  renderer.clearScreen();
+bool EpubReaderMenuActivity::handleButtons() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    closeCancelled();
+    return true;
+  }
 
-  auto metrics = UITheme::getInstance().getMetrics();
-  Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    activateIndex(nav.selected);
+    return true;
+  }
 
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 title.c_str());
+  return false;
+}
 
-  // Progress summary
+int EpubReaderMenuActivity::enabledIndexFrom(int index, const int direction) const {
+  const int count = listCount();
+  for (int checked = 0; checked < count; checked++) {
+    if (menuRowItems[index].enabled) return index;
+    index = direction > 0 ? ButtonNavigator::nextIndex(index, count) : ButtonNavigator::previousIndex(index, count);
+  }
+  return nav.selected;
+}
+
+void EpubReaderMenuActivity::navigateButtons() {
+  const int count = listCount();
+  buttonNavigator.onNextRelease(
+      [this, count] { moveSelectionTo(enabledIndexFrom(ButtonNavigator::nextIndex(nav.selected, count), 1)); });
+  buttonNavigator.onPreviousRelease(
+      [this, count] { moveSelectionTo(enabledIndexFrom(ButtonNavigator::previousIndex(nav.selected, count), -1)); });
+  buttonNavigator.onNextContinuous([this, count] {
+    moveSelectionTo(enabledIndexFrom(ButtonNavigator::nextPageIndex(nav.selected, count, nav.visibleRows), 1));
+  });
+  buttonNavigator.onPreviousContinuous([this, count] {
+    moveSelectionTo(enabledIndexFrom(ButtonNavigator::previousPageIndex(nav.selected, count, nav.visibleRows), -1));
+  });
+}
+
+void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  // Content: the safe area minus the header band GUI.drawHeader paints.
+  screen.setContentMarginFromScreen(fui::Insets{
+      static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
+      static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
+      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
+
+  // Progress summary where the old sub-header band sat.
   std::string progressLine;
   if (totalPages > 0) {
     progressLine = std::string(tr(STR_CHAPTER_PREFIX)) + std::to_string(currentPage) + "/" +
                    std::to_string(totalPages) + std::string(tr(STR_PAGES_SEPARATOR));
   }
   progressLine += std::string(tr(STR_BOOK_PREFIX)) + std::to_string(bookProgressPercent) + "%";
-  GUI.drawSubHeader(
-      renderer,
-      Rect{screen.x, screen.y + metrics.topPadding + metrics.headerHeight, screen.width, metrics.tabBarHeight},
-      progressLine.c_str());
+  const fui::Rect band = screen.takeTop(static_cast<int16_t>(metrics.tabBarHeight));
+  const int16_t pad = screen.theme().headerSidePadding;
+  screen.target().text(band.inset(fui::Insets{0, pad, 0, pad}), progressLine.c_str(), screen.theme().smallText);
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
-  const int contentTop =
-      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
+  // menuRowItems's labels/actionValue were set once in the constructor (see
+  // buildMenuRowItems()); only rows with live values need refreshing here.
+  for (size_t i = 0; i < menuItems.size(); i++) {
+    const auto action = menuItems[i].action;
+    if (action == MenuAction::ROTATE_SCREEN) {
+      menuRowItems[i].value = I18N.get(orientationLabels[pendingOrientation]);
+    } else if (action == MenuAction::AUTO_PAGE_TURN) {
+      menuRowItems[i].value = pageTurnLabels[selectedPageTurnOption];
+    } else if (action == MenuAction::NIGHT_MODE) {
+      // A switch row draws its state in the switch, so the value slot stays empty.
+      menuRowItems[i].toggleChecked = SETTINGS.screenInverted != 0;
+    } else if (action == MenuAction::FRONTLIGHT) {
+      menuRowItems[i].value = I18N.get(Frontlight.isOn() ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
+    }
+  }
 
-  GUI.drawList(
-      renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, menuItems.size(), selectedIndex,
-      [this](int index) { return I18N.get(menuItems[index].labelId); }, nullptr, nullptr,
-      [this](int index) {
-        const auto value = menuItems[index].action;
-        if (value == MenuAction::ROTATE_SCREEN) {
-          // Render current orientation value on the right edge of the content area.
-          return I18N.get(orientationLabels[pendingOrientation]);
-        } else if (value == MenuAction::AUTO_PAGE_TURN) {
-          // Render current page turn value on the right edge of the content area.
-          return pageTurnLabels[selectedPageTurnOption];
-        } else if (value == MenuAction::TOGGLE_VERTICAL) {
-          return I18N.get(pendingVerticalEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
-        } else if (value == MenuAction::TOGGLE_FURIGANA) {
-          return I18N.get(pendingFuriganaEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
-        } else if (value == MenuAction::TOGGLE_PANELS_ONLY) {
-          return I18N.get(panelsOnlyEnabled ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
-        } else {
-          return "";
-        }
-      },
-      true,
-      [this](int index) {
-        if (hasPageText) return false;
-        const auto value = menuItems[index].action;
-        return value == MenuAction::WORD_LOOKUP || value == MenuAction::TRANSLATE_PAGE ||
-               value == MenuAction::DISPLAY_QR;
-      },
-      /*showScrollbar=*/false);
+  fui::ListProps props;
+  props.items = menuRowItems;
+  props.count = static_cast<uint16_t>(menuItems.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
+  props.valueInset = 8;               // air between the value and the row edge
+  applySwitchStyle(props);            // pill switches, as everywhere else
+  // Label at the value's font size: both sides of the row read as one unit.
+  // maxLines=2 also marks the style caller-owned (see textStyleUnset).
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 2;
+  const fui::Rect listRect = screen.body();
+  syncListViewport(screen, props);
+  screen.list(props);
 
-  // Footer / Hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  thinDisabledRows(renderer, screen, props, listRect, listCount(), nav.visibleRows);
+}
 
-  renderer.displayBuffer();
+void EpubReaderMenuActivity::drawChrome() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+
+  // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
+  // indicator; the rest of the screen renders through the app.
+  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                 title.c_str());
+}
+
+void EpubReaderMenuActivity::render(RenderLock&&) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+
+  renderer.clearScreen();
+  drawChrome();
+
+  renderUi();
+
+  drawFooter();
+  // A reader page with images leaves gray charge that a FAST diff cannot drive out,
+  // so the page shows through this screen. One HALF pass on entry scrubs it; moving
+  // the selection afterwards stays fast.
+  const bool scrub = scrubOnEnter_ && firstPaint_;
+  firstPaint_ = false;
+  renderer.displayBuffer(scrub ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }

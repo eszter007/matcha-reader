@@ -1,0 +1,213 @@
+name: Compile Release
+
+# Builds every board's release firmware, with the .bin named exactly as OtaUpdater
+# requests it from the GitHub release: <board>-firmware.bin, and x4old-x3-firmware.bin
+# for the combined C3 X4/X3 image.
+#
+# A bare tag push builds and leaves the results as workflow artifacts. Publishing a
+# release additionally ATTACHES those .bin files to it, which is what makes OTA work:
+# the updater reads releases/latest from the API, and that returns release assets --
+# workflow artifacts are not visible there.
+
+on:
+  push:
+    tags:
+      - '*'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    # One name for the environment this job builds, because four steps have to agree on it:
+    # the build, the asset copy and the two artifact paths all read `.pio/build/<env>/`, and a
+    # prerelease builds the `_rc` variant (LOG_LEVEL=1, RC hash in the version) rather than the
+    # release one. Derived from pio_env so a renamed env cannot leave one step behind.
+    env:
+      PIO_ENV: ${{ github.event.release.prerelease && format('{0}_rc', matrix.pio_env) || matrix.pio_env }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Asset names are the contract OtaUpdater reads: <board>-firmware.bin, with
+          # the combined X3/X4 C3 image published as x4old-x3. Renaming one here without
+          # the matching change in OtaUpdater.cpp silently breaks over-the-air updates.
+          - pio_env: gh_release
+            asset: x4old-x3-firmware.bin
+          - pio_env: x4c-gh_release
+            asset: x4c-firmware.bin
+          - pio_env: sticky-gh_release
+            asset: sticky-firmware.bin
+          - pio_env: x4pro-gh_release
+            asset: x4pro-firmware.bin
+          - pio_env: papermono-gh_release
+            asset: papermono-firmware.bin
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Validate release version
+        env:
+          # A release event carries the tag in the payload; a bare tag push has no payload, so
+          # fall back to ref_name, which IS the tag there. Without the fallback this compares an
+          # empty string and every tag-push build fails before it starts.
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          # The tag must name the version the tagged commit actually carries. Upstream compares a
+          # prerelease against "<version>rc"; this fork tags prereleases with their full version
+          # (1.6.0-rc-2) and platformio.ini holds the same string, so the two compare as-is.
+          # Catches a release cut from the wrong commit, where platformio.ini still reads the
+          # previous version.
+          version="${RELEASE_TAG#v}"
+          configured_version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          if [ "$version" != "$configured_version" ]; then
+            echo "Tag $version does not match platformio.ini version $configured_version" >&2
+            exit 1
+          fi
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Install PlatformIO Core
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          # platform-espressif32's builder/main.py imports these unconditionally; its own
+          # penv bootstrap (builder/penv_setup.py) is supposed to install them automatically
+          # but isn't picking them up reliably in this runner image, so pin them explicitly.
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio6119s481-${{ runner.os }}-
+
+      - name: Pin the Core inside the platform's penv
+        run: |
+          set -euo pipefail
+          # platform-espressif32 runs the second stage of a custom_sdkconfig build through the
+          # PlatformIO Core in its OWN penv, which penv_setup.py installs as
+          # `pioarduino>=6.1.19` with --upgrade -- so it drifts past the Core pinned above.
+          # 6.1.19 pins tool-scons 4.8.1 (the platform's own pin), 6.2.0 pins 4.11.1, and both
+          # unpack into ~/.platformio/packages/tool-scons: the second install replaces the
+          # package under a running build and the link step dies in the half-swapped directory
+          # ("No module named 'SCons.Tool.FortranCommon'"). Pinning the penv keeps one SCons.
+          pio pkg install -e "$PIO_ENV"
+          penv_python="$HOME/.platformio/penv/bin/python"
+          test -x "$penv_python" || { echo "No penv Python at $penv_python"; exit 1; }
+          uv pip install --python "$penv_python" "pioarduino==6.1.19"
+          "$penv_python" -c "import platformio; print('penv Core', platformio.VERSION)"
+
+      - name: Build CrossPoint
+        run: CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)" pio run -e "$PIO_ENV" -j1
+
+      - name: Name release asset
+        run: |
+          cp ".pio/build/${{ env.PIO_ENV }}/firmware.bin" \
+            ".pio/build/${{ env.PIO_ENV }}/${{ matrix.asset }}"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            .pio/build/${{ env.PIO_ENV }}/bootloader.bin
+            .pio/build/${{ env.PIO_ENV }}/${{ matrix.asset }}
+            .pio/build/${{ env.PIO_ENV }}/firmware.elf
+            .pio/build/${{ env.PIO_ENV }}/firmware.map
+            .pio/build/${{ env.PIO_ENV }}/partitions.bin
+
+  publish-release:
+    # Only a published release has somewhere to attach to. On a bare tag push this is
+    # skipped and the artifacts remain available for a manual upload.
+    if: github.event_name == 'release'
+    needs: [build-release, language-packs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the built firmware
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Attach firmware to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Exactly the names OtaUpdater asks for; a missing one means some device would
+          # see no update, so fail loudly rather than publish a half-updatable release.
+          for asset in x4old-x3-firmware.bin x4c-firmware.bin sticky-firmware.bin \
+                       x4pro-firmware.bin papermono-firmware.bin; do
+            path="$(find dist -type f -name "$asset" | head -1)"
+            if [ -z "$path" ]; then
+              echo "No $asset among the built artifacts" >&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          pack="$(find dist -type f -name language-packs.zip | head -1)"
+          if [ -z "$pack" ]; then
+            echo "No language-packs.zip among the built artifacts" >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "$pack" --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Languages that are not compiled in ship as .cplang packs for the SD card. A pack is
+  # only valid for the firmware it was generated with -- it is indexed by string-key
+  # position and refuses to load when the count differs -- so it is built from the same
+  # tag as the .bin files and attached to the same release.
+  language-packs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Generate language packs
+        run: |
+          # Read the built-in set from platformio.ini so the packs are exactly the
+          # complement of what the firmware carries.
+          BUILTIN=$(sed -n 's/^custom_i18n_builtin_langs *= *//p' platformio.ini | head -1)
+          if [ -z "$BUILTIN" ]; then
+            echo "custom_i18n_builtin_langs missing from platformio.ini" >&2
+            exit 1
+          fi
+          echo "Built-in languages: $BUILTIN"
+          # --strip-unused matches the pre-build hook, so the key count agrees with the firmware.
+          python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ \
+            --strip-unused --builtin-langs "$BUILTIN" --pack-dir dist/lang
+
+      - name: Validate packs against the generated key table
+        run: python3 scripts/check_language_packs.py lib/I18n/I18nKeys.h dist/lang
+
+      - name: Bundle packs
+        run: |
+          cd dist
+          zip -r ../language-packs.zip lang
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: language-packs
+          path: |
+            language-packs.zip
+            dist/lang/*.cplang

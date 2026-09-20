@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <SdSystemDir.h>
 
 #include <algorithm>
 #include <cstring>
@@ -9,7 +10,7 @@
 
 ReadingStatsStore ReadingStatsStore::instance;
 
-static constexpr const char* STATS_PATH = "/system/reading_stats.bin";
+static std::string statsPath() { return sdsystem::path("reading_stats.bin"); }
 // v3 appends the per-book block after the finished-book paths; v4 appends the per-day-per-language
 // block after that. Each older reader stops where its own format ends and ignores what follows,
 // rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves.
@@ -412,7 +413,7 @@ int ReadingStatsStore::getDaysReadInMonth(uint16_t year, uint8_t month) const {
 
 bool ReadingStatsStore::saveToFile() const {
   HalFile f;
-  if (!Storage.openFileForWrite("STAT", STATS_PATH, f)) return false;
+  if (!Storage.openFileForWrite("STAT", statsPath().c_str(), f)) return false;
   f.write(&STATS_VERSION, 1);
   // days never exceeds MAX_DAYS in memory, so this only guards the 16-bit field.
   const uint16_t count = static_cast<uint16_t>(std::min<size_t>(days.size(), UINT16_MAX));
@@ -463,7 +464,7 @@ bool ReadingStatsStore::saveToFile() const {
 
 bool ReadingStatsStore::loadFromFile() {
   HalFile f;
-  if (!Storage.openFileForRead("STAT", STATS_PATH, f)) return false;
+  if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
   uint8_t version;
   if (f.read(&version, 1) != 1) {
     f.close();

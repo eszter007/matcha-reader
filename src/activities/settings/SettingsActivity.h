@@ -1,15 +1,16 @@
 #pragma once
 #include <I18n.h>
 
+#include <algorithm>
 #include <functional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "CrossPointSettings.h"
-#include "activities/Activity.h"
+#include "activities/UiTabListActivity.h"
 #include "components/OptionPopup.h"
-#include "util/ButtonNavigator.h"
 
 enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
 
@@ -17,15 +18,23 @@ enum class SettingAction {
   None,
   RemapFrontButtons,
   CustomiseStatusBar,
+  ClockSettings,
   KOReaderSync,
   OPDSBrowser,
   Network,
   ClearCache,
+  RebuildLibraryIndex,
   CheckForUpdates,
   SdFirmwareUpdate,
   Language,
   DownloadFonts,
   TextSettings,
+  KeyboardLayouts,
+  HomeButton,
+  LibrarySettings,
+  SleepSettings,
+  ShortcutsSettings,
+  About,
 };
 
 struct SettingInfo {
@@ -33,6 +42,7 @@ struct SettingInfo {
   SettingType type;
   uint8_t CrossPointSettings::* valuePtr = nullptr;
   std::vector<StrId> enumValues;
+  std::span<const StrId> staticEnumValues;
   std::vector<std::string> enumStringValues;  // runtime alternative to StrId enumValues (for SD card fonts etc.)
   SettingAction action = SettingAction::None;
 
@@ -68,6 +78,46 @@ struct SettingInfo {
     return *this;
   }
 
+  // Stored values, in the order the options should be OFFERED. Empty means "offer them in
+  // stored-value order", which is the default. Persisted indices are frozen by every settings
+  // file already on a card, so a menu that reads badly cannot be fixed by renumbering the enum --
+  // this reorders the presentation alone. enumValues/staticEnumValues stay indexed BY STORED
+  // VALUE, so settingValueText() and the persistence clamp need no mapping.
+  std::vector<uint8_t> enumOrder;
+
+  std::span<const StrId> enumLabels() const {
+    return staticEnumValues.empty() ? std::span<const StrId>(enumValues) : staticEnumValues;
+  }
+
+  // Menu slot -> stored value, and back. Identity while enumOrder is empty. Both clamp, so a
+  // corrupt or migrated byte lands on the first slot rather than indexing out of the table.
+  uint8_t storedFromSlot(const uint8_t slot) const {
+    if (enumOrder.empty()) return slot;
+    return slot < enumOrder.size() ? enumOrder[slot] : enumOrder[0];
+  }
+  uint8_t slotFromStored(const uint8_t stored) const {
+    if (enumOrder.empty()) return stored;
+    const auto it = std::find(enumOrder.begin(), enumOrder.end(), stored);
+    return it != enumOrder.end() ? static_cast<uint8_t>(it - enumOrder.begin()) : 0;
+  }
+  // The labels in menu order. Returned by value: the popup wants a contiguous array and the
+  // reordered view does not exist anywhere else. At most SIDE_BUTTON_ACTION_COUNT entries.
+  std::vector<StrId> orderedEnumLabels() const {
+    const auto labels = enumLabels();
+    if (enumOrder.empty()) return std::vector<StrId>(labels.begin(), labels.end());
+    std::vector<StrId> out;
+    out.reserve(enumOrder.size());
+    for (const uint8_t stored : enumOrder) {
+      if (stored < labels.size()) out.push_back(labels[stored]);
+    }
+    return out;
+  }
+
+  SettingInfo& withEnumOrder(std::vector<uint8_t> order) {
+    enumOrder = std::move(order);
+    return *this;
+  }
+
   static SettingInfo Toggle(StrId nameId, uint8_t CrossPointSettings::* ptr, const char* key = nullptr,
                             StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
@@ -86,6 +136,18 @@ struct SettingInfo {
     s.type = SettingType::ENUM;
     s.valuePtr = ptr;
     s.enumValues = std::move(values);
+    s.key = key;
+    s.category = category;
+    return s;
+  }
+
+  static SettingInfo StaticEnum(StrId nameId, uint8_t CrossPointSettings::* ptr, std::span<const StrId> values,
+                                const char* key = nullptr, StrId category = StrId::STR_NONE_OPT) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::ENUM;
+    s.valuePtr = ptr;
+    s.staticEnumValues = values;
     s.key = key;
     s.category = category;
     return s;
@@ -111,7 +173,7 @@ struct SettingInfo {
     return s;
   }
 
-  static SettingInfo String(StrId nameId, char* ptr, size_t maxLen, const char* key = nullptr,
+  static SettingInfo String(StrId nameId, const char* ptr, size_t maxLen, const char* key = nullptr,
                             StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;
@@ -167,8 +229,7 @@ struct SettingInfo {
   }
 };
 
-class SettingsActivity final : public Activity {
-  ButtonNavigator buttonNavigator;
+class SettingsActivity final : public UiTabListActivity {
   int initialCategory = 0;
   bool finishOnBack = false;
   bool japaneseBook = false;
@@ -187,8 +248,14 @@ class SettingsActivity final : public Activity {
   // Rotate Panels, Reading Orientation and Customise Status Bar all still apply and stay.
   bool mangaMode = false;
 
+  // Single-category mode. The Library and Sleep rows in Display, and Shortcuts in Controls, open
+  // this same screen showing only their own category, none of which is one of the four tabs.
+  // STR_NONE_OPT means the ordinary tabbed screen. Everything else -- row building, value text, the option popup,
+  // toggles, actions -- is the usual path, so a sub-screen costs a list rather than an activity.
+  StrId submenuCategory = StrId::STR_NONE_OPT;
+  bool isSubmenu() const { return submenuCategory != StrId::STR_NONE_OPT; }
+
   int selectedCategoryIndex = 0;  // Currently selected category
-  int selectedSettingIndex = 0;
   int settingsCount = 0;
 
   // Per-category settings derived from shared list + device-only actions
@@ -196,6 +263,7 @@ class SettingsActivity final : public Activity {
   std::vector<SettingInfo> readerSettings;
   std::vector<SettingInfo> controlsSettings;
   std::vector<SettingInfo> systemSettings;
+  std::vector<SettingInfo> submenuSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
 
   bool preserveQuickResumeTimeoutOn = false;
@@ -205,12 +273,55 @@ class SettingsActivity final : public Activity {
 
   OptionPopup optionPopup;
 
+  // Row structure (label/actionValue) for *currentSettings, rebuilt only when
+  // the active category or a category's setting list changes
+  // (rebuildRowItems(), called from selectCategory()/rebuildSettingsLists())
+  // — not on every repaint. rowValues_ holds the live per-row value text,
+  // refreshed every buildScreen() call by assigning into the existing
+  // strings (no vector growth).
+  std::vector<std::string> rowValues_;
+  std::vector<freeink::ui::ListItem> rowItems_;
+  void rebuildRowItems();
+
   static constexpr int categoryCount = 4;
-  static const StrId categoryNames[categoryCount];
+  static constexpr StrId categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
+                                                         StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
+
+  // --- UiTabListActivity contract ---
+  int listCount() const override { return settingsCount; }
+  int tabCount() const override { return isSubmenu() ? 1 : categoryCount; }
+  int activeTab() const override { return isSubmenu() ? 0 : selectedCategoryIndex; }
+  const char* tabLabel(int index) const override {
+    return I18N.get(isSubmenu() ? submenuCategory : categoryNames[index]);
+  }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  void onTabAction(int index) override;
+  void stepTab(int direction) override;
+  void navigateButtons() override;
+  bool handleButtons() override;
+  bool handleCustomInput() override;
+
+  static std::string settingValueText(const SettingInfo& setting);
+  // True when the row is an on/off setting, so it draws a switch instead of a value string.
+  // Covers both TOGGLE forms and the two-value {OFF, ON} enums, which already flip in place
+  // rather than opening the option popup.
+  static bool settingIsSwitch(const SettingInfo& setting);
+  static bool settingSwitchState(const SettingInfo& setting);
+  // A row the user cannot change: an enum with a getter but nothing to write through. Reader
+  // Settings shows the dictionary this way -- the book's language picks it, so the row reports
+  // the choice rather than offering one. Such rows draw disabled and the cursor steps over them.
+  static bool settingIsReadOnly(const SettingInfo& setting);
+  // First ring position at or after `ring` whose row is enabled, walking `direction`. Falls back
+  // to the current position when every row is disabled.
+  int enabledRingFrom(int ring, int direction) const;
+  void selectCategory(int categoryIndex);
+  void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
 
   void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
+  void rebuildLibraryIndex();
   void rebuildSettingsLists();
   void saveSettings();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
@@ -226,8 +337,9 @@ class SettingsActivity final : public Activity {
                             const bool finishOnBack = false, const bool japaneseBook = false,
                             std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
                             const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
-                            const bool mangaMode = false, const bool hideMangaOnlySettings = false)
-      : Activity("Settings", renderer, mappedInput),
+                            const bool mangaMode = false, const bool hideMangaOnlySettings = false,
+                            const StrId submenuCategory = StrId::STR_NONE_OPT)
+      : UiTabListActivity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),
         japaneseBook(japaneseBook),
@@ -236,9 +348,9 @@ class SettingsActivity final : public Activity {
         verticalTextState(verticalTextEnabled),
         furiganaState(furiganaEnabled),
         mangaMode(mangaMode),
+        submenuCategory(submenuCategory),
         hideMangaOnlySettings(hideMangaOnlySettings) {}
   void onEnter() override;
   void onExit() override;
-  void loop() override;
   void render(RenderLock&&) override;
 };

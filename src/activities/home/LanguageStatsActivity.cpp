@@ -60,6 +60,39 @@ void LanguageStatsActivity::onEnter() {
 
 void LanguageStatsActivity::onExit() { Activity::onExit(); }
 
+std::vector<TabInfo> LanguageStatsActivity::buildTabs() const {
+  std::vector<TabInfo> tabs;
+  tabs.reserve(languages.size());
+  for (int i = 0; i < static_cast<int>(languages.size()); i++) {
+    tabs.push_back({tabLabels[i].c_str(), i == selectedTab});
+  }
+  return tabs;
+}
+
+void LanguageStatsActivity::selectTab(const int index) {
+  if (index == selectedTab || index < 0 || index >= static_cast<int>(languages.size())) return;
+  selectedTab = index;
+  scrollOffset = 0;
+  requestUpdate();
+}
+
+bool LanguageStatsActivity::stepMonthFromTap() {
+  if (monthNav.next.width == 0) return false;
+  int tx = 0;
+  int ty = 0;
+  if (!mappedInput.wasScreenTapped(tx, ty)) return false;
+  const auto hit = [&](const Rect& r) { return tx >= r.x && tx < r.x + r.width && ty >= r.y && ty < r.y + r.height; };
+  if (hit(monthNav.prev)) {
+    StatsWidgets::stepMonth(calYear, calMonth, -1);
+  } else if (hit(monthNav.next)) {
+    StatsWidgets::stepMonth(calYear, calMonth, +1);
+  } else {
+    return false;
+  }
+  requestUpdate();
+  return true;
+}
+
 void LanguageStatsActivity::loop() {
   // Tap steps back, hold goes home; the latch stops the hold's release firing the tap too.
   if (backLongPressFired) {
@@ -79,26 +112,71 @@ void LanguageStatsActivity::loop() {
   }
   // Confirm cycles languages; Left/Right stay on the month, as on the overall screen.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && languages.size() > 1) {
-    selectedTab = (selectedTab + 1) % static_cast<int>(languages.size());
-    scrollOffset = 0;
-    requestUpdate();
+    selectTab((selectedTab + 1) % static_cast<int>(languages.size()));
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+  // Tapping a tab picks it, hit-tested through the theme so the targets land where
+  // drawTabBar put the labels -- same scroll offset, same skip rule for the tabs the
+  // row is too narrow to show. Confirm was the only way to change language, and touch
+  // boards have no Confirm button.
+  if (tabBar.width > 0) {  // only set once render() has drawn a non-empty row
+    int tabX = 0;
+    int tabY = 0;
+    if (mappedInput.wasScreenTapped(tabX, tabY) && tabY >= tabBar.y && tabY < tabBar.y + tabBar.height) {
+      int tab = -1;
+      if (GUI.tabIndexFromPoint(renderer, tabBar, buildTabs(), tabX, tabY, tab)) selectTab(tab);
+      // Swallowed either way: a tap in the gap between labels must not fall through
+      // to the cards below.
+      return;
+    }
+  }
+  const auto swipe = mappedInput.wasSwipe();
+  // Horizontal swipe steps through the languages, in the reader's direction: a
+  // right-to-left flick advances. The row shows about five tabs, so on a device
+  // with more languages than that the rest were off-screen with no way to reach
+  // them; drawTabBar scrolls the row to keep the selected one in view.
+  //
+  // A left-to-right flick that STARTS in the left quarter is the back gesture and
+  // never arrives here -- the Back branch above consumes it. Same split the reader
+  // lives with for its swipe page turns, so it costs nothing new to learn: start
+  // further in and the swipe steps back a language instead of leaving the screen.
+  if (swipe == MappedInputManager::SwipeDir::Left || swipe == MappedInputManager::SwipeDir::Right) {
+    const int count = static_cast<int>(languages.size());
+    if (count > 1) {
+      const int step = swipe == MappedInputManager::SwipeDir::Left ? 1 : -1;
+      selectTab((selectedTab + step + count) % count);
+    }
+    return;
+  }
+  // Vertical swipe scrolls a page at a time, the same gesture and direction as the
+  // overall screen. Without it the calendar's last week was unreachable by touch.
+  if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+    const int delta = swipe == MappedInputManager::SwipeDir::Up ? scrollPageHeight : -scrollPageHeight;
+    const int target = std::clamp(scrollOffset + delta, 0, maxScrollOffset);
+    if (target != scrollOffset) {
+      scrollOffset = target;
+      requestUpdate();
+    }
+    return;
+  }
+  // Tapping a chevron steps the month, the touch equivalent of the Left/Right keys
+  // below -- which resolve to front buttons a touch board does not have.
+  if (stepMonthFromTap()) return;
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
     StatsWidgets::stepMonth(calYear, calMonth, -1);
     requestUpdate();
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenRight)) {
     StatsWidgets::stepMonth(calYear, calMonth, +1);
     requestUpdate();
   }
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
     if (scrollOffset < maxScrollOffset) {
       scrollOffset = std::min(scrollOffset + 40, maxScrollOffset);
       requestUpdate();
     }
   });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
     if (scrollOffset > 0) {
       scrollOffset = std::max(scrollOffset - 40, 0);
       requestUpdate();
@@ -116,7 +194,9 @@ void LanguageStatsActivity::render(RenderLock&&) {
   // Content starts below the tab bar, which sits in the fixed band under the header exactly as
   // it does in Library and Settings.
   const int tabBarY = screen.y + metrics.topPadding + metrics.headerHeight;
-  const int headerBottom = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
+  // Same band height Settings and Library use, so the three read as one component.
+  const int tabBarH = tabBandHeight(metrics, mappedInput.hasTouch());
+  const int headerBottom = tabBarY + tabBarH + metrics.verticalSpacing;
   const int contentTop = headerBottom - scrollOffset;
 
   const int cardMargin = 20;
@@ -163,25 +243,24 @@ void LanguageStatsActivity::render(RenderLock&&) {
     y += StatsWidgets::drawTileGrid(renderer, cardX, y, cardW, tiles) + 8;
 
     const StatsWidgets::MonthSource source{code, languageMonthStatus, languageDaysReadInMonth};
-    y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source);
+    y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source, &monthNav);
 
     const int contentEndY = y + 10;
     const int visibleHeight = renderer.getScreenHeight() - headerBottom - 50;
     maxScrollOffset = std::max(0, contentEndY - headerBottom - visibleHeight + scrollOffset);
+    scrollPageHeight = visibleHeight;
   }
 
   // Header and tabs last, over the scrolled content, so nothing bleeds through.
   renderer.fillRect(0, 0, screen.width, headerBottom - metrics.verticalSpacing, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  tr(STR_LANGUAGE));
+  tabBar = Rect{};
   if (!languages.empty()) {
-    std::vector<TabInfo> tabs;
-    tabs.reserve(languages.size());
-    for (int i = 0; i < static_cast<int>(languages.size()); i++) {
-      tabs.push_back({tabLabels[i].c_str(), i == selectedTab});
-    }
+    // Kept for loop()'s hit test, so taps land exactly where the labels were drawn.
+    tabBar = Rect{0, tabBarY, screen.width, tabBarH};
     // Same component Library and Settings use. Always drawn focused: Confirm acts only on tabs.
-    GUI.drawTabBar(renderer, Rect{0, tabBarY, screen.width, metrics.tabBarHeight}, tabs, true);
+    GUI.drawTabBar(renderer, tabBar, buildTabs(), true);
   }
 
   // Left/Right step months, so the hints name the months they land on.

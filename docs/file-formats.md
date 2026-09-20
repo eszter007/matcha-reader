@@ -90,17 +90,125 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 70 (fork numbering)
+### Version 92 (fork numbering)
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 92 keeps the version 91 framing unchanged. A drop cap is now sized
+against the vertical advance the lines beside it are actually emitted with —
+the reader's line-spacing factor and the block's CSS `line-height` — instead of
+the font's raw leading. Under tighter leading the enlarged letter came out
+taller than the column it reserved, so it ran through the first full-width line
+below the reserved lines. The reserved column and the opening lines' breaks
+change with it, so cached sections must be rebuilt.
+
+Version 91 keeps the version 90 framing unchanged. Only the geometry stored in
+`PageBox` changes: a bordered block's closing edge is no longer allowed above
+the bottom of the last line inside it. The edge is still pulled up toward the
+text to absorb trailing block spacing, but a block carrying little or none used
+to have that pull-up land inside the final line's glyphs, drawing the border
+through the text. Because the box height is computed at build time and stored,
+existing caches keep the old geometry and must be rebuilt — hence the version
+bump rather than a pure code fix.
+
+Version 90 kept the version 89 framing unchanged. An inline `font-size`
+that the built-in font ladder cannot serve — a single-size SD-card reader font
+has no 12/14/16/18pt siblings to snap to — is now honoured by scaling the
+glyph bitmap instead of being dropped, at a scale snapped to an eighth. The
+per-word font slot carries that scale as a negative tag rather than a font id.
+`<small>` runs that previously rendered at body size are now narrower, so any
+line containing one breaks and positions differently.
+
+Version 89 extends the drop cap trailer with the opening mark's codepoint
+(u32, zero when there is none), so the record is 4 bytes longer than version
+88's and the two framings are not interchangeable. Punctuation a paragraph
+opens with before its initial — the em dash of a French chapter opening —
+now leaves the text flow together with the letter and is drawn at body size
+immediately left of it. Left in the flow it appeared to the *right* of the
+initial, because the flow begins where the reserved column ends.
+
+Version 88 keeps the version 85 serialized layout unchanged. It was bumped
+because the initial no longer has to be the paragraph's first token: a French
+chapter opening (`—&#160;<span class="let">L</span>…`) tokenizes the em dash
+and the no-break space ahead of the lettrine, and those paragraphs now get the
+reserved column and reflowed opening lines as well.
+
+Version 87 keeps the version 85 serialized layout unchanged. It was bumped
+because a paragraph opened by an enlarged single-letter span
+(`<p><span class="lettrine">L</span>…`) is now treated as an initial as well,
+which is how many trade EPUBs mark a drop cap up instead of using a
+pseudo-element at all. Those paragraphs gain the reserved column and the
+reflowed opening lines a version 86 cache was built without.
+
+Version 86 keeps the version 85 serialized layout unchanged. It was bumped
+because the drop cap selector is now also recognised in its CSS 2.1 one-colon
+spelling (`p:first-letter`, alongside `p::first-letter`), so a book written
+that way gains drop caps — and with them the reserved column and the reflowed
+opening lines a version 85 cache was built without.
+
+Version 85 extends each text block's record with a drop cap trailer — the
+enlarged letter's codepoint (u32), its ink origin relative to the block (two
+i16), its glyph magnification (u8) and the face it is drawn in (u8, bits 0-1),
+all zero on the lines that have none.
+The layout changes with it: a paragraph whose stylesheet declares
+`::first-letter { font-size: ... }` at 2x or more now takes that letter out of
+the text flow and reserves a column for it, so the opening lines are broken to
+a narrower width and their words sit at new x positions.
+
+Version 84 keeps the version 83 serialized layout unchanged. It was bumped
+because, in French books, a word ending in a hyphenated subject pronoun
+("songeai-je", "pense-t-il", "dit-elle") is now split into extra word tokens
+so the verb and the pronoun are each independently selectable for dictionary
+lookup, while a lexicalized compound like "rendez-vous" stays one token. This
+changes the token count and positions on any page cached under v83 that
+contains such a word.
+
+Version 83 merges upstream's v43 and v44 changes into the fork's format:
+paragraph base direction no longer follows a direction change on an inline
+element, and each serialized page now carries the internal-link rectangles the
+reader uses for touch navigation. Older caches neither match the new line
+positions nor parse the extended page body.
+
+Version 81 merges upstream's v41 change into the fork's format: simple HTML
+table rows are laid out as positioned columns rather than flattened paragraphs
+with synthetic row/cell labels, so any cached page holding a table has the wrong
+geometry.
+
+Version 76 merges upstream's v37 change into the fork's format: the fixed-size
+footnote href field grows from 96 to 256 bytes for long calibre paths, taking
+each serialized footnote record from 128 to 288 bytes. Older section caches
+cannot be read under the new framing and are rebuilt.
 
 Version 75 is binary-identical to version 74. The version was bumped because a
 `font-size` on `<html>` or `<body>` is no longer applied to layout: it restates
 the base text size, and the reader's own font already *is* that base (every
 declaration resolves against it), so applying it sized whole books away from the
 user's setting. Pages cached by v74 hold the publisher-sized layout.
+
+Version 41 keeps the version 40 serialized layout unchanged. It was bumped
+because simple HTML table rows are now laid out as positioned columns rather
+than flattened paragraphs with synthetic row/cell labels.
+
+Version 40 keeps the version 39 serialized layout unchanged. It was bumped
+because ruby groups now remain intact when large text blocks are soft-flushed.
+
+Version 39 keeps the version 38 serialized layout unchanged. It was bumped
+because image top margins are now clamped to keep full-height images within the
+page viewport.
+
+Version 38 keeps the version 37 serialized layout unchanged. It was bumped
+because Focus Reading now permits line breaks at visible hyphens and dashes
+and hyphenates focus-split words as a whole, changing cached page layout.
+
+Version 37 increases the fixed-size footnote href field from 96 to 256 bytes.
+This changes each serialized footnote record from 128 to 288 bytes, so older
+section caches must be discarded and rebuilt.
+
+Version 36 keeps the version 35 serialized layout unchanged. It was bumped
+because ruby and justified text positioning and CJK line breaking now use
+corrected word measurements, so version 35 cached page layouts no longer match.
 
 Version 70 merges upstream's v35 change into the fork's format: the header
 gains a fifth `uint32_t` offset and a `uint32_t` entry per page for the
@@ -144,10 +252,10 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 35
+#define EXPECTED_VERSION 81
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
-#define FOOTNOTE_HREF_LEN 96
+#define FOOTNOTE_HREF_LEN 256
 
 struct String {
     u32 length [[hidden, comment("String byte length")]];
@@ -226,6 +334,7 @@ struct TextBlock {
 
 struct ImageBlock {
     String imagePath;
+    String srcPath;
     s16 width;
     s16 height;
 };
@@ -375,3 +484,119 @@ repeated count times:
 Only kanji-bearing base texts are stored. The file is capped at 16KB; overflow pairs
 are silently dropped (the glossary is best-effort). Distinct readings for the same
 base text may appear as separate records; lookup joins them with '・'.
+
+## LIBX — cover grid index (`.crosspoint/covers.idx`)
+
+Written and read by `src/activities/library/CoverLibraryActivity.cpp`, for the Matcha Covers
+library view. One fixed-size record per book seen by a previous scan, so a visit can skip the
+file open per EPUB and the directory listing per manga folder that checking for a cover costs.
+Carries no titles or paths: those already live in the persisted recents list.
+
+Distinct from the CLX1 index below, which serves the CrossPoint list view. The two views keep
+separate indexes and separate filenames — sharing a path means each write destroys the other's
+index, so both rebuild on every switch between the views.
+
+`"LIBX"` magic, `uint8_t` version (currently 3), `uint32_t` entry count (rejected above 2048),
+then that many 15-byte records: `pathHash` (`uint32_t`), `fileSize` (`uint32_t`, the size of
+`panels.idx` for a manga folder), `modifiedStamp` (`uint32_t`, packed FAT date/time, 0 when the
+driver has none), `thumbHeight` (`uint16_t`, the cover height the thumbnail was verified for),
+and `flags` (`uint8_t`: bit 0 a verified thumbnail is present, bit 1 the book declares no cover).
+A mismatched magic, version or count is treated as no index at all and the scan runs in full.
+
+## CLX1 — library index (`.crosspoint/library.idx`)
+
+Written by `lib/LibraryIndex/LibraryBuilder.cpp`, read by `LibraryIndexFile`. One
+file describing every book on the card, so the shelf can sort and search
+thousands of titles without opening any of them.
+
+Format version 2. An index written by another version fails validation on open
+and is rebuilt; that is the entire migration mechanism.
+
+### Layout
+
+| Section | Offset | Contents |
+|---|---|---|
+| Header | 0 | 64 bytes, `ClixHeader` |
+| Folders | `folderStart` | length-prefixed paths, one per folder |
+| Records | `recordStart` | `bookCount` × 128-byte `ClixRecord` |
+| Permutations | `permStart` | `bookCount` u16 author order, then `bookCount` u16 arrival order |
+| Name blob | `nameStart` | per record: path hash, name, canonical author, title, source author (see below) |
+
+The arrival permutation runs oldest first, keyed by the record's FAT
+modification time (when the file landed on the card); `firstSeen` — the
+build-assigned discovery counter — breaks ties and carries books whose
+filesystem reports no time. Fold version 3 introduced the timestamp key; a
+fold bump rebuilds ranks while preserving `firstSeen`.
+
+Sections are 512-byte aligned so each starts on an SD block boundary.
+
+### Records are exactly 128 bytes
+
+A fixed stride is what lets the reader seek straight to record *n* without an
+offset table, and read a screenful in one 4 KB block. `static_assert` enforces it.
+
+Each record carries `fold[96]`, the title normalised for search and sorting —
+accents stripped, case dropped, leading articles removed — and `authorKey[12]`,
+the author's words folded and sorted so that "Victor Hugo" and "Hugo Victor" group as
+one person. `authorKey` is a GROUPING key, not an ordering one: the shelf orders by
+surname, derived separately from the display name.
+
+The byte before the folded title records metadata extraction status: not
+attempted, extracted, or failed. The final four bytes contain the packed FAT
+modification date and time returned by SdFat. A zero timestamp is not trusted.
+These fields occupy the alignment and reserved bytes from version 1, so the
+record remains exactly 128 bytes.
+
+The header records whether EPUB metadata extraction was enabled for the build.
+This prevents a metadata-disabled rebuild from making filename fallbacks look
+fresh to a later metadata-enabled build.
+
+### The name blob
+
+Per record, at `nameStart + nameOff`:
+
+```text
+[u64 pathHash]    FNV-1a fingerprint of the complete path
+[nameLen bytes]  filename, without the directory
+[u8][author]     display author, one spelling chosen per authorKey across the library
+[u8][title]      the book's own title, or length 0 if it never gave one
+[u8][source]     cleaned author spelling before the library-wide spelling vote
+```
+
+The filename must stay the first textual field and stay the filename: `readPath`
+rebuilds a book's path from it, so writing the display title there makes the book
+impossible to open. That was a real defect, and it is why title has its own field.
+
+The source author is separate from the displayed canonical author so a later
+rebuild can repeat the spelling vote after books are added or removed. Existing
+display reads still stop at the author or title fields and retain their offsets.
+
+### Freshness and unchanged rebuilds
+
+Reconciliation treats the persisted 64-bit complete-path fingerprint as the
+book identity. Metadata is reused only when the fingerprint, size, nonzero FAT
+timestamp, fold version, metadata mode, and expected extraction status agree.
+EPUBs with a zero timestamp or a previous extraction failure are parsed again.
+
+If every current record reuses metadata, the old and new counts agree, and no
+unreadable entry was seen, the staging files are discarded and the live index is
+left byte-for-byte unchanged. A normal rebuild action is therefore a freshness
+check, not a forced metadata reread.
+
+### Header flags
+
+`RANKS_DEGRADED` says one or more orders fell back to walk order because a
+checked sort allocation failed. Title and author each use a phase-local
+`SortKey[bookCount]` allocation (14 bytes per book, 57,344 bytes at the 4,096-book
+format ceiling); the first array is released before the second is requested.
+Sorting is therefore best effort through the full format limit rather than
+being disabled at an arbitrary library size.
+
+`DEDUP_DEGRADED` says a directory exceeded the fixed 1024-entry duplicate-key
+buffer, or that its fallible 8 KiB allocation failed. The walk still indexes
+every enumerated book; it only stops remembering additional identities for
+duplicate-dirent detection, so a damaged FAT may expose duplicates but cannot
+make a real book disappear.
+
+`selfSize` is the expected file size. Comparing it against the real one is a free
+truncation guard: a build cut short by a power failure cannot pass.
