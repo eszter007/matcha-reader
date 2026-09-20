@@ -7,6 +7,8 @@ input order and asserts the sequence the reader should walk them in.
 """
 
 from convert_manga import (
+    PANEL_RETRY_COVER_FRAC,
+    _panel_cover_frac,
     _webtoon_cut_points,
     build_panel_ocr_prompt,
     expand_panels_over_text,
@@ -301,6 +303,25 @@ def test_overlapping_subpanels_are_rejected():
     frame = [0, 0, 900, 300]
     kids = [[0, 0, 600, 300], [100, 0, 700, 300]]
     assert split_frames_over_subpanels([frame], kids + [frame]) == [frame]
+
+
+def test_sparse_page_falls_under_the_retry_gate():
+    """One banner-sized box on a whole page: what a failed detection pass looks like."""
+    assert _panel_cover_frac([[0, 0, 600, 100]], 1200, 1700) < PANEL_RETRY_COVER_FRAC
+
+
+def test_full_page_splash_stays_above_the_gate():
+    """A genuine single-panel splash covers the page, so it must not be retried."""
+    assert _panel_cover_frac([[0, 0, 1200, 1700]], 1200, 1700) >= PANEL_RETRY_COVER_FRAC
+
+
+def test_panelled_page_stays_above_the_gate():
+    boxes = [[0, y, 1200, y + 400] for y in (0, 420, 840, 1260)]
+    assert _panel_cover_frac(boxes, 1200, 1700) >= PANEL_RETRY_COVER_FRAC
+
+
+def test_no_boxes_covers_nothing():
+    assert _panel_cover_frac([], 1200, 1700) == 0.0
 
 
 if __name__ == "__main__":
