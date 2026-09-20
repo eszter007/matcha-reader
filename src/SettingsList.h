@@ -694,3 +694,22 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
   }
   return v;
 }
+
+// Every row whose value belongs in the settings file, without materializing the menu copy (which
+// aborts the firmware on a fragmented heap, and persistence runs while the reader is tearing
+// down). That is the static table PLUS the rows getSettingsList() only adds to its copy: the
+// home-button gestures and the word-lookup font size. Those two were menu-only, so their keys
+// were never written and came back as defaults on the next boot -- the Home long-press in
+// particular fell back to the pre-1.5 longPressMenuFunction migration, which is why it kept
+// reverting to Dictionary. Callers still apply settingHiddenByBoard().
+template <typename Fn>
+inline void forEachPersistableSetting(Fn&& fn) {
+  for (const auto& info : settingsBaseList()) fn(info);
+  if (BoardConfig::hasHomeKey()) {
+    for (unsigned i = 0; i < 3; ++i) {
+      fn(SettingInfo::StaticEnum(home_button::GESTURE_LABELS[i], home_button::FIELDS[i], home_button::ACTION_LABELS,
+                                 home_button::KEYS[i], StrId::STR_CAT_CONTROLS));
+    }
+  }
+  fn(buildWordLookupFontSizeSetting());
+}
