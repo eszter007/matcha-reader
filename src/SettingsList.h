@@ -223,10 +223,21 @@ inline std::vector<StrId> buildLongPressMenuValues() {
 // categoryFilter/includeTextSettingsEntries let embedded device screens copy only
 // entries they can display while the reader keeps its memory-heavy state alive.
 
-// The single test for "this row is a per-button side action". Kept for the persistence walk and
-// any caller that needs to name the pair.
-inline bool isSideButtonActionRow(const StrId nameId) {
-  return nameId == StrId::STR_UPPER_SIDE_BUTTON || nameId == StrId::STR_LOWER_SIDE_BUTTON;
+// The two side keys sit one above the other on most boards -- including the plain X4 and the X3 --
+// but the X4 Pro and the X4 Classic wear them to the left and the right of the screen, where
+// "upper" and "lower" name nothing the reader can see. Only the label changes: the same GPIOs, the
+// same settings keys, the same order (the upper row is BTN_UP, which is the left key on those two
+// boards). Read once, when the settings list is first built -- by then the board is known, and it
+// does not change under a running device.
+inline bool sideButtonsReadLeftRight() {
+  const auto board = BoardConfig::ACTIVE.board;
+  return board == BoardConfig::Board::XteinkX4Pro || board == BoardConfig::Board::XteinkX4Classic;
+}
+inline StrId upperSideButtonLabel() {
+  return sideButtonsReadLeftRight() ? StrId::STR_LEFT_SIDE_BUTTON : StrId::STR_UPPER_SIDE_BUTTON;
+}
+inline StrId lowerSideButtonLabel() {
+  return sideButtonsReadLeftRight() ? StrId::STR_RIGHT_SIDE_BUTTON : StrId::STR_LOWER_SIDE_BUTTON;
 }
 
 // The settings table itself, built once. Exposed separately from getSettingsList() so the
@@ -403,7 +414,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         // those two keys directly, so the rows are offered everywhere -- they were X3/X4 only for
         // no reason the input path shares. The option order matches SIDE_BUTTON_ACTION.
         SettingInfo::Enum(
-            StrId::STR_UPPER_SIDE_BUTTON, &CrossPointSettings::upperSideButtonAction,
+            upperSideButtonLabel(), &CrossPointSettings::upperSideButtonAction,
             {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
              StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
             "upperSideButtonAction", StrId::STR_CAT_SHORTCUTS)
@@ -412,7 +423,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                             CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
                             CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_NONE}),
         SettingInfo::Enum(
-            StrId::STR_LOWER_SIDE_BUTTON, &CrossPointSettings::lowerSideButtonAction,
+            lowerSideButtonLabel(), &CrossPointSettings::lowerSideButtonAction,
             {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
              StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
             "lowerSideButtonAction", StrId::STR_CAT_SHORTCUTS)
