@@ -14,6 +14,7 @@
 #include "LanguageStatsActivity.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
+#include "components/HomeTabBar.h"
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
 #include "components/icons/flame.h"
@@ -69,6 +70,10 @@ bool ReadingStatsActivity::stepMonthFromTap() {
 }
 
 void ReadingStatsActivity::loop() {
+  // allowButtons = false: Left/Right step the month on this screen, so the band is touch-only
+  // here and button boards reach the other tabs through Back.
+  int unusedFocus = -1;
+  if (HomeTabBar::route(mappedInput, renderer, HomeTab::Stats, unusedFocus, false) != HomeTabBar::Input::None) return;
   // Tap leaves Insights, hold goes home; same gesture as the language screen.
   if (backLongPressFired) {
     if (!mappedInput.isPressed(MappedInputManager::Button::Back)) backLongPressFired = false;
@@ -150,6 +155,8 @@ void ReadingStatsActivity::render(RenderLock&&) {
   auto& theme = UITheme::getInstance();
   auto metrics = theme.getMetrics();
   Rect screen = theme.getScreenSafeArea(renderer, true, false);
+  // The tab bar replaces the hints at the bottom, so the scrollable area ends where it begins.
+  if (HomeTabBar::enabled()) screen.height = HomeTabBar::top(renderer) - screen.y;
 
   // The header's underline sits a few px above the header rect's bottom edge.
   const int headerLineY = screen.y + metrics.topPadding + metrics.headerHeight - 3;
@@ -222,8 +229,12 @@ void ReadingStatsActivity::render(RenderLock&&) {
   }
 
   // Compute max scroll: content bottom minus the visible area.
-  const int contentEndY = y + 10;                                            // 10px bottom margin
-  const int visibleHeight = renderer.getScreenHeight() - headerBottom - 50;  // 50 for button hints
+  const int contentEndY = y + 10;  // 10px bottom margin
+  // Where the scrollable area really ends: the tab bar's top edge when it is drawn, otherwise the
+  // old hint-band allowance. Reserving the smaller of the two left the last card (View details)
+  // unable to scroll clear of the bar.
+  const int visibleBottom = HomeTabBar::enabled() ? HomeTabBar::top(renderer) : renderer.getScreenHeight() - 50;
+  const int visibleHeight = visibleBottom - headerBottom;
   maxScrollOffset = contentEndY - headerBottom - visibleHeight + scrollOffset;
   if (maxScrollOffset < 0) maxScrollOffset = 0;
   scrollPageHeight = visibleHeight;
@@ -232,7 +243,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
   // Clear only up to the header line, then redraw the header (which draws the line).
   renderer.fillRect(0, 0, screen.width, headerLineY, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_STATS));
+                 tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true));
 
   // Button hints
   // Hints name the months Left/Right land on.
@@ -241,10 +252,16 @@ void ReadingStatsActivity::render(RenderLock&&) {
   uint8_t pm = calMonth, nm = calMonth;
   StatsWidgets::stepMonth(py, pm, -1);
   StatsWidgets::stepMonth(ny, nm, +1);
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), tr(STR_DETAILS), StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
-                            StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (HomeTabBar::enabled()) {
+    // Left/Right step the month here, so this screen has no tab focus: button boards reach the
+    // other tabs through Back, touch boards tap the bar.
+    HomeTabBar::draw(renderer, HomeTab::Stats);
+  } else {
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), tr(STR_DETAILS), StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
+                              StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 
   renderer.displayBuffer();
 }

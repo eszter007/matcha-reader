@@ -88,7 +88,9 @@ class ActivityManager {
   void goToUsbDrive();
   void goToSettings();
   void goToFileBrowser(std::string path = {});
-  void goToLibrary();
+  // initialTab selects the cover library's tab (LibraryTabs::Books / Shelves); the indexed list
+  // view has its own tabs and ignores it.
+  void goToLibrary(int initialTab = 0);
   void goToBrowser();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);

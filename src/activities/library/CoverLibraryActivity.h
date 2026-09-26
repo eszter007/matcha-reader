@@ -12,14 +12,21 @@
 
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 #include "components/UITheme.h"  // TabInfo, Rect
 #include "util/ButtonNavigator.h"
 
 class CoverLibraryActivity final : public Activity {
  private:
   ButtonNavigator buttonNavigator;
+  // Long-press menu on a cover (stats / read / unread / delete), shared with the Home grid.
+  OptionPopup optionPopup;
+  // Bottom tab bar cursor for button boards; -1 when nothing in the band is focused.
+  int tabFocus = -1;
 
   int selectedTab = 0;
+  // Tab to open on, from the tab band of whichever screen switched here.
+  int requestedTab = 0;
   int contentIndex = 0;
   int scrollRow = 0;      // Books tab: first visible grid row
   int shelvesScroll = 0;  // Shelves tab: first visible list row
@@ -134,6 +141,7 @@ class CoverLibraryActivity final : public Activity {
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
   // cell's padding margin. Because it never overlaps the cover, moving the selection is two of
   // these calls (erase old with on=false, draw new) -- no cover re-decode, a few ms total.
+  void drawCoverShadow(int coverX, int coverY, int coverWidth, int coverHeight);
   void drawGridSelectionBorder(int cellX, int cellY, int cellWidth, int cellHeight, bool on);
 
   // Selection-only fast path: when the previous full render is still in the framebuffer and ONLY
@@ -293,10 +301,11 @@ class CoverLibraryActivity final : public Activity {
 
   // Long-press on a book opens its reading stats.
   void showBookStats(const std::string& path, const std::string& title);
+  void showBookActions(const std::string& path, const std::string& title, int progressPercent);
 
  public:
-  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("RecentBooks", renderer, mappedInput) {}
+  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialTab = 0)
+      : Activity("RecentBooks", renderer, mappedInput), requestedTab(initialTab) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -461,11 +461,8 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
                         LyraMetrics::values.homeCoverHeight, true);
 
       if (!hasCover) {
-        // Render empty cover
-        renderer.fillRect(tileX + hPaddingInSelection,
-                          tileY + hPaddingInSelection + (LyraMetrics::values.homeCoverHeight / 3), coverWidth,
-                          2 * LyraMetrics::values.homeCoverHeight / 3, true);
-        renderer.drawIcon(CoverIcon, tileX + hPaddingInSelection + 24, tileY + hPaddingInSelection + 24, 32);
+        drawCoverPlaceholder(renderer, Rect{tileX + hPaddingInSelection, tileY + hPaddingInSelection, coverWidth,
+                                            LyraMetrics::values.homeCoverHeight});
       }
 
       coverBufferStored = storeCoverBuffer();

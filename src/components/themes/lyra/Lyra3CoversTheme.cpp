@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -17,6 +18,13 @@ namespace {
 constexpr int hPaddingInSelection = 8;
 constexpr int cornerRadius = 6;
 }  // namespace
+
+int Lyra3CoversTheme::homeCoverThumbHeight(const GfxRenderer& renderer) const {
+  const int tileWidth = (renderer.getScreenWidth() - 2 * Lyra3CoversMetrics::values.contentSidePadding) / 3;
+  // Thumbs cover a (0.6*h, h) target box; in landscape the tile is wider than
+  // 0.6 aspect, so request a taller thumb and let the draw crop vertically.
+  return std::max(Lyra3CoversMetrics::values.homeCoverHeight, (tileWidth - 2 * hPaddingInSelection) * 5 / 3 + 2);
+}
 
 void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                            const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
@@ -39,8 +47,7 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
         if (coverPath.empty()) {
           hasCover = false;
         } else {
-          const std::string coverBmpPath =
-              UITheme::getCoverThumbPath(coverPath, Lyra3CoversMetrics::values.homeCoverHeight);
+          const std::string coverBmpPath = UITheme::getCoverThumbPath(coverPath, homeCoverThumbHeight(renderer));
 
           // First time: load cover from SD and render. Shared helper: manga carry a JPG/PNG
           // cover, EPUB/XTC a generated BMP thumbnail -- this theme only read the BMP form and

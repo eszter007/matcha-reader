@@ -22,10 +22,14 @@
 #include "activities/home/BookStatsActivity.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/home/XtcProgressUtil.h"
+#include "components/BookActionsMenu.h"
+#include "components/HomeTabBar.h"
+#include "components/LibraryTabs.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
+#include "util/BookProgress.h"
 
 namespace {
 constexpr unsigned long LONG_PRESS_MS = 1000;
@@ -847,13 +851,7 @@ void CoverLibraryActivity::warmOnePendingProgress() {
   // No requestUpdate: visible entries are still filled synchronously during their render.
 }
 
-std::vector<TabInfo> CoverLibraryActivity::buildTabs() const {
-  std::vector<TabInfo> tabs;
-  tabs.reserve(TAB_COUNT);
-  tabs.push_back({tr(STR_TAB_BOOKS), selectedTab == 0});
-  tabs.push_back({tr(STR_TAB_SHELVES), selectedTab == 1});
-  return tabs;
-}
+std::vector<TabInfo> CoverLibraryActivity::buildTabs() const { return LibraryTabs::build(selectedTab); }
 
 Rect CoverLibraryActivity::tabBarRect() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -925,20 +923,7 @@ int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const
   } else if (FsHelpers::hasXtcExtension(bookPath)) {
     return XtcProgress::percentForBook(bookPath);
   } else if (manga::MangaBook::isMangaFolder(bookPath)) {
-    std::string mangaCachePath = "/.crosspoint/manga_" + std::to_string(std::hash<std::string>{}(bookPath));
-    HalFile f;
-    if (!Storage.openFileForRead("LIB", mangaCachePath + "/progress.bin", f)) return 0;
-    uint8_t data[4];
-    if (f.read(data, 4) != 4) return 0;
-    uint32_t currentPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-    HalFile idxFile;
-    if (!Storage.openFileForRead("LIB", bookPath + "/panels.idx", idxFile)) return 0;
-    uint8_t hdr[8];
-    if (idxFile.read(hdr, 8) != 8) return 0;
-    uint32_t totalPages = hdr[4] | (hdr[5] << 8) | (hdr[6] << 16) | (hdr[7] << 24);
-    if (totalPages == 0) return 0;
-    int pct = static_cast<int>((static_cast<float>(currentPage) / static_cast<float>(totalPages)) * 100.0f + 0.5f);
-    return std::clamp(pct, 0, 100);
+    return mangaProgressPercent(bookPath);
   } else {
     return -1;
   }
@@ -964,7 +949,8 @@ void CoverLibraryActivity::onEnter() {
   startCoverWorker();
   startLibraryScan();
 
-  selectedTab = 0;
+  selectedTab = requestedTab == LibraryTabs::Shelves ? 1 : 0;
+  if (selectedTab == 1) loadShelves();
   contentIndex = 0;
   scrollRow = 0;
   shelvesScroll = 0;
@@ -987,6 +973,11 @@ void CoverLibraryActivity::onExit() {
 }
 
 void CoverLibraryActivity::loop() {
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+  if (HomeTabBar::route(mappedInput, renderer, HomeTab::Library, tabFocus) != HomeTabBar::Input::None) {
+    requestUpdate();
+    return;
+  }
   // Raw state catches the press before any early return below and cancels background SD/decode
   // work even when the debounced edge has not been emitted yet.
   if (mappedInput.anyButtonDownRaw()) {
@@ -994,7 +985,8 @@ void CoverLibraryActivity::loop() {
     coverWorkerCancelRequested_ = true;
   }
 
-  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
+  const int pageItems =
+      UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true, HomeTabBar::extraPageReserve());
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
@@ -1216,6 +1208,11 @@ void CoverLibraryActivity::loop() {
       hideSelector();  // a touch, whether or not it lands on a label
       int tab = -1;
       if (GUI.tabIndexFromPoint(renderer, barRect, buildTabs(), tabX, tabY, tab) && tab != selectedTab) {
+        if (tab == LibraryTabs::Files) {
+          // The browser is its own activity; the band it draws carries on from here.
+          LibraryTabs::activate(LibraryTabs::Files);
+          return;
+        }
         selectedTab = tab;
         if (selectedTab == 1 && !shelvesLoaded) loadShelves();
         contentIndex = 0;
@@ -1244,7 +1241,8 @@ void CoverLibraryActivity::loop() {
       // Stats are for books; a shelf has none.
       if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
         contentIndex = hit + 1;
-        showBookStats(recentBooks[hit].path, recentBooks[hit].title);
+        showBookActions(recentBooks[hit].path, recentBooks[hit].title,
+                        hit < static_cast<int>(bookProgress.size()) ? bookProgress[hit].percent : -1);
       }
       return;
     }
@@ -1257,6 +1255,23 @@ void CoverLibraryActivity::loop() {
       }
       return;
     }
+    // Back before the grid's own tap handling: a tap on the header chevron arrives as a Back
+    // release (MappedInputManager folds HeaderBackTapTarget into it), and the block below
+    // swallows every tap -- including that one, which is why the chevron did nothing on the
+    // themes that draw it.
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      if (contentIndex > 0) {
+        contentIndex = 0;
+        scrollRow = 0;
+        shelvesScroll = 0;
+        selectorVisible = true;
+        requestUpdate();
+      } else {
+        onGoHome();
+      }
+      return;
+    }
+
     if (mappedInput.wasScreenTapped(gx, gy)) {
       const int hit = hitAtPoint(gx, gy);
       hideSelector();
@@ -1351,12 +1366,30 @@ void CoverLibraryActivity::loop() {
   }
 }
 
-void CoverLibraryActivity::showBookStats(const std::string& path, const std::string& title) {
-  auto handler = [this](const ActivityResult&) {
-    lastRendered.valid = false;  // stats painted over the frame; a partial redraw would smear
-  };
+void CoverLibraryActivity::showBookActions(const std::string& path, const std::string& title,
+                                           const int progressPercent) {
+  BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, path, title, progressPercent,
+                        [this](const bool deleted) {
+                          // Either way the frame underneath is stale; a delete also drops a book
+                          // out of the lists the grid is drawn from.
+                          lastRendered.valid = false;
+                          if (deleted) {
+                            loadRecentBooks();
+                            shelvesLoaded = false;
+                            contentIndex = 0;
+                          }
+                          // Marked or deleted, the badges are stale either way: they come from
+                          // the stored progress this menu just rewrote.
+                          loadBookProgress();
+                          requestUpdate();
+                        });
+  requestUpdate();
+}
 
-  startActivityForResult(std::make_unique<BookStatsActivity>(renderer, mappedInput, path, title), std::move(handler));
+void CoverLibraryActivity::showBookStats(const std::string& path, const std::string& title) {
+  BookStatsActivity::openFor(*this, renderer, mappedInput, path, title, [this](const ActivityResult&) {
+    lastRendered.valid = false;  // stats painted over the frame; a partial redraw would smear
+  });
 }
 
 void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int cellY, const int cellWidth,
@@ -1366,11 +1399,36 @@ void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int ce
   const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
   const int coverX = cellX + COVER_PADDING;
   const int coverY = cellY + COVER_PADDING;
-  // Two nested 1px rects = a 2px ring at offsets -2/-3 from the cover box: a 1px white gap
-  // separates it from the cover's own 1px outline, and it stays clear of the progress label
-  // below (labelY = cover bottom + CELL_TEXT_GAP).
-  renderer.drawRect(coverX - 2, coverY - 2, coverWidth + 4, coverHeight + 4, on);
-  renderer.drawRect(coverX - 3, coverY - 3, coverWidth + 6, coverHeight + 6, on);
+  // The home grid's ring: a thick dithered band hugging the cover, which reads on a dark cover
+  // where a hairline outline does not. It fills the cell's padding exactly -- never the art --
+  // because the cursor-move fast path turns the ring off by painting this same band white, and a
+  // band that straddled the cover edge would take a bite out of the cover with it.
+  const int ringX = coverX - COVER_PADDING;
+  const int ringY = coverY - COVER_PADDING;
+  const int ringW = coverWidth + 2 * COVER_PADDING;
+  const int ringH = coverHeight + 2 * COVER_PADDING;
+  const auto band = [&](const int x, const int y, const int w, const int h) {
+    if (on) {
+      renderer.fillRectDither(x, y, w, h, Color::LightGray);
+    } else {
+      renderer.fillRect(x, y, w, h, false);
+    }
+  };
+  band(ringX, ringY, ringW, COVER_PADDING);
+  band(ringX, ringY + ringH - COVER_PADDING, ringW, COVER_PADDING);
+  band(ringX, ringY + COVER_PADDING, COVER_PADDING, ringH - 2 * COVER_PADDING);
+  band(ringX + ringW - COVER_PADDING, ringY + COVER_PADDING, COVER_PADDING, ringH - 2 * COVER_PADDING);
+  // The drop shadow lives in that same padding, so erasing the ring erases it too.
+  if (!on) drawCoverShadow(coverX, coverY, coverWidth, coverHeight);
+}
+
+void CoverLibraryActivity::drawCoverShadow(const int coverX, const int coverY, const int coverWidth,
+                                           const int coverHeight) {
+  // Same drop shadow the home grid gives its covers (CoverGridHomeUi::paintFramedCover): two px
+  // down the right edge and along the bottom, so a cover reads as a book lying on the shelf.
+  constexpr int SHADOW = 2;
+  renderer.fillRect(coverX + coverWidth, coverY + SHADOW, SHADOW, coverHeight, true);
+  renderer.fillRect(coverX + SHADOW, coverY + coverHeight, coverWidth, SHADOW, true);
 }
 
 void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const int cellWidth, const int cellHeight,
@@ -1391,67 +1449,11 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
     drawGridSelectionBorder(cellX, cellY, cellWidth, cellHeight, true);
   }
 
-  bool hasCover = false;
-  if (!coverBmpPath.empty()) {
-    const std::string coverPath = UITheme::getCoverThumbPath(coverBmpPath, thumbHeight);
-    // Shared helper: manga covers are raw page images (JPG/PNG), EPUB/XTC covers pre-cropped
-    // BMP thumbnails. Both fill the cell and crop the overflow rather than letterboxing.
-    hasCover = UITheme::drawCoverThumbFilled(renderer, coverPath, coverX, coverY, coverWidth, coverHeight,
-                                             /*allowRawDecode=*/false);
-  }
-
-  renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
-
-  if (!hasCover) {
-    renderer.drawIcon(CoverIcon, coverX + (coverWidth - 32) / 2, coverY + (coverHeight - 32) / 2, 32);
-    auto titleLines = renderer.wrappedText(SMALL_FONT_ID, title.c_str(), coverWidth - 8, 3);
-    int textY = coverY + (coverHeight - 32) / 2 + 36;
-    for (const auto& line : titleLines) {
-      if (textY + lineHeight > coverY + coverHeight) break;
-      const int textW = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
-      const int textX = coverX + (coverWidth - textW) / 2;
-      renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str(), true);
-      textY += lineHeight;
-    }
-  }
-
-  // Progress badge on the cover (top-right, white on black): "NEW" for unstarted books,
-  // "Read" for finished ones, else the percentage. progressPercent < 0 means the idle-gated
-  // progress pass hasn't reached this book yet -- draw nothing rather than a wrong badge.
-  if (progressPercent >= 0) {
-    char badgeBuf[8];
-    if (progressPercent <= 0) {
-      snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
-    } else if (progressPercent >= 100) {
-      snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_READ));
-    } else {
-      snprintf(badgeBuf, sizeof(badgeBuf), "%d%%", progressPercent);
-    }
-    const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
-    const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
-    const int badgeW = badgeTextW + 12;
-    const int badgeX = coverX + coverWidth - badgeW;
-    const int badgeY = coverY;
-    // Black fill with a rounded bottom-left corner; pixels outside the arc stay untouched so
-    // the cover shows through the corner notch.
-    constexpr int badgeR = 4;
-    renderer.fillRect(badgeX + badgeR, badgeY, badgeW - badgeR, badgeH, true);
-    renderer.fillRect(badgeX, badgeY, badgeR, badgeH - badgeR, true);
-    const int arcCx = badgeX + badgeR;
-    const int arcCy = badgeY + badgeH - 1 - badgeR;
-    for (int dy = 0; dy <= badgeR; dy++) {
-      for (int dx = 0; dx <= badgeR; dx++) {
-        const int d2 = dx * dx + dy * dy;
-        if (d2 > badgeR * badgeR) continue;
-        // Outermost ring of the arc is white so it joins the white edge lines below.
-        renderer.drawPixel(arcCx - dx, arcCy + dy, d2 < (badgeR - 1) * (badgeR - 1));
-      }
-    }
-    // White border on the two exposed edges (left + bottom); top/right sit on the cover edge.
-    renderer.drawLine(badgeX, badgeY, badgeX, arcCy, false);
-    renderer.drawLine(arcCx, badgeY + badgeH - 1, badgeX + badgeW - 1, badgeY + badgeH - 1, false);
-    renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
-  }
+  const std::string coverPath =
+      coverBmpPath.empty() ? std::string() : UITheme::getCoverThumbPath(coverBmpPath, thumbHeight);
+  // Cover art, fallback, shadow and badge all come from the shared painter, so a book looks the
+  // same here and on the Home cover grid.
+  UITheme::drawBookCover(renderer, Rect{coverX, coverY, coverWidth, coverHeight}, coverPath, title, progressPercent);
 
   // Title below the cover, single line, ellipsis-truncated. The peek row skips this: its
   // title band lies under the button hints, so measuring/truncating it would be wasted work.
@@ -1835,6 +1837,9 @@ bool CoverLibraryActivity::tryPartialSelectionRedraw() {
 }
 
 void CoverLibraryActivity::render(RenderLock&&) {
+  // The popup is a self-contained modal drawn over the frame underneath, same as the list
+  // library's: while it is up it owns the screen and the grid must not repaint beneath it.
+  if (optionPopup.processRender(renderer, mappedInput)) return;
   if (tryPartialSelectionRedraw()) {
     lastRendered.contentIndex = contentIndex;
     lastRendered.shelfContentIndex = shelfContentIndex;
@@ -1853,25 +1858,30 @@ void CoverLibraryActivity::render(RenderLock&&) {
                    shelves[openShelfIndex].folderName.c_str());
 
     const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-    const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+    const int contentHeight = pageHeight - contentTop - HomeTabBar::bottomInset() - metrics.verticalSpacing;
 
     renderShelfBooksView(contentTop, contentHeight);
 
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    if (HomeTabBar::enabled()) {
+      HomeTabBar::draw(renderer, HomeTab::Library, tabFocus);
+    } else {
+      const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    }
 
     rememberRendered();
     renderer.displayBuffer();
     return;
   }
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS));
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS),
+                 nullptr, HomeTabBar::showsBackButton(true));
 
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
   GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), selectorVisible && contentIndex == 0);
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  const int contentHeight = pageHeight - contentTop - HomeTabBar::bottomInset() - metrics.verticalSpacing;
 
   if (selectedTab == 0) {
     renderBooksTab(contentTop, contentHeight);
@@ -1879,8 +1889,12 @@ void CoverLibraryActivity::render(RenderLock&&) {
     renderShelvesTab(contentTop, contentHeight);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (HomeTabBar::enabled()) {
+    HomeTabBar::draw(renderer, HomeTab::Library, tabFocus);
+  } else {
+    const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 
   rememberRendered();
   renderer.displayBuffer();

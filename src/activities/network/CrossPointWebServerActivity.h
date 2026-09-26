@@ -28,6 +28,9 @@ enum class WebServerActivityState {
  * - Cleans up the server and shuts down WiFi on exit
  */
 class CrossPointWebServerActivity final : public Activity {
+  // Bottom tab bar cursor for button boards; -1 when nothing in the band is focused.
+  int tabFocus = -1;
+
   WebServerActivityState state = WebServerActivityState::MODE_SELECTION;
 
   // Network mode

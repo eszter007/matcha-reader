@@ -6,8 +6,14 @@
 #include <string>
 #include <vector>
 
+class Bitmap;
 class GfxRenderer;
 struct RecentBook;
+namespace freeink {
+namespace ui {
+struct HeaderProps;
+}  // namespace ui
+}  // namespace freeink
 
 struct Rect {
   int x;
@@ -55,15 +61,17 @@ struct ThemeMetrics {
   int headerUnderlineSize;  // bottom rule thickness (Lyra), 0 = none
   int headerTitleAlign;     // 0 = left, 1 = center, 2 = right (fui::TextAlign order)
   int headerBatterySide;    // 0 = right edge, 1 = left edge
-  // Battery in its own corner strip (batteryBarHeight tall) with the title on
-  // the lower sub-band spanning the full width (Lyra), vs sharing the title
-  // line with a width reserve (Classic, RoundedRaff).
-  bool headerBatteryDetached;
+  // Header clock opt-out for themes whose title layout can't spare the left
+  // reserve (RoundedRaff); the user setting still governs the themes that can.
+  bool headerShowsClock = true;
+  // Clock slot: centered on the band, or on the left after the back arrow.
+  bool headerClockCentered = true;
   int menuRowHeight;
   int menuSpacing;
 
   int tabSpacing;
   int tabBarHeight;
+  int coverGridTabBarHeight = 72;
   // Selected-tab pill fills its equal-width slot (legacy RoundedRaff tabs)
   // instead of shrinking to hug the label (legacy Lyra tabs).
   bool tabPillFullSlot = false;
@@ -163,7 +171,7 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .batteryHeight = 12,
                                  .topPadding = 5,
                                  .batteryBarHeight = 20,
-                                 .headerHeight = 45,
+                                 .headerHeight = 84,
                                  .verticalSpacing = 10,
                                  .previewPadding = 12,
                                  .previewHeightPercent = 30,
@@ -182,7 +190,8 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .headerUnderlineSize = 0,
                                  .headerTitleAlign = 1,  // centered
                                  .headerBatterySide = 0,
-                                 .headerBatteryDetached = false,
+                                 // Corner clock: a centered clock would collide with the centered title.
+                                 .headerClockCentered = false,
                                  .menuRowHeight = 45,
                                  .menuSpacing = 8,
                                  .tabSpacing = 10,
@@ -238,6 +247,10 @@ class BaseTheme {
   virtual ~BaseTheme() = default;
 
   // Component drawing methods
+  static void drawCoverPlaceholder(const GfxRenderer& renderer, Rect rect);
+  // Draws a pre-dithered cover thumb 1:1, centered and clipped to fill the
+  // slot. Rescaling a dithered bitmap aliases badly, so overflow is cropped.
+  static bool drawCoverThumbFill(const GfxRenderer& renderer, const Bitmap& bitmap, Rect slot, int xOffset = 0);
   static void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total);
   void drawBatteryLeft(const GfxRenderer& renderer, Rect rect,
                        bool showPercentage = true) const;  // Left aligned (reader mode)
@@ -262,9 +275,21 @@ class BaseTheme {
                         const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
                         const std::function<bool(int index)>& rowDimmed = nullptr, bool showScrollbar = true) const;
   // Also draws the wall clock opposite the battery when the user enabled
-  // SETTINGS.clockShowInHeader and an RTC is present.
-  virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
-                          const char* subtitle = nullptr) const;
+  // SETTINGS.clockShowInHeader and an RTC is present. On touch boards a
+  // tappable back button leads the band (see HeaderBackTapTarget); root
+  // screens that own their stack bottom pass backButton = false.
+  virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
+                          bool backButton = true) const;
+  // Fill the battery/clock status chrome (settings + theme metrics) into
+  // header props, so FUI-native screens drawing their own interactive header
+  // carry the same band as drawHeader. Status text is styled with the
+  // FONT_LABEL slot (bound to the fixed small font by makeUiTarget and
+  // drawHeader). The label strings point at internal static buffers refreshed
+  // per call (headers draw on the single render task).
+  static void applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::HeaderProps& props);
+  // Edge inset drawHeader uses for the clock/battery status line (detached
+  // layouts hug the corner with a legacy 12px inset instead of the padding).
+  static int headerStatusInset();
   virtual void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,
                              const char* rightLabel = nullptr) const;
   virtual void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
@@ -292,6 +317,9 @@ class BaseTheme {
   virtual void drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode = false,
                              int contentStartX = 0, int contentWidth = 0) const;
   virtual bool showsFileIcons() const { return false; }
+  // Thumb generation height for home covers; 0 means use metrics.homeCoverHeight.
+  // Themes with slots wider than 0.6 aspect override this so covers still fill.
+  virtual int homeCoverThumbHeight(const GfxRenderer&) const { return 0; }
 
   // Shared constants and helpers for battery drawing (used by all themes)
   static constexpr int batteryPercentSpacing = 4;

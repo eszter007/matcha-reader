@@ -32,6 +32,9 @@ class NetworkModeSelectionActivity final : public UiListActivity {
 
  private:
   int listCount() const override;
+  // Part of the File Transfer flow (it is what the Transfer tab opens first), so it carries the
+  // same tab.
+  HomeTab tabBarTab() const override { return HomeTab::Transfer; }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onBackButton() override { onCancel(); }

@@ -145,9 +145,10 @@ jobs:
           path: ~/.platformio
           # Bump the prefix whenever the Core pin moves: a ~/.platformio restored from a
           # run on a different Core carries that Core's tool-scons, which then fights the
-          # platform's over the same package directory.
-          key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio6119s481-${{ runner.os }}-
+          # platform's over the same package directory. Keyed per env as well, so one
+          # environment's packages cannot mask another's.
+          key: pio6119s481-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio6119s481-${{ runner.os }}-${{ matrix.env }}-
 
       - name: Pin the Core inside the platform's penv
         run: |

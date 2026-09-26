@@ -251,7 +251,14 @@ namespace {
 //      whose advanceY is under its own ascender + descender no longer lets a descender meet the
 //      ascender below it. Line heights are computed at layout time and stored, so cached geometry
 //      must be rebuilt. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 93;
+// v94: upstream merge (their v45 to v48). Internal EPUB links keep CSS super/subscript
+//      positioning; ordered lists number their items and `list-style-type: none` suppresses
+//      markers; the header gains signed characterSpacing (px) and unsigned wordSpacingPercent,
+//      both part of cache validation, with each BlockStyle storing only characterSpacing; and
+//      Hangul no longer breaks between syllables -- Korean wraps at spaces, justifies on word
+//      spaces alone, and with hyphenation on may split where the CJK rules allow. The header
+//      grew and line breaking moved, so a v93 cache neither parses nor matches.
+constexpr uint8_t SECTION_FILE_VERSION = 94;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -272,7 +279,8 @@ constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) +
-                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                 sizeof(int8_t) + sizeof(uint8_t);
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -320,7 +328,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
                                    sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
                                    sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
-                                   sizeof(spec.honorBookInsets) + sizeof(spec.furiganaEnabled) + sizeof(uint32_t) +
+                                   sizeof(spec.honorBookInsets) + sizeof(spec.furiganaEnabled) +
+                                   sizeof(spec.characterSpacing) + sizeof(spec.wordSpacingPercent) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
@@ -338,6 +347,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.focusReadingEnabled);
   serialization::writePod(file, spec.honorBookInsets);
   serialization::writePod(file, spec.furiganaEnabled);
+  serialization::writePod(file, spec.characterSpacing);
+  serialization::writePod(file, spec.wordSpacingPercent);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -379,6 +390,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     bool fileFocusReadingEnabled;
     bool fileHonorBookInsets;
     bool fileFuriganaEnabled;
+    int8_t fileCharacterSpacing;
+    uint8_t fileWordSpacingPercent;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -391,13 +404,17 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileFocusReadingEnabled);
     serialization::readPod(file, fileHonorBookInsets);
     serialization::readPod(file, fileFuriganaEnabled);
+    serialization::readPod(file, fileCharacterSpacing);
+    serialization::readPod(file, fileWordSpacingPercent);
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
-        spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled) {
+        spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled ||
+        spec.characterSpacing != fileCharacterSpacing ||
+        spec.wordSpacingPercent != fileWordSpacingPercent) {
       // Name the field(s). A mismatch here throws the whole chapter away and rebuilds it, and on a
       // build long enough to be SUSPENDED (which persists a partial) an unexplained rejection is
       // indistinguishable from an infinite rebuild loop -- reported in #209 as the orientation
@@ -434,6 +451,10 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
       if (spec.honorBookInsets != fileHonorBookInsets)
         note("honorBookInsets", spec.honorBookInsets, fileHonorBookInsets);
       if (spec.furiganaEnabled != fileFuriganaEnabled) note("furigana", spec.furiganaEnabled, fileFuriganaEnabled);
+      if (spec.characterSpacing != fileCharacterSpacing)
+        note("characterSpacing", spec.characterSpacing, fileCharacterSpacing);
+      if (spec.wordSpacingPercent != fileWordSpacingPercent)
+        note("wordSpacing", spec.wordSpacingPercent, fileWordSpacingPercent);
       why[at] = '\0';
       file.close();
       LOG_ERR("SCT", "Cache rejected (%s): want!=file %s", filePartial ? "partial" : "complete", why);
@@ -719,6 +740,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
     return false;
   }
 
+  ctx->parser->setTextSpacing(spec.characterSpacing, spec.wordSpacingPercent);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   build_ = std::move(ctx);
 
@@ -966,7 +988,13 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
 
 bool Section::finalizeBuild() {
   // Flush the trailing page (emits the last page via the completePageFn into the LUT).
-  build_->parser->finishParse();
+  // A false return means layout dropped content (OOM); committing would persist a
+  // section cache with holes in the text, so abandon the build instead.
+  if (!build_->parser->finishParse()) {
+    LOG_ERR("SCT", "Parse finalize failed; abandoning section build");
+    abandonBuild();
+    return false;
+  }
 
   // Persist harvested furigana pairs for the per-book glossary (see RubyGlossary); runs
   // after the parse so the transient merge buffer doesn't compete with layout's peak memory.

@@ -49,6 +49,11 @@ class Epub {
                        ZipFile* sharedZip = nullptr);
   bool parseTocNcxFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   bool parseTocNavFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  // Extracted from generateThumbBmp() so the cover can also be rendered straight from a
+  // parsed href. Cancellable like its caller: shouldCancel is polled during extraction and
+  // decode, and partial files are removed on cancel.
+  bool generateThumbBmpForCover(int height, const std::string& coverImageHref,
+                                BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
 
@@ -87,6 +92,8 @@ class Epub {
   // shouldCancel is polled during cover extraction and decode; on cancel partial files are
   // removed and the call returns false, so a long thumbnail generation can give way to input.
   bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  // Locate the cover without building spine, TOC, or reading caches.
+  bool generateThumbBmpFromSource(int height);
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize, bool allowEarlyStop = false,

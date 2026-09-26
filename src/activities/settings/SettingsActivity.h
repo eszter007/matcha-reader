@@ -326,6 +326,10 @@ class SettingsActivity final : public UiTabListActivity {
   void saveSettings();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
+  void drawChrome() override;
+  void drawFooter() override;
+  HomeTab tabBarTab() const override { return HomeTab::Settings; }
+
  public:
   // initialCategory: category tab to open on (0=Display, 1=Reader, 2=Controls, 3=System).
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
@@ -352,5 +356,5 @@ class SettingsActivity final : public UiTabListActivity {
         hideMangaOnlySettings(hideMangaOnlySettings) {}
   void onEnter() override;
   void onExit() override;
-  void render(RenderLock&&) override;
+  void render(RenderLock&& lock) override;
 };

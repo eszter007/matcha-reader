@@ -461,6 +461,8 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string moreRowName(int row) const;
   std::string moreRowValue(int row) const;
   void activateMoreRow(int row);
+  void openFootnoteSelect(bool reopenMenuOnCancel);
+  void openDictionaryWordSelect();
   unsigned long confirmLongPressThreshold() const;
   // pageOnScreen: the framebuffer still holds the reader page, so the vertical word-lookup panel
   // can draw its cursor straight onto it instead of paying for a page repaint first. False when

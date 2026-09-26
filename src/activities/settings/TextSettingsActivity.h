@@ -40,7 +40,16 @@ class TextSettingsActivity final : public UiTabListActivity {
   // silently confused with a StyleRow of equal value.
   // BookSideMargins is horizontal-only (the vertical engine never reads honorBookInsets), so it
   // is hidden for a Japanese book alongside ParaSpacing and Alignment -- see layoutRowAt().
-  enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, BookSideMargins, Count };
+  enum class LayoutRow {
+    LineSpacing,
+    WordSpacing,
+    CharacterSpacing,
+    ParaSpacing,
+    Alignment,
+    ScreenMargin,
+    BookSideMargins,
+    Count
+  };
   enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
 
   // --- UiTabListActivity contract ---
@@ -52,6 +61,8 @@ class TextSettingsActivity final : public UiTabListActivity {
   void activateIndex(int index) override;
   void onTabAction(int index) override;
   void stepTab(int direction) override { switchTab(direction); }
+  void drawChrome() override;
+  void drawFooter() override;
   bool handleButtons() override;
   bool handleCustomInput() override;
 

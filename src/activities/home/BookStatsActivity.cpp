@@ -2,6 +2,8 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
+#include <Memory.h>
 
 #include <cstdio>
 
@@ -144,4 +146,14 @@ void BookStatsActivity::render(RenderLock&&) {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
+}
+
+void BookStatsActivity::openFor(Activity& host, GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                std::string path, std::string title, ActivityResultHandler onDone) {
+  auto activity = makeUniqueNoThrow<BookStatsActivity>(renderer, mappedInput, std::move(path), std::move(title));
+  if (!activity) {
+    LOG_ERR("BST", "OOM: book stats activity");
+    return;
+  }
+  host.startActivityForResult(std::move(activity), std::move(onDone));
 }

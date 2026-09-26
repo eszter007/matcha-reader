@@ -106,6 +106,7 @@ void UiListActivity::loop() {
   }
 
   if (handleCustomInput()) return;
+  if (handleTabBarInput()) return;
   if (handleButtons()) return;
   if (routeListTouch()) return;
 
@@ -146,17 +147,49 @@ void UiListActivity::navigateButtons() {
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const int selectionOffset) {
   props.partialTrailingRow = true;
-  screen.syncListViewport(activeNav(), props, listCount(), selectionOffset);
+  auto& n = activeNav();
+  const int prevTop = n.top;
+  const bool trusted = n.trusts(listCount());
+  const int drawn = n.drawnRows;
+
+  screen.syncListViewport(n, props, listCount(), selectionOffset);
+
+  // When the selection is already visible in the current viewport (based on
+  // the measured drawnRows rather than the unweighted visibleRows estimate),
+  // keep selection-follow anchored instead of jumping to top. Explicit swipe
+  // scrolling clears followPending and must retain its new viewport.
+  if (n.followPending && trusted && drawn > 0) {
+    const int sel = props.selectedIndex;
+    if (sel >= prevTop && sel < prevTop + drawn) {
+      n.top = prevTop;
+      props.topIndex = static_cast<uint16_t>(prevTop);
+    }
+  }
 }
 
 void UiListActivity::drawChrome() {
   const char* title = headerTitle();
   if (!title) return;
   const auto& metrics = UITheme::getInstance().getMetrics();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, title);
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, title, nullptr,
+                 HomeTabBar::showsBackButton(hasTabBar()));
+}
+
+bool UiListActivity::hasTabBar() const { return tabBarTab() != HomeTab::Count && HomeTabBar::enabled(); }
+
+bool UiListActivity::handleTabBarInput() {
+  if (!hasTabBar()) return false;
+  const auto routed = HomeTabBar::route(mappedInput, renderer, tabBarTab(), tabFocus);
+  if (routed == HomeTabBar::Input::FocusMoved) requestUpdate();
+  if (routed == HomeTabBar::Input::Consumed) app.clearTapFlash();
+  return routed != HomeTabBar::Input::None;
 }
 
 void UiListActivity::drawFooter() {
+  if (hasTabBar()) {
+    HomeTabBar::draw(renderer, tabBarTab(), tabFocus);
+    return;
+  }
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

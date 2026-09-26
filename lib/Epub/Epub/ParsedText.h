@@ -8,22 +8,27 @@
 #include <string>
 #include <vector>
 
+#include "WordStore.h"
 #include "blocks/BlockStyle.h"
 #include "blocks/TextBlock.h"
 
 class GfxRenderer;
 
 class ParsedText {
-  // words/rubyTexts are std::deque, not std::vector: a paragraph can hold thousands
-  // of tokens (CJK splits every character), and a vector grows by reallocating its
-  // whole element array into one contiguous block (32 B/std::string -> 64-128 KB at
-  // a few thousand tokens). On the ESP32-C3 that single large contiguous request
-  // fails under a fragmented, BLE-resident heap and the throwing operator new
-  // abort()s the firmware (fresh-open CJK crash). A deque grows in fixed ~512 B nodes
-  // (largest contiguous alloc stays ~2 KB regardless of token count), so it never
-  // triggers that. The per-token parallel arrays below stay vectors: 1 byte / 1 bit
-  // each, they never approach the contiguous-block ceiling.
-  std::deque<std::string> words;
+  // Word text lives in wordStore (chunked bump arena, NUL-terminated entries);
+  // words holds 8-byte handles into it. This replaces the former
+  // std::deque<std::string>: per-word string objects, their SSO spills, and
+  // every hyphenation/NFC temporary were the layout path's dominant
+  // small-allocation churn, and any failed implicit allocation abort()s under
+  // -fno-exceptions. Handles stay in a std::deque for the #2814 reason: no
+  // large contiguous reallocation at CJK token counts (deque grows in fixed
+  // ~512 B nodes). On arena OOM the word is dropped and hadDroppedWords()
+  // latches so the section build can fail readably instead of aborting.
+  // rubyTexts stays a deque of strings: ruby is rare and per-block small.
+  // The per-token parallel arrays below stay vectors: 1 byte / 1 bit each,
+  // they never approach the contiguous-block ceiling.
+  WordStore wordStore;
+  std::deque<WordStore::StoredWord> words;
   std::vector<EpdFontFamily::Style> wordStyles;
   // Boundary flags use all four combinations:
   //   false,false: ordinary gap; false,true: stretchable zero-width CJK gap;
@@ -56,6 +61,7 @@ class ParsedText {
   std::vector<VisibleOffsetRebase> visibleOffsetRebases;
   std::deque<std::string> rubyTexts;
   BlockStyle blockStyle;
+  uint8_t wordSpacingPercent = 100;
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
@@ -71,6 +77,8 @@ class ParsedText {
   // line" is spelled -- without this it would take the first-line text-indent a second time,
   // several lines into the paragraph.
   bool dropCapLinesEmitted = false;
+  // True once any word was dropped because the text arena could not allocate.
+  bool droppedWords = false;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<int32_t> reorderedFontsScratch;
@@ -80,6 +88,7 @@ class ParsedText {
   std::vector<uint8_t> reorderedFocusBoundaryScratch;
   std::vector<uint16_t> visualOrderScratch;
 
+  bool storeWord(std::string_view text, WordStore::StoredWord& out);
   uint32_t visibleOffsetBaseAt(size_t wordIndex) const;
   uint32_t visibleOffsetAt(size_t wordIndex) const;
   void pushVisibleOffset(uint32_t offset);
@@ -165,9 +174,9 @@ class ParsedText {
   }
   // Caller must check !isEmpty() first (used by the furigana-glossary harvest to pair a
   // just-closed <rt> reading with its base word).
-  const std::string& lastWord() const { return words.back(); }
+  std::string_view lastWord() const { return wordStore.view(words.back()); }
   // Base text behind a ruby group, for the same harvest (a group ruby spans several words).
-  const std::string& wordAt(size_t index) const { return words[index]; }
+  std::string_view wordAt(const size_t i) const { return wordStore.view(words[i]); }
   // Delegates so the sizing rule lives in ONE place: ensureRubyCapacity() only reserve()s, it
   // does not resize, so writing rubyTexts.back() while the vector is still empty (no ruby seen
   // in this block yet) wrote past the end -- device crash: Store access fault inside
@@ -184,6 +193,9 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  // True once any word was dropped because the text arena could not allocate.
+  // Callers must treat the block as incomplete and fail the section build.
+  bool hadDroppedWords() const { return droppedWords; }
   // baseFontId is the reader's font; a block with a CSS font-size lays out (and later draws)
   // with BlockStyle::resolveFontId(baseFontId) instead. processLine receives each line and the
   // visible-codepoint offset of its first word (content-based positions, upstream #2805).
@@ -196,5 +208,6 @@ class ParsedText {
   // heap where fragmentation is the binding constraint.
   void layoutAndExtractLines(const GfxRenderer& renderer, int baseFontId, uint16_t viewportWidth,
                              const std::function<void(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
-                             bool includeLastLine = true, float lineCompression = 1.0f);
+                             bool includeLastLine = true, float lineCompression = 1.0f, int8_t characterSpacing = 0,
+                             uint8_t wordSpacingPercent = 100);
 };

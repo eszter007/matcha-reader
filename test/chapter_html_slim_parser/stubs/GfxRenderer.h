@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EpdFontFamily.h>
+#include <Utf8.h>
 
 #include <deque>
 #include <string>
