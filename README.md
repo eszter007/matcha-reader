@@ -8,7 +8,7 @@ It includes all features of upstream CrossPoint and runs on any supported ESP32 
   <img src="docs/images/screenshots/vertical-text.png" width="200" alt="Vertical Japanese text">
   <img src="docs/images/screenshots/word-lookup.png" width="200" alt="Dictionary word lookup panel">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Manga reader, full page">
-  <img src="docs/images/screenshots/language-stats.png" width="200" alt="Reading stats split by language">
+  <img src="docs/images/screenshots/insights.png" width="200" alt="Reading stats, split by language across the tabs">
 </p>
 
 ### Now running on:
@@ -103,6 +103,14 @@ Covers are built in the background, so the grid appears at once with titles stan
 made yet and each cover replaces its own title as it finishes. A button press interrupts the work instead of queueing
 behind it.
 
+<p align="center">
+  <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
+  <img src="docs/images/screenshots/tab-library.png" width="150" alt="Library tab, with Books, Shelves and Files">
+  <img src="docs/images/screenshots/tab-transfer.png" width="150" alt="File Transfer tab">
+  <img src="docs/images/screenshots/insights.png" width="150" alt="Insights tab, with a tab per language">
+  <img src="docs/images/screenshots/tab-settings.png" width="150" alt="Settings tab">
+</p>
+
 The SD browser lives inside the Library there, as a third tab beside **Books** and **Shelves**. On the other themes it
 stays its own entry on the home menu.
 
@@ -121,7 +129,6 @@ Tabs across the top split the same numbers by language: **All**, then one per la
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">
-  <img src="docs/images/screenshots/language-stats.png" width="240" alt="Per-language stats with a tab for each language">
   <img src="docs/images/screenshots/book-stats.png" width="240" alt="Per-book stats for one book">
 </p>
 
