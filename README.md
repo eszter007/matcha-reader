@@ -81,7 +81,7 @@ Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/
 Every book on the card as a cover grid, at any depth. Covers and titles come from the book's own metadata on first
 visit, with progress as a badge. Manga sits beside EPUBs. A **Shelves** tab lists folders that contain books.
 
-<p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side"></p>
+<p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side, under the Books / Shelves / Files tabs"></p>
 
 CrossPoint's own library screen is still here if you prefer it: an indexed list with title and author search across
 thousands of books, sorted by title, author or when they were added. **Settings → Display → Library** gathers the library
@@ -105,7 +105,7 @@ behind it.
 
 <p align="center">
   <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
-  <img src="docs/images/screenshots/tab-library.png" width="150" alt="Library tab, with Books, Shelves and Files">
+  <img src="docs/images/screenshots/library.png" width="150" alt="Library tab, with Books, Shelves and Files">
   <img src="docs/images/screenshots/tab-transfer.png" width="150" alt="File Transfer tab">
   <img src="docs/images/screenshots/insights.png" width="150" alt="Insights tab, with a tab per language">
   <img src="docs/images/screenshots/tab-settings.png" width="150" alt="Settings tab">
