@@ -222,9 +222,9 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsVerbAndPronoun) {
   feedWord("songeai-je");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 3u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "songeai");
-  EXPECT_EQ(parser->currentTextBlock->words[1], "-");
-  EXPECT_EQ(parser->currentTextBlock->words[2], "je");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "songeai");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(1), "-");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(2), "je");
   // The connector and pronoun stay glued to the verb: no rendered gap, matching the source.
   EXPECT_TRUE(parser->currentTextBlock->wordContinues[1]);
   EXPECT_TRUE(parser->currentTextBlock->wordContinues[2]);
@@ -235,9 +235,9 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicT) {
   feedWord("pense-t-il");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 3u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "pense");
-  EXPECT_EQ(parser->currentTextBlock->words[1], "-t-");
-  EXPECT_EQ(parser->currentTextBlock->words[2], "il");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "pense");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(1), "-t-");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(2), "il");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWhenUppercased) {
@@ -247,9 +247,9 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWhenUpperc
   feedWord("PENSE-T-IL");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 3u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "PENSE");
-  EXPECT_EQ(parser->currentTextBlock->words[1], "-T-");
-  EXPECT_EQ(parser->currentTextBlock->words[2], "IL");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "PENSE");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(1), "-T-");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(2), "IL");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsWithTrailingPunctuation) {
@@ -259,9 +259,9 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsWithTrailingPunctuation) 
   feedWord("songeai-je,");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 3u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "songeai");
-  EXPECT_EQ(parser->currentTextBlock->words[1], "-");
-  EXPECT_EQ(parser->currentTextBlock->words[2], "je,");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "songeai");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(1), "-");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(2), "je,");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWithTrailingPunctuation) {
@@ -269,9 +269,9 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, SplitsAroundEuphonicTWithTraili
   feedWord("pense-t-il?");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 3u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "pense");
-  EXPECT_EQ(parser->currentTextBlock->words[1], "-t-");
-  EXPECT_EQ(parser->currentTextBlock->words[2], "il?");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "pense");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(1), "-t-");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(2), "il?");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWhole) {
@@ -279,7 +279,7 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWhole)
   feedWord("rendez-vous");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 1u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "rendez-vous");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "rendez-vous");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWholeWithTrailingPunctuation) {
@@ -287,7 +287,7 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsLexicalizedCompoundsWholeW
   feedWord("rendez-vous.");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 1u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "rendez-vous.");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "rendez-vous.");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsSecondLexicalizedCompoundWhole) {
@@ -296,7 +296,7 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsSecondLexicalizedCompoundW
   feedWord("qu'en-dira-t-on");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 1u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "qu'en-dira-t-on");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "qu'en-dira-t-on");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsOrdinaryCompoundsWhole) {
@@ -304,7 +304,7 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, KeepsOrdinaryCompoundsWhole) {
   feedWord("grand-mère");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 1u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "grand-mère");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "grand-mère");
 }
 
 TEST_F(ChapterHtmlSlimParserFrenchInversionTest, DoesNotSplitInNonFrenchBooks) {
@@ -312,7 +312,7 @@ TEST_F(ChapterHtmlSlimParserFrenchInversionTest, DoesNotSplitInNonFrenchBooks) {
   feedWord("songeai-je");
 
   ASSERT_EQ(parser->currentTextBlock->size(), 1u);
-  EXPECT_EQ(parser->currentTextBlock->words[0], "songeai-je");
+  EXPECT_EQ(parser->currentTextBlock->wordAt(0), "songeai-je");
 }
 
 // Drop caps, end to end: a `::first-letter` font-size has to reach the layout, take the letter

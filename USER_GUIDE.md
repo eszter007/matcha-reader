@@ -19,6 +19,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [First Launch](#first-launch)
   - [3. Screens](#3-screens)
     - [3.1 Home Screen](#31-home-screen)
+      - [3.1.1 Tabs and Button Navigation (Cover Grid theme)](#311-tabs-and-button-navigation-cover-grid-theme)
     - [3.2 Reading Mode](#32-reading-mode)
     - [3.3 Browse Files Screen](#33-browse-files-screen)
     - [3.4 Library Screen](#34-library-screen)
@@ -66,9 +67,8 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [6.5 Dictionary Files and Language Selection](#65-dictionary-files-and-language-selection)
   - [7. Reading Stats](#7-reading-stats)
     - [7.1 Insights](#71-insights)
-    - [7.2 Per-language Stats](#72-per-language-stats)
-    - [7.3 Per-book Stats](#73-per-book-stats)
-    - [7.4 What the Numbers Do Not Cover](#74-what-the-numbers-do-not-cover)
+    - [7.2 Per-book Stats](#72-per-book-stats)
+    - [7.3 What the Numbers Do Not Cover](#73-what-the-numbers-do-not-cover)
   - [8. Current Limitations & Roadmap](#8-current-limitations--roadmap)
   - [9. Troubleshooting Issues & Escaping Bootloop](#9-troubleshooting-issues--escaping-bootloop)
 
@@ -130,6 +130,36 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Browse Files](#33-browse-files-screen)**, the **[Library](#34-library-screen)**, **[File Transfer](#35-file-transfer-screen)**, or **[Settings](#36-settings)**.
 
+In the **Cover Grid** theme the Home screen is a grid of covers instead of a menu: the book you are reading fills a card
+across the top and the rest follow below it. Covers are made in the background the first time the device sees a book, so
+the grid appears straight away with titles in place of the artwork it has not built yet, and each cover replaces its own
+title as it finishes. Nothing blocks while this happens, and a button press stops the conversion rather than waiting for
+it. A cover that could not be built is retried the next time you visit Home.
+
+Long press a cover, here or in the Library, for **View Stats**, **Mark as Read** / **Mark as Unread** and **Delete**.
+Only the direction that changes something is offered, so a finished book has no **Mark as Read**. Delete asks first and
+takes the book's reading cache with it.
+
+#### 3.1.1 Tabs and Button Navigation (Cover Grid theme)
+
+The Cover Grid theme carries a tab bar along the bottom of Home, Library, File Transfer, Insights and Settings. It stays
+put as you move between them, and the tab you are in is drawn filled. Nothing opens on top of anything else, so there is
+no stack to back out of.
+
+On a touch device, tap a tab. On a button-only device the bar is part of one navigation ring, so every control on the
+screen is reachable without leaving it:
+
+- **Up / Side Up** and **Down / Side Down** walk the ring: the screen's own tabs at the top (where it has them), then its
+  rows or covers, then the bottom bar, and round again.
+- **Confirm** on a screen's own tabs steps to the next one — **Books**, **Shelves**, **Files** in the Library, the
+  categories in Settings, the languages in Insights — and past the last one it moves the cursor into the bottom bar.
+- **Left** and **Right**, once the cursor is in the bottom bar, move between Home, Library, File Transfer, Insights and
+  Settings. **Confirm** goes to the highlighted tab; **Confirm** on the tab you are already in hands the cursor back to
+  the top of the screen, closing the ring.
+- **Back** still leaves the screen, and holding it still goes Home.
+
+A grey outline marks whatever the cursor is on, whether that is a cover, a row or a tab.
+
 ### 3.2 Reading Mode
 
 See [Reading Mode](#4-reading-mode) below for more information.
@@ -142,6 +172,11 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 * **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
 * **Delete Files or Folders:** Hold and release **Confirm** to delete the selected file or folder. You will be given an option to either confirm or cancel. Multiple files can be selected for deletion in a single operation. Deleting a folder removes everything inside it.
 * **Rename or Move:** Files can be renamed or moved to a different folder from within the browse screen.
+
+In the **Cover Grid** theme this screen is the Library's **Files** tab rather than its own entry on the home menu, so it
+keeps the **Books / Shelves / Files** tabs at the top and the bottom tab bar. The back arrow in the header appears only
+once you are inside a folder; at the card root the tabs are the way out. Every other theme keeps **Browse Files** as a
+separate home entry, exactly as before.
 
 ### 3.4 Library Screen
 
@@ -1037,28 +1072,26 @@ crash costs you the last few minutes rather than the whole session. Manga counts
 Home → **Insights**. Your current streak, minutes this week, books finished, days read, total time, longest
 streak, and a calendar of the days you read.
 
-| Button | Action |
-| --- | --- |
-| Left / Right | Previous or next month. The button hints name the month they move to. |
-| Up / Down | Scroll |
-| Confirm | Open the per-language view |
-| Back | Back one screen. Hold it to go home. |
-
-<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, stat cards and calendar"></p>
-
-### 7.2 Per-language Stats
-
-Press **Details** on Insights. The same figures again, split by the language of what you read, with one tab per
-language and **Switch** to move between them. Each tab has its own streak, calendar and totals, so a Japanese
-streak survives an evening spent with an English book.
+A row of tabs across the top splits the same figures by the language of what you read. **All** is everything
+together; after it comes one tab per language the device has seen. Each tab keeps its own streak, calendar and
+totals, so a Japanese streak survives an evening spent with an English book.
 
 Tabs are named where the firmware has a translation for the language, so `ja` shows as 日本語. A language it has
 no translation for keeps its tag, `ZH` for instance, rather than being given the wrong name. Books that declare no
-language at all, which means TXT, XTC and manga converted without `--language`, collect in an **Unknown** tab.
+language at all — TXT, XTC and manga converted without `--language` — collect in an **Unknown** tab.
 
-<p align="center"><img src="docs/images/screenshots/language-stats.png" width="260" alt="Per-language stats with a tab for each language"></p>
+| Button | Action |
+| --- | --- |
+| Confirm | Next tab. Past the last one the cursor moves into the bottom tab bar (Cover Grid theme). |
+| Left / Right | Previous or next month, while the cursor is on the page. The button hints name the month they move to. |
+| Up / Down | Scroll. Down past the end of the page moves the cursor into the bottom tab bar. |
+| Back | Back one screen. Hold it to go home. |
 
-### 7.3 Per-book Stats
+On a touch device, tap a tab, or flick left and right across the page to step through them.
+
+<p align="center"><img src="docs/images/screenshots/insights.png" width="260" alt="Insights with streak, stat cards and calendar"></p>
+
+### 7.2 Per-book Stats
 
 Long press a book in the Library. Sessions, total time, average session, days read, and a calendar of the days you
 read that book.
@@ -1072,7 +1105,7 @@ recorded yet" until you next open it. Your overall Insights numbers go back as f
 
 <p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book stats for one book"></p>
 
-### 7.4 What the Numbers Do Not Cover
+### 7.3 What the Numbers Do Not Cover
 
 Worth knowing before you read too much into them.
 

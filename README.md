@@ -93,6 +93,16 @@ The **Cover Grid** theme (the default on touch devices; **Settings → Display �
 the bottom that stays put as you move between Home, Library, File Transfer, Insights and Settings. The tab you are in is
 drawn filled. Nothing opens "on top" any more, so there is no stack to back out of.
 
+On a button-only device the bar is part of one navigation ring rather than a separate thing to reach: **Up/Down** walk a
+screen's own tabs, then its rows, then the bottom bar; **Confirm** steps the tabs at the top and past the last one drops
+into the bar; **Left/Right** move along the bar, and **Confirm** on the tab you are already in hands the cursor back to
+the top. A grey outline marks whatever the cursor is on. Details in
+[§3.1.1](USER_GUIDE.md#311-tabs-and-button-navigation-cover-grid-theme).
+
+Covers are built in the background, so the grid appears at once with titles standing in for artwork the device has not
+made yet and each cover replaces its own title as it finishes. A button press interrupts the work instead of queueing
+behind it.
+
 The SD browser lives inside the Library there, as a third tab beside **Books** and **Shelves**. On the other themes it
 stays its own entry on the home menu.
 
@@ -107,7 +117,7 @@ refresh, orientation, touch controls and the light. Each button names what tappi
 
 Streak, minutes this week, books finished, total time, and a calendar of the days you read. Recorded as you go, every few minutes and again when you close a book, so a flat battery costs you minutes rather than the whole session.
 
-Press **Details** for the same numbers per language, one tab each. Long press a book in the Library for its own sessions, total time, average session and calendar.
+Tabs across the top split the same numbers by language: **All**, then one per language the device has seen. Long press a book in the Library for its own sessions, total time, average session and calendar.
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">

@@ -39,9 +39,8 @@ void promptDelete(Activity& host, GfxRenderer& renderer, MappedInputManager& inp
 
 }  // namespace
 
-void show(OptionPopup& popup, Activity& host, GfxRenderer& renderer, MappedInputManager& input,
-          const std::string& path, const std::string& title, const int progressPercent,
-          const std::function<void(bool deleted)>& onChanged) {
+void show(OptionPopup& popup, Activity& host, GfxRenderer& renderer, MappedInputManager& input, const std::string& path,
+          const std::string& title, const int progressPercent, const std::function<void(bool deleted)>& onChanged) {
   const char* labels[4];
   Action actions[4];
   int count = 0;

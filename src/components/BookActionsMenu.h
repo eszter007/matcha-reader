@@ -19,8 +19,7 @@ class MappedInputManager;
 namespace BookActionsMenu {
 
 // progressPercent: the badge value, < 0 when unknown (no record yet, i.e. unread).
-void show(OptionPopup& popup, Activity& host, GfxRenderer& renderer, MappedInputManager& input,
-          const std::string& path, const std::string& title, int progressPercent,
-          const std::function<void(bool deleted)>& onChanged);
+void show(OptionPopup& popup, Activity& host, GfxRenderer& renderer, MappedInputManager& input, const std::string& path,
+          const std::string& title, int progressPercent, const std::function<void(bool deleted)>& onChanged);
 
 }  // namespace BookActionsMenu

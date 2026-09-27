@@ -413,8 +413,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
         spec.honorBookInsets != fileHonorBookInsets || spec.furiganaEnabled != fileFuriganaEnabled ||
-        spec.characterSpacing != fileCharacterSpacing ||
-        spec.wordSpacingPercent != fileWordSpacingPercent) {
+        spec.characterSpacing != fileCharacterSpacing || spec.wordSpacingPercent != fileWordSpacingPercent) {
       // Name the field(s). A mismatch here throws the whole chapter away and rebuilds it, and on a
       // build long enough to be SUSPENDED (which persists a partial) an unexplained rejection is
       // indistinguishable from an infinite rebuild loop -- reported in #209 as the orientation
