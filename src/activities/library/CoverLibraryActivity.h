@@ -12,6 +12,7 @@
 
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
+#include "components/CoverWorker.h"
 #include "components/OptionPopup.h"
 #include "components/UITheme.h"  // TabInfo, Rect
 #include "util/ButtonNavigator.h"
@@ -223,73 +224,24 @@ class CoverLibraryActivity final : public Activity {
   std::vector<LibraryIndexEntry> libraryIndex_;
   bool libraryIndexDirty_ = false;
 
-  // One lower-priority cover job at a time. Release/acquire stores on busy publish the job to
-  // the worker and its result back to loop(), so the non-atomic structs are never accessed
-  // concurrently; the loop task is their only writer while busy=false.
-  struct CoverJob {
-    RecentBook book;
-    int gridHeight = 0;
-    // Every thumb height this book still needs, generated in ONE job. Opening the book is what
-    // costs (measured on device: 213ms typical, 2347ms worst, against milliseconds to scale the
-    // cover once it is open), so a job per height paid that price again for each size. Unused
-    // slots are 0. Three: the grid cell, the home cover, and SHELF_THUMB_HEIGHT.
-    static constexpr int MAX_TARGET_HEIGHTS = 3;
-    int targetHeights[MAX_TARGET_HEIGHTS] = {0, 0, 0};
-    uint32_t fileSize = 0;
-    uint32_t modifiedStamp = 0;
+  // Cover conversion off the loop task. The mechanism lives in CoverWorker (shared with Home);
+  // what stays here is the policy -- which book to convert next, the set of heights to ask for,
+  // and recording the outcome in library.idx.
+  CoverWorker coverWorker_;
 
-    void addTargetHeight(const int h) {
-      if (h <= 0) return;
-      for (int& slot : targetHeights) {
-        if (slot == h) return;  // already queued
-        if (slot == 0) {
-          slot = h;
-          return;
-        }
-      }
-    }
-  };
-  struct CoverResult {
-    bool pending = false;
-    bool completed = false;  // false means foreground work cancelled it; retry after idle
-    bool hasGridThumb = false;
-    // The book declares no cover image at all, so no future attempt can succeed. Distinct from
-    // hasGridThumb=false, which usually means the conversion did not fit in the heap this time
-    // and must be retried -- conflating the two costs a cover forever (see Epub::hasCoverImage).
-    bool coverKnownAbsent = false;
-    RecentBook book;
-    uint32_t fileSize = 0;
-    uint32_t modifiedStamp = 0;
-  };
-  TaskHandle_t coverWorkerTask_ = nullptr;
-  std::atomic<bool> coverWorkerExitRequested_{false};
-  std::atomic<bool> coverWorkerExited_{false};
-  std::atomic<bool> coverWorkerBusy_{false};
-  std::atomic<bool> coverWorkerCancelRequested_{false};
-  std::atomic<bool> coverWorkerCancelSeen_{false};
-  CoverJob coverJob_;
-  CoverResult coverResult_;
-
-  static void coverWorkerTrampoline(void* ctx);
-  static bool coverWorkerShouldCancel(void* ctx);
-  void coverWorkerLoop();
-  void runCoverJob();
-  bool postCoverJob(CoverJob&& job);
-  void startCoverWorker();
-  void stopCoverWorker();
+  // Full CPU while a cover conversion runs, the same way EpubReaderActivity keeps a section
+  // build off the low-power clock. The Library sits idle while the worker converts, so the loop
+  // would drop to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz takes ~24s at 10 --
+  // long enough that it used to be cancelled before it could finish. The work is fixed, so
+  // finishing sooner spends less time awake, not more.
+  bool skipLoopDelay() override { return coverWorker_.busy(); }
 
   void loadLibraryIndex();
   void saveLibraryIndex();
   const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
   void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
                         bool hasThumb, bool coverKnownAbsent = false);
-  // Full CPU while a cover conversion runs, the same way EpubReaderActivity keeps a section
-  // build off the low-power clock. The Library sits idle while the worker converts, so the loop
-  // would drop to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz takes ~24s at 10 --
-  // long enough that it used to be cancelled before it could finish. The work is fixed, so
-  // finishing sooner spends less time awake, not more.
-  bool skipLoopDelay() override { return coverWorkerBusy_.load(std::memory_order_acquire); }
-
+  void prewarmBookText();
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   bool applyLibraryScan();

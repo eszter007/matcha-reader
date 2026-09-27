@@ -7,6 +7,7 @@
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
 #include "components/CoverGridHomeUi.h"
+#include "components/CoverWorker.h"
 #include "components/HomeTabBar.h"
 #include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
@@ -17,7 +18,7 @@ class HomeActivity final : public Activity {
   std::unique_ptr<CoverGridHomeUi> coverGridUi;
   ButtonNavigator buttonNavigator;
   int selectorIndex = 0;
-  bool recentsLoading = false;
+  // True once the cover scan has walked every recent book. Reset when the slot height changes.
   bool recentsLoaded = false;
   // Set after the cover grid's first paint: that pass uses a clean HALF refresh, later ones FAST.
   bool firstRenderDone = false;
@@ -110,10 +111,21 @@ class HomeActivity final : public Activity {
   bool restoreCoverBuffer();  // Restore frame buffer from stored cover
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
-  void loadRecentCovers(int coverHeight);
+  // Cover thumbnails off the loop task, the same worker the Library uses.
+  CoverWorker coverWorker_;
+  // How far the cover scan has walked recentBooks. Advances on a completed job; a cancelled one
+  // leaves it in place so the book is retried.
+  int coverScanIndex_ = 0;
+  void postNextCoverJob(int coverHeight);
+  void applyCoverResult();
+  // The cover height the cards actually ask for. 0 before the grid has measured a slot.
+  int coverTargetHeight() const;
+  // Full CPU while a conversion runs: Home sits idle meanwhile, so the loop would drop to
+  // LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz would take ~24s at 10. The work is
+  // fixed, so finishing sooner spends less time awake, not more.
+  bool skipLoopDelay() override { return coverWorker_.busy(); }
   void fillCoverGridFromLibrary();
   void resolveGridCoverPaths();
-  void loadGridCover(RecentBook& book, int height, bool& showingLoading, Rect& popupRect);
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
