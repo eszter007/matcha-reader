@@ -38,6 +38,15 @@ class CoverGridHomeUi final : public UiAppHost {
   // fallback constant before that, which is not a size any card will ask for.
   bool thumbHeightMeasured() const { return thumbHeight > 0; }
   bool takeThumbHeightChanged();
+  // Move the cursor without repainting the screen: erase the ring on `from`, draw it on `to`.
+  // False when the frame on screen cannot be trusted or the move is not cover-to-cover, in which
+  // case the caller does a full render. Exists because a full render re-opens and re-decodes
+  // every cover thumb from SD -- there is no PSRAM snapshot on the C3 boards (HomeCoverCache
+  // bails without it), so a cursor step cost seven SD reads for pixels already on the panel.
+  bool tryMoveSelection(int from, int to);
+  // Forget where the covers are: the next cursor move takes the full path. Any change to what a
+  // cell shows has to call this, or the ring would move over a frame that no longer matches.
+  void invalidateFrame() { frameRectsValid = false; }
 
  private:
   static void screenFn(UiScreen& screen, void* user);
@@ -78,5 +87,10 @@ class CoverGridHomeUi final : public UiAppHost {
   // Cover rect of the cell the cursor is on, filled in by paintFramedCover() during the grid's
   // render and consumed by paintSelectionRing() right after it.
   freeink::ui::Rect selectedCoverRect{};
+  // Where every cover was painted in the frame currently on screen, indexed by book. Written by
+  // paintFramedCover() during a full render; tryMoveSelection() reads it to find the two rings it
+  // has to touch. frameRectsValid says the array still describes what the panel shows.
+  std::array<freeink::ui::Rect, MAX_BOOKS> coverRects{};
+  bool frameRectsValid = false;
   void paintSelectionRing(int gap);
 };

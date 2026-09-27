@@ -1266,16 +1266,7 @@ void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int ce
                               coverHeight + 2 * COVER_PADDING},
                          on);
   // The drop shadow lives in that same padding, so erasing the ring erases it too.
-  if (!on) drawCoverShadow(coverX, coverY, coverWidth, coverHeight);
-}
-
-void CoverLibraryActivity::drawCoverShadow(const int coverX, const int coverY, const int coverWidth,
-                                           const int coverHeight) {
-  // Same drop shadow the home grid gives its covers (CoverGridHomeUi::paintFramedCover): two px
-  // down the right edge and along the bottom, so a cover reads as a book lying on the shelf.
-  constexpr int SHADOW = 2;
-  renderer.fillRect(coverX + coverWidth, coverY + SHADOW, SHADOW, coverHeight, true);
-  renderer.fillRect(coverX + SHADOW, coverY + coverHeight, coverWidth, SHADOW, true);
+  if (!on) UITheme::drawCoverShadow(renderer, coverX, coverY, coverWidth, coverHeight);
 }
 
 void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const int cellWidth, const int cellHeight,

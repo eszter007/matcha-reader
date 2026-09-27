@@ -145,7 +145,6 @@ class CoverLibraryActivity final : public Activity {
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
   // cell's padding margin. Because it never overlaps the cover, moving the selection is two of
   // these calls (erase old with on=false, draw new) -- no cover re-decode, a few ms total.
-  void drawCoverShadow(int coverX, int coverY, int coverWidth, int coverHeight);
   void drawGridSelectionBorder(int cellX, int cellY, int cellWidth, int cellHeight, bool on);
 
   // Selection-only fast path: when the previous full render is still in the framebuffer and ONLY
