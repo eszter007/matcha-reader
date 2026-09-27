@@ -613,9 +613,7 @@ void LibraryListActivity::applyFilter() {
   headerSearchTitle = query.empty() ? std::string() : "“" + query + "”";
   if (query.empty()) return;
 
-  // Folded the same way the stored folds were, articles removed included —
-  // otherwise "the hobbit" searches for a word no record contains.
-  const std::string needle = library::fold(query, /*stripArticle=*/true);
+  const std::string needle = library::fold(query);
   const int total = static_cast<int>(index.bookCount());
   if (total <= 0) return;
 
