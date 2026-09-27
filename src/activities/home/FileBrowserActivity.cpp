@@ -253,6 +253,9 @@ void FileBrowserActivity::prewarmRowGlyphs(const int start) {
 }
 
 void FileBrowserActivity::onEnter() {
+  // Entered as the Library's Files tab: the cursor carries on from the band the previous screen
+  // left it on, so Confirm keeps stepping the same ring instead of opening the first row.
+  topBandFocused = showsLibraryTabs();
   UiListActivity::onEnter();
 
   fileNameBuffer = makeUniqueNoThrow<char[]>(NAME_BUFFER_SIZE);
@@ -754,8 +757,27 @@ void FileBrowserActivity::drawChrome() {
   // or Shelves is a tab switch rather than a trip back through Home.
   if (showsLibraryTabs()) {
     GUI.drawTabBar(renderer, LibraryTabs::barRect(renderer, mappedInput), LibraryTabs::build(LibraryTabs::Files),
-                   false);
+                   topBandFocused);
   }
+}
+
+// Left/Right on the band walk the Library's three views; Books and Shelves live in the other
+// activity, so stepping onto them switches to it.
+// The bottom bar is the last stop on the Library's ring, so leaving it returns to the first
+// Library view rather than to Files, which is where the cursor just came from.
+void FileBrowserActivity::onTabBandExit() {
+  if (showsLibraryTabs()) {
+    LibraryTabs::activate(LibraryTabs::Books);
+    return;
+  }
+  UiListActivity::onTabBandExit();
+}
+
+void FileBrowserActivity::stepTopBand(const int direction) {
+  const int count = LibraryTabs::count();
+  if (count <= 1) return;
+  const int next = (LibraryTabs::Files + direction + count) % count;
+  if (next != LibraryTabs::Files) LibraryTabs::activate(next);
 }
 
 void FileBrowserActivity::drawFooter() {

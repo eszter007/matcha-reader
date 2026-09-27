@@ -974,9 +974,24 @@ void CoverLibraryActivity::onExit() {
 
 void CoverLibraryActivity::loop() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
-  if (HomeTabBar::route(mappedInput, renderer, HomeTab::Library, tabFocus) != HomeTabBar::Input::None) {
-    requestUpdate();
-    return;
+  {
+    const auto routed = HomeTabBar::route(mappedInput, renderer, HomeTab::Library, tabFocus);
+    if (routed == HomeTabBar::Input::Exited) {
+      // Confirm on the Library tab, from the bottom bar: back to the top of the ring, which on
+      // this screen is the Books tab of its own band.
+      tabFocus = -1;
+      contentIndex = 0;
+      selectedTab = 0;
+      scrollRow = 0;
+      shelvesScroll = 0;
+      selectorVisible = true;
+      requestUpdate();
+      return;
+    }
+    if (routed != HomeTabBar::Input::None) {
+      requestUpdate();
+      return;
+    }
   }
   // Raw state catches the press before any early return below and cancels background SD/decode
   // work even when the debounced edge has not been emitted yet.
@@ -1096,9 +1111,27 @@ void CoverLibraryActivity::loop() {
 
   bool hasChangedTab = false;
 
+  if (filesPending) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      filesPending = false;
+      LibraryTabs::activate(LibraryTabs::Files);
+    }
+    return;
+  }
+
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (contentIndex == 0) {
-      selectedTab = (selectedTab + 1) % TAB_COUNT;
+      // LibraryTabs::count(), not the two this screen draws itself: in the Cover Grid theme the
+      // band carries a third tab, Files, and cycling modulo 2 left it reachable only by touch.
+      const int next = (selectedTab + 1) % LibraryTabs::count();
+      if (next == LibraryTabs::Files) {
+        // Deferred to the release: leaving on the press edge hands the release of the same
+        // physical click to the browser, which opened whatever row its cursor was on -- so the
+        // Files tab appeared to jump straight into a folder.
+        filesPending = true;
+        return;
+      }
+      selectedTab = next;
       hasChangedTab = true;
       if (selectedTab == 1 && !shelvesLoaded) loadShelves();
       requestUpdate();
@@ -1325,6 +1358,9 @@ void CoverLibraryActivity::loop() {
     requestUpdate();
   });
 
+  // A hold steps between the two tabs this screen owns. Files is deliberately not in the ring:
+  // reaching it means leaving for the browser, which is not something a key repeat should do by
+  // scrolling past it. Confirm on the tab band is the way there.
   buttonNavigator.onNextContinuous([this, &hasChangedTab] {
     hasChangedTab = true;
     selectedTab = ButtonNavigator::nextIndex(selectedTab, TAB_COUNT);
@@ -1399,25 +1435,13 @@ void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int ce
   const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
   const int coverX = cellX + COVER_PADDING;
   const int coverY = cellY + COVER_PADDING;
-  // The home grid's ring: a thick dithered band hugging the cover, which reads on a dark cover
-  // where a hairline outline does not. It fills the cell's padding exactly -- never the art --
-  // because the cursor-move fast path turns the ring off by painting this same band white, and a
-  // band that straddled the cover edge would take a bite out of the cover with it.
-  const int ringX = coverX - COVER_PADDING;
-  const int ringY = coverY - COVER_PADDING;
-  const int ringW = coverWidth + 2 * COVER_PADDING;
-  const int ringH = coverHeight + 2 * COVER_PADDING;
-  const auto band = [&](const int x, const int y, const int w, const int h) {
-    if (on) {
-      renderer.fillRectDither(x, y, w, h, Color::LightGray);
-    } else {
-      renderer.fillRect(x, y, w, h, false);
-    }
-  };
-  band(ringX, ringY, ringW, COVER_PADDING);
-  band(ringX, ringY + ringH - COVER_PADDING, ringW, COVER_PADDING);
-  band(ringX, ringY + COVER_PADDING, COVER_PADDING, ringH - 2 * COVER_PADDING);
-  band(ringX + ringW - COVER_PADDING, ringY + COVER_PADDING, COVER_PADDING, ringH - 2 * COVER_PADDING);
+  // The one focus ring, in the cell padding: never over the art, because the cursor-move fast
+  // path turns it off by painting the same band white and a ring that straddled the cover edge
+  // would take a bite out of the cover with it.
+  UITheme::drawFocusRing(renderer,
+                         Rect{coverX - COVER_PADDING, coverY - COVER_PADDING, coverWidth + 2 * COVER_PADDING,
+                              coverHeight + 2 * COVER_PADDING},
+                         on);
   // The drop shadow lives in that same padding, so erasing the ring erases it too.
   if (!on) drawCoverShadow(coverX, coverY, coverWidth, coverHeight);
 }
@@ -1878,7 +1902,7 @@ void CoverLibraryActivity::render(RenderLock&&) {
                  nullptr, HomeTabBar::showsBackButton(true));
 
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
-  GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), selectorVisible && contentIndex == 0);
+  GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), selectorVisible && contentIndex == 0 && tabFocus < 0);
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - HomeTabBar::bottomInset() - metrics.verticalSpacing;

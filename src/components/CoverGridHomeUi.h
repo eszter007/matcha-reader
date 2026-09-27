@@ -73,4 +73,10 @@ class CoverGridHomeUi final : public UiAppHost {
   freeink::ui::Rect gridBounds{};
   // Where the featured cover was last painted, for the long-press test in selectedAction.
   freeink::ui::Rect heroCoverRect{};
+  // The featured card's own box, for the cursor ring paintFramedCover() draws around it.
+  freeink::ui::Rect heroCardRect{};
+  // Cover rect of the cell the cursor is on, filled in by paintFramedCover() during the grid's
+  // render and consumed by paintSelectionRing() right after it.
+  freeink::ui::Rect selectedCoverRect{};
+  void paintSelectionRing(int gap);
 };

@@ -12,6 +12,7 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numeric>
 
@@ -428,6 +429,54 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   renderer.drawLine(badgeX, badgeY, badgeX, arcCy, false);
   renderer.drawLine(arcCx, badgeY + badgeH - 1, badgeX + badgeW - 1, badgeY + badgeH - 1, false);
   renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
+}
+
+void UITheme::drawFocusRing(const GfxRenderer& renderer, const Rect box, const bool on) {
+  if (box.width <= 0 || box.height <= 0) return;
+  const int w = std::min<int>(FOCUS_RING_WIDTH, std::min(box.width, box.height) / 2);
+  if (w <= 0) return;
+  const int outerR = std::min<int>(FOCUS_RING_RADIUS, std::min(box.width, box.height) / 2);
+  const int innerR = std::max(outerR - w, 0);
+  const auto band = [&](const int x, const int y, const int bw) {
+    if (bw <= 0) return;
+    if (on) {
+      renderer.fillRectDither(x, y, bw, 1, Color::LightGray);
+    } else {
+      renderer.fillRect(x, y, bw, 1, false);
+    }
+  };
+  // Horizontal inset of a rounded rect's edge on a row `fromEdge` pixels in from its top or
+  // bottom. Row by row rather than four bands plus a stair: a butt joint reads as a square
+  // corner, and the frame has to curve on its inner edge as well as its outer one. Costs one
+  // sqrt per corner row -- at most 2 * FOCUS_RING_RADIUS rows per rect, off the render hot path.
+  const auto inset = [](const int radius, const int fromEdge) {
+    if (radius <= 0 || fromEdge >= radius) return 0;
+    const int dy = radius - fromEdge;
+    return radius - static_cast<int>(std::sqrt(static_cast<double>(radius * radius - dy * dy)));
+  };
+  const int x0 = box.x;
+  const int y0 = box.y;
+  const int innerX = x0 + w;
+  const int innerY = y0 + w;
+  const int innerW = box.width - 2 * w;
+  const int innerH = box.height - 2 * w;
+  for (int row = 0; row < box.height; ++row) {
+    const int y = y0 + row;
+    const int outFrom = std::min(row, box.height - 1 - row);
+    const int outDx = inset(outerR, outFrom);
+    const int left = x0 + outDx;
+    const int right = x0 + box.width - outDx;  // exclusive
+    const int innerRow = y - innerY;
+    if (innerH <= 0 || innerRow < 0 || innerRow >= innerH) {
+      band(left, y, right - left);
+      continue;
+    }
+    const int inDx = inset(innerR, std::min(innerRow, innerH - 1 - innerRow));
+    const int holeLeft = innerX + inDx;
+    const int holeRight = innerX + innerW - inDx;  // exclusive
+    band(left, y, holeLeft - left);
+    band(holeRight, y, right - holeRight);
+  }
 }
 
 UIIcon UITheme::getFileIcon(const std::string& filename) {

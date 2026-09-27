@@ -102,6 +102,21 @@ class UiListActivity : public Activity, protected UiAppHost {
 
   // Slot the bar's cursor sits on for button boards; -1 when the cursor is in the list.
   int tabFocus = -1;
+  // True while the cursor sits on the screen's OWN band above the list (the Library's
+  // Books/Shelves/Files). Only screens that override hasTopBand() ever set it.
+  bool topBandFocused = false;
+
+  // --- the ring --------------------------------------------------------------
+  // Up/Down walk one ring: this screen's own band (when it has one), then the rows, then the
+  // bottom bar. Without it the cursor was trapped in the list and neither band was reachable
+  // from a button board.
+  virtual bool hasTopBand() const { return false; }
+  // Left/Right while the cursor is on the top band. Default: nothing to step.
+  virtual void stepTopBand(int) {}
+  void enterBottomBand();
+  // Where the cursor goes when Confirm on the bottom bar lands on the tab this screen already
+  // is: back to the top of the ring.
+  virtual void onTabBandExit();
 
  private:
   // A selection move that arrived while a render was in flight, applied by loop() as soon as the

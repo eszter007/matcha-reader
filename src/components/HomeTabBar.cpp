@@ -21,11 +21,8 @@ struct TabIcons {
 
 // Index order must match HomeTab.
 constexpr TabIcons ICONS[HomeTabBar::COUNT] = {
-    {HomeIcon, HomeFilledIcon},
-    {LibraryTabIcon, LibraryTabFilledIcon},
-    {TransferTabIcon, TransferTabFilledIcon},
-    {StatsIcon, StatsFilledIcon},
-    {SettingsTabIcon, SettingsTabFilledIcon},
+    {HomeIcon, HomeFilledIcon},   {LibraryTabIcon, LibraryTabFilledIcon},   {TransferTabIcon, TransferTabFilledIcon},
+    {StatsIcon, StatsFilledIcon}, {SettingsTabIcon, SettingsTabFilledIcon},
 };
 
 // Horizontal band the slots divide up: the theme's side padding, so the outer icons line up with
@@ -49,9 +46,7 @@ int HomeTabBar::extraPageReserve() {
   return enabled() ? height() - UITheme::getInstance().getMetrics().buttonHintsHeight : 0;
 }
 
-int HomeTabBar::bottomInset() {
-  return enabled() ? height() : UITheme::getInstance().getMetrics().buttonHintsHeight;
-}
+int HomeTabBar::bottomInset() { return enabled() ? height() : UITheme::getInstance().getMetrics().buttonHintsHeight; }
 
 void HomeTabBar::draw(const GfxRenderer& renderer, const HomeTab active, const int focused) {
   const int bandTop = top(renderer);
@@ -61,20 +56,23 @@ void HomeTabBar::draw(const GfxRenderer& renderer, const HomeTab active, const i
 
   renderer.fillRect(0, bandTop, renderer.getScreenWidth(), height(), false);
 
-  // The wash marks where a button board's cursor sits. A touch board has no cursor to show -- a
-  // washed slot there just looks like a second, half-selected tab.
-  const int cursor = BoardConfig::hasTouch() ? -1 : focused;
+  // The ring marks where the cursor sits, including on the tab you are already in: a button
+  // board's cursor enters the band on the active slot, and with nothing drawn there the first
+  // Left/Right press looked like a dead key. Nothing moves a cursor into the band on a board
+  // without those keys, so `focused` is simply -1 there.
+  const int cursor = focused;
   for (int i = 0; i < COUNT; ++i) {
     const int slotX = barLeft() + i * step;
     const bool isActive = i == static_cast<int>(active);
-    if (i == cursor && !isActive) {
-      renderer.fillRectDither(slotX, bandTop, step, height(), Color::LightGray);
+    if (i == cursor) {
+      UITheme::drawFocusRing(renderer, Rect{slotX, bandTop, step, height()});
     }
     renderer.drawIcon(isActive ? ICONS[i].filled : ICONS[i].outline, slotX + (step - ICON_SIZE) / 2, iconY, ICON_SIZE);
-    if (isActive || i == cursor) {
+    // The underline marks where the cursor is once it is in the band, and which tab you are in
+    // only while it is not: both at once read as two selections.
+    if (cursor >= 0 ? i == cursor : isActive) {
       const int lineWidth = ICON_SIZE + 8;
-      renderer.fillRect(slotX + (step - lineWidth) / 2, iconY + ICON_SIZE + UNDERLINE_GAP, lineWidth,
-                        UNDERLINE_HEIGHT);
+      renderer.fillRect(slotX + (step - lineWidth) / 2, iconY + ICON_SIZE + UNDERLINE_GAP, lineWidth, UNDERLINE_HEIGHT);
     }
   }
 }
@@ -90,8 +88,8 @@ int HomeTabBar::hitTest(const MappedInputManager& input, const GfxRenderer& rend
   return col;
 }
 
-HomeTabBar::Input HomeTabBar::route(const MappedInputManager& input, const GfxRenderer& renderer,
-                                    const HomeTab current, int& focus, const bool allowButtons) {
+HomeTabBar::Input HomeTabBar::route(const MappedInputManager& input, const GfxRenderer& renderer, const HomeTab current,
+                                    int& focus, const bool allowButtons) {
   if (!enabled()) return Input::None;
 
   bool tapped = false;
@@ -115,6 +113,7 @@ HomeTabBar::Input HomeTabBar::route(const MappedInputManager& input, const GfxRe
     return Input::FocusMoved;
   }
   if (focus >= 0 && input.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (focus == static_cast<int>(current)) return Input::Exited;
     activate(static_cast<HomeTab>(focus), current);
     return Input::Consumed;
   }

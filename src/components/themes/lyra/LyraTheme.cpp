@@ -112,13 +112,23 @@ void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
 }
 
+// Cover Grid packs the band as content-width pills; every other theme keeps Lyra's chips. Both
+// the painter and tabIndexFromPoint() read these, so a tap always lands on what was drawn.
+namespace {
+bool pillTabs() { return UITheme::hasCoverGridHome(); }
+int tabHPad() { return pillTabs() ? 20 : hPaddingInSelection; }
+int tabGap() { return pillTabs() ? 10 : LyraMetrics::values.tabSpacing; }
+int tabLeadingInset() { return pillTabs() ? 4 : 0; }
+// Pill box inside the band: 4px clear above and below.
+Rect tabPillBox(const Rect& band, const int x, const int width) {
+  const auto height = static_cast<int16_t>(band.height > 9 ? band.height - 8 : 1);
+  return Rect{static_cast<int16_t>(x), static_cast<int16_t>(band.y + 4), static_cast<int16_t>(width), height};
+}
+}  // namespace
+
 void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                            bool selected) const {
   const int sidePad = LyraMetrics::values.contentSidePadding;
-
-  if (selected) {
-    renderer.fillRectDither(rect.x, rect.y, rect.width, rect.height, Color::LightGray);
-  }
 
   // Centred in the band rather than pinned a fixed 6px from its top. The band is taller than the
   // label, and anchoring to the top put every spare pixel underneath -- next to the Settings tabs,
@@ -127,37 +137,61 @@ void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::ve
 
   // Tabs sit at natural width, so enough of them overrun the bar. Whole tabs only: one clipped
   // in half reads as a rendering fault, not as "there is more this way".
-  const int scrollX = tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * hPaddingInSelection,
-                                      LyraMetrics::values.tabSpacing, sidePad, false);
-  int currentX = rect.x + sidePad - scrollX;
+  const int scrollX =
+      tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * tabHPad(), tabGap(), sidePad + tabLeadingInset(), false);
+  int currentX = rect.x + sidePad + tabLeadingInset() - scrollX;
 
   for (const auto& tab : tabs) {
     const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR);
-    const int tabWidth = textWidth + 2 * hPaddingInSelection;
+    const int tabWidth = textWidth + 2 * tabHPad();
     if (currentX < rect.x || currentX + tabWidth > rect.x + rect.width) {
-      currentX += tabWidth + LyraMetrics::values.tabSpacing;
+      currentX += tabWidth + tabGap();
+      continue;
+    }
+
+    if (pillTabs()) {
+      const Rect pill = tabPillBox(rect, currentX, tabWidth);
+      const int radius = pill.height / 2 > 1 ? pill.height / 2 : 1;
+      if (tab.selected) {
+        // Solid while the cursor is in the band, grey when it is elsewhere: with no underline and
+        // no rule, the fill is the only thing left to say where the next key press lands.
+        renderer.fillRoundedRect(pill.x, pill.y, pill.width, pill.height, radius,
+                                 selected ? Color::Black : Color::DarkGray);
+      } else {
+        // Outline: a dithered pill with a white one punched out of it. drawRoundedRect strokes
+        // solid only, and a 1px black outline next to the filled pill reads as a second state.
+        renderer.fillRoundedRect(pill.x, pill.y, pill.width, pill.height, radius, Color::DarkGray);
+        renderer.fillRoundedRect(pill.x + 2, pill.y + 2, pill.width - 4, pill.height - 4,
+                                 radius - 2 > 1 ? radius - 2 : 1, Color::White);
+      }
+      const int pillLabelY = pill.y + (pill.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+      renderer.drawText(UI_10_FONT_ID, currentX + tabHPad(), pillLabelY, tab.label, !tab.selected,
+                        EpdFontFamily::REGULAR);
+      currentX += tabWidth + tabGap();
       continue;
     }
 
     if (tab.selected) {
+      // With the cursor in the band, the shared focus ring -- the one the covers and the bottom
+      // tabs use -- replaces the chip's fill. It cannot sit on top of it: both are the same
+      // LightGray dither, so the ring would vanish into the chip.
       if (selected) {
-        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * hPaddingInSelection, rect.height - 4,
-                                 cornerRadius, Color::Black);
+        UITheme::drawFocusRing(renderer, Rect{static_cast<int16_t>(currentX), rect.y, static_cast<int16_t>(tabWidth),
+                                              static_cast<int16_t>(rect.height - 2)});
       } else {
-        renderer.fillRectDither(currentX, rect.y, textWidth + 2 * hPaddingInSelection, rect.height - 3,
-                                Color::LightGray);
-        renderer.drawLine(currentX, rect.y + rect.height - 3, currentX + textWidth + 2 * hPaddingInSelection,
-                          rect.y + rect.height - 3, 2, true);
+        renderer.fillRectDither(currentX, rect.y, tabWidth, rect.height - 3, Color::LightGray);
+        renderer.drawLine(currentX, rect.y + rect.height - 3, currentX + tabWidth, rect.y + rect.height - 3, 2, true);
       }
     }
 
-    renderer.drawText(UI_10_FONT_ID, currentX + hPaddingInSelection, labelY, tab.label, !(tab.selected && selected),
-                      EpdFontFamily::REGULAR);
+    renderer.drawText(UI_10_FONT_ID, currentX + tabHPad(), labelY, tab.label, true, EpdFontFamily::REGULAR);
 
-    currentX += textWidth + LyraMetrics::values.tabSpacing + 2 * hPaddingInSelection;
+    currentX += tabWidth + tabGap();
   }
 
-  renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
+  if (!pillTabs()) {
+    renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
+  }
 }
 
 bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
@@ -168,23 +202,23 @@ bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
 
   // Same offset and skip rule as drawTabBar, or a touch lands on the unscrolled tab.
   const int sidePad = LyraMetrics::values.contentSidePadding;
-  const int scrollX = tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * hPaddingInSelection,
-                                      LyraMetrics::values.tabSpacing, sidePad, false);
-  int currentX = rect.x + sidePad - scrollX;
+  const int scrollX =
+      tabScrollOffset(renderer, rect, tabs, UI_10_FONT_ID, 2 * tabHPad(), tabGap(), sidePad + tabLeadingInset(), false);
+  int currentX = rect.x + sidePad + tabLeadingInset() - scrollX;
   for (size_t i = 0; i < tabs.size(); i++) {
     const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tabs[i].label, EpdFontFamily::REGULAR);
-    const int tabWidth = textWidth + 2 * hPaddingInSelection;
+    const int tabWidth = textWidth + 2 * tabHPad();
     if (currentX < rect.x || currentX + tabWidth > rect.x + rect.width) {
-      currentX += tabWidth + LyraMetrics::values.tabSpacing;
+      currentX += tabWidth + tabGap();
       continue;  // not drawn, so not touchable
     }
-    const int left = (i == 0) ? rect.x : currentX - LyraMetrics::values.tabSpacing / 2;
-    const int right = currentX + tabWidth + LyraMetrics::values.tabSpacing / 2;
+    const int left = (i == 0) ? rect.x : currentX - tabGap() / 2;
+    const int right = currentX + tabWidth + tabGap() / 2;
     if (x >= left && x < right) {
       index = static_cast<int>(i);
       return true;
     }
-    currentX += tabWidth + LyraMetrics::values.tabSpacing;
+    currentX += tabWidth + tabGap();
   }
 
   return false;

@@ -40,7 +40,9 @@ int hitTest(const GfxRenderer& renderer, const MappedInputManager& input, const 
 
 void activate(const int tab) {
   if (tab == Files) {
-    activityManager.goToFileBrowser();
+    // Explicitly the card root: the default argument is an empty path, which lists nothing and
+    // also fails showsLibraryTabs(), so the browser came up blank and without the band.
+    activityManager.goToFileBrowser("/");
     return;
   }
   activityManager.goToLibrary(tab);

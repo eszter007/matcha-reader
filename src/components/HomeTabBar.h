@@ -58,7 +58,9 @@ class HomeTabBar {
 
   // What a routed input pass did, so the caller can request a redraw for a focus move without
   // the bar needing to know how that screen renders.
-  enum class Input : uint8_t { None, Consumed, FocusMoved };
+  // Exited: Confirm landed on the tab you are already in, so the band hands the cursor back to
+  // the host instead of rebuilding the same screen.
+  enum class Input : uint8_t { None, Consumed, FocusMoved, Exited };
 
   // The whole input contract in one place: a tap switches tabs, Left/Right walk the focus on
   // button boards, Confirm on a focused slot switches. `focus` is the caller's cursor slot

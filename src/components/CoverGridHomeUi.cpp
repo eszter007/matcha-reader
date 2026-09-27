@@ -216,18 +216,22 @@ void CoverGridHomeUi::drawCurrent(UiScreen& screen, fui::Rect rect, const int co
   card.progress = std::max(0, progress);
   card.progressMax = progress >= 0 ? 100 : 0;
   card.action = SELECT;
-  // The featured card's selected state is a slim accent bar drawn after the
-  // card (see below), not a bookCard indicator: every ring/outline treatment
-  // tried here either overwhelmed the large cover or made the heading above
-  // read as misaligned.
-  card.state = fui::StateNormal;
+  // Focus outlines the whole card, the way Lyra boxes its continue-reading tile -- cover,
+  // heading and progress together, since the card is one target. Only where a cursor exists:
+  // on a touch board selection sits on the card by default and a permanent box would read as a
+  // state rather than a cursor.
+  card.selectionIndicator = fui::BookCardSelectionIndicator::Card;
+  card.state = selected == 0 && !BoardConfig::hasTouch() ? fui::StateSelected : fui::StateNormal;
   card.styles = theme.listRow;
-  card.styles.selected.background = fui::Paint::dither(fui::Color::LightGray);
-  // The grid thumbs' selection ring draws with this border: gray like Lyra's
-  // selection box, not solid black.
-  card.styles.selected.border = fui::Paint::dither(fui::Color::LightGray);
+  // The same dithered grey as every other focus ring, and an outline rather than a wash: a
+  // dithered fill behind a cover and two lines of text muddies both.
+  card.styles.selected.background = fui::Paint::solid(fui::Color::White);
+  // No border from FreeInkUI: its stroke honours a dithered paint only at radius 0, so a rounded
+  // one comes out solid black. paintFramedCover() draws the shared ring over heroCardRect instead.
+  card.styles.selected.border = fui::Paint::none();
+  card.styles.selected.borderWidth = 0;
   card.styles.selected.foreground = fui::Paint::solid(fui::Color::Black);
-  card.styles.selected.radius = theme.listRowRadius;
+  card.styles.selected.radius = 0;
   card.styles.active = card.styles.selected;
   card.titleText = theme.bodyText;
   card.titleText.maxLines = renderer.getScreenWidth() > renderer.getScreenHeight() ? 1 : 2;
@@ -250,17 +254,13 @@ void CoverGridHomeUi::drawCurrent(UiScreen& screen, fui::Rect rect, const int co
   card.coverPainter = [](fui::DrawTarget& target, fui::Rect cover, const fui::BookCardProps&, void* user) {
     return static_cast<CoverGridHomeUi*>(user)->paintFramedCover(target, cover, 0);
   };
+  heroCardRect = rect;
+  selectedCoverRect = fui::Rect{};
   fui::bookCard(screen.frame(), rect, card);
-
-  if (selected == 0 && !BoardConfig::hasTouch()) {
-    // Button boards only: a vertical accent bar left of the card, cover-height
-    // and vertically centered on it, marks the featured card as the button
-    // cursor without framing the cover. Touch boards tap directly and need no
-    // cursor on the hero card.
-    const int16_t barH = card.coverSize.height;
-    screen.target().fill(
-        fui::Rect{static_cast<int16_t>(rect.x - 5), static_cast<int16_t>(rect.y + (rect.height - barH) / 2), 3, barH},
-        fui::Paint::dither(fui::Color::LightGray));
+  // The featured card's ring frames the whole card, not just its cover.
+  if (selectedCoverRect.width > 0) {
+    selectedCoverRect = heroCardRect;
+    paintSelectionRing(0);
   }
 }
 
@@ -287,11 +287,12 @@ void CoverGridHomeUi::drawGrid(UiScreen& screen) {
   grid.selectedIndex = selected > 0 && selected < static_cast<int>(books->size()) ? selected - 1 : -1;
   // Same thick cover ring as the featured card; the dithered Cell background
   // was easy to miss behind a dark cover.
+  // The ring comes from paintFramedCover(), not from FreeInkUI: only the shared painter can draw
+  // a dithered ring with rounded corners. CoverFrame with zero width draws nothing, and Cell
+  // would wash the whole cell.
   grid.selectionIndicator = fui::CoverGridSelectionIndicator::CoverFrame;
-  // Thick dithered ring sized for the small thumbs: 6px outside the cover,
-  // 2px over its edge.
-  grid.selectedCoverFrameGap = 6;
-  grid.selectedCoverFrameWidth = 8;
+  grid.selectedCoverFrameWidth = 0;
+  grid.selectedCoverFrameGap = 0;
   grid.cellStyles = card.styles;
   grid.labelHeight = 0;
   grid.labelGap = 0;
@@ -302,7 +303,19 @@ void CoverGridHomeUi::drawGrid(UiScreen& screen) {
                          void* user) {
     return static_cast<CoverGridHomeUi*>(user)->paintFramedCover(target, cover, index + 1);
   };
+  selectedCoverRect = fui::Rect{};
   fui::coverGrid(screen.frame(), rect, grid);
+  paintSelectionRing(UITheme::FOCUS_RING_WIDTH);
+}
+
+// The cursor ring, once everything under it is down. `gap` is how far outside the cover it sits.
+void CoverGridHomeUi::paintSelectionRing(const int gap) {
+  if (selectedCoverRect.width <= 0) return;
+  UITheme::drawFocusRing(
+      renderer, Rect{static_cast<int16_t>(selectedCoverRect.x - gap), static_cast<int16_t>(selectedCoverRect.y - gap),
+                     static_cast<int16_t>(selectedCoverRect.width + 2 * gap),
+                     static_cast<int16_t>(selectedCoverRect.height + 2 * gap)});
+  selectedCoverRect = fui::Rect{};
 }
 
 void CoverGridHomeUi::drawTabs() {
@@ -317,9 +330,18 @@ bool CoverGridHomeUi::paintFramedCover(fui::DrawTarget& target, fui::Rect rect, 
   // The false spine draws inside the cover paint (HomeCoverCache), glued to
   // the art's left edge, so it stays aligned whatever each cover's margin is.
   if (index == 0) heroCoverRect = rect;
-  if (index >= coverPaths.size() || !books || index >= books->size()) return false;
-  // No badge on the featured card: its percentage already sits under the title, and a second
-  // copy in the corner of the big cover is just noise.
-  const int badge = index == 0 && hasContinueReading ? -1 : bookProgress[index];
-  return coverCache.paint(rect, index, coverPaths[index], (*books)[index].title, badge);
+  // Touch boards have no cursor, so nothing is permanently outlined there.
+  const bool ring = !BoardConfig::hasTouch() && static_cast<int>(index) == selected;
+  bool painted = false;
+  if (index < coverPaths.size() && books && index < books->size()) {
+    // No badge on the featured card: its percentage already sits under the title, and a second
+    // copy in the corner of the big cover is just noise.
+    const int badge = index == 0 && hasContinueReading ? -1 : bookProgress[index];
+    painted = coverCache.paint(rect, index, coverPaths[index], (*books)[index].title, badge);
+  }
+  // Remembered, not drawn here: coverGrid() fills each cell's background as it reaches it, so a
+  // ring in the gap around one cover was painted over by the next cell. drawGrid() paints it
+  // once the whole grid is down.
+  if (ring) selectedCoverRect = rect;
+  return painted;
 }

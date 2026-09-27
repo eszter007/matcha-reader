@@ -278,8 +278,11 @@ class BaseTheme {
   // SETTINGS.clockShowInHeader and an RTC is present. On touch boards a
   // tappable back button leads the band (see HeaderBackTapTarget); root
   // screens that own their stack bottom pass backButton = false.
+  // underline: -1 leaves it to the theme (the Cover Grid theme draws no rule under any header),
+  // 0 forces it off, 1 forces it on. Screens whose content starts flush against the header pass
+  // the scroll state, so there the rule appears only once something has scrolled under it.
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
-                          bool backButton = true) const;
+                          bool backButton = true, int underline = -1) const;
   // Fill the battery/clock status chrome (settings + theme metrics) into
   // header props, so FUI-native screens drawing their own interactive header
   // carry the same band as drawHeader. Status text is styled with the

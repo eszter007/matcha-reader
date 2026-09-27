@@ -57,6 +57,9 @@ class CoverLibraryActivity final : public Activity {
     int bookCount = 0;
   };
   std::vector<ShelfInfo> shelves;
+  // Confirm on the Files tab switches activity on the RELEASE, not the press; set while the
+  // key is still down so the browser never sees that release as "open the selected row".
+  bool filesPending = false;
   bool shelvesLoaded = false;
 
   // Shelf detail view

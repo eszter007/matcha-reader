@@ -521,7 +521,7 @@ void BaseTheme::applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::Head
 }
 
 void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
-                           const bool backButton) const {
+                           const bool backButton, const int underline) const {
   // Every activity header renders through the FreeInkUI header + battery
   // indicator components, styled by the active theme's tokens (padding,
   // centering, underline). Non-interactive frame: no hit rects registered.
@@ -569,7 +569,10 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   } else {
     HeaderBackTapTarget::clear();
   }
-  props.borderEdges = fui::EdgeBottom;
+  // Cover Grid drops the rule under every header: its screens carry their own band (tabs, a
+  // grid) right below the title, and the two lines stacked read as a drawing fault.
+  const bool showRule = underline < 0 ? !UITheme::hasCoverGridHome() : underline != 0;
+  props.borderEdges = showRule ? fui::EdgeBottom : fui::EdgesNone;
   props.titleText = tokens.titleText;
   props.titleText.align = tokens.headerTitleAlign;
   props.subtitleText = tokens.smallText;
@@ -577,7 +580,13 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   props.sidePadding = tokens.headerSidePadding;
   // Underline only under a titled header: an untitled band (Lyra home screen)
   // historically drew no rule, and the old themes keyed the line on the title.
-  if (title != nullptr && props.styles.normal.border.kind == fui::PaintKind::None && tokens.headerUnderline > 0) {
+  if (!showRule) {
+    // The theme's own popup style may already carry the rule, so clearing borderEdges is not
+    // enough on every theme.
+    props.styles.normal.border = fui::Paint::none();
+    props.styles.normal.borderWidth = 0;
+  } else if (title != nullptr && props.styles.normal.border.kind == fui::PaintKind::None &&
+             tokens.headerUnderline > 0) {
     props.styles.normal.border = fui::Paint::solid(fui::Color::Black);
     props.styles.normal.borderWidth = tokens.headerUnderline;
   }

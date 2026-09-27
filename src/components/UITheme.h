@@ -72,6 +72,18 @@ class UITheme {
   static void drawBookCover(GfxRenderer& renderer, Rect box, const std::string& thumbPath, const std::string& title,
                             int progressPercent);
 
+  // The one focus treatment across every screen: a dithered grey ring just inside `box`. Grey
+  // rather than black so it reads as "the cursor is here" next to content that is itself black,
+  // and an outline rather than a wash so it never muddies a cover or a line of text.
+  // Even, and it must stay even: the grey dither has period 2 in x and y, so an odd-width band
+  // lights two pixel columns at one start parity and one at the other -- which read as a ring
+  // thicker on two sides than on the other two.
+  static constexpr int FOCUS_RING_WIDTH = 4;
+  // Corner radius of that ring, outer edge; the inner edge curves with it. Matches the rounded
+  // language the Cover Grid theme's pills and cards use.
+  static constexpr int FOCUS_RING_RADIUS = 8;
+  static void drawFocusRing(const GfxRenderer& renderer, Rect box, bool on = true);
+
   static UIIcon getFileIcon(const std::string& filename);
   static int getStatusBarHeight();
   static int getProgressBarHeight();

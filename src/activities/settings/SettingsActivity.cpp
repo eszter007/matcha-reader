@@ -445,7 +445,14 @@ bool SettingsActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (ringPos() == 0) {
       // Embedded single-category mode (reader menu): the category row is locked.
-      if (!finishOnBack) stepTab(1);
+      if (finishOnBack) return true;
+      // Past the last category the ring carries on into the bottom bar, the same cycle the
+      // Library has: tabs, then the bar, then back to the tabs.
+      if (hasTabBar() && selectedCategoryIndex >= categoryCount - 1) {
+        enterBottomBand();
+        return true;
+      }
+      stepTab(1);
     } else {
       const int row = ringPos() - 1;
       if (row >= 0 && row < static_cast<int>(rowItems_.size()) && !rowItems_[row].enabled) return true;
@@ -877,7 +884,10 @@ void SettingsActivity::drawChrome() {
                  isSubmenu()    ? I18N.get(submenuCategory)
                  : finishOnBack ? tr(STR_READER_SETTINGS)
                                 : tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION, HomeTabBar::showsBackButton(!isSubmenu() && !finishOnBack));
+                 CROSSPOINT_VERSION, HomeTabBar::showsBackButton(!isSubmenu() && !finishOnBack),
+                 // The rule only earns its place once a row has scrolled under it; at the top it
+                 // is a second horizontal line stacked on the tab band.
+                 activeNav().top > 0 ? 1 : 0);
 }
 
 void SettingsActivity::drawFooter() {

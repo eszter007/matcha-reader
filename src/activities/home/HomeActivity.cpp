@@ -539,31 +539,18 @@ void HomeActivity::loop() {
       activateSelection();
       return;
     }
-    // Side page buttons walk the covers, front Left/Right walk the tabs
-    // (selectorIndex is flat: books first, then the tab items). A press while
-    // selection sits in the other band jumps into this band first.
-    const int bookCount = static_cast<int>(recentBooks.size());
-    const auto cycleBand = [this](const int base, const int count, const int dir) {
-      if (count <= 0) return;
-      int idx = selectorIndex - base;
-      if (idx < 0 || idx >= count) {
-        idx = dir > 0 ? 0 : count - 1;
-      } else {
-        idx = (idx + count + dir) % count;
-      }
-      selectorIndex = base + idx;
+    // One ring through everything on screen -- the covers, then the tab bar -- on every key.
+    // Splitting them (side keys for covers, front keys for tabs) meant each pair was trapped in
+    // its own band, so there was no way to walk from the last cover to the tabs and round.
+    const auto step = [this, menuCount](const int dir) {
+      if (menuCount <= 0) return;
+      selectorIndex = (selectorIndex + menuCount + dir) % menuCount;
       requestUpdate();
     };
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up},
-                                         [&cycleBand, bookCount] { cycleBand(0, bookCount, -1); });
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down},
-                                         [&cycleBand, bookCount] { cycleBand(0, bookCount, +1); });
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [&cycleBand, bookCount, menuCount] {
-      cycleBand(bookCount, menuCount - bookCount, -1);
-    });
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [&cycleBand, bookCount, menuCount] {
-      cycleBand(bookCount, menuCount - bookCount, +1);
-    });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [&step] { step(-1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [&step] { step(+1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [&step] { step(-1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [&step] { step(+1); });
     return;
   }
 

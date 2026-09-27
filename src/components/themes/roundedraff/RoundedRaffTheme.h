@@ -92,7 +92,7 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
 class RoundedRaffTheme : public BaseTheme {
  public:
   void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
-                  bool backButton = true) const override;
+                  bool backButton = true, int underline = -1) const override;
   void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                   bool selected) const override;
   bool tabIndexFromPoint(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int x, int y,
