@@ -432,6 +432,13 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
 }
 
+void UITheme::drawCoverShadow(const GfxRenderer& renderer, const int coverX, const int coverY, const int coverWidth,
+                              const int coverHeight) {
+  constexpr int SHADOW = 2;
+  renderer.fillRect(coverX + coverWidth, coverY + SHADOW, SHADOW, coverHeight, true);
+  renderer.fillRect(coverX + SHADOW, coverY + coverHeight, coverWidth, SHADOW, true);
+}
+
 void UITheme::drawFocusRing(const GfxRenderer& renderer, const Rect box, const bool on) {
   if (box.width <= 0 || box.height <= 0) return;
   const int w = std::min<int>(FOCUS_RING_WIDTH, std::min(box.width, box.height) / 2);

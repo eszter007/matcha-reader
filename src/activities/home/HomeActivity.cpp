@@ -533,7 +533,19 @@ void HomeActivity::loop() {
 void HomeActivity::render(RenderLock&&) {
   // While the long-press menu is up it owns the frame; repainting the grid under it would erase
   // the dialog and leave its hit table pointing at nothing.
-  if (optionPopup.processRender(renderer, mappedInput)) return;
+  if (optionPopup.processRender(renderer, mappedInput)) {
+    // The dialog drew over the grid, so the frame underneath is gone.
+    if (coverGridUi) coverGridUi->invalidateFrame();
+    return;
+  }
+  // Fast path: a cursor move between two covers over an intact frame moves the ring and nothing
+  // else. A full render re-opens and re-decodes every cover thumb from SD, which is what made
+  // stepping sluggish on the boards with no PSRAM to snapshot them into.
+  if (coverGridUi && firstRenderDone && coverGridUi->tryMoveSelection(lastSelectorIndex, selectorIndex)) {
+    lastSelectorIndex = selectorIndex;
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    return;
+  }
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -578,6 +590,7 @@ void HomeActivity::render(RenderLock&&) {
 
   renderer.clearScreen();
   if (coverGridUi) {
+    lastSelectorIndex = selectorIndex;
     coverGridUi->setSelection(selectorIndex);
     UITheme::getInstance().drawCoverGridHome(*coverGridUi);
     renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH

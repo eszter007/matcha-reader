@@ -83,6 +83,11 @@ class UITheme {
   // language the Cover Grid theme's pills and cards use.
   static constexpr int FOCUS_RING_RADIUS = 8;
   static void drawFocusRing(const GfxRenderer& renderer, Rect box, bool on = true);
+  // The drop shadow under a cover: two px down its right edge and along its bottom, so a cover
+  // reads as a book standing on a shelf. Separate from drawBookCover() because erasing a focus
+  // ring takes the shadow with it -- the ring band and the shadow overlap -- so both grids have
+  // to put it back on a deselect.
+  static void drawCoverShadow(const GfxRenderer& renderer, int coverX, int coverY, int coverWidth, int coverHeight);
 
   static UIIcon getFileIcon(const std::string& filename);
   static int getStatusBarHeight();

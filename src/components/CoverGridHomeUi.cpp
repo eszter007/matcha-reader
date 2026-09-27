@@ -46,12 +46,14 @@ void CoverGridHomeUi::begin(const std::vector<RecentBook>& recent, bool opds, bo
 }
 
 void CoverGridHomeUi::refreshCoverPaths() {
+  invalidateFrame();
   coverCache.invalidate();
   for (size_t i = 0; i < books->size() && i < coverPaths.size(); ++i) refreshCoverPath(i);
 }
 
 void CoverGridHomeUi::refreshCoverPath(size_t index) {
   if (index >= books->size() || index >= coverPaths.size()) return;
+  invalidateFrame();
   coverCache.invalidate(index);
   coverPaths[index] =
       thumbHeight > 0 ? UITheme::getCoverThumbPath((*books)[index].coverBmpPath, thumbHeight) : std::string();
@@ -59,6 +61,7 @@ void CoverGridHomeUi::refreshCoverPath(size_t index) {
 
 void CoverGridHomeUi::refreshProgress(const size_t index) {
   if (!books || index >= books->size() || index >= bookProgress.size()) return;
+  invalidateFrame();
   bookProgress[index] = loadBookProgress((*books)[index].path);
   // The featured card shows the same number as a percentage under the title.
   if (index == 0 && hasContinueReading) {
@@ -306,6 +309,44 @@ void CoverGridHomeUi::drawGrid(UiScreen& screen) {
   selectedCoverRect = fui::Rect{};
   fui::coverGrid(screen.frame(), rect, grid);
   paintSelectionRing(UITheme::FOCUS_RING_WIDTH);
+  // Every cell has now published its rect, so the cursor can be moved without a repaint until
+  // something changes what a cell shows.
+  frameRectsValid = true;
+}
+
+// The whole point of the fast path: no clearScreen(), no FreeInkUI rebuild, no cover decode --
+// two ring bands and the panel refresh the caller does anyway.
+bool CoverGridHomeUi::tryMoveSelection(const int from, const int to) {
+  // Touch boards draw no cursor at all (see the state gate in drawCurrent/drawGrid), so there is
+  // nothing to move and a ring painted here would be a state the user never asked for.
+  if (BoardConfig::hasTouch()) return false;
+  if (!frameRectsValid || !books) return false;
+  if (from == to) return false;
+  const int count = static_cast<int>(books->size());
+  // Cover-to-cover only. A move into or out of the tab band changes the band's underline as
+  // well, and the band is drawn by the full path.
+  if (from < 0 || to < 0 || from >= count || to >= count) return false;
+  if (from >= static_cast<int>(coverRects.size()) || to >= static_cast<int>(coverRects.size())) return false;
+  if (coverRects[from].width <= 0 || coverRects[to].width <= 0) return false;
+
+  // The hero's ring frames its whole card; a grid cover's sits just outside the art.
+  const auto ringBox = [this](const int index) {
+    if (index == 0) return Rect{heroCardRect.x, heroCardRect.y, heroCardRect.width, heroCardRect.height};
+    constexpr int GAP = UITheme::FOCUS_RING_WIDTH;
+    const auto& r = coverRects[index];
+    return Rect{static_cast<int16_t>(r.x - GAP), static_cast<int16_t>(r.y - GAP),
+                static_cast<int16_t>(r.width + 2 * GAP), static_cast<int16_t>(r.height + 2 * GAP)};
+  };
+  UITheme::drawFocusRing(renderer, ringBox(from), false);
+  // The erase above paints the band white, and for a grid cover that band contains the drop
+  // shadow -- put it back, or the cover the cursor just left loses it.
+  if (from != 0) {
+    const auto& r = coverRects[from];
+    UITheme::drawCoverShadow(renderer, r.x, r.y, r.width, r.height);
+  }
+  UITheme::drawFocusRing(renderer, ringBox(to));
+  selected = to;
+  return true;
 }
 
 // The cursor ring, once everything under it is down. `gap` is how far outside the cover it sits.
@@ -330,6 +371,7 @@ bool CoverGridHomeUi::paintFramedCover(fui::DrawTarget& target, fui::Rect rect, 
   // The false spine draws inside the cover paint (HomeCoverCache), glued to
   // the art's left edge, so it stays aligned whatever each cover's margin is.
   if (index == 0) heroCoverRect = rect;
+  if (index < coverRects.size()) coverRects[index] = rect;
   // Touch boards have no cursor, so nothing is permanently outlined there.
   const bool ring = !BoardConfig::hasTouch() && static_cast<int>(index) == selected;
   bool painted = false;
