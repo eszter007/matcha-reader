@@ -80,7 +80,7 @@ namespace {
 // elementDepth against an already-decremented one, so a style was never popped and ran to the end
 // of the chapter -- most visibly a <span class="em-sesame"> putting sesame marks on every
 // character after it. Cached pages carry the marks and the pagination they caused.
-constexpr uint8_t VSECTION_FILE_VERSION = 135;
+constexpr uint8_t VSECTION_FILE_VERSION = 136;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -264,16 +264,40 @@ struct TextExtractor {
   static constexpr size_t RUBY_RESERVE_HINT = 32;   // bytes
   static constexpr size_t RUNS_RESERVE_HINT = 16;   // elements
 
-  void flushCurrentText() {
-    if (!currentText.empty()) {
-      // COPY, don't move: moving handed currentText's grown buffer to a transient RubyRun and
-      // restarted this one at TEXT_RESERVE_HINT, so every paragraph re-grew it by doubling
-      // (alloc-copy-free per step, hundreds of times per chapter) -- the main planter of the
-      // persistent fragments that shredded maxAlloc on long single-file books. The copy is a
-      // transient that coalesces back; currentText's capacity now lives for the whole build.
-      currentRuns.push_back(RubyRun{currentText, {}, currentStyle(), hasEmphasis(), currentTextOffset});
-      currentText.clear();
+  // Headroom to leave behind a growth here, so serving it never takes the last usable block.
+  static constexpr uint32_t GROWTH_MARGIN = 2048;
+  static bool canAllocate(const size_t bytes) { return ESP.getMaxAllocHeap() >= bytes + GROWTH_MARGIN; }
+
+  // std::vector growth and std::string copies in this layer go through the THROWING operator new,
+  // which aborts the device under -fno-exceptions rather than returning null (observed: a
+  // furigana-dense chapter reached maxAlloc=2548 and aborted inside flushCurrentText's string
+  // copy). Draining to the sink first frees every run's text and needs no allocation, so a tight
+  // heap costs one extra paragraph continuation instead of a reboot.
+  void pushRun(RubyRun&& run) {
+    if (currentRuns.size() == currentRuns.capacity() && !canAllocate(currentRuns.capacity() * 2 * sizeof(RubyRun)) &&
+        sink && !currentRuns.empty()) {
+      sink->onParagraph(currentRuns, midParagraph);
+      currentRuns.clear();
+      midParagraph = true;
     }
+    currentRuns.push_back(std::move(run));
+  }
+
+  void flushCurrentText() {
+    if (currentText.empty()) return;
+    // COPY, don't move, while the heap allows it: moving handed currentText's grown buffer to a
+    // transient RubyRun and restarted this one at TEXT_RESERVE_HINT, so every paragraph re-grew it
+    // by doubling (alloc-copy-free per step, hundreds of times per chapter) -- the main planter of
+    // the persistent fragments that shredded maxAlloc on long single-file books. The copy is a
+    // transient that coalesces back; currentText's capacity then lives for the whole build. Under
+    // pressure a move is the only safe option: it allocates nothing at all.
+    if (canAllocate(currentText.size() + 1)) {
+      pushRun(RubyRun{currentText, {}, currentStyle(), hasEmphasis(), currentTextOffset});
+      currentText.clear();
+      return;
+    }
+    pushRun(RubyRun{std::move(currentText), {}, currentStyle(), hasEmphasis(), currentTextOffset});
+    currentText.clear();
   }
 
   // Streaming accumulation bounds: hand runs to the sink every ~SOFT_FLUSH_BYTES (or
@@ -548,8 +572,8 @@ struct TextExtractor {
           self->rubyElemRuby += self->rubyAnnotation;
           self->rubyElemRunCount++;
         }
-        self->currentRuns.push_back(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation),
-                                            self->currentStyle(), self->hasEmphasis(), self->rubyBaseOffset});
+        self->pushRun(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation), self->currentStyle(),
+                              self->hasEmphasis(), self->rubyBaseOffset});
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
@@ -560,7 +584,7 @@ struct TextExtractor {
     if (strcasecmp(name, "ruby") == 0) {
       // Flush any remaining base text that had no <rt> (malformed markup).
       if (!self->rubyBase.empty()) {
-        self->currentRuns.push_back(
+        self->pushRun(
             RubyRun{std::move(self->rubyBase), {}, self->currentStyle(), self->hasEmphasis(), self->rubyBaseOffset});
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
@@ -1480,8 +1504,10 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // this chapter's build even started. free=getFreeHeap() (total) was already logged; maxAlloc=
   // getMaxAllocHeap() (largest contiguous block) is new.
   const uint32_t buildStartMs = millis();
+  // Kept for the stale-retry decision at the end: how much headroom THIS build had to work with.
+  lastBuildStartMaxAlloc_ = ESP.getMaxAllocHeap();
   LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(),
-          ESP.getMaxAllocHeap());
+          lastBuildStartMaxAlloc_);
   // Vertical placement measures each glyph's real ink extents (burasage, half-em pairing, the 3.8
   // squeeze deficits), and those measurements go through the font decompressor. A heap too tight for a
   // glyph group makes them fall back to nominal metrics silently, and the result is written to the
@@ -1784,15 +1810,18 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
   // ideally, a healthier heap -- instead of the truncation being persisted as a valid cache.
   if (lastBuildDroppedForHeap_ && !rebuildingFromStale_) {
-    LOG_ERR("VSC", "Build dropped glyphs on low heap; marking section stale for rebuild on next open");
+    LOG_ERR("VSC", "Build dropped glyphs on low heap (maxAlloc=%u at start); marking section stale for rebuild",
+            lastBuildStartMaxAlloc_);
     if (file.seek(0)) {
       const uint8_t staleVersion = 0;
       serialization::writePod(file, staleVersion);
     }
   } else if (lastBuildDroppedForHeap_) {
-    // The retry ALSO dropped: conditions are deterministic, another rebuild would too. Keep the
-    // best-effort cache valid -- a few missing glyphs on the densest pages beat re-indexing the
-    // whole chapter on every single open.
+    // The retry ALSO dropped. Comparing the retry's headroom against the failed build's was tried
+    // and reverted: on a repeatable path (open book, switch to vertical) the heap is IDENTICAL each
+    // time, so "did the heap improve" answered no forever and every open rebuilt the chapter --
+    // 9.8s before the reader would even respond. Keep the best-effort cache: a few missing glyphs
+    // on the densest pages beat re-indexing on every single open.
     LOG_ERR("VSC", "Stale-rebuild dropped glyphs again; keeping best-effort cache to break the rebuild loop");
   }
   file.close();

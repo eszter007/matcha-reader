@@ -162,11 +162,24 @@ bool EpubReaderWordLookupActivity::stepScan(uint32_t budgetMs) {
   // Definition rendering leaves compressed-font groups resident. Reclaim before the next scan
   // slice needs to grow a vector; waiting until that growth fails discards progress and rescans
   // the whole page. This is the same recovery used below, just before damage instead of after it.
-  if (ESP.getMaxAllocHeap() < 20 * 1024) {
+  //
+  // Honours reclaimIsFutile for the same reason reclaimFontHeap() does, and sets it: stepScan runs
+  // once per loop slice, so on a heap where the release frees nothing this fired ~40 times in two
+  // seconds, each time discarding advance tables, kern matrices and mini bitmaps that were then
+  // re-read from SD, with maxAlloc unchanged at 10228 throughout.
+  if (!reclaimIsFutile && ESP.getMaxAllocHeap() < 20 * 1024) {
     RenderLock lock;
     if (auto* fcm = renderer.getFontCacheManager()) {
+      const uint32_t before = ESP.getMaxAllocHeap();
       fcm->releaseAllFontMemory();
-      LOG_INF("WLA", "Reclaimed fonts before scan: maxAlloc=%u", ESP.getMaxAllocHeap());
+      const uint32_t after = ESP.getMaxAllocHeap();
+      if (after <= before + 2048) {
+        reclaimIsFutile = true;
+        LOG_INF("WLA", "Reclaim before scan freed nothing contiguous (%u -> %u); not retrying this session", before,
+                after);
+      } else {
+        LOG_INF("WLA", "Reclaimed fonts before scan: maxAlloc=%u", after);
+      }
     }
   }
   const bool done = scan.step(budgetMs);

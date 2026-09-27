@@ -254,7 +254,6 @@ class CoverLibraryActivity final : public Activity {
   void warmOnePendingProgress();
 
   // Long-press on a book opens its reading stats.
-  void showBookStats(const std::string& path, const std::string& title);
   void showBookActions(const std::string& path, const std::string& title, int progressPercent);
 
  public:

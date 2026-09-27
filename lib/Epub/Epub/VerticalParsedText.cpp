@@ -100,6 +100,16 @@ bool growForOnePush(std::vector<T>& vec, const uint32_t (&margins)[N], const siz
   }
   return false;
 }
+
+// Can one more element be appended to a per-run scratch vector without an allocation the heap
+// cannot serve? Small elements and a small step, so the margin is PER_RUN_RESERVE_MARGIN rather
+// than SMALL_ALLOC_MARGIN, which is sized for the multi-KB stream and page buffers.
+template <typename T>
+bool canGrowScratch(std::vector<T>& vec) {
+  static constexpr uint32_t MARGINS[] = {PER_RUN_RESERVE_MARGIN};
+  constexpr size_t LINEAR_GROWTH_STEP = 32;
+  return growForOnePush(vec, MARGINS, LINEAR_GROWTH_STEP);
+}
 }  // namespace
 
 namespace {
@@ -471,7 +481,7 @@ void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
   if (needed <= stream_.capacity()) return;
   const size_t requestBytes = needed * sizeof(PendingChar);
   if (!heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
-    LOG_ERR("VPT", "Reserve of %u bytes doesn't fit (free=%u); growing incrementally",
+    LOG_DBG("VPT", "Reserve of %u bytes doesn't fit (free=%u); growing incrementally",
             static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
     return;
   }
@@ -485,7 +495,7 @@ void VerticalParsedText::preallocateStream() {
   if (heapCanAfford(bytes, MIN_FREE_HEAP_FOR_RESERVE)) {
     stream_.reserve(STREAM_STABLE_ENTRIES);
   } else {
-    LOG_ERR("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
+    LOG_DBG("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
             static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
   }
 }
@@ -495,7 +505,7 @@ bool VerticalParsedText::canPushStreamChar() {
   static constexpr uint32_t MARGINS[] = {SMALL_ALLOC_MARGIN};
   constexpr size_t LINEAR_GROWTH_STEP = 64;  // PendingChar elements; keeps stalled retries cheap
   if (growForOnePush(stream_, MARGINS, LINEAR_GROWTH_STEP)) return true;
-  LOG_ERR("VPT", "Low heap (%u bytes) while building vertical text stream; truncating batch", ESP.getMaxAllocHeap());
+  LOG_DBG("VPT", "Low heap (%u bytes) while building vertical text stream; truncating batch", ESP.getMaxAllocHeap());
   oom_ = true;
   everDroppedForHeap_ = true;
   return false;
@@ -634,6 +644,17 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         size_t consumed = 1;
         const uint32_t cp = decodeUtf8At(run.baseText, i, &consumed);
         const uint32_t thisCpIndex = cpIndex++;
+        // The reserves above are skipped when they don't fit, which leaves these vectors growing by
+        // doubling through the THROWING operator new -- it aborts the device under -fno-exceptions
+        // rather than returning null (observed: a furigana-dense chapter entered this function at
+        // maxAlloc=2036 and aborted here). Truncate the run instead, the same degradation
+        // canPushStreamChar already accepts for the stream itself.
+        if (!canGrowScratch(baseOffsets) || !canGrowScratch(baseCps) || !canGrowScratch(baseCpIndex) ||
+            !canGrowScratch(breakBeforeBaseIndex)) {
+          LOG_DBG("VPT", "Low heap (%u bytes) decoding run; truncating", ESP.getMaxAllocHeap());
+          everDroppedForHeap_ = true;
+          break;
+        }
         if ((cp == 0x3099 || cp == 0x309A) && !baseCps.empty()) {
           const uint32_t composed = composeKanaDiacritic(baseCps.back(), cp);
           if (composed != 0) {
@@ -781,7 +802,7 @@ struct VerticalParsedText::LayoutCursor {
         return;
       }
     }
-    LOG_ERR("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
+    LOG_DBG("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
             static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
   }
 
@@ -815,7 +836,7 @@ struct VerticalParsedText::LayoutCursor {
       glyphs.push_back(g);
       return true;
     }
-    LOG_ERR("VPT", "Low heap (%u bytes); dropping glyph", ESP.getMaxAllocHeap());
+    LOG_DBG("VPT", "Low heap (%u bytes); dropping glyph", ESP.getMaxAllocHeap());
     o.everDroppedForHeap_ = true;
     return false;
   }
@@ -1476,7 +1497,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
       pages.reserve(worstCasePages);
     } else {
-      LOG_ERR("VPT", "Skipping pages reserve (%u bytes doesn't fit, free=%u); growing incrementally",
+      LOG_DBG("VPT", "Skipping pages reserve (%u bytes doesn't fit, free=%u); growing incrementally",
               static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
     }
   }

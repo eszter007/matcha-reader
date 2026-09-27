@@ -320,14 +320,29 @@ class SdCardFont {
   //
   // Set from what the measurement justified, not from what the slots could hold. The thrash this
   // ring fixes was a Latin working set of ~48 glyphs totalling roughly 3KB, so 4KB keeps the
-  // whole win while capping growth over the old 8-slot ring at about 3KB per loaded font. A
-  // larger budget bought nothing measurable and cost headroom that an OOM abort was already
-  // using up elsewhere (freeink-sdk Credential.cpp allocates with bare `new`).
+  // whole win while capping growth over the old 8-slot ring at about 3KB per loaded font.
+  //
+  // 12KB was tried, to let the 48 slots bind first for a CJK working set, and reverted: during a
+  // vertical section build the ring holds its bytes while the layout is competing for the same
+  // heap, and the extra 8KB pushed maxAlloc down to ~3KB mid-build, which brought back the
+  // emergency page splits (70 of them, pages ending at ~100 of 207 glyphs). A full ring wipe and
+  // some repeated SD reads cost time; sparse pages cost the reader's text.
   static constexpr uint32_t OVERFLOW_BYTE_BUDGET = 4 * 1024;
   OverflowEntry overflow_[OVERFLOW_CAPACITY] = {};
   uint32_t overflowCount_ = 0;
   uint32_t overflowNext_ = 0;
   uint32_t overflowBytes_ = 0;  // sum of dataLength over the occupied slots
+  // Lifetime count of on-demand loads, for the periodic line in the miss path. Never reset: a
+  // count that climbs steeply while one page renders is what a thrashing ring looks like.
+  uint32_t overflowLoads_ = 0;
+  // Codepoints already reported as absent from this font, to keep the miss path from logging the
+  // same character once per measure and once per draw for every occurrence on the page. A set, not
+  // one slot: a miss is retried as U+FFFD, so the calls ALTERNATE and a single-entry memo matched
+  // nothing (104 lines for two codepoints).
+  static constexpr uint32_t MISSING_REPORTED_SLOTS = 8;
+  uint32_t missingReported_[MISSING_REPORTED_SLOTS] = {};
+  uint32_t missingReportedNext_ = 0;
+  bool noteMissingCodepoint(uint32_t codepoint);
 
   // Compact advance-only table for layout measurement (per-style).
   // Built by buildAdvanceTable(), queried by getAdvance().

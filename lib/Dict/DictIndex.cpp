@@ -12,6 +12,17 @@
 #include <vector>
 
 namespace {
+// Headroom to leave behind an allocation of `bytes`. Scaled, not flat: an 8KB reserve added to a
+// 54-byte definition refused every entry once the largest block fell below ~8KB (observed on
+// device at maxAlloc=6644, where a whole lookup session reported "no match" for words that were
+// found), while doubling a small request costs nothing and still refuses a genuinely dead heap.
+// Requests at or above the reserve keep the full 8KB behind them.
+constexpr uint32_t DICT_ALLOC_RESERVE = 8 * 1024;
+bool dictFitsWithReserve(const size_t bytes) {
+  const size_t reserve = bytes < DICT_ALLOC_RESERVE ? bytes : DICT_ALLOC_RESERVE;
+  return ESP.getMaxAllocHeap() >= bytes + reserve;
+}
+
 // Re-opening the idx/dat files on every lookup was the dominant cost of building the Word Lookup
 // screen: each SD file open has real filesystem overhead (path resolution, directory traversal),
 // and WordLookup::lookup() calls DictIndex::lookupExact() up to 8 window lengths x several
@@ -660,7 +671,7 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         // that don't comfortably fit (shorter definition instead of a reboot); the size cap also
         // rejects a corrupt/misread record length before it becomes a huge allocation request.
         constexpr uint32_t MAX_DEF_BYTES = 16 * 1024;
-        if (sibs[s].length > MAX_DEF_BYTES || ESP.getMaxAllocHeap() < sibs[s].length + 8 * 1024) {
+        if (sibs[s].length > MAX_DEF_BYTES || !dictFitsWithReserve(sibs[s].length)) {
           g_heapLimited = true;
           g_lookupIncomplete = true;
           LOG_ERR("DICT", "Skipping entry (%u bytes, maxAlloc=%u)", static_cast<unsigned>(sibs[s].length),
@@ -692,9 +703,9 @@ bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const ch
         // under a tight heap the merge is droppable (the best entry alone is still useful).
         size_t mergedLen = 0;
         for (const auto& en : entries) mergedLen += en.def.size() + 8;
-        if (ESP.getMaxAllocHeap() < mergedLen + 8 * 1024) {
+        if (!dictFitsWithReserve(mergedLen)) {
           g_heapLimited = true;
-          LOG_ERR("DICT", "Skipping entry merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
+          LOG_DBG("DICT", "Skipping entry merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
           out.definition = std::move(entries[0].def);
         } else {
           out.definition.reserve(mergedLen);

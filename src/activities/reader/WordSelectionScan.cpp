@@ -23,6 +23,16 @@ namespace {
 // character isn't selectable for lookup, a far better failure mode than crashing the reader.
 constexpr uint32_t SMALL_ALLOC_MARGIN = 16 * 1024;
 constexpr size_t LINEAR_GROWTH_STEP = 32;
+
+// Headroom to leave behind an allocation of `bytes`, so serving it never consumes the last usable
+// block. Scaled, not fixed: a flat 16KB reserve added to a 640-byte vector growth refused every
+// growth below ~16.4KB maxAlloc, which left the scan with zero glyphs and an empty lookup panel
+// (observed on device at maxAlloc=16372). Doubling a small request costs nothing and still refuses
+// when the heap is genuinely gone; large requests keep the original 16KB reserve.
+bool fitsWithMargin(const size_t bytes) {
+  const size_t margin = bytes < SMALL_ALLOC_MARGIN ? bytes : SMALL_ALLOC_MARGIN;
+  return ESP.getMaxAllocHeap() >= bytes + margin;
+}
 }  // namespace
 
 // Returns true for any character that could be part of a Japanese word.
@@ -166,7 +176,7 @@ void WordSelectionScan::encodeUtf8(uint32_t cp, std::string& out) {
 void WordSelectionScan::reserveGlyphsSafe(std::vector<GlyphRef>& vec, size_t count) {
   if (count <= vec.capacity()) return;
   const size_t requestBytes = count * sizeof(GlyphRef);
-  if (ESP.getMaxAllocHeap() < requestBytes + SMALL_ALLOC_MARGIN) {
+  if (!fitsWithMargin(requestBytes)) {
     LOG_ERR("WLKP", "Skipping glyph reserve (%u bytes doesn't fit, free=%u); growing incrementally",
             static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
     return;
@@ -181,14 +191,14 @@ bool WordSelectionScan::pushGlyphSafe(std::vector<GlyphRef>& vec, const GlyphRef
   }
   const size_t doubledCapacity = vec.capacity() == 0 ? 8 : vec.capacity() * 2;
   const size_t doubledBytes = doubledCapacity * sizeof(GlyphRef);
-  if (ESP.getMaxAllocHeap() >= doubledBytes + SMALL_ALLOC_MARGIN) {
+  if (fitsWithMargin(doubledBytes)) {
     vec.reserve(doubledCapacity);
     vec.push_back(g);
     return true;
   }
   const size_t linearCapacity = vec.capacity() + LINEAR_GROWTH_STEP;
   const size_t linearBytes = linearCapacity * sizeof(GlyphRef);
-  if (ESP.getMaxAllocHeap() >= linearBytes + SMALL_ALLOC_MARGIN) {
+  if (fitsWithMargin(linearBytes)) {
     vec.reserve(linearCapacity);
     vec.push_back(g);
     return true;
@@ -429,7 +439,7 @@ void WordSelectionScan::allocScannedBits() {
   // that cannot be served aborts the device, so a capacity() check afterwards never runs. The
   // bitmap is optional -- leaving it empty drops the walk to a strictly sequential pass (see
   // aimAtGlyph() and step()), which is slower but complete.
-  if (ESP.getMaxAllocHeap() < bytes + SMALL_ALLOC_MARGIN) {
+  if (!fitsWithMargin(bytes)) {
     LOG_ERR("WLS", "Skipping scanned bitmap (%u bytes doesn't fit, maxAlloc=%u); walk stays sequential",
             static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
     return;
@@ -619,7 +629,7 @@ bool WordSelectionScan::tryLoadCache(const std::string& path, const uint16_t spi
   // never be able to do that -- the worst it may do is miss and let the page be rescanned.
   if (hdr.count > selectToAllIdx.capacity()) {
     const size_t requestBytes = static_cast<size_t>(hdr.count) * sizeof(size_t);
-    if (ESP.getMaxAllocHeap() >= requestBytes + SMALL_ALLOC_MARGIN) {
+    if (fitsWithMargin(requestBytes)) {
       selectToAllIdx.reserve(hdr.count);
     } else {
       LOG_ERR("WLS", "Skipping index reserve (%u bytes doesn't fit, maxAlloc=%u); growing incrementally",

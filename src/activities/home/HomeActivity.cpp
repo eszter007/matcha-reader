@@ -31,6 +31,12 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+namespace {
+// Matches LibraryListActivity's hold threshold: the same gesture on every screen that offers book
+// actions.
+constexpr unsigned long LONG_PRESS_MS = 1000;
+}  // namespace
+
 int HomeActivity::getMenuItemCount() const {
   // The cover grid's band is the six-entry tab bar (Home included, and no OPDS), not the classic
   // home menu, so its selector space is books followed by exactly those six.
@@ -42,6 +48,31 @@ int HomeActivity::getMenuItemCount() const {
     count++;
   }
   return count;
+}
+
+bool HomeActivity::showBookOptions(const int bookIndex) {
+  if (!coverGridUi || bookIndex < 0 || bookIndex >= static_cast<int>(recentBooks.size())) return false;
+  const auto& book = recentBooks[bookIndex];
+  BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, book.path, book.title,
+                        coverGridUi->progressFor(bookIndex), [this, bookIndex](const bool deleted) {
+                          if (deleted) {
+                            // The book is gone from the store: rebuild the row the grid draws
+                            // from, and re-resolve covers so no card points at a dead path.
+                            loadRecentBooks(CoverGridHomeUi::MAX_BOOKS);
+                            fillCoverGridFromLibrary();
+                            resolveGridCoverPaths();
+                            coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
+                            selectorIndex = 0;
+                          } else {
+                            // Marked read or unread: the badge and the featured card's percentage
+                            // both come from the stored progress.
+                            coverGridUi->refreshProgress(static_cast<size_t>(bookIndex));
+                          }
+                          recentsLoaded = false;
+                          requestUpdate();
+                        });
+  requestUpdate();
+  return true;
 }
 
 void HomeActivity::loadRecentBooks(int maxBooks) {
@@ -170,6 +201,11 @@ void HomeActivity::resolveGridCoverPaths() {
 // finished cover replaces its placeholder.
 void HomeActivity::postNextCoverJob(const int coverHeight) {
   if (coverHeight <= 0 || coverWorker_.busy() || !coverWorker_.running()) return;
+  // A render in flight means the Try below will fail anyway. Checked first because the scan
+  // opens the book's thumbnail on SD to test it, and while renders ran back to back (stepping
+  // through covers) that open and its log line repeated every loop pass, ~60 times a second.
+  // peek() is racy on its own, which is fine: it only skips work, and Try stays the real gate.
+  if (RenderLock::peek()) return;
   while (coverScanIndex_ < static_cast<int>(recentBooks.size())) {
     RecentBook& book = recentBooks[coverScanIndex_];
     // An EMPTY cover path is "not produced yet", not "this book has none" -- see the result
@@ -206,8 +242,18 @@ void HomeActivity::postNextCoverJob(const int coverHeight) {
     // converter ~52KB. Measured on device, the parse skipped its last stylesheet at 45904 bytes
     // free and then DISCARDED the whole parse -- throwing away ~3.5s of work that would be redone
     // and re-discarded next time. Font caches reload on demand.
+    //
+    // Under the render lock, as CoverLibraryActivity does it: this runs on the loop task while the
+    // render task may be inside the font decompressor drawing a card title, and releasing there
+    // freed the hot-group buffer under it -- a double free that corrupted the heap's free list
+    // (device: tlsf_malloc fault in remove_free_block). Try, not block: a busy render just means
+    // this book is posted on a later loop pass, since coverScanIndex_ has not moved.
+    RenderLock lock{RenderLock::Try{}};
+    if (!lock.held()) return;
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-    coverWorker_.post(std::move(job));
+    if (!coverWorker_.post(std::move(job))) {
+      LOG_ERR("HOME", "Cover post: worker refused job for %s", book.path.c_str());
+    }
     return;
   }
   recentsLoaded = true;
@@ -433,28 +479,12 @@ void HomeActivity::loop() {
 
   if (coverGridUi) {
     // Long press on a cover opens that book's stats -- the Library grid's gesture, same screen.
-    const int longPressed = coverGridUi->takeLongPressedBook();
-    if (longPressed >= 0 && longPressed < static_cast<int>(recentBooks.size())) {
-      const auto& book = recentBooks[longPressed];
-      BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, book.path, book.title,
-                            coverGridUi->progressFor(longPressed), [this, longPressed](const bool deleted) {
-                              if (deleted) {
-                                // The book is gone from the store: rebuild the row the grid draws
-                                // from, and re-resolve covers so no card points at a dead path.
-                                loadRecentBooks(CoverGridHomeUi::MAX_BOOKS);
-                                fillCoverGridFromLibrary();
-                                resolveGridCoverPaths();
-                                coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
-                                selectorIndex = 0;
-                              } else {
-                                // Marked read or unread: the badge and the featured card's
-                                // percentage both come from the stored progress.
-                                coverGridUi->refreshProgress(static_cast<size_t>(longPressed));
-                              }
-                              recentsLoaded = false;
-                              requestUpdate();
-                            });
-      requestUpdate();
+    if (showBookOptions(coverGridUi->takeLongPressedBook())) return;
+    // Same menu from the Confirm hold, for boards with no touch panel. Fires at the threshold
+    // mid-hold; wasLongPressed() arms the release it suppresses, which ActivityManager::loop()
+    // consumes before any activity runs, so it cannot land in the popup and pick its default.
+    if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS) &&
+        showBookOptions(selectorIndex)) {
       return;
     }
     const int touched = coverGridUi->selectedAction(mappedInput);

@@ -68,7 +68,6 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // the firmware on a fragmented heap, and this runs while the reader is tearing down. The walk
   // covers the rows the menu copy adds as well, so their values are written like any other.
   forEachPersistableSetting([&](const SettingInfo& info) {
-    if (settingHiddenByBoard(info)) return;
     if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
     if (!info.valuePtr && !info.stringOffset) return;
@@ -126,7 +125,6 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // the firmware on a fragmented heap, and this runs while the reader is tearing down. The walk
   // covers the rows the menu copy adds as well, so their values are written like any other.
   forEachPersistableSetting([&](const SettingInfo& info) {
-    if (settingHiddenByBoard(info)) return;
     if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
     if (!info.valuePtr && !info.stringOffset) return;

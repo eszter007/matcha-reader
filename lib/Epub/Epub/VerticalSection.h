@@ -66,6 +66,9 @@ class VerticalSection {
   // cache valid instead of re-stamping: the drop conditions are deterministic per book, so
   // re-stamping meant a full re-index on every open, forever.
   bool rebuildingFromStale_ = false;
+  // Largest block at the start of this build, reported with the stale stamp so a sparse chapter
+  // says how much room it had.
+  uint32_t lastBuildStartMaxAlloc_ = 0;
 
   // See setEarlyRenderHook().
   void (*earlyRenderFn_)(void*, const VerticalPage&, int) = nullptr;
