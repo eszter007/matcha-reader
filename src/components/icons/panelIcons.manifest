@@ -1,0 +1,20 @@
+# Manifest for src/components/icons/panelIcons.h — regenerate with:
+#   python3 scripts/convert_icon.py --manifest src/components/icons/panelIcons.manifest \
+#     --svgdir assets/icons/tabler --size 32 --out src/components/icons/panelIcons.h
+# then ./bin/clang-format-fix -g. Needs cairosvg and Pillow.
+#
+# Tabler icons (MIT), vendored in assets/icons/tabler/ from
+# https://github.com/tabler/tabler-icons. The control centre's round buttons: each one shows
+# what tapping it does, so the night, touch and light buttons swap icon with their state.
+PanelMoonIcon = moon
+PanelSunIcon = sun
+PanelRefreshIcon = refresh
+PanelPortraitIcon = crop-portrait
+PanelLandscapeIcon = crop-3-2
+PanelTouchOnIcon = hand-finger
+PanelTouchOffIcon = hand-finger-off
+PanelBulbIcon = bulb
+PanelBulbOffIcon = bulb-off
+# Leading icons on the two slider rows.
+PanelBrightnessIcon = sun
+PanelWarmthIcon = temperature

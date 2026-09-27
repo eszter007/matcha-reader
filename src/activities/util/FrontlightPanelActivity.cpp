@@ -16,6 +16,8 @@
 #include "components/UIThemeTokens.h"
 #include "components/icons/customListIcons.h"
 #include "components/icons/listIcons.h"
+#include "components/icons/panelIcons.h"
+#include "fontIds.h"
 
 namespace fui = freeink::ui;
 
@@ -25,7 +27,6 @@ constexpr fui::ActionId ACTION_WARMTH = 2;
 constexpr fui::ActionId ACTION_TOGGLE = 3;
 constexpr fui::ActionId ACTION_BRIGHTNESS_STEP = 4;
 constexpr fui::ActionId ACTION_WARMTH_STEP = 5;
-constexpr fui::ActionId ACTION_TILE = 6;  // value = tile index
 
 // iOS-style geometry. The panel is a card hanging from the top of the screen:
 // a grabber, full-width slider pills, then a 2-column tile grid. The chrome
@@ -34,9 +35,12 @@ constexpr fui::ActionId ACTION_TILE = 6;  // value = tile index
 constexpr int16_t kPanelSideMargin = 16;
 constexpr int16_t kGrabberHeight = 5;     // fui::SheetProps default, mirrored here
 constexpr int16_t kSliderRowHeight = 56;  // the pill itself (finger-sized)
-constexpr int16_t kTileHeight = 84;
-constexpr int16_t kTileGap = 16;
-constexpr int kTileCols = 2;
+constexpr int16_t kRowIconSize = 32;      // leading icon naming each slider
+// Round quick-setting button: finger-sized circle with a caption under it.
+constexpr int16_t kQuickCircle = 56;
+constexpr int16_t kQuickIcon = 32;
+constexpr int16_t kQuickLabelGap = 4;
+constexpr int kQuickLabelLines = 2;
 // One percent per press, on the -/+ buttons and on the physical Left/Right keys
 // alike (both repeat while held), so a level can be set exactly.
 constexpr int BRIGHTNESS_STEP = 1;
@@ -79,7 +83,6 @@ void FrontlightPanelActivity::onEnter() {
   app.on(ACTION_TOGGLE, &FrontlightPanelActivity::onToggleEvent, this);
   app.on(ACTION_BRIGHTNESS_STEP, &FrontlightPanelActivity::onBrightnessStepEvent, this);
   app.on(ACTION_WARMTH_STEP, &FrontlightPanelActivity::onWarmthStepEvent, this);
-  app.on(ACTION_TILE, &FrontlightPanelActivity::onTileEvent, this);
   app.setScreen(&FrontlightPanelActivity::panelScreen, this);
   requestUpdate();
 }
@@ -134,10 +137,6 @@ void FrontlightPanelActivity::onBrightnessStepEvent(const fui::ActionEvent& even
 
 void FrontlightPanelActivity::onWarmthStepEvent(const fui::ActionEvent& event, void* user) {
   static_cast<FrontlightPanelActivity*>(user)->adjustWarmth(event.value);
-}
-
-void FrontlightPanelActivity::onTileEvent(const fui::ActionEvent& event, void* user) {
-  static_cast<FrontlightPanelActivity*>(user)->runTile(event.value);
 }
 
 void FrontlightPanelActivity::runTile(const int idx) {
@@ -254,6 +253,13 @@ void FrontlightPanelActivity::loop() {
     // runs its first loop(), and panelBottom is only known once render() has
     // measured the layout — so at 0 that release read as "tapped below the
     // sheet" and closed it again before it was ever drawn.
+    if (touch.snap.touchReleased && !draggingSlider) {
+      const int button = quickButtonAt(touch.snap.touchX, touch.snap.touchY);
+      if (button >= 0) {
+        runQuickButton(button);
+        return;
+      }
+    }
     if (touch.snap.touchReleased && !draggingSlider && panelBottom > 0 && touch.snap.touchY >= panelBottom) {
       close();
       return;
@@ -295,18 +301,19 @@ int FrontlightPanelActivity::computePanelBottom() const {
   const int y0 = std::max<int>(metrics.batteryHeight, lineHeight);
   int y = tokens.spaceMd + y0 + tokens.spaceMd;
   if (Frontlight.present()) {
-    // Screen::sliderRow reserves caption + spaceMd + control band, then a
-    // spaceMd gap; addSliderRow() adds one more spaceMd of air after each row.
-    y += lineHeight + tokens.spaceMd + kSliderRowHeight + 2 * tokens.spaceMd;  // brightness
+    // addSliderRow() cancels the caption line, so a row is the control band plus the takeTop gap
+    // and the spaceMd of air it adds after itself.
+    y += kSliderRowHeight + 2 * tokens.spaceMd;  // brightness
     if (Frontlight.hasColorTemperature()) {
-      y += lineHeight + tokens.spaceMd + kSliderRowHeight + 2 * tokens.spaceMd;  // warmth
+      y += kSliderRowHeight + 2 * tokens.spaceMd;  // warmth
     }
     y += tokens.spaceSm;
   }
-  // Tiles are touch targets, so a buttons-only board gets no grid and the
-  // sheet is exactly the frontlight controls.
-  const int tileCount = mappedInput.hasTouch() ? kTileCount : 0;
-  y += fui::tileGridHeight(static_cast<uint16_t>(tileCount), kTileCols, kTileHeight, kTileGap);
+  // The quick buttons are touch targets, so a buttons-only board gets none and the sheet is
+  // exactly the frontlight controls. Mirrors the band buildPanelScreen() reserves.
+  if (mappedInput.hasTouch()) {
+    y += tokens.spaceSm + kQuickCircle + kQuickLabelGap + kQuickLabelLines * uiTarget.lineHeight(tokens.smallText.font);
+  }
   // The sheet's grabber band: content margin + grabber + air to the edge.
   // buildPanelScreen() feeds the same theme spacings into SheetProps.
   y += tokens.spaceLg + kGrabberHeight + tokens.spaceLg + tokens.spaceMd;
@@ -317,26 +324,38 @@ void FrontlightPanelActivity::panelScreen(UiScreen& screen, void* user) {
   static_cast<FrontlightPanelActivity*>(user)->buildPanelScreen(screen);
 }
 
-void FrontlightPanelActivity::addSliderRow(UiScreen& screen, const char* label, const uint8_t value,
+void FrontlightPanelActivity::addSliderRow(UiScreen& screen, const uint8_t* icon, const uint8_t value,
                                            const fui::ActionId sliderAction, const fui::ActionId stepAction,
                                            const bool showToggle) {
-  // Live percentage readout. The row draws before this call returns
-  // (immediate mode), so borrowing a stack buffer is safe.
-  char pct[8];
-  snprintf(pct, sizeof(pct), "%u%%", static_cast<unsigned>(value));
+  const auto& theme = screen.theme();
 
-  // rowProps is a member (fui::SliderRowProps embeds a 324-byte StyleSet, well
-  // past the 256-byte budget a local gets — AGENTS.md). Every field that
-  // varies between the two rows is reassigned here; the rest keep their
-  // constructed defaults, which already match the panel's card language.
-  rowProps.label = label;
-  rowProps.value = pct;
+  // rowProps is a member (fui::SliderRowProps embeds a 324-byte StyleSet, well past the 256-byte
+  // budget a local gets -- AGENTS.md). Every field that varies between the two rows is
+  // reassigned here; the rest keep their constructed defaults.
+  //
+  // No caption line: the leading icon says which slider this is, so a "Brightness 100%" heading
+  // above it is a second label for the same control. Screen::sliderRow() would overwrite
+  // captionGap with the theme's spacing, so the row is themed and placed here and handed to the
+  // component directly -- which also leaves room at the left for the icon.
+  rowProps.label = nullptr;
+  rowProps.value = nullptr;
   rowProps.sliderValue = value;
   rowProps.sliderAction = sliderAction;
   rowProps.decrement = stepAction;
   rowProps.increment = stepAction;
   rowProps.decrementValue = -BRIGHTNESS_STEP;
   rowProps.incrementValue = BRIGHTNESS_STEP;
+  rowProps.labelText = theme.smallText;
+  rowProps.buttonText = theme.titleText;
+  rowProps.buttonText.bold = true;
+  rowProps.gap = theme.spaceMd;
+  // Round step buttons and a full stadium capsule, whatever the theme's corner radius: at this
+  // height Lyra's 6 and Classic's 0 turn both into squared-off bars. Half the band height,
+  // because 255 is RADIUS_INHERIT -- asking for it hands the shape back to the theme.
+  rowProps.buttonRadius = static_cast<uint8_t>(kSliderRowHeight / 2);
+  rowProps.capsuleRadius = static_cast<uint8_t>(kSliderRowHeight / 2);
+  // Cancels the caption line sliderRow() reserves whether or not there is a label to put in it.
+  rowProps.captionGap = static_cast<int16_t>(-screen.target().lineHeight(rowProps.labelText.font));
   if (showToggle) {
     // Lamp on/off after the +: the sliders set the level, this kills the light
     // outright. Filled glyph = on, outline = off.
@@ -346,9 +365,15 @@ void FrontlightPanelActivity::addSliderRow(UiScreen& screen, const char* label, 
     rowProps.toggleAction = fui::NO_ACTION;
     rowProps.toggleIcon = fui::BitmapRef{};
   }
-  screen.sliderRow(rowProps, kSliderRowHeight);
+
+  fui::Rect band = screen.takeTop(fui::sliderRowHeight(screen.target(), rowProps, kSliderRowHeight), theme.spaceMd);
+  renderer.drawIcon(icon, band.x, band.y + (band.height - kRowIconSize) / 2, kRowIconSize);
+  const int16_t leading = static_cast<int16_t>(kRowIconSize + theme.spaceMd);
+  band.x = static_cast<int16_t>(band.x + leading);
+  band.width = static_cast<int16_t>(band.width - leading);
+  fui::sliderRow(screen.frame(), band, rowProps);
   // The wrapper's own trailing gap is one spaceMd; double it so the rows
-  // breathe — a control band this tall reads cramped at the list cadence.
+  // breathe -- a control band this tall reads cramped at the list cadence.
   screen.spacer(screen.theme().spaceMd);
 }
 
@@ -383,49 +408,92 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
   }
 
   if (Frontlight.present()) {
-    addSliderRow(screen, tr(STR_BRIGHTNESS), brightness, ACTION_BRIGHTNESS, ACTION_BRIGHTNESS_STEP,
-                 /*showToggle=*/true);
+    // No lamp button on the row: the light switch is one of the quick buttons below, so the
+    // panel has a single place that turns it on and off.
+    addSliderRow(screen, PanelBrightnessIcon, brightness, ACTION_BRIGHTNESS, ACTION_BRIGHTNESS_STEP,
+                 /*showToggle=*/!mappedInput.hasTouch());
     if (Frontlight.hasColorTemperature()) {
-      addSliderRow(screen, tr(STR_WARMTH), warmth, ACTION_WARMTH, ACTION_WARMTH_STEP, /*showToggle=*/false);
+      addSliderRow(screen, PanelWarmthIcon, warmth, ACTION_WARMTH, ACTION_WARMTH_STEP, /*showToggle=*/false);
     }
     screen.spacer(theme.spaceSm);
   }
 
-  // Quick-setting tiles. Two columns of finger-sized cards; a tile whose
-  // setting is currently on draws filled (StateChecked -> selected style).
-  // Touch boards only — the tiles are touch targets.
+  // Quick-setting buttons. Reserve the band here; the circles and captions draw as chrome in
+  // render(), where the renderer's icon and circle primitives are to hand. Touch boards only --
+  // they are touch targets.
+  quickRowRect = fui::Rect{};
   if (mappedInput.hasTouch()) {
-    static constexpr StrId kOrientNames[4] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
-                                              StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
-    // The orientation tile is labelled with just the current mode ("Portrait"):
-    // the mode names say what the tile is about on their own.
-    const char* orientLabel = I18N.get(kOrientNames[SETTINGS.orientation % 4]);
-    // "Touch On" / "Touch Off", from the existing state strings: the label
-    // names the current state of the touch-reader-controls setting.
-    const bool touchOn = SETTINGS.touchReaderControls != CrossPointSettings::TOUCH_READER_OFF;
-    char touchLabel[48];
-    snprintf(touchLabel, sizeof(touchLabel), "%s %s", tr(STR_TOUCH_TOGGLE),
-             I18N.get(touchOn ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF));
-
-    const char* labels[kTileCount] = {tr(STR_NIGHT_MODE), tr(STR_FORCE_REFRESH), orientLabel, touchLabel};
-    const fui::State states[kTileCount] = {SETTINGS.screenInverted ? fui::StateChecked : fui::StateNormal,
-                                           fui::StateNormal, fui::StateNormal,
-                                           // Filled when touch reader controls are OFF — the non-default,
-                                           // attention-worthy state.
-                                           touchOn ? fui::StateNormal : fui::StateChecked};
-
-    for (int id = 0; id < kTileCount; ++id) {
-      gridItems[id].label = labels[id];
-      gridItems[id].value = static_cast<int16_t>(id);
-      gridItems[id].state = states[id];
-    }
-    gridProps.items = gridItems;
-    gridProps.count = static_cast<uint16_t>(kTileCount);
-    gridProps.action = ACTION_TILE;
-    gridProps.tileHeight = kTileHeight;
-    gridProps.gap = kTileGap;
-    screen.tileGrid(gridProps);
+    const int16_t rowHeight = static_cast<int16_t>(kQuickCircle + kQuickLabelGap +
+                                                   kQuickLabelLines * screen.target().lineHeight(theme.smallText.font));
+    quickRowRect = screen.takeTop(rowHeight, theme.spaceSm);
   }
+}
+
+void FrontlightPanelActivity::drawQuickRow() {
+  if (quickRowRect.width <= 0) return;
+  const bool touchOn = SETTINGS.touchReaderControls != CrossPointSettings::TOUCH_READER_OFF;
+  // The orientation button shows and names the mode it would GIVE you, not the one you are in:
+  // four modes cycle, so a readout sitting among four buttons that all promise an action is the
+  // one thing in the row that would have to be read differently.
+  const int nextOrientation = (SETTINGS.orientation + 1) % 4;
+  const bool nextIsLandscape = nextOrientation % 2 == 1;
+  // Every glyph names the action, not the state: tap the moon to go dark, the sun to come back.
+  const uint8_t* icons[kQuickCount] = {SETTINGS.screenInverted ? PanelSunIcon : PanelMoonIcon, PanelRefreshIcon,
+                                       nextIsLandscape ? PanelLandscapeIcon : PanelPortraitIcon,
+                                       touchOn ? PanelTouchOffIcon : PanelTouchOnIcon,
+                                       lightOn ? PanelBulbOffIcon : PanelBulbIcon};
+  static constexpr StrId kOrientNames[4] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
+                                            StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
+  // Every caption names what the tap DOES, like the glyph above it, and all five say it the same
+  // way -- mixing an action ("Dark Mode") with a readout ("Portrait") in one row makes the reader
+  // work out which is which. "Touch Off" was the worst of it: with touch currently on it reads
+  // just as easily as the status "touch: off", the exact opposite of the truth, so those two
+  // carry a verb instead.
+  char touchLabel[64];
+  snprintf(touchLabel, sizeof(touchLabel), "%s %s", I18N.get(touchOn ? StrId::STR_TURN_OFF : StrId::STR_TURN_ON),
+           tr(STR_TOUCH_TOGGLE));
+  char lightLabel[64];
+  snprintf(lightLabel, sizeof(lightLabel), "%s %s", I18N.get(lightOn ? StrId::STR_TURN_OFF : StrId::STR_TURN_ON),
+           tr(STR_LIGHT));
+  const char* labels[kQuickCount] = {I18N.get(SETTINGS.screenInverted ? StrId::STR_LIGHT_MODE : StrId::STR_DARK_MODE),
+                                     tr(STR_FORCE_REFRESH), I18N.get(kOrientNames[nextOrientation]), touchLabel,
+                                     lightLabel};
+
+  const int slot = quickRowRect.width / kQuickCount;
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  for (int i = 0; i < kQuickCount; ++i) {
+    const int cx = quickRowRect.x + i * slot + slot / 2;
+    const int circleX = cx - kQuickCircle / 2;
+    renderer.drawRoundedRect(circleX, quickRowRect.y, kQuickCircle, kQuickCircle, /*lineWidth=*/2, kQuickCircle / 2,
+                             true);
+    renderer.drawIcon(icons[i], cx - kQuickIcon / 2, quickRowRect.y + (kQuickCircle - kQuickIcon) / 2, kQuickIcon);
+    // Two lines: "Night Mode" and "Refresh Screen" do not fit a fifth of the panel on one, and
+    // truncating them to "Night M..." says less than the icon above already does.
+    const auto lines = renderer.wrappedText(SMALL_FONT_ID, labels[i], slot - 4, kQuickLabelLines);
+    int labelY = quickRowRect.y + kQuickCircle + kQuickLabelGap;
+    for (const auto& line : lines) {
+      const int labelWidth = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
+      renderer.drawText(SMALL_FONT_ID, cx - labelWidth / 2, labelY, line.c_str(), true);
+      labelY += lineHeight;
+    }
+  }
+}
+
+int FrontlightPanelActivity::quickButtonAt(const int x, const int y) const {
+  if (quickRowRect.width <= 0) return -1;
+  if (y < quickRowRect.y || y >= quickRowRect.y + quickRowRect.height) return -1;
+  const int slot = quickRowRect.width / kQuickCount;
+  if (slot <= 0 || x < quickRowRect.x) return -1;
+  const int idx = (x - quickRowRect.x) / slot;
+  return idx >= 0 && idx < kQuickCount ? idx : -1;
+}
+
+void FrontlightPanelActivity::runQuickButton(const int idx) {
+  if (idx == kQuickCount - 1) {
+    toggleLight();
+    return;
+  }
+  runTile(idx);
 }
 
 void FrontlightPanelActivity::render(RenderLock&&) {
@@ -434,6 +502,7 @@ void FrontlightPanelActivity::render(RenderLock&&) {
   // fui::sheet draws the card body, its bottom rule, and the grabber during
   // renderUi(); the battery band at the card's top is part of the screen build.
   renderUi();
+  drawQuickRow();
 
   // A tile that rewrote the whole frame (night mode) re-drives every pixel
   // once; ordinary repaints stay on the fast path. HALF: strong enough to

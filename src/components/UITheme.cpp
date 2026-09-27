@@ -5,19 +5,26 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numeric>
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "components/CoverGridHomeUi.h"
+#include "components/icons/cover.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
+#include "fontIds.h"
 
 UITheme UITheme::instance;
 
@@ -31,18 +38,38 @@ void UITheme::reload() {
   setTheme(themeType);
 }
 
+// Every board. PSRAM only buys HomeCoverCache's region snapshot, which saves re-decoding the
+// cover thumbs after each clearScreen(); without it they are decoded again, and since the thumbs
+// are generated at slot height and drawn 1:1 that costs a few ms against a ~500ms FAST_REFRESH.
+bool UITheme::supportsCoverGrid() { return true; }
+
+bool UITheme::hasCoverGridHome() { return SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && supportsCoverGrid(); }
+
+void UITheme::drawCoverGridHome(CoverGridHomeUi& home) { home.renderUi(); }
+
 void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
+  // No board-support fallback here: supportsCoverGrid() is true everywhere, and a guard that can
+  // never fire reads as a real constraint. Reinstate it here and in SettingsList's option count
+  // together if a board ever has to opt out.
   switch (type) {
     case CrossPointSettings::UI_THEME::CLASSIC:
       LOG_DBG("UI", "Using Classic theme");
       currentTheme = std::make_unique<BaseTheme>();
       currentMetrics = &BaseMetrics::values;
       break;
-    case CrossPointSettings::UI_THEME::LYRA:
-      LOG_DBG("UI", "Using Lyra theme");
-      currentTheme = std::make_unique<LyraTheme>();
+    case CrossPointSettings::UI_THEME::COVER_GRID:
+    case CrossPointSettings::UI_THEME::LYRA: {
+      // The cover home owns its screen-lifetime UI state; other screens retain Lyra styling.
+      auto theme = makeUniqueNoThrow<LyraTheme>();
+      if (!theme) {
+        LOG_ERR("UI", "OOM: Lyra theme");
+        return;
+      }
+      currentTheme = std::move(theme);
       currentMetrics = &LyraMetrics::values;
+      LOG_DBG("UI", "Using Lyra theme");
       break;
+    }
     case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
       LOG_DBG("UI", "Using RoundedRaff theme");
       currentTheme = std::make_unique<RoundedRaffTheme>();
@@ -328,6 +355,129 @@ int UITheme::drawCoverThumb(GfxRenderer& renderer, const std::string& coverThumb
   const int drawWidth = (boxWidth > 0) ? boxWidth : bitmap.getWidth();
   if (!renderer.drawBitmap(bitmap, x, y, drawWidth, coverHeight, cropX, cropY, /*allowUpscale=*/true)) return 0;
   return drawWidth;
+}
+
+void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::string& thumbPath,
+                            const std::string& title, const int progressPercent) {
+  const int coverX = box.x;
+  const int coverY = box.y;
+  const int coverWidth = box.width;
+  const int coverHeight = box.height;
+
+  bool hasCover = false;
+  if (!thumbPath.empty()) {
+    // Manga covers are raw page images, EPUB/XTC covers pre-cropped BMP thumbnails. Both fill
+    // the box and crop the overflow rather than letterboxing.
+    hasCover = drawCoverThumbFilled(renderer, thumbPath, coverX, coverY, coverWidth, coverHeight,
+                                    /*allowRawDecode=*/false);
+  }
+
+  renderer.drawRect(coverX, coverY, coverWidth, coverHeight, true);
+  // Drop shadow: two px down the right edge and along the bottom, so a cover reads as a book
+  // standing on a shelf.
+  constexpr int SHADOW = 2;
+  renderer.fillRect(coverX + coverWidth, coverY + SHADOW, SHADOW, coverHeight, true);
+  renderer.fillRect(coverX + SHADOW, coverY + coverHeight, coverWidth, SHADOW, true);
+
+  if (!hasCover) {
+    const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+    constexpr int ICON_SIZE = 32;
+    renderer.drawIcon(CoverIcon, coverX + (coverWidth - ICON_SIZE) / 2, coverY + (coverHeight - ICON_SIZE) / 2,
+                      ICON_SIZE);
+    const auto titleLines = renderer.wrappedText(SMALL_FONT_ID, title.c_str(), coverWidth - 8, 3);
+    int textY = coverY + (coverHeight - ICON_SIZE) / 2 + ICON_SIZE + 4;
+    for (const auto& line : titleLines) {
+      if (textY + lineHeight > coverY + coverHeight) break;
+      const int textW = renderer.getTextWidth(SMALL_FONT_ID, line.c_str());
+      renderer.drawText(SMALL_FONT_ID, coverX + (coverWidth - textW) / 2, textY, line.c_str(), true);
+      textY += lineHeight;
+    }
+  }
+
+  // Progress badge, top-right, white on black: "New" for unstarted books, "Read" for finished
+  // ones, else the percentage. A negative percent means the caller has not read it yet -- draw
+  // nothing rather than a wrong badge.
+  if (progressPercent < 0) return;
+  char badgeBuf[8];
+  if (progressPercent <= 0) {
+    snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
+  } else if (progressPercent >= 100) {
+    snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_READ));
+  } else {
+    snprintf(badgeBuf, sizeof(badgeBuf), "%d%%", progressPercent);
+  }
+  const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
+  const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
+  const int badgeW = badgeTextW + 12;
+  const int badgeX = coverX + coverWidth - badgeW;
+  const int badgeY = coverY;
+  // Black fill with a rounded bottom-left corner; pixels outside the arc stay untouched so the
+  // cover shows through the corner notch.
+  constexpr int badgeR = 4;
+  renderer.fillRect(badgeX + badgeR, badgeY, badgeW - badgeR, badgeH, true);
+  renderer.fillRect(badgeX, badgeY, badgeR, badgeH - badgeR, true);
+  const int arcCx = badgeX + badgeR;
+  const int arcCy = badgeY + badgeH - 1 - badgeR;
+  for (int dy = 0; dy <= badgeR; dy++) {
+    for (int dx = 0; dx <= badgeR; dx++) {
+      const int d2 = dx * dx + dy * dy;
+      if (d2 > badgeR * badgeR) continue;
+      // Outermost ring of the arc is white so it joins the white edge lines below.
+      renderer.drawPixel(arcCx - dx, arcCy + dy, d2 < (badgeR - 1) * (badgeR - 1));
+    }
+  }
+  // White border on the two exposed edges (left + bottom); top/right sit on the cover edge.
+  renderer.drawLine(badgeX, badgeY, badgeX, arcCy, false);
+  renderer.drawLine(arcCx, badgeY + badgeH - 1, badgeX + badgeW - 1, badgeY + badgeH - 1, false);
+  renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
+}
+
+void UITheme::drawFocusRing(const GfxRenderer& renderer, const Rect box, const bool on) {
+  if (box.width <= 0 || box.height <= 0) return;
+  const int w = std::min<int>(FOCUS_RING_WIDTH, std::min(box.width, box.height) / 2);
+  if (w <= 0) return;
+  const int outerR = std::min<int>(FOCUS_RING_RADIUS, std::min(box.width, box.height) / 2);
+  const int innerR = std::max(outerR - w, 0);
+  const auto band = [&](const int x, const int y, const int bw) {
+    if (bw <= 0) return;
+    if (on) {
+      renderer.fillRectDither(x, y, bw, 1, Color::LightGray);
+    } else {
+      renderer.fillRect(x, y, bw, 1, false);
+    }
+  };
+  // Horizontal inset of a rounded rect's edge on a row `fromEdge` pixels in from its top or
+  // bottom. Row by row rather than four bands plus a stair: a butt joint reads as a square
+  // corner, and the frame has to curve on its inner edge as well as its outer one. Costs one
+  // sqrt per corner row -- at most 2 * FOCUS_RING_RADIUS rows per rect, off the render hot path.
+  const auto inset = [](const int radius, const int fromEdge) {
+    if (radius <= 0 || fromEdge >= radius) return 0;
+    const int dy = radius - fromEdge;
+    return radius - static_cast<int>(std::sqrt(static_cast<double>(radius * radius - dy * dy)));
+  };
+  const int x0 = box.x;
+  const int y0 = box.y;
+  const int innerX = x0 + w;
+  const int innerY = y0 + w;
+  const int innerW = box.width - 2 * w;
+  const int innerH = box.height - 2 * w;
+  for (int row = 0; row < box.height; ++row) {
+    const int y = y0 + row;
+    const int outFrom = std::min(row, box.height - 1 - row);
+    const int outDx = inset(outerR, outFrom);
+    const int left = x0 + outDx;
+    const int right = x0 + box.width - outDx;  // exclusive
+    const int innerRow = y - innerY;
+    if (innerH <= 0 || innerRow < 0 || innerRow >= innerH) {
+      band(left, y, right - left);
+      continue;
+    }
+    const int inDx = inset(innerR, std::min(innerRow, innerH - 1 - innerRow));
+    const int holeLeft = innerX + inDx;
+    const int holeRight = innerX + innerW - inDx;  // exclusive
+    band(left, y, holeLeft - left);
+    band(holeRight, y, right - holeRight);
+  }
 }
 
 UIIcon UITheme::getFileIcon(const std::string& filename) {

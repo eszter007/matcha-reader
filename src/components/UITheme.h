@@ -8,6 +8,8 @@
 #include "CrossPointSettings.h"
 #include "components/themes/BaseTheme.h"
 
+class CoverGridHomeUi;
+
 class UITheme {
   // Static instance
   static UITheme instance;
@@ -19,7 +21,7 @@ class UITheme {
   static UITheme& getInstance() { return instance; }
 
   const ThemeMetrics& getMetrics() const;
-  const BaseTheme& getTheme() const { return *currentTheme; }
+  const BaseTheme& getTheme() const { return currentTheme ? *currentTheme : fallbackTheme; }
   Rect getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints = false,
                          bool hasSideButtonHints = false);
   static void drawCenteredText(const GfxRenderer& renderer, Rect screen, int fontId, int y, const char* text,
@@ -29,6 +31,9 @@ class UITheme {
                                       int maxLines, bool black = true,
                                       EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                                       TextVerticalAlignment verticalAlignment = TextVerticalAlignment::CENTER);
+  static bool supportsCoverGrid();
+  static bool hasCoverGridHome();
+  static void drawCoverGridHome(CoverGridHomeUi& home);
   void reload();
   void setTheme(CrossPointSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
@@ -59,12 +64,33 @@ class UITheme {
   // the background pass has produced the BMP thumbnail.
   static bool drawCoverThumbFilled(GfxRenderer& renderer, const std::string& coverThumbPath, int x, int y, int boxWidth,
                                    int boxHeight, bool allowRawDecode = true);
+  // One book cover as the Library grid paints it: the thumb (or, when there is none, the book
+  // icon over the wrapped title so a coverless book is still identifiable), a hairline outline,
+  // the drop shadow, and the progress badge. Shared with the Home cover grid so a book looks the
+  // same in both. `thumbPath` is already resolved for this box's height; progressPercent < 0
+  // draws no badge.
+  static void drawBookCover(GfxRenderer& renderer, Rect box, const std::string& thumbPath, const std::string& title,
+                            int progressPercent);
+
+  // The one focus treatment across every screen: a dithered grey ring just inside `box`. Grey
+  // rather than black so it reads as "the cursor is here" next to content that is itself black,
+  // and an outline rather than a wash so it never muddies a cover or a line of text.
+  // Even, and it must stay even: the grey dither has period 2 in x and y, so an odd-width band
+  // lights two pixel columns at one start parity and one at the other -- which read as a ring
+  // thicker on two sides than on the other two.
+  static constexpr int FOCUS_RING_WIDTH = 4;
+  // Corner radius of that ring, outer edge; the inner edge curves with it. Matches the rounded
+  // language the Cover Grid theme's pills and cards use.
+  static constexpr int FOCUS_RING_RADIUS = 8;
+  static void drawFocusRing(const GfxRenderer& renderer, Rect box, bool on = true);
+
   static UIIcon getFileIcon(const std::string& filename);
   static int getStatusBarHeight();
   static int getProgressBarHeight();
 
  private:
-  const ThemeMetrics* currentMetrics;
+  BaseTheme fallbackTheme;
+  const ThemeMetrics* currentMetrics = &BaseMetrics::values;
   std::unique_ptr<BaseTheme> currentTheme;
   mutable ThemeMetrics adjustedMetrics;
   mutable bool metricsValid = false;

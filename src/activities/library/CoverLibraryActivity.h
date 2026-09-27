@@ -12,14 +12,22 @@
 
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
+#include "components/CoverWorker.h"
+#include "components/OptionPopup.h"
 #include "components/UITheme.h"  // TabInfo, Rect
 #include "util/ButtonNavigator.h"
 
 class CoverLibraryActivity final : public Activity {
  private:
   ButtonNavigator buttonNavigator;
+  // Long-press menu on a cover (stats / read / unread / delete), shared with the Home grid.
+  OptionPopup optionPopup;
+  // Bottom tab bar cursor for button boards; -1 when nothing in the band is focused.
+  int tabFocus = -1;
 
   int selectedTab = 0;
+  // Tab to open on, from the tab band of whichever screen switched here.
+  int requestedTab = 0;
   int contentIndex = 0;
   int scrollRow = 0;      // Books tab: first visible grid row
   int shelvesScroll = 0;  // Shelves tab: first visible list row
@@ -50,6 +58,9 @@ class CoverLibraryActivity final : public Activity {
     int bookCount = 0;
   };
   std::vector<ShelfInfo> shelves;
+  // Confirm on the Files tab switches activity on the RELEASE, not the press; set while the
+  // key is still down so the browser never sees that release as "open the selected row".
+  bool filesPending = false;
   bool shelvesLoaded = false;
 
   // Shelf detail view
@@ -134,6 +145,7 @@ class CoverLibraryActivity final : public Activity {
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
   // cell's padding margin. Because it never overlaps the cover, moving the selection is two of
   // these calls (erase old with on=false, draw new) -- no cover re-decode, a few ms total.
+  void drawCoverShadow(int coverX, int coverY, int coverWidth, int coverHeight);
   void drawGridSelectionBorder(int cellX, int cellY, int cellWidth, int cellHeight, bool on);
 
   // Selection-only fast path: when the previous full render is still in the framebuffer and ONLY
@@ -212,73 +224,24 @@ class CoverLibraryActivity final : public Activity {
   std::vector<LibraryIndexEntry> libraryIndex_;
   bool libraryIndexDirty_ = false;
 
-  // One lower-priority cover job at a time. Release/acquire stores on busy publish the job to
-  // the worker and its result back to loop(), so the non-atomic structs are never accessed
-  // concurrently; the loop task is their only writer while busy=false.
-  struct CoverJob {
-    RecentBook book;
-    int gridHeight = 0;
-    // Every thumb height this book still needs, generated in ONE job. Opening the book is what
-    // costs (measured on device: 213ms typical, 2347ms worst, against milliseconds to scale the
-    // cover once it is open), so a job per height paid that price again for each size. Unused
-    // slots are 0. Three: the grid cell, the home cover, and SHELF_THUMB_HEIGHT.
-    static constexpr int MAX_TARGET_HEIGHTS = 3;
-    int targetHeights[MAX_TARGET_HEIGHTS] = {0, 0, 0};
-    uint32_t fileSize = 0;
-    uint32_t modifiedStamp = 0;
+  // Cover conversion off the loop task. The mechanism lives in CoverWorker (shared with Home);
+  // what stays here is the policy -- which book to convert next, the set of heights to ask for,
+  // and recording the outcome in library.idx.
+  CoverWorker coverWorker_;
 
-    void addTargetHeight(const int h) {
-      if (h <= 0) return;
-      for (int& slot : targetHeights) {
-        if (slot == h) return;  // already queued
-        if (slot == 0) {
-          slot = h;
-          return;
-        }
-      }
-    }
-  };
-  struct CoverResult {
-    bool pending = false;
-    bool completed = false;  // false means foreground work cancelled it; retry after idle
-    bool hasGridThumb = false;
-    // The book declares no cover image at all, so no future attempt can succeed. Distinct from
-    // hasGridThumb=false, which usually means the conversion did not fit in the heap this time
-    // and must be retried -- conflating the two costs a cover forever (see Epub::hasCoverImage).
-    bool coverKnownAbsent = false;
-    RecentBook book;
-    uint32_t fileSize = 0;
-    uint32_t modifiedStamp = 0;
-  };
-  TaskHandle_t coverWorkerTask_ = nullptr;
-  std::atomic<bool> coverWorkerExitRequested_{false};
-  std::atomic<bool> coverWorkerExited_{false};
-  std::atomic<bool> coverWorkerBusy_{false};
-  std::atomic<bool> coverWorkerCancelRequested_{false};
-  std::atomic<bool> coverWorkerCancelSeen_{false};
-  CoverJob coverJob_;
-  CoverResult coverResult_;
-
-  static void coverWorkerTrampoline(void* ctx);
-  static bool coverWorkerShouldCancel(void* ctx);
-  void coverWorkerLoop();
-  void runCoverJob();
-  bool postCoverJob(CoverJob&& job);
-  void startCoverWorker();
-  void stopCoverWorker();
+  // Full CPU while a cover conversion runs, the same way EpubReaderActivity keeps a section
+  // build off the low-power clock. The Library sits idle while the worker converts, so the loop
+  // would drop to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz takes ~24s at 10 --
+  // long enough that it used to be cancelled before it could finish. The work is fixed, so
+  // finishing sooner spends less time awake, not more.
+  bool skipLoopDelay() override { return coverWorker_.busy(); }
 
   void loadLibraryIndex();
   void saveLibraryIndex();
   const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
   void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
                         bool hasThumb, bool coverKnownAbsent = false);
-  // Full CPU while a cover conversion runs, the same way EpubReaderActivity keeps a section
-  // build off the low-power clock. The Library sits idle while the worker converts, so the loop
-  // would drop to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz takes ~24s at 10 --
-  // long enough that it used to be cancelled before it could finish. The work is fixed, so
-  // finishing sooner spends less time awake, not more.
-  bool skipLoopDelay() override { return coverWorkerBusy_.load(std::memory_order_acquire); }
-
+  void prewarmBookText();
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   bool applyLibraryScan();
@@ -293,10 +256,11 @@ class CoverLibraryActivity final : public Activity {
 
   // Long-press on a book opens its reading stats.
   void showBookStats(const std::string& path, const std::string& title);
+  void showBookActions(const std::string& path, const std::string& title, int progressPercent);
 
  public:
-  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("RecentBooks", renderer, mappedInput) {}
+  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialTab = 0)
+      : Activity("RecentBooks", renderer, mappedInput), requestedTab(initialTab) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

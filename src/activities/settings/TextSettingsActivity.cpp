@@ -52,11 +52,22 @@ int findCurrentFontIndex(const std::vector<TextSettingsActivity::FontEntry>& fon
 }
 
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};
+constexpr StrId WORD_SPACING_IDS[] = {StrId::STR_SPACING_50_PERCENT,  StrId::STR_SPACING_75_PERCENT,
+                                      StrId::STR_SPACING_100_PERCENT, StrId::STR_SPACING_125_PERCENT,
+                                      StrId::STR_SPACING_150_PERCENT, StrId::STR_SPACING_175_PERCENT,
+                                      StrId::STR_SPACING_200_PERCENT};
+constexpr StrId CHARACTER_SPACING_IDS[] = {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1,
+                                           StrId::STR_SPACING_ZERO, StrId::STR_SPACING_PLUS_1,
+                                           StrId::STR_SPACING_PLUS_2};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                    StrId::STR_BOOK_S_STYLE};
 constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
 constexpr int MARGIN_MAX = CrossPointSettings::SCREEN_MARGIN_MAX;
 constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
+constexpr int WORD_SPACING_MIN = CrossPointSettings::WORD_SPACING_MIN;
+constexpr int WORD_SPACING_MAX = CrossPointSettings::WORD_SPACING_MAX;
+constexpr int WORD_SPACING_STEP = CrossPointSettings::WORD_SPACING_STEP;
+static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MIN) / WORD_SPACING_STEP + 1);
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -309,11 +320,7 @@ const char* TextSettingsActivity::confirmLabelText() const {
   }
 }
 
-void TextSettingsActivity::render(RenderLock&&) {
-  if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
-
-  renderer.clearScreen();
-
+void TextSettingsActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
 
   GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
@@ -331,10 +338,11 @@ void TextSettingsActivity::render(RenderLock&&) {
   const bool japaneseFace = japaneseBook_ || verticalText_;
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
                               previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(japaneseFace));
+}
 
-  // Tab bar + active tab's list draw inside the screen builder.
-  renderUi();
-
+// Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer
+// separately, so the hints repaint without redrawing the preview.
+void TextSettingsActivity::drawFooter() {
   if (focusedRowHasNoPreview()) {
     const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
     const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
@@ -343,8 +351,11 @@ void TextSettingsActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabelText(), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
 
-  renderer.displayBuffer();
+void TextSettingsActivity::render(RenderLock&& lock) {
+  if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
+  UiListActivity::render(std::move(lock));
 }
 
 // Font switching runs on the main task from loop(), which deliberately holds no
@@ -445,6 +456,25 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         [](int idx) { SETTINGS.paragraphAlignment = static_cast<uint8_t>(idx); });
       requestUpdate();
       break;
+    case LayoutRow::WordSpacing: {
+      const int cur = (std::clamp<int>(SETTINGS.wordSpacing, WORD_SPACING_MIN, WORD_SPACING_MAX) - WORD_SPACING_MIN) /
+                      WORD_SPACING_STEP;
+      optionPopup_.show(StrId::STR_WORD_SPACING, WORD_SPACING_IDS, static_cast<int>(std::size(WORD_SPACING_IDS)), cur,
+                        [](int idx) {
+                          SETTINGS.wordSpacing = static_cast<uint8_t>(WORD_SPACING_MIN + idx * WORD_SPACING_STEP);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
+    }
+    case LayoutRow::CharacterSpacing:
+      optionPopup_.show(StrId::STR_CHARACTER_SPACING, CHARACTER_SPACING_IDS,
+                        static_cast<int>(std::size(CHARACTER_SPACING_IDS)), SETTINGS.characterSpacing, [](int idx) {
+                          SETTINGS.characterSpacing = static_cast<uint8_t>(idx);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
     case LayoutRow::ScreenMargin: {
       std::vector<std::string> options;
       options.reserve((MARGIN_MAX - MARGIN_MIN) / MARGIN_STEP + 1);
@@ -502,6 +532,13 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     case LayoutRow::Alignment: {
       const uint8_t v = SETTINGS.paragraphAlignment;
       return v < std::size(ALIGNMENT_IDS) ? I18N.get(ALIGNMENT_IDS[v]) : I18N.get(StrId::STR_JUSTIFY);
+    }
+    case LayoutRow::WordSpacing:
+      return std::to_string(SETTINGS.wordSpacing) + "%";
+    case LayoutRow::CharacterSpacing: {
+      const uint8_t v = SETTINGS.characterSpacing;
+      return v < std::size(CHARACTER_SPACING_IDS) ? I18N.get(CHARACTER_SPACING_IDS[v])
+                                                  : I18N.get(StrId::STR_SPACING_ZERO);
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);

@@ -1,11 +1,17 @@
 #include "FontDecompressor.h"
 
 #include <Arduino.h>
+#include <FontAlloc.h>  // PSRAM-preferring font allocator (fiFontMalloc/Free)
 #include <Logging.h>
 #include <Utf8.h>
 
 #include <cstdlib>
 #include <cstring>
+
+// Decompressed-glyph page slots and the hot-group buffers are placed in PSRAM
+// when the board has it (fiFontMalloc), falling back to the internal heap
+// otherwise — so the built-in compressed fonts get the same lift as the SD and
+// vector paths. fiFontFree releases either region.
 
 FontDecompressor::~FontDecompressor() { deinit(); }
 
@@ -90,20 +96,20 @@ const uint8_t* FontDecompressor::slabInsert(const EpdFontData* fontData, const u
 
 void FontDecompressor::freePageBuffer() {
   for (uint8_t s = 0; s < pageSlotCount; s++) {
-    free(pageSlots[s].buffer);
-    free(pageSlots[s].glyphs);
+    fiFontFree(pageSlots[s].buffer);
+    fiFontFree(pageSlots[s].glyphs);
     pageSlots[s] = {};
   }
   pageSlotCount = 0;
 }
 
 void FontDecompressor::freeHotGroup() {
-  free(hotGroup);
+  fiFontFree(hotGroup);
   hotGroup = nullptr;
   hotGroupCapacity = 0;
   hotGroupFont = nullptr;
   hotGroupIndex = UINT16_MAX;
-  free(hotGlyphBuf);
+  fiFontFree(hotGlyphBuf);
   hotGlyphBuf = nullptr;
   hotGlyphBufCapacity = 0;
   // The release itself is the biggest heap improvement there is; never let a stale latch
@@ -116,8 +122,8 @@ bool FontDecompressor::ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_
   if (capacity >= needed) return true;
   // Grow-only, free-then-malloc: every caller fully rewrites the buffer after a grow, so the
   // old contents are dead -- freeing first gives the allocator its best shot on a tight heap.
-  free(buf);
-  buf = static_cast<uint8_t*>(malloc(needed));  // owned by FontDecompressor, freed in freeHotGroup()
+  fiFontFree(buf);
+  buf = static_cast<uint8_t*>(fiFontMalloc(needed));  // owned by FontDecompressor, freed in freeHotGroup()
   capacity = buf ? needed : 0;
   return buf != nullptr;
 }
@@ -502,12 +508,12 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
   if (totalBytes == 0) return 0;
 
   // Step 3: Allocate page buffer and lookup table for this slot
-  slot.buffer = static_cast<uint8_t*>(malloc(totalBytes));
-  slot.glyphs = static_cast<PageGlyphEntry*>(malloc(glyphCount * sizeof(PageGlyphEntry)));
+  slot.buffer = static_cast<uint8_t*>(fiFontMalloc(totalBytes));
+  slot.glyphs = static_cast<PageGlyphEntry*>(fiFontMalloc(glyphCount * sizeof(PageGlyphEntry)));
   if (!slot.buffer || !slot.glyphs) {
     LOG_ERR("FDC", "Failed to allocate page buffer (%u bytes, %u glyphs)", totalBytes, glyphCount);
-    free(slot.buffer);
-    free(slot.glyphs);
+    fiFontFree(slot.buffer);
+    fiFontFree(slot.glyphs);
     slot = {};
     return glyphCount;
   }
@@ -636,14 +642,19 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     uint16_t groupIdx = neededGroups[g];
     const EpdFontGroup& group = fontData->groups[groupIdx];
 
+    auto* tempBuf = static_cast<uint8_t*>(fiFontMalloc(group.uncompressedSize));
+    if (!tempBuf) {
+      LOG_ERR("FDC", "Failed to allocate temp buffer (%u bytes) for group %u", group.uncompressedSize, groupIdx);
+      missed++;
+      continue;
+    }
+    if (group.uncompressedSize > stats.peakTempBytes) {
+      stats.peakTempBytes = group.uncompressedSize;
+    }
+
     if (!decompressGroup(fontData, groupIdx, tempBuf, group.uncompressedSize)) {
-      // The return value is a GLYPH count (see the header), so charge every glyph this group
-      // owed, not 1 for the group. Those glyphs keep bufferOffset == UINT32_MAX and fall through
-      // to the hot-group path in getBitmap().
-      for (uint16_t i = 0; i < slot.glyphCount; i++) {
-        if (slot.glyphs[i].bufferOffset == UINT32_MAX && getGroupIndex(fontData, slot.glyphs[i].glyphIndex) == groupIdx)
-          missed++;
-      }
+      fiFontFree(tempBuf);
+      missed++;
       continue;
     }
 
@@ -666,6 +677,8 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
       }
       writeOffset += glyph.dataLength;
     }
+
+    fiFontFree(tempBuf);
   }
 
   free(tempBuf);

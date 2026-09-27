@@ -18,6 +18,7 @@
 #include "ReaderFontSizes.h"
 #include "SdCardFontSystem.h"
 #include "activities/settings/SettingsActivity.h"
+#include "components/UITheme.h"
 #include "util/DictionaryRegistry.h"
 
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
@@ -210,6 +211,13 @@ inline std::vector<StrId> buildLongPressMenuValues() {
   return {VALUES, VALUES + count};
 }
 
+inline std::vector<StrId> homeThemeValues() {
+  static constexpr StrId VALUES[] = {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
+                                     StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_COVER_GRID};
+  const size_t count = UITheme::supportsCoverGrid() ? std::size(VALUES) : std::size(VALUES) - 1;
+  return {VALUES, VALUES + count};
+}
+
 // Shared settings list used by both the device settings UI and the web settings API.
 // Each entry has a key (for JSON API) and category (for grouping).
 // ACTION-type entries and entries without a key are device-only.
@@ -290,10 +298,8 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                           {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
                            StrId::STR_PAGES_30, StrId::STR_NEVER},
                           "refreshFrequency", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
-                          {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
-                           StrId::STR_THEME_ROUNDEDRAFF},
-                          "uiTheme", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme, homeThemeValues(), "uiTheme",
+                          StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                             StrId::STR_CAT_DISPLAY),
 #if FREEINK_CAP_FRONTLIGHT
@@ -316,6 +322,16 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
                           {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE}, "lineSpacing",
                           StrId::STR_CAT_READER)
+            .withTextSettings(),
+        SettingInfo::Value(StrId::STR_WORD_SPACING, &CrossPointSettings::wordSpacing,
+                           {CrossPointSettings::WORD_SPACING_MIN, CrossPointSettings::WORD_SPACING_MAX,
+                            CrossPointSettings::WORD_SPACING_STEP},
+                           "wordSpacing", StrId::STR_CAT_READER)
+            .withTextSettings(),
+        SettingInfo::Enum(StrId::STR_CHARACTER_SPACING, &CrossPointSettings::characterSpacing,
+                          {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1, StrId::STR_SPACING_ZERO,
+                           StrId::STR_SPACING_PLUS_1, StrId::STR_SPACING_PLUS_2},
+                          "characterSpacing", StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin,
                            {CrossPointSettings::SCREEN_MARGIN_MIN, CrossPointSettings::SCREEN_MARGIN_MAX,
@@ -359,18 +375,34 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                           StrId::STR_CAT_READER),
         // --- Controls ---
         // Front buttons first, then the side buttons, then the touch equivalents. The Shortcuts
-        // and Remap rows are actions, inserted ahead of these in SettingsActivity.
+        // and Remap rows are actions, inserted ahead of these in SettingsActivity. No Side Button
+        // Layout row: the per-button upper/lowerSideButtonAction settings replaced it, and cover
+        // its Next/Next and Prev/Prev options by setting both buttons to the same action.
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
                             "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_WORD_LOOKUP_SIDE_BUTTONS, &CrossPointSettings::wordLookupSideButtons,
                             "wordLookupSideButtons", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_REVERSED_PAGE_TURN, &CrossPointSettings::reversePageTurn, "reversePageTurn",
                             StrId::STR_CAT_CONTROLS),
-        // Index 4 (Inverted Swipe) is Matcha-only, for right-to-left vertical reading.
-        SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_TAP, StrId::STR_STATE_SWIPE,
-                           StrId::STR_STATE_INVERTED_TAP, StrId::STR_STATE_INVERTED_SWIPE},
-                          "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Toggle(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
+                            "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        // Inverted Swipe is Matcha-only, for right-to-left vertical reading. It is stored after
+        // Disabled (append-only indices) but offered beside Inverted Tap, which is what the
+        // enumOrder below does -- presentation only, stored values unchanged.
+        SettingInfo::Enum(StrId::STR_NEXT_PAGE_GESTURE, &CrossPointSettings::pageTurnGesture,
+                          {StrId::STR_TAP_AND_SWIPE, StrId::STR_TAP_ONLY, StrId::STR_SWIPE_ONLY,
+                           StrId::STR_INVERTED_TAP, StrId::STR_DISABLED, StrId::STR_STATE_INVERTED_SWIPE},
+                          "pageTurnGesture", StrId::STR_CAT_CONTROLS)
+            .withEnumOrder({CrossPointSettings::TAP_AND_SWIPE, CrossPointSettings::TAP_ONLY,
+                            CrossPointSettings::SWIPE_ONLY, CrossPointSettings::INVERTED_TAP,
+                            CrossPointSettings::INVERTED_SWIPE, CrossPointSettings::PAGE_TURN_GESTURE_DISABLED}),
+        SettingInfo::Enum(StrId::STR_PREV_PAGE_GESTURE, &CrossPointSettings::previousPageGesture,
+                          {StrId::STR_TAP_AND_SWIPE, StrId::STR_TAP_ONLY, StrId::STR_SWIPE_ONLY,
+                           StrId::STR_INVERTED_TAP, StrId::STR_DISABLED, StrId::STR_STATE_INVERTED_SWIPE},
+                          "previousPageGesture", StrId::STR_CAT_CONTROLS)
+            .withEnumOrder({CrossPointSettings::TAP_AND_SWIPE, CrossPointSettings::TAP_ONLY,
+                            CrossPointSettings::SWIPE_ONLY, CrossPointSettings::INVERTED_TAP,
+                            CrossPointSettings::INVERTED_SWIPE, CrossPointSettings::PAGE_TURN_GESTURE_DISABLED}),
         // Persisted under the legacy "tapForReaderMenu" key: old saves map
         // 0 = Off, 1 = Tap.
         SettingInfo::Enum(StrId::STR_SHOW_READER_MENU, &CrossPointSettings::showReaderMenu,
@@ -632,7 +664,11 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     // The reader menu style stays available on button boards (the toolbar
     // chrome is button-navigable); only the touch controls are hidden.
     v.erase(std::remove_if(v.begin(), v.end(),
-                           [](const SettingInfo& s) { return s.nameId == StrId::STR_TOUCH_READER_CONTROLS; }),
+                           [](const SettingInfo& s) {
+                             return s.nameId == StrId::STR_TOUCH_READER_CONTROLS ||
+                                    s.nameId == StrId::STR_NEXT_PAGE_GESTURE ||
+                                    s.nameId == StrId::STR_PREV_PAGE_GESTURE;
+                           }),
             v.end());
   }
   // The reader-menu gesture choice only makes sense where the menu stays

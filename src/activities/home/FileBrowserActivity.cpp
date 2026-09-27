@@ -253,6 +253,9 @@ void FileBrowserActivity::prewarmRowGlyphs(const int start) {
 }
 
 void FileBrowserActivity::onEnter() {
+  // Entered as the Library's Files tab: the cursor carries on from the band the previous screen
+  // left it on, so Confirm keeps stepping the same ring instead of opening the first row.
+  topBandFocused = showsLibraryTabs();
   UiListActivity::onEnter();
 
   fileNameBuffer = makeUniqueNoThrow<char[]>(NAME_BUFFER_SIZE);
@@ -563,6 +566,23 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
 bool FileBrowserActivity::handleCustomInput() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
 
+  if (showsLibraryTabs()) {
+    int tabX = 0;
+    int tabY = 0;
+    if (mappedInput.wasScreenTapped(tabX, tabY)) {
+      const int tab = LibraryTabs::hitTest(renderer, mappedInput, tabX, tabY, LibraryTabs::Files);
+      if (tab >= 0) {
+        // The band swallows the contact either way: a tap in the gap between labels must not
+        // fall through to the row underneath.
+        if (tab != LibraryTabs::Files) {
+          app.clearTapFlash();
+          LibraryTabs::activate(tab);
+        }
+        return true;
+      }
+    }
+  }
+
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
   if (mode == Mode::Books && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
@@ -623,6 +643,9 @@ bool FileBrowserActivity::handleButtons() {
         res.isCancelled = true;
         setResult(std::move(res));
         finish();
+      } else if (showsLibraryTabs()) {
+        // This view is the Library's Files tab, so its root belongs to the Library, not Home.
+        LibraryTabs::activate(LibraryTabs::Books);
       } else {
         onGoHome();
       }
@@ -648,9 +671,11 @@ std::string getFileExtension(const std::string& filename) {
 
 void FileBrowserActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Content below the GUI.drawHeader band, above the button hints.
-  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  // Content below the GUI.drawHeader band, above the button hints -- or above the tab bar that
+  // replaces them in the Cover Grid theme, so the last row clears it instead of hiding behind it.
+  screen.setContentMarginFromScreen(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + libraryTabBandHeight()), 0,
+                  static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // Full path band at the bottom: separator on top, left-truncated so the
@@ -725,10 +750,41 @@ void FileBrowserActivity::drawChrome() {
                                                     : utf8ComposeNfc(basepath.substr(basepath.rfind('/') + 1)));
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
+  // Back still means "up a folder" below the root; at the root the tab bar covers it.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str(), nullptr,
+                 HomeTabBar::showsBackButton(hasTabBar() && basepath == "/"));
+  // The Library's own band, with Files marked: this screen is that tab, so leaving it for Books
+  // or Shelves is a tab switch rather than a trip back through Home.
+  if (showsLibraryTabs()) {
+    GUI.drawTabBar(renderer, LibraryTabs::barRect(renderer, mappedInput), LibraryTabs::build(LibraryTabs::Files),
+                   topBandFocused);
+  }
+}
+
+// Left/Right on the band walk the Library's three views; Books and Shelves live in the other
+// activity, so stepping onto them switches to it.
+// The bottom bar is the last stop on the Library's ring, so leaving it returns to the first
+// Library view rather than to Files, which is where the cursor just came from.
+void FileBrowserActivity::onTabBandExit() {
+  if (showsLibraryTabs()) {
+    LibraryTabs::activate(LibraryTabs::Books);
+    return;
+  }
+  UiListActivity::onTabBandExit();
+}
+
+void FileBrowserActivity::stepTopBand(const int direction) {
+  const int count = LibraryTabs::count();
+  if (count <= 1) return;
+  const int next = (LibraryTabs::Files + direction + count) % count;
+  if (next != LibraryTabs::Files) LibraryTabs::activate(next);
 }
 
 void FileBrowserActivity::drawFooter() {
+  if (hasTabBar()) {
+    UiListActivity::drawFooter();
+    return;
+  }
   const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
   // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.

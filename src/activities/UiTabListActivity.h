@@ -58,7 +58,17 @@ class UiTabListActivity : public UiListActivity {
   // --- screen helpers --------------------------------------------------------
   // The shared tab band: theme-driven pill treatment (label-hugging Lyra vs
   // full-slot RoundedRaff), Lyra focused band wash, always-on divider.
+  void onTabBandExit() override;
   void buildTabBar(UiScreen& screen);
+  // Cover Grid pill geometry, shared by the painter and the outline pass so both agree.
+  static constexpr int16_t PILL_PAD_H = 20;
+  static constexpr int16_t PILL_PAD_H_MIN = 8;
+  static constexpr int16_t PILL_INSET_V = 4;
+  static constexpr int16_t PILL_GAP = 10;
+  static constexpr int16_t PILL_LEADING = 4;
+  // Cover Grid's tab band: content-width pills packed from the left, outline when idle and
+  // solid black when selected. Every other theme keeps the band buildTabBar() draws.
+  void buildPillTabBar(UiScreen& screen, const freeink::ui::TabItem* tabs, int count, bool tabsFocused);
   // Ring-aware counterpart of syncListViewport: measures rows, applies the
   // one-shot follow to the remembered row, clamps, and writes
   // props.selectedIndex = ring - 1.

@@ -2,9 +2,11 @@
 
 #include <GfxRenderer.h>
 
+#include <algorithm>
 #include <cassert>
 
 #include "MappedInputManager.h"
+#include "components/HomeTabBar.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -55,18 +57,134 @@ void UiTabListActivity::moveRingTo(const int ringIndex) {
   requestUpdate();
 }
 
+void UiTabListActivity::onTabBandExit() { moveRingTo(0); }
+
 void UiTabListActivity::navigateButtons() {
-  // Buttons walk the tab band (index 0) plus the rows (1..listCount).
+  // One ring: the tab band (index 0), the rows (1..listCount), then the bottom bar.
   const int ringSize = listCount() + 1;
-  buttonNavigator.onNextRelease([this, ringSize] { moveRingTo(ButtonNavigator::nextIndex(ringPos(), ringSize)); });
-  buttonNavigator.onPreviousRelease(
-      [this, ringSize] { moveRingTo(ButtonNavigator::previousIndex(ringPos(), ringSize)); });
+  buttonNavigator.onNextRelease([this, ringSize] {
+    if (tabFocus >= 0) {
+      tabFocus = -1;
+      moveRingTo(0);
+      return;
+    }
+    if (hasTabBar() && ringPos() >= ringSize - 1) {
+      enterBottomBand();
+      return;
+    }
+    moveRingTo(ButtonNavigator::nextIndex(ringPos(), ringSize));
+  });
+  buttonNavigator.onPreviousRelease([this, ringSize] {
+    if (tabFocus >= 0) {
+      tabFocus = -1;
+      moveRingTo(ringSize - 1);
+      return;
+    }
+    if (hasTabBar() && ringPos() <= 0) {
+      enterBottomBand();
+      return;
+    }
+    moveRingTo(ButtonNavigator::previousIndex(ringPos(), ringSize));
+  });
   buttonNavigator.onNextContinuous([this] { stepTab(1); });
   buttonNavigator.onPreviousContinuous([this] { stepTab(-1); });
 }
 
 void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& props) {
   syncListViewport(screen, props, 1);
+}
+
+// Cover Grid's tab band: content-width pills packed from the leading edge. Idle pills are a grey
+// outline, the selected one is filled solid black with white text -- no underline and no rule
+// under the band, so the pill alone carries the state. With the cursor elsewhere on the screen
+// the fill drops to a grey dither, which is the only cue left that the band is not where the
+// next key press lands.
+void UiTabListActivity::buildPillTabBar(UiScreen& screen, const fui::TabItem* tabs, const int count,
+                                        const bool tabsFocused) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+
+  fui::TabBarProps props;
+  props.tabs = tabs;
+  props.count = static_cast<uint8_t>(count);
+  props.action = ACTION_TAB;
+  props.inputMask = fui::InputTouch;
+  props.text = screen.theme().smallText;
+  props.text.align = fui::TextAlign::Center;
+  // ContentWidth, not the default EqualWidth: pills sized to their own label, so a short one
+  // ("Tags") stays an oval instead of spreading into a circle across an equal slot.
+  props.layout = fui::TabBarLayout::ContentWidth;
+  props.tabInset = fui::Insets{PILL_INSET_V, 0, PILL_INSET_V, 0};
+  props.gap = PILL_GAP;
+  props.leadingInset = PILL_LEADING;
+  props.divider = false;
+
+  const int16_t lineHeight = screen.target().lineHeight(props.text.font);
+  // Pill height is the band minus the tab insets, so the band carries the label plus its 8px
+  // vertical padding plus those insets.
+  const auto wanted = static_cast<int16_t>(lineHeight + 16 + 2 * PILL_INSET_V);
+  const auto preferred = static_cast<int16_t>(tabBandHeight(metrics, mappedInput.hasTouch()));
+  const int16_t band = preferred > wanted ? preferred : wanted;
+  const int pillHeight = band - 2 * PILL_INSET_V;
+  // A stadium needs a radius of at least half the pill height.
+  const auto radius = static_cast<uint8_t>(pillHeight > 2 ? std::min(pillHeight / 2, 255) : 1);
+
+  const auto side = static_cast<int16_t>(metrics.contentSidePadding);
+  const int16_t slotsWidth = static_cast<int16_t>(screen.frame().screen().width - 2 * side);
+  // Widest horizontal padding the row still fits at. Past that tabBar() abandons ContentWidth for
+  // equal slots, which would leave the outlines this function paints at the wrong x.
+  int16_t pad = PILL_PAD_H;
+  for (;; pad = static_cast<int16_t>(pad - 2)) {
+    int total = PILL_LEADING + PILL_GAP * (count - 1);
+    for (int i = 0; i < count; ++i) {
+      const int16_t labelW = screen.target().measureText(props.text.font, tabs[i].label, props.text).width;
+      total += std::max<int>(labelW + 2 * pad, pillHeight);
+    }
+    if (total <= slotsWidth || pad <= PILL_PAD_H_MIN) break;
+  }
+  props.contentInset = fui::Insets{8, pad, 8, pad};
+
+  // explicitlySet is required: without it StyleSet::unset() is true and tabBar() substitutes
+  // its own defaults for everything below.
+  fui::StyleSet pills{};
+  pills.explicitlySet = true;
+  pills.normal.background = fui::Paint::none();
+  pills.normal.foreground = fui::Paint::solid(fui::Color::Black);
+  // No border here: FreeInkUIGfxRenderer::stroke honours a dithered paint only at radius 0 and
+  // falls back to solid black on a rounded one, which is the heavy outline this replaces. The
+  // grey outline is painted below instead.
+  pills.normal.border = fui::Paint::none();
+  pills.normal.radius = radius;
+  pills.selected = pills.normal;
+  pills.selected.background =
+      tabsFocused ? fui::Paint::solid(fui::Color::Black) : fui::Paint::dither(fui::Color::DarkGray);
+  pills.selected.foreground = fui::Paint::solid(fui::Color::White);
+  pills.focused = pills.normal;
+  pills.active = pills.selected;
+  pills.disabled = pills.normal;
+  props.tabStyles = pills;
+
+  const fui::Rect contentTabRect = screen.takeTop(band);
+  const fui::Rect frameRect = screen.frame().screen();
+  const fui::Rect tabRect{frameRect.x, contentTabRect.y, frameRect.width, contentTabRect.height};
+  const fui::Rect slotsRect{static_cast<int16_t>(tabRect.x + side), tabRect.y, slotsWidth, tabRect.height};
+
+  // Grey outlines first, under the labels tabBar() draws: a dithered pill with a white one punched
+  // out of it. Slot geometry mirrors tabBar()'s ContentWidth pass, which with zero horizontal
+  // tabInset makes each slot exactly its pill.
+  int16_t x = static_cast<int16_t>(slotsRect.x + PILL_LEADING);
+  for (int i = 0; i < count; ++i) {
+    const int16_t labelW = screen.target().measureText(props.text.font, tabs[i].label, props.text).width;
+    const auto pillW = static_cast<int16_t>(std::max<int>(labelW + 2 * pad, pillHeight));
+    if (!tabs[i].selected) {
+      const int16_t y = static_cast<int16_t>(slotsRect.y + PILL_INSET_V);
+      renderer.fillRoundedRect(x, y, pillW, pillHeight, radius, Color::DarkGray);
+      renderer.fillRoundedRect(x + 2, y + 2, pillW - 4, pillHeight - 4, std::max(radius - 2, 1), Color::White);
+    }
+    x = static_cast<int16_t>(x + pillW + PILL_GAP);
+  }
+
+  fui::tabBar(screen.frame(), slotsRect, props);
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 }
 
 void UiTabListActivity::buildTabBar(UiScreen& screen) {
@@ -85,6 +203,11 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
     tabs[i].selected = activeTab() == i;
     tabs[i].indicator = tabIndicator(i);
   }
+  const bool tabsFocused = ringPos() == 0;
+  if (HomeTabBar::enabled()) {
+    buildPillTabBar(screen, tabs, count, tabsFocused);
+    return;
+  }
   fui::TabBarProps tabProps;
   tabProps.tabs = tabs;
   tabProps.count = static_cast<uint16_t>(count);
@@ -96,7 +219,6 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
   // (slot minus a 4px frame, 8px clearance above the divider) with
   // body-size labels; zero horizontal contentInset disables the tabBar's
   // label-width shrink.
-  const bool tabsFocused = ringPos() == 0;
   if (metrics.tabPillFullSlot) {
     tabProps.text = screen.theme().bodyText;
     tabProps.tabInset = fui::Insets{4, 4, 7, 4};

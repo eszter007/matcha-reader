@@ -41,9 +41,12 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   static constexpr uint32_t kOrientationTileDebounceMs = 750;
   int panelBottom = 0;
 
-  // Quick-setting tiles, in grid order (2 columns): night mode, refresh,
-  // orientation, touch. Fixed set — shown on touch boards, absent elsewhere.
-  static constexpr int kTileCount = 4;
+  // Quick-setting buttons, left to right: night mode, refresh, orientation, touch, light. Round
+  // icon buttons with a caption under each; every icon shows what tapping it does, so the night,
+  // touch and light buttons swap glyph with their state. Touch boards only — they are touch
+  // targets. The light button lives here rather than beside the brightness slider so all five
+  // switches read as one row.
+  static constexpr int kQuickCount = 5;
 
   // fui::SliderRowProps and fui::TileGridProps embed a 324-byte fui::StyleSet,
   // so the props the render path fills in live here instead of on the stack
@@ -52,8 +55,9 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   // enough — every field either is reassigned on each use or keeps its
   // constructed default.
   freeink::ui::SliderRowProps rowProps;
-  freeink::ui::TileGridProps gridProps;
-  freeink::ui::TileGridItem gridItems[kTileCount];
+  // Band the quick-button row was laid out into, in screen coordinates: the row draws as chrome
+  // after the app renders, and loop() hit-tests taps against it.
+  freeink::ui::Rect quickRowRect{};
 
   static void panelScreen(UiScreen& screen, void* user);
   static void onBrightnessEvent(const freeink::ui::ActionEvent& event, void* user);
@@ -61,19 +65,25 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   static void onToggleEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onBrightnessStepEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onWarmthStepEvent(const freeink::ui::ActionEvent& event, void* user);
-  static void onTileEvent(const freeink::ui::ActionEvent& event, void* user);
 
   void buildPanelScreen(UiScreen& screen);
-  // One slider row: a caption line (name + live percentage) above
-  // [-] [draggable 1-bit capsule] [+], plus a lamp on/off button after the +
-  // when showToggle is set (the brightness row).
-  void addSliderRow(UiScreen& screen, const char* label, uint8_t value, freeink::ui::ActionId sliderAction,
+  // One slider row: a leading icon naming the control, then [-] [draggable capsule] [+], plus a
+  // lamp on/off button after the + when showToggle is set (button boards, which have no quick
+  // buttons to put the light switch in).
+  void addSliderRow(UiScreen& screen, const uint8_t* icon, uint8_t value, freeink::ui::ActionId sliderAction,
                     freeink::ui::ActionId stepAction, bool showToggle);
   int computePanelBottom() const;
   void adjustBrightness(int delta);
   void adjustWarmth(int delta);
   void toggleLight();
+  // What tapping quick button `idx` does. Kept as its own step so the night/refresh/orientation/
+  // touch actions read in one place.
   void runTile(int idx);
+  // Paint the round buttons and their captions into quickRowRect.
+  void drawQuickRow();
+  // Button index under a touch, or -1.
+  int quickButtonAt(int x, int y) const;
+  void runQuickButton(int idx);
   // Copy the panel's live brightness/warmth/lightOn into SETTINGS and save if
   // anything actually changed. onExit() runs it on every way out.
   void persistLightSettings();

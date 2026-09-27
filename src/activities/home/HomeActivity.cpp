@@ -8,6 +8,8 @@
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
 #include <MangaPanel.h>
 #include <Utf8.h>
 #include <Xtc.h>
@@ -16,6 +18,7 @@
 #include <cstring>
 #include <vector>
 
+#include "BookStatsActivity.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubProgressUtil.h"
@@ -23,15 +26,19 @@
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "XtcProgressUtil.h"
+#include "components/BookActionsMenu.h"
+#include "components/HomeTabBar.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 5;  // Library, Browse Files, File Transfer, Insights, Settings
+  // The cover grid's band is the six-entry tab bar (Home included, and no OPDS), not the classic
+  // home menu, so its selector space is books followed by exactly those six.
+  int count = coverGridUi ? HomeTabBar::COUNT : 5;  // Library, Browse Files, File Transfer, Insights, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
-  if (hasOpdsServers) {
+  if (hasOpdsServers && !coverGridUi) {
     count++;
   }
   return count;
@@ -40,7 +47,7 @@ int HomeActivity::getMenuItemCount() const {
 void HomeActivity::loadRecentBooks(int maxBooks) {
   recentBooks.clear();
   const auto& books = RECENT_BOOKS.getBooks();
-  recentBooks.reserve(std::min(static_cast<int>(books.size()), maxBooks));
+  recentBooks.reserve(coverGridUi ? maxBooks : std::min(static_cast<int>(books.size()), maxBooks));
 
   for (const RecentBook& book : books) {
     // Limit to maximum number of recent books
@@ -93,171 +100,210 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
   }
 }
 
-void HomeActivity::loadRecentCovers(int coverHeight) {
-  recentsLoading = true;
-  bool showingLoading = false;
-  Rect popupRect;
-
-  int progress = 0;
-  for (RecentBook& book : recentBooks) {
-    // An EMPTY cover path is "not produced yet", not "this book has none" -- see the failure
-    // handling below. Treating it as the latter is what left one EPUB permanently without a
-    // cover on device while its neighbours were fine.
-    {
-      // A RAW image path (no [HEIGHT] placeholder) is a source, not a cover. Every generator
-      // produces templated thumb paths, so anything else means none was made yet -- and because
-      // the raw file of course exists, an exists() check alone reported "cover present" and the
-      // card drew the full-size page scaled into the cell. For a dithered manga page that comes
-      // out near-black (device report).
-      // Templated, or a concrete thumb_<height>.bmp. The concrete form is what the Library
-      // publishes for a book whose exact size cannot be generated but which still has a
-      // thumbnail at another one -- it is a GENERATED cover, not a raw source, so it must not
-      // send this card back through the generator on every visit.
-      const bool coverIsThumb =
-          book.coverBmpPath.find("[HEIGHT]") != std::string::npos || UITheme::isGeneratedThumbPath(book.coverBmpPath);
-      // hasCompleteBmp(), not exists() or hasContent(): a 0-byte sentinel from an older build,
-      // or a thumbnail truncated by an interrupted conversion, would otherwise count as a cover --
-      // the card then skipped regeneration and drew a placeholder forever.
-      const bool coverMissing =
-          !coverIsThumb ||
-          !FsHelpers::hasCompleteBmp("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
-      if (coverMissing) {
-        // If epub, try to load the metadata for title/author and cover
-        if (FsHelpers::hasEpubExtension(book.path)) {
-          // Coalesce the heap BEFORE the load, not just before the cover extraction below. Both
-          // halves of this block are heap-hungry and both fail the same way arriving here from a
-          // reader: the stylesheet parse gates on 64KB free per file, and the cover inflates
-          // through a 32KB zip window. Measured on device: the parse skipped its last stylesheet
-          // at 45904 bytes free and then DISCARDED the whole parse (correctly -- a partial rule
-          // set must not be cached as complete), throwing away ~3.5s of work that would be redone
-          // and re-discarded on the next visit. The XTC branch below does the same release for the
-          // same reason. Font caches reload on demand.
-          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-
-          Epub epub(book.path, "/.crosspoint");
-          // Build the CSS cache alongside the first cover while the loading UI is already
-          // active, so the later book click does not synchronously parse every stylesheet.
-          epub.load(true, SETTINGS.embeddedStyle == 0);
-
-          // Try to generate thumbnail image for Continue Reading card
-          if (!showingLoading) {
-            showingLoading = true;
-            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-          }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-          // Again before the extraction itself: the load above may have refilled the heap with
-          // rule data, and the 32KB inflate window is what failed here on device ("Inflate window
-          // OOM (32768 bytes): heap 11584 free/6132 max"). That failure is recoverable by design
-          // -- the cover path is kept rather than recording "no cover" -- but the retry repeats
-          // the whole load first, so it is worth not failing in the first place.
-          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-          const bool success = epub.generateThumbBmp(coverHeight);
-          if (success) {
-            // Also covers the recovery case: a book whose path was cleared by an earlier build
-            // gets it back here instead of staying blank forever.
-            book.coverBmpPath = epub.getThumbBmpPath();
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
-          } else if (!epub.hasCoverImage()) {
-            // Genuinely no cover in the book: a permanent fact, worth recording so later visits
-            // stop re-parsing it.
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-            book.coverBmpPath = "";
-          } else {
-            // The book HAS a cover, the conversion just didn't fit right now. Clearing the path
-            // here (as this did) turned one low-heap moment into a permanent verdict: the entry
-            // lost its path, the "is it missing?" check above skipped it from then on, and the
-            // cover never came back. Keep it and retry on the next visit.
-            LOG_ERR("HOME", "Cover thumb failed for %s; keeping path to retry", book.path.c_str());
-          }
-          // Discard the placeholder buffer captured on the first paint so the
-          // next render redraws the real cover instead of restoring the stale
-          // (cover-not-yet-generated) snapshot.
-          coverRendered = false;
-          coverBufferStored = false;
-          freeCoverBuffer();
-        } else if (FsHelpers::hasXtcExtension(book.path)) {
-          // Handle XTC file
-          Xtc xtc(book.path, "/.crosspoint");
-          if (xtc.load()) {
-            // Try to generate thumbnail image for Continue Reading card
-            if (!showingLoading) {
-              showingLoading = true;
-              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-            }
-            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-            // The XTH cover page needs a large contiguous buffer (~104KB for 2-bit 528x792) --
-            // more than the largest free block once the font caches are warm, so the thumb
-            // generation would fail and the cover would be missing. Coalesce the heap first.
-            if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-            const bool success = xtc.generateThumbBmp(coverHeight);
-            if (success) {
-              book.coverBmpPath = xtc.getThumbBmpPath();
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
-            } else {
-              // Keep the path and retry next visit -- see the EPUB branch. This one fails on
-              // heap most of all (the XTH cover page needs ~104KB contiguous), which is exactly
-              // the transient condition that must not be recorded as permanent.
-              LOG_ERR("HOME", "Cover thumb failed for %s; keeping path to retry", book.path.c_str());
-            }
-            coverRendered = false;
-            coverBufferStored = false;
-            freeCoverBuffer();
-          }
-        } else if (manga::MangaBook::isMangaFolder(book.path)) {
-          // Manga folders used to fall through here with no generator at all, so the card
-          // resolved its own [HEIGHT] against a thumb only the Library ever wrote -- and only at
-          // the heights the Library itself draws. The X4 hid that behind a live page decode
-          // (~466ms per render); the X3 has no heap for one, so its manga covers were simply
-          // missing. Generating here makes the home screen self-sufficient, like the two
-          // branches above, instead of depending on the Library's idle scan having run.
-          if (!showingLoading) {
-            showingLoading = true;
-            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-          }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-          // Same reason as the XTC branch: the converter needs ~52KB contiguous, which the warm
-          // font caches would otherwise be sitting on -- the difference between a cover and no
-          // cover on an X3.
-          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-          const manga::MangaBook mangaBook(book.path);
-          if (mangaBook.generateThumbBmp(coverHeight)) {
-            // Point the entry at the thumb: leaving the raw page path would send every later
-            // render back through the full-size scale that this generation exists to avoid.
-            book.coverBmpPath = mangaBook.getThumbBmpPath();
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
-          } else {
-            LOG_ERR("HOME", "Failed to generate manga cover thumb for %s", book.path.c_str());
-          }
-          coverRendered = false;
-          coverBufferStored = false;
-          freeCoverBuffer();
-        }
-      }
-    }
-    progress++;
+void HomeActivity::fillCoverGridFromLibrary() {
+  if (recentBooks.size() >= CoverGridHomeUi::MAX_BOOKS) return;
+  // Keep the index and record together off the task stack; reuse for every row.
+  struct LibraryReader {
+    library::LibraryIndexFile index;
+    library::ClixRecord record;
+  };
+  auto reader = makeUniqueNoThrow<LibraryReader>();
+  if (!reader) {
+    LOG_ERR("HOME", "OOM: library index");
+    return;
   }
+  auto& index = reader->index;
+  auto& record = reader->record;
+  if (!index.open(library::libraryIndexPath())) {
+    index.close();
+    GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
+    library::BuildStats stats;
+    if (!library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0) ||
+        !index.open(library::libraryIndexPath())) {
+      LOG_ERR("HOME", "Cannot populate cover grid from library");
+      return;
+    }
+  }
+  for (uint16_t row = 0; row < index.bookCount() && recentBooks.size() < CoverGridHomeUi::MAX_BOOKS; ++row) {
+    RecentBook book;
+    if (!index.readRecord(index.ordinalForRow(library::SortOrder::RecentDesc, row), record) ||
+        !index.readPath(record, book.path))
+      continue;
+    if (std::any_of(recentBooks.begin(), recentBooks.end(),
+                    [&](const RecentBook& existing) { return existing.path == book.path; }) ||
+        RecentBooksStore::isMissing(book))
+      continue;
+    if (!index.readTitle(record, book.title) && !index.readName(record, book.title)) continue;
+    index.readAuthor(record, book.author);
+    if (index.ioFailed()) break;
+    recentBooks.push_back(std::move(book));
+  }
+}
 
+void HomeActivity::resolveGridCoverPaths() {
+  for (auto& book : recentBooks) {
+    if (!book.coverBmpPath.empty()) continue;
+    // Constructors only derive cache paths; no metadata parsing or image generation.
+    // Keep these large objects off the task stack and release each before the next book.
+    if (FsHelpers::hasEpubExtension(book.path)) {
+      auto epub = makeUniqueNoThrow<Epub>(book.path, "/.crosspoint");
+      if (!epub) {
+        LOG_ERR("HOME", "OOM: EPUB thumbnail path");
+        continue;
+      }
+      book.coverBmpPath = epub->getThumbBmpPath();
+    } else if (FsHelpers::hasXtcExtension(book.path)) {
+      auto xtc = makeUniqueNoThrow<Xtc>(book.path, "/.crosspoint");
+      if (!xtc) {
+        LOG_ERR("HOME", "OOM: XTC thumbnail path");
+        continue;
+      }
+      book.coverBmpPath = xtc->getThumbBmpPath();
+    }
+  }
+}
+
+// One book per call: find the next recent book whose thumb is missing and hand it to the worker.
+// This used to convert every cover inline behind a progress popup, which froze the screen for as
+// long as it took to open each book (213ms typical, 2347ms worst on device). The grid now paints
+// straight away with the title-only placeholder UITheme::drawBookCover falls back to, and each
+// finished cover replaces its placeholder.
+void HomeActivity::postNextCoverJob(const int coverHeight) {
+  if (coverHeight <= 0 || coverWorker_.busy() || !coverWorker_.running()) return;
+  while (coverScanIndex_ < static_cast<int>(recentBooks.size())) {
+    RecentBook& book = recentBooks[coverScanIndex_];
+    // An EMPTY cover path is "not produced yet", not "this book has none" -- see the result
+    // handling in applyCoverResult(). Treating it as the latter is what left one EPUB
+    // permanently without a cover on device while its neighbours were fine.
+    //
+    // A RAW image path (no [HEIGHT] placeholder) is a source, not a cover. Every generator
+    // produces templated thumb paths, so anything else means none was made yet -- and because
+    // the raw file of course exists, an exists() check alone reported "cover present" and the
+    // card drew the full-size page scaled into the cell. For a dithered manga page that comes
+    // out near-black (device report).
+    // Templated, or a concrete thumb_<height>.bmp. The concrete form is what the Library
+    // publishes for a book whose exact size cannot be generated but which still has a
+    // thumbnail at another one -- it is a GENERATED cover, not a raw source, so it must not
+    // send this card back through the generator on every visit.
+    const bool coverIsThumb =
+        book.coverBmpPath.find("[HEIGHT]") != std::string::npos || UITheme::isGeneratedThumbPath(book.coverBmpPath);
+    // hasCompleteBmp(), not exists() or hasContent(): a 0-byte sentinel from an older build,
+    // or a thumbnail truncated by an interrupted conversion, would otherwise count as a cover --
+    // the card then skipped regeneration and drew a placeholder forever.
+    const bool coverMissing =
+        !coverIsThumb || !FsHelpers::hasCompleteBmp("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
+    if (!coverMissing) {
+      coverScanIndex_++;
+      continue;
+    }
+    CoverWorker::Job job;
+    job.book = book;
+    job.gridHeight = coverHeight;
+    job.addTargetHeight(coverHeight);
+    // Coalesce the heap before handing the job over. Both halves of the conversion are
+    // heap-hungry: the stylesheet parse gates on 64KB free per file and the cover inflates
+    // through a 32KB zip window, while the XTH cover page needs ~104KB contiguous and the manga
+    // converter ~52KB. Measured on device, the parse skipped its last stylesheet at 45904 bytes
+    // free and then DISCARDED the whole parse -- throwing away ~3.5s of work that would be redone
+    // and re-discarded next time. Font caches reload on demand.
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+    coverWorker_.post(std::move(job));
+    return;
+  }
   recentsLoaded = true;
-  recentsLoading = false;
+}
+
+// The worker's outcome for one book, applied on the loop task.
+void HomeActivity::applyCoverResult() {
+  auto* result = coverWorker_.takeResult();
+  if (!result) return;
+  const std::string path = result->book.path;
+  const std::string title = result->book.title;
+  const std::string coverPath = result->book.coverBmpPath;
+  const bool hasThumb = result->hasGridThumb;
+  const bool knownAbsent = result->coverKnownAbsent;
+  // A cancelled job leaves the cursor where it is and is retried on the next tick; only a job
+  // that ran its course advances the scan.
+  const bool completed = result->completed;
+  coverWorker_.consumeResult();
+
+  const auto live = std::find_if(recentBooks.begin(), recentBooks.end(),
+                                 [&path](const RecentBook& item) { return item.path == path; });
+  if (live != recentBooks.end()) {
+    if (hasThumb) {
+      // Also covers the recovery case: a book whose path was cleared by an earlier build gets it
+      // back here instead of staying blank forever.
+      if (!title.empty()) live->title = title;
+      live->coverBmpPath = coverPath;
+      RECENT_BOOKS.updateBook(path, live->title, live->author, coverPath);
+    } else if (knownAbsent) {
+      // Genuinely no cover in the book: a permanent fact, worth recording so later visits stop
+      // re-parsing it.
+      RECENT_BOOKS.updateBook(path, live->title, live->author, "");
+      live->coverBmpPath.clear();
+    } else {
+      // The book HAS a cover, the conversion just didn't fit right now. Clearing the path here
+      // would turn one low-heap moment into a permanent verdict: the entry loses its path, the
+      // "is it missing?" test above skips it from then on, and the cover never comes back.
+      LOG_ERR("HOME", "Cover thumb failed for %s; keeping path to retry", path.c_str());
+    }
+  }
+  if (completed) coverScanIndex_++;
+
+  // Discard the placeholder snapshot captured on an earlier paint, or the next render restores
+  // the stale (cover-not-yet-generated) tile instead of reading the fresh thumb.
+  coverRendered = false;
+  coverBufferStored = false;
+  freeCoverBuffer();
+  if (coverGridUi) coverGridUi->refreshCoverPaths();
+  requestUpdate();
+}
+
+// The size the cards actually resolve their thumb paths at. 0 while the grid's first pass has
+// not measured a slot yet, which suppresses generation until it has.
+int HomeActivity::coverTargetHeight() const {
+  if (!coverGridUi) return UITheme::getInstance().getMetrics().homeCoverHeight;
+  return coverGridUi->thumbHeightMeasured() ? coverGridUi->thumbHeightFor() : 0;
 }
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  coverScanIndex_ = 0;
+  recentsLoaded = false;
+  coverWorker_.start("HomeCover");
 
   hasOpdsServers = OPDS_STORE.hasServers();
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  loadRecentBooks(metrics.homeRecentBooksCount);
+  if (UITheme::getInstance().hasCoverGridHome()) {
+    // Screen-lifetime interaction tables and component properties exceed the stack budget.
+    coverGridUi = makeUniqueNoThrow<CoverGridHomeUi>(renderer);
+    if (!coverGridUi) LOG_ERR("HOME", "OOM: cover grid UI; using standard home");
+  }
+  loadRecentBooks(coverGridUi ? CoverGridHomeUi::MAX_BOOKS : metrics.homeRecentBooksCount);
+  hasContinueReading = !recentBooks.empty();
+  if (coverGridUi) {
+    fillCoverGridFromLibrary();
+    resolveGridCoverPaths();
+    coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
+  }
 
   const auto base = static_cast<int>(recentBooks.size());
-  selectorIndex = initialMenuItem == HomeMenuItem::NONE ? 0 : base + menuItemToIndex(initialMenuItem, hasOpdsServers);
+  selectorIndex =
+      initialMenuItem == HomeMenuItem::NONE
+          ? 0
+          : base + (coverGridUi ? tabIndexFor(initialMenuItem) : menuItemToIndex(initialMenuItem, hasOpdsServers));
 
   // Trigger first update
   requestUpdate();
 }
 
 void HomeActivity::onExit() {
+  // Before anything else: the worker task holds `this`, and the activity is deleted on exit.
+  coverWorker_.stop();
   Activity::onExit();
+
+  coverGridUi.reset();
 
   // Free the stored cover buffer if any
   freeCoverBuffer();
@@ -300,6 +346,16 @@ void HomeActivity::freeCoverBuffer() {
 }
 
 void HomeActivity::loop() {
+  // A real key press must not wait for a conversion; the abandoned job is retried on a later tick
+  // and the heights already written to disk are kept.
+  if (mappedInput.anyButtonDownRaw()) coverWorker_.requestCancel();
+  applyCoverResult();
+  // Only once a card has measured the slot it draws into: a job at any other height writes a
+  // thumb no card ever asks for, and every slot keeps drawing the placeholder.
+  if (!recentsLoaded) postNextCoverJob(coverTargetHeight());
+
+  // The long-press menu is a modal over the grid: while it is up it takes every input.
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   const int menuCount = getMenuItemCount();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
@@ -309,6 +365,14 @@ void HomeActivity::loop() {
       return;
     }
     const int menuIndex = selectorIndex - static_cast<int>(recentBooks.size());
+    if (coverGridUi) {
+      // Tab band: the index IS the tab. Home is the screen we are on, so it falls through as a
+      // no-op rather than rebuilding this activity under the user's finger.
+      if (menuIndex >= 0 && menuIndex < HomeTabBar::COUNT) {
+        HomeTabBar::activate(static_cast<HomeTab>(menuIndex), HomeTab::Home);
+      }
+      return;
+    }
     switch (indexToMenuItem(menuIndex, hasOpdsServers)) {
       case HomeMenuItem::FILE_BROWSER:
         onFileBrowserOpen();
@@ -333,15 +397,19 @@ void HomeActivity::loop() {
     }
   };
 
-  buttonNavigator.onNext([this, menuCount] {
-    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
-    requestUpdate();
-  });
+  // Cover grid home splits navigation by button group (see below); the flat
+  // next/previous cycle is for the classic list home only.
+  if (!coverGridUi) {
+    buttonNavigator.onNext([this, menuCount] {
+      selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
+      requestUpdate();
+    });
 
-  buttonNavigator.onPrevious([this, menuCount] {
-    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
-    requestUpdate();
-  });
+    buttonNavigator.onPrevious([this, menuCount] {
+      selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
+      requestUpdate();
+    });
+  }
 
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up) {
@@ -352,6 +420,65 @@ void HomeActivity::loop() {
   if (swipe == MappedInputManager::SwipeDir::Down) {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
     requestUpdate();
+    return;
+  }
+
+  // Back is otherwise unused on the home menu: open the most recently read
+  // book directly (recentBooks is most-recent-first and already pruned of
+  // files missing from the SD card).
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && hasContinueReading && !recentBooks.empty()) {
+    onSelectBook(recentBooks[0].path);
+    return;
+  }
+
+  if (coverGridUi) {
+    // Long press on a cover opens that book's stats -- the Library grid's gesture, same screen.
+    const int longPressed = coverGridUi->takeLongPressedBook();
+    if (longPressed >= 0 && longPressed < static_cast<int>(recentBooks.size())) {
+      const auto& book = recentBooks[longPressed];
+      BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, book.path, book.title,
+                            coverGridUi->progressFor(longPressed), [this, longPressed](const bool deleted) {
+                              if (deleted) {
+                                // The book is gone from the store: rebuild the row the grid draws
+                                // from, and re-resolve covers so no card points at a dead path.
+                                loadRecentBooks(CoverGridHomeUi::MAX_BOOKS);
+                                fillCoverGridFromLibrary();
+                                resolveGridCoverPaths();
+                                coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
+                                selectorIndex = 0;
+                              } else {
+                                // Marked read or unread: the badge and the featured card's
+                                // percentage both come from the stored progress.
+                                coverGridUi->refreshProgress(static_cast<size_t>(longPressed));
+                              }
+                              recentsLoaded = false;
+                              requestUpdate();
+                            });
+      requestUpdate();
+      return;
+    }
+    const int touched = coverGridUi->selectedAction(mappedInput);
+    if (touched >= 0 && touched < menuCount) {
+      selectorIndex = touched;
+      activateSelection();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      activateSelection();
+      return;
+    }
+    // One ring through everything on screen -- the covers, then the tab bar -- on every key.
+    // Splitting them (side keys for covers, front keys for tabs) meant each pair was trapped in
+    // its own band, so there was no way to walk from the last cover to the tabs and round.
+    const auto step = [this, menuCount](const int dir) {
+      if (menuCount <= 0) return;
+      selectorIndex = (selectorIndex + menuCount + dir) % menuCount;
+      requestUpdate();
+    };
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [&step] { step(-1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [&step] { step(+1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [&step] { step(-1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [&step] { step(+1); });
     return;
   }
 
@@ -404,6 +531,9 @@ void HomeActivity::loop() {
 }
 
 void HomeActivity::render(RenderLock&&) {
+  // While the long-press menu is up it owns the frame; repainting the grid under it would erase
+  // the dialog and leave its hit table pointing at nothing.
+  if (optionPopup.processRender(renderer, mappedInput)) return;
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -446,25 +576,36 @@ void HomeActivity::render(RenderLock&&) {
     return;
   }
 
-  // Covers BEFORE the first paint, not after. Generating them afterwards meant the card was
-  // drawn and pushed to the panel with no cover yet -- a half-empty tile the user then watched
-  // being replaced (device report: "the white right half should never be visible"). Nothing to
-  // generate is the common case and costs only a few exists() checks, so the usual path still
-  // paints exactly once; when there IS work, the progress popup covers it and the card is drawn
-  // once, finished.
-  if (!recentsLoaded && !recentsLoading) {
-    recentsLoading = true;
-    loadRecentCovers(metrics.homeCoverHeight);
-  }
-
   renderer.clearScreen();
+  if (coverGridUi) {
+    coverGridUi->setSelection(selectorIndex);
+    UITheme::getInstance().drawCoverGridHome(*coverGridUi);
+    renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH
+                                                                   : HalDisplay::FAST_REFRESH);
+    // Slot heights are recorded during the draw above; a change (first layout pass, orientation
+    // switch) means the paths must point at those sizes, and the scan has to walk the list again
+    // because thumbs at the old size are no longer the ones the cards ask for.
+    const bool coverSpecChanged = coverGridUi->takeThumbHeightChanged();
+    if (coverSpecChanged) {
+      coverGridUi->refreshCoverPaths();
+      recentsLoaded = false;
+      coverScanIndex_ = 0;
+    }
+    if (!firstRenderDone) {
+      firstRenderDone = true;
+      requestUpdate();
+    }
+    return;
+  }
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
   // Band spans topPadding..homeTopPadding: the cover tile starts at the fixed
   // homeTopPadding, so the height must shrink by topPadding or the band (and a
   // centered title, e.g. RoundedRaff's book title) sinks into the tile.
+  // Home is the stack root: no back button in its header.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding - metrics.topPadding},
-                 metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr);
+                 metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr,
+                 nullptr, false);
 
   // Record the tile rect so storeCoverBuffer (called from the theme) knows
   // which sub-region of the framebuffer to snapshot. ~16 KB in Portrait

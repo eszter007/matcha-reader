@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "activities/UiListActivity.h"
+#include "components/LibraryTabs.h"
 #include "components/OptionPopup.h"
 
 class FileBrowserActivity final : public UiListActivity {
@@ -51,6 +52,18 @@ class FileBrowserActivity final : public UiListActivity {
   void prewarmRowGlyphs(int start);
 
   int listCount() const override { return static_cast<int>(files.size()); }
+  // The Library's tab band belongs on this screen only while it IS the Library's Files tab: at
+  // the root of an ordinary browse, never in the firmware picker or inside a folder, where the
+  // header's Back means "up" and the band would claim you are somewhere you are not.
+  bool showsLibraryTabs() const { return hasTabBar() && basepath == "/"; }
+  int libraryTabBandHeight() const { return showsLibraryTabs() ? LibraryTabs::height(mappedInput) : 0; }
+  // The browser is the Library's Files tab, so the bottom bar marks Library while it is up.
+  // The firmware picker is a modal errand and carries no bar at all.
+  HomeTab tabBarTab() const override { return mode == Mode::Books ? HomeTab::Library : HomeTab::Count; }
+  // The Library band above the list is a stop on the ring while it is drawn.
+  bool hasTopBand() const override { return showsLibraryTabs(); }
+  void stepTopBand(int direction) override;
+  void onTabBandExit() override;
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onRowLongPress(int index) override;
