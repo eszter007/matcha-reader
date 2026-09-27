@@ -101,6 +101,11 @@ class FontDecompressor {
   // cycle on every glyph lookup that lands in a different group.
   uint8_t* hotGroup = nullptr;  // owned; freed in freeHotGroup()/dtor
   uint32_t hotGroupCapacity = 0;
+  // How much of the cached group was actually decompressed. Normally the whole group, but when the
+  // heap cannot hold it the inflate is stopped at the end of the requested glyph (see getBitmap):
+  // a glyph early in a 16KB group then needs a fraction of it. A later glyph whose data ends past
+  // this mark is not in the buffer, so the cache hit has to be refused and the group re-read.
+  uint32_t hotGroupValidBytes = 0;
 
   // Scratch buffer for compacting a single glyph from the hot group.
   // Valid until the next getBitmap() call. Same ownership/OOM contract as hotGroup.

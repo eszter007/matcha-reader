@@ -114,8 +114,8 @@ behind it.
 The SD browser lives inside the Library there, as a third tab beside **Books** and **Shelves**. On the other themes it
 stays its own entry on the home menu.
 
-Long press a cover, on the home grid or in the Library, for **View Stats**, **Mark as Read** / **Mark as Unread** and
-**Delete**. Only the direction that changes something is offered: a finished book has no "Mark as Read". Delete asks
+Long press a cover, on the home grid, in the Library or inside a shelf, for **View Stats**, **Mark as Read** /
+**Mark as Unread** and **Delete**. On button-only devices, hold **Confirm** on the selected cover. Only the direction that changes something is offered: a finished book has no "Mark as Read". Delete asks
 first, and takes the book's reading cache with it.
 
 Swipe down from the top edge for the control centre: brightness and warmth, then round buttons for dark mode, a screen

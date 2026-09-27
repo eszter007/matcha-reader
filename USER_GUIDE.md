@@ -136,7 +136,9 @@ the grid appears straight away with titles in place of the artwork it has not bu
 title as it finishes. Nothing blocks while this happens, and a button press stops the conversion rather than waiting for
 it. A cover that could not be built is retried the next time you visit Home.
 
-Long press a cover, here or in the Library, for **View Stats**, **Mark as Read** / **Mark as Unread** and **Delete**.
+Long press a cover, here, in the Library or inside a shelf, for **View Stats**, **Mark as Read** / **Mark as Unread**
+and **Delete**. Without a touch panel, select the cover and hold **Confirm** for a second; letting go leaves the menu
+open.
 Only the direction that changes something is offered, so a finished book has no **Mark as Read**. Delete asks first and
 takes the book's reading cache with it.
 

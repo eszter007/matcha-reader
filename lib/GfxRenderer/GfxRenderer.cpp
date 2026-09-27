@@ -591,7 +591,14 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) {
-    LOG_ERR("GFX", "No glyph for codepoint %d", cp);
+    // Deduplicated per codepoint: the same undrawable character is reached once per occurrence on
+    // the page, and 26 identical lines say no more than one does. Render-task only, so the static
+    // needs no synchronisation.
+    static uint32_t lastReported = 0;
+    if (cp != lastReported) {
+      lastReported = cp;
+      LOG_ERR("GFX", "No glyph for codepoint %d (U+%04X)", cp, cp);
+    }
     return;
   }
 

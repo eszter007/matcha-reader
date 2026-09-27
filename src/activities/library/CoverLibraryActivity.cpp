@@ -19,7 +19,6 @@
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
-#include "activities/home/BookStatsActivity.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/home/XtcProgressUtil.h"
 #include "components/BookActionsMenu.h"
@@ -858,7 +857,8 @@ void CoverLibraryActivity::loop() {
       hideSelector();
       if (hit >= 0) {
         shelfContentIndex = hit;
-        showBookStats(shelfBooks[hit].path, shelfBooks[hit].title);
+        showBookActions(shelfBooks[hit].path, shelfBooks[hit].title,
+                        hit < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[hit].percent : -1);
       }
       return;
     }
@@ -904,9 +904,12 @@ void CoverLibraryActivity::loop() {
 
     if (shelfConfirmPressSeen && shelfContentIndex < static_cast<int>(shelfBooks.size())) {
       // Shelves are where manga folders are browsed; without this they had no route to stats.
-      if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
+      // Same menu and same release handling as the Books grid below.
+      if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS)) {
         longPressFired = true;
-        showBookStats(shelfBooks[shelfContentIndex].path, shelfBooks[shelfContentIndex].title);
+        const int idx = shelfContentIndex;
+        showBookActions(shelfBooks[idx].path, shelfBooks[idx].title,
+                        idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1);
         return;
       }
       if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() < LONG_PRESS_MS) {
@@ -993,9 +996,15 @@ void CoverLibraryActivity::loop() {
     const int itemIdx = contentIndex - 1;
     if (itemIdx < static_cast<int>(recentBooks.size())) {
       // Fires while still held, so the gesture completes without waiting for release.
-      if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
+      // wasLongPressed(), not isPressed() + getHeldTime(): it also arms suppression of the release
+      // that ends this hold, which ActivityManager::loop() consumes before any activity runs.
+      // Without it the popup opened here received that release as a Confirm on its default item
+      // and jumped straight into Details. Home's hold uses the same call.
+      if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS)) {
         longPressFired = true;
-        showBookStats(recentBooks[itemIdx].path, recentBooks[itemIdx].title);
+        // The actions menu (stats, mark read, delete), as the touch long-press opens it.
+        showBookActions(recentBooks[itemIdx].path, recentBooks[itemIdx].title,
+                        itemIdx < static_cast<int>(bookProgress.size()) ? bookProgress[itemIdx].percent : -1);
         return;
       }
       // The latch above swallows a long press's release, so stats never also opens the book.
@@ -1227,8 +1236,15 @@ void CoverLibraryActivity::loop() {
 
 void CoverLibraryActivity::showBookActions(const std::string& path, const std::string& title,
                                            const int progressPercent) {
-  BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, path, title, progressPercent,
-                        [this](const bool deleted) {
+  // Badges fill in progressively, so a hold can land before this book's has been read. The menu
+  // picks Mark as read / unread from this figure, and the sentinel would offer the wrong one.
+  const int percent = progressPercent == PROGRESS_PENDING ? readProgressPercent(path) : progressPercent;
+  // Captured now: a delete reloads the shelf index, which can renumber openShelfIndex.
+  const std::string openShelfFolder = openShelfIndex >= 0 && openShelfIndex < static_cast<int>(shelves.size())
+                                          ? shelves[openShelfIndex].folderPath
+                                          : std::string();
+  BookActionsMenu::show(optionPopup, *this, renderer, mappedInput, path, title, percent,
+                        [this, openShelfFolder](const bool deleted) {
                           // Either way the frame underneath is stale; a delete also drops a book
                           // out of the lists the grid is drawn from.
                           lastRendered.valid = false;
@@ -1240,15 +1256,17 @@ void CoverLibraryActivity::showBookActions(const std::string& path, const std::s
                           // Marked or deleted, the badges are stale either way: they come from
                           // the stored progress this menu just rewrote.
                           loadBookProgress();
+                          // An open shelf draws from its own list, filtered out of recentBooks, so
+                          // it is rebuilt too -- otherwise a deleted book stayed on the shelf
+                          // pointing at a file that no longer exists.
+                          if (!openShelfFolder.empty()) {
+                            loadShelfBooks(openShelfFolder);
+                            const int count = static_cast<int>(shelfBooks.size());
+                            if (shelfContentIndex >= count) shelfContentIndex = count > 0 ? count - 1 : 0;
+                          }
                           requestUpdate();
                         });
   requestUpdate();
-}
-
-void CoverLibraryActivity::showBookStats(const std::string& path, const std::string& title) {
-  BookStatsActivity::openFor(*this, renderer, mappedInput, path, title, [this](const ActivityResult&) {
-    lastRendered.valid = false;  // stats painted over the frame; a partial redraw would smear
-  });
 }
 
 void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int cellY, const int cellWidth,

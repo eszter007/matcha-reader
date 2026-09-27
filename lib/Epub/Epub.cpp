@@ -310,8 +310,15 @@ void Epub::parseCssFiles() const {
   // Maximum CSS file size we'll attempt to parse (uncompressed)
   // Larger files risk memory exhaustion on ESP32
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
-  // Minimum heap required before attempting CSS parsing
-  constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 64 * 1024;  // 64KB
+  // Floor on FREE heap, kept low deliberately. Free heap was never what blocks a parse here: the
+  // binding constraint is the contiguous LZ window the extraction needs, checked separately below
+  // and again here before the attempt. A 64KB free-heap figure sat a few hundred bytes above the
+  // ~64.5KB the C3 has free with a book open, so it refused every stylesheet after the first on
+  // every open and -- the parse being partial -- discarded the cache each time, so it re-ran and
+  // failed identically forever ("need 65536" against 64564 free, "Loaded 0 CSS style rules from 7
+  // files"). Merely lowering it was worse: the files then got as far as the inflate window, failed
+  // there anyway, and the attempts cost ~13KB of contiguous heap that the reader needed later.
+  constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 40 * 1024;
   // The streaming inflate's LZ window (TINFL_LZ_DICT_SIZE): the one contiguous block extracting a
   // CSS file needs, and the block whose absence makes that extraction fail.
   constexpr uint32_t INFLATE_WINDOW_BYTES = 32 * 1024;
@@ -379,11 +386,14 @@ void Epub::parseCssFiles() const {
     }
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
-    // Check heap before parsing - CSS parsing allocates heavily
+    // Check heap before parsing - CSS parsing allocates heavily. The window check is the one that
+    // matters: without it the extraction below is attempted, fails on exactly this block, and the
+    // failed attempts leave the heap more fragmented than before for no gain.
     const uint32_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
-      LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
-              MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+    const uint32_t maxBlock = ESP.getMaxAllocHeap();
+    if (freeHeap < MIN_HEAP_FOR_CSS_PARSING || maxBlock < INFLATE_WINDOW_BYTES) {
+      LOG_ERR("EBP", "Insufficient heap for CSS parsing (free=%u, maxAlloc=%u, need %zu free and %u contiguous): %s",
+              freeHeap, maxBlock, MIN_HEAP_FOR_CSS_PARSING, INFLATE_WINDOW_BYTES, cssPath.c_str());
       skippedFileForHeap = true;
       continue;
     }

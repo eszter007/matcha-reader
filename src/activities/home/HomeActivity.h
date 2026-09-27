@@ -111,6 +111,9 @@ class HomeActivity final : public Activity {
   bool restoreCoverBuffer();  // Restore frame buffer from stored cover
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
+  // Book actions (stats, mark read, delete) for one cover. Shared by the touch long-press and the
+  // Confirm hold, so a button-only board reaches the same menu.
+  bool showBookOptions(int bookIndex);
   // Cover thumbnails off the loop task, the same worker the Library uses.
   CoverWorker coverWorker_;
   // How far the cover scan has walked recentBooks. Advances on a completed job; a cancelled one
