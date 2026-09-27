@@ -543,6 +543,7 @@ modification time (when the file landed on the card); `firstSeen` — the
 build-assigned discovery counter — breaks ties and carries books whose
 filesystem reports no time. Fold version 3 introduced the timestamp key; a
 fold bump rebuilds ranks while preserving `firstSeen`.
+Fold version 4 preserves leading articles in title sort and search keys.
 
 Sections are 512-byte aligned so each starts on an SD block boundary.
 
@@ -552,7 +553,7 @@ A fixed stride is what lets the reader seek straight to record *n* without an
 offset table, and read a screenful in one 4 KB block. `static_assert` enforces it.
 
 Each record carries `fold[96]`, the title normalised for search and sorting —
-accents stripped, case dropped, leading articles removed — and `authorKey[12]`,
+accents stripped, case dropped, leading articles preserved — and `authorKey[12]`,
 the author's words folded and sorted so that "Victor Hugo" and "Hugo Victor" group as
 one person. `authorKey` is a GROUPING key, not an ordering one: the shelf orders by
 surname, derived separately from the display name.

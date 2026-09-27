@@ -372,6 +372,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // any single allocation can actually have it. 16 KB also keeps the advance-table
   // batch path (16 KB scratch) viable during builds.
   static constexpr size_t BACKGROUND_BUILD_MIN_MAX_ALLOC = 16 * 1024;
+  // Requires the render lock; heap admission is checked separately by the build tick.
+  bool backgroundBuildWanted() const;
   // Gate for a background build tick: true when the heap can take parse allocations.
   // Updates buildHeapPaused as a side effect.
   bool buildTickHeapGate();

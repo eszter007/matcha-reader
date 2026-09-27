@@ -346,10 +346,21 @@ void TxtReaderActivity::render(RenderLock&&) {
   size_t offset = pageOffsets[currentPage];
   size_t nextOffset;
   currentPageLines.clear();
-  loadPageAtOffset(offset, currentPageLines, nextOffset);
+  // Upstream's failure notice, on this fork's signatures: loadPageAtOffset() and renderPage()
+  // take no renderer here (the activity holds one).
+  if (!loadPageAtOffset(offset, currentPageLines, nextOffset)) {
+    LOG_ERR("TRS", "Failed to load page at offset %zu", offset);
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.displayBuffer();
+    return;
+  }
 
   renderer.clearScreen();
   renderPage();
+  markPageRendered();
 
   // Save progress
   saveProgress();

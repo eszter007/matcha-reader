@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 #include "FsHelpers.h"
@@ -112,6 +113,37 @@ TEST(HasCompleteBmp, RejectsDimensionsThatWouldOverflowTheSizeCheck) {
   const auto minHeight = writeTemp(bmpHeader(54, 54, 8, INT32_MIN, 1), 54);
   EXPECT_FALSE(FsHelpers::hasCompleteBmp("TEST", minHeight));
   remove(minHeight.c_str());
+}
+
+// Sanitizes into a buffer of `size` bytes (at most 64, the size ScreenshotUtil uses).
+std::string sanitize(const char* input, const size_t size = 64) {
+  char out[64];
+  FsHelpers::sanitizePathComponentForFat32(input, out, size);
+  return out;
+}
+
+// Book titles from the EPUBs attached to #2103 and #2199.
+constexpr char kTitle2103[] = "Богиня глюкозы. Нормализуйте уровень сахара в крови, чтобы изменить свою жизнь";
+constexpr char kTitle2199[] = "Вглядываясь в солнце. Жизнь без страха смерти";
+
+TEST(SanitizePathComponentForFat32, KeepsTitleThatFits) {
+  EXPECT_EQ(sanitize("Эдем (полный перевод)"), "Эдем-(полный-перевод)");
+}
+
+// The readers copy the title into ScreenshotInfo::title (char[64]) with snprintf, which can
+// end the copy partway through a Cyrillic letter.
+TEST(SanitizePathComponentForFat32, DropsLetterCutOffByCaller) {
+  char title[64];
+  snprintf(title, sizeof(title), "%s", kTitle2103);
+  EXPECT_EQ(sanitize(title), "Богиня-глюкозы.-Нормализуйте-уров");
+  snprintf(title, sizeof(title), "%s", kTitle2199);
+  EXPECT_EQ(sanitize(title), "Вглядываясь-в-солнце.-Жизнь-без-ст");
+}
+
+TEST(SanitizePathComponentForFat32, DoesNotSplitLetterAtBufferLimit) {
+  // Each letter of "Жизнь" is 2 bytes. 7 bytes of room holds "Жиз" and half of "н".
+  EXPECT_EQ(sanitize("Жизнь", 8), "Жиз");
+  EXPECT_EQ(sanitize(kTitle2103), "Богиня-глюкозы.-Нормализуйте-уров");
 }
 
 }  // namespace

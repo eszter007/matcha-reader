@@ -60,6 +60,13 @@ void ReaderActivity::onEnter() {
     finish();
     return;
   }
+
+  // Clear remembered book after opening it
+  if (!APP_STATE.openEpubPath.empty()) {
+    APP_STATE.openEpubPath.clear();
+    APP_STATE.saveToFile();
+  }
+
   sdFontSystem.ensureLoaded(renderer);
   if (!loadBook()) {
     finish();
@@ -68,11 +75,18 @@ void ReaderActivity::onEnter() {
 
   readingSessionStartMs = millis();
   onReaderEnter();
+  BookStats::recordOpen(bookPath.c_str());
+  requestUpdate();
+}
+
+// The book is only remembered once a page has actually reached the panel. Recording it in
+// onEnter() meant a book that cannot be rendered was reopened on every wake (upstream #3724).
+void ReaderActivity::rememberBookOnceRendered() {
+  if (bookRemembered || !pageRendered.load(std::memory_order_acquire)) return;
+  bookRemembered = true;
   APP_STATE.openEpubPath = bookPath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
-  BookStats::recordOpen(bookPath.c_str());
-  requestUpdate();
 }
 
 void ReaderActivity::onExit() {
@@ -101,6 +115,9 @@ void ReaderActivity::loop() {
     return;
   }
   ReaderUtils::flushReadingStats(readingSessionStartMs, false, bookPath.c_str(), getBookLanguage());
+  // Here rather than in each format's readerLoop(): every reader routes through this, and the
+  // write it defers (APP_STATE + Recent Books) belongs on the loop task, not the render task.
+  rememberBookOnceRendered();
   readerLoop();
 }
 

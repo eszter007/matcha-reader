@@ -14,13 +14,18 @@ std::vector<uint8_t> readerFontPointSizes(const SdCardFontRegistry* registry, co
   const SdCardFontFamilyInfo* own = nullptr;
   if (registry && sdFamilyName && sdFamilyName[0] != '\0') own = registry->findFamily(sdFamilyName);
   // A vector (.ttf/.otf) family renders at any size and records a placeholder size-0 entry
-  // instead of a file per size, so it takes the built-in reader ladder below.
+  // instead of a file per size, so it takes the whole-point ladder below.
   if (own && !own->vector && !own->files.empty()) {
     // Copied element-wise, not move-assigned: assigning the temporary would swap in its buffer
     // and throw away the reservation the stand-in loop below depends on.
     const std::vector<uint8_t> ownSizes = own->availableSizes();
     sizes.reserve(ownSizes.size() + extra);
     sizes.assign(ownSizes.begin(), ownSizes.end());
+  } else if (own && own->vector) {
+    // A vector face renders at any size, so the ladder is the whole point range rather than the
+    // four sizes the built-in bitmap families are compiled at.
+    sizes.reserve(std::size(VECTOR_READER_POINT_SIZES) + extra);
+    sizes.assign(std::begin(VECTOR_READER_POINT_SIZES), std::end(VECTOR_READER_POINT_SIZES));
   } else {
     sizes.reserve(std::size(BUILTIN_READER_POINT_SIZES) + extra);
     sizes.assign(std::begin(BUILTIN_READER_POINT_SIZES), std::end(BUILTIN_READER_POINT_SIZES));
