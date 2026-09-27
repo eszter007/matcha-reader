@@ -163,8 +163,6 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
     LOG_ERR("TXB", "Render skipped: invalid block");
     return;
   }
-  const int8_t tracking = blockStyle.characterSpacing;
-
   // Same resolution ParsedText::layoutAndExtractLines() used to position these words: the
   // per-word x offsets in the arena are only valid for THIS font.
   const int fontId = blockStyle.resolveFontId(baseFontId);

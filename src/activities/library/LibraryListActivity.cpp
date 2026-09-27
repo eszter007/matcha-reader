@@ -991,7 +991,6 @@ void LibraryListActivity::drawPositionReadout() const {
   char buf[32];
   const char* positionFormat = groupsCollapsed ? tr(STR_LIBRARY_GROUP_POSITION) : tr(STR_LIBRARY_POSITION);
   snprintf(buf, sizeof(buf), positionFormat, selectedEntry() + 1, count);
-  const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getTextWidth(SMALL_FONT_ID, buf);
   const int x = renderer.getScreenWidth() - width - SIDE_PADDING;
   const int y = renderer.getScreenHeight() - HomeTabBar::bottomInset() - renderer.getLineHeight(SMALL_FONT_ID);
@@ -1016,7 +1015,6 @@ void LibraryListActivity::drawHoldHelp() const {
     help = tr(STR_LIBRARY_HOLD_GROUPS);
   if (!help) return;
 
-  const auto& metrics = UITheme::getInstance().getMetrics();
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int y = renderer.getScreenHeight() - HomeTabBar::bottomInset() - lineHeight;
   GUI.drawHelpText(renderer, Rect{SIDE_PADDING, y, renderer.getScreenWidth() / 2 - SIDE_PADDING, lineHeight}, help);

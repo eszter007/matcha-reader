@@ -219,7 +219,6 @@ void HomeActivity::applyCoverResult() {
   if (!result) return;
   const std::string path = result->book.path;
   const std::string title = result->book.title;
-  const std::string author = result->book.author;
   const std::string coverPath = result->book.coverBmpPath;
   const bool hasThumb = result->hasGridThumb;
   const bool knownAbsent = result->coverKnownAbsent;

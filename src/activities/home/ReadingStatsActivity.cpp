@@ -324,16 +324,15 @@ void ReadingStatsActivity::render(RenderLock&&) {
   tabBar = Rect{0, tabBarY, screen.width, tabBarH};
   GUI.drawTabBar(renderer, tabBar, buildTabs(), true);
 
-  // Button hints
-  // Hints name the months Left/Right land on.
-  char prevBuf[16], nextBuf[16];
-  uint16_t py = calYear, ny = calYear;
-  uint8_t pm = calMonth, nm = calMonth;
-  StatsWidgets::stepMonth(py, pm, -1);
-  StatsWidgets::stepMonth(ny, nm, +1);
   if (HomeTabBar::enabled()) {
     HomeTabBar::draw(renderer, HomeTab::Stats, tabFocus);
   } else {
+    // Hints name the months Left/Right land on.
+    char prevBuf[16], nextBuf[16];
+    uint16_t py = calYear, ny = calYear;
+    uint8_t pm = calMonth, nm = calMonth;
+    StatsWidgets::stepMonth(py, pm, -1);
+    StatsWidgets::stepMonth(ny, nm, +1);
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tabLabels.size() > 1 ? tr(STR_SWITCH) : "",
                                               StatsWidgets::monthAbbrev(pm, prevBuf, sizeof(prevBuf)),
                                               StatsWidgets::monthAbbrev(nm, nextBuf, sizeof(nextBuf)));

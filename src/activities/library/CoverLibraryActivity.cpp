@@ -1281,14 +1281,12 @@ void CoverLibraryActivity::drawCoverShadow(const int coverX, const int coverY, c
 void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const int cellWidth, const int cellHeight,
                                         const std::string& coverBmpPath, const std::string& title,
                                         const int progressPercent, const bool selected, const bool drawTitle) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
   const int coverWidth = cellWidth - 2 * COVER_PADDING;
   const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
   // Request the thumb at the size it is drawn at: a theme-sized thumb (300px, 400px in
   // Classic) scaled into this cell cost ~2.5s per cover in software scaling.
   const int thumbHeight = coverHeight;
   gridCoverHeight_.store(coverHeight, std::memory_order_release);
-  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int coverX = cellX + COVER_PADDING;
   const int coverY = cellY + COVER_PADDING;
 

@@ -48,8 +48,9 @@ bool UITheme::hasCoverGridHome() { return SETTINGS.uiTheme == CrossPointSettings
 void UITheme::drawCoverGridHome(CoverGridHomeUi& home) { home.renderUi(); }
 
 void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
-  if (type == CrossPointSettings::COVER_GRID && !supportsCoverGrid()) type = CrossPointSettings::LYRA;
-
+  // No board-support fallback here: supportsCoverGrid() is true everywhere, and a guard that can
+  // never fire reads as a real constraint. Reinstate it here and in SettingsList's option count
+  // together if a board ever has to opt out.
   switch (type) {
     case CrossPointSettings::UI_THEME::CLASSIC:
       LOG_DBG("UI", "Using Classic theme");
