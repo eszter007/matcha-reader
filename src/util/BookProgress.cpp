@@ -6,7 +6,6 @@
 #include <Logging.h>
 #include <MangaPanel.h>
 #include <Memory.h>
-#include <Txt.h>
 #include <Xtc.h>
 
 #include <algorithm>
@@ -47,9 +46,9 @@ int mangaProgressPercent(const std::string& path) {
 
 std::string bookCachePath(const std::string& path) {
   const std::string hash = std::to_string(std::hash<std::string>{}(path));
-  if (FsHelpers::hasEpubExtension(path)) return "/.crosspoint/epub_" + hash;
+  // TXT and Markdown are read through the EPUB pipeline, so their cache is an epub_ one too.
+  if (FsHelpers::hasReflowableBookExtension(path)) return "/.crosspoint/epub_" + hash;
   if (FsHelpers::hasXtcExtension(path)) return "/.crosspoint/xtc_" + hash;
-  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) return "/.crosspoint/txt_" + hash;
   if (manga::MangaBook::isMangaFolder(path)) return "/.crosspoint/manga_" + hash;
   return {};
 }
@@ -73,7 +72,7 @@ bool markBookRead(const std::string& path) {
     return ProgressFile::writeAtomic(cachePath, data, sizeof(data));
   }
 
-  if (FsHelpers::hasEpubExtension(path)) {
+  if (FsHelpers::hasReflowableBookExtension(path)) {
     // Byte 8 is the book percent every reader of this record honours; spine and page are set
     // past the last section so the legacy computation lands on 100 as well.
     auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");
@@ -123,7 +122,7 @@ bool markBookUnread(const std::string& path) {
 
 int loadBookProgress(const std::string& path) {
   uint8_t data[10]{};
-  if (FsHelpers::hasEpubExtension(path)) {
+  if (FsHelpers::hasReflowableBookExtension(path)) {
     // Metadata objects exceed the stack budget; only the featured book is loaded, once per entry.
     auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");
     if (!epub) {
@@ -161,25 +160,6 @@ int loadBookProgress(const std::string& path) {
     if (xtc->getPageCount() == 0) return -1;
     if (page >= xtc->getPageCount()) return 100;
     return xtc->calculateProgress(page);
-  }
-  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
-    Txt txt(path, "/.crosspoint");
-    HalFile file;
-    if (!Storage.openFileForRead("HOME", txt.getCachePath() + "/progress.bin", file) || file.read(data, 4) != 4)
-      return -1;
-    const uint32_t page = data[0] | (data[1] << 8);
-    HalFile index;
-    // TXT index v3: magic, version, file size, four layout fields, alignment, page count.
-    uint8_t header[30];
-    if (!Storage.openFileForRead("HOME", txt.getCachePath() + "/index.bin", index) ||
-        index.read(header, sizeof(header)) != sizeof(header))
-      return -1;
-    if (readLe32(header) != 0x54585449 || header[4] != 3) return -1;
-    const uint32_t pages = readLe32(header + 26);
-    if (pages == 0 || pages > (index.size() - sizeof(header)) / 4) return -1;
-    HalFile source;
-    if (!Storage.openFileForRead("HOME", path, source) || source.size() != readLe32(header + 5)) return -1;
-    return std::min<int>(100, static_cast<int>((page + 1) * 100ULL / pages));
   }
   return mangaProgressPercent(path);
 }

@@ -71,9 +71,11 @@ add_subdirectory(content_opf_parser)
 add_subdirectory(chapter_position)
 add_subdirectory(home_button)
 add_subdirectory(side_buttons)
+add_subdirectory(button_press_navigation)
 
 add_subdirectory(inflate_stream)
 add_subdirectory(fs_helpers)
+add_subdirectory(txt_to_html)
 
 add_subdirectory(absolute_grayscale)
 

@@ -739,7 +739,7 @@ void CoverLibraryActivity::loadShelfBooks(const std::string& folderPath) {
 
 int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const {
   std::string cachePath;
-  if (FsHelpers::hasEpubExtension(bookPath)) {
+  if (FsHelpers::hasReflowableBookExtension(bookPath)) {
     cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(bookPath));
   } else if (FsHelpers::hasXtcExtension(bookPath)) {
     return XtcProgress::percentForBook(bookPath);
@@ -749,7 +749,7 @@ int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const
     return -1;
   }
 
-  if (FsHelpers::hasEpubExtension(bookPath)) {
+  if (FsHelpers::hasReflowableBookExtension(bookPath)) {
     const int pct = EpubProgress::percentFromCache(cachePath, "LIB");
     return pct < 0 ? 0 : pct;
   }
