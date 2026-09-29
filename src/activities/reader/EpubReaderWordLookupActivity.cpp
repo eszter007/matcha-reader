@@ -1484,12 +1484,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
 
   splitDefinitionIntoSections();
   if (grammarFirst) {
-    for (size_t i = 0; i < sectionKind.size(); i++) {
-      if (sectionKind[i] == StrId::STR_DICT_KIND_GRAMMAR) {
-        currentSection = static_cast<int>(i);
-        break;
-      }
-    }
+    const auto grammar = std::find(sectionKind.begin(), sectionKind.end(), StrId::STR_DICT_KIND_GRAMMAR);
+    if (grammar != sectionKind.end()) currentSection = static_cast<int>(grammar - sectionKind.begin());
   }
   if (sectionText.empty())
     DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
