@@ -1145,11 +1145,20 @@ void EpubReaderActivity::openReaderMenu() {
     // go-to-percent... cancelled back to the menu), so the framebuffer holds
     // that screen, not the page: re-render the page and let renderBook() put
     // the toolbar on top. The in-reader fast path is openOverlay().
+    // Build the toolbar before committing to it: a low heap here is routine (the
+    // first visit to a page with an image has just spent tens of KB extracting and
+    // decoding it), and leaving overlay set with no toolbar would draw nothing.
+    if (!toolbarUi) {
+      toolbarUi = makeUniqueNoThrow<ReaderToolbarUi>(renderer);
+      if (!toolbarUi) {
+        LOG_ERR("ERS", "OOM: reader toolbar, staying on the page");
+        return;
+      }
+    }
     overlay = Overlay::Toolbar;
     focusedTool = 0;
     panelHoldJumped = false;
     panelCursorShown = !mappedInput.hasTouch();
-    if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
     toolbarUi->begin();
     discardOverlayPage();
     requestUpdate();
@@ -4436,9 +4445,18 @@ void EpubReaderActivity::settleOverlayRefresh() {
 void EpubReaderActivity::openOverlay(Overlay target) {
   mappedInput.resetHomeButtonInput();
   requestVerticalBuildNotice();
+  // Same as openReaderMenu(): allocate first, and leave the overlay closed if the
+  // heap cannot spare it. std::make_unique would abort() here instead -- with
+  // -fno-exceptions a failed bare `new` never returns null.
+  if (!toolbarUi) {
+    toolbarUi = makeUniqueNoThrow<ReaderToolbarUi>(renderer);
+    if (!toolbarUi) {
+      LOG_ERR("ERS", "OOM: reader toolbar, staying on the page");
+      return;
+    }
+  }
   const Overlay previous = overlay;
   overlay = target;
-  if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
   if (previous == Overlay::None) toolbarUi->begin();
   // Buttons show a cursor from the start; touch boards only once a button moves it.
   panelCursorShown = !mappedInput.hasTouch();
