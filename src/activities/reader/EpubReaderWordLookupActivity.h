@@ -250,6 +250,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::string resultGrammar;
   int resultMatchLen = 0;
   bool hasGrammar = false;
+  // The grammar entry is the looked-up word itself (a short function word such as こと), so its
+  // page opens before the vocab one.
+  bool grammarFirst = false;
+  int promotedGrammarLen = 0;
   std::string grammarHeadword;
   std::string grammarDefinition;
   // Tategaki shows ONE source per page: the merged definition is split at the separators the

@@ -309,13 +309,15 @@ std::string DictionaryWordSelectActivity::miningSentence(const std::string_view 
 }
 
 void DictionaryWordSelectActivity::performLookup() {
-  if (!dictOpenAttempted) {
-    dictOpenAttempted = true;
-    dictOpenOk = dict.open(folderName.c_str(), language.c_str());
+  for (size_t d = 0; d < dictCount; d++) {
+    auto& slot = dicts[d];
+    if (slot.openAttempted) continue;
+    slot.openAttempted = true;
+    slot.openOk = slot.dict.open(slot.folder.c_str(), language.c_str());
     // needsIndex() opens and validates the .qidx sidecar, so ask it once per
     // open rather than once per word: the answer only changes when we build
     // the sidecar ourselves, which is handled below.
-    dictNeedsIndex = dictOpenOk && dict.needsIndex();
+    slot.needsIndex = slot.openOk && slot.dict.needsIndex();
   }
   // No busy popup: the lookup is fast enough that one only flashes, and the definition panel
   // draws over the page without clearing it, so a popup painted here would survive underneath
@@ -326,39 +328,54 @@ void DictionaryWordSelectActivity::performLookup() {
   }
   LOG_DBG("DICT", "Lookup maxAlloc after font release: %u", ESP.getMaxAllocHeap());
 
-  bool ok = dictOpenOk;
-  Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
-  if (ok && dictNeedsIndex) {
-    ok = dict.buildIndex(&indexBuildYield, nullptr, &indexResult);
-    dictNeedsIndex = !ok;  // a successful build leaves the sidecar fresh; a failed one retries
-  }
-
-  std::string definition;
-  std::string headword;
-  Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
+  // Every dictionary is asked; each that has the word adds an entry, in dictionary order. The
+  // failure reported when none does is the first dictionary's that could not answer.
   std::string joined;
-  const bool found =
-      ok && dict.lookup(lookupTextFor(static_cast<size_t>(selected), joined), definition, headword, &result);
-
-  if (found) {
-    popup = Popup::None;
-    sentencemining::Draft draft;
-    draft.card.word = headword;
-    draft.card.sentence = miningSentence(lookupTextFor(static_cast<size_t>(selected), joined));
+  const char* word = lookupTextFor(static_cast<size_t>(selected), joined);
+  std::vector<DictionaryDefinitionActivity::Entry> entries;
+  entries.reserve(dictCount);
+  bool ok = false;
+  Dictionary::IndexResult indexResult = Dictionary::IndexResult::Ok;
+  Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
+  for (size_t d = 0; d < dictCount; d++) {
+    auto& slot = dicts[d];
+    if (!slot.openOk) continue;
+    if (slot.needsIndex) {
+      Dictionary::IndexResult built = Dictionary::IndexResult::Ok;
+      slot.needsIndex = !slot.dict.buildIndex(&indexBuildYield, nullptr, &built);
+      if (slot.needsIndex) {  // a failed build retries on the next word
+        if (!ok && indexResult == Dictionary::IndexResult::Ok) indexResult = built;
+        continue;
+      }
+    }
+    ok = true;
+    DictionaryDefinitionActivity::Entry entry;
+    Dictionary::LookupResult lookupResult = Dictionary::LookupResult::NotFound;
+    if (!slot.dict.lookup(word, entry.definition, entry.headword, &lookupResult)) {
+      if (result == Dictionary::LookupResult::NotFound) result = lookupResult;
+      continue;
+    }
+    entry.html = slot.dict.definitionsAreHtml();
+    entry.dictName = slot.dict.getBookName();
+    auto& draft = entry.draft;
+    draft.card.word = entry.headword;
+    draft.card.sentence = miningSentence(word);
     draft.card.book = mining_.bookTitle;
     draft.card.author = mining_.bookAuthor;
-    draft.card.dictionary = dict.getBookName();
-    draft.language = sentencemining::languageForDictionary(folderName, language);
+    draft.card.dictionary = entry.dictName;
+    draft.language = sentencemining::languageForDictionary(slot.folder, language);
     draft.bookPath = mining_.bookPath;
+    entries.push_back(std::move(entry));
+  }
+
+  if (!entries.empty()) {
+    popup = Popup::None;
     BookStats::addCounts(mining_.bookPath.c_str(), 1, 0);
-    auto definitionView = makeUniqueNoThrow<DictionaryDefinitionActivity>(
-        renderer, mappedInput, std::move(headword), std::move(definition), dict.definitionsAreHtml(),
-        dict.getBookName());
+    auto definitionView = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(entries));
     if (!definitionView) {
       LOG_ERR("DICT", "OOM: definition view");
       return;
     }
-    definitionView->setMiningDraft(std::move(draft));
     startActivityForResult(std::move(definitionView), [this](const ActivityResult& result) {
       // The definition view cancels when its power click asked to leave the dictionary
       // entirely, rather than step back to this selection.

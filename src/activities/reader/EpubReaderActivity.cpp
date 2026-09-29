@@ -502,10 +502,11 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
     openWordLookupPanel(pageOnScreen, lookupAtX, lookupAtY);
     return;
   }
-  std::string dictionaryFolder;
+  std::vector<std::string> dictionaryFolders;
   const std::string bookLanguage = epub ? epub->getLanguage() : std::string{};
-  DictionaryRegistry::folderForLanguageOrFallback(bookLanguage, SETTINGS.dictionaryName, dictionaryFolder);
-  if (dictionaryFolder.empty()) {
+  DictionaryRegistry::foldersForLanguage(bookLanguage, SETTINGS.dictionaryName,
+                                         DictionaryWordSelectActivity::MAX_DICTIONARIES, dictionaryFolders);
+  if (dictionaryFolders.empty()) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
     requestUpdate();
@@ -546,7 +547,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
   // A lookup ends back on the page no matter how it was opened (menu or
   // long-press): the user is mid-reading, not mid-menu.
   auto wordSelect = makeUniqueNoThrow<DictionaryWordSelectActivity>(
-      renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop, std::move(dictionaryFolder),
+      renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop, std::move(dictionaryFolders),
       bookLanguage, effectiveReaderFontId(), lookupAtX, lookupAtY);
   if (!wordSelect) {
     LOG_ERR("ERS", "OOM: word select");

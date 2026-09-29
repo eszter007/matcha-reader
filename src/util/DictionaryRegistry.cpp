@@ -141,28 +141,31 @@ bool resolveBasePath(const char* folderName, std::string& basePathOut) {
   return false;
 }
 
-bool folderForLanguage(const std::string& language, std::string& folderNameOut) {
+void foldersForLanguage(const std::string& language, const char* preferred, const size_t max,
+                        std::vector<std::string>& foldersOut) {
+  foldersOut.clear();
+  if (max == 0) return;
   const std::string lang = languageFolder(language);
-  if (lang.empty()) return false;
-  std::vector<DictionaryEntry> entries;
-  discover(entries);
-  const std::string prefix = lang + "/";
-  const auto entry = std::find_if(entries.begin(), entries.end(), [&prefix](const auto& candidate) {
-    return candidate.name.compare(0, prefix.size(), prefix) == 0;
-  });
-  if (entry == entries.end()) return false;
-  folderNameOut = entry->name;
-  return true;
-}
-
-bool folderForLanguageOrFallback(const std::string& language, const char* fallbackFolder, std::string& folderNameOut) {
-  if (!language.empty() && folderForLanguage(language, folderNameOut)) return true;
-  if (!fallbackFolder || fallbackFolder[0] == '\0') {
-    folderNameOut.clear();
-    return false;
+  if (!lang.empty()) {
+    std::vector<DictionaryEntry> entries;
+    discover(entries);  // sorted by name
+    const std::string prefix = lang + "/";
+    foldersOut.reserve(max);
+    const bool hasPreferred = preferred && preferred[0] != '\0';
+    if (hasPreferred &&
+        std::any_of(entries.begin(), entries.end(),
+                    [preferred](const DictionaryEntry& e) { return e.name == preferred; }) &&
+        strncmp(preferred, prefix.c_str(), prefix.size()) == 0) {
+      foldersOut.emplace_back(preferred);
+    }
+    for (const auto& entry : entries) {
+      if (foldersOut.size() >= max) break;
+      if (entry.name.compare(0, prefix.size(), prefix) != 0) continue;
+      if (!foldersOut.empty() && foldersOut.front() == entry.name) continue;
+      foldersOut.push_back(entry.name);
+    }
   }
-  folderNameOut = fallbackFolder;
-  return true;
+  if (foldersOut.empty() && preferred && preferred[0] != '\0') foldersOut.emplace_back(preferred);
 }
 
 }  // namespace DictionaryRegistry
