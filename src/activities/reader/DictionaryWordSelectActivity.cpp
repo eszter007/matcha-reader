@@ -89,12 +89,16 @@ void DictionaryWordSelectActivity::extractWords() {
   pageText.reserve(2048);
   uint8_t styleMask = 0;
   int16_t pendingHyphen = -1;  // line-final word ending in '-', awaiting its remainder
+  uint16_t segment = 0;
+  int lastLineFont = -1;
+  auto lastLineAlign = CssTextAlign::Justify;
 
   for (const auto& element : page->elements) {
     // Layout hyphenation only ever continues onto the IMMEDIATELY following text line, so
     // anything else in between (an image, a line with no usable block) disarms the join.
     if (element->getTag() != TAG_PageLine) {
       pendingHyphen = -1;
+      lastLineFont = -1;  // an image or other element breaks the run
       continue;
     }
     const auto* line = static_cast<const PageLine*>(element.get());
@@ -103,11 +107,17 @@ void DictionaryWordSelectActivity::extractWords() {
       // Reset the pending hyphen too: a skipped line must not let a hyphenated word join across
       // the gap it leaves.
       pendingHyphen = -1;
+      lastLineFont = -1;
       continue;
     }
 
     bool rowHasWords = false;
     const int lineFontId = block->getBlockStyle().resolveFontId(fontId);
+    const CssTextAlign lineAlign = block->getBlockStyle().alignment;
+    if (lastLineFont >= 0 && (lineFontId != lastLineFont || lineAlign != lastLineAlign)) segment++;
+    if (lastLineFont < 0 && !words.empty()) segment++;
+    lastLineFont = lineFontId;
+    lastLineAlign = lineAlign;
     const uint16_t lastWordIndex = block->wordCount() > 0 ? static_cast<uint16_t>(block->wordCount() - 1) : 0;
     const int ascender = renderer.getFontAscenderSize(lineFontId);
     const int rubyShift = block->getRubyShift(ascender);
@@ -121,6 +131,7 @@ void DictionaryWordSelectActivity::extractWords() {
       box.style = block->wordStyle(i);
       box.width = 0;  // measured below, once the advance table is ready
       box.row = rowCount;
+      box.segment = segment;
       box.text = text;
       // An inline font-size (a <span> inside the block) overrides the block's font for this
       // word alone, exactly as TextBlock::render resolves it. 0 = no override.
@@ -248,19 +259,27 @@ std::string DictionaryWordSelectActivity::miningSentence(const std::string_view 
   const size_t last = box.joinNext >= 0 ? static_cast<size_t>(box.joinNext) : sel;
   // Words on either side, one sentence's reach at most; sentenceHtml() cuts at the ends it finds.
   constexpr size_t REACH = 80;
+  const uint16_t seg = box.segment;
+  size_t from = first;
+  while (from > 0 && first - from < REACH && words[from - 1].segment == seg) --from;
   std::string before;
-  for (size_t i = first > REACH ? first - REACH : 0; i < first; ++i) {
+  for (size_t i = from; i < first; ++i) {
     before += words[i].text;
     before += ' ';
   }
   std::string after;
   size_t i = last + 1;
+  bool segmentEnded = false;
   for (; i < words.size() && i <= last + REACH; ++i) {
+    if (words[i].segment != seg) {
+      segmentEnded = true;
+      break;
+    }
     after += ' ';
     after += words[i].text;
   }
   // Ran off the bottom of the page mid-sentence: finish it from the next page's text.
-  if (i >= words.size() && !sentencemining::hasSentenceEnd(after) && !mining_.nextPageText.empty()) {
+  if (!segmentEnded && i >= words.size() && !sentencemining::hasSentenceEnd(after) && !mining_.nextPageText.empty()) {
     after += ' ';
     after += mining_.nextPageText;
   }

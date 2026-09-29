@@ -38,8 +38,23 @@ size_t markAt(std::string_view text, const size_t i, const std::string_view (&ma
   return 0;
 }
 
+constexpr std::string_view IDEOGRAPHIC_SPACE = "\u3000";
+
+// Japanese dialogue closes a line with 」 alone, no 。: 「行ってきます」　外は雨だった。 is two
+// sentences. But 「行こう」と言った。 is one, so the bracket only ends a sentence when a space, a
+// new quote, or the end of the text comes after it.
+constexpr std::string_view DIALOGUE_CLOSERS[] = {"」", "』"};
+constexpr std::string_view DIALOGUE_OPENERS[] = {"「", "『"};
+
 // Byte offset just past a sentence end at text[i] and any closers after it; 0 when none at i.
 size_t endAt(std::string_view text, size_t i) {
+  if (const size_t closer = markAt(text, i, DIALOGUE_CLOSERS)) {
+    const size_t next = i + closer;
+    if (next >= text.size() || text[next] == ' ' || text[next] == '\n' ||
+        text.substr(next, IDEOGRAPHIC_SPACE.size()) == IDEOGRAPHIC_SPACE || markAt(text, next, DIALOGUE_OPENERS) > 0) {
+      return next;
+    }
+  }
   const size_t len = markAt(text, i, SENTENCE_ENDS);
   if (len == 0) return 0;
   i += len;
@@ -74,6 +89,15 @@ std::string_view firstCodepoints(std::string_view text, size_t count) {
 }
 
 bool isSpace(const char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
+std::string_view trimIdeographicSpace(std::string_view text) {
+  while (text.substr(0, IDEOGRAPHIC_SPACE.size()) == IDEOGRAPHIC_SPACE) text.remove_prefix(IDEOGRAPHIC_SPACE.size());
+  while (text.size() >= IDEOGRAPHIC_SPACE.size() &&
+         text.substr(text.size() - IDEOGRAPHIC_SPACE.size()) == IDEOGRAPHIC_SPACE) {
+    text.remove_suffix(IDEOGRAPHIC_SPACE.size());
+  }
+  return text;
+}
 
 // Page text arrives with paragraph breaks and layout spacing; a card wants one line.
 std::string collapseWhitespace(std::string_view text) {
@@ -191,7 +215,7 @@ std::string sentenceHtml(std::string_view before, std::string_view word, std::st
   for (size_t i = 0; i < before.size(); i += charLength(before, i)) {
     if (const size_t past = endAt(before, i)) start = past;
   }
-  std::string lead = collapseWhitespace(before.substr(start));
+  std::string lead = collapseWhitespace(trimIdeographicSpace(before.substr(start)));
 
   // Forward through the first sentence end after it (and its closing marks).
   size_t stop = after.size();
@@ -203,7 +227,7 @@ std::string sentenceHtml(std::string_view before, std::string_view word, std::st
   }
   // Keep the word's trailing space if the text had one: "Did anyone see" must not become
   // "Did anyonesee" once the trail is collapsed on its own.
-  std::string trail = collapseWhitespace(after.substr(0, stop));
+  std::string trail = collapseWhitespace(trimIdeographicSpace(after.substr(0, stop)));
   if (!trail.empty() && !after.empty() && isSpace(after.front())) trail.insert(0, " ");
   if (!lead.empty() && !before.empty() && isSpace(before.back())) lead += ' ';
 
@@ -310,8 +334,16 @@ std::string definitionHtml(std::string_view plain) {
   size_t lineStart = 0;
   while (lineStart <= capped.size()) {
     const size_t lineEnd = capped.find('\n', lineStart);
-    const std::string_view line =
-        std::string_view(capped).substr(lineStart, lineEnd == std::string::npos ? std::string::npos : lineEnd - lineStart);
+    std::string_view line = std::string_view(capped).substr(
+        lineStart, lineEnd == std::string::npos ? std::string::npos : lineEnd - lineStart);
+    // The panel indents example sentences under a box-drawing bar ("  │ 運命に…"). That is screen
+    // layout, not content: a card gets the example itself.
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
+    constexpr std::string_view BAR = "\u2502";
+    if (line.substr(0, BAR.size()) == BAR) {
+      line.remove_prefix(BAR.size());
+      while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
+    }
     if (!out.empty()) out += "<br>";
     out += htmlEscape(line);
     if (lineEnd == std::string::npos) break;

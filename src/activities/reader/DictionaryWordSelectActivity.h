@@ -63,6 +63,10 @@ class DictionaryWordSelectActivity final : public Activity {
     // whole word; -1 when the word is not part of a split. Indices into `words`.
     int16_t joinNext = -1;  // set on the "any-" half: index of the remainder
     int16_t joinPrev = -1;  // set on the "one" half: index of the hyphenated prefix
+    // Run of lines set in the same block style. A sentence never crosses into another run: a
+    // chapter heading ("ZWEI") or caption ends without punctuation, and would otherwise be read as
+    // the start of the paragraph under it.
+    uint16_t segment = 0;
   };
   // The word to look up for a box, joining a hyphenated pair back together. Returns a reference
   // into `scratch` when a join happened, so the caller owns the storage.

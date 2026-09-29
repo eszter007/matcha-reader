@@ -145,3 +145,29 @@ TEST(SentenceMiningFiles, HtmlCapNeverLeavesATagOpen) {
   EXPECT_GT(capped.rfind('>'), capped.rfind('<'));
   EXPECT_EQ(capHtml("<b>short</b>"), "<b>short</b>");
 }
+
+// From a device export: the card began with the previous line of dialogue, which ends in 」 with
+// no 。, and kept the full-width space after it.
+TEST(SentenceMiningCsv, DialogueLineEndingInBracketIsItsOwnSentence) {
+  EXPECT_EQ(
+      sentenceHtml("「まあ、刑務所よりは居心地がよさそうですね」　実際、その評価は", "甘んじて", "受けることにした。"),
+      "実際、その評価は<b>甘んじて</b>受けることにした。");
+}
+
+TEST(SentenceMiningCsv, BracketFollowedByTextStaysInTheSentence) {
+  // 「行こう」と言った is one sentence: the bracket is followed by text, not a break.
+  EXPECT_EQ(sentenceHtml("雨だ。「行こう」と", "言った", "。"), "「行こう」と<b>言った</b>。");
+}
+
+TEST(SentenceMiningCsv, BracketBeforeANewQuoteEndsTheSentence) {
+  EXPECT_EQ(sentenceHtml("「はい」「", "いいえ", "」"), "「<b>いいえ</b>」");
+}
+
+TEST(SentenceMiningCsv, ParagraphIndentIsNotPartOfTheSentence) {
+  EXPECT_EQ(sentenceHtml("　彼は", "走った", "。"), "彼は<b>走った</b>。");
+}
+
+TEST(SentenceMiningFiles, DefinitionDropsThePanelsExampleBars) {
+  EXPECT_EQ(definitionHtml("1. to content oneself with\n  │ 運命に甘んじる。\n  │ To accept one's fate."),
+            "1. to content oneself with<br>運命に甘んじる。<br>To accept one's fate.");
+}
