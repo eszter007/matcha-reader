@@ -12,6 +12,7 @@
 
 #include "DictionaryDefinitionActivity.h"
 #include "ReaderUtils.h"
+#include "WordSelectionScan.h"
 #include "components/UITheme.h"
 
 namespace {
@@ -77,6 +78,7 @@ void DictionaryWordSelectActivity::onEnter() {
 
 void DictionaryWordSelectActivity::extractWords() {
   words.clear();
+  dropCapWord_ = -1;
   words.reserve(128);
   rowCount = 0;
 
@@ -89,16 +91,12 @@ void DictionaryWordSelectActivity::extractWords() {
   pageText.reserve(2048);
   uint8_t styleMask = 0;
   int16_t pendingHyphen = -1;  // line-final word ending in '-', awaiting its remainder
-  uint16_t segment = 0;
-  int lastLineFont = -1;
-  auto lastLineAlign = CssTextAlign::Justify;
 
   for (const auto& element : page->elements) {
     // Layout hyphenation only ever continues onto the IMMEDIATELY following text line, so
     // anything else in between (an image, a line with no usable block) disarms the join.
     if (element->getTag() != TAG_PageLine) {
       pendingHyphen = -1;
-      lastLineFont = -1;  // an image or other element breaks the run
       continue;
     }
     const auto* line = static_cast<const PageLine*>(element.get());
@@ -107,17 +105,13 @@ void DictionaryWordSelectActivity::extractWords() {
       // Reset the pending hyphen too: a skipped line must not let a hyphenated word join across
       // the gap it leaves.
       pendingHyphen = -1;
-      lastLineFont = -1;
       continue;
     }
 
     bool rowHasWords = false;
     const int lineFontId = block->getBlockStyle().resolveFontId(fontId);
-    const CssTextAlign lineAlign = block->getBlockStyle().alignment;
-    if (lastLineFont >= 0 && (lineFontId != lastLineFont || lineAlign != lastLineAlign)) segment++;
-    if (lastLineFont < 0 && !words.empty()) segment++;
-    lastLineFont = lineFontId;
-    lastLineAlign = lineAlign;
+    const size_t lineFirstWord = words.size();
+    const bool lineHasDropCap = dropCapWord_ < 0 && block->getDropCap().present();
     const uint16_t lastWordIndex = block->wordCount() > 0 ? static_cast<uint16_t>(block->wordCount() - 1) : 0;
     const int ascender = renderer.getFontAscenderSize(lineFontId);
     const int rubyShift = block->getRubyShift(ascender);
@@ -131,7 +125,6 @@ void DictionaryWordSelectActivity::extractWords() {
       box.style = block->wordStyle(i);
       box.width = 0;  // measured below, once the advance table is ready
       box.row = rowCount;
-      box.segment = segment;
       box.text = text;
       // An inline font-size (a <span> inside the block) overrides the block's font for this
       // word alone, exactly as TextBlock::render resolves it. 0 = no override.
@@ -156,6 +149,12 @@ void DictionaryWordSelectActivity::extractWords() {
       pageText.append(text);
       pageText.push_back(' ');
       styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(box.style) & 0x03));
+    }
+    // Only when the line put a word down: its first word is the one missing the letter.
+    if (lineHasDropCap && words.size() > lineFirstWord) {
+      dropCapWord_ = static_cast<int16_t>(lineFirstWord);
+      dropCapCp_ = block->getDropCap().cp;
+      dropCapPrefixCp_ = block->getDropCap().prefixCp;
     }
     if (rowHasWords) {
       rowCount++;
@@ -259,24 +258,46 @@ std::string DictionaryWordSelectActivity::miningSentence(const std::string_view 
   const size_t last = box.joinNext >= 0 ? static_cast<size_t>(box.joinNext) : sel;
   // Words on either side, one sentence's reach at most; sentenceHtml() cuts at the ends it finds.
   constexpr size_t REACH = 80;
-  const uint16_t seg = box.segment;
+  // A sentence never crosses a paragraph break. The page does not mark those, but it spaces them:
+  // a heading ("Chapter I", "ZWEI"), a caption or an image sits after a gap wider than the line
+  // advance, and a heading ends without punctuation, so it would otherwise be read as the start
+  // of the paragraph under it. The advance is the tightest one between two lines on this page.
+  int minAdvance = 0;
+  for (size_t i = 1; i < words.size(); ++i) {
+    if (words[i].row == words[i - 1].row) continue;
+    const int advance = words[i].y - words[i - 1].y;
+    if (advance > 0 && (minAdvance == 0 || advance < minAdvance)) minAdvance = advance;
+  }
+  const auto breaksBetween = [&](const size_t a, const size_t b) {
+    if (minAdvance == 0 || words[a].row == words[b].row) return false;
+    return words[b].y - words[a].y > minAdvance * 13 / 10;
+  };
+  // A drop cap's letter belongs in front of the first word of its line ("I" + "T" = "IT").
+  const auto appendWord = [this](std::string& out, const size_t index) {
+    if (static_cast<int>(index) == dropCapWord_) {
+      if (dropCapPrefixCp_ != 0) WordSelectionScan::encodeUtf8(dropCapPrefixCp_, out);
+      WordSelectionScan::encodeUtf8(dropCapCp_, out);
+    }
+    out += words[index].text;
+  };
+
   size_t from = first;
-  while (from > 0 && first - from < REACH && words[from - 1].segment == seg) --from;
+  while (from > 0 && first - from < REACH && !breaksBetween(from - 1, from)) --from;
   std::string before;
   for (size_t i = from; i < first; ++i) {
-    before += words[i].text;
+    appendWord(before, i);
     before += ' ';
   }
   std::string after;
   size_t i = last + 1;
   bool segmentEnded = false;
   for (; i < words.size() && i <= last + REACH; ++i) {
-    if (words[i].segment != seg) {
+    if (breaksBetween(i - 1, i)) {
       segmentEnded = true;
       break;
     }
     after += ' ';
-    after += words[i].text;
+    appendWord(after, i);
   }
   // Ran off the bottom of the page mid-sentence: finish it from the next page's text.
   if (!segmentEnded && i >= words.size() && !sentencemining::hasSentenceEnd(after) && !mining_.nextPageText.empty()) {

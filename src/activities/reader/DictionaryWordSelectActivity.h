@@ -63,10 +63,6 @@ class DictionaryWordSelectActivity final : public Activity {
     // whole word; -1 when the word is not part of a split. Indices into `words`.
     int16_t joinNext = -1;  // set on the "any-" half: index of the remainder
     int16_t joinPrev = -1;  // set on the "one" half: index of the hyphenated prefix
-    // Run of lines set in the same block style. A sentence never crosses into another run: a
-    // chapter heading ("ZWEI") or caption ends without punctuation, and would otherwise be read as
-    // the start of the paragraph under it.
-    uint16_t segment = 0;
   };
   // The word to look up for a box, joining a hyphenated pair back together. Returns a reference
   // into `scratch` when a join happened, so the caller owns the storage.
@@ -101,6 +97,12 @@ class DictionaryWordSelectActivity final : public Activity {
   std::vector<WordBox> words;
   int selected = 0;
   sentencemining::BookContext mining_;
+  // A paragraph's drop cap is drawn outside the text flow, so its letter is in no word: the
+  // first word of that line reads "T" for "IT". Kept here (one per page is the norm) so the
+  // saved sentence gets the letter back. -1 when the page has none.
+  int16_t dropCapWord_ = -1;
+  uint32_t dropCapCp_ = 0;
+  uint32_t dropCapPrefixCp_ = 0;
   // The sentence around the selected word (and its hyphen-split half, if any), as card HTML.
   std::string miningSentence(std::string_view surface) const;
   uint16_t rowCount = 0;

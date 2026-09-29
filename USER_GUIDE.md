@@ -951,8 +951,12 @@ Lookup** (the other settings keep the click for sleep, page turns, refresh or fo
 
 #### Sentence mining
 
-Save a looked-up word with the sentence it came from, as a card for Anki or another flashcard app. It works in
-Japanese books, in books in other languages, and in manga.
+Save a looked-up word with the sentence it came from, as a flashcard for [Anki](https://apps.ankiweb.net/). It
+works in Japanese books, in books in other languages, and in manga.
+
+The saved words are written as a CSV file made to be imported into Anki: it carries the header lines Anki's
+importer reads, so the import needs no setup (see **Importing into Anki** below). Being plain CSV, it also opens in
+a spreadsheet or another flashcard app, but Anki is what it is laid out for.
 
 - **With buttons:** open a definition and press **Select**.
 - **On a touch device:** tap the **+** in the top-right corner of the definition panel.
