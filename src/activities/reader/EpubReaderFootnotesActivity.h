@@ -6,16 +6,16 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "components/PanelTextPages.h"
 #include "util/ButtonNavigator.h"
 
 class Epub;
-struct Rect;
 
-// Footnote panel in the Word Lookup style: shows the CURRENT page's footnotes' actual text in
-// place (extracted on demand from the note's target file -- see FootnoteTextExtractor) instead
-// of a bare list of numbers that immediately navigates away. Left/Right cycles through the
-// page's footnotes (wrapping), Up/Down scrolls a long note, Confirm jumps to the footnote's
-// location (previous behavior), Back returns to the page.
+// The page's footnotes in the floating dictionary panel, drawn over the page: the note's own text
+// (extracted on demand from its target file -- see FootnoteTextExtractor). A long note scrolls
+// (Up/Down, vertical swipes); a page turn (Left/Right, or the reader's touch setting) moves to the
+// next or previous note. A tap outside the panel or Back returns to the page, and Confirm (or
+// Power) jumps to the note's location.
 class EpubReaderFootnotesActivity final : public Activity {
  public:
   explicit EpubReaderFootnotesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -40,17 +40,16 @@ class EpubReaderFootnotesActivity final : public Activity {
   int startIndex = 0;
   int selectedIndex = 0;
   std::string noteText;  // extracted text of the selected footnote
-  bool noteLoaded = false;
-  int scrollOffset = 0;  // lines scrolled within the current note
-  int totalLines = 0;
-  int maxScroll = 0;
-
-  bool initialRenderDone = false;
-  int fastRefreshCount = 0;
-  static constexpr int kFullRefreshInterval = 10;
+  PanelTextPages textPages;
+  int scrollLine = 0;  // first line of the note shown; the note scrolls, notes page
 
   ButtonNavigator buttonNavigator;
 
+  // Loads note `index` and shows it from its top. Clamped to the notes that exist.
   void selectFootnote(int index);
-  void renderContentArea(const Rect& screen, int contentTop);
+  // Moves to the next (+1) or previous (-1) note; ends are hard stops.
+  void stepNote(int direction);
+  // Scrolls the note by `lines`, clamped to its length.
+  void scrollBy(int lines);
+  void cancel();
 };

@@ -65,9 +65,9 @@ A sentence cut off by the end of the page is finished from the next page. The da
 
 ### Page translation
 
-Translates the current page to English with Gemini. Works in any book, not only Japanese ones. Needs Wi-Fi and your own API key.
+Translates the current page to English with Gemini, in the same floating panel as the dictionary, over the page you are reading. Works in any book, not only Japanese ones. Needs Wi-Fi and your own API key; a saved network is joined from inside the panel.
 
-<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A translated page"></p>
+<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
 
 ### Manga panel reader
 

@@ -486,6 +486,14 @@ class EpubReaderActivity final : public ReaderActivity {
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
   void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
+  // Footnotes and translation float over the page. Picked from the reader menu, the framebuffer
+  // still holds the menu, so they wait for render() to put the page back first: render() sets
+  // panelPageReady once the page is drawn, and the next readerLoop() opens the panel.
+  enum class PanelAfterRender : uint8_t { None, Footnotes, Translation };
+  std::atomic<PanelAfterRender> panelAfterRender{PanelAfterRender::None};
+  std::atomic<bool> panelPageReady{false};
+  void openPanelAfterRender(PanelAfterRender panel);
+  void openTranslationPanel();
   // Repaints the current vertical page (body + status bar) for the word-lookup panel's select
   // view, which owns no page of its own -- a VerticalPage copy would cost ~15KB, the same
   // headroom the scan and the dictionary caches need. Called from the panel's render(), i.e.

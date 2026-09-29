@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "components/PanelTextPages.h"
 #include "util/ButtonNavigator.h"
 #include "util/SentenceMining.h"
 
@@ -47,13 +48,6 @@ class DictionaryDefinitionActivity final : public Activity {
   // One page forward (+1) or back (-1) through the whole flow. False at either end.
   bool stepPage(int direction);
 
-  // One wrapped display line: a byte span of `definition`. Wrapping keeps
-  // lines under the screen width, so uint16_t length is ample.
-  struct Line {
-    uint32_t start;
-    uint16_t len;
-  };
-
   // Usable body-text area: the panel's inner rectangle.
   struct BodyArea {
     int width;
@@ -73,8 +67,6 @@ class DictionaryDefinitionActivity final : public Activity {
 
   BodyArea bodyArea() const;
   bool layoutHtmlPages();
-  void wrapText();
-  int measureSpan(int fontId, const char* text, size_t len) const;
   void drawBody(int fontId, int x, int startY) const;
 
   std::vector<Entry> entries;
@@ -87,9 +79,8 @@ class DictionaryDefinitionActivity final : public Activity {
   // Styled path: reader-identical Pages laid out from the HTML definition.
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
-  std::vector<Line> lines;
+  PanelTextPages textPages;  // plain-text path: wrapped spans of `definition`
   int currentPage = 0;
   int totalPages = 1;
-  int linesPerPage = 1;
   ButtonNavigator buttonNavigator;
 };
