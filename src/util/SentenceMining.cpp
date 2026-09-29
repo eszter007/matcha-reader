@@ -39,7 +39,7 @@ bool append(const Card& card, std::string_view language) {
 }
 
 std::string today() {
-  struct tm local {};
+  struct tm local{};
   if (!halClock.hasTime() || !halClock.localTime(local)) return {};
   char buf[12];
   snprintf(buf, sizeof(buf), "%04d-%02d-%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
