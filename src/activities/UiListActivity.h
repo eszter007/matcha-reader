@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "activities/Activity.h"
 #include "components/HomeTabBar.h"
 #include "components/UiAppHost.h"
@@ -122,6 +124,16 @@ class UiListActivity : public Activity, protected UiAppHost {
   // A selection move that arrived while a render was in flight, applied by loop() as soon as the
   // lock frees. -1 when nothing is parked. See moveSelectionTo().
   int pendingSelection_ = -1;
+
+  // Bottom-bar fast path. A cursor step between two bar slots changes nothing but the band, which
+  // HomeTabBar::draw() clears and repaints itself, so render() paints only the band over the frame
+  // already on screen. It does so only when the step is provably the one thing pending: no update
+  // request since the last render began (other than earlier band steps), and none after the step.
+  // Both are checked against ActivityManager::updateRequestCount(), which every request bumps.
+  std::atomic<uint32_t> bandStepRequest_{0};  // count right after the last band step; 0 = none
+  std::atomic<uint32_t> lastRenderRequest_{0};
+  bool frameValid_ = false;
+  int renderedTabFocus_ = -1;
 
   static void screenTrampoline(UiScreen& screen, void* user);
   static void rowActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
