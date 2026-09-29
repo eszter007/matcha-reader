@@ -1105,7 +1105,7 @@ void EpubReaderWordLookupActivity::saveSentence() {
   card.sentence = miningSentence();
   // The whole entry on screen, led by its grammar line ("5-dan verb · transitive") when it has one.
   const char* grammar = visibleGrammar();
-  std::string definition = grammar && grammar[0] != '\0' ? std::string(grammar) + "\n" : std::string();
+  std::string definition = grammar[0] != '\0' ? std::string(grammar) + "\n" : std::string();
   definition += sentencemining::capUtf8(visibleDefinition(), sentencemining::MAX_DEFINITION_BYTES);
   card.definition = sentencemining::definitionHtml(definition);
   card.book = mining_.bookTitle;
