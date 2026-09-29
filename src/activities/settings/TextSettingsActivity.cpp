@@ -26,8 +26,10 @@ namespace {
 // Tab labels for Font | Size | Layout | Style.
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
-constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING, StrId::STR_ALIGNMENT,
-                                         StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS};
+// Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
+constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
+    StrId::STR_LINE_SPACING, StrId::STR_WORD_SPACING,  StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
+    StrId::STR_ALIGNMENT,    StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
                                         StrId::STR_TEXT_AA};
 
@@ -137,6 +139,10 @@ void TextSettingsActivity::rebuildFamilyList() {
 // call only when tab_ or its backing data (fonts_/sizes_) changes, never from
 // buildScreen(), which just refreshes rowValues_/rowItems_[].value in place.
 void TextSettingsActivity::rebuildRowItems() {
+  static_assert(std::size(LAYOUT_ROW_NAME_IDS) == static_cast<size_t>(LayoutRow::Count),
+                "LAYOUT_ROW_NAME_IDS must have one label per LayoutRow");
+  static_assert(std::size(STYLE_ROW_NAME_IDS) == static_cast<size_t>(StyleRow::Count),
+                "STYLE_ROW_NAME_IDS must have one label per StyleRow");
   const int count = listCount();
   rowValues_.assign(count, std::string());
   rowItems_.clear();
