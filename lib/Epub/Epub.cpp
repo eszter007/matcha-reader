@@ -1137,6 +1137,12 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
   }
 
   if (Txt::isTxtOrMd(filepath)) {
+    // Through the same cancellation wrapper as a zip entry: background work on a TXT book must
+    // stop on a key press just like it does for an EPUB.
+    if (shouldCancel) {
+      CancellablePrint cancellable(out, shouldCancel, cancelCtx);
+      return Txt::streamTxtToHtml(filepath, cancellable);
+    }
     return Txt::streamTxtToHtml(filepath, out);
   }
 

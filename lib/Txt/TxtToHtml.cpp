@@ -67,6 +67,9 @@ bool TxtToHtml::stream(std::string_view filename, void* readerCtx, int (*readFn)
   int bytesRead = 0;
 
   while ((bytesRead = readFn(readerCtx, inBuf.get(), IN_BUF_SIZE)) > 0) {
+    // Once the sink refuses bytes the result is already lost, so stop reading. A cancelled
+    // stream refuses every write, and a multi-megabyte file would otherwise be read to the end.
+    if (!outputOk) break;
     int startIdx = 0;
     if (isStart) {
       isStart = false;
