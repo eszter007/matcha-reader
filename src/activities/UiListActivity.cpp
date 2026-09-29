@@ -18,6 +18,8 @@ UiListActivity::UiListActivity(const char* name, GfxRenderer& renderer, MappedIn
 
 void UiListActivity::onEnter() {
   Activity::onEnter();
+  frameValid_ = false;
+  bandStepRequest_ = 0;
   activeNav().reset();
   resetUi();
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
@@ -269,7 +271,13 @@ bool UiListActivity::handleTabBarInput() {
     requestUpdate();
     return true;
   }
-  if (routed == HomeTabBar::Input::FocusMoved) requestUpdate();
+  if (routed == HomeTabBar::Input::FocusMoved) {
+    const uint32_t before = activityManager.updateRequestCount();
+    const uint32_t lastStep = bandStepRequest_;
+    const bool onlyBandPending = before == lastRenderRequest_ || (lastStep != 0 && before == lastStep);
+    requestUpdate();
+    bandStepRequest_ = onlyBandPending ? activityManager.updateRequestCount() : 0;
+  }
   if (routed == HomeTabBar::Input::Consumed) app.clearTapFlash();
   return routed != HomeTabBar::Input::None;
 }
@@ -284,6 +292,16 @@ void UiListActivity::drawFooter() {
 }
 
 void UiListActivity::render(RenderLock&&) {
+  const uint32_t seen = activityManager.updateRequestCount();
+  const uint32_t step = bandStepRequest_.exchange(0);
+  lastRenderRequest_ = seen;
+  if (step != 0 && step == seen && frameValid_ && renderedTabFocus_ >= 0 && tabFocus >= 0 && hasTabBar()) {
+    HomeTabBar::draw(renderer, tabBarTab(), tabFocus);
+    renderedTabFocus_ = tabFocus;
+    renderer.displayBuffer();
+    return;
+  }
+
   renderer.clearScreen();
   drawChrome();
   renderUi();
@@ -298,5 +316,7 @@ void UiListActivity::render(RenderLock&&) {
     renderUi();
   }
   drawFooter();
+  frameValid_ = true;
+  renderedTabFocus_ = tabFocus;
   renderer.displayBuffer();
 }

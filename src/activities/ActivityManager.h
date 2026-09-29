@@ -67,6 +67,8 @@ class ActivityManager {
   // Whether to trigger a render after the current loop()
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
+  // Bumped by every update request, see updateRequestCount().
+  std::atomic<uint32_t> updateRequests{0};
 
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -122,6 +124,11 @@ class ActivityManager {
   // Trigger a render and block until it completes.
   // Must NOT be called from the render task or while holding a RenderLock.
   void requestUpdateAndWait();
+
+  // Bumped by every update request, whoever makes it (an activity, main.cpp, a popped activity's
+  // result handler). A screen that repaints only part of its frame compares it across a render to
+  // prove that nothing else asked for a redraw in the meantime.
+  uint32_t updateRequestCount() const { return updateRequests.load(std::memory_order_relaxed); }
 };
 
 extern ActivityManager activityManager;  // singleton, to be defined in main.cpp

@@ -428,6 +428,7 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
 }
 
 void ActivityManager::requestUpdate(bool immediate) {
+  updateRequests.fetch_add(1, std::memory_order_relaxed);
   if (immediate) {
     if (renderTaskHandle) {
       xTaskNotify(renderTaskHandle, 1, eIncrement);
@@ -442,6 +443,7 @@ void ActivityManager::requestUpdateAndWait() {
   if (!renderTaskHandle) {
     return;
   }
+  updateRequests.fetch_add(1, std::memory_order_relaxed);
 
   // Atomic section to perform checks
   taskENTER_CRITICAL(&activityManagerSpinlock);
