@@ -166,6 +166,7 @@ class CoverLibraryActivity final : public Activity {
     int shelvesScroll = -1;
     int shelfContentIndex = -1;
     int shelfScrollRow = -1;
+    int tabFocus = -1;
   };
   RenderedState lastRendered;
   // The one place that snapshots what the frame on screen shows. Both render paths call it, so a
@@ -180,6 +181,7 @@ class CoverLibraryActivity final : public Activity {
     lastRendered.shelvesScroll = shelvesScroll;
     lastRendered.shelfContentIndex = shelfContentIndex;
     lastRendered.shelfScrollRow = shelfScrollRow;
+    lastRendered.tabFocus = tabFocus;
   }
 
   // Background library scan (stale-while-revalidate): onEnter() shows the persisted book list

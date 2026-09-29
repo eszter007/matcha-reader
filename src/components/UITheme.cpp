@@ -448,7 +448,7 @@ void UITheme::drawFocusRing(const GfxRenderer& renderer, const Rect box, const b
   const auto band = [&](const int x, const int y, const int bw) {
     if (bw <= 0) return;
     if (on) {
-      renderer.fillRectDither(x, y, bw, 1, Color::LightGray);
+      renderer.fillRect(x, y, bw, 1, true);
     } else {
       renderer.fillRect(x, y, bw, 1, false);
     }
