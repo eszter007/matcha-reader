@@ -36,6 +36,12 @@ class MangaReaderActivity final : public Activity {
   std::unique_ptr<manga::MangaBook> book;
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
   std::atomic<bool> endOfBookOptionsReady{false};
+  // Translation opens as a panel over the page once render() has put the page back after the
+  // menu: the menu handler stores the text and sets the flag, render() marks the page drawn.
+  std::atomic<bool> translationAfterRender{false};
+  std::atomic<bool> translationPageReady{false};
+  std::string pendingTranslationSource;
+  std::string pendingTranslation;
 
   uint32_t currentPage = 0;
   int currentPanel = -1;  // -1 = full page view, 0+ = zoomed panel

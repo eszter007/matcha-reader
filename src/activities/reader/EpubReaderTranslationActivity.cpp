@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -11,9 +12,13 @@
 #include <WiFi.h>
 #include <esp_crt_bundle.h>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "PanelTouch.h"
 #include "SilentRestart.h"
+#include "WifiCredentialStore.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -47,6 +52,13 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
 static std::string apiKeyPath() { return sdsystem::findUserFile("gemini.key"); }
 constexpr const char* GEMINI_MODEL = "gemini-3.6-flash";
+// The page behind the panel, kept across the full-screen Wi-Fi list and a silent restart.
+static std::string backgroundPath() { return sdsystem::path("translate_bg.bin"); }
+// A saved network either answers within this or is out of range; the Wi-Fi list takes over then.
+constexpr unsigned long QUICK_CONNECT_TIMEOUT_MS = 12000;
+// Translations are prose, and a Japanese page's is read beside Japanese: the UI face carries the
+// CJK fallback.
+constexpr int TRANSLATION_FONT_ID = UI_12_FONT_ID;
 
 }  // namespace
 
@@ -86,8 +98,17 @@ void EpubReaderTranslationActivity::onEnter() {
   Activity::onEnter();
 
   if (hasPreTranslation) {
+    const auto body = DictionaryPanel::compute(renderer).body;
+    textPages.layout(renderer, TRANSLATION_FONT_ID, translatedText, body.width, body.height);
     requestUpdate();
     return;
+  }
+
+  // A restarted translation boots to a blank framebuffer; the page was saved before the restart.
+  if (resumedAfterRestart) {
+    restoreBackgroundPending = true;
+  } else {
+    saveBackground(renderer);
   }
 
   // The reader activity underneath is only paused, not destroyed, so its font decompressor's
@@ -129,13 +150,87 @@ void EpubReaderTranslationActivity::onEnter() {
   }
 
   WiFi.mode(WIFI_STA);
+  if (!startQuickConnect()) startWifiSelection();
+}
 
+bool EpubReaderTranslationActivity::saveBackground(const GfxRenderer& renderer) {
+  HalFile file;
+  if (!Storage.openFileForWrite("XLAT", backgroundPath().c_str(), file)) return false;
+  const size_t size = renderer.getBufferSize();
+  if (file.write(renderer.getFrameBuffer(), size) != size) {
+    LOG_ERR("XLAT", "Short write saving the page behind the panel");
+    return false;
+  }
+  return true;
+}
+
+bool EpubReaderTranslationActivity::restoreBackground(const GfxRenderer& renderer) {
+  HalFile file;
+  if (!Storage.openFileForRead("XLAT", backgroundPath().c_str(), file)) return false;
+  const size_t size = renderer.getBufferSize();
+  if (file.size() != size || file.read(renderer.getFrameBuffer(), size) != static_cast<int>(size)) {
+    // A page from another orientation or a truncated file: a blank backdrop beats a garbled one.
+    renderer.clearScreen();
+    return false;
+  }
+  return true;
+}
+
+bool EpubReaderTranslationActivity::startQuickConnect() {
+  {
+    RenderLock lock(*this);  // SD access shares the SPI bus with the display
+    WIFI_STORE.loadFromFile();
+  }
+  const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
+  if (lastSsid.empty()) return false;
+  const auto cred = WIFI_STORE.findCredential(lastSsid);
+  if (!cred) return false;
+  if (cred->password.empty()) {
+    WiFi.begin(cred->ssid.c_str());
+  } else {
+    WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
+  }
+  connectStartMs = millis();
+  state = CONNECTING;
+  requestUpdate();
+  return true;
+}
+
+void EpubReaderTranslationActivity::pollQuickConnect() {
+  const wl_status_t status = WiFi.status();
+  if (status == WL_CONNECTED) {
+    // Same clock rule as the Wi-Fi list: any connection is a chance to correct the time, which
+    // TLS certificate checks and the reading stats both depend on.
+    if (!SETTINGS.clockHasBeenSynced || !HalClock::systemTimeValid() || !halClock.isAvailable()) {
+      if (halClock.syncFromNTP() && !SETTINGS.clockHasBeenSynced) {
+        SETTINGS.clockHasBeenSynced = 1;
+        SETTINGS.saveToFile();
+      }
+    }
+    onWifiComplete(true);
+    return;
+  }
+  if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL ||
+      millis() - connectStartMs > QUICK_CONNECT_TIMEOUT_MS) {
+    LOG_DBG("XLAT", "Saved network did not answer (status %d); opening the Wi-Fi list", static_cast<int>(status));
+    WiFi.disconnect(false);
+    startWifiSelection();
+  }
+}
+
+void EpubReaderTranslationActivity::startWifiSelection() {
+  state = WIFI_SELECTION;
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
-                         [this](const ActivityResult& result) { onWifiComplete(!result.isCancelled); });
+                         [this](const ActivityResult& result) {
+                           // The list drew over the page behind the panel.
+                           restoreBackgroundPending = true;
+                           onWifiComplete(!result.isCancelled);
+                         });
 }
 
 void EpubReaderTranslationActivity::onExit() {
   Activity::onExit();
+  Storage.remove(backgroundPath().c_str());
 
   if (!hasPreTranslation && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
@@ -332,6 +427,9 @@ void EpubReaderTranslationActivity::onWifiComplete(bool success) {
 
   if (callGeminiApi(apiKey)) {
     RenderLock lock(*this);
+    const auto body = DictionaryPanel::compute(renderer).body;
+    textPages.layout(renderer, TRANSLATION_FONT_ID, translatedText, body.width, body.height);
+    currentPage = 0;
     state = SHOWING_RESULT;
   } else {
     RenderLock lock(*this);
@@ -340,79 +438,90 @@ void EpubReaderTranslationActivity::onWifiComplete(bool success) {
   requestUpdate();
 }
 
+void EpubReaderTranslationActivity::cancel() {
+  ActivityResult result;
+  result.isCancelled = true;
+  setResult(std::move(result));
+  finish();
+}
+
+void EpubReaderTranslationActivity::stepPage(const int direction) {
+  if (state != SHOWING_RESULT) return;
+  const int next = currentPage + direction;
+  if (next < 0 || next >= textPages.pageCount()) return;
+  currentPage = next;
+  requestUpdate();
+}
+
 void EpubReaderTranslationActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
+    cancel();
+    return;
+  }
+  if (state == CONNECTING) {
+    pollQuickConnect();
     return;
   }
 
-  if (state == SHOWING_RESULT) {
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenDown}, [this] {
-      if (scrollOffset < maxScrollOffset) {
-        scrollOffset++;
-        requestUpdate();
-      }
-    });
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
-      if (scrollOffset > 0) {
-        scrollOffset--;
-        requestUpdate();
-      }
-    });
+  switch (PanelTouch::read(renderer, mappedInput)) {
+    case PanelTouch::Action::Close:
+      cancel();
+      return;
+    case PanelTouch::Action::Next:
+    case PanelTouch::Action::ScrollDown:
+      stepPage(1);
+      return;
+    case PanelTouch::Action::Previous:
+    case PanelTouch::Action::ScrollUp:
+      stepPage(-1);
+      return;
+    case PanelTouch::Action::AddButton:
+    case PanelTouch::Action::None:
+      break;
   }
+
+  buttonNavigator.onNext([this] { stepPage(1); });
+  buttonNavigator.onPrevious([this] { stepPage(-1); });
 }
 
 void EpubReaderTranslationActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  auto& theme = UITheme::getInstance();
-  auto metrics = theme.getMetrics();
-  Rect screen = theme.getScreenSafeArea(renderer, true, false);
-
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_TRANSLATE_PAGE));
-
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + metrics.verticalSpacing;
-  const int contentBottom = screen.y + screen.height - footerHeight;
-  const int maxWidth = screen.width - metrics.contentSidePadding * 2;
-  const int textX = screen.x + metrics.contentSidePadding;
-
-  if (state == TRANSLATING) {
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2, tr(STR_TRANSLATING), true);
-  } else if (state == ERROR) {
-    UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, screen.y + screen.height / 2, errorMessage.c_str(),
-                              true);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  } else if (state == SHOWING_RESULT) {
-    const int fontId = UI_12_FONT_ID;
-    const int lineHeight = renderer.getLineHeight(fontId);
-
-    auto lines = renderer.wrappedText(fontId, translatedText.c_str(), maxWidth, 64);
-
-    maxScrollOffset = static_cast<int>(lines.size()) - (contentBottom - contentTop) / lineHeight;
-    if (maxScrollOffset < 0) maxScrollOffset = 0;
-    if (scrollOffset > maxScrollOffset) scrollOffset = maxScrollOffset;
-
-    int y = contentTop;
-    for (int i = scrollOffset; i < static_cast<int>(lines.size()) && y + lineHeight <= contentBottom; i++) {
-      renderer.drawText(fontId, textX, y, lines[i].c_str(), true);
-      y += lineHeight;
-    }
-
-    if (maxScrollOffset > 0) {
-      std::string scrollInfo = std::to_string(scrollOffset + 1) + "/" + std::to_string(maxScrollOffset + 1);
-      renderer.drawText(SMALL_FONT_ID, screen.x + screen.width - metrics.contentSidePadding - 40, contentBottom + 2,
-                        scrollInfo.c_str(), true);
-    }
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // No clearScreen: the panel floats over the reader's page, which is in the framebuffer or, after
+  // the Wi-Fi list, back from SD.
+  if (restoreBackgroundPending) {
+    restoreBackgroundPending = false;
+    restoreBackground(renderer);
   }
 
+  char counter[16] = "";
+  if (state == SHOWING_RESULT && textPages.pageCount() > 1) {
+    snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, textPages.pageCount());
+  }
+  const auto layout =
+      DictionaryPanel::draw(renderer, tr(STR_TRANSLATE_PAGE), hasPreTranslation ? "" : "Gemini", counter);
+
+  if (state == SHOWING_RESULT) {
+    auto* fcm = renderer.getFontCacheManager();
+    auto scope = fcm->createPrewarmScope();
+    textPages.draw(renderer, TRANSLATION_FONT_ID, layout.body.x, layout.body.y, translatedText, currentPage);
+    scope.endScanAndPrewarm();
+    textPages.draw(renderer, TRANSLATION_FONT_ID, layout.body.x, layout.body.y, translatedText, currentPage);
+  } else {
+    const char* status = state == CONNECTING    ? tr(STR_CONNECTING_SAVED_WIFI)
+                         : state == TRANSLATING ? tr(STR_TRANSLATING)
+                         : state == ERROR       ? errorMessage.c_str()
+                                                : "";
+    const auto lines = renderer.wrappedText(TRANSLATION_FONT_ID, status, layout.body.width, 6);
+    int y = layout.body.y;
+    for (const auto& line : lines) {
+      renderer.drawText(TRANSLATION_FONT_ID, layout.body.x, y, line.c_str(), true);
+      y += renderer.getLineHeight(TRANSLATION_FONT_ID);
+    }
+  }
+
+  const bool paged = state == SHOWING_RESULT;
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", paged && currentPage > 0 ? "<" : "",
+                                            paged && currentPage + 1 < textPages.pageCount() ? ">" : "");
+  DictionaryPanel::clearButtonHints(renderer);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

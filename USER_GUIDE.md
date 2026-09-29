@@ -805,6 +805,14 @@ When reading an EPUB that contains footnotes, you can navigate to the footnote t
 
 If the device goes to sleep or you close the book while viewing a footnote, the book reopens to your original reading position, not the footnote.
 
+To read the notes without leaving the page, choose **Footnotes** in the reader menu (or set the power button or a
+side button to it). The page's notes open in the same floating panel as the dictionary: the footer names the note's
+place among them (`2/3`). A long note scrolls with Up/Down or a vertical swipe; Left/Right, or the page-turn gesture
+your touch setting uses, moves to the next or previous note. Confirm jumps to the note in the book, and Back or a
+tap outside the panel returns to the page.
+
+<p align="center"><img src="docs/images/screenshots/footnotes.png" width="260" alt="A footnote in the floating panel, note 2 of 3"></p>
+
 ### Dictionary Lookup
 
 Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.5](#65-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#363-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
@@ -1008,9 +1016,15 @@ clock chip (the X4) lose the time on a restart, so until the next Wi-Fi connecti
 
 ### 6.3 Page Translation
 
-Reader menu → **Translate Page**, then wait for "Translating…". Up/Down scrolls, Back returns. Needs Wi-Fi and a
-Gemini API key in `/system/gemini.key`. The folder can also be called `/.system/`, which hides it from the file
+Reader menu → **Translate Page**. The translation opens in the floating panel over the page, like a dictionary
+entry: a long one is paged, with Left/Right, the page buttons or your touch page-turn gesture, and Back or a tap
+outside the panel returns to the page. The connection and "Translating…" show in the panel too. The last Wi-Fi
+network you used is joined straight away; only when there is none, or it does not answer, does the Wi-Fi list open,
+and the panel comes back over the page once you have picked a network. Needs a Gemini API key in
+`/system/gemini.key`. The folder can also be called `/.system/`, which hides it from the file
 browser; when both exist, `/.system/` is used.
+
+<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
 
 ### 6.4 Reading Manga
 

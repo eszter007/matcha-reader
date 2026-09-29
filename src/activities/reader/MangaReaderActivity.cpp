@@ -536,6 +536,15 @@ void MangaReaderActivity::loop() {
   // this very tick's input handling, and so the single job slot frees up for the next post.
   applyPrefetchResult();
 
+  if (translationPageReady.exchange(false, std::memory_order_acquire)) {
+    translationAfterRender.store(false, std::memory_order_relaxed);
+    startActivityForResult(
+        std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pendingTranslationSource),
+                                                        std::move(pendingTranslation)),
+        [this](const ActivityResult&) { requestUpdate(); });
+    return;
+  }
+
   clearEndOfBookOptionsIfNeeded();
   if (handleEndOfBookMenu()) return;
 
@@ -777,6 +786,10 @@ void MangaReaderActivity::render(RenderLock&&) {
   }
 
   saveProgress();
+
+  if (translationAfterRender.load(std::memory_order_relaxed)) {
+    translationPageReady.store(true, std::memory_order_release);
+  }
 
   if (pendingScreenshot) {
     pendingScreenshot = false;
@@ -2172,9 +2185,13 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
         }
       }
       if (!combined.empty()) {
-        startActivityForResult(std::make_unique<EpubReaderTranslationActivity>(
-                                   renderer, mappedInput, std::move(combined), std::move(preTranslated)),
-                               [this](const ActivityResult&) { requestUpdate(); });
+        // The panel floats over the page, and the menu is still in the framebuffer: render()
+        // puts the page back first, then loop() opens the panel.
+        pendingTranslationSource = std::move(combined);
+        pendingTranslation = std::move(preTranslated);
+        translationPageReady.store(false, std::memory_order_relaxed);
+        translationAfterRender.store(true, std::memory_order_relaxed);
+        requestUpdate();
         return;
       }
       break;
