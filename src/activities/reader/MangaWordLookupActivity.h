@@ -8,6 +8,7 @@
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
+#include "util/SentenceMining.h"
 
 struct Rect;
 
@@ -23,6 +24,9 @@ class MangaWordLookupActivity final : public Activity {
   explicit MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& panelText,
                                    std::string scanCachePath = "", uint16_t pageIndex = 0, uint16_t panelIndex = 0,
                                    int targetGlyph = -1);
+
+  // The book, so a looked-up word can be saved for sentence mining (the sentence is the bubble's).
+  void setMiningContext(sentencemining::BookContext context) { mining_ = std::move(context); }
 
   void onEnter() override;
   void onExit() override;
@@ -62,6 +66,12 @@ class MangaWordLookupActivity final : public Activity {
   void initScanFromCacheOrBurst();
   void runInitialBurst();
   void moveCursor(int delta);
+  // Sentence mining: saves the shown entry with the sentence from its speech bubble.
+  enum class MiningStatus : uint8_t { None, Saved, Failed };
+  sentencemining::BookContext mining_;
+  MiningStatus miningStatus_ = MiningStatus::None;
+  void saveSentence();
+  std::string miningSentence() const;
   void performLookup();
   void performLookupImpl();
   // True while performLookup() executes; render() shows "Loading..." instead of "No match found".

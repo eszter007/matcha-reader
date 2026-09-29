@@ -26,6 +26,7 @@
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/SentenceMining.h"
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
@@ -292,6 +293,7 @@ void EpubReaderWordLookupActivity::onExit() {
 }
 
 void EpubReaderWordLookupActivity::moveCursor(int delta) {
+  miningStatus_ = MiningStatus::None;
   // Moving past the last already-discovered word while the background scan is still running:
   // scan forward just enough to reveal the next one (typically a few hundred ms), so early
   // rapid navigation works instead of clamping at a stale end.
@@ -1058,6 +1060,64 @@ size_t EpubReaderWordLookupActivity::currentAllGlyphIndex() const {
   return scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
 }
 
+std::string EpubReaderWordLookupActivity::miningSentence() const {
+  const size_t start = currentAllGlyphIndex();
+  const size_t onPage = scan.onPageGlyphCount();
+  if (start >= onPage) return {};
+  const auto& glyphs = scan.allGlyphs;
+  const uint32_t paragraph = glyphs[start].paragraphIndex;
+  const size_t cap = sentencemining::MAX_SENTENCE_CODEPOINTS;
+
+  // Back to the start of the paragraph, at most one sentence cap away: sentenceHtml() cuts at
+  // the previous sentence end inside what it is given.
+  size_t from = start;
+  while (from > 0 && start - from < cap && glyphs[from - 1].paragraphIndex == paragraph) --from;
+  std::string before;
+  before.reserve((start - from) * 3);
+  for (size_t i = from; i < start; ++i) WordSelectionScan::encodeUtf8(glyphs[i].codepoint, before);
+
+  // The word as it stands in the text (the match's cells), which the card shows in bold.
+  const size_t wordEnd = std::min(onPage, start + static_cast<size_t>(std::max(1, resultMatchLen)));
+  std::string word;
+  for (size_t i = start; i < wordEnd; ++i) WordSelectionScan::encodeUtf8(glyphs[i].codepoint, word);
+
+  // Forward to the page end or the paragraph end.
+  std::string after;
+  size_t i = wordEnd;
+  bool paragraphEnded = false;
+  for (; i < onPage && i - wordEnd < cap; ++i) {
+    if (glyphs[i].paragraphIndex != paragraph) {
+      paragraphEnded = true;
+      break;
+    }
+    WordSelectionScan::encodeUtf8(glyphs[i].codepoint, after);
+  }
+  // Ran off the bottom of the page mid-sentence: finish it from the next page's text.
+  if (!paragraphEnded && i >= onPage && !sentencemining::hasSentenceEnd(after)) after += mining_.nextPageText;
+  return sentencemining::sentenceHtml(before, word, after);
+}
+
+void EpubReaderWordLookupActivity::saveSentence() {
+  if (!hasResult) return;
+  sentencemining::Card card;
+  card.word = visibleHeadword();
+  card.reading = visibleReading();
+  card.sentence = miningSentence();
+  // The whole entry on screen, led by its grammar line ("5-dan verb · transitive") when it has one.
+  const char* grammar = visibleGrammar();
+  std::string definition = grammar && grammar[0] != '\0' ? std::string(grammar) + "\n" : std::string();
+  definition += sentencemining::capUtf8(visibleDefinition(), sentencemining::MAX_DEFINITION_BYTES);
+  card.definition = sentencemining::definitionHtml(definition);
+  card.book = mining_.bookTitle;
+  card.author = mining_.bookAuthor;
+  card.date = sentencemining::today();
+  // The footer label is "JMdict | Tatoeba [1][2]"; the card names the dictionary only.
+  const std::string_view label = visibleLabel() ? visibleLabel() : "";
+  card.dictionary = std::string(label.substr(0, label.find(" | ")));
+  miningStatus_ = sentencemining::append(card, sentencemining::JAPANESE) ? MiningStatus::Saved : MiningStatus::Failed;
+  requestUpdate();
+}
+
 std::string EpubReaderWordLookupActivity::buildLookupText() const {
   std::string text;
   const size_t allStart = currentAllGlyphIndex();
@@ -1088,6 +1148,7 @@ void EpubReaderWordLookupActivity::prependBookReading(const std::string& surface
 }
 
 void EpubReaderWordLookupActivity::performLookup() {
+  miningStatus_ = MiningStatus::None;
   // Hold the rendering mutex while the result strings are rebuilt: the render task wraps and
   // draws resultDefinition/resultHeadword CONCURRENTLY on its own task, and mutating them
   // mid-render tears the string under the renderer -- confirmed crash_report: out_of_range
@@ -1493,6 +1554,11 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
       finish();
       return false;
     }
+    const auto add = DictionaryPanel::compute(renderer).addButton;
+    if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+      saveSentence();
+      return false;
+    }
   }
 
   // Two axes, two jobs -- the same split the buttons below make. Up/down swipes scroll within the
@@ -1504,6 +1570,7 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
     if (hasResult && target != scrollOffset) {
       scrollOffset = target;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     }
     return false;
@@ -1528,8 +1595,14 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     return false;
   }
 
+  // With an entry showing, Select saves it for sentence mining. Without one (no match, or a
+  // lookup the heap refused) it looks the word up again, as it always did.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    performLookup();
+    if (hasResult) {
+      saveSentence();
+    } else {
+      performLookup();
+    }
     return false;
   }
 
@@ -1598,6 +1671,7 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
 }
 
 void EpubReaderWordLookupActivity::moveSection(const int delta) {
+  miningStatus_ = MiningStatus::None;
   const int count = static_cast<int>(sectionText.size());
   if (count <= 1) return;
   const int next = currentSection + delta;
@@ -1971,15 +2045,21 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
 
   // The panel is opaque and always covers the same rectangle, so a re-render overwrites the
   // previous one; the reader's page stays visible around it instead of being cleared away.
-  const auto layout = DictionaryPanel::draw(renderer, hasResult ? visibleHeadword() : "", visibleLabel(),
-                                            counterText.empty() ? nullptr : counterText.c_str(), visibleKind());
+  // A save's outcome takes the footer's label until the next move, in place of "kind | dictionary".
+  const bool showStatus = miningStatus_ != MiningStatus::None;
+  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
+  const auto layout =
+      DictionaryPanel::draw(renderer, hasResult ? visibleHeadword() : "", showStatus ? nullptr : visibleLabel(),
+                            counterText.empty() ? nullptr : counterText.c_str(),
+                            showStatus ? statusText : visibleKind(), hasResult && mappedInput.hasTouch());
   renderContentArea(layout.body);
 
   // Directional labels, not mapLabels: the hint has to name the direction the button moves the
   // selection ON THE ROTATED SCREEN. mapLabels only ever flipped a fixed left/right pair, so in
   // landscape the front buttons still read "Left"/"Right" while actually moving up and down.
-  const auto labels = mappedInput.mapDirectionalLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT),
-                                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapDirectionalLabels(tr(STR_BACK), hasResult ? tr(STR_MINING_SAVE) : tr(STR_SELECT), tr(STR_DIR_LEFT),
+                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

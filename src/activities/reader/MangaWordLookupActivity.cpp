@@ -20,6 +20,7 @@
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/SentenceMining.h"
 
 MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  const std::string& panelText, std::string scanCachePath,
@@ -136,7 +137,52 @@ void MangaWordLookupActivity::onExit() {
   Activity::onExit();
 }
 
+std::string MangaWordLookupActivity::miningSentence() const {
+  if (cursorIndex < 0 || static_cast<size_t>(cursorIndex) >= scan.selectToAllIdx.size()) return {};
+  const size_t start = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
+  const auto& glyphs = scan.allGlyphs;
+  if (start >= glyphs.size()) return {};
+  // One speech bubble is one paragraph of the OCR text: the sentence stays inside it.
+  const uint32_t paragraph = glyphs[start].paragraphIndex;
+  const size_t cap = sentencemining::MAX_SENTENCE_CODEPOINTS;
+  size_t from = start;
+  while (from > 0 && start - from < cap && glyphs[from - 1].paragraphIndex == paragraph) --from;
+  std::string before;
+  for (size_t i = from; i < start; ++i) WordSelectionScan::encodeUtf8(glyphs[i].codepoint, before);
+  const size_t wordEnd = std::min(glyphs.size(), start + static_cast<size_t>(std::max(1, resultMatchLen)));
+  std::string word;
+  for (size_t i = start; i < wordEnd; ++i) WordSelectionScan::encodeUtf8(glyphs[i].codepoint, word);
+  std::string after;
+  for (size_t i = wordEnd; i < glyphs.size() && i - wordEnd < cap && glyphs[i].paragraphIndex == paragraph; ++i) {
+    WordSelectionScan::encodeUtf8(glyphs[i].codepoint, after);
+  }
+  return sentencemining::sentenceHtml(before, word, after);
+}
+
+void MangaWordLookupActivity::saveSentence() {
+  if (!hasResult) return;
+  sentencemining::Card card;
+  card.word = resultHeadword;
+  card.reading = resultReading;
+  card.sentence = miningSentence();
+  std::string definition = resultGrammar.empty() ? std::string() : resultGrammar + "\n";
+  definition += sentencemining::capUtf8(resultDefinition, sentencemining::MAX_DEFINITION_BYTES);
+  card.definition = sentencemining::definitionHtml(definition);
+  card.book = mining_.bookTitle;
+  card.author = mining_.bookAuthor;
+  card.date = sentencemining::today();
+  const std::string_view label = dictionaryLabel() ? dictionaryLabel() : "";
+  card.dictionary = std::string(label.substr(0, label.find(" | ")));
+  // Filed under the comic's language. Folders converted before the tool recorded one are
+  // Japanese manga, which is what they were made for.
+  std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
+  if (language.empty()) language = sentencemining::JAPANESE;
+  miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
+  requestUpdate();
+}
+
 void MangaWordLookupActivity::moveCursor(int delta) {
+  miningStatus_ = MiningStatus::None;
   // Moving past the last already-discovered word while the background scan is still running:
   // scan forward just enough to reveal the next one (see EpubReaderWordLookupActivity).
   if (delta > 0 && !scan.isDone() && cursorIndex + delta >= static_cast<int>(scan.selectableGlyphs.size())) {
@@ -181,6 +227,7 @@ std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
 }
 
 void MangaWordLookupActivity::performLookup() {
+  miningStatus_ = MiningStatus::None;
   // Serialize against the render task, which reads the result strings concurrently -- see
   // EpubReaderWordLookupActivity::performLookup() for the confirmed tear/abort.
   RenderLock lock;
@@ -390,8 +437,13 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
+  // With a definition showing, Select saves it for sentence mining; before that it looks up.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    performLookup();
+    if (hasResult) {
+      saveSentence();
+    } else {
+      performLookup();
+    }
     return;
   }
 
@@ -449,6 +501,11 @@ void MangaWordLookupActivity::loop() {
       finish();
       return;
     }
+    const auto add = DictionaryPanel::compute(renderer).addButton;
+    if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+      saveSentence();
+      return;
+    }
   }
 
   // Tap zones, inverted zones, swipes or inverted swipes -- whatever the reader is set to, through
@@ -467,6 +524,7 @@ void MangaWordLookupActivity::loop() {
     const int target = std::clamp(scrollOffset + scroll * visibleCapacity, 0, maxScroll);
     if (hasResult && target != scrollOffset) {
       scrollOffset = target;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     }
     return;
@@ -581,14 +639,20 @@ void MangaWordLookupActivity::render(RenderLock&&) {
                          : I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
                                     : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
                                                                             : StrId::STR_DICT_KIND_VOCAB);
-  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
-                                            counterText.empty() ? nullptr : counterText.c_str(), kind);
+  // A save's outcome takes the footer's label until the next move, in place of "kind | dictionary".
+  const bool showStatus = miningStatus_ != MiningStatus::None;
+  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
+  const auto layout =
+      DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", showStatus ? nullptr : dictionaryLabel(),
+                            counterText.empty() ? nullptr : counterText.c_str(), showStatus ? statusText : kind,
+                            hasResult && mappedInput.hasTouch());
   renderContentArea(layout.body);
 
   // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
   // direction on the rotated screen, which a fixed left/right pair cannot do.
-  const auto labels = mappedInput.mapDirectionalLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT),
-                                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapDirectionalLabels(tr(STR_BACK), hasResult ? tr(STR_MINING_SAVE) : tr(STR_SELECT), tr(STR_DIR_LEFT),
+                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

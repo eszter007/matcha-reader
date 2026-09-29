@@ -1826,18 +1826,26 @@ void MangaReaderActivity::launchWordLookupAt(std::string combined, const int gly
     sdFontSystem.ensureLoaded(renderer);
     sdFontSystem.setJpFallbackNeeded(renderer, true);
   }
-  startActivityForResult(std::make_unique<MangaWordLookupActivity>(
-                             renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
-                             static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1), glyph),
-                         [this, returnMode](const ActivityResult&) {
-                           {
-                             RenderLock lock;
-                             sdFontSystem.releaseAllResidentFonts(renderer);
-                             sdFontSystem.setJpFallbackNeeded(renderer, false);
-                             viewMode = returnMode;
-                           }
-                           requestUpdate();
-                         });
+  auto lookup = makeUniqueNoThrow<MangaWordLookupActivity>(
+      renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
+      static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1), glyph);
+  if (!lookup) {
+    LOG_ERR("MRA", "OOM: word lookup");
+    RenderLock lock;
+    sdFontSystem.releaseAllResidentFonts(renderer);
+    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    return;
+  }
+  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage()});
+  startActivityForResult(std::move(lookup), [this, returnMode](const ActivityResult&) {
+    {
+      RenderLock lock;
+      sdFontSystem.releaseAllResidentFonts(renderer);
+      sdFontSystem.setJpFallbackNeeded(renderer, false);
+      viewMode = returnMode;
+    }
+    requestUpdate();
+  });
 }
 
 void MangaReaderActivity::launchWordLookup() {
@@ -1864,18 +1872,26 @@ void MangaReaderActivity::launchWordLookup() {
 
   // Use the MangaWordLookup sub-activity with raw text. The scan cache makes a re-open of the
   // same panel/page text instant (validated by content hash, so the key is just a hint).
-  startActivityForResult(std::make_unique<MangaWordLookupActivity>(
-                             renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
-                             static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
-                         [this](const ActivityResult&) {
-                           {
-                             RenderLock lock;
-                             sdFontSystem.releaseAllResidentFonts(renderer);
-                             sdFontSystem.setJpFallbackNeeded(renderer, false);
-                             viewMode = ViewMode::PanelZoom;
-                           }
-                           requestUpdate();
-                         });
+  auto lookup = makeUniqueNoThrow<MangaWordLookupActivity>(
+      renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
+      static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1));
+  if (!lookup) {
+    LOG_ERR("MRA", "OOM: word lookup");
+    RenderLock lock;
+    sdFontSystem.releaseAllResidentFonts(renderer);
+    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    return;
+  }
+  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage()});
+  startActivityForResult(std::move(lookup), [this](const ActivityResult&) {
+    {
+      RenderLock lock;
+      sdFontSystem.releaseAllResidentFonts(renderer);
+      sdFontSystem.setJpFallbackNeeded(renderer, false);
+      viewMode = ViewMode::PanelZoom;
+    }
+    requestUpdate();
+  });
 }
 
 void MangaReaderActivity::saveProgress() const {

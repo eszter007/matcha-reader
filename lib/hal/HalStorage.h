@@ -64,6 +64,9 @@ class HalStorage {
   bool openFileForWrite(const char* moduleName, const char* path, HalFile& file);
   bool openFileForWrite(const char* moduleName, const std::string& path, HalFile& file);
   bool openFileForWrite(const char* moduleName, const String& path, HalFile& file);
+  // Opens for writing at the end, creating the file if absent. openFileForWrite() truncates, so a
+  // log that is only ever extended (the sentence-mining export) must come through here.
+  bool openFileForAppend(const char* moduleName, const char* path, HalFile& file);
   bool removeDir(const char* path);
 
   static HalStorage& getInstance() { return instance; }

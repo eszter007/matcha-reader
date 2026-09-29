@@ -9,6 +9,7 @@
 
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
+#include "util/SentenceMining.h"
 
 // Paged viewer for one dictionary definition. HTML definitions are laid out
 // through the EPUB chapter parser into styled Pages; anything else (plain
@@ -24,12 +25,22 @@ class DictionaryDefinitionActivity final : public Activity {
         htmlDefinition(htmlDefinition),
         dictName(std::move(dictName)) {}
 
+  // Enables sentence mining for this entry: Select (and the + button on touch boards) saves the
+  // draft with this entry as its definition. Call before the activity starts -- the definition
+  // text is copied here, because the HTML layout frees it.
+  void setMiningDraft(sentencemining::Draft draft);
+
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
+  enum class MiningStatus : uint8_t { None, Saved, Failed };
+  sentencemining::Draft miningDraft_;
+  MiningStatus miningStatus_ = MiningStatus::None;
+  void saveSentence();
+
   // One wrapped display line: a byte span of `definition`. Wrapping keeps
   // lines under the screen width, so uint16_t length is ample.
   struct Line {
