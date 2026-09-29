@@ -417,9 +417,9 @@ void SettingsActivity::navigateButtons() {
   // the visible rows (ring positions 1..N) instead of landing on hidden 0.
   const int count = listCount();
   if (count <= 0) return;
-  buttonNavigator.onNextRelease(
+  buttonNavigator.onNextPress(
       [this, count] { moveRingTo(enabledRingFrom(ButtonNavigator::nextIndex(ringPos() - 1, count) + 1, 1)); });
-  buttonNavigator.onPreviousRelease(
+  buttonNavigator.onPreviousPress(
       [this, count] { moveRingTo(enabledRingFrom(ButtonNavigator::previousIndex(ringPos() - 1, count) + 1, -1)); });
   buttonNavigator.onNextContinuous([this, count] {
     moveRingTo(enabledRingFrom(ButtonNavigator::nextPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1, 1));

@@ -77,6 +77,9 @@ class UiTabListActivity : public UiListActivity {
   // Per-tab selection/viewport state, sized in onEnter. Protected so subclass
   // tab-switch code can seed the target tab's ring/viewport.
   std::vector<freeink::ui::ListNav> tabNavs;
+  // Set on each Next/Previous press: whether the cursor was on the tab band when it began. A
+  // subclass that treats the band specially while a key is held (the Library) reads it.
+  bool navigationStartedOnTabs = false;
 
   // When > 0, each tab pill is capped at its label width plus this padding
   // per side, centered in its unchanged equal-width slot. With few tabs the
@@ -85,5 +88,14 @@ class UiTabListActivity : public UiListActivity {
   int16_t tabPillMaxPad = 0;
 
  private:
+  // Where a press found the cursor. A press steps the ring at once, but a hold steps the TAB, so
+  // by the time the hold is recognised the press has already moved one step: the first repeat
+  // puts the cursor back here before stepping the tab. `pending` is cleared once restored.
+  struct HoldStart {
+    int selected = 0;
+    int tabFocus = -1;
+    bool pending = false;
+  } holdStart_;
+  void restoreHoldStart();
   static void tabActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
 };

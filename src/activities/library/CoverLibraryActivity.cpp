@@ -924,12 +924,12 @@ void CoverLibraryActivity::loop() {
 
     const int shelfItemCount = static_cast<int>(shelfBooks.size());
     if (shelfItemCount > 0) {
-      buttonNavigator.onNextRelease([this, shelfItemCount] {
+      buttonNavigator.onNextPress([this, shelfItemCount] {
         shelfContentIndex = ButtonNavigator::nextIndex(shelfContentIndex, shelfItemCount);
         selectorVisible = true;
         requestUpdate();
       });
-      buttonNavigator.onPreviousRelease([this, shelfItemCount] {
+      buttonNavigator.onPreviousPress([this, shelfItemCount] {
         shelfContentIndex = ButtonNavigator::previousIndex(shelfContentIndex, shelfItemCount);
         selectorVisible = true;
         requestUpdate();
@@ -1181,13 +1181,26 @@ void CoverLibraryActivity::loop() {
 
   const int totalItems = getContentItemCount() + 1;
 
-  buttonNavigator.onNextRelease([this, totalItems] {
+  // A press moves at once; a hold steps the Books/Shelves tab instead. The press has already
+  // moved one step when the hold is recognised, so the first repeat puts contentIndex back
+  // where the press found it -- otherwise a hold begun on the tab row would leave it.
+  if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
+      mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
+    holdStartContentIndex_ = contentIndex;
+  }
+  const auto restoreHoldStart = [this] {
+    if (holdStartContentIndex_ < 0) return;
+    contentIndex = holdStartContentIndex_;
+    holdStartContentIndex_ = -1;
+  };
+
+  buttonNavigator.onNextPress([this, totalItems] {
     contentIndex = ButtonNavigator::nextIndex(contentIndex, totalItems);
     selectorVisible = true;
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousRelease([this, totalItems] {
+  buttonNavigator.onPreviousPress([this, totalItems] {
     contentIndex = ButtonNavigator::previousIndex(contentIndex, totalItems);
     selectorVisible = true;
     requestUpdate();
@@ -1196,13 +1209,15 @@ void CoverLibraryActivity::loop() {
   // A hold steps between the two tabs this screen owns. Files is deliberately not in the ring:
   // reaching it means leaving for the browser, which is not something a key repeat should do by
   // scrolling past it. Confirm on the tab band is the way there.
-  buttonNavigator.onNextContinuous([this, &hasChangedTab] {
+  buttonNavigator.onNextContinuous([this, &hasChangedTab, &restoreHoldStart] {
+    restoreHoldStart();
     hasChangedTab = true;
     selectedTab = ButtonNavigator::nextIndex(selectedTab, TAB_COUNT);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, &hasChangedTab] {
+  buttonNavigator.onPreviousContinuous([this, &hasChangedTab, &restoreHoldStart] {
+    restoreHoldStart();
     hasChangedTab = true;
     selectedTab = ButtonNavigator::previousIndex(selectedTab, TAB_COUNT);
     requestUpdate();

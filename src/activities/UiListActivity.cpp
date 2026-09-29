@@ -191,17 +191,21 @@ void UiListActivity::navigateButtons() {
     }
     moveSelectionTo(ButtonNavigator::previousIndex(selectionCursor(), count));
   };
-  buttonNavigator.onNextRelease(stepDown);
-  buttonNavigator.onPreviousRelease(stepUp);
+  buttonNavigator.onNextPress(stepDown);
+  buttonNavigator.onPreviousPress(stepUp);
   // Page by the rows the last build actually drew (pageRows), not the
   // fixed-height visibleRows estimate: with wrapped labels the estimate
   // overshoots and rows between pages would never be shown. The measurement
   // can be one build old while a refresh is in flight; the next layout's
   // feedback corrects the viewport.
+  // A hold pages through the rows. If the press that started it carried the cursor onto a band,
+  // there is nothing to page, and moving the hidden row selection would only surprise later.
   buttonNavigator.onNextContinuous([this, count, &n] {
+    if (tabFocus >= 0 || topBandFocused) return;
     moveSelectionTo(ButtonNavigator::nextPageIndex(selectionCursor(), count, n.inputPageRows()));
   });
   buttonNavigator.onPreviousContinuous([this, count, &n] {
+    if (tabFocus >= 0 || topBandFocused) return;
     moveSelectionTo(ButtonNavigator::previousPageIndex(selectionCursor(), count, n.inputPageRows()));
   });
 }
