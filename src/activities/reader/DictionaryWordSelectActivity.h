@@ -8,6 +8,7 @@
 
 #include "activities/Activity.h"
 #include "util/Dictionary.h"
+#include "util/SentenceMining.h"
 
 // Word selection over the current reader page: Left/Right step through words
 // in reading order, Up/Down jump rows, Confirm looks the word up and opens
@@ -34,6 +35,9 @@ class DictionaryWordSelectActivity final : public Activity {
   // instead of dropping the reader into word selection. -1 = normal entry.
   int lookupAtX = -1;
   int lookupAtY = -1;
+
+  // The book and the next page's text, so a looked-up word can be saved for sentence mining.
+  void setMiningContext(sentencemining::BookContext context) { mining_ = std::move(context); }
 
   void onEnter() override;
   void loop() override;
@@ -92,6 +96,15 @@ class DictionaryWordSelectActivity final : public Activity {
 
   std::vector<WordBox> words;
   int selected = 0;
+  sentencemining::BookContext mining_;
+  // A paragraph's drop cap is drawn outside the text flow, so its letter is in no word: the
+  // first word of that line reads "T" for "IT". Kept here (one per page is the norm) so the
+  // saved sentence gets the letter back. -1 when the page has none.
+  int16_t dropCapWord_ = -1;
+  uint32_t dropCapCp_ = 0;
+  uint32_t dropCapPrefixCp_ = 0;
+  // The sentence around the selected word (and its hyphen-split half, if any), as card HTML.
+  std::string miningSentence(std::string_view surface) const;
   uint16_t rowCount = 0;
   bool confirmPressSeen = false;
   unsigned long lastHorizontalMoveTime = 0;

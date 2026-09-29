@@ -65,6 +65,9 @@
 #include "util/ScreenshotUtil.h"
 
 namespace {
+// How far into the next page the word-lookup panel is handed text, so a sentence cut by the page
+// turn can be finished when the word is saved for sentence mining (about one long sentence).
+constexpr int kMiningTailChars = 120;
 // The X4 Pro and X4 Classic carry the X4's panel but sit outside isXteinkDevice()
 // (that helper also gates power management). Overlay refresh choices are per-panel:
 // this family runs the grayscale anti-aliasing pass, so chrome painted over a
@@ -519,12 +522,38 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
   orientedMarginTop += SETTINGS.screenMargin;
   orientedMarginLeft += SETTINGS.screenMargin;
 
+  // The start of the next page, so a sentence the page turn cut off can be finished when the word
+  // is saved for sentence mining. Words spaced as prose: this path only serves non-Japanese books.
+  std::string nextPageText;
+  if (auto nextPage = section->loadPageAt(section->currentPage + 1)) {
+    nextPageText.reserve(kMiningTailChars + 32);
+    for (const auto& el : nextPage->elements) {
+      if (nextPageText.size() >= static_cast<size_t>(kMiningTailChars)) break;
+      if (el->getTag() != TAG_PageLine) continue;
+      const auto& line = static_cast<const PageLine&>(*el);
+      if (!line.getBlock()) continue;
+      const TextBlock& block = *line.getBlock();
+      for (uint16_t wi = 0; wi < block.wordCount() && nextPageText.size() < static_cast<size_t>(kMiningTailChars);
+           wi++) {
+        const std::string_view w{block.wordText(wi), block.wordTextLen(wi)};
+        if (w.empty()) continue;
+        if (!nextPageText.empty()) nextPageText += ' ';
+        nextPageText.append(w.data(), w.size());
+      }
+    }
+  }
+
   // A lookup ends back on the page no matter how it was opened (menu or
   // long-press): the user is mid-reading, not mid-menu.
-  startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(
-                             renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop,
-                             std::move(dictionaryFolder), bookLanguage, effectiveReaderFontId(), lookupAtX, lookupAtY),
-                         [this](const ActivityResult&) { requestUpdate(); });
+  auto wordSelect = makeUniqueNoThrow<DictionaryWordSelectActivity>(
+      renderer, mappedInput, std::move(page), orientedMarginLeft, orientedMarginTop, std::move(dictionaryFolder),
+      bookLanguage, effectiveReaderFontId(), lookupAtX, lookupAtY);
+  if (!wordSelect) {
+    LOG_ERR("ERS", "OOM: word select");
+    return;
+  }
+  wordSelect->setMiningContext({getBookTitle(), getBookAuthor(), std::move(nextPageText)});
+  startActivityForResult(std::move(wordSelect), [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void EpubReaderActivity::readerLoop() {
@@ -4122,6 +4151,10 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       // Worst case 4 UTF-8 bytes per context character: one reserve instead of repeated growth
       // on a heap that was just reclaimed.
       lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);
+      // The same walk, carried further, finishes a sentence the page turn cut off when the word
+      // is saved for sentence mining. Kept apart from lookupTail, which becomes scan glyphs.
+      std::string miningTail;
+      miningTail.reserve(kMiningTailChars * 3);
       uint32_t lookupTailParagraph = 0;
       if (const VerticalPage* nextPage = verticalSection->getPage(verticalSection->currentPage + 1)) {
         int taken = 0;
@@ -4134,15 +4167,21 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
           // One paragraph only: a word cannot span a paragraph break, and the scan would discard
           // the rest anyway.
           if (g.paragraphIndex != lookupTailParagraph) break;
-          WordSelectionScan::encodeUtf8(g.codepoint, lookupTail);
-          if (++taken >= WordSelectionScan::kLookupContextChars) break;
+          if (taken < WordSelectionScan::kLookupContextChars) WordSelectionScan::encodeUtf8(g.codepoint, lookupTail);
+          WordSelectionScan::encodeUtf8(g.codepoint, miningTail);
+          if (++taken >= kMiningTailChars) break;
         }
       }
       if (const VerticalPage* page = verticalSection->getPage()) {
-        panel = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
+        auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
             renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
             static_cast<uint16_t>(verticalSection->currentPage), selectCtx, lookupTail, lookupTailParagraph);
-        if (!panel) LOG_ERR("ERS", "OOM: word lookup panel");
+        if (!lookup) {
+          LOG_ERR("ERS", "OOM: word lookup panel");
+        } else {
+          lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail)});
+          panel = std::move(lookup);
+        }
       }
     }
     if (panel) {
@@ -4185,6 +4224,8 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       // to invalidate and the order does not matter.
       std::string lookupTail;
       lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);  // see the vertical path
+      std::string miningTail;                                          // see the vertical path
+      miningTail.reserve(kMiningTailChars * 3);
       if (auto nextPage = section->loadPageAt(section->currentPage + 1)) {
         // Flattened the way initFromPage() flattens the current page -- a separating space only
         // between two ASCII words, CJK runs concatenated -- so a split Japanese word still meets
@@ -4195,21 +4236,22 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         };
         int taken = 0;
         for (const auto& el : nextPage->elements) {
-          if (taken >= WordSelectionScan::kLookupContextChars) break;
+          if (taken >= kMiningTailChars) break;
           if (el->getTag() != TAG_PageLine) continue;
           const auto& line = static_cast<const PageLine&>(*el);
           if (!line.getBlock()) continue;
           const TextBlock& block = *line.getBlock();
-          for (uint16_t wi = 0; wi < block.wordCount() && taken < WordSelectionScan::kLookupContextChars; wi++) {
+          for (uint16_t wi = 0; wi < block.wordCount() && taken < kMiningTailChars; wi++) {
             // Braces, not parens: Arduino.h defines a function-like `word(...)` macro.
             const std::string_view w{block.wordText(wi), block.wordTextLen(wi)};
             if (w.empty()) continue;
-            if (!lookupTail.empty() && isAsciiWord(static_cast<unsigned char>(lookupTail.back())) &&
+            if (!miningTail.empty() && isAsciiWord(static_cast<unsigned char>(miningTail.back())) &&
                 isAsciiWord(static_cast<unsigned char>(w[0]))) {
-              lookupTail += ' ';
+              if (taken < WordSelectionScan::kLookupContextChars) lookupTail += ' ';
+              miningTail += ' ';
               taken++;
             }
-            for (size_t b = 0; b < w.size() && taken < WordSelectionScan::kLookupContextChars;) {
+            for (size_t b = 0; b < w.size() && taken < kMiningTailChars;) {
               const auto lead = static_cast<unsigned char>(w[b]);
               size_t len = 1;
               if ((lead & 0xE0) == 0xC0)
@@ -4219,7 +4261,8 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
               else if ((lead & 0xF8) == 0xF0)
                 len = 4;
               if (b + len > w.size()) break;
-              lookupTail.append(w.data() + b, len);
+              if (taken < WordSelectionScan::kLookupContextChars) lookupTail.append(w.data() + b, len);
+              miningTail.append(w.data() + b, len);
               b += len;
               taken++;
             }
@@ -4227,10 +4270,16 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         }
       }
 
-      startActivityForResult(std::make_unique<EpubReaderWordLookupActivity>(
-                                 renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
-                                 static_cast<uint16_t>(section->currentPage), lookupTail),
-                             [this](const ActivityResult&) { requestUpdate(); });
+      auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
+          renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
+          static_cast<uint16_t>(section->currentPage), lookupTail);
+      if (!lookup) {
+        LOG_ERR("ERS", "OOM: word lookup panel");
+        requestUpdate();  // the build was suspended for the panel; the next render resumes it
+        return;
+      }
+      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail)});
+      startActivityForResult(std::move(lookup), [this](const ActivityResult&) { requestUpdate(); });
     }
   }
 }

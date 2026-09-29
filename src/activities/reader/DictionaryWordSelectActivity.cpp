@@ -12,6 +12,7 @@
 
 #include "DictionaryDefinitionActivity.h"
 #include "ReaderUtils.h"
+#include "WordSelectionScan.h"
 #include "components/UITheme.h"
 
 namespace {
@@ -77,6 +78,7 @@ void DictionaryWordSelectActivity::onEnter() {
 
 void DictionaryWordSelectActivity::extractWords() {
   words.clear();
+  dropCapWord_ = -1;
   words.reserve(128);
   rowCount = 0;
 
@@ -108,6 +110,8 @@ void DictionaryWordSelectActivity::extractWords() {
 
     bool rowHasWords = false;
     const int lineFontId = block->getBlockStyle().resolveFontId(fontId);
+    const size_t lineFirstWord = words.size();
+    const bool lineHasDropCap = dropCapWord_ < 0 && block->getDropCap().present();
     const uint16_t lastWordIndex = block->wordCount() > 0 ? static_cast<uint16_t>(block->wordCount() - 1) : 0;
     const int ascender = renderer.getFontAscenderSize(lineFontId);
     const int rubyShift = block->getRubyShift(ascender);
@@ -145,6 +149,12 @@ void DictionaryWordSelectActivity::extractWords() {
       pageText.append(text);
       pageText.push_back(' ');
       styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(box.style) & 0x03));
+    }
+    // Only when the line put a word down: its first word is the one missing the letter.
+    if (lineHasDropCap && words.size() > lineFirstWord) {
+      dropCapWord_ = static_cast<int16_t>(lineFirstWord);
+      dropCapCp_ = block->getDropCap().cp;
+      dropCapPrefixCp_ = block->getDropCap().prefixCp;
     }
     if (rowHasWords) {
       rowCount++;
@@ -238,6 +248,65 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
   }
 }
 
+std::string DictionaryWordSelectActivity::miningSentence(const std::string_view surface) const {
+  if (words.empty() || selected < 0 || static_cast<size_t>(selected) >= words.size()) return {};
+  // A hyphen-split word ("any-" / "one") is one word on the card: its other half is neither
+  // before nor after it.
+  const auto sel = static_cast<size_t>(selected);
+  const WordBox& box = words[sel];
+  const size_t first = box.joinPrev >= 0 ? static_cast<size_t>(box.joinPrev) : sel;
+  const size_t last = box.joinNext >= 0 ? static_cast<size_t>(box.joinNext) : sel;
+  // Words on either side, one sentence's reach at most; sentenceHtml() cuts at the ends it finds.
+  constexpr size_t REACH = 80;
+  // A sentence never crosses a paragraph break. The page does not mark those, but it spaces them:
+  // a heading ("Chapter I", "ZWEI"), a caption or an image sits after a gap wider than the line
+  // advance, and a heading ends without punctuation, so it would otherwise be read as the start
+  // of the paragraph under it. The advance is the tightest one between two lines on this page.
+  int minAdvance = 0;
+  for (size_t i = 1; i < words.size(); ++i) {
+    if (words[i].row == words[i - 1].row) continue;
+    const int advance = words[i].y - words[i - 1].y;
+    if (advance > 0 && (minAdvance == 0 || advance < minAdvance)) minAdvance = advance;
+  }
+  const auto breaksBetween = [&](const size_t a, const size_t b) {
+    if (minAdvance == 0 || words[a].row == words[b].row) return false;
+    return words[b].y - words[a].y > minAdvance * 13 / 10;
+  };
+  // A drop cap's letter belongs in front of the first word of its line ("I" + "T" = "IT").
+  const auto appendWord = [this](std::string& out, const size_t index) {
+    if (static_cast<int>(index) == dropCapWord_) {
+      if (dropCapPrefixCp_ != 0) WordSelectionScan::encodeUtf8(dropCapPrefixCp_, out);
+      WordSelectionScan::encodeUtf8(dropCapCp_, out);
+    }
+    out += words[index].text;
+  };
+
+  size_t from = first;
+  while (from > 0 && first - from < REACH && !breaksBetween(from - 1, from)) --from;
+  std::string before;
+  for (size_t i = from; i < first; ++i) {
+    appendWord(before, i);
+    before += ' ';
+  }
+  std::string after;
+  size_t i = last + 1;
+  bool segmentEnded = false;
+  for (; i < words.size() && i <= last + REACH; ++i) {
+    if (breaksBetween(i - 1, i)) {
+      segmentEnded = true;
+      break;
+    }
+    after += ' ';
+    appendWord(after, i);
+  }
+  // Ran off the bottom of the page mid-sentence: finish it from the next page's text.
+  if (!segmentEnded && i >= words.size() && !sentencemining::hasSentenceEnd(after) && !mining_.nextPageText.empty()) {
+    after += ' ';
+    after += mining_.nextPageText;
+  }
+  return sentencemining::sentenceHtml(before, surface, after);
+}
+
 void DictionaryWordSelectActivity::performLookup() {
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
@@ -272,25 +341,37 @@ void DictionaryWordSelectActivity::performLookup() {
 
   if (found) {
     popup = Popup::None;
-    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
-                               renderer, mappedInput, std::move(headword), std::move(definition),
-                               dict.definitionsAreHtml(), dict.getBookName()),
-                           [this](const ActivityResult& result) {
-                             // The definition view cancels when its power click asked to leave the dictionary
-                             // entirely, rather than step back to this selection.
-                             if (result.isCancelled) {
-                               finish();
-                               return;
-                             }
-                             // A long press opened the definition directly, so closing it returns to the
-                             // page. Word selection was never a step the reader asked for, and stopping
-                             // here would strand them in a screen they did not open.
-                             if (lookupAtX >= 0 && lookupAtY >= 0) {
-                               finish();
-                               return;
-                             }
-                             requestUpdate();
-                           });
+    sentencemining::Draft draft;
+    draft.card.word = headword;
+    draft.card.sentence = miningSentence(lookupTextFor(static_cast<size_t>(selected), joined));
+    draft.card.book = mining_.bookTitle;
+    draft.card.author = mining_.bookAuthor;
+    draft.card.dictionary = dict.getBookName();
+    draft.language = sentencemining::languageForDictionary(folderName, language);
+    auto definitionView = makeUniqueNoThrow<DictionaryDefinitionActivity>(
+        renderer, mappedInput, std::move(headword), std::move(definition), dict.definitionsAreHtml(),
+        dict.getBookName());
+    if (!definitionView) {
+      LOG_ERR("DICT", "OOM: definition view");
+      return;
+    }
+    definitionView->setMiningDraft(std::move(draft));
+    startActivityForResult(std::move(definitionView), [this](const ActivityResult& result) {
+      // The definition view cancels when its power click asked to leave the dictionary
+      // entirely, rather than step back to this selection.
+      if (result.isCancelled) {
+        finish();
+        return;
+      }
+      // A long press opened the definition directly, so closing it returns to the
+      // page. Word selection was never a step the reader asked for, and stopping
+      // here would strand them in a screen they did not open.
+      if (lookupAtX >= 0 && lookupAtY >= 0) {
+        finish();
+        return;
+      }
+      requestUpdate();
+    });
     return;
   }
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but

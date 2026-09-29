@@ -41,7 +41,7 @@ A word broken across a page break still resolves. The lookup reads a few charact
 
 On a touch device, long-pressing a word on the page opens its definition directly — no setting to turn on, and no cursor to move first. A press that lands between words opens ordinary word selection instead. The panel pages by touch however the reader is set to turn pages, and a tap outside it puts it away.
 
-The definition itself opens as a panel floating over the page you were reading: the word sits above a divider at the top, the entry fills the middle, and the dictionary it came from is named along the bottom. In vertical text and in English books the entry is paged a screenful at a time with a page counter in the top right; horizontal Japanese and manga scroll the entry freely and show your position among the page's words instead.
+The definition itself opens as a panel floating over the page you were reading: the word sits above a divider at the top, the entry fills the middle, and along the bottom the entry's type and dictionary (`Vocab | JMdict`) sit on the left with a counter on the right. In vertical text and in English books the entry is paged a screenful at a time and the counter shows the page; horizontal Japanese and manga scroll the entry freely and the counter shows your position among the page's words instead.
 
 Vocabulary, names and grammar each come from their own dictionary. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
 
@@ -51,7 +51,17 @@ In French books, a literary verb-subject inversion like `songeai-je` or `pense-t
 
 Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.
 
-<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page: 漏らした resolved to 漏らす, with its reading, part of speech, definitions and an example sentence"></p>
+#### Sentence mining
+
+Save a looked-up word together with the sentence it came from, ready to import into Anki. With a definition open, press **Select**, or tap the **+** in the panel's top-right corner on a touch device. The footer shows **Saved** until you move on. It works in Japanese and other-language books and in manga.
+
+Each save adds one line to a CSV file per language in the `sentence-mining` folder on the SD card: `sentences-ja.csv`, `sentences-en.csv` and so on. The language is the dictionary's, so a file can be imported into its own deck. Each line holds the word in its dictionary form, its reading (Japanese only), the sentence with the word in bold, the whole dictionary entry, the book, author, date and dictionary, plus tags (`matcha` and the book title).
+
+To import, open the file in Anki with **File → Import**. The first lines of the file tell Anki the layout, so there is nothing to set up. The files only ever grow; import the same file again later and Anki updates the cards it already has instead of adding them twice, because every card carries a stable ID.
+
+A sentence cut off by the end of the page is finished from the next page. The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. On devices without a clock chip (the X4) a restart loses the time, so the date can lag until the next Wi-Fi connection.
+
+<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence, the save button in the top-right corner and Vocab | JMdict | Tatoeba in the footer"></p>
 
 ### Page translation
 

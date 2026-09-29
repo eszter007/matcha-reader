@@ -16,6 +16,7 @@
 #include "fontIds.h"
 #include "util/DictHtmlPages.h"
 #include "util/HtmlToPlainText.h"
+#include "util/SentenceMining.h"
 
 namespace {
 
@@ -230,6 +231,20 @@ void DictionaryDefinitionActivity::wrapText() {
   currentPage = 0;
 }
 
+void DictionaryDefinitionActivity::setMiningDraft(sentencemining::Draft draft) {
+  miningDraft_ = std::move(draft);
+  miningDraft_.card.definition =
+      htmlDefinition ? sentencemining::capHtml(definition) : sentencemining::definitionHtml(definition);
+}
+
+void DictionaryDefinitionActivity::saveSentence() {
+  if (!miningDraft_.valid()) return;
+  miningDraft_.card.date = sentencemining::today();  // the day of the save, not of the lookup
+  miningStatus_ =
+      sentencemining::append(miningDraft_.card, miningDraft_.language) ? MiningStatus::Saved : MiningStatus::Failed;
+  requestUpdate();
+}
+
 void DictionaryDefinitionActivity::loop() {
   // Back steps up to the word selection. The power click leaves the dictionary outright: from
   // the selection it opened this view, so from here it closes the whole flow -- two clicks in
@@ -245,6 +260,10 @@ void DictionaryDefinitionActivity::loop() {
     finish();
     return;
   }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    saveSentence();
+    return;
+  }
 
   // Outside the card is "put it away": the panel floats over the page, so a tap
   // on the page around it reads as dismissing it rather than as paging a
@@ -258,6 +277,11 @@ void DictionaryDefinitionActivity::loop() {
       finish();
       return;
     }
+    const auto add = DictionaryPanel::compute(renderer).addButton;
+    if (miningDraft_.valid() && tx >= add.x && tx < add.x + add.width && ty >= add.y && ty < add.y + add.height) {
+      saveSentence();
+      return;
+    }
   }
 
   // Paging follows whatever the reader is set to, rather than a second scheme
@@ -269,9 +293,11 @@ void DictionaryDefinitionActivity::loop() {
   if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
     if (scroll > 0 && currentPage + 1 < totalPages) {
       currentPage++;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     } else if (scroll < 0 && currentPage > 0) {
       currentPage--;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     }
     return;
@@ -281,9 +307,11 @@ void DictionaryDefinitionActivity::loop() {
   if (touchTurn.prev || touchTurn.next) {
     if (touchTurn.prev && currentPage > 0) {
       currentPage--;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     } else if (touchTurn.next && currentPage + 1 < totalPages) {
       currentPage++;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     }
     return;
@@ -292,6 +320,7 @@ void DictionaryDefinitionActivity::loop() {
   buttonNavigator.onNext([this] {
     if (currentPage + 1 < totalPages) {
       currentPage++;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     }
   });
@@ -299,6 +328,7 @@ void DictionaryDefinitionActivity::loop() {
   buttonNavigator.onPrevious([this] {
     if (currentPage > 0) {
       currentPage--;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     }
   });
@@ -333,7 +363,11 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   if (totalPages > 1) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
   }
-  const auto layout = DictionaryPanel::draw(renderer, headword.c_str(), dictName.c_str(), counter);
+  const bool showStatus = miningStatus_ != MiningStatus::None;
+  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
+  const auto layout =
+      DictionaryPanel::draw(renderer, headword.c_str(), showStatus ? nullptr : dictName.c_str(), counter,
+                            showStatus ? statusText : nullptr, miningDraft_.valid() && mappedInput.hasTouch());
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
@@ -345,8 +379,8 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   scope.endScanAndPrewarm();
   drawBody(fontId, layout.body.x, layout.body.y);
 
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), "", (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), miningDraft_.valid() ? tr(STR_MINING_SAVE) : "",
+                                            (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();

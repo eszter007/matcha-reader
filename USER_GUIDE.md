@@ -908,7 +908,7 @@ In **vertical text**, lookup opens on the page you were reading, with the curren
 | Power (short click) | Leave lookup, when **Short power button click** is set to **Word Lookup** |
 
 From the definition, **Back** returns to the highlighted page rather than to the book, so looking up several
-words on one page costs a couple of presses each.
+words on one page costs a couple of presses each, and **Select** saves the word for sentence mining (see below).
 
 The cursor opens on the middle of the page, so any word is at most half a page of presses away, and the page is
 mapped starting from there — the half you are looking at is ready first. Mapping continues in the background
@@ -925,11 +925,13 @@ In **horizontal text** and in manga, lookup opens directly in the definition vie
 | --- | --- |
 | Left / Right | Move between matched words on the page |
 | Up / Down | Scroll a long definition |
+| Select | Save the word and its sentence for sentence mining (see below) |
 | Back | Return to reading |
 | Power (short click) | Go back, same as Back, when **Short power button click** is set to **Word Lookup** |
 
-The header counts your position (e.g. 10/35). The page is pre-scanned, so you only ever land on a word the
-dictionary actually has.
+The counter in the bottom-right corner shows your position (e.g. 10/35), next to the entry's type and dictionary
+(e.g. `Vocab | JMdict`) on the left. The page is pre-scanned, so you only ever land on a word the dictionary
+actually has.
 
 A Japanese word broken by the page break still resolves: the lookup reads a few characters past the last one on
 screen, so selecting the part you can see gives the whole word. The highlight stays on the page, covering only
@@ -946,6 +948,52 @@ straight from the page, in both EPUBs and manga — and closes it again: the sam
 definition and out of word selection, so a whole lookup happens under the index finger of the hand already
 holding the device. Back still works as before, and the click only does this while the setting is **Word
 Lookup** (the other settings keep the click for sleep, page turns, refresh or footnotes).
+
+#### Sentence mining
+
+Save a looked-up word with the sentence it came from, as a flashcard for [Anki](https://apps.ankiweb.net/). It
+works in Japanese books, in books in other languages, and in manga.
+
+The saved words are written as a CSV file made to be imported into Anki: it carries the header lines Anki's
+importer reads, so the import needs no setup (see **Importing into Anki** below). Being plain CSV, it also opens in
+a spreadsheet or another flashcard app, but Anki is what it is laid out for.
+
+To save the word on screen, open its definition and:
+
+- **On a touch device** (X4 Pro, Papermono, Sticky): tap the **+** in the top-right corner of the definition panel,
+  circled below.
+- **On a button device** (X4, X3, X4 Classic): press **Select**. The **+** is not shown there, since the button does the same.
+
+<p align="center"><img src="docs/images/screenshots/sentence-mining.png" width="260" alt="A definition panel for 用意 over a vertical page of たのしいムーミン一家, with the save button in its top-right corner circled"></p>
+
+The footer shows **Saved** (or **Could not save** if the SD card refused the write) until you move to another word,
+page or entry.
+
+Saved words go into the **sentence-mining** folder on the SD card, one file per language: `sentences-ja.csv`,
+`sentences-en.csv` and so on. The language is the dictionary's (for manga, the comic's), so each file can go into
+its own deck. Each line holds:
+
+| Column | Contents |
+| --- | --- |
+| Word | The word in its dictionary form, e.g. 漏らす |
+| Reading | Its reading, e.g. もらす (Japanese only) |
+| Sentence | The sentence it appeared in, with the word itself in bold |
+| Definition | The whole dictionary entry |
+| Book, Author | Where it came from |
+| Date | The day you saved it |
+| Dictionary | Which dictionary answered |
+| Tags | `matcha` and the book title |
+
+**Importing into Anki:** copy the file to your computer and open it with **File → Import**. The first lines of the
+file describe its layout, so Anki sets the columns, HTML and tags up by itself. The files only ever grow: import
+the same file again later and Anki updates the cards it already has rather than duplicating them, because every
+card carries a stable ID. Saving the same word from the same sentence twice is harmless for the same reason.
+
+A sentence cut off by the bottom of the page is finished from the start of the next page. In manga the sentence
+comes from the speech bubble the word is in.
+
+The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. Devices without a
+clock chip (the X4) lose the time on a restart, so until the next Wi-Fi connection the date can lag behind.
 
 ### 6.3 Page Translation
 
