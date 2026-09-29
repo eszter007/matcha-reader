@@ -61,7 +61,7 @@ To import, open the file in Anki with **File → Import**. The first lines of th
 
 A sentence cut off by the end of the page is finished from the next page. The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. On devices without a clock chip (the X4) a restart loses the time, so the date can lag until the next Wi-Fi connection.
 
-<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page: 漏らした resolved to 漏らす, with its reading, part of speech, definitions and an example sentence"></p>
+<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence, the save button in the top-right corner and Vocab | JMdict | Tatoeba in the footer"></p>
 
 ### Page translation
 

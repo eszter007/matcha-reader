@@ -958,10 +958,13 @@ The saved words are written as a CSV file made to be imported into Anki: it carr
 importer reads, so the import needs no setup (see **Importing into Anki** below). Being plain CSV, it also opens in
 a spreadsheet or another flashcard app, but Anki is what it is laid out for.
 
-- **With buttons:** open a definition and press **Select**.
-- **On a touch device:** tap the **+** in the top-right corner of the definition panel.
+To save the word on screen, open its definition and:
 
-<p align="center"><img src="docs/images/screenshots/sentence-mining.png" width="260" alt="A definition panel over a page of 1984, with the save button in its top-right corner circled"></p>
+- **On a touch device** (X4 Pro, Papermono, Sticky): tap the **+** in the top-right corner of the definition panel,
+  circled below.
+- **On a button device** (X4, X3, X4 Classic): press **Select**. The **+** is not shown there, since the button does the same.
+
+<p align="center"><img src="docs/images/screenshots/sentence-mining.png" width="260" alt="A definition panel for 用意 over a vertical page of たのしいムーミン一家, with the save button in its top-right corner circled"></p>
 
 The footer shows **Saved** (or **Could not save** if the SD card refused the write) until you move to another word,
 page or entry.
