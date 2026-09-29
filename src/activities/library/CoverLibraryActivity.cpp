@@ -777,6 +777,9 @@ void CoverLibraryActivity::onEnter() {
   scrollRow = 0;
   shelvesScroll = 0;
   openShelfIndex = -1;
+  // Button boards open on the Books/Shelves tab, drawn focused, so Down lands on the first book.
+  // Starting hidden left index 0 invisible and the first Up wrapped to the last cover.
+  selectorVisible = !mappedInput.hasTouch();
   requestUpdate();
 }
 
@@ -1694,6 +1697,17 @@ void CoverLibraryActivity::render(RenderLock&&) {
   // The popup is a self-contained modal drawn over the frame underneath, same as the list
   // library's: while it is up it owns the screen and the grid must not repaint beneath it.
   if (optionPopup.processRender(renderer, mappedInput)) return;
+  // Stepping the cursor between two bottom-tab slots changes nothing but the band, which draw()
+  // clears and repaints itself: paint it over the frame already on screen instead of clearing
+  // and re-reading every visible cover off the SD card for each step.
+  if (lastRendered.valid && HomeTabBar::enabled() && lastRendered.tabFocus >= 0 && tabFocus >= 0 &&
+      lastRendered.tabFocus != tabFocus && lastRendered.openShelf == openShelfIndex &&
+      lastRendered.tab == selectedTab && lastRendered.contentIndex == contentIndex) {
+    HomeTabBar::draw(renderer, HomeTab::Library, tabFocus);
+    lastRendered.tabFocus = tabFocus;
+    renderer.displayBuffer();
+    return;
+  }
   if (tryPartialSelectionRedraw()) {
     lastRendered.contentIndex = contentIndex;
     lastRendered.shelfContentIndex = shelfContentIndex;

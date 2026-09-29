@@ -733,6 +733,9 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   // 60%-band wrap cap and let both name lines run the full width before it.
   props.balanceWrappedLabelWithValue = false;
   syncListViewport(screen, props);
+  // One cursor on screen: while a tab band holds it, no row is highlighted. The row selection
+  // itself is kept, so Down from the top band still lands on the first row.
+  if (topBandFocused || tabFocus >= 0) props.selectedIndex = -1;
   // Prewarm the window at the final viewport (syncListViewport just applied
   // follow/clamping to nav.top) before the list resolves rows through the
   // provider.
