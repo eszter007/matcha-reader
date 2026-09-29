@@ -14,7 +14,6 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "TxtReaderActivity.h"
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 
@@ -41,10 +40,7 @@ std::unique_ptr<Activity> ReaderActivity::create(GfxRenderer& renderer, MappedIn
     return makeUniqueNoThrow<XtcReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   }
 
-  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
-    return makeUniqueNoThrow<TxtReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
-  }
-
+  // EPUB, and TXT/Markdown too: those are converted to HTML and read through the EPUB pipeline.
   return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
 }
 

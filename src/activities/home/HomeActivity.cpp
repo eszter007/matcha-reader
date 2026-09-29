@@ -99,7 +99,7 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
   if (!recentBooks.empty()) {
     const auto& path = recentBooks[0].path;
     std::string cachePath;
-    if (FsHelpers::hasEpubExtension(path))
+    if (FsHelpers::hasReflowableBookExtension(path))
       cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(path));
     else if (FsHelpers::hasXtcExtension(path)) {
       currentBookProgress = XtcProgress::percentForBook(path);  // page-based; -1 if none yet
@@ -176,7 +176,7 @@ void HomeActivity::resolveGridCoverPaths() {
     if (!book.coverBmpPath.empty()) continue;
     // Constructors only derive cache paths; no metadata parsing or image generation.
     // Keep these large objects off the task stack and release each before the next book.
-    if (FsHelpers::hasEpubExtension(book.path)) {
+    if (FsHelpers::hasReflowableBookExtension(book.path)) {
       auto epub = makeUniqueNoThrow<Epub>(book.path, "/.crosspoint");
       if (!epub) {
         LOG_ERR("HOME", "OOM: EPUB thumbnail path");

@@ -29,6 +29,8 @@ class CoverLibraryActivity final : public Activity {
   // Tab to open on, from the tab band of whichever screen switched here.
   int requestedTab = 0;
   int contentIndex = 0;
+  // contentIndex when the current Next/Previous press began; -1 once a hold has restored it.
+  int holdStartContentIndex_ = -1;
   int scrollRow = 0;      // Books tab: first visible grid row
   int shelvesScroll = 0;  // Shelves tab: first visible list row
 

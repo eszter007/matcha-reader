@@ -226,9 +226,9 @@ int EpubReaderMenuActivity::enabledIndexFrom(int index, const int direction) con
 
 void EpubReaderMenuActivity::navigateButtons() {
   const int count = listCount();
-  buttonNavigator.onNextRelease(
+  buttonNavigator.onNextPress(
       [this, count] { moveSelectionTo(enabledIndexFrom(ButtonNavigator::nextIndex(nav.selected, count), 1)); });
-  buttonNavigator.onPreviousRelease(
+  buttonNavigator.onPreviousPress(
       [this, count] { moveSelectionTo(enabledIndexFrom(ButtonNavigator::previousIndex(nav.selected, count), -1)); });
   buttonNavigator.onNextContinuous([this, count] {
     moveSelectionTo(enabledIndexFrom(ButtonNavigator::nextPageIndex(nav.selected, count, nav.visibleRows), 1));

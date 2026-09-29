@@ -59,10 +59,23 @@ void UiTabListActivity::moveRingTo(const int ringIndex) {
 
 void UiTabListActivity::onTabBandExit() { moveRingTo(0); }
 
+void UiTabListActivity::restoreHoldStart() {
+  if (!holdStart_.pending) return;
+  holdStart_.pending = false;
+  activeNav().selected = holdStart_.selected;
+  tabFocus = holdStart_.tabFocus;
+}
+
 void UiTabListActivity::navigateButtons() {
-  // One ring: the tab band (index 0), the rows (1..listCount), then the bottom bar.
+  if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
+      mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
+    navigationStartedOnTabs = ringPos() == 0 && tabFocus < 0;
+    holdStart_ = {activeNav().selected, tabFocus, true};
+  }
+  // One ring: the tab band (index 0), the rows (1..listCount), then the bottom bar. A press walks
+  // it straight away; a hold steps the tab instead, see holdStart_.
   const int ringSize = listCount() + 1;
-  buttonNavigator.onNextRelease([this, ringSize] {
+  buttonNavigator.onNextPress([this, ringSize] {
     if (tabFocus >= 0) {
       tabFocus = -1;
       moveRingTo(0);
@@ -74,7 +87,7 @@ void UiTabListActivity::navigateButtons() {
     }
     moveRingTo(ButtonNavigator::nextIndex(ringPos(), ringSize));
   });
-  buttonNavigator.onPreviousRelease([this, ringSize] {
+  buttonNavigator.onPreviousPress([this, ringSize] {
     if (tabFocus >= 0) {
       tabFocus = -1;
       moveRingTo(ringSize - 1);
@@ -86,8 +99,14 @@ void UiTabListActivity::navigateButtons() {
     }
     moveRingTo(ButtonNavigator::previousIndex(ringPos(), ringSize));
   });
-  buttonNavigator.onNextContinuous([this] { stepTab(1); });
-  buttonNavigator.onPreviousContinuous([this] { stepTab(-1); });
+  buttonNavigator.onNextContinuous([this] {
+    restoreHoldStart();
+    stepTab(1);
+  });
+  buttonNavigator.onPreviousContinuous([this] {
+    restoreHoldStart();
+    stepTab(-1);
+  });
 }
 
 void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& props) {
