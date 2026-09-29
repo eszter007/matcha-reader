@@ -933,6 +933,17 @@ The counter in the bottom-right corner shows your position (e.g. 10/35), next to
 (e.g. `Vocab | JMdict`) on the left. The page is pre-scanned, so you only ever land on a word the dictionary
 actually has.
 
+A word listed in both the vocabulary and the grammar dictionary shows both entries. In vertical text each gets its
+own page, and for short function words such as こと or よう the grammar page opens first; step to the other the way
+you page through an entry. Tapping a word in manga shows the grammar entry below the vocabulary one. Horizontal
+text, and manga lookups where you step from word to word, keep one entry per word so stepping stays quick: a short
+function word shows its grammar entry there, anything else its vocabulary entry.
+
+<p align="center">
+  <img src="docs/images/screenshots/multi-dict-jp-vocab.png" width="240" alt="それなら: the vocabulary page, 1 of 2">
+  <img src="docs/images/screenshots/multi-dict-jp-grammar.png" width="240" alt="それなら: the grammar page, 2 of 2">
+</p>
+
 A Japanese word broken by the page break still resolves: the lookup reads a few characters past the last one on
 screen, so selecting the part you can see gives the whole word. The highlight stays on the page, covering only
 the characters that are actually there.
@@ -1080,9 +1091,22 @@ or any other Yomitan dictionary with [Matcha Reader Tools](https://eszter007.git
 which also handles jmdict-simplified JSON and MDict `.mdx` input. Every other language uses ordinary StarDict, one
 folder per dictionary, with no conversion needed.
 
-The dictionary you choose in **Settings → Reader → Dictionary** is the fallback. It is used when the book carries
-no language, or when nothing under `dictionaries/` matches the one it carries. Reader Settings shows the
-dictionary a book actually ended up with, which is the quickest way to check a tag is being read.
+**Several dictionaries in one language.** Give each its own folder, such as `en/collins/` and `en/wiktionary/`. A
+lookup checks all of the book language's dictionaries, up to four, and shows every entry it finds as one run of
+pages: paging past the end of one dictionary's entry opens the next one's, and paging back from its first page returns
+to the previous entry's last. The footer names the dictionary on screen and its place among them (`Collins (1/2)`).
+The dictionary chosen in **Settings → Reader → Dictionary** comes first when it is in the book's language, then the
+others by folder name. Saving a sentence records the dictionary whose entry is showing. A dictionary added this way
+builds its index on its first lookup, so that one lookup is slower.
+
+<p align="center">
+  <img src="docs/images/screenshots/multi-dict-stardict-1.png" width="240" alt="cold: the first dictionary's entry, 1 of 2">
+  <img src="docs/images/screenshots/multi-dict-stardict-2.png" width="240" alt="cold: the second dictionary's entry, 2 of 2">
+</p>
+
+The dictionary you choose in **Settings → Reader → Dictionary** is also the fallback. It is used when the book
+carries no language, or when nothing under `dictionaries/` matches the one it carries. Reader Settings shows the
+dictionary a book reads first, which is the quickest way to check a tag is being read.
 
 The folder can also be called `.dictionaries/`, which keeps it out of the file browser. Everything above works the
 same there, including `jp/`. When both exist, StarDict dictionaries are picked up from either folder, while Japanese

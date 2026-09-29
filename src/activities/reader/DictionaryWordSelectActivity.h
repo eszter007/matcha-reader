@@ -18,7 +18,7 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        std::string folderName, std::string language, int baseFontId,
+                                        std::vector<std::string> folderNames, std::string language, int baseFontId,
                                         int lookupAtX = -1, int lookupAtY = -1)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         lookupAtX(lookupAtX),
@@ -27,8 +27,15 @@ class DictionaryWordSelectActivity final : public Activity {
         marginLeft(marginLeft),
         marginTop(marginTop),
         fontId(baseFontId),
-        folderName(std::move(folderName)),
-        language(std::move(language)) {}
+        language(std::move(language)) {
+    for (auto& folder : folderNames) {
+      if (dictCount >= MAX_DICTIONARIES) break;
+      dicts[dictCount++].folder = std::move(folder);
+    }
+  }
+
+  // Dictionaries a word is looked up in together (see DictionaryRegistry::foldersForLanguage).
+  static constexpr size_t MAX_DICTIONARIES = 4;
 
   // Screen point to open on: the word under it is selected and looked up
   // immediately, so a long press on the page goes straight to the definition
@@ -109,14 +116,19 @@ class DictionaryWordSelectActivity final : public Activity {
   bool confirmPressSeen = false;
   unsigned long lastHorizontalMoveTime = 0;
 
-  Dictionary dict;
-  bool dictOpenAttempted = false;
-  bool dictOpenOk = false;
-  std::string folderName;
+  // One dictionary of the lookup, opened (and its index built) the first time a word is looked up.
+  struct DictSlot {
+    Dictionary dict;
+    std::string folder;
+    bool openAttempted = false;
+    bool openOk = false;
+    bool needsIndex = false;
+  };
+  DictSlot dicts[MAX_DICTIONARIES];
+  size_t dictCount = 0;
   // The book's EPUB language tag, selecting the dictionary's inflection rules.
   // Empty for an untagged book, which leaves the folder to decide.
   std::string language;
-  bool dictNeedsIndex = false;
 
   Popup popup = Popup::None;
   StrId popupMsg = StrId::STR_DICT_NOT_FOUND;

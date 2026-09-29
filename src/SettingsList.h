@@ -161,9 +161,11 @@ inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& di
   s.category = StrId::STR_CAT_READER;
 
   if (showAppliedDictionary) {
-    // Reader settings are informational: the book language wins over the global fallback.
-    std::string appliedFolder;
-    DictionaryRegistry::folderForLanguageOrFallback(bookLanguage, SETTINGS.dictionaryName, appliedFolder);
+    // Reader settings are informational: the book language wins over the global fallback. Shows
+    // the dictionary a lookup reads first; the language's others follow it.
+    std::vector<std::string> applied;
+    DictionaryRegistry::foldersForLanguage(bookLanguage, SETTINGS.dictionaryName, 1, applied);
+    const std::string appliedFolder = applied.empty() ? std::string() : applied.front();
     s.valueGetter = [folderNames, appliedFolder]() -> uint8_t {
       for (size_t i = 0; i < folderNames.size(); i++) {
         // The fallback is persisted in a bounded field, so match it the same way as the editor.

@@ -1211,6 +1211,11 @@ void EpubReaderWordLookupActivity::performLookup() {
 
 void EpubReaderWordLookupActivity::performLookupImpl() {
   hasResult = false;
+  hasGrammar = false;
+  grammarFirst = false;
+  promotedGrammarLen = 0;
+  grammarHeadword.clear();
+  grammarDefinition.clear();
   resultHeadword.clear();
   resultDefinition.clear();
   resultReading.clear();
@@ -1366,8 +1371,10 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
-                                    gramEntry)) {
+        if (!pagedDefinition() && DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
+                                                          DictIndex::grammarDatPath(), gramEntry)) {
+          // One scrolling block: the grammar entry replaces the vocab one rather than making the
+          // reader scroll past both.
           resultDefinition = std::move(gramEntry.definition);
           DefinitionText::EntryMetadata grammarMetadata;
           DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
@@ -1375,6 +1382,14 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
           resultGrammar = std::move(grammarMetadata.grammar);
           resultDictionaryLabel = std::move(grammarMetadata.source);
           resultSource = "Grammar";
+        } else if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
+                                           DictIndex::grammarDatPath(), gramEntry)) {
+          // Paged: the grammar entry gets its own page beside the vocab one, and opens first.
+          hasGrammar = true;
+          grammarFirst = true;
+          promotedGrammarLen = chars;
+          grammarHeadword = std::move(gramEntry.headword);
+          grammarDefinition = std::move(gramEntry.definition);
         }
       }
     }
@@ -1383,9 +1398,6 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   // Grammar scan: search for grammar patterns in a window around the cursor.
   // Try starting from a few characters BEFORE the cursor (to catch patterns
   // like ことになる when cursor is on こと) and also from the cursor itself.
-  hasGrammar = false;
-  grammarHeadword.clear();
-  grammarDefinition.clear();
   // The grammar overlay is a nicety on top of the main result. Its lookups build several
   // transient strings and read whole grammar entries; under a near-exhausted heap those
   // allocations abort() (-fno-exceptions) -- confirmed by a real device crash_report with a
@@ -1397,8 +1409,9 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     if (allStart >= scan.allGlyphs.size()) return;
     const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
 
-    // Try starting positions: cursor-3, cursor-2, cursor-1, cursor
-    int bestGramLen = 0;
+    // Try starting positions: cursor-3, cursor-2, cursor-1, cursor. A longer pattern replaces the
+    // word's own grammar entry found above.
+    int bestGramLen = promotedGrammarLen;
     for (int backoff = 3; backoff >= 0; backoff--) {
       size_t scanStart = allStart;
       for (int b = 0; b < backoff && scanStart > 0; b++) {
@@ -1436,9 +1449,12 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
         DictEntry gramEntry;
         if (DictIndex::lookupInFile(window.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
-          if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
+          // Scrolling block: an entry for the looked-up word itself is left out (see above).
+          const bool sameWord = !pagedDefinition() && gramEntry.headword == resultHeadword;
+          if (!sameWord && wLen > bestGramLen) {
             bestGramLen = wLen;
             hasGrammar = true;
+            grammarFirst = false;
             grammarHeadword = std::move(gramEntry.headword);
             grammarDefinition = std::move(gramEntry.definition);
           }
@@ -1467,6 +1483,14 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   }
 
   splitDefinitionIntoSections();
+  if (grammarFirst) {
+    for (size_t i = 0; i < sectionKind.size(); i++) {
+      if (sectionKind[i] == StrId::STR_DICT_KIND_GRAMMAR) {
+        currentSection = static_cast<int>(i);
+        break;
+      }
+    }
+  }
   if (sectionText.empty())
     DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
                                                           ? resultHeadword

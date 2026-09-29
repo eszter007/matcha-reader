@@ -252,6 +252,13 @@ void MangaWordLookupActivity::performLookup() {
 }
 
 void MangaWordLookupActivity::performLookupImpl() {
+  // A tapped word shows both its vocab and grammar entries; stepping through the panel word by
+  // word keeps one entry each.
+  const bool tapLookup = targetGlyph >= 0;
+  // The grammar entry shown after the main result: the word's own, or a longer pattern found
+  // around the cursor, which wins.
+  int bestGramLen = 0;
+  std::string bestGramHw, bestGramDef;
   hasResult = false;
   resultHeadword.clear();
   resultSource = nullptr;
@@ -346,8 +353,15 @@ void MangaWordLookupActivity::performLookupImpl() {
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
-                                    gramEntry)) {
+        if (tapLookup && DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
+                                                 DictIndex::grammarDatPath(), gramEntry)) {
+          // Opened on a tapped word: show its grammar entry after the vocab one, not instead of it.
+          bestGramLen = chars;
+          bestGramHw = std::move(gramEntry.headword);
+          bestGramDef = std::move(gramEntry.definition);
+        } else if (!tapLookup && DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
+                                                         DictIndex::grammarDatPath(), gramEntry)) {
+          // Stepping through every word of the panel: one entry per word keeps that quick.
           resultDefinition = std::move(gramEntry.definition);
           DefinitionText::EntryMetadata grammarMetadata;
           DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
@@ -368,8 +382,6 @@ void MangaWordLookupActivity::performLookupImpl() {
   } else if (Storage.exists(DictIndex::grammarIdxPath()) &&
              cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
     const size_t allStart = scan.selectToAllIdx[cursorIndex];
-    int bestGramLen = 0;
-    std::string bestGramHw, bestGramDef;
 
     for (int backoff = 3; backoff >= 0; backoff--) {
       size_t scanStart = allStart;
@@ -401,7 +413,8 @@ void MangaWordLookupActivity::performLookupImpl() {
         DictEntry gramEntry;
         if (DictIndex::lookupInFile(window.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
-          if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
+          const bool sameWord = !tapLookup && gramEntry.headword == resultHeadword;
+          if (!sameWord && wLen > bestGramLen) {
             bestGramLen = wLen;
             bestGramHw = std::move(gramEntry.headword);
             bestGramDef = std::move(gramEntry.definition);
@@ -410,19 +423,19 @@ void MangaWordLookupActivity::performLookupImpl() {
         }
       }
     }
+  }
 
-    if (bestGramLen > 0) {
-      // Guarded reserve + appends instead of a temporary chain -- see the EPUB activity.
-      const size_t mergedLen = resultDefinition.size() + bestGramHw.size() + bestGramDef.size() + 32;
-      if (ESP.getMaxAllocHeap() > mergedLen + 8 * 1024) {
-        resultDefinition.reserve(mergedLen);
-        resultDefinition += "\n\n— Grammar: ";
-        resultDefinition += bestGramHw;
-        resultDefinition += " —\n";
-        resultDefinition += bestGramDef;
-      } else {
-        LOG_ERR("MWLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-      }
+  if (bestGramLen > 0) {
+    // Guarded reserve + appends instead of a temporary chain -- see the EPUB activity.
+    const size_t mergedLen = resultDefinition.size() + bestGramHw.size() + bestGramDef.size() + 32;
+    if (ESP.getMaxAllocHeap() > mergedLen + 8 * 1024) {
+      resultDefinition.reserve(mergedLen);
+      resultDefinition += "\n\n— Grammar: ";
+      resultDefinition += bestGramHw;
+      resultDefinition += " —\n";
+      resultDefinition += bestGramDef;
+    } else {
+      LOG_ERR("MWLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
     }
   }
 

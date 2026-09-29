@@ -67,17 +67,72 @@ void DictionaryDefinitionActivity::ensureGlyphFallback() const {
   sdFontSystem.ensureWordLookupFallback(renderer, definitionFontId(), definitionPointSize());
 }
 
+DictionaryDefinitionActivity::DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                                           std::vector<Entry> entries)
+    : Activity("DictionaryDefinition", renderer, mappedInput), entries(std::move(entries)) {
+  // The card keeps the definition as it came from the dictionary; the layout frees its copy.
+  for (auto& entry : this->entries) {
+    if (!entry.draft.valid()) continue;
+    entry.draft.card.definition =
+        entry.html ? sentencemining::capHtml(entry.definition) : sentencemining::definitionHtml(entry.definition);
+  }
+}
+
 void DictionaryDefinitionActivity::onEnter() {
   ensureGlyphFallback();
   Activity::onEnter();
-  // Normalize StarDict multi-type separators so the wrap loop and the
-  // C-string font APIs below both see the whole definition.
+  if (entries.empty()) {
+    finish();
+    return;
+  }
+  showEntry(0, false);
+  requestUpdate();
+}
+
+void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLastPage) {
+  currentEntry = index;
+  const Entry& entry = entries[index];
+  pages.clear();
+  lines.clear();
+  definition = entry.definition;
   std::replace(definition.begin(), definition.end(), '\0', '\n');
-  if (!(htmlDefinition && definition.size() <= MAX_STYLED_HTML_BYTES && layoutHtmlPages())) {
+  if (!(entry.html && definition.size() <= MAX_STYLED_HTML_BYTES && layoutHtmlPages())) {
     definition = htmlToPlainText(definition);
     wrapText();
   }
+  dictLabel = entry.dictName;
+  if (entries.size() > 1) {
+    char place[16];
+    snprintf(place, sizeof(place), " (%u/%u)", static_cast<unsigned>(index + 1), static_cast<unsigned>(entries.size()));
+    dictLabel += place;
+  }
+  currentPage = atLastPage ? totalPages - 1 : 0;
+  miningStatus_ = MiningStatus::None;
+}
+
+bool DictionaryDefinitionActivity::stepPage(const int direction) {
+  if (direction > 0) {
+    if (currentPage + 1 < totalPages) {
+      currentPage++;
+    } else if (currentEntry + 1 < entries.size()) {
+      RenderLock lock;  // the render task draws from the pages this replaces
+      showEntry(currentEntry + 1, false);
+    } else {
+      return false;
+    }
+  } else {
+    if (currentPage > 0) {
+      currentPage--;
+    } else if (currentEntry > 0) {
+      RenderLock lock;
+      showEntry(currentEntry - 1, true);
+    } else {
+      return false;
+    }
+  }
+  miningStatus_ = MiningStatus::None;
   requestUpdate();
+  return true;
 }
 
 void DictionaryDefinitionActivity::onExit() {
@@ -232,18 +287,12 @@ void DictionaryDefinitionActivity::wrapText() {
   currentPage = 0;
 }
 
-void DictionaryDefinitionActivity::setMiningDraft(sentencemining::Draft draft) {
-  miningDraft_ = std::move(draft);
-  miningDraft_.card.definition =
-      htmlDefinition ? sentencemining::capHtml(definition) : sentencemining::definitionHtml(definition);
-}
-
 void DictionaryDefinitionActivity::saveSentence() {
-  if (!miningDraft_.valid()) return;
-  miningDraft_.card.date = sentencemining::today();  // the day of the save, not of the lookup
-  miningStatus_ =
-      sentencemining::append(miningDraft_.card, miningDraft_.language) ? MiningStatus::Saved : MiningStatus::Failed;
-  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(miningDraft_.bookPath.c_str(), 0, 1);
+  auto& draft = entries[currentEntry].draft;
+  if (!draft.valid()) return;
+  draft.card.date = sentencemining::today();  // the day of the save, not of the lookup
+  miningStatus_ = sentencemining::append(draft.card, draft.language) ? MiningStatus::Saved : MiningStatus::Failed;
+  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(draft.bookPath.c_str(), 0, 1);
   requestUpdate();
 }
 
@@ -280,7 +329,7 @@ void DictionaryDefinitionActivity::loop() {
       return;
     }
     const auto add = DictionaryPanel::compute(renderer).addButton;
-    if (miningDraft_.valid() && tx >= add.x && tx < add.x + add.width && ty >= add.y && ty < add.y + add.height) {
+    if (miningDraft().valid() && tx >= add.x && tx < add.x + add.width && ty >= add.y && ty < add.y + add.height) {
       saveSentence();
       return;
     }
@@ -293,47 +342,18 @@ void DictionaryDefinitionActivity::loop() {
   // Up/down swipes scroll a long definition whatever the page-turn setting says -- the same
   // gesture as the Japanese panel, so an entry that does not fit reads the same way everywhere.
   if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
-    if (scroll > 0 && currentPage + 1 < totalPages) {
-      currentPage++;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    } else if (scroll < 0 && currentPage > 0) {
-      currentPage--;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    }
+    stepPage(scroll > 0 ? 1 : -1);
     return;
   }
 
   const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   if (touchTurn.prev || touchTurn.next) {
-    if (touchTurn.prev && currentPage > 0) {
-      currentPage--;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    } else if (touchTurn.next && currentPage + 1 < totalPages) {
-      currentPage++;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    }
+    stepPage(touchTurn.next ? 1 : -1);
     return;
   }
 
-  buttonNavigator.onNext([this] {
-    if (currentPage + 1 < totalPages) {
-      currentPage++;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    }
-  });
-
-  buttonNavigator.onPrevious([this] {
-    if (currentPage > 0) {
-      currentPage--;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    }
-  });
+  buttonNavigator.onNext([this] { stepPage(1); });
+  buttonNavigator.onPrevious([this] { stepPage(-1); });
 }
 
 // Draws the current page: a styled Page when the HTML layout succeeded,
@@ -365,11 +385,12 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   if (totalPages > 1) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
   }
+  const auto& entry = entries[currentEntry];
   const bool showStatus = miningStatus_ != MiningStatus::None;
   const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
   const auto layout =
-      DictionaryPanel::draw(renderer, headword.c_str(), showStatus ? nullptr : dictName.c_str(), counter,
-                            showStatus ? statusText : nullptr, miningDraft_.valid() && mappedInput.hasTouch());
+      DictionaryPanel::draw(renderer, entry.headword.c_str(), showStatus ? nullptr : dictLabel.c_str(), counter,
+                            showStatus ? statusText : nullptr, miningDraft().valid() && mappedInput.hasTouch());
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
@@ -381,8 +402,10 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   scope.endScanAndPrewarm();
   drawBody(fontId, layout.body.x, layout.body.y);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), miningDraft_.valid() ? tr(STR_MINING_SAVE) : "",
-                                            (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
+  const bool hasPrev = currentPage > 0 || currentEntry > 0;
+  const bool hasNext = currentPage + 1 < totalPages || currentEntry + 1 < entries.size();
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), miningDraft().valid() ? tr(STR_MINING_SAVE) : "",
+                                            hasPrev ? "<" : "", hasNext ? ">" : "");
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
