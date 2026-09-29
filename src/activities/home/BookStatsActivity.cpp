@@ -10,6 +10,7 @@
 #include "MappedInputManager.h"
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
+#include "components/icons/dictionaryIcons.h"
 #include "components/icons/stats_icons.h"
 #include "fontIds.h"
 
@@ -107,19 +108,23 @@ void BookStatsActivity::render(RenderLock&&) {
     renderer.drawText(SMALL_FONT_ID, cardX + (cardW - mw) / 2, y + 40, msg, true);
     maxScrollOffset = 0;
   } else {
-    char sessionsBuf[16], timeBuf[16], avgBuf[16], daysBuf[16];
+    char sessionsBuf[16], timeBuf[16], avgBuf[16], daysBuf[16], lookupsBuf[16], sentencesBuf[16];
     snprintf(sessionsBuf, sizeof(sessionsBuf), "%lu", static_cast<unsigned long>(stats.getSessions()));
     formatMinutes(timeBuf, sizeof(timeBuf), stats.getTotalMinutes());
     formatMinutes(avgBuf, sizeof(avgBuf), stats.getAverageSessionMinutes());
     snprintf(daysBuf, sizeof(daysBuf), "%d", stats.getDaysRead());
+    snprintf(lookupsBuf, sizeof(lookupsBuf), "%lu", static_cast<unsigned long>(stats.getLookups()));
+    snprintf(sentencesBuf, sizeof(sentencesBuf), "%lu", static_cast<unsigned long>(stats.getSentencesSaved()));
 
-    const StatsWidgets::Tile tiles[4] = {
+    const StatsWidgets::Tile tiles[6] = {
         {sessionsBuf, tr(STR_STAT_SESSIONS), BookOpenIcon24, false},
         {timeBuf, tr(STR_STAT_TOTAL_TIME), ClockIcon24, false},
         {avgBuf, tr(STR_STAT_AVG_SESSION), ChartBarIcon, true},
         {daysBuf, tr(STR_STAT_DAYS_READ), CalendarIcon24, false},
+        {lookupsBuf, tr(STR_STAT_LOOKUPS), DictLookupIcon, false},
+        {sentencesBuf, tr(STR_STAT_SENTENCES), DictAddCardIcon, false},
     };
-    y += StatsWidgets::drawTileGrid(renderer, cardX, y, cardW, tiles) + 8;
+    y += StatsWidgets::drawTileGrid(renderer, cardX, y, cardW, tiles, 6) + 8;
 
     const StatsWidgets::MonthSource source{&stats, bookMonthStatus, bookDaysReadInMonth};
     y += StatsWidgets::drawMonthCalendar(renderer, cardX, y, cardW, calYear, calMonth, today, source);

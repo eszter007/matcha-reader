@@ -1143,8 +1143,11 @@ On a touch device, tap a tab, or flick left and right across the page to step th
 
 ### 7.2 Per-book Stats
 
-Long press a book in the Library. Sessions, total time, average session, days read, and a calendar of the days you
-read that book.
+Long press a book in the Library. Sessions, total time, average session, days read, words looked up, sentences saved,
+and a calendar of the days you read that book.
+
+Words looked up counts each word whose definition you opened, once per visit to the lookup panel: stepping back and
+forth over the same word does not add to it. Sentences saved counts the cards written to your sentence-mining file.
 
 A session is one opening of the book. Opening the reader menu or settings partway through does not start another
 one. Waking the device back into a book does count as a new session, so an evening broken up by sleep shows as
@@ -1154,6 +1157,15 @@ This history starts when you install the version that added it. A book you read 
 recorded yet" until you next open it. Your overall Insights numbers go back as far as they always did.
 
 <p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book stats for one book"></p>
+
+#### Finishing a book
+
+Turning past the last page opens the end-of-book screen, for every book type. It marks the book finished, says which
+book this is for you, overall and in the book's language, and shows its reading time, the days from your first reading
+day to your last, your current streak, and, if you used the dictionary, the words you looked up and sentences you saved.
+Below are up to three books from the same folder and **Go to Home**. A short press of Back returns to the last page.
+
+<p align="center"><img src="docs/images/screenshots/end-of-book.png" width="260" alt="End-of-book screen with the book's stats and the next books"></p>
 
 ### 7.3 What the Numbers Do Not Cover
 

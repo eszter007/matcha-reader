@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
@@ -242,6 +243,7 @@ void DictionaryDefinitionActivity::saveSentence() {
   miningDraft_.card.date = sentencemining::today();  // the day of the save, not of the lookup
   miningStatus_ =
       sentencemining::append(miningDraft_.card, miningDraft_.language) ? MiningStatus::Saved : MiningStatus::Failed;
+  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(miningDraft_.bookPath.c_str(), 0, 1);
   requestUpdate();
 }
 

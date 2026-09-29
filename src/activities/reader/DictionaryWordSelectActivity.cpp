@@ -10,6 +10,7 @@
 #include <climits>
 #include <cstdlib>
 
+#include "BookStats.h"
 #include "DictionaryDefinitionActivity.h"
 #include "ReaderUtils.h"
 #include "WordSelectionScan.h"
@@ -348,6 +349,8 @@ void DictionaryWordSelectActivity::performLookup() {
     draft.card.author = mining_.bookAuthor;
     draft.card.dictionary = dict.getBookName();
     draft.language = sentencemining::languageForDictionary(folderName, language);
+    draft.bookPath = mining_.bookPath;
+    BookStats::addCounts(mining_.bookPath.c_str(), 1, 0);
     auto definitionView = makeUniqueNoThrow<DictionaryDefinitionActivity>(
         renderer, mappedInput, std::move(headword), std::move(definition), dict.definitionsAreHtml(),
         dict.getBookName());

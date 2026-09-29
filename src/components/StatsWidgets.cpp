@@ -131,11 +131,12 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
   return streakH;
 }
 
-int drawTileGrid(const GfxRenderer& renderer, const int x, const int y, const int w, const Tile tiles[4]) {
+int drawTileGrid(const GfxRenderer& renderer, const int x, const int y, const int w, const Tile* tiles,
+                 const int count) {
   const int halfW = (w - CARD_GAP) / 2;
   const int iconSm = 24;
 
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < count; i++) {
     const int col = i % 2;
     const int row = i / 2;
     const int cx = x + col * (halfW + CARD_GAP);
@@ -155,7 +156,7 @@ int drawTileGrid(const GfxRenderer& renderer, const int x, const int y, const in
     renderer.drawText(SMALL_FONT_ID, cx + 10, valueY + renderer.getLineHeight(UI_12_FONT_ID) + 2, tiles[i].label, true);
   }
 
-  return 2 * (TILE_HEIGHT + CARD_GAP);
+  return (count + 1) / 2 * (TILE_HEIGHT + CARD_GAP);
 }
 
 int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, const int w, const uint16_t calYear,

@@ -178,7 +178,7 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
   }
   renderer.clearScreen();
   if (endOfBookOptions) {
-    endOfBookOptions->loadOnce(bookPath);
+    endOfBookOptions->loadOnce(bookPath, getBookTitle(), getBookLanguage());
     // Release-publish AFTER loadOnce() so the main task's acquire load can't
     // observe an object whose names/selector are still being populated.
     endOfBookOptionsReady.store(true, std::memory_order_release);

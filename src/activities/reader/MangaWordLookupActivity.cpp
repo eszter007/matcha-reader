@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "MappedInputManager.h"
@@ -134,6 +135,7 @@ void MangaWordLookupActivity::onExit() {
   }
   // Return the dictionary cache memory (~30KB) to the pool -- see EpubReaderWordLookupActivity.
   DictIndex::releaseCaches();
+  BookStats::addCounts(mining_.bookPath.c_str(), static_cast<uint32_t>(countedLookups_.size()), 0);
   Activity::onExit();
 }
 
@@ -178,6 +180,7 @@ void MangaWordLookupActivity::saveSentence() {
   std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
   if (language.empty()) language = sentencemining::JAPANESE;
   miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
+  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
   requestUpdate();
 }
 
@@ -244,6 +247,7 @@ void MangaWordLookupActivity::performLookup() {
   // Render shows "Loading..." instead of "No match found" while this runs (fast navigation).
   lookupInFlight = true;
   performLookupImpl();
+  countLookup();
   lookupInFlight = false;
 }
 
@@ -661,4 +665,12 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   // from that plane: a black flash, then the image in a different tone. A FAST wave drives only the
   // pixels that change, the panel's, and leaves the page around it as it was.
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+void MangaWordLookupActivity::countLookup() {
+  if (!hasResult || resultHeadword.empty() || countedLookups_.size() >= MAX_COUNTED_LOOKUPS) return;
+  const auto hash = static_cast<uint32_t>(std::hash<std::string>{}(resultHeadword));
+  if (std::find(countedLookups_.begin(), countedLookups_.end(), hash) != countedLookups_.end()) return;
+  if (countedLookups_.empty()) countedLookups_.reserve(32);
+  countedLookups_.push_back(hash);
 }
