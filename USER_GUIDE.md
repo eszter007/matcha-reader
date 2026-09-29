@@ -961,6 +961,8 @@ a spreadsheet or another flashcard app, but Anki is what it is laid out for.
 - **With buttons:** open a definition and press **Select**.
 - **On a touch device:** tap the **+** in the top-right corner of the definition panel.
 
+<p align="center"><img src="docs/images/screenshots/sentence-mining.png" width="260" alt="A definition panel over a page of 1984, with the save button in its top-right corner circled"></p>
+
 The footer shows **Saved** (or **Could not save** if the SD card refused the write) until you move to another word,
 page or entry.
 
