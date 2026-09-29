@@ -552,7 +552,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
     LOG_ERR("ERS", "OOM: word select");
     return;
   }
-  wordSelect->setMiningContext({getBookTitle(), getBookAuthor(), std::move(nextPageText)});
+  wordSelect->setMiningContext({getBookTitle(), getBookAuthor(), std::move(nextPageText), {}, bookPath});
   startActivityForResult(std::move(wordSelect), [this](const ActivityResult&) { requestUpdate(); });
 }
 
@@ -4179,7 +4179,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         if (!lookup) {
           LOG_ERR("ERS", "OOM: word lookup panel");
         } else {
-          lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail)});
+          lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), {}, bookPath});
           panel = std::move(lookup);
         }
       }
@@ -4278,7 +4278,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         requestUpdate();  // the build was suspended for the panel; the next render resumes it
         return;
       }
-      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail)});
+      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), {}, bookPath});
       startActivityForResult(std::move(lookup), [this](const ActivityResult&) { requestUpdate(); });
     }
   }

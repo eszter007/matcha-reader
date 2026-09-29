@@ -16,9 +16,12 @@ namespace {
 static std::string statsDir() { return sdsystem::path("bookstats"); }
 constexpr uint8_t MAGIC[4] = {'B', 'K', 'S', 'T'};
 // v2 dropped lastFlushMinutes when sessions moved from flush-gap inference to recordOpen.
-constexpr uint8_t BOOKSTATS_VERSION = 2;
+// v3 appended the lookup and saved-sentence counters to the header; v2 files still load.
+constexpr uint8_t BOOKSTATS_VERSION = 3;
 // magic(4) + version(1) + sessions(4) + dayCount(4) + pathLen(2)
-constexpr size_t HEADER_BYTES = 15;
+constexpr size_t V2_HEADER_BYTES = 15;
+// + lookups(4) + sentencesSaved(4)
+constexpr size_t HEADER_BYTES = V2_HEADER_BYTES + 8;
 constexpr size_t DAY_RECORD_BYTES = 6;
 constexpr uint16_t MAX_PATH_LEN = 500;  // guards reserve() against a corrupt length field
 
@@ -61,6 +64,8 @@ std::string BookStats::filePathFor(const char* path) {
 bool BookStats::load(const char* path) {
   bookPath = path ? path : "";
   sessions = 0;
+  lookups = 0;
+  sentencesSaved = 0;
   days.clear();
   if (bookPath.empty()) return false;
 
@@ -71,12 +76,16 @@ bool BookStats::load(const char* path) {
   if (!Storage.openFileForRead("BSTAT", file.c_str(), f)) return false;
 
   uint8_t head[HEADER_BYTES];
-  if (f.read(head, sizeof(head)) != sizeof(head)) return false;
-  if (memcmp(head, MAGIC, 4) != 0 || head[4] != BOOKSTATS_VERSION) {
+  if (f.read(head, V2_HEADER_BYTES) != V2_HEADER_BYTES) return false;
+  if (memcmp(head, MAGIC, 4) != 0 || head[4] < 2 || head[4] > BOOKSTATS_VERSION) {
     // Start clean rather than error: an unreadable stats cache must not leave the screen
     // permanently blank. The next save takes the file over.
     LOG_DBG("BSTAT", "ignoring unreadable/old %s", file.c_str());
     return true;
+  }
+  const bool hasCounters = head[4] >= 3;
+  if (hasCounters && f.read(head + V2_HEADER_BYTES, HEADER_BYTES - V2_HEADER_BYTES) != HEADER_BYTES - V2_HEADER_BYTES) {
+    return false;
   }
   const uint32_t storedSessions = getU32(head + 5);
   const uint32_t dayCount = getU32(head + 9);
@@ -95,6 +104,10 @@ bool BookStats::load(const char* path) {
   }
 
   sessions = storedSessions;
+  if (hasCounters) {
+    lookups = getU32(head + 15);
+    sentencesSaved = getU32(head + 19);
+  }
   // Keep the most recent MAX_DAYS. Nothing follows the day records in this format, so the
   // skipped ones need not be consumed -- but they are, so a future block could be added safely.
   const size_t keep = std::min<size_t>(dayCount, MAX_DAYS);
@@ -144,6 +157,8 @@ bool BookStats::save() const {
   putU32(head + 5, sessions);
   putU32(head + 9, static_cast<uint32_t>(dayCount));
   putU16(head + 13, pathLen);
+  putU32(head + 15, lookups);
+  putU32(head + 19, sentencesSaved);
   if (f.write(head, sizeof(head)) != sizeof(head)) return false;
   if (f.write(bookPath.data(), pathLen) != pathLen) return false;
 
@@ -189,6 +204,28 @@ bool BookStats::recordOpen(const char* path) {
   if (!b.load(path)) return false;
   b.sessions++;
   return b.save();
+}
+
+bool BookStats::addCounts(const char* path, const uint32_t addLookups, const uint32_t addSentences) {
+  if (!path || !*path || (addLookups == 0 && addSentences == 0)) return false;
+  BookStats b;
+  if (!b.load(path)) return false;
+  b.lookups += addLookups;
+  b.sentencesSaved += addSentences;
+  return b.save();
+}
+
+int BookStats::getDaySpan() const {
+  if (days.empty()) return 0;
+  // Days since 0000-03-01 (Howard Hinnant's days_from_civil), enough for a difference.
+  const auto serial = [](const BookDay& d) {
+    const int y = d.year - (d.month <= 2 ? 1 : 0);
+    const int era = y / 400;
+    const int yoe = y - era * 400;
+    const int doy = (153 * (d.month + (d.month > 2 ? -3 : 9)) + 2) / 5 + d.day - 1;
+    return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  };
+  return serial(days.back()) - serial(days.front()) + 1;
 }
 
 uint32_t BookStats::getTotalMinutes() const {

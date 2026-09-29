@@ -7,3 +7,7 @@
 # https://github.com/tabler/tabler-icons. The dictionary panel's corner button on touch boards:
 # saves the looked-up word and its sentence for sentence mining.
 DictAddCardIcon = category-plus
+# Words looked up, on the end-of-book screen and the book stats page.
+DictLookupIcon = vocabulary
+# Day streak at the stat-row size on the end-of-book screen (flame.h is 32px).
+StreakIcon24 = flame

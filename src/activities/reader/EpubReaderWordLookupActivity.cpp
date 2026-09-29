@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "Epub/Page.h"
@@ -289,6 +290,7 @@ void EpubReaderWordLookupActivity::onExit() {
   // Return the dictionary cache memory (~30KB) to the pool -- the reader needs it for heavy
   // operations like re-pagination (zip inflate wants one contiguous 32KB block).
   DictIndex::releaseCaches();
+  BookStats::addCounts(mining_.bookPath.c_str(), static_cast<uint32_t>(countedLookups_.size()), 0);
   Activity::onExit();
 }
 
@@ -1115,6 +1117,7 @@ void EpubReaderWordLookupActivity::saveSentence() {
   const std::string_view label = visibleLabel() ? visibleLabel() : "";
   card.dictionary = std::string(label.substr(0, label.find(" | ")));
   miningStatus_ = sentencemining::append(card, sentencemining::JAPANESE) ? MiningStatus::Saved : MiningStatus::Failed;
+  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
   requestUpdate();
 }
 
@@ -1202,6 +1205,7 @@ void EpubReaderWordLookupActivity::performLookup() {
     lowMemoryResult = false;
     lastLookupHeapLimited = false;
   }
+  countLookup();
   lookupInFlight = false;
 }
 
@@ -2094,4 +2098,12 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   if (auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) fd->clearCache();
   }
+}
+
+void EpubReaderWordLookupActivity::countLookup() {
+  if (!hasResult || resultHeadword.empty() || countedLookups_.size() >= MAX_COUNTED_LOOKUPS) return;
+  const auto hash = static_cast<uint32_t>(std::hash<std::string>{}(resultHeadword));
+  if (std::find(countedLookups_.begin(), countedLookups_.end(), hash) != countedLookups_.end()) return;
+  if (countedLookups_.empty()) countedLookups_.reserve(32);
+  countedLookups_.push_back(hash);
 }

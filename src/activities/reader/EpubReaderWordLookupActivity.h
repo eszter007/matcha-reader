@@ -318,6 +318,11 @@ class EpubReaderWordLookupActivity final : public Activity {
   enum class MiningStatus : uint8_t { None, Saved, Failed };
   MiningContext mining_;
   MiningStatus miningStatus_ = MiningStatus::None;
+  // Hashes of the headwords shown this session, so browsing back and forth counts each word
+  // once; the total goes to BookStats in one write on exit.
+  static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
+  std::vector<uint32_t> countedLookups_;
+  void countLookup();
   void saveSentence();
   std::string miningSentence() const;
   void performLookup();

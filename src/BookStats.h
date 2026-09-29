@@ -41,7 +41,15 @@ class BookStats {
   // Sessions are counted by recordOpen, not here: an opening counts even if it banks no minute.
   void recordMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes);
 
+  // Adds to the dictionary counters and saves: words whose definition was shown, and sentences
+  // saved for Anki. One SD write per call, so lookup screens batch theirs until they close.
+  static bool addCounts(const char* bookPath, uint32_t lookups, uint32_t sentences);
+
   uint32_t getSessions() const { return sessions; }
+  uint32_t getLookups() const { return lookups; }
+  uint32_t getSentencesSaved() const { return sentencesSaved; }
+  // Calendar days from the first reading day to the last, both included; 0 with no history.
+  int getDaySpan() const;
   uint32_t getTotalMinutes() const;
   int getDaysRead() const { return static_cast<int>(days.size()); }
   // Mean minutes per opening, rounded. Zero-minute opens stay in the divisor: excluding them
@@ -58,5 +66,7 @@ class BookStats {
  private:
   std::string bookPath;
   uint32_t sessions = 0;
+  uint32_t lookups = 0;
+  uint32_t sentencesSaved = 0;
   std::vector<BookDay> days;
 };

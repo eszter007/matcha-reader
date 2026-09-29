@@ -21,6 +21,8 @@ struct BookContext {
   // The book's own language, for views whose dictionary does not say (manga: a comic in any
   // language). Empty when unknown.
   std::string bookLanguage;
+  // The book's identity in BookStats, which counts lookups and saved sentences per book.
+  std::string bookPath;
 };
 
 // A card waiting for its definition, handed from a word-select screen to the definition screen,
@@ -28,6 +30,7 @@ struct BookContext {
 struct Draft {
   Card card;
   std::string language;
+  std::string bookPath;  // BookStats identity, for the saved-sentence counter
   bool valid() const { return !card.word.empty(); }
 };
 

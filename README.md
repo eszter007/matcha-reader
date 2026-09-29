@@ -135,11 +135,14 @@ refresh, orientation, touch controls and the light. Each button names what tappi
 
 Streak, minutes this week, books finished, total time, and a calendar of the days you read. Recorded as you go, every few minutes and again when you close a book, so a flat battery costs you minutes rather than the whole session.
 
-Tabs across the top split the same numbers by language: **All**, then one per language the device has seen. Long press a book in the Library for its own sessions, total time, average session and calendar.
+Tabs across the top split the same numbers by language: **All**, then one per language the device has seen. Long press a book in the Library for its own sessions, total time, average session, words looked up, sentences saved and calendar.
+
+Finishing a book opens a celebration screen: which book this is for you overall and in its language ("Your 12th book · 3rd in 日本語"), your reading time, the days it took, your streak, and the words you looked up and sentences you saved in it. Below that, the next books in the same folder and **Go to Home**. Every book type gets it: EPUB, TXT, Markdown, XTC and manga.
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">
   <img src="docs/images/screenshots/book-stats.png" width="240" alt="Per-book stats for one book">
+  <img src="docs/images/screenshots/end-of-book.png" width="240" alt="End-of-book screen with the book's stats and the next books">
 </p>
 
 Manga counts the same as EPUBs. Language comes from the book, so set `--language` when you convert manga. Details and the known limits are in [§7](USER_GUIDE.md#7-reading-stats).

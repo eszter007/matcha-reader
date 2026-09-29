@@ -505,7 +505,7 @@ bool MangaReaderActivity::renderEndOfBook() {
   }
   renderer.clearScreen();
   if (endOfBookOptions) {
-    endOfBookOptions->loadOnce(book->getFolder());
+    endOfBookOptions->loadOnce(book->getFolder(), book->getTitle(), book->getLanguage().c_str());
     endOfBookOptions->render(renderer, mappedInput);
   } else {
     renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
@@ -1836,7 +1836,7 @@ void MangaReaderActivity::launchWordLookupAt(std::string combined, const int gly
     sdFontSystem.setJpFallbackNeeded(renderer, false);
     return;
   }
-  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage()});
+  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage(), book->getFolder()});
   startActivityForResult(std::move(lookup), [this, returnMode](const ActivityResult&) {
     {
       RenderLock lock;
@@ -1882,7 +1882,7 @@ void MangaReaderActivity::launchWordLookup() {
     sdFontSystem.setJpFallbackNeeded(renderer, false);
     return;
   }
-  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage()});
+  lookup->setMiningContext({book->getTitle(), book->getAuthor(), {}, book->getLanguage(), book->getFolder()});
   startActivityForResult(std::move(lookup), [this](const ActivityResult&) {
     {
       RenderLock lock;
