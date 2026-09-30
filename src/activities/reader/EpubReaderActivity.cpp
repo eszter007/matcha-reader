@@ -2347,6 +2347,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       renderStatusBar();
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
     }
+    // A vertical page counts as rendered too: the book becomes Continue Reading / Recent once
+    // it has shown one (rememberBookOnceRendered).
+    markPageRendered();
     runPostRenderTail(viewportWidth, viewportHeight, /*vertical=*/true, 0, 0);
 
     // End of the overlap window. Everything past this point may draw: the popups below, the
