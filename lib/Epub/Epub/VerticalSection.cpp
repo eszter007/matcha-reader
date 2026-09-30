@@ -17,6 +17,7 @@
 #include <string>
 
 #include "Epub/RubyGlossary.h"
+#include "Epub/blocks/ImageBlock.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "GfxRenderer.h"
 #include "VisibleTextUtils.h"
@@ -80,7 +81,8 @@ namespace {
 // elementDepth against an already-decremented one, so a style was never popped and ran to the end
 // of the chapter -- most visibly a <span class="em-sesame"> putting sesame marks on every
 // character after it. Cached pages carry the marks and the pagination they caused.
-constexpr uint8_t VSECTION_FILE_VERSION = 136;
+// v137: an image is rotated only when it fills the page (ImageBlock::fillsPage).
+constexpr uint8_t VSECTION_FILE_VERSION = 137;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -1151,10 +1153,27 @@ struct LayoutPageSink final : ParagraphSink {
     // pending: the pending page (whose content PRECEDES the image) landed in the cache AFTER
     // the image page, and post-image text silently merged onto it -- confirmed on a real device
     // as dialogue continuing mid-column across a scene-break graphic instead of starting fresh.
+    VerticalPage imagePage = makeImagePage(src);
+    // An image narrow enough to sit among the columns flows with the text: it takes the columns
+    // its width needs, upright, beside the text around it. A wider one gets its own page.
+    if (imagePage.imageWidth > 0 && imagePage.imageHeight > 0) {
+      int w = imagePage.imageWidth;
+      int h = imagePage.imageHeight;
+      ImageBlock::fitWithin(viewportWidth, viewportHeight, w, h);
+      // Vertical text runs in columns, so "fits in the flow" is about width: a narrow image (a
+      // heading strip, a small figure) sits in a few columns even at full height.
+      if (w * 10 < viewportWidth * 4) {
+        const int advance = std::max(1, layout.columnAdvancePx());
+        const auto columns = static_cast<uint16_t>((w + advance - 1) / advance);
+        char dims[24];
+        snprintf(dims, sizeof(dims), "\t%d\t%d", w, h);
+        layout.addInlineImage(imagePage.imagePath + "\t" + imagePage.imageSrcPath + dims, columns, w);
+        return;
+      }
+    }
     flushText();
     VerticalPage pendingTail;
     if (layout.finalizePendingPage(pendingTail)) writeOne(pendingTail);
-    VerticalPage imagePage = makeImagePage(src);
     imagePage.visibleTextOffset = visibleTextOffset;
     writeOne(imagePage);
   }
@@ -1442,7 +1461,9 @@ struct LayoutPageSink final : ParagraphSink {
       if (decoder->getDimensions(cachedPath, dims) && dims.width > 0 && dims.height > 0) {
         const bool viewportIsPortrait = (viewportHeight > viewportWidth);
         const bool imageIsLandscape = (dims.width > dims.height);
-        rotated = (viewportIsPortrait == imageIsLandscape);
+        // Rotated only when it fills the page; a smaller image stays upright at its own size.
+        rotated = (viewportIsPortrait == imageIsLandscape) &&
+                  ImageBlock::fillsPage(dims.width, dims.height, viewportWidth, viewportHeight);
         displayW = dims.width;
         displayH = dims.height;
       }

@@ -258,7 +258,9 @@ namespace {
 //      Hangul no longer breaks between syllables -- Korean wraps at spaces, justifies on word
 //      spaces alone, and with hyphenation on may split where the CJK rules allow. The header
 //      grew and line breaking moved, so a v93 cache neither parses nor matches.
-constexpr uint8_t SECTION_FILE_VERSION = 94;
+// v95/v96: an image that does not fill the page flows inline with the text, upright; only one that
+//      fills it in either dimension (at no more than its own size) gets its own page and the rotation.
+constexpr uint8_t SECTION_FILE_VERSION = 96;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

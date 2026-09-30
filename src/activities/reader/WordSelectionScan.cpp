@@ -243,6 +243,7 @@ void WordSelectionScan::initFromVerticalPage(const VerticalPage& page) {
   reserveGlyphsSafe(allGlyphs, page.glyphs.size());
   for (const auto& g : page.glyphs) {
     if (g.renderKind == VerticalGlyph::RotatedRun) continue;
+    if (VerticalParsedText::isImageMarker(g.codepoint)) continue;  // an inline image, not text
     GlyphRef ref{g.x, g.y, g.column, g.row, g.codepoint, g.paragraphIndex, 0};
     if (!pushGlyphSafe(allGlyphs, ref)) {
       scanTruncated = true;

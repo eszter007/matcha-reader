@@ -1805,6 +1805,72 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
                 (void)imageMarginBottom;
 
+                // An image that does not fill the page flows with the text: placed at the current
+                // position at its layout size, upright, and followed by more text on the same page.
+                // Only one that fills the page in either dimension gets a page of its own below.
+                // Never enlarged past its own pixels, as on its own page: a stylesheet's width:100%
+                // would otherwise make every small figure "fill" the page.
+                if (dims.width > 0 && dims.height > 0 && displayWidth > dims.width) {
+                  displayHeight = static_cast<int>(static_cast<int64_t>(displayHeight) * dims.width / displayWidth);
+                  displayWidth = dims.width;
+                }
+                if (dims.width > 0 && dims.height > 0 && displayWidth > 0 && displayHeight > 0 &&
+                    !ImageBlock::fillsPage(displayWidth, displayHeight, self->viewportWidth, self->viewportHeight)) {
+                  if (!self->currentPage) {
+                    self->currentPage.reset(new (std::nothrow) Page());
+                    if (!self->currentPage) {
+                      LOG_ERR("EHP", "Failed to create page for inline image");
+                      return;
+                    }
+                    self->currentPageNextY = 0;
+                  }
+                  // Does not fit under what is already on the page: carry it to the next one.
+                  if (self->currentPageNextY + imageMarginTop + displayHeight > self->viewportHeight &&
+                      !self->currentPage->elements.empty()) {
+                    self->maybeEmitOpenBoxForPageBreak();
+                    self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
+                                         self->xpathListItemIndex, self->currentPageVisibleOffset);
+                    self->completedPageCount++;
+                    self->currentPage.reset(new (std::nothrow) Page());
+                    if (!self->currentPage) {
+                      LOG_ERR("EHP", "Failed to create page for inline image");
+                      return;
+                    }
+                    self->currentPageNextY = 0;
+                    self->currentPageVisibleOffsetSet = false;
+                    imageMarginTop = 0;
+                  }
+                  self->currentPageNextY += imageMarginTop;
+                  auto inlineBlock =
+                      makeUniqueNoThrow<ImageBlock>(cachedImagePath, resolvedPath, static_cast<int16_t>(displayWidth),
+                                                    static_cast<int16_t>(displayHeight));
+                  if (!inlineBlock) {
+                    LOG_ERR("EHP", "Failed to create inline ImageBlock");
+                    return;
+                  }
+                  const int inlineX = std::max(0, (self->viewportWidth - displayWidth) / 2);
+                  auto inlineImage = makeUniqueNoThrow<PageImage>(std::move(inlineBlock), static_cast<int16_t>(inlineX),
+                                                                  static_cast<int16_t>(self->currentPageNextY));
+                  if (!inlineImage) {
+                    LOG_ERR("EHP", "Failed to create inline PageImage");
+                    return;
+                  }
+                  self->currentPage->elements.push_back(std::move(inlineImage));
+                  self->setCurrentPageVisibleOffset(self->visibleTextOffset);
+                  // The container's bottom margin is applied when it closes -- after a caption, which
+                  // must sit right under the image.
+                  self->currentPageNextY += displayHeight;
+                  if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
+                    BlockStyle resetStyle;
+                    resetStyle.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                                               ? CssTextAlign::Justify
+                                               : static_cast<CssTextAlign>(self->paragraphAlignment);
+                    self->currentTextBlock->setBlockStyle(resetStyle);
+                  }
+                  self->depth += 1;
+                  return;
+                }
+
                 // Images get their own dedicated page. Complete the current page
                 // if it already has content, then start a fresh page for the image.
                 if (self->currentPage && !self->currentPage->elements.empty()) {

@@ -1717,6 +1717,42 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // class benefit too. Only a run of exactly two marks qualifies, and only
     // when no ASCII letter/digit adjoins it -- "Hello!?" stays part of the
     // rotated latin run. Other run lengths keep their existing handling.
+    if (isImageMarker(pc.codepoint)) {
+      const uint32_t id = pc.codepoint - IMAGE_MARKER_BASE;
+      if (id < inlineImages_.size()) {
+        const uint16_t span = std::max<uint16_t>(1, std::min<uint16_t>(inlineImages_[id].columns, columnsPerPage));
+        if (row != 0) {
+          column++;
+          row = 0;
+          cur.finalizePageIfNeeded();
+        }
+        // All of its columns on one page: start the next page when the rest of this one is short.
+        if (column != 0 && column + span > columnsPerPage) {
+          column = columnsPerPage;
+          cur.finalizePageIfNeeded();
+        }
+        VerticalGlyph g;
+        g.codepoint = pc.codepoint;
+        g.column = static_cast<uint16_t>(column + span - 1);  // leftmost column it covers
+        g.row = 0;
+        // Flush with the right edge of its first (rightmost) column, extending left over the rest.
+        const int rightEdge = geom.columnLeftX(static_cast<uint16_t>(column)) + geom.cellPx;
+        g.x = static_cast<uint16_t>(std::max(0, rightEdge - inlineImages_[id].widthPx));
+        g.y = 0;
+        g.paragraphIndex = pc.paragraphIndex;
+        g.byteOffset = pc.byteOffset;
+        g.style = pc.style;
+        g.renderKind = VerticalGlyph::Upright;
+        cur.pushGlyph(page, g, inlineImages_[id].info);
+        column += span;
+        row = 0;
+        cur.finalizePageIfNeeded();
+        row = cur.columnStartRow(true);
+      }
+      idx++;
+      continue;
+    }
+
     if (isBangOrQuestion(pc.codepoint)) {
       const bool prevAlnum = idx > 0 && isAsciiAlnum(stream_[idx - 1].codepoint);
       size_t markEnd = idx;
@@ -2266,3 +2302,19 @@ bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
   anyPageEverProduced_ = true;  // set, NOT reset -- see the header doc comment
   return true;
 }
+
+void VerticalParsedText::addInlineImage(std::string info, const uint16_t columns, const int widthPx) {
+  if (inlineImages_.size() >= 0x10000 || !canPushStreamChar()) return;
+  const uint32_t id = static_cast<uint32_t>(inlineImages_.size());
+  inlineImages_.push_back({std::move(info), columns, static_cast<int16_t>(widthPx)});
+  // Its own paragraph: text before it ends its column, text after starts a fresh one.
+  const uint32_t paragraphIndex = static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size());
+  paragraphBreaksBeforeIndex_.push_back(stream_.size());
+  PendingChar pc{};
+  pc.codepoint = IMAGE_MARKER_BASE + id;
+  pc.paragraphIndex = paragraphIndex;
+  stream_.push_back(std::move(pc));
+  paragraphBreaksBeforeIndex_.push_back(stream_.size());
+}
+
+int VerticalParsedText::columnAdvancePx() const { return verticalCellPx(renderer_, fontId_) + columnGapPx_; }
