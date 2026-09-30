@@ -314,7 +314,12 @@ class EpubReaderActivity final : public ReaderActivity {
   // Draws one vertical TEXT page into the framebuffer; shared by the normal render path and
   // the early-first-render hook. Does not touch the display. glyphsAlreadyWarm skips the
   // prewarm when the page's glyphs were pre-loaded during idle (see prewarmedVPage_).
-  void renderVerticalPageBody(const VerticalPage& vpage, bool glyphsAlreadyWarm = false);
+  // imagesOnly: just the page's inline images, for their grayscale refine while the text stays B/W.
+  void renderVerticalPageBody(const VerticalPage& vpage, bool glyphsAlreadyWarm = false, bool imagesOnly = false);
+  // Gray planes of the vertical text page over its B/W base, then the gray waveform: the text when
+  // anti-aliasing is on, the inline images always. Reads the page afresh (the post-render tail's
+  // warm reuses the single-page cache). Cancelled by input; controller RAM is re-synced either way.
+  void renderVerticalGrayPlanes(bool withText, bool withImages);
   // Page index whose glyphs currently sit in the SD-font mini cache from the idle next-page
   // warm; -1 = cache cold/unknown. Kindle-class turns: the NEXT page's glyphs are loaded
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)

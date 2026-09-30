@@ -2171,6 +2171,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     updateBookmarkFlag();
 
     bool imagePageDisplayed = false;
+    bool textPageHasImages = false;
     {
       const auto* vpage = verticalSection->getPage();
       if (!vpage) {
@@ -2342,9 +2343,29 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!monoBmp) pagesUntilFullRefresh = 1;
         imagePageDisplayed = true;
       } else {
+        const uint32_t pageKey =
+            (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage);
+        textPageHasImages = VerticalTextBlock(*vpage).hasImages();
+        if (textPageHasImages &&
+            requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == pageKey) {
+          // The idle refine of a text page's inline images: the B/W page is already on the glass.
+          // Redraw it into the framebuffer (glyphs are warm, the images a cache read) as the base
+          // the planes' cleanup re-syncs from, then add the grays -- text too when AA is on.
+          renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true);
+          renderStatusBar();
+          imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+          renderVerticalGrayPlanes(SETTINGS.textAntiAliasing, /*withImages=*/true);
+          return;
+        }
         renderedVPage_ = verticalSection->currentPage;  // see the post-render warm block below
         const bool vGlyphsWarm = prewarmedVPage_ == verticalSection->currentPage;
         renderVerticalPageBody(*vpage, vGlyphsWarm);
+        // Inline images show B/W now and refine to grayscale once the page is left idle
+        // (readerLoop), as image pages do: flipping through costs one fast refresh each.
+        if (textPageHasImages && renderer.supportsStripGrayscale()) {
+          ImageBlock::releaseRenderCache();
+          pendingImageRefine_.store(pageKey, std::memory_order_relaxed);
+        }
         // Re-assert the claim for the page the body just prewarmed (it cleared it above).
         if (!vGlyphsWarm) prewarmedVPage_ = verticalSection->currentPage;
       }
@@ -2361,9 +2382,27 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // the image warm are not, and run after the wait.
     shownPageHasImages_ = imagePageDisplayed;
     const bool overlapRefresh = !imagePageDisplayed && renderer.supportsAsyncRefresh();
+    // Text anti-aliasing: gray planes after the B/W base, as renderPage() does. Not while the chapter
+    // is still being laid out (the build holds the heap the strip scratch needs), and not on a page
+    // with inline images, whose idle refine adds the text grays along with the images'.
+    const bool textAa = !imagePageDisplayed && !textPageHasImages && SETTINGS.textAntiAliasing &&
+                        renderer.supportsStripGrayscale() &&
+                        renderer.grayscaleCapabilities().base != HalDisplay::GrayscaleBase::Combined &&
+                        !verticalBuildInProgress_.load(std::memory_order_relaxed);
+    const uint32_t grayInputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
-      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
+      if (textAa && pagesUntilFullRefresh <= 1) {
+        // A cleanup refresh settles the grays only when the preconditioning runs before the planes.
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        renderer.preconditionGrayscale();
+        pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+      } else if (textAa && !overlapRefresh) {
+        renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+        pagesUntilFullRefresh--;
+      } else {
+        ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
+      }
     }
     // A vertical page counts as rendered too: the book becomes Continue Reading / Recent once
     // it has shown one (rememberBookOnceRendered).
@@ -2373,6 +2412,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // End of the overlap window. Everything past this point may draw: the popups below, the
     // screenshot's framebuffer read, and the image warm's cache decode.
     if (overlapRefresh) renderer.waitRefreshComplete();
+
+    if (textAa) {
+      imageWarmStampSnapshot_ = grayInputStamp;  // a key pressed since the render abandons the grays
+      renderVerticalGrayPlanes(/*withText=*/true, /*withImages=*/false);
+    }
 
     showPendingSyncSaveError();
 
@@ -3995,8 +4039,9 @@ bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
   return true;
 }
 
-void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const bool glyphsAlreadyWarm) {
-  if (!glyphsAlreadyWarm) prewarmVerticalPageGlyphs(vpage);
+void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const bool glyphsAlreadyWarm,
+                                                const bool imagesOnly) {
+  if (!imagesOnly && !glyphsAlreadyWarm) prewarmVerticalPageGlyphs(vpage);
   // Same origin derivation as render(): vertical text only needs the top-left corner, but
   // getOrientedViewableTRBL fills all four edges -- right/bottom are intentionally unused here.
   int marginTop, marginLeft;
@@ -4005,6 +4050,10 @@ void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const
   marginTop += SETTINGS.screenMargin;
   marginLeft += SETTINGS.screenMargin;
   VerticalTextBlock block(vpage);
+  if (imagesOnly) {
+    block.renderImages(renderer, marginLeft, marginTop);
+    return;
+  }
   if (useFurigana()) {
     // Ruby in the body font: its SUP style draws at 50%, so furigana is half the body size at every
     // font size (JLREQ 3.3.2), matching the half-em ruby gap the layout reserves.
@@ -4012,6 +4061,53 @@ void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const
     block.render(renderer, bodyFontId, bodyFontId, marginLeft, marginTop, true);
   } else {
     block.render(renderer, effectiveReaderFontId(), marginLeft, marginTop, true);
+  }
+}
+
+void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const bool withImages) {
+  const auto t0 = millis();
+  renderer.waitRefreshComplete();  // the plane writes need the panel idle
+  const auto tWait = millis();
+  const VerticalPage* vpage = verticalSection ? verticalSection->getPage() : nullptr;
+  const int gh = renderer.getDisplayHeight();
+  const int gwBytes = renderer.getDisplayWidthBytes();
+  // Every strip re-reads an image's whole pixel cache, so images take the taller strip; text culls
+  // out-of-band glyphs and stays on the smaller scratch.
+  int stripRows = withImages ? 160 : 80;
+  auto scratch = vpage ? makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows) : nullptr;
+  if (vpage && !scratch && stripRows > 80) {
+    stripRows = 80;
+    scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
+  }
+  bool cancelled = !scratch;
+  if (!scratch) LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); page stays B/W", gwBytes * stripRows);
+  for (int plane = 0; plane < 2 && !cancelled; plane++) {
+    const bool lsb = plane == 0;
+    renderer.setRenderMode(lsb ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
+    for (int y = 0; y < gh; y += stripRows) {
+      if (imageWarmShouldCancel(this)) {
+        cancelled = true;
+        break;
+      }
+      const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
+      renderer.beginStripTarget(scratch.get(), y, rows);
+      renderer.clearScreen(0x00);
+      renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true, /*imagesOnly=*/!withText);
+      renderer.endStripTarget();
+      renderer.writeGrayscalePlaneStrip(lsb, scratch.get(), y, rows);
+    }
+  }
+  const auto tPlanes = millis();
+  if (!cancelled) renderer.displayGrayBuffer();
+  renderer.setRenderMode(GfxRenderer::BW);
+  // The B/W framebuffer is intact; re-sync controller RAM from it for the next differential turn.
+  renderer.cleanupGrayscaleWithFrameBuffer();
+  LOG_DBG("ERS", "Vertical gray planes (text=%d images=%d): wait=%lums planes=%lums display=%lums cancelled=%d",
+          withText, withImages, tWait - t0, tPlanes - tWait, millis() - tPlanes, cancelled);
+  if (withImages) {
+    ImageBlock::releaseRenderCache();
+    // Image grays leave charge a plain FAST diff cannot clear; the next page takes the HALF cleanup.
+    pagesUntilFullRefresh = 1;
   }
 }
 

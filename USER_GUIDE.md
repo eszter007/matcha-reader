@@ -384,7 +384,7 @@ open a list when selected.
 
 - **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` or `/.dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
 
-- **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode. Note this slows down page turns slightly.
+- **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode, horizontal and vertical (Japanese) text alike, furigana included. Note this slows down page turns slightly: the grey edges follow the black-and-white page about half a second later, and a page turn before then skips them. Images inside vertical text turn grayscale once you stay on the page, whether or not this is on.
 
 - **Images**: Whether to display embedded images (JPG/PNG) found in EPUB files; options are "ON" (default) or "OFF".
 
