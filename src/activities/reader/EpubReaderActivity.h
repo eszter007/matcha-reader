@@ -243,9 +243,12 @@ class EpubReaderActivity final : public ReaderActivity {
     int spine = -1;
     uint16_t width = 0;
     uint16_t height = 0;
+    int fontId = 0;     // font size moves CSS-em image sizes, and with them the cache dimensions
+    int pageCount = 0;  // a rebuilt layout (other settings) changes it
     bool vertical = false;
     bool operator==(const ImageWarmScope& o) const {
-      return spine == o.spine && width == o.width && height == o.height && vertical == o.vertical;
+      return spine == o.spine && width == o.width && height == o.height && fontId == o.fontId &&
+             pageCount == o.pageCount && vertical == o.vertical;
     }
     bool operator!=(const ImageWarmScope& o) const { return !(*this == o); }
   };
@@ -254,6 +257,11 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr uint32_t NO_IMAGE_REFINE = UINT32_MAX;
   std::atomic<uint32_t> pendingImageRefine_{NO_IMAGE_REFINE};
   std::atomic<uint32_t> requestedImageRefine_{NO_IMAGE_REFINE};
+  // A grayscale refine is waiting for the render task: the chapter-wide image warm yields to it.
+  bool imageRefinePending() const {
+    return pendingImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE ||
+           requestedImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE;
+  }
   void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
   static bool imageWarmShouldCancel(const void* ctx);
   // True when the next turn has already been requested: a button is physically down, or a render

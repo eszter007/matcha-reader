@@ -571,6 +571,7 @@ void EpubReaderActivity::readerLoop() {
   if (mappedInput.wasAnyPressed()) {
     imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
     pendingImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+    requestedImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   }
 
   // Someone else turned the screen while this reader was stacked (the control
@@ -1756,6 +1757,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   // block on the RenderLock it holds.
   imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
   pendingImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+  requestedImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
 
   const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
   const int pgCount = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
@@ -3253,23 +3255,25 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     }
     // Then the rest of the chapter, once per chapter: the whole scan is repeated only after a
     // cancel or a change of chapter or page size.
-    const ImageWarmScope scope{currentSpineIndex, viewportWidth, viewportHeight, true};
-    if (imageWarmChapterDone_ == scope) return;
+    const ImageWarmScope scope{currentSpineIndex,          viewportWidth, viewportHeight, fontId,
+                               verticalSection->pageCount, true};
+    // The shown page's grayscale refine goes first; the render tail after it resumes the scan.
+    if (imageWarmChapterDone_ == scope || imageRefinePending()) return;
 
     for (int ahead = 2; ahead < verticalSection->pageCount; ahead++) {
       const int page = verticalSection->currentPage + ahead;
       if (page >= verticalSection->pageCount) break;
       // Re-check the heap per page: getPage() may pull a page in from the section file.
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
       const VerticalPage* aheadPage = verticalSection->getPage(page);
-      if (!aheadPage) break;
+      if (!aheadPage) return;  // unread (heap/SD): not a finished scan, so it is retried
       if (!warmVerticalPage(*aheadPage)) return;
     }
     // The pages before this one, nearest first.
     for (int page = verticalSection->currentPage - 2; page >= 0; page--) {
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
       const VerticalPage* behind = verticalSection->getPage(page);
-      if (!behind) break;
+      if (!behind) return;
       if (!warmVerticalPage(*behind)) return;
     }
     imageWarmChapterDone_ = scope;
@@ -3310,12 +3314,12 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   }
   // Then the rest of the chapter, once per chapter (repeated only after a cancel or a change of
   // chapter or page size), so no image in it is decoded while the reader waits.
-  const ImageWarmScope scope{currentSpineIndex, viewportWidth, viewportHeight, false};
-  if (imageWarmChapterDone_ != scope) {
+  const ImageWarmScope scope{currentSpineIndex, viewportWidth, viewportHeight, fontId, section->pageCount, false};
+  if (imageWarmChapterDone_ != scope && !imageRefinePending()) {
     for (int pageIndex = 0; pageIndex < section->pageCount; pageIndex++) {
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
       auto page = section->loadPageAt(pageIndex);
-      if (!page) break;
+      if (!page) return;  // unread (heap/SD): not a finished scan, so it is retried
       if (!page->hasImages()) continue;
       if (!warmHorizontalPage(*page)) return;
     }
