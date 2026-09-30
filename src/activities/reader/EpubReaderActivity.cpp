@@ -570,7 +570,8 @@ void EpubReaderActivity::readerLoop() {
   // stamp per decode block, so the wait stays in the milliseconds).
   if (mappedInput.wasAnyPressed()) {
     imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
-    pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+    pendingImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+    requestedImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   }
 
   // Someone else turned the screen while this reader was stacked (the control
@@ -599,18 +600,18 @@ void EpubReaderActivity::readerLoop() {
     pendingOrientation = 0xFF;
   }
 
-  // A horizontal image is shown immediately in BW; refine it only after the reader
-  // leaves the page idle. The render lock keeps this behind the foreground render,
+  // An image page is shown immediately in BW, horizontal or vertical; refine it to grayscale only
+  // after the reader leaves the page idle. The render lock keeps this behind the foreground render,
   // and any input above cancels the pending refinement before it can be queued.
   constexpr unsigned long IMAGE_REFINE_IDLE_MS = 150;
-  uint32_t pendingRefine = pendingHorizontalImageRefine_.load(std::memory_order_relaxed);
-  if (pendingRefine != NO_IMAGE_REFINE && section && lastRenderCompleteMs != 0 &&
+  uint32_t pendingRefine = pendingImageRefine_.load(std::memory_order_relaxed);
+  if (pendingRefine != NO_IMAGE_REFINE && (section || verticalSection) && lastRenderCompleteMs != 0 &&
       millis() - lastRenderCompleteMs >= IMAGE_REFINE_IDLE_MS && !RenderLock::peek()) {
-    const uint32_t currentKey =
-        (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
-    if (pendingRefine == currentKey && pendingHorizontalImageRefine_.compare_exchange_strong(
-                                           pendingRefine, NO_IMAGE_REFINE, std::memory_order_relaxed)) {
-      requestedHorizontalImageRefine_.store(currentKey, std::memory_order_relaxed);
+    const int shownPage = verticalSection ? verticalSection->currentPage : section->currentPage;
+    const uint32_t currentKey = (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(shownPage);
+    if (pendingRefine == currentKey &&
+        pendingImageRefine_.compare_exchange_strong(pendingRefine, NO_IMAGE_REFINE, std::memory_order_relaxed)) {
+      requestedImageRefine_.store(currentKey, std::memory_order_relaxed);
       requestUpdate();
       return;
     }
@@ -1755,7 +1756,8 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   // bump didn't fire -- cancel a running image warm before the chapter-boundary branches below
   // block on the RenderLock it holds.
   imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
-  pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+  pendingImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+  requestedImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
 
   const int curPage = verticalSection ? verticalSection->currentPage : (section ? section->currentPage : 0);
   const int pgCount = verticalSection ? verticalSection->pageCount : (section ? section->pageCount : 0);
@@ -2245,12 +2247,21 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // controller RAM, leaving the sleep screen on the panel -- #237), a manual refresh must
         // scrub regardless, and gray planes from a preceding image page sit in RED until a
         // non-FAST pass rewrites it.
+        const uint32_t imageKey =
+            (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage);
+        // The idle refine: the BW picture is already on the glass. Redraw it into the framebuffer
+        // (a RAM/cache read) for the planes' cleanup below, without driving the panel again.
+        const bool grayscaleRefineOnly =
+            requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == imageKey;
         const bool cleanImageBasePending =
-            forcedRefreshPending || pagesUntilFullRefresh == 0 || renderer.panelHasGrayPlanes();
-        forcedRefreshPending = false;
+            !grayscaleRefineOnly &&
+            (forcedRefreshPending || pagesUntilFullRefresh == 0 || renderer.panelHasGrayPlanes());
+        if (!grayscaleRefineOnly) forcedRefreshPending = false;
         drawImagePage();
         renderStatusBar();
-        renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+        if (!grayscaleRefineOnly) {
+          renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+        }
 
         // The grayscale refine below re-reads the pixel cache several times (~1s+) and the BW
         // image is ALREADY a valid picture on the persistent e-ink. Snapshot the input stamp so
@@ -2267,7 +2278,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         const bool monoBmp = FsHelpers::hasBmpExtension(vpage->imagePath) &&
                              BmpToFramebufferConverter::isMonochromeStatic(vpage->imagePath);
 
-        if (!monoBmp && renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
+        // BW first: the grayscale planes wait until the reader stays on the page (readerLoop), so
+        // flipping through illustrations costs one fast refresh each.
+        if (!grayscaleRefineOnly && !monoBmp && renderer.supportsStripGrayscale()) {
+          pendingImageRefine_.store(imageKey, std::memory_order_relaxed);
+        }
+        if (grayscaleRefineOnly && !monoBmp && renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
           const int gh = renderer.getDisplayHeight();
           const int gwBytes = renderer.getDisplayWidthBytes();
           // Each grayscale strip re-reads the WHOLE pixel cache (the .pxc is row-major in logical
@@ -2333,6 +2349,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!vGlyphsWarm) prewarmedVPage_ = verticalSection->currentPage;
       }
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
+      // The idle image refine (readerLoop) counts its wait from here.
+      lastRenderCompleteMs = millis();
     }
 
     // Async: start the waveform and return, so runPostRenderTail() below runs DURING the panel's
@@ -2814,7 +2832,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const uint32_t currentKey =
         (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
     const bool grayscaleRefineOnly =
-        requestedHorizontalImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == currentKey;
+        requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == currentKey;
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft,
                    /*glyphsAlreadyWarm=*/prewarmedHPage_ == section->currentPage, grayscaleRefineOnly);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
@@ -3195,9 +3213,26 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     // illustration with a cold cache stalls the turn; spending otherwise idle time on the ones
     // further ahead makes every later image page open immediately. Cheap to repeat: warmCache()
     // returns AlreadyWarm after a 4-byte header read once the cache exists.
-    constexpr int IMAGE_WARM_LOOKAHEAD_PAGES = 8;
     const auto warmVerticalPage = [&](const VerticalPage& page) -> bool {
-      if (!page.isImagePage()) return true;  // keep scanning
+      if (!page.isImagePage()) {
+        // Inline images ride in the text as glyphs whose text is "path\tsrc\twidth\theight".
+        for (const auto& g : page.glyphs) {
+          if (!VerticalParsedText::isImageMarker(g.codepoint)) continue;
+          const std::string& info = page.glyphTextStr(g);
+          const size_t t1 = info.find('\t');
+          const size_t t2 = t1 == std::string::npos ? t1 : info.find('\t', t1 + 1);
+          const size_t t3 = t2 == std::string::npos ? t2 : info.find('\t', t2 + 1);
+          if (t3 == std::string::npos) continue;
+          const int w = atoi(info.c_str() + t2 + 1);
+          const int h = atoi(info.c_str() + t3 + 1);
+          if (w <= 0 || h <= 0) continue;
+          if (!warmBlock(ImageBlock(info.substr(0, t1), info.substr(t1 + 1, t2 - t1 - 1), static_cast<int16_t>(w),
+                                    static_cast<int16_t>(h)))) {
+            return false;
+          }
+        }
+        return true;  // keep scanning
+      }
       if (page.imageRotated) {
         const int reserve = readerBottomReserve(/*verticalMode=*/false);
         ImageBlock block(page.imagePath, page.imageSrcPath, page.imageWidth, page.imageHeight);
@@ -3213,16 +3248,35 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     };
 
     if (vp && !warmVerticalPage(*vp)) return;  // cancelled: the reader wants the render task back
+    // Then the page behind, for a turn back.
+    if (verticalSection->currentPage > 0) {
+      const VerticalPage* prev = verticalSection->getPage(verticalSection->currentPage - 1);
+      if (prev && !warmVerticalPage(*prev)) return;
+    }
+    // Then the rest of the chapter, once per chapter: the whole scan is repeated only after a
+    // cancel or a change of chapter or page size.
+    const ImageWarmScope scope{currentSpineIndex,          viewportWidth, viewportHeight, fontId,
+                               verticalSection->pageCount, true};
+    // The shown page's grayscale refine goes first; the render tail after it resumes the scan.
+    if (imageWarmChapterDone_ == scope || imageRefinePending()) return;
 
-    for (int ahead = 2; ahead <= IMAGE_WARM_LOOKAHEAD_PAGES; ahead++) {
+    for (int ahead = 2; ahead < verticalSection->pageCount; ahead++) {
       const int page = verticalSection->currentPage + ahead;
       if (page >= verticalSection->pageCount) break;
       // Re-check the heap per page: getPage() may pull a page in from the section file.
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
       const VerticalPage* aheadPage = verticalSection->getPage(page);
-      if (!aheadPage) break;
+      if (!aheadPage) return;  // unread (heap/SD): not a finished scan, so it is retried
       if (!warmVerticalPage(*aheadPage)) return;
     }
+    // The pages before this one, nearest first.
+    for (int page = verticalSection->currentPage - 2; page >= 0; page--) {
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
+      const VerticalPage* behind = verticalSection->getPage(page);
+      if (!behind) return;
+      if (!warmVerticalPage(*behind)) return;
+    }
+    imageWarmChapterDone_ = scope;
     return;
   }
 
@@ -3248,6 +3302,28 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
     auto page = section->loadPageAt(pageIndex);
     if (!page || !warmHorizontalPage(*page)) return;
+  }
+  // One page the other way, for a turn back.
+  {
+    const int behind = section->currentPage - direction;
+    if (behind >= 0 && behind < section->pageCount) {
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+      auto page = section->loadPageAt(behind);
+      if (page && !warmHorizontalPage(*page)) return;
+    }
+  }
+  // Then the rest of the chapter, once per chapter (repeated only after a cancel or a change of
+  // chapter or page size), so no image in it is decoded while the reader waits.
+  const ImageWarmScope scope{currentSpineIndex, viewportWidth, viewportHeight, fontId, section->pageCount, false};
+  if (imageWarmChapterDone_ != scope && !imageRefinePending()) {
+    for (int pageIndex = 0; pageIndex < section->pageCount; pageIndex++) {
+      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
+      auto page = section->loadPageAt(pageIndex);
+      if (!page) return;  // unread (heap/SD): not a finished scan, so it is retried
+      if (!page->hasImages()) continue;
+      if (!warmHorizontalPage(*page)) return;
+    }
+    imageWarmChapterDone_ = scope;
   }
 
   // Continue the same short lookahead across the chapter boundary in the
@@ -3444,7 +3520,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   if (!grayscaleRefineOnly && pageHasImages) {
     const uint32_t currentKey =
         (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
-    pendingHorizontalImageRefine_.store(currentKey, std::memory_order_relaxed);
+    pendingImageRefine_.store(currentKey, std::memory_order_relaxed);
     LOG_DBG("ERS", "Page render (image BW): prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
             tBwRender - tPrewarm, tDisplay - tBwRender, tDisplay - t0);
     return;

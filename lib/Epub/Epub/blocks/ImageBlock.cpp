@@ -191,6 +191,30 @@ int loadPxcSlot(uint64_t cacheHash, HalFile& cacheFile, uint16_t cachedWidth, ui
   return rows;
 }
 
+// Draws columns [colStart, colEnd) of one 2bpp cache row. A packed byte holds four pixels; one
+// that draws nothing in this pass is skipped whole instead of unpacked pixel by pixel: all white
+// (level 3) writes nothing in BW or on an overlay gray plane, and all black (level 0) writes
+// nothing on an overlay gray plane. Most of a typical illustration is one or the other.
+void drawPxcRow(DirectPixelWriter& pw, const uint8_t* rowBuffer, const int x, const int colStart, const int colEnd) {
+  const bool overlay = !pw.absolute;
+  const bool grayPass = pw.mode == GfxRenderer::GRAYSCALE_MSB || pw.mode == GfxRenderer::GRAYSCALE_LSB;
+  const bool skipWhite = overlay && (pw.mode == GfxRenderer::BW || grayPass);
+  const bool skipBlack = overlay && grayPass;
+  int col = colStart;
+  while (col < colEnd) {
+    if ((col & 3) == 0 && col + 4 <= colEnd) {
+      const uint8_t packed = rowBuffer[col >> 2];
+      if ((skipWhite && packed == 0xFF) || (skipBlack && packed == 0x00)) {
+        col += 4;
+        continue;
+      }
+    }
+    const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
+    pw.writePixel(x + col, (rowBuffer[col >> 2] >> bitShift) & 0x03);
+    col++;
+  }
+}
+
 void renderRowsFromPxcSlot(GfxRenderer& renderer, int x, int y) {
   const int bytesPerRow = (pxcSlotWidth + 3) / 4;
   uint8_t tempRow[PXC_MAX_BYTES_PER_ROW];
@@ -203,12 +227,7 @@ void renderRowsFromPxcSlot(GfxRenderer& renderer, int x, int y) {
     pw.beginRow(y + row);
     int colStart, colEnd;
     pw.bandColRange(x, pxcSlotWidth, colStart, colEnd);
-    for (int col = colStart; col < colEnd; col++) {
-      const int byteIdx = col >> 2;            // col / 4
-      const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
-      const uint8_t pixelValue = (rowBuffer[byteIdx] >> bitShift) & 0x03;
-      pw.writePixel(x + col, pixelValue);
-    }
+    drawPxcRow(pw, rowBuffer, x, colStart, colEnd);
   }
 }
 
@@ -314,13 +333,7 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     // the active band; skip the rest instead of unpacking+clipping every pixel.
     int colStart, colEnd;
     pw.bandColRange(x, cachedWidth, colStart, colEnd);
-    for (int col = colStart; col < colEnd; col++) {
-      const int byteIdx = col >> 2;            // col / 4
-      const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
-      uint8_t pixelValue = (rowBuffer[byteIdx] >> bitShift) & 0x03;
-
-      pw.writePixel(x + col, pixelValue);
-    }
+    drawPxcRow(pw, rowBuffer, x, colStart, colEnd);
   }
 
   free(readBuffer);

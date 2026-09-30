@@ -237,10 +237,31 @@ class EpubReaderActivity final : public ReaderActivity {
   //      when no new button press is involved.
   std::atomic<uint32_t> imageWarmInputStamp_{0};
   uint32_t imageWarmStampSnapshot_ = 0;  // render task only: stamp value at warm start
-  std::string imageWarmFailedPath_;      // render task only: give-up-once decode-failure target
+  // The chapter whose every image cache the idle warm has already visited, so later render tails
+  // only check the pages around the reader. Render task only.
+  struct ImageWarmScope {
+    int spine = -1;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    int fontId = 0;     // font size moves CSS-em image sizes, and with them the cache dimensions
+    int pageCount = 0;  // a rebuilt layout (other settings) changes it
+    bool vertical = false;
+    bool operator==(const ImageWarmScope& o) const {
+      return spine == o.spine && width == o.width && height == o.height && fontId == o.fontId &&
+             pageCount == o.pageCount && vertical == o.vertical;
+    }
+    bool operator!=(const ImageWarmScope& o) const { return !(*this == o); }
+  };
+  ImageWarmScope imageWarmChapterDone_;
+  std::string imageWarmFailedPath_;  // render task only: give-up-once decode-failure target
   static constexpr uint32_t NO_IMAGE_REFINE = UINT32_MAX;
-  std::atomic<uint32_t> pendingHorizontalImageRefine_{NO_IMAGE_REFINE};
-  std::atomic<uint32_t> requestedHorizontalImageRefine_{NO_IMAGE_REFINE};
+  std::atomic<uint32_t> pendingImageRefine_{NO_IMAGE_REFINE};
+  std::atomic<uint32_t> requestedImageRefine_{NO_IMAGE_REFINE};
+  // A grayscale refine is waiting for the render task: the chapter-wide image warm yields to it.
+  bool imageRefinePending() const {
+    return pendingImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE ||
+           requestedImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE;
+  }
   void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
   static bool imageWarmShouldCancel(const void* ctx);
   // True when the next turn has already been requested: a button is physically down, or a render
