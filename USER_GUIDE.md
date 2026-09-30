@@ -153,7 +153,7 @@ screen is reachable without leaving it:
 
 - **Up / Side Up** and **Down / Side Down** walk the ring: the screen's own tabs at the top (where it has them), then its
   rows or covers, then the bottom bar, and round again.
-- **Confirm** on a screen's own tabs steps to the next one — **Books**, **Shelves**, **Files** in the Library, the
+- **Confirm** on a screen's own tabs steps to the next one — **Books**, **Shelves**, **OPDS**, **Files** in the Library, the
   categories in Settings, the languages in Insights — and past the last one it moves the cursor into the bottom bar.
 - **Left** and **Right**, once the cursor is in the bottom bar, move between Home, Library, File Transfer, Insights and
   Settings. **Confirm** goes to the highlighted tab; **Confirm** on the tab you are already in hands the cursor back to
@@ -176,7 +176,7 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 * **Rename or Move:** Files can be renamed or moved to a different folder from within the browse screen.
 
 In the **Cover Grid** theme this screen is the Library's **Files** tab rather than its own entry on the home menu, so it
-keeps the **Books / Shelves / Files** tabs at the top and the bottom tab bar. The back arrow in the header appears only
+keeps the **Books / Shelves / OPDS / Files** tabs at the top and the bottom tab bar. The back arrow in the header appears only
 once you are inside a folder; at the card root the tabs are the way out. Every other theme keeps **Browse Files** as a
 separate home entry, exactly as before.
 
@@ -498,6 +498,11 @@ font list inside **Text Settings**.
 #### 3.6.5 OPDS Servers (Multiple Libraries)
 
 CrossPoint supports saving multiple OPDS servers and switching between them when browsing catalogs.
+
+In the **Cover Grid** theme the catalogs are the Library's **OPDS** tab: it lists your saved servers under the
+**Books / Shelves / OPDS / Files** tabs, and choosing one opens its catalog (Wi-Fi connects only then, never just from
+moving across the tabs). **Back** from the catalog's top level returns to the tab. **Add Server** is on the tab too; the
+download folder and file name format stay in Settings. Other themes open the catalogs from the home menu, as before.
 
 1. Open **Settings -> System -> OPDS Servers**.
 

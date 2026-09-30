@@ -76,6 +76,22 @@ class OpdsBookBrowserActivity final : public Activity, private UiAppHost {
   void releaseEntries();
   void navigateToEntry(const OpdsEntry& entry);
   void navigateBack();
+  // Out of the browser: to the Library's OPDS tab in the Cover Grid theme, Home elsewhere.
+  void leaveBrowser();
+
+  // Cover Grid theme: the catalog is drawn as the Library's OPDS tab, under the Library band and
+  // above the bottom bar, instead of full screen. Only the Wi-Fi picker still takes the screen.
+  static bool inLibraryTab();
+  // Cursor slot in the bottom bar on a button board, -1 while it is on the catalog.
+  int tabFocus = -1;
+  // Where the next onExit()'s heap-defrag restart lands: a HomeTab, LIBRARY_TAB_BASE plus a
+  // LibraryTabs value, or -1 for Home.
+  static constexpr int LIBRARY_TAB_BASE = 16;
+  int exitTarget = -1;
+  void goToLibraryTab(int tab);
+  void goToHomeTab(int tab);
+  // Band and bottom-bar input; true when it consumed the pass.
+  bool handleTabInput();
   void downloadBook(const OpdsEntry& book);
   void launchSearch();
   void performSearch(const std::string& query);

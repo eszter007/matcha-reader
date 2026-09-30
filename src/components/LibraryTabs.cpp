@@ -8,14 +8,17 @@
 
 namespace LibraryTabs {
 
-int count() { return HomeTabBar::enabled() ? 3 : 2; }
+int count() { return HomeTabBar::enabled() ? 4 : 2; }
 
 std::vector<TabInfo> build(const int active) {
   std::vector<TabInfo> tabs;
   tabs.reserve(count());
   tabs.push_back({tr(STR_TAB_BOOKS), active == Books});
   tabs.push_back({tr(STR_TAB_SHELVES), active == Shelves});
-  if (count() > 2) tabs.push_back({tr(STR_TAB_FILES), active == Files});
+  if (count() > 2) {
+    tabs.push_back({tr(STR_TAB_OPDS), active == Opds});
+    tabs.push_back({tr(STR_TAB_FILES), active == Files});
+  }
   return tabs;
 }
 
@@ -39,6 +42,10 @@ int hitTest(const GfxRenderer& renderer, const MappedInputManager& input, const 
 }
 
 void activate(const int tab) {
+  if (tab == Opds) {
+    activityManager.goToOpdsServers();
+    return;
+  }
   if (tab == Files) {
     // Explicitly the card root: the default argument is an empty path, which lists nothing and
     // also fails showsLibraryTabs(), so the browser came up blank and without the band.

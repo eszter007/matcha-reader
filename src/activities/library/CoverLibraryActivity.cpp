@@ -940,10 +940,11 @@ void CoverLibraryActivity::loop() {
 
   bool hasChangedTab = false;
 
-  if (filesPending) {
+  if (pendingTab >= 0) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      filesPending = false;
-      LibraryTabs::activate(LibraryTabs::Files);
+      const int tab = pendingTab;
+      pendingTab = -1;
+      LibraryTabs::activate(tab);
     }
     return;
   }
@@ -951,13 +952,13 @@ void CoverLibraryActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (contentIndex == 0) {
       // LibraryTabs::count(), not the two this screen draws itself: in the Cover Grid theme the
-      // band carries a third tab, Files, and cycling modulo 2 left it reachable only by touch.
+      // band carries OPDS and Files too, and cycling modulo 2 left them reachable only by touch.
       const int next = (selectedTab + 1) % LibraryTabs::count();
-      if (next == LibraryTabs::Files) {
+      if (next >= LibraryTabs::Opds) {
         // Deferred to the release: leaving on the press edge hands the release of the same
         // physical click to the browser, which opened whatever row its cursor was on -- so the
         // Files tab appeared to jump straight into a folder.
-        filesPending = true;
+        pendingTab = next;
         return;
       }
       selectedTab = next;
@@ -1076,9 +1077,9 @@ void CoverLibraryActivity::loop() {
       hideSelector();  // a touch, whether or not it lands on a label
       int tab = -1;
       if (GUI.tabIndexFromPoint(renderer, barRect, buildTabs(), tabX, tabY, tab) && tab != selectedTab) {
-        if (tab == LibraryTabs::Files) {
-          // The browser is its own activity; the band it draws carries on from here.
-          LibraryTabs::activate(LibraryTabs::Files);
+        if (tab >= LibraryTabs::Opds) {
+          // OPDS and Files are their own activities; the band they draw carries on from here.
+          LibraryTabs::activate(tab);
           return;
         }
         selectedTab = tab;

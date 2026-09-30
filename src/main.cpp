@@ -36,6 +36,8 @@
 #include "activities/ActivityManager.h"
 #include "activities/reader/EpubReaderTranslationActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
+#include "components/HomeTabBar.h"
+#include "components/LibraryTabs.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
@@ -162,10 +164,17 @@ constexpr uint32_t SILENT_REBOOT_TARGET_TRANSLATE = 2;
 // RTC memory, so renumbering Translate would land a device that armed one target in the other;
 // Settings takes the next free number instead.
 constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 3;
-constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_SETTINGS;  // bounds the setup() range check
+// A Cover Grid tab screen; which one rides in silentRebootPayload's second byte.
+constexpr uint32_t SILENT_REBOOT_TARGET_TAB = 4;
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_TAB;  // bounds the setup() range check
 // Bit in silentRebootPayload, which is a separate word from the target above -- the two
 // never share bits.
 constexpr uint32_t SILENT_REBOOT_LIGHT_ON = 1U << 0;
+// Tab destination for SILENT_REBOOT_TARGET_TAB: a HomeTab value, or a LibraryTabs value plus
+// SILENT_REBOOT_LIBRARY_TAB_BASE.
+constexpr uint32_t SILENT_REBOOT_TAB_SHIFT = 8;
+constexpr uint32_t SILENT_REBOOT_TAB_MASK = 0xFFU << SILENT_REBOOT_TAB_SHIFT;
+constexpr uint32_t SILENT_REBOOT_LIBRARY_TAB_BASE = 16;
 
 // How the device is coming back to life, resolved once at boot. Both resume
 // flows suppress the splash and leave the panel holding its pre-boot frame; a
@@ -214,7 +223,7 @@ static void armSilentReboot(const uint32_t target) {
 
 // Returns instead of rebooting when sleep supersedes the reboot; callers keep
 // running in that case.
-static void silentRestartTo(const uint32_t target, const char* targetName) {
+static void silentRestartTo(const uint32_t target, const char* targetName, const uint32_t tab = 0) {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
   // Touch boards shut the network stack down in place instead of restarting, so their
   // externally-powered touch/frontlight rails keep their state. Sits in the shared helper so
@@ -223,6 +232,7 @@ static void silentRestartTo(const uint32_t target, const char* targetName) {
   if (finishWifiSessionWithoutRestart()) return;
 #endif
   armSilentReboot(target);
+  silentRebootPayload |= (tab << SILENT_REBOOT_TAB_SHIFT) & SILENT_REBOOT_TAB_MASK;
   LOG_DBG("MAIN", "Silent restart (target=%s)", targetName);
   // E-ink retains the previous frame until the target's first paint lands
   // (~2-3s). Without an overlay, users don't see the reboot and fire input
@@ -239,6 +249,15 @@ void silentRestart() { silentRestartTo(SILENT_REBOOT_TARGET_HOME, "home"); }
 void silentRestartToReader() { silentRestartTo(SILENT_REBOOT_TARGET_READER, "reader"); }
 
 void silentRestartToSettings() { silentRestartTo(SILENT_REBOOT_TARGET_SETTINGS, "settings"); }
+
+void silentRestartToHomeTab(const int homeTab) {
+  silentRestartTo(SILENT_REBOOT_TARGET_TAB, "tab", static_cast<uint32_t>(homeTab));
+}
+
+void silentRestartToLibraryTab(const int libraryTab) {
+  silentRestartTo(SILENT_REBOOT_TARGET_TAB, "library tab",
+                  SILENT_REBOOT_LIBRARY_TAB_BASE + static_cast<uint32_t>(libraryTab));
+}
 
 void silentRestartToTranslation() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
@@ -455,6 +474,8 @@ void setup() {
   const uint32_t snapshotTarget =
       (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_MAX) ? silentRebootTarget : 0;
   const bool silentRebootLightOn = isSilentReboot && (silentRebootPayload & SILENT_REBOOT_LIGHT_ON) != 0;
+  const uint32_t silentRebootTab =
+      isSilentReboot ? (silentRebootPayload & SILENT_REBOOT_TAB_MASK) >> SILENT_REBOOT_TAB_SHIFT : 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
   silentRebootPayload = 0;
@@ -651,6 +672,17 @@ void setup() {
     // Plain reader resume -- also the fallback for a translate target whose stash was
     // missing/unreadable: land back in the book rather than home.
     activityManager.goToReader(APP_STATE.openEpubPath);
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_TAB) {
+    // Left a Wi-Fi screen for another tab: land on that tab, not Home.
+    if (silentRebootTab >= SILENT_REBOOT_LIBRARY_TAB_BASE &&
+        silentRebootTab < SILENT_REBOOT_LIBRARY_TAB_BASE + static_cast<uint32_t>(LibraryTabs::count())) {
+      LibraryTabs::activate(static_cast<int>(silentRebootTab - SILENT_REBOOT_LIBRARY_TAB_BASE));
+    } else if (silentRebootTab < static_cast<uint32_t>(HomeTab::Count) &&
+               silentRebootTab != static_cast<uint32_t>(HomeTab::Home)) {
+      HomeTabBar::activate(static_cast<HomeTab>(silentRebootTab), HomeTab::Count);
+    } else {
+      activityManager.goHome();
+    }
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
     // Back out of the WiFi rows and the user is where they left off, not on Home.
     activityManager.goToSettings();

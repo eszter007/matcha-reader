@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "activities/UiListActivity.h"
+#include "components/HomeTabBar.h"
 #include "components/OptionPopup.h"
 
 /**
@@ -27,6 +28,15 @@ class OpdsServerListActivity final : public UiListActivity {
   // Picker mode backs out to the home menu rather than finishing.
   void onBackButton() override;
   const char* headerTitle() const override;
+
+  // The picker is the Library's OPDS tab in the Cover Grid theme: it draws the Library band and
+  // the bottom bar, the same way the file browser is its Files tab.
+  bool isLibraryTab() const { return pickerMode && HomeTabBar::enabled(); }
+  HomeTab tabBarTab() const override { return isLibraryTab() ? HomeTab::Library : HomeTab::Count; }
+  bool hasTopBand() const override { return isLibraryTab(); }
+  void stepTopBand(int direction) override;
+  void onTabBandExit() override;
+  void drawChrome() override;
 
   bool pickerMode = false;
   OptionPopup optionPopup;
