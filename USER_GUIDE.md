@@ -799,6 +799,13 @@ Auto Page Turn automatically advances pages at a set interval, useful for hands-
 
 On the **Xteink X3**, the gyroscope can be used to turn pages by tilting the device. This feature is available in the Controls settings.
 
+### Images in Books
+
+An image that fills the page, across its width or its height, gets a page of its own; a wide one is turned sideways
+so it fills the screen, and you tilt the device to look at it. A smaller image stays with the text around it,
+upright and at no more than its own size: a figure between paragraphs, with its caption, or a narrow heading strip
+or diagram among the columns of vertical text.
+
 ### Footnote Navigation
 
 When reading an EPUB that contains footnotes, you can navigate to the footnote text by selecting the footnote reference in the book. From the footnote, you can return to your original reading position.

@@ -52,6 +52,7 @@ std::string PageTextExtractor::fromVerticalPage(const VerticalPage& page) {
       continue;
     }
     if (g.codepoint == 0) continue;  // never emit NUL into a string with c_str() consumers
+    if (VerticalParsedText::isImageMarker(g.codepoint)) continue;  // an inline image, not text
 
     encodeUtf8(g.codepoint, text);
 

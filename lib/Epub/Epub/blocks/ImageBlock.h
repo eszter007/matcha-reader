@@ -56,6 +56,12 @@ class ImageBlock final : public Block {
   // and warmCache() -- one implementation so a background warm computes EXACTLY the dimensions
   // the later render will expect from the pixel cache.
   static void fitWithin(int availW, int availH, int& w, int& h);
+  // Whether an image shown at w x h fills the page: it reaches (nearly) the full width or height.
+  // Only such an image gets a page of its own and is rotated to match the screen; a smaller one
+  // flows inline with the text, upright.
+  static bool fillsPage(int w, int h, int pageW, int pageH) {
+    return w > 0 && h > 0 && (w * 10 >= pageW * 9 || h * 10 >= pageH * 9);
+  }
 
   enum class WarmResult : uint8_t {
     Warmed,         // cache written

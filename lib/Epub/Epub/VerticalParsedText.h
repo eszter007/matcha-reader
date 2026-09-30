@@ -318,6 +318,15 @@ class VerticalParsedText {
   // to flush layoutPages()+reset() periodically so stream_ stays O(batch) instead of O(chapter)
   // -- a whole chapter's worth of PendingChars (32 bytes each) cannot fit in RAM on-device.
   size_t pendingCount() const { return stream_.size(); }
+
+  // Inline images: an image placed in the text flow, taking `columns` whole columns (on one page)
+  // at the position it appears. The image is a glyph whose codepoint is IMAGE_MARKER_BASE + id and
+  // whose text is "path\tsrc\twidth\theight"; VerticalTextBlock draws it across those columns.
+  static constexpr uint32_t IMAGE_MARKER_BASE = 0xF0000;
+  static bool isImageMarker(uint32_t cp) { return cp >= IMAGE_MARKER_BASE && cp < IMAGE_MARKER_BASE + 0x10000; }
+  void addInlineImage(std::string info, uint16_t columns, int widthPx);
+  // Horizontal distance between two column origins, for sizing an inline image in columns.
+  int columnAdvancePx() const;
   void setColumnGapPx(int gapPx) { columnGapPx_ = gapPx; }
   // Extra right-side padding (in pixels) reserved for vertical ruby so it
   // doesn't clip against the right edge.
@@ -349,6 +358,15 @@ class VerticalParsedText {
   // forced column break (a new paragraph always starts at the top of a
   // fresh column, matching how horizontal layout starts a new line).
   std::vector<PendingChar> stream_;
+  // Queued inline images, indexed by marker codepoint - IMAGE_MARKER_BASE: the glyph text and the
+  // columns each spans. Kept across batches (a marker may be laid out in a later batch); cleared
+  // with the chapter.
+  struct InlineImage {
+    std::string info;
+    uint16_t columns;
+    int16_t widthPx;
+  };
+  std::vector<InlineImage> inlineImages_;
   std::vector<size_t> paragraphBreaksBeforeIndex_;
 
   // Set once free heap drops critically low; remaining characters/paragraphs for this chapter

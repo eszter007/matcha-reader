@@ -3,9 +3,11 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include "GfxRenderer.h"
+#include "ImageBlock.h"
 #include "Kinsoku.h"
 
 namespace {
@@ -45,6 +47,23 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
   for (const VerticalGlyph& g : page.glyphs) {
     const int dx = g.x + offsetX;
     const int cellTop = g.y + offsetY;
+    // Inline image: its text is "path\tsrc\twidth\theight", already placed by the layout (x is its
+    // left edge), top-aligned. Skipped in the font scan pass, which draws nothing and would decode it.
+    if (VerticalParsedText::isImageMarker(g.codepoint)) {
+      if (renderer.isFontCacheScanning()) continue;
+      const std::string& info = page.glyphTextStr(g);
+      const size_t t1 = info.find('\t');
+      const size_t t2 = t1 == std::string::npos ? t1 : info.find('\t', t1 + 1);
+      const size_t t3 = t2 == std::string::npos ? t2 : info.find('\t', t2 + 1);
+      if (t3 == std::string::npos) continue;
+      const int w = atoi(info.c_str() + t2 + 1);
+      const int h = atoi(info.c_str() + t3 + 1);
+      if (w <= 0 || h <= 0) continue;
+      ImageBlock block(info.substr(0, t1), info.substr(t1 + 1, t2 - t1 - 1), static_cast<int16_t>(w),
+                       static_cast<int16_t>(h));
+      block.render(renderer, dx, cellTop);
+      continue;
+    }
     int dy = cellTop;
     if (g.renderKind == VerticalGlyph::Upright || g.renderKind == VerticalGlyph::UprightRun) {
       dy = cellTop + uprightTopAdjust;
@@ -138,7 +157,8 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
   for (size_t gi = 0; gi < page_.glyphs.size(); gi++) {
     const VerticalGlyph& g = page_.glyphs[gi];
     const std::string& rubyText = page_.glyphTextStr(g);
-    if (rubyText.empty() || g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
+    if (rubyText.empty() || VerticalParsedText::isImageMarker(g.codepoint) ||
+        g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
       continue;
     }
 
