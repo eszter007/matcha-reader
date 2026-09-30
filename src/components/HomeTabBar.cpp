@@ -102,13 +102,15 @@ HomeTabBar::Input HomeTabBar::route(const MappedInputManager& input, const GfxRe
   if (!allowButtons) return Input::None;
 
   // The first Left/Right parks the cursor on the tab you are in, so the band lights up where the
-  // user already is rather than jumping to an end.
+  // user already is rather than jumping to an end. Taken on the press: Left/Right are also
+  // NavPrevious/NavNext, which the lists act on at the press, so a release here would come after
+  // the list had already moved the cursor out of the band.
   const int from = focus >= 0 ? focus : static_cast<int>(current);
-  if (input.wasReleased(MappedInputManager::Button::Left)) {
+  if (input.wasPressed(MappedInputManager::Button::Left)) {
     focus = (from + COUNT - 1) % COUNT;
     return Input::FocusMoved;
   }
-  if (input.wasReleased(MappedInputManager::Button::Right)) {
+  if (input.wasPressed(MappedInputManager::Button::Right)) {
     focus = (from + 1) % COUNT;
     return Input::FocusMoved;
   }
