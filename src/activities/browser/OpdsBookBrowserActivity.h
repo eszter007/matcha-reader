@@ -90,8 +90,13 @@ class OpdsBookBrowserActivity final : public Activity, private UiAppHost {
   int exitTarget = -1;
   void goToLibraryTab(int tab);
   void goToHomeTab(int tab);
+  // Library band holds the button cursor (ring: band -> rows -> bottom bar -> band).
+  bool bandFocused = false;
   // Band and bottom-bar input; true when it consumed the pass.
   bool handleTabInput();
+  // Free heap under which a feed fetch first drops the SD-font caches: 38 KB failed the TLS
+  // handshake, 66 KB succeeded.
+  static constexpr uint32_t FETCH_FREE_HEAP_FLOOR = 60000;
   void downloadBook(const OpdsEntry& book);
   void launchSearch();
   void performSearch(const std::string& query);

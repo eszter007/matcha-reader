@@ -504,6 +504,12 @@ In the **Cover Grid** theme the catalogs are the Library's **OPDS** tab: it list
 moving across the tabs). **Back** from the catalog's top level returns to the tab. **Add Server** is on the tab too; the
 download folder and file name format stay in Settings. Other themes open the catalogs from the home menu, as before.
 
+A catalog stays inside the tab layout, with the Library tabs above it and the bottom bar below; only the Wi-Fi
+network picker takes the full screen. On a button-only device the cursor moves in one ring: **Up** from the first
+entry reaches the Library tabs (**Left**/**Right** switch tab, **Confirm** goes on to **Files**), **Down** past the
+last entry reaches the bottom bar. On an error screen or an empty catalog, **Up** and **Down** go straight to the tabs
+and the bar.
+
 1. Open **Settings -> System -> OPDS Servers**.
 
 2. Select **Add Server** to create a new entry, or select an existing server to edit it.
