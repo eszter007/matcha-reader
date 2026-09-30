@@ -3317,7 +3317,13 @@ void GfxRenderer::freeBwBufferChunks() {
  * Uses chunked allocation to avoid needing 48KB of contiguous memory.
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
-bool GfxRenderer::storeBwBuffer() {
+bool GfxRenderer::storeBwBuffer(const size_t headroom) {
+  // Refuse up front when the copy cannot fit: every caller has a fallback (re-render, skip the
+  // grays), while an attempt that fails at chunk N leaves N freed 8 KB holes behind.
+  if (ESP.getFreeHeap() < frameBufferSize + headroom || ESP.getMaxAllocHeap() < BW_BUFFER_CHUNK_SIZE) {
+    LOG_DBG("GFX", "Not storing BW buffer: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    return false;
+  }
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
     // Check if any chunks are already allocated

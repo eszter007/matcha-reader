@@ -2,6 +2,7 @@
 
 #include <BmpToBmpConverter.h>
 #include <BufferedFile.h>
+#include <BuildScratch.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -396,7 +397,9 @@ void Epub::parseCssFiles() const {
     // failed attempts leave the heap more fragmented than before for no gain.
     const uint32_t freeHeap = ESP.getFreeHeap();
     const uint32_t maxBlock = ESP.getMaxAllocHeap();
-    if (freeHeap < MIN_HEAP_FOR_CSS_PARSING || maxBlock < INFLATE_WINDOW_BYTES) {
+    // During a framebuffer loan the extraction's inflate takes the lent block, not the heap.
+    const bool windowAvailable = maxBlock >= INFLATE_WINDOW_BYTES || buildscratch::available(INFLATE_WINDOW_BYTES);
+    if (freeHeap < MIN_HEAP_FOR_CSS_PARSING || !windowAvailable) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (free=%u, maxAlloc=%u, need %zu free and %u contiguous): %s",
               freeHeap, maxBlock, MIN_HEAP_FOR_CSS_PARSING, INFLATE_WINDOW_BYTES, cssPath.c_str());
       skippedFileForHeap = true;
@@ -476,10 +479,12 @@ void Epub::parseCssFiles() const {
 
   LOG_DBG("EBP", "Loaded %zu CSS style rules from %zu files (%zu identical duplicates skipped)", cssParser->ruleCount(),
           cssFiles.size(), skippedDuplicates);
-  cssParser->clear();
+  cssParser->releasePools();
 }
 
 // load in the meta data for the epub file
+bool Epub::hasCssCache() const { return Txt::isTxtOrMd(filepath) || CssParser::hasCacheAt(cachePath); }
+
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvertCancelFn shouldCancel,
                 void* cancelCtx) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
@@ -555,7 +560,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvert
     // section caches, and createSectionFile reloads it from cache on demand. Holding it
     // resident pins tens of KB for the whole reading session (more on warm resume into
     // an already-cached chapter, where createSectionFile never runs to clear it).
-    cssParser->clear();
+    cssParser->releasePools();
     LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
     return true;
   }

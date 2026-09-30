@@ -1016,7 +1016,7 @@ bool Section::finalizeBuild() {
     LOG_DBG("SCT", "Chapter spans %u chars over %u pages", build_->lut.back().visibleTextOffset, pageCount);
   }
   const bool committed = commitBuildFile(SECTION_FILE_VERSION, 0, 0);
-  if (build_->cssParser) build_->cssParser->clear();
+  if (build_->cssParser) build_->cssParser->releasePools();
   build_.reset();
   if (!committed) {
     // commitBuildFile removed filePath before the failed swap, so nothing valid remains.
@@ -1057,7 +1057,7 @@ void Section::suspendBuild() {
   }
 
   if (build_->parser) build_->parser->abortParse();
-  if (build_->cssParser) build_->cssParser->clear();
+  if (build_->cssParser) build_->cssParser->releasePools();
   if (!committed && file) {
     // Explicit close() required before remove (member variable, O_RDWR handle).
     file.close();
@@ -1075,7 +1075,7 @@ void Section::suspendBuild() {
 void Section::abandonBuild() {
   if (!build_) return;
   if (build_->parser) build_->parser->abortParse();
-  if (build_->cssParser) build_->cssParser->clear();
+  if (build_->cssParser) build_->cssParser->releasePools();
   if (file) {
     // Explicit close() required before remove (member variable, O_RDWR handle).
     file.close();

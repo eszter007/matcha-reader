@@ -150,6 +150,21 @@ class CssParser {
     ruleGrowthStopped_ = false;
   }
 
+  // clear() plus the pool allocations themselves. The parser lives on the Epub for the whole
+  // reading session, so pools kept after the last stylesheet sit mid-heap for good (36 KB for a
+  // heavy book, splitting the region a chapter build needs). A later build reloads the table
+  // from the on-disk cache and grows fresh pools.
+  void releasePools() {
+    clear();
+    entries_.reset();
+    selectorPool_.reset();
+    stylePool_.reset();
+    styleHashes_.reset();
+    entryCapacity_ = 0;
+    selectorPoolCapacity_ = 0;
+    styleCapacity_ = 0;
+  }
+
   /**
    * True if a parse had to drop selectors because the heap ran low (transient condition, NOT
    * the deterministic MAX_RULES cap). A partial rule table must not be persisted: the cached
@@ -170,6 +185,8 @@ class CssParser {
    * Check if CSS rules cache file exists
    */
   bool hasCache() const;
+  // Same check before a CssParser exists (Epub::load creates it).
+  static bool hasCacheAt(const std::string& bookCachePath);
 
   /**
    * Delete CSS rules cache file exists
@@ -232,12 +249,23 @@ class CssParser {
     }
   };
 
+  // One styled-block rule, keyed by hashes rather than the selector text: the vertical engine only
+  // matches "tag", ".class" and "tag.class", so a tag hash (0 = any tag) and a class hash (0 = no
+  // class) say everything a selector string did, in 28 bytes and without a heap string per rule.
+  struct VerticalBlockRule {
+    uint32_t tagHash = 0;
+    uint32_t classHash = 0;
+    VerticalBlockStyle style;
+  };
+  // Case-insensitive FNV-1a over a selector piece (tag name or class token). Never 0.
+  static uint32_t blockSelectorHash(const char* s, size_t len);
+
   /**
-   * Stream the on-disk rules cache and collect (selector -> VerticalBlockStyle) for every
-   * selector with at least one vertical-relevant property, without materializing the rule map.
-   * Returns the number collected (bounded by maxOut).
+   * Stream the on-disk rules cache and collect a VerticalBlockRule for every selector with at
+   * least one vertical-relevant property, without materializing the rule map. Returns the number
+   * collected (bounded by maxOut).
    */
-  size_t collectVerticalStyles(std::vector<std::pair<std::string, VerticalBlockStyle>>& out, size_t maxOut = 256) const;
+  size_t collectVerticalStyles(std::vector<VerticalBlockRule>& out, size_t maxOut = 256) const;
 
  private:
   // Lookup key for a multi-piece selector: the pieces are hashed and compared as if

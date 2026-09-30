@@ -40,11 +40,23 @@ FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap,
 
 void FontCacheManager::setFontDecompressor(FontDecompressor* d) { fontDecompressor_ = d; }
 
+// The companion fallback font is held apart from sdCardFonts_ (it is not a reader font id), so every
+// release has to reach it separately -- it is what the cover grid loads for CJK titles, and left
+// resident it splits the heap the reader's chapter build needs.
+SdCardFont* FontCacheManager::unregisteredFallback() const {
+  if (!fallbackSdFont_) return nullptr;
+  for (const auto& [id, font] : sdCardFonts_) {
+    if (font == fallbackSdFont_) return nullptr;
+  }
+  return fallbackSdFont_;
+}
+
 void FontCacheManager::clearCache() {
   if (fontDecompressor_) fontDecompressor_->clearCache();
   for (auto& [id, font] : sdCardFonts_) {
     font->clearCache();
   }
+  if (auto* fallback = unregisteredFallback()) fallback->clearCache();
 #if CROSSPOINT_VECTOR_FONTS
   for (auto& [id, font] : ttfFonts_) {
     if (font) font->clearCache();
@@ -61,6 +73,7 @@ void FontCacheManager::releaseAllFontMemory() {
   for (auto& [id, font] : sdCardFonts_) {
     font->clearPersistentCache();
   }
+  if (auto* fallback = unregisteredFallback()) fallback->clearPersistentCache();
 #if CROSSPOINT_VECTOR_FONTS
   // TTF faces too: byte arenas, glyph tables and the lazy bold/italic FreeType faces all
   // rebuild on demand, so the emergency path surrenders them like the .cpfont caches.

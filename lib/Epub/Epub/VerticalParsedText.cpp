@@ -494,10 +494,33 @@ void VerticalParsedText::preallocateStream() {
   if (stream_.capacity() >= STREAM_STABLE_ENTRIES) return;
   if (heapCanAfford(bytes, MIN_FREE_HEAP_FOR_RESERVE)) {
     stream_.reserve(STREAM_STABLE_ENTRIES);
+    // A batch's ruby, pinned with the stream for the same reason (a few bytes per ruby'd char).
+    rubyPool_.reserve(1024);
   } else {
     LOG_DBG("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
             static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
   }
+}
+
+void VerticalParsedText::setRuby(PendingChar& pc, const char* s, const size_t len) {
+  pc.rubyLen = 0;
+  if (len == 0 || len > UINT16_MAX) return;
+  const size_t need = rubyPool_.size() + len;
+  if (need > rubyPool_.capacity() && !heapCanAfford(std::max(need, rubyPool_.capacity() * 2), SMALL_ALLOC_MARGIN)) {
+    everDroppedForHeap_ = true;
+    return;
+  }
+  pc.rubyOffset = static_cast<uint32_t>(rubyPool_.size());
+  pc.rubyLen = static_cast<uint16_t>(len);
+  rubyPool_.append(s, len);
+}
+
+void VerticalParsedText::pushCarried(PendingChar& c) {
+  if (c.rubyLen) {
+    const uint32_t from = c.rubyOffset;
+    setRuby(c, carriedRubyPool_.data() + from, c.rubyLen);
+  }
+  stream_.push_back(c);
 }
 
 bool VerticalParsedText::canPushStreamChar() {
@@ -521,9 +544,10 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
     for (auto& carried : carriedRunTail_) {
       if (!canPushStreamChar()) break;
       carried.paragraphIndex = carryIndex;
-      stream_.push_back(std::move(carried));
+      pushCarried(carried);
     }
     carriedRunTail_.clear();
+    carriedRubyPool_.clear();
   }
 
   const uint32_t paragraphIndex = static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size());
@@ -588,9 +612,10 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     for (auto& carried : carriedRunTail_) {
       if (!canPushStreamChar()) break;
       carried.paragraphIndex = carryIndex;
-      stream_.push_back(std::move(carried));
+      pushCarried(carried);
     }
     carriedRunTail_.clear();
+    carriedRubyPool_.clear();
   }
 
   // A continuation chunk belongs to the paragraph already in flight: no break is recorded and
@@ -730,8 +755,15 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         std::string slice;
         for (size_t r = rubyStart; r < rubyEnd; r++) utf8AppendCodepoint(rubyCps[r], slice);
         if (!canPushStreamChar()) return;
-        stream_.push_back(PendingChar{baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style,
-                                      run.emphasis, std::move(slice), run.visibleTextOffset + baseCpIndex[k]});
+        PendingChar pc{baseCps[k],
+                       paragraphIndex,
+                       static_cast<uint32_t>(baseOffsets[k]),
+                       run.style,
+                       run.emphasis,
+                       0,
+                       run.visibleTextOffset + baseCpIndex[k]};
+        setRuby(pc, slice.data(), slice.size());
+        stream_.push_back(pc);
       }
     }
 
@@ -1111,7 +1143,7 @@ struct VerticalParsedText::LayoutCursor {
     g.byteOffset = pc.byteOffset;
     g.style = pc.style;
     g.emphasis = pc.emphasis;
-    pushGlyph(page, g, pc.rubyText);
+    pushGlyph(page, g, o.rubyOf(pc));
     return true;
   }
 
@@ -1222,7 +1254,7 @@ struct VerticalParsedText::LayoutCursor {
       const bool atLineHead = page.glyphs.empty() || page.glyphs.back().column != col;
       const bool flushOpeningBracket = atLineHead && Kinsoku::verticalShiftType(pc.codepoint) == 3;
       if (flushOpeningBracket) g.lineHeadFlush = 1;
-      pushGlyph(page, g, pc.rubyText);
+      pushGlyph(page, g, o.rubyOf(pc));
       if (flushOpeningBracket) {
         // The half em it no longer needs comes off the rest of the column.
         columnYShift += geom.cellPx / 2;
@@ -1245,7 +1277,7 @@ struct VerticalParsedText::LayoutCursor {
         g.y = static_cast<uint16_t>(rowIdx * geom.cellPx);
       }
       g.renderKind = VerticalGlyph::Upright;
-      pushGlyph(page, g, pc.rubyText);
+      pushGlyph(page, g, o.rubyOf(pc));
       return;
     }
 
@@ -1276,7 +1308,7 @@ struct VerticalParsedText::LayoutCursor {
     g.x = static_cast<uint16_t>(gx);
     g.y = static_cast<uint16_t>(gy);
     g.renderKind = VerticalGlyph::Upright;
-    pushGlyph(page, g, pc.rubyText);
+    pushGlyph(page, g, o.rubyOf(pc));
   }
 
   // Place a two-character tate-chu-yoko run (a 2-digit number, or a !?/!! pair) upright in one
@@ -1386,9 +1418,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   if (!carriedRunTail_.empty() && stream_.empty()) {
     for (auto& carried : carriedRunTail_) {
       if (!canPushStreamChar()) break;
-      stream_.push_back(std::move(carried));
+      pushCarried(carried);
     }
     carriedRunTail_.clear();
+    carriedRubyPool_.clear();
   }
 
   // Nothing new to lay out AND nothing left over from a previous non-final call to finalize.
@@ -1872,6 +1905,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       if (!isFinalFlush && runEnd == stream_.size()) {
         carriedRunTail_.assign(std::make_move_iterator(stream_.begin() + static_cast<long>(idx)),
                                std::make_move_iterator(stream_.end()));
+        // rubyPool_ is cleared with the batch: keep the carried characters' ruby apart.
+        carriedRubyPool_.clear();
+        for (auto& c : carriedRunTail_) {
+          if (!c.rubyLen) continue;
+          const uint32_t at = static_cast<uint32_t>(carriedRubyPool_.size());
+          carriedRubyPool_.append(rubyPool_, c.rubyOffset, c.rubyLen);
+          c.rubyOffset = at;
+        }
         idx = runEnd;
         continue;
       }
@@ -2143,7 +2184,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           }
           g.paragraphIndex = pc.paragraphIndex;
           g.byteOffset = pc.byteOffset;
-          cur.pushGlyph(prevPage, g, pc.rubyText);
+          cur.pushGlyph(prevPage, g, rubyOf(pc));
           idx++;
           continue;
         }

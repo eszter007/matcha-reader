@@ -1,6 +1,7 @@
 #include "SdCardFontManager.h"
 
 #include <EpdFontFamily.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <SdCardFont.h>
@@ -116,6 +117,12 @@ void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
   renderer.clearFallbackFonts();
   for (auto& lf : loaded_) {
     renderer.removeFont(lf.fontId);
+    // The companion slot (renderer and font cache) is re-pointed only by the caller's next
+    // updateGlobalFallback(); until then a release pass would walk a deleted font.
+    if (renderer.getFallbackSdFont() == lf.font) renderer.setFallbackSdFont(nullptr);
+    if (auto* fcm = renderer.getFontCacheManager(); fcm && fcm->getFallbackSdFont() == lf.font) {
+      fcm->setFallbackSdFont(nullptr);
+    }
     delete lf.font;
   }
   loaded_.clear();
