@@ -606,7 +606,8 @@ int TextSettingsActivity::listCount() const {
       // layout inputs the vertical engine does not read.
       return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 3 : 0);
     case Tab::Style:
-      return japaneseBook_ ? (verticalText_ ? 1 : 2) : static_cast<int>(StyleRow::Count);
+      // Japanese books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
+      return japaneseBook_ ? 2 : static_cast<int>(StyleRow::Count);
     default:
       return 0;
   }

@@ -13,6 +13,22 @@
 namespace {
 constexpr int kNoStyle = 0;
 
+// An inline image glyph: its text is "path\tsrc\twidth\theight", already placed by the layout.
+void drawInlineImage(GfxRenderer& renderer, const VerticalPage& page, const VerticalGlyph& g, const int x,
+                     const int y) {
+  const std::string& info = page.glyphTextStr(g);
+  const size_t t1 = info.find('\t');
+  const size_t t2 = t1 == std::string::npos ? t1 : info.find('\t', t1 + 1);
+  const size_t t3 = t2 == std::string::npos ? t2 : info.find('\t', t2 + 1);
+  if (t3 == std::string::npos) return;
+  const int w = atoi(info.c_str() + t2 + 1);
+  const int h = atoi(info.c_str() + t3 + 1);
+  if (w <= 0 || h <= 0) return;
+  ImageBlock block(info.substr(0, t1), info.substr(t1 + 1, t2 - t1 - 1), static_cast<int16_t>(w),
+                   static_cast<int16_t>(h));
+  block.render(renderer, x, y);
+}
+
 // Returns the cell size it drew with, so a caller needing the same geometry (ruby) reuses it
 // instead of re-deriving it -- every derivation probes the reference glyph out of the SD font.
 int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
@@ -50,18 +66,7 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
     // Inline image: its text is "path\tsrc\twidth\theight", already placed by the layout (x is its
     // left edge), top-aligned. Skipped in the font scan pass, which draws nothing and would decode it.
     if (VerticalParsedText::isImageMarker(g.codepoint)) {
-      if (renderer.isFontCacheScanning()) continue;
-      const std::string& info = page.glyphTextStr(g);
-      const size_t t1 = info.find('\t');
-      const size_t t2 = t1 == std::string::npos ? t1 : info.find('\t', t1 + 1);
-      const size_t t3 = t2 == std::string::npos ? t2 : info.find('\t', t2 + 1);
-      if (t3 == std::string::npos) continue;
-      const int w = atoi(info.c_str() + t2 + 1);
-      const int h = atoi(info.c_str() + t3 + 1);
-      if (w <= 0 || h <= 0) continue;
-      ImageBlock block(info.substr(0, t1), info.substr(t1 + 1, t2 - t1 - 1), static_cast<int16_t>(w),
-                       static_cast<int16_t>(h));
-      block.render(renderer, dx, cellTop);
+      if (!renderer.isFontCacheScanning()) drawInlineImage(renderer, page, g, dx, cellTop);
       continue;
     }
     int dy = cellTop;
@@ -281,5 +286,17 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
       rubyY += rubyLineH;
       ri += charLen;
     }
+  }
+}
+
+bool VerticalTextBlock::hasImages() const {
+  return std::any_of(page_.glyphs.begin(), page_.glyphs.end(),
+                     [](const VerticalGlyph& g) { return VerticalParsedText::isImageMarker(g.codepoint); });
+}
+
+void VerticalTextBlock::renderImages(GfxRenderer& renderer, const int offsetX, const int offsetY) const {
+  for (const VerticalGlyph& g : page_.glyphs) {
+    if (VerticalParsedText::isImageMarker(g.codepoint))
+      drawInlineImage(renderer, page_, g, g.x + offsetX, g.y + offsetY);
   }
 }
