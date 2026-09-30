@@ -33,8 +33,13 @@ std::string displayName(const std::string& filename) {
   return filename.substr(0, pos);
 }
 
-// "1st", "2nd", "3rd", "11th", "22nd".
+// "1st", "2nd", "3rd", "11th", "22nd" in English. Every other UI language gets the bare number:
+// its milestone strings carry their own ordinal form around the %s ("%s.", "%se", "%s冊目").
 void formatOrdinal(char* buf, const size_t size, const unsigned n) {
+  if (I18N.getLanguage() != Language::EN) {
+    snprintf(buf, size, "%u", n);
+    return;
+  }
   const unsigned lastTwo = n % 100;
   const char* suffix = "th";
   if (lastTwo < 11 || lastTwo > 13) {
