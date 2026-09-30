@@ -65,6 +65,12 @@
 #include "util/ScreenshotUtil.h"
 
 namespace {
+// The toolbar's page snapshot is a convenience (closing the toolbar redraws without re-rendering);
+// it is skipped rather than taken when it would leave the next render short.
+constexpr size_t OVERLAY_SNAPSHOT_HEADROOM = 16 * 1024;
+}  // namespace
+
+namespace {
 // How far into the next page the word-lookup panel is handed text, so a sentence cut by the page
 // turn can be finished when the word is saved for sentence mining (about one long sentence).
 constexpr int kMiningTailChars = 120;
@@ -271,11 +277,13 @@ void EpubReaderActivity::saveBookPrefs(const ReaderPrefs& prefs) const {
 
 bool EpubReaderActivity::loadBook() {
   if (ESP.getMaxAllocHeap() < 64 * 1024) {
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      LOG_INF("READER", "Low heap before book load (maxAlloc=%u); releasing font memory", ESP.getMaxAllocHeap());
-      fcm->releaseAllFontMemory();
-      LOG_INF("READER", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
-    }
+    // Unload the fonts themselves, not just their caches: the fonts the previous screen used (the
+    // cover grid's CJK titles pull in the Japanese companion) keep small tables mid-heap that a
+    // cache release leaves standing, and the book's own allocations then scatter around them --
+    // the chapter build started on a 21 KB block. Unloaded here, the book loads into one region
+    // and onReaderEnter()'s ensureLoaded() puts the fonts back right after it.
+    LOG_INF("READER", "Low heap before book load (maxAlloc=%u); releasing resident fonts", ESP.getMaxAllocHeap());
+    sdFontSystem.releaseAllResidentFonts(renderer);
   }
 
   epub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
@@ -285,7 +293,10 @@ bool EpubReaderActivity::loadBook() {
   }
 
   const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
-  if (uncached) {
+  // The CSS rebuild extracts each stylesheet through a 32 KB inflate window; lend it the
+  // framebuffer as for a first index, so it never needs that block from a fragmented heap.
+  const bool cssUncached = SETTINGS.embeddedStyle != 0 && !epub->hasCssCache();
+  if (uncached || cssUncached) {
     disableFastInitialRefresh();
     GUI.drawPopup(renderer, tr(STR_INDEXING));
   }
@@ -293,7 +304,7 @@ bool EpubReaderActivity::loadBook() {
   bool loaded;
   {
     std::optional<GfxRenderer::FrameBufferLoan> loan;
-    if (uncached) loan.emplace(renderer);
+    if (uncached || cssUncached) loan.emplace(renderer);
     loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
   }
   if (loaded) return true;
@@ -2009,8 +2020,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
       const int fontId = effectiveReaderFontId();
-      if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing,
-                                            useFurigana())) {
+      if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana(),
+                                            /*retryDegraded=*/true)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
         GUI.drawPopup(renderer, tr(STR_INDEXING));
         // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
@@ -2913,7 +2924,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (overlay != Overlay::None && usesToolbarMenu()) {
     // The page just re-rendered under the overlay: refresh the snapshot that
     // backs panel->toolbar restores (any previous copy is stale).
-    overlayPageStored = renderer.storeBwBuffer();
+    overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     renderOverlay();
     // An open option picker rides on top of the freshly drawn panel.
     if (overlayPopup.isActive()) overlayPopup.render(renderer);
@@ -4758,7 +4769,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     if (previous == Overlay::None) {
       // Snapshot the clean page so stepping back from a panel to the toolbar
       // (and closing, where supported) can restore it without a re-render.
-      overlayPageStored = renderer.storeBwBuffer();
+      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     } else if (overlayPageStored) {
       // Overlay -> overlay: wipe the previous chrome (toolbar header, sheet,
       // progress row) back to the clean page so none of it shows around or
@@ -4766,7 +4777,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
       // resync: the glass still shows the old chrome, and the differential
       // must keep diffing against it to erase it.
       renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-      overlayPageStored = renderer.storeBwBuffer();
+      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     }
     renderOverlay();
     pushOverlayRefresh();
@@ -4896,7 +4907,7 @@ void EpubReaderActivity::handleOverlayInput() {
       settleOverlayRefresh();
       if (overlayPageStored) {
         renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-        overlayPageStored = renderer.storeBwBuffer();
+        overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
         renderOverlay();
         pushOverlayRefresh();
       } else {
@@ -5076,7 +5087,7 @@ void EpubReaderActivity::handleOverlayInput() {
         // No baseline resync: the glass shows the panel, and erasing it needs
         // the differential to keep diffing against the last pushed frame.
         renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-        overlayPageStored = renderer.storeBwBuffer();
+        overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
       }
       fastRedraw();  // takes its own RenderLock
       return;

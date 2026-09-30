@@ -142,11 +142,17 @@ class VerticalSection {
 
   // furiganaEnabled is part of the cache key: the column gap only has to clear ruby when ruby is
   // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.
+  // retryDegraded: the foreground open may discard a best-effort cache for a rebuild (see
+  // degradedPath()); probes and background warms leave it alone.
   bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
-                       bool furiganaEnabled);
+                       bool furiganaEnabled, bool retryDegraded = false);
   bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
                          bool furiganaEnabled);
   bool clearCache() const;
+  // Sidecar marking the cache as a best-effort low-heap build; holds lastLoadMaxAlloc_ of that open.
+  std::string degradedPath() const { return filePath + ".deg"; }
+  static constexpr uint32_t DEGRADED_RETRY_MARGIN = 16 * 1024;
+  uint32_t lastLoadMaxAlloc_ = 0;  // largest free block when the cache load that preceded a build ran
 
   // Position of a page's first character within the chapter's visible character data, in the
   // same units Section::getVisibleTextOffsetForPage() reports -- which is what makes a reading

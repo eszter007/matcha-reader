@@ -36,6 +36,7 @@ class FontCacheManager {
   // codepoints the requested font can't cover, so rendering fallback glyphs doesn't hit the
   // per-glyph on-demand SD loader on every page turn.
   void setFallbackSdFont(SdCardFont* font) { fallbackSdFont_ = font; }
+  SdCardFont* getFallbackSdFont() const { return fallbackSdFont_; }
   void logStats(const char* label = "render");
   void resetStats();
 
@@ -78,6 +79,8 @@ class FontCacheManager {
 
  private:
   SdCardFont* fallbackSdFont_ = nullptr;
+  // fallbackSdFont_ when it is not also one of sdCardFonts_ (so a release does not run twice).
+  SdCardFont* unregisteredFallback() const;
   const std::map<int, EpdFontFamily>& fontMap_;
   const std::map<int, SdCardFont*>& sdCardFonts_;
   // Read only when CROSSPOINT_VECTOR_FONTS is on (PSRAM boards).

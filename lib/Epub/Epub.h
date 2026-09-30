@@ -110,5 +110,8 @@ class Epub {
   size_t getBookSize() const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;
   CssParser* getCssParser() const { return cssParser.get(); }
+  // Whether the parsed-CSS cache exists (always true for TXT/MD, which have none to build);
+  // load() rebuilds it when missing.
+  bool hasCssCache() const;
   int resolveHrefToSpineIndex(const std::string& href) const;
 };

@@ -23,5 +23,8 @@ void reclaim();
 // bytes; nullptr means "use the heap". Release with the same pointer.
 uint8_t* claim(size_t minLen, size_t* lenOut = nullptr);
 void release(const uint8_t* p);
+// Whether a claim(minLen) would succeed right now: a heap gate may count the lent block in place
+// of a contiguous heap allocation.
+bool available(size_t minLen);
 
 }  // namespace buildscratch

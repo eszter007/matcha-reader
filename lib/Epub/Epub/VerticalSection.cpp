@@ -133,7 +133,7 @@ struct TextExtractor {
 
   // Styled-block detection: (selector -> vertical layout params) distilled from the CSS cache.
   // boxOpenedAtDepth is the elementDepth of the styled element while inside one, else -1.
-  const std::vector<std::pair<std::string, CssParser::VerticalBlockStyle>>* blockStyles = nullptr;
+  const std::vector<CssParser::VerticalBlockRule>* blockStyles = nullptr;
   int boxOpenedAtDepth = -1;
 
   // Ruby parsing state
@@ -270,6 +270,20 @@ struct TextExtractor {
   static constexpr uint32_t GROWTH_MARGIN = 2048;
   static bool canAllocate(const size_t bytes) { return ESP.getMaxAllocHeap() >= bytes + GROWTH_MARGIN; }
 
+  // Appends through the same throwing operator new: a string's growth step (it doubles) is refused
+  // up front when the heap cannot hold it. A tight heap drops the text and flags the build as
+  // degraded, so the chapter is retried on a later open instead of the device aborting.
+  bool droppedTextForHeap = false;
+  bool appendChecked(std::string& dst, const char* s, const size_t len) {
+    const size_t need = dst.size() + len;
+    if (need > dst.capacity() && !canAllocate(std::max(need, dst.capacity() * 2))) {
+      droppedTextForHeap = true;
+      return false;
+    }
+    dst.append(s, len);
+    return true;
+  }
+
   // std::vector growth and std::string copies in this layer go through the THROWING operator new,
   // which aborts the device under -fno-exceptions rather than returning null (observed: a
   // furigana-dense chapter reached maxAlloc=2548 and aborted inside flushCurrentText's string
@@ -386,22 +400,29 @@ struct TextExtractor {
   // match). Returns true if anything matched.
   bool resolveBlockStyle(const char* name, const char** atts, VerticalBlockParams& params) const {
     if (!blockStyles || blockStyles->empty()) return false;
-    bool matched = false;
-    for (const auto& [sel, vs] : *blockStyles) {
-      if (sel.empty()) continue;
-      bool hit = false;
-      if (sel[0] == '.') {
-        hit = hasClass(atts, sel.c_str() + 1);
-      } else {
-        const size_t dot = sel.find('.');
-        if (dot == std::string::npos) {
-          hit = strcasecmp(sel.c_str(), name) == 0;
-        } else {
-          hit =
-              strlen(name) == dot && strncasecmp(sel.c_str(), name, dot) == 0 && hasClass(atts, sel.c_str() + dot + 1);
-        }
+    // The element's tag and class tokens, hashed once; rules match on the same hashes.
+    const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
+    constexpr int MAX_CLASSES = 16;
+    uint32_t classHashes[MAX_CLASSES];
+    int classCount = 0;
+    for (int i = 0; atts && atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "class") != 0 || !atts[i + 1]) continue;
+      const char* val = atts[i + 1];
+      while (*val && classCount < MAX_CLASSES) {
+        while (*val == ' ') val++;
+        const char* start = val;
+        while (*val && *val != ' ') val++;
+        if (val > start) classHashes[classCount++] = CssParser::blockSelectorHash(start, val - start);
       }
-      if (!hit) continue;
+    }
+    bool matched = false;
+    for (const auto& rule : *blockStyles) {
+      if (rule.tagHash != 0 && rule.tagHash != tagHash) continue;
+      if (rule.classHash != 0 &&
+          std::find(classHashes, classHashes + classCount, rule.classHash) == classHashes + classCount) {
+        continue;
+      }
+      const auto& vs = rule.style;
       matched = true;
       if (vs.startEm > 0) params.startEm = vs.startEm;
       if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
@@ -647,10 +668,10 @@ struct TextExtractor {
     if (self->skipDepth >= 0) return;
     if (self->inRp) return;
     if (self->inRt) {
-      self->rubyAnnotation.append(s, static_cast<size_t>(len));
+      self->appendChecked(self->rubyAnnotation, s, static_cast<size_t>(len));
     } else if (self->inRuby) {
       if (self->rubyBase.empty()) self->rubyBaseOffset = offsetOfThisRun;
-      self->rubyBase.append(s, static_cast<size_t>(len));
+      self->appendChecked(self->rubyBase, s, static_cast<size_t>(len));
     } else {
       // Forced split for markup-less mega-paragraphs; see MAX_PARAGRAPH_BYTES. (Not applied
       // inside <ruby> -- ruby runs are a handful of characters by nature.)
@@ -676,7 +697,11 @@ struct TextExtractor {
         // codepoints later. All of it is ASCII, so bytes and codepoints agree here.
         self->currentTextOffset = offsetOfThisRun + static_cast<uint32_t>(firstInk);
       }
-      self->currentText.append(s, static_cast<size_t>(len));
+      if (!self->appendChecked(self->currentText, s, static_cast<size_t>(len))) {
+        // Hand the buffered text on (frees it, allocates nothing) and try once more before dropping.
+        self->emitRuns(false);
+        self->appendChecked(self->currentText, s, static_cast<size_t>(len));
+      }
       // Streaming cadence: hand the buffered text onward as a seamless continuation well
       // before it grows large (see SOFT_FLUSH_BYTES).
       if (self->currentText.size() >= SOFT_FLUSH_BYTES) self->emitRuns(false);
@@ -1507,8 +1532,7 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
 // bytes still available in the largest free block, a miss of barely 4KB.
 constexpr size_t STYLED_BLOCK_TABLE_ENTRIES = 256;  // must match collectVerticalStyles()'s maxOut default
 constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS =
-    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)) +
-    12 * 1024;
+    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(CssParser::VerticalBlockRule)) + 12 * 1024;
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
                                            const uint16_t viewportHeight, const uint8_t lineSpacing,
@@ -1626,7 +1650,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // rule map (heap!). The table lives for the whole build (~10-15KB for a full EBPAJ book),
   // so under heap pressure it is bounded down or skipped entirely: correct TEXT layout beats
   // styling fidelity on a tight (X3) heap, and the release below reclaims font memory first.
-  std::vector<std::pair<std::string, CssParser::VerticalBlockStyle>> blockStyles;
+  std::vector<CssParser::VerticalBlockRule> blockStyles;
   if (epub->getCssParser()) {
     if (ESP.getMaxAllocHeap() < 64 * 1024) {
       if (auto* fcm = renderer.getFontCacheManager()) {
@@ -1642,7 +1666,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     const uint32_t maxAllocNow = ESP.getMaxAllocHeap();
     LOG_DBG("VSC", "styled-block table needs %u bytes contiguous (%u entries x %u); maxAlloc=%u",
             static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS), static_cast<unsigned>(STYLED_BLOCK_TABLE_ENTRIES),
-            static_cast<unsigned>(sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)), maxAllocNow);
+            static_cast<unsigned>(sizeof(CssParser::VerticalBlockRule)), maxAllocNow);
     if (maxAllocNow < MIN_MAX_ALLOC_FOR_STYLED_BLOCKS) {
       LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u, need %u); building unstyled", maxAllocNow,
               static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));
@@ -1747,7 +1771,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // Emergency page splits count as heap degradation too: no content is lost, but pages end at
   // arbitrary fill levels, so the same usable-now/rebuild-next-open path applies (and the same
   // rebuildingFromStale_ guard breaks the loop when a retry degrades again).
-  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap();
+  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap() ||
+                             extractor.droppedTextForHeap;
+  if (extractor.droppedTextForHeap) LOG_ERR("VSC", "Text dropped on low heap; chapter is incomplete");
   if (auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) {
       const uint32_t starved = fd->getStarvedGlyphCount() - starvedGlyphsAtStart;
@@ -1838,6 +1864,12 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
       serialization::writePod(file, staleVersion);
     }
   } else if (lastBuildDroppedForHeap_) {
+    // Kept best-effort, but not for good: record the headroom this attempt had, measured where
+    // the next open measures it (the cache load that precedes a build), and retry once an open
+    // finds clearly more. A retry that degrades again records its own, higher, figure.
+    HalFile deg;
+    const uint32_t headroom = lastLoadMaxAlloc_ ? lastLoadMaxAlloc_ : lastBuildStartMaxAlloc_;
+    if (Storage.openFileForWrite("VSC", degradedPath(), deg)) serialization::writePod(deg, headroom);
     // The retry ALSO dropped. Comparing the retry's headroom against the failed build's was tried
     // and reverted: on a repeatable path (open book, switch to vertical) the heap is IDENTICAL each
     // time, so "did the heap improve" answered no forever and every open rebuilt the chapter --
@@ -1846,6 +1878,7 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
     LOG_ERR("VSC", "Stale-rebuild dropped glyphs again; keeping best-effort cache to break the rebuild loop");
   }
   file.close();
+  if (!lastBuildDroppedForHeap_ && Storage.exists(degradedPath().c_str())) Storage.remove(degradedPath().c_str());
 
   // Last page's source position. The horizontal build logs the same number ("SCT: chapter
   // spans"), and the two counters are supposed to agree character for character -- if these
@@ -1857,11 +1890,27 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
 }
 
 bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                      const uint8_t lineSpacing, const bool furiganaEnabled) {
+                                      const uint8_t lineSpacing, const bool furiganaEnabled, const bool retryDegraded) {
   // A missing cache file is the NORMAL case here, not an error: the book-progress counter probes
   // every spine's section on each page turn, and unbuilt chapters simply don't have one yet.
   // openFileForRead would print "File does not exist" per spine per probe -- pure log spam.
+  lastLoadMaxAlloc_ = ESP.getMaxAllocHeap();
   if (!Storage.exists(filePath.c_str())) return false;
+  // A best-effort cache from a low-heap build: rebuild once this open has clearly more room than
+  // the build that produced it had at the same point.
+  if (retryDegraded && Storage.exists(degradedPath().c_str())) {
+    uint32_t degradedAt = 0;
+    {
+      HalFile deg;
+      if (Storage.openFileForRead("VSC", degradedPath(), deg)) serialization::readPod(deg, degradedAt);
+    }
+    if (lastLoadMaxAlloc_ >= degradedAt + DEGRADED_RETRY_MARGIN) {
+      LOG_INF("VSC", "Best-effort cache built at maxAlloc=%u; now %u, rebuilding", degradedAt, lastLoadMaxAlloc_);
+      rebuildingFromStale_ = true;  // a retry that degrades again is kept, with its own figure
+      clearCache();
+      return false;
+    }
+  }
   HalFile file;
   if (!Storage.openFileForRead("VSC", filePath, file)) {
     return false;
@@ -1934,6 +1983,7 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
 }
 
 bool VerticalSection::clearCache() const {
+  if (Storage.exists(degradedPath().c_str())) Storage.remove(degradedPath().c_str());
   if (!Storage.exists(filePath.c_str())) {
     return true;
   }

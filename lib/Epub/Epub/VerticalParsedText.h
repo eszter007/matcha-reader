@@ -281,6 +281,7 @@ class VerticalParsedText {
         boxStartCarry_ || (!boxStartsBeforeIndex_.empty() && boxStartsBeforeIndex_.back() == stream_.size());
     boxEndCarry_ = boxEndCarry_ || (!boxEndsBeforeIndex_.empty() && boxEndsBeforeIndex_.back() == stream_.size());
     stream_.clear();
+    rubyPool_.clear();
     paragraphBreaksBeforeIndex_.clear();
     boxStartsBeforeIndex_.clear();
     boxEndsBeforeIndex_.clear();
@@ -346,12 +347,29 @@ class VerticalParsedText {
     uint32_t byteOffset;
     uint8_t style;
     bool emphasis;
-    std::string rubyText;
+    // This character's share of its ruby, as a span of rubyPool_ (0 = none). A span rather than a
+    // std::string keeps the entry at 24 bytes instead of 44: stream_ reserves 512 of them for the
+    // whole build.
+    uint16_t rubyLen = 0;
     // See RubyRun::visibleTextOffset. Carried per character so the page that a character
     // opens can be stamped with it; NOT carried on VerticalGlyph, which is deliberately a
     // fixed-size POD (4 bytes x ~500 glyphs/page is a page buffer this device cannot spare).
     uint32_t visibleTextOffset = 0;
+    uint32_t rubyOffset = 0;
   };
+  static_assert(sizeof(PendingChar) == 24, "stream_ reserves 512 of these for the whole build");
+  // Ruby text of the characters in stream_; cleared with it. carriedRubyPool_ holds the ruby of
+  // carriedRunTail_ across the reset between batches.
+  std::string rubyPool_;
+  std::string carriedRubyPool_;
+  std::string rubyOf(const PendingChar& pc) const {
+    return pc.rubyLen ? rubyPool_.substr(pc.rubyOffset, pc.rubyLen) : std::string();
+  }
+  // Appends a ruby slice for `pc` when the pool can grow without exhausting the heap; a slice that
+  // does not fit is dropped and the build flagged as degraded.
+  void setRuby(PendingChar& pc, const char* s, size_t len);
+  // Moves a carried character back into stream_ with its ruby re-pooled.
+  void pushCarried(PendingChar& c);
 
   // Flattened, paragraph-tagged codepoint stream built up by addParagraph()
   // and consumed by layoutPages(). Paragraph boundaries are recorded as a
