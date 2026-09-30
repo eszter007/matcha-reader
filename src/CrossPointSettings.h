@@ -490,7 +490,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   /// current size. Used as the Latin fallback when the selected SD family has no
   /// Latin glyphs and the book is not Japanese.
   int getBuiltinReaderFontId() const;
-  int getRubyFontId() const;
 
   // Drop the SD font selection and fall back to the built-in family, persisting the change.
   // The reader point size is deliberately left alone: which sizes a built-in row offers depends

@@ -3930,7 +3930,10 @@ void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const
   marginLeft += SETTINGS.screenMargin;
   VerticalTextBlock block(vpage);
   if (useFurigana()) {
-    block.render(renderer, effectiveReaderFontId(), SETTINGS.getRubyFontId(), marginLeft, marginTop, true);
+    // Ruby in the body font: its SUP style draws at 50%, so furigana is half the body size at every
+    // font size (JLREQ 3.3.2), matching the half-em ruby gap the layout reserves.
+    const int bodyFontId = effectiveReaderFontId();
+    block.render(renderer, bodyFontId, bodyFontId, marginLeft, marginTop, true);
   } else {
     block.render(renderer, effectiveReaderFontId(), marginLeft, marginTop, true);
   }
