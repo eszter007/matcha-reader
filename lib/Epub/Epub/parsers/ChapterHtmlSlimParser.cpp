@@ -1803,6 +1803,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   }
                 }
 
+                (void)imageMarginBottom;
+
                 // An image that does not fill the page flows with the text: placed at the current
                 // position at its layout size, upright, and followed by more text on the same page.
                 // Only one that fills the page in either dimension gets a page of its own below.
@@ -1855,7 +1857,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   }
                   self->currentPage->elements.push_back(std::move(inlineImage));
                   self->setCurrentPageVisibleOffset(self->visibleTextOffset);
-                  self->currentPageNextY += displayHeight + imageMarginBottom;
+                  // The container's bottom margin is applied when it closes -- after a caption, which
+                  // must sit right under the image.
+                  self->currentPageNextY += displayHeight;
                   if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
                     BlockStyle resetStyle;
                     resetStyle.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
