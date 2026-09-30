@@ -331,6 +331,15 @@ void ActivityManager::goToBrowser() {
   }
 }
 
+void ActivityManager::goToOpdsServers() {
+  auto activity = makeUniqueNoThrow<OpdsServerListActivity>(renderer, mappedInput, true);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: OPDS server list activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     goToFileBrowser("/");

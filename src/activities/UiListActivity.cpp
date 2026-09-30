@@ -246,12 +246,13 @@ bool UiListActivity::hasTabBar() const { return tabBarTab() != HomeTab::Count &&
 
 bool UiListActivity::handleTabBarInput() {
   if (topBandFocused) {
-    // Left/Right belong to the screen's own band while the cursor is on it.
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    // Left/Right belong to the screen's own band while the cursor is on it. Taken on the press,
+    // before navigateButtons() reads the same key as NavPrevious/NavNext and leaves the band.
+    if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
       stepTopBand(-1);
       return true;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
       stepTopBand(1);
       return true;
     }

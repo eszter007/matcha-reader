@@ -94,6 +94,9 @@ class ActivityManager {
   // view has its own tabs and ignores it.
   void goToLibrary(int initialTab = 0);
   void goToBrowser();
+  // The server list as the Library's OPDS tab: picking a server opens the browser, so moving
+  // across the tabs never starts Wi-Fi.
+  void goToOpdsServers();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
