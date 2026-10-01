@@ -38,8 +38,7 @@ class TextSettingsActivity final : public UiTabListActivity {
  private:
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
-  // BookSideMargins is horizontal-only (the vertical engine never reads honorBookInsets), so it
-  // is hidden for a Japanese book alongside ParaSpacing and Alignment -- see layoutRowAt().
+  // Not every row applies to every book: visibleLayoutRows() lists the ones shown.
   enum class LayoutRow {
     LineSpacing,
     WordSpacing,
@@ -89,6 +88,9 @@ class TextSettingsActivity final : public UiTabListActivity {
   // Maps a visible list position to its LayoutRow: a Japanese book hides ParaSpacing,
   // Alignment and BookSideMargins, so position and enum value diverge.
   LayoutRow layoutRowAt(int visibleIndex) const;
+  // Fills `out` (when non-null, room for LayoutRow::Count) with the Layout rows shown for this
+  // book, in order, and returns how many.
+  int visibleLayoutRows(LayoutRow* out) const;
   // Japanese books hide FocusReading/Hyphenation; vertical Japanese also hides AntiAliasing.
   StyleRow styleRowAt(int visibleIndex) const;
   // Sentinel settingIndex for the "Manage Fonts" row appended to the family list. It opens

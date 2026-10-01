@@ -157,8 +157,8 @@ void TextSettingsActivity::rebuildRowItems() {
         item.label = sizes_[i].name.c_str();
         break;
       case Tab::Layout:
-        // Visible position -> LayoutRow: a Japanese book hides ParaSpacing, Alignment and
-        // BookSideMargins, so `i` is not the enum value (see layoutRowAt()).
+        // Visible position -> LayoutRow: not every row is shown for every book, so `i` is not
+        // the enum value (see visibleLayoutRows()).
         item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i))]);
         break;
       case Tab::Style:
@@ -274,8 +274,7 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
         rowValues_[i] = (i == currentSizeIndex_) ? tr(STR_SELECTED) : "";
         break;
       case Tab::Layout: {
-        // Visible position -> LayoutRow, as the labels do: a Japanese book hides three of the
-        // rows, so `i` is not the enum value (see layoutRowAt()).
+        // Visible position -> LayoutRow, as the labels do (see visibleLayoutRows()).
         const int layoutRow = static_cast<int>(layoutRowAt(i));
         rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
         if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
@@ -602,9 +601,7 @@ int TextSettingsActivity::listCount() const {
     case Tab::Size:
       return static_cast<int>(sizes_.size());
     case Tab::Layout:
-      // Japanese books hide ParaSpacing, Alignment and BookSideMargins: all three are horizontal
-      // layout inputs the vertical engine does not read.
-      return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 3 : 0);
+      return visibleLayoutRows(nullptr);
     case Tab::Style:
       // Japanese books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
       return japaneseBook_ ? 2 : static_cast<int>(StyleRow::Count);
@@ -615,9 +612,32 @@ int TextSettingsActivity::listCount() const {
 
 int TextSettingsActivity::tabCount() const { return static_cast<int>(Tab::Count); }
 
+// Only the rows the book's layout engine reads. Vertical text uses line spacing and the screen
+// margin alone; a horizontal Japanese book adds character spacing (it has no word spaces, and
+// paragraph spacing, alignment and book side margins are left to the book).
+int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
+  static constexpr LayoutRow VERTICAL[] = {LayoutRow::LineSpacing, LayoutRow::ScreenMargin};
+  static constexpr LayoutRow JAPANESE[] = {LayoutRow::LineSpacing, LayoutRow::CharacterSpacing,
+                                           LayoutRow::ScreenMargin};
+  const LayoutRow* rows = nullptr;
+  int count = static_cast<int>(LayoutRow::Count);
+  if (verticalText_) {
+    rows = VERTICAL;
+    count = static_cast<int>(std::size(VERTICAL));
+  } else if (japaneseBook_) {
+    rows = JAPANESE;
+    count = static_cast<int>(std::size(JAPANESE));
+  }
+  if (out) {
+    for (int i = 0; i < count; i++) out[i] = rows ? rows[i] : static_cast<LayoutRow>(i);
+  }
+  return count;
+}
+
 TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {
-  if (japaneseBook_ && visibleIndex > 0) return LayoutRow::ScreenMargin;
-  return static_cast<LayoutRow>(visibleIndex);
+  LayoutRow rows[static_cast<int>(LayoutRow::Count)];
+  const int count = visibleLayoutRows(rows);
+  return visibleIndex >= 0 && visibleIndex < count ? rows[visibleIndex] : LayoutRow::Count;
 }
 
 TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {
