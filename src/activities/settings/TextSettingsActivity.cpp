@@ -612,24 +612,14 @@ int TextSettingsActivity::listCount() const {
 
 int TextSettingsActivity::tabCount() const { return static_cast<int>(Tab::Count); }
 
-// Only the rows the book's layout engine reads. Vertical text uses line spacing and the screen
-// margin alone; a horizontal Japanese book adds character spacing (it has no word spaces, and
-// paragraph spacing, alignment and book side margins are left to the book).
+// Only the rows the book's layout engine reads, so a hidden row never keeps changing the page.
+// Vertical text uses line spacing and the screen margin alone; horizontal text -- Japanese
+// included -- applies every row.
 int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
   static constexpr LayoutRow VERTICAL[] = {LayoutRow::LineSpacing, LayoutRow::ScreenMargin};
-  static constexpr LayoutRow JAPANESE[] = {LayoutRow::LineSpacing, LayoutRow::CharacterSpacing,
-                                           LayoutRow::ScreenMargin};
-  const LayoutRow* rows = nullptr;
-  int count = static_cast<int>(LayoutRow::Count);
-  if (verticalText_) {
-    rows = VERTICAL;
-    count = static_cast<int>(std::size(VERTICAL));
-  } else if (japaneseBook_) {
-    rows = JAPANESE;
-    count = static_cast<int>(std::size(JAPANESE));
-  }
+  const int count = verticalText_ ? static_cast<int>(std::size(VERTICAL)) : static_cast<int>(LayoutRow::Count);
   if (out) {
-    for (int i = 0; i < count; i++) out[i] = rows ? rows[i] : static_cast<LayoutRow>(i);
+    for (int i = 0; i < count; i++) out[i] = verticalText_ ? VERTICAL[i] : static_cast<LayoutRow>(i);
   }
   return count;
 }
