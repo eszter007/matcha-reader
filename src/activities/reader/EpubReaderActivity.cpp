@@ -2357,12 +2357,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         const uint32_t pageKey =
             (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage);
         textPageHasImages = VerticalTextBlock(*vpage).hasImages();
-        if ((textPageHasImages || deferredTextAaPanel()) &&
+        if (textPageHasImages &&
             requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == pageKey) {
-          // The idle refine of a text page's inline images, or of its text AA where the planes are
-          // deferred (deferredTextAaPanel): the B/W page is already on the glass. Redraw it into the
-          // framebuffer (glyphs are warm, the images a cache read) as the base the planes' cleanup
-          // re-syncs from, then add the grays -- text too when AA is on.
+          // The idle refine of a text page's inline images: the B/W page is already on the glass.
+          // Redraw it into the framebuffer (glyphs are warm, the images a cache read) as the base
+          // the planes' cleanup re-syncs from, then add the grays -- text too when AA is on.
           renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true);
           renderStatusBar();
           imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
@@ -2419,6 +2418,13 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
       }
     }
+    // A blocking base (no overlap window): the grays go up right behind it, ahead of the tail's
+    // next-page work, so they land as soon after the text as on a horizontal page. The pass checks
+    // for input between its steps, so a turn pressed meanwhile is not held behind it.
+    if (textAa && !overlapRefresh) {
+      imageWarmStampSnapshot_ = grayInputStamp;
+      renderVerticalGrayPlanes(/*withText=*/true, /*withImages=*/false);
+    }
     // A vertical page counts as rendered too: the book becomes Continue Reading / Recent once
     // it has shown one (rememberBookOnceRendered).
     markPageRendered();
@@ -2428,13 +2434,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // screenshot's framebuffer read, and the image warm's cache decode.
     if (overlapRefresh) renderer.waitRefreshComplete();
 
-    if (textAa && deferredTextAaPanel()) {
-      // Full-frame planes cost seconds here; add them once the reader rests on the page (readerLoop's
-      // idle refine), so paging through runs at B/W speed and no turn waits behind a gray pass.
-      pendingImageRefine_.store(
-          (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage),
-          std::memory_order_relaxed);
-    } else if (textAa) {
+    if (textAa && overlapRefresh) {
       imageWarmStampSnapshot_ = grayInputStamp;  // a key pressed since the render abandons the grays
       renderVerticalGrayPlanes(/*withText=*/true, /*withImages=*/false);
     }
@@ -4134,12 +4134,6 @@ void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const boo
     // Image grays leave charge a plain FAST diff cannot clear; the next page takes the HALF cleanup.
     pagesUntilFullRefresh = 1;
   }
-}
-
-bool EpubReaderActivity::deferredTextAaPanel() const {
-  return SETTINGS.textAntiAliasing && !renderer.supportsStripGrayscale() &&
-         renderer.grayscaleCapabilities().supported() &&
-         renderer.grayscaleCapabilities().base != HalDisplay::GrayscaleBase::Combined;
 }
 
 void EpubReaderActivity::renderVerticalGrayPlanesFullFrame(const VerticalPage* vpage, const bool withText,
