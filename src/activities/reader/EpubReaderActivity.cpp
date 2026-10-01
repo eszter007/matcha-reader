@@ -4186,7 +4186,7 @@ void EpubReaderActivity::renderVerticalGrayPlanesFullFrame(const VerticalPage* v
   const auto tRestore = millis();
   // Puts the B/W page back and re-syncs controller RAM from it for the next differential turn.
   renderer.restoreBwBuffer();
-  LOG_INF("ERS",
+  LOG_DBG("ERS",
           "Vertical gray planes, full frame (text=%d images=%d): render=%lums upload=%lums display=%lums "
           "restore=%lums total=%lums cancelled=%d",
           withText, withImages, renderMs, copyMs, tRestore - tDisplay, millis() - tRestore, millis() - t0, cancelled);
