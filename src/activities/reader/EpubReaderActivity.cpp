@@ -2357,15 +2357,16 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         const uint32_t pageKey =
             (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage);
         textPageHasImages = VerticalTextBlock(*vpage).hasImages();
-        if (textPageHasImages &&
+        if ((textPageHasImages || deferredTextAaPanel()) &&
             requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == pageKey) {
-          // The idle refine of a text page's inline images: the B/W page is already on the glass.
-          // Redraw it into the framebuffer (glyphs are warm, the images a cache read) as the base
-          // the planes' cleanup re-syncs from, then add the grays -- text too when AA is on.
+          // The idle refine of a text page's inline images, or of its text AA where the planes are
+          // deferred (deferredTextAaPanel): the B/W page is already on the glass. Redraw it into the
+          // framebuffer (glyphs are warm, the images a cache read) as the base the planes' cleanup
+          // re-syncs from, then add the grays -- text too when AA is on.
           renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true);
           renderStatusBar();
           imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
-          renderVerticalGrayPlanes(SETTINGS.textAntiAliasing, /*withImages=*/true);
+          renderVerticalGrayPlanes(SETTINGS.textAntiAliasing, /*withImages=*/textPageHasImages);
           return;
         }
         renderedVPage_ = verticalSection->currentPage;  // see the post-render warm block below
@@ -2427,7 +2428,13 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // screenshot's framebuffer read, and the image warm's cache decode.
     if (overlapRefresh) renderer.waitRefreshComplete();
 
-    if (textAa) {
+    if (textAa && deferredTextAaPanel()) {
+      // Full-frame planes cost seconds here; add them once the reader rests on the page (readerLoop's
+      // idle refine), so paging through runs at B/W speed and no turn waits behind a gray pass.
+      pendingImageRefine_.store(
+          (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage),
+          std::memory_order_relaxed);
+    } else if (textAa) {
       imageWarmStampSnapshot_ = grayInputStamp;  // a key pressed since the render abandons the grays
       renderVerticalGrayPlanes(/*withText=*/true, /*withImages=*/false);
     }
@@ -4129,6 +4136,12 @@ void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const boo
   }
 }
 
+bool EpubReaderActivity::deferredTextAaPanel() const {
+  return SETTINGS.textAntiAliasing && !renderer.supportsStripGrayscale() &&
+         renderer.grayscaleCapabilities().supported() &&
+         renderer.grayscaleCapabilities().base != HalDisplay::GrayscaleBase::Combined;
+}
+
 void EpubReaderActivity::renderVerticalGrayPlanesFullFrame(const VerticalPage* vpage, const bool withText,
                                                            const bool withImages) {
   // Panels without strip uploads (the UC8279 on the X4 Pro and X4C) take each plane as a whole
@@ -4145,6 +4158,9 @@ void EpubReaderActivity::renderVerticalGrayPlanesFullFrame(const VerticalPage* v
     finish();
     return;
   }
+  const auto t0 = millis();
+  unsigned long renderMs = 0;
+  unsigned long copyMs = 0;
   bool cancelled = false;
   for (int plane = 0; plane < 2 && !cancelled; plane++) {
     if (imageWarmShouldCancel(this)) {
@@ -4152,20 +4168,34 @@ void EpubReaderActivity::renderVerticalGrayPlanesFullFrame(const VerticalPage* v
       break;
     }
     const bool lsb = plane == 0;
+    const auto tRender = millis();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(lsb ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
     renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true, /*imagesOnly=*/!withText);
+    const auto tCopy = millis();
+    renderMs += tCopy - tRender;
+    // A key pressed while the plane was drawn: skip the upload and the gray waveform.
+    if (imageWarmShouldCancel(this)) {
+      cancelled = true;
+      break;
+    }
     if (lsb) {
       renderer.copyGrayscaleLsbBuffers();
     } else {
       renderer.copyGrayscaleMsbBuffers();
     }
+    copyMs += millis() - tCopy;
   }
+  const auto tDisplay = millis();
   if (!cancelled) renderer.displayGrayBuffer();
   renderer.setRenderMode(GfxRenderer::BW);
+  const auto tRestore = millis();
   // Puts the B/W page back and re-syncs controller RAM from it for the next differential turn.
   renderer.restoreBwBuffer();
-  LOG_DBG("ERS", "Vertical gray planes, full frame (text=%d images=%d): cancelled=%d", withText, withImages, cancelled);
+  LOG_INF("ERS",
+          "Vertical gray planes, full frame (text=%d images=%d): render=%lums upload=%lums display=%lums "
+          "restore=%lums total=%lums cancelled=%d",
+          withText, withImages, renderMs, copyMs, tRestore - tDisplay, millis() - tRestore, millis() - t0, cancelled);
   finish();
 }
 
