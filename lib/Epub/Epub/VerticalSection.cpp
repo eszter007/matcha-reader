@@ -1179,6 +1179,7 @@ struct LayoutPageSink final : ParagraphSink {
     // the image page, and post-image text silently merged onto it -- confirmed on a real device
     // as dialogue continuing mid-column across a scene-break graphic instead of starting fresh.
     VerticalPage imagePage = makeImagePage(src);
+    if (failed) return;  // cancelled during the image extraction
     // An image narrow enough to sit among the columns flows with the text: it takes the columns
     // its width needs, upright, beside the text around it. A wider one gets its own page.
     if (imagePage.imageWidth > 0 && imagePage.imageHeight > 0) {
@@ -1221,6 +1222,7 @@ struct LayoutPageSink final : ParagraphSink {
     failed = true;
     return true;
   }
+  static bool cancelDuringExtraction(void* self) { return static_cast<LayoutPageSink*>(self)->checkCancelled(); }
 
   void flushText(bool isFinalFlush = false) {
     if (checkCancelled()) return;
@@ -1464,12 +1466,20 @@ struct LayoutPageSink final : ParagraphSink {
           const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
                                      ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
           const size_t chunkSize = useFastChunks ? kFastChunk : 4096;
-          extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
+          // A speculative build checks its cancel hook during the copy too: a full-page illustration
+          // is often over 1 MB, seconds of SD writes that would otherwise hold a page turn.
+          extracted = cancelFn ? epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize, false,
+                                                               &cancelDuringExtraction, this)
+                               : epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
         }
         cachedFile.flush();
         cachedFile.close();
         if (!extracted) {
-          LOG_ERR("VSC", "Failed to extract image %s; removing partial cache file", resolvedSrc.c_str());
+          if (cancelled) {
+            LOG_DBG("VSC", "Image extraction cancelled; removing partial cache file %s", cachedPath.c_str());
+          } else {
+            LOG_ERR("VSC", "Failed to extract image %s; removing partial cache file", resolvedSrc.c_str());
+          }
           Storage.remove(cachedPath.c_str());
         }
       }
