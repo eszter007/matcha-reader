@@ -3588,13 +3588,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Skip the placeholder pre-pass on cold image pages: it caused a visible two-stage update
   // (placeholder boxes, then the real image) and an extra panel cycle.
   // Instead, keep the previous page displayed while decoding and do a single refresh to the final image.
-  auto tBwRender = tPrewarm;
+  // The idle refine draws the B/W page too, without displaying it: renderPage() cleared the
+  // framebuffer, and the planes' cleanup below re-syncs the controller's differential baseline
+  // from it. A white baseline leaves the next FAST turn unable to erase this page's image.
+  page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
+  renderStatusBar();
+  const auto tBwRender = millis();
   auto tDisplay = tBwRender;
-  if (!grayscaleRefineOnly) {
-    page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
-    renderStatusBar();
-    tBwRender = millis();
-  }
 
   if (!grayscaleRefineOnly && absoluteImageGrayscale) {
     const auto baseMode = cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
