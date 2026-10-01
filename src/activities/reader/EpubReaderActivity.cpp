@@ -2951,18 +2951,24 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     if (!epub || !verticalSection || verticalSection->pageCount < 1) return;
     if (verticalSection->currentPage < verticalSection->pageCount - SILENT_INDEX_WINDOW_PAGES) return;
 
-    const int nextSpineIndex = currentSpineIndex + 1;
-    if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
-
     // A skip below set a backoff: retrying every tick releases the font caches each time
     // (cold glyphs on the next turn) while the heap plateau that caused the skip rarely
     // moves within a second. One attempt per backoff window is plenty.
     if (silentIndexBackoffUntilMs_ != 0 && millis() < silentIndexBackoffUntilMs_) return;
 
-    VerticalSection nextVSection(epub, nextSpineIndex, renderer);
     const int fontId = effectiveReaderFontId();
-    if (nextVSection.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana()))
-      return;
+    // The first unbuilt chapter ahead, looking past one already-built one-page chapter: a
+    // full-page illustration is read in a second, too briefly for the build after it to run there,
+    // so the chapter behind it has to be built from here.
+    int nextSpineIndex = currentSpineIndex + 1;
+    for (int ahead = 0;; ahead++) {
+      if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
+      VerticalSection built(epub, nextSpineIndex, renderer);
+      if (!built.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana())) break;
+      if (ahead > 0 || built.pageCount > 1) return;
+      nextSpineIndex++;
+    }
+    VerticalSection nextVSection(epub, nextSpineIndex, renderer);
 
     constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
 
