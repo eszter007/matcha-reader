@@ -4581,14 +4581,23 @@ std::string EpubReaderActivity::currentChapterTitle() const {
   return tr(STR_UNNAMED);
 }
 
-// Japanese books omit Paragraph Alignment and Focus Reading; Vertical Text / Furigana
-// take their place. Latin books keep the upstream rows.
+// The rows shown, as kTextRowNames indices. Japanese books omit Paragraph Alignment and Focus
+// Reading for Vertical Text / Furigana; a Latin book switched to vertical keeps every row; other
+// books show the upstream five. Listed rather than offset, so a new row cannot alias another.
+namespace {
+constexpr int kJapaneseTextRows[] = {0, 1, 2, kRowVerticalText, kRowFurigana};
+constexpr int kAllTextRows[] = {0, 1, 2, 3, kRowFocusReading, kRowVerticalText, kRowFurigana};
+static_assert(std::size(kAllTextRows) == kTextRowCount, "every text row listed");
+}  // namespace
+
 int EpubReaderActivity::textRowCount() const {
-  return isJapaneseBook() ? kBaseTextRowCount : showVerticalToggle() ? kTextRowCount : kBaseTextRowCount;
+  if (isJapaneseBook()) return static_cast<int>(std::size(kJapaneseTextRows));
+  return showVerticalToggle() ? kTextRowCount : kBaseTextRowCount;
 }
 
 int EpubReaderActivity::textRowAt(const int visibleIndex) const {
-  return isJapaneseBook() && visibleIndex >= 3 ? visibleIndex + 2 : visibleIndex;
+  if (visibleIndex < 0 || visibleIndex >= textRowCount()) return -1;
+  return isJapaneseBook() ? kJapaneseTextRows[visibleIndex] : kAllTextRows[visibleIndex];
 }
 
 std::string EpubReaderActivity::textRowName(int row) const {
