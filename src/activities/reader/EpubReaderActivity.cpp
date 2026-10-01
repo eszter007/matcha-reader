@@ -2373,7 +2373,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         renderVerticalPageBody(*vpage, vGlyphsWarm);
         // Inline images show B/W now and refine to grayscale once the page is left idle
         // (readerLoop), as image pages do: flipping through costs one fast refresh each.
-        if (textPageHasImages && renderer.supportsStripGrayscale()) {
+        if (textPageHasImages && renderer.grayscaleCapabilities().supported()) {
           ImageBlock::releaseRenderCache();
           pendingImageRefine_.store(pageKey, std::memory_order_relaxed);
         }
@@ -2392,14 +2392,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // is safe (its glyph warm renders in scan mode, which draws nothing); popups, screenshots and
     // the image warm are not, and run after the wait.
     shownPageHasImages_ = imagePageDisplayed;
-    const bool overlapRefresh = !imagePageDisplayed && renderer.supportsAsyncRefresh();
     // Text anti-aliasing: gray planes after the B/W base, as renderPage() does. Not while the chapter
     // is still being laid out (the build holds the heap the strip scratch needs), and not on a page
     // with inline images, whose idle refine adds the text grays along with the images'.
+    const auto grayscale = renderer.grayscaleCapabilities();
     const bool textAa = !imagePageDisplayed && !textPageHasImages && SETTINGS.textAntiAliasing &&
-                        renderer.supportsStripGrayscale() &&
-                        renderer.grayscaleCapabilities().base != HalDisplay::GrayscaleBase::Combined &&
+                        grayscale.supported() && grayscale.base != HalDisplay::GrayscaleBase::Combined &&
                         !verticalBuildInProgress_.load(std::memory_order_relaxed);
+    // An async B/W refresh is a valid base for the planes only where the panel says so (asyncBase);
+    // elsewhere (the X4 Pro's UC8279) AA pages take the blocking displayGrayscaleBase() below.
+    const bool overlapRefresh =
+        !imagePageDisplayed && renderer.supportsAsyncRefresh() && (!textAa || grayscale.asyncBase);
     const uint32_t grayInputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
@@ -4080,6 +4083,10 @@ void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const boo
   renderer.waitRefreshComplete();  // the plane writes need the panel idle
   const auto tWait = millis();
   const VerticalPage* vpage = verticalSection ? verticalSection->getPage() : nullptr;
+  if (!renderer.supportsStripGrayscale()) {
+    renderVerticalGrayPlanesFullFrame(vpage, withText, withImages);
+    return;
+  }
   const int gh = renderer.getDisplayHeight();
   const int gwBytes = renderer.getDisplayWidthBytes();
   // Every strip re-reads an image's whole pixel cache, so images take the taller strip; text culls
@@ -4120,6 +4127,46 @@ void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const boo
     // Image grays leave charge a plain FAST diff cannot clear; the next page takes the HALF cleanup.
     pagesUntilFullRefresh = 1;
   }
+}
+
+void EpubReaderActivity::renderVerticalGrayPlanesFullFrame(const VerticalPage* vpage, const bool withText,
+                                                           const bool withImages) {
+  // Panels without strip uploads (the UC8279 on the X4 Pro and X4C) take each plane as a whole
+  // frame, so the planes are drawn over the framebuffer with the B/W page parked meanwhile -- the
+  // same fallback renderContents() uses for horizontal pages.
+  const auto finish = [&] {
+    if (!withImages) return;
+    ImageBlock::releaseRenderCache();
+    // Image grays leave charge a plain FAST diff cannot clear; the next page takes the HALF cleanup.
+    pagesUntilFullRefresh = 1;
+  };
+  if (!vpage || !renderer.storeBwBuffer()) {
+    LOG_ERR("ERS", "Could not park the B/W page for vertical gray planes; page stays B/W");
+    finish();
+    return;
+  }
+  bool cancelled = false;
+  for (int plane = 0; plane < 2 && !cancelled; plane++) {
+    if (imageWarmShouldCancel(this)) {
+      cancelled = true;
+      break;
+    }
+    const bool lsb = plane == 0;
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(lsb ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
+    renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true, /*imagesOnly=*/!withText);
+    if (lsb) {
+      renderer.copyGrayscaleLsbBuffers();
+    } else {
+      renderer.copyGrayscaleMsbBuffers();
+    }
+  }
+  if (!cancelled) renderer.displayGrayBuffer();
+  renderer.setRenderMode(GfxRenderer::BW);
+  // Puts the B/W page back and re-syncs controller RAM from it for the next differential turn.
+  renderer.restoreBwBuffer();
+  LOG_DBG("ERS", "Vertical gray planes, full frame (text=%d images=%d): cancelled=%d", withText, withImages, cancelled);
+  finish();
 }
 
 void EpubReaderActivity::buildNoticeThunk(void* ctx) {
