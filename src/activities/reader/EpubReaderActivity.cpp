@@ -3267,6 +3267,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   // The page on screen showed a placeholder for a PNG it could not decode in place (see
   // ImageBlock::render): decode it here first, then draw the page again.
   const bool currentPageDeferred = ImageBlock::consumeDeferredDecode();
+  if (!currentPageDeferred) lastDeferredRedraw_ = {};
   int warmedCount = 0;
   // Redraw once per page: a cache the render then rejects anyway must not loop render -> warm.
   const auto redrawAfterDeferredDecode = [&](const int page, const bool vertical) {
@@ -3285,8 +3286,13 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     if (block.getImagePath() == imageWarmFailedPath_) {
       return true;
     }
-    const auto res = block.needsFramebufferLoanToDecode() ? warmImageWithFramebufferLoan(block)
-                                                          : block.warmCache(renderer, &imageWarmShouldCancel, this);
+    const bool needsLoan = block.needsFramebufferLoanToDecode();
+    // The lower IMAGE_WARM_LOAN_MIN_ALLOC floor only covers a decoder parked in the framebuffer.
+    if (!needsLoan && ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC) {
+      return true;
+    }
+    const auto res =
+        needsLoan ? warmImageWithFramebufferLoan(block) : block.warmCache(renderer, &imageWarmShouldCancel, this);
     if (res == ImageBlock::WarmResult::Failed) {
       imageWarmFailedPath_ = block.getImagePath();
     } else if (res == ImageBlock::WarmResult::Warmed) {

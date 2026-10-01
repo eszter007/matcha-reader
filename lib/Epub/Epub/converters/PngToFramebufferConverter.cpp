@@ -105,8 +105,7 @@ static_assert(PNG_DECODER_SIZE <= HalDisplay::BUFFER_SIZE, "the PNG decoder must
 // Where the decoder lives: one heap block when the largest one fits it, otherwise -- only for the
 // caller that took the framebuffer loan itself -- the lent framebuffer bytes. Anyone else claiming
 // them (another task, or a decode running under a chapter build's loan) would be clobbered when
-// that loan ends. The decoder is a single allocation,
-// so the largest free block is what decides, not the total.
+// that loan ends. The decoder is a single allocation, so the largest free block decides.
 class PngDecoderSlot {
  public:
   PngDecoderSlot() = default;
@@ -139,11 +138,8 @@ class PngDecoderSlot {
   PNG* decoder_ = nullptr;
 };
 
-// PNGdec keeps TWO scanlines in its internal ucPixels buffer (current + previous)
-// and each scanline includes a leading filter byte.
-// Required storage is therefore approximately: 2 * (pitch + 1) + alignment slack.
-// If PNG_MAX_BUFFERED_PIXELS is smaller than this requirement for a given image,
-// PNGdec can overrun its internal buffer before our draw callback executes.
+// PNGdec keeps TWO scanlines in its row buffer (current + previous), each with a leading filter
+// byte, so the buffer handed to setRowBuffer() is 2 * (pitch + 1) + alignment slack.
 int bytesPerPixelFromType(int pixelType) {
   switch (pixelType) {
     case PNG_PIXEL_TRUECOLOR:
@@ -486,12 +482,10 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
           ctx.visibleWidth, ctx.visibleHeight, ctx.dstWidth, ctx.dstHeight, ctx.scale, pixelType, bitsPerSample);
 
   const int requiredInternal = requiredPngInternalBufferBytes(ctx.srcWidth, pixelType, bitsPerSample);
+  // PNG_MAX_BUFFERED_PIXELS no longer sizes a buffer; it caps how wide an image is decoded at all.
   if (requiredInternal > PNG_MAX_BUFFERED_PIXELS) {
-    LOG_ERR(
-        "PNG",
-        "PNG row buffer too small: need %d bytes for width=%d type=%d bpp=%d, configured PNG_MAX_BUFFERED_PIXELS=%d",
-        requiredInternal, ctx.srcWidth, pixelType, bitsPerSample, PNG_MAX_BUFFERED_PIXELS);
-    LOG_ERR("PNG", "Aborting decode to avoid PNGdec internal buffer overflow");
+    LOG_ERR("PNG", "PNG too wide: needs a %d-byte row buffer for width=%d type=%d bpp=%d, cap %d", requiredInternal,
+            ctx.srcWidth, pixelType, bitsPerSample, PNG_MAX_BUFFERED_PIXELS);
     return false;
   }
 
@@ -536,7 +530,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   // Stream the pixel cache to disk. PNGdec delivers source scanlines top to
   // bottom and we emit at most one (downscaled) output row per callback, so the
   // band only needs a single row. Streaming keeps the working set tiny, so
-  // unlike the old full-image buffer it neither competes with the ~44KB decoder
+  // unlike the old full-image buffer it neither competes with the decoder
   // nor forces larger images to skip caching - which previously meant a full
   // re-decode on every one of an image page's ~14 render passes.
   ctx.caching = !config.preserveAlpha && !config.cachePath.empty();
