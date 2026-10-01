@@ -552,6 +552,8 @@ class GfxRenderer {
   // Whether the framebuffer's CONTENTS can be trusted -- hasFrameBuffer() only answers for the
   // pointer, which comes back intact after a build loan even though the pixels did not.
   bool frameBufferContentsStale() const { return frameBufferContentsStale_; }
+  // The caller put the pre-loan bytes back after a loan (e.g. from an SD copy).
+  void markFrameBufferContentsRestored() { frameBufferContentsStale_ = false; }
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

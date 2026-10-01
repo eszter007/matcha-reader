@@ -104,6 +104,11 @@ constexpr char READER_PREFS_FILE[] = "/readerprefs.bin";
 // pixel-cache band <= 24KB); below this the decode would fail either way, so don't try --
 // the page-turn path keeps its existing on-demand behavior.
 constexpr uint32_t IMAGE_WARM_MIN_ALLOC = 30 * 1024;
+// Floor when the decoder itself can sit in the lent framebuffer: what remains on the heap is the
+// PNG row buffer, the gray line buffer and the cache stream.
+constexpr uint32_t IMAGE_WARM_LOAN_MIN_ALLOC = 12 * 1024;
+// The page's framebuffer bytes, parked here while a decode borrows the framebuffer.
+constexpr char FRAMEBUFFER_STASH_PATH[] = "/.crosspoint/fbstash.bin";
 
 int clampPercent(int percent) {
   if (percent < 0) {
@@ -3213,26 +3218,79 @@ bool EpubReaderActivity::imageWarmShouldCancel(const void* ctx) {
   return ulTaskNotifyValueClear(nullptr, 0) > 0;
 }
 
+bool EpubReaderActivity::imageWarmHeapOk() const {
+  const uint32_t largest = ESP.getMaxAllocHeap();
+  return largest >= IMAGE_WARM_MIN_ALLOC || (largest >= IMAGE_WARM_LOAN_MIN_ALLOC && renderer.hasFrameBuffer());
+}
+
+ImageBlock::WarmResult EpubReaderActivity::warmImageWithFramebufferLoan(const ImageBlock& block) {
+  // The panel keeps showing the page while its framebuffer is lent, but menus and popups drawn
+  // over it later read those bytes, so they wait on SD and come back after the decode.
+  uint8_t* frame = renderer.getFrameBuffer();
+  const size_t frameSize = renderer.getBufferSize();
+  if (!frame) return ImageBlock::WarmResult::Failed;  // already lent: the loan below would be inert
+  {
+    HalFile stash;
+    if (!Storage.openFileForWrite("IWARM", FRAMEBUFFER_STASH_PATH, stash) ||
+        stash.write(frame, frameSize) != frameSize) {
+      LOG_ERR("IWARM", "Could not stash the framebuffer; skipping %s", block.getImagePath().c_str());
+      return ImageBlock::WarmResult::Failed;
+    }
+  }
+
+  ImageBlock::WarmResult result;
+  {
+    GfxRenderer::FrameBufferLoan loan(renderer);
+    result = block.warmCache(renderer, &imageWarmShouldCancel, this, /*decoderInLentFramebuffer=*/true);
+  }
+
+  frame = renderer.getFrameBuffer();
+  HalFile stash;
+  if (frame && Storage.openFileForRead("IWARM", FRAMEBUFFER_STASH_PATH, stash) &&
+      stash.read(frame, frameSize) == static_cast<int>(frameSize)) {
+    renderer.markFrameBufferContentsRestored();
+  } else {
+    LOG_ERR("IWARM", "Could not restore the stashed framebuffer; redrawing the page");
+    requestUpdate();
+  }
+  return result;
+}
+
 void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
   if (imageWarmShouldCancel(this)) {
     return;  // another render is already queued -- stay out of its way
   }
-  if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC) {
+  if (!imageWarmHeapOk()) {
     return;
   }
+  // The page on screen showed a placeholder for a PNG it could not decode in place (see
+  // ImageBlock::render): decode it here first, then draw the page again.
+  const bool currentPageDeferred = ImageBlock::consumeDeferredDecode();
+  int warmedCount = 0;
+  // Redraw once per page: a cache the render then rejects anyway must not loop render -> warm.
+  const auto redrawAfterDeferredDecode = [&](const int page, const bool vertical) {
+    if (warmedCount == 0) return;
+    const DeferredRedrawKey key{currentSpineIndex, page, vertical};
+    if (key == lastDeferredRedraw_) return;
+    lastDeferredRedraw_ = key;
+    requestUpdate();
+  };
 
   const int fontId = effectiveReaderFontId();
   // Returns false to stop iterating (cancelled). The MOST RECENT failed target is remembered
   // (single path, not a list): the warm targets one page at a time, so one slot is enough to
   // stop the common retry churn of re-attempting the same broken image on every render tail.
-  const auto warmBlock = [this](const ImageBlock& block) -> bool {
+  const auto warmBlock = [this, &warmedCount](const ImageBlock& block) -> bool {
     if (block.getImagePath() == imageWarmFailedPath_) {
       return true;
     }
-    const auto res = block.warmCache(renderer, &imageWarmShouldCancel, this);
+    const auto res = block.needsFramebufferLoanToDecode() ? warmImageWithFramebufferLoan(block)
+                                                          : block.warmCache(renderer, &imageWarmShouldCancel, this);
     if (res == ImageBlock::WarmResult::Failed) {
       imageWarmFailedPath_ = block.getImagePath();
+    } else if (res == ImageBlock::WarmResult::Warmed) {
+      warmedCount++;
     }
     return res != ImageBlock::WarmResult::Cancelled;
   };
@@ -3302,6 +3360,11 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
           ImageBlock(page.imagePath, page.imageSrcPath, static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
     };
 
+    if (currentPageDeferred) {
+      const VerticalPage* shown = verticalSection->getPage(verticalSection->currentPage);
+      if (shown && warmVerticalPage(*shown)) redrawAfterDeferredDecode(verticalSection->currentPage, true);
+      return;  // the redraw's own tail resumes the lookahead
+    }
     if (vp && !warmVerticalPage(*vp)) return;  // cancelled: the reader wants the render task back
     // Then the page behind, for a turn back.
     if (verticalSection->currentPage > 0) {
@@ -3319,14 +3382,14 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
       const int page = verticalSection->currentPage + ahead;
       if (page >= verticalSection->pageCount) break;
       // Re-check the heap per page: getPage() may pull a page in from the section file.
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
+      if (!imageWarmHeapOk() || imageWarmShouldCancel(this) || imageRefinePending()) return;
       const VerticalPage* aheadPage = verticalSection->getPage(page);
       if (!aheadPage) return;  // unread (heap/SD): not a finished scan, so it is retried
       if (!warmVerticalPage(*aheadPage)) return;
     }
     // The pages before this one, nearest first.
     for (int page = verticalSection->currentPage - 2; page >= 0; page--) {
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
+      if (!imageWarmHeapOk() || imageWarmShouldCancel(this) || imageRefinePending()) return;
       const VerticalPage* behind = verticalSection->getPage(page);
       if (!behind) return;
       if (!warmVerticalPage(*behind)) return;
@@ -3348,13 +3411,19 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     return true;
   };
 
+  if (currentPageDeferred) {
+    auto shown = section->loadPageAt(section->currentPage);
+    if (shown && warmHorizontalPage(*shown)) redrawAfterDeferredDecode(section->currentPage, false);
+    return;  // the redraw's own tail resumes the lookahead
+  }
+
   const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
   const int direction = forward ? 1 : -1;
   int warmedAhead = 0;
   for (int pageIndex = section->currentPage + direction;
        pageIndex >= 0 && pageIndex < section->pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
        pageIndex += direction, warmedAhead++) {
-    if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+    if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) return;
     auto page = section->loadPageAt(pageIndex);
     if (!page || !warmHorizontalPage(*page)) return;
   }
@@ -3362,7 +3431,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   {
     const int behind = section->currentPage - direction;
     if (behind >= 0 && behind < section->pageCount) {
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+      if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) return;
       auto page = section->loadPageAt(behind);
       if (page && !warmHorizontalPage(*page)) return;
     }
@@ -3372,7 +3441,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
   const ImageWarmScope scope{currentSpineIndex, viewportWidth, viewportHeight, fontId, section->pageCount, false};
   if (imageWarmChapterDone_ != scope && !imageRefinePending()) {
     for (int pageIndex = 0; pageIndex < section->pageCount; pageIndex++) {
-      if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this) || imageRefinePending()) return;
+      if (!imageWarmHeapOk() || imageWarmShouldCancel(this) || imageRefinePending()) return;
       auto page = section->loadPageAt(pageIndex);
       if (!page) return;  // unread (heap/SD): not a finished scan, so it is retried
       if (!page->hasImages()) continue;
@@ -3390,7 +3459,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
       for (int pageIndex = forward ? 0 : adjacentSection.pageCount - 1;
            pageIndex >= 0 && pageIndex < adjacentSection.pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
            pageIndex += direction, warmedAhead++) {
-        if (ESP.getMaxAllocHeap() < IMAGE_WARM_MIN_ALLOC || imageWarmShouldCancel(this)) return;
+        if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) return;
         auto page = adjacentSection.loadPageAt(pageIndex);
         if (!page || !warmHorizontalPage(*page)) return;
       }

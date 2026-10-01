@@ -1,7 +1,9 @@
 #include "PngToFramebufferConverter.h"
 
+#include <BuildScratch.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -94,23 +96,48 @@ int32_t pngSeekWithHandle(PNGFILE* pFile, int32_t pos) {
 }
 
 // The PNG decoder (PNGdec) is one big object: a 32 KB zlib window plus the inflate state, the
-// palette, and a scanline buffer sized by PNG_MAX_BUFFERED_PIXELS (16416 here, far above the
-// library default). We heap-allocate it on demand rather than keeping a static instance, so the
-// memory is only spent while decoding. Taken from the type, not a hand-written number: a
-// hardcoded "~42 KB" went stale the moment the build flag grew the buffer, and the checks below
-// then waved through allocations that could not fit.
-constexpr size_t PNG_DECODER_APPROX_SIZE = sizeof(PNG);
-constexpr size_t MIN_FREE_HEAP_FOR_PNG = PNG_DECODER_APPROX_SIZE + 16 * 1024;  // decoder + 16 KB headroom
+// palette and a file buffer. Its scanline buffer is a separate, image-sized allocation made after
+// open(), which keeps the object small enough to fit in the lent framebuffer.
+constexpr size_t PNG_DECODER_SIZE = sizeof(PNG);
+constexpr size_t MIN_FREE_HEAP_FOR_PNG = PNG_DECODER_SIZE + 16 * 1024;  // decoder + 16 KB headroom
+static_assert(PNG_DECODER_SIZE <= HalDisplay::BUFFER_SIZE, "the PNG decoder must fit in the lent framebuffer");
 
-// The decoder is a single allocation, so the largest free block is what decides, not the total.
-// A fragmented heap can show 100 KB free and still have no room for it.
-bool pngDecoderFits() {
-  const size_t largest = ESP.getMaxAllocHeap();
-  if (largest >= PNG_DECODER_APPROX_SIZE && ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PNG) return true;
-  LOG_ERR("PNG", "No room for the %u-byte decoder (free=%u largest=%u)", static_cast<unsigned>(PNG_DECODER_APPROX_SIZE),
-          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(largest));
-  return false;
-}
+// Where the decoder lives: one heap block when the largest one fits it, otherwise -- only for the
+// caller that took the framebuffer loan itself -- the lent framebuffer bytes. Anyone else claiming
+// them (another task, or a decode running under a chapter build's loan) would be clobbered when
+// that loan ends. The decoder is a single allocation,
+// so the largest free block is what decides, not the total.
+class PngDecoderSlot {
+ public:
+  PngDecoderSlot() = default;
+  PngDecoderSlot(const PngDecoderSlot&) = delete;
+  PngDecoderSlot& operator=(const PngDecoderSlot&) = delete;
+  ~PngDecoderSlot() {
+    if (scratch_) {
+      decoder_->~PNG();
+      buildscratch::release(scratch_);
+    }
+  }
+
+  PNG* acquire(const bool allowScratch) {
+    if (PngToFramebufferConverter::decoderFitsHeap()) {
+      heap_ = makeUniqueNoThrow<PNG>();
+      if (heap_) return decoder_ = heap_.get();
+    }
+    if (allowScratch) {
+      scratch_ = buildscratch::claim(PNG_DECODER_SIZE);
+      if (scratch_) return decoder_ = new (scratch_) PNG();
+    }
+    LOG_ERR("PNG", "No room for the %u-byte decoder (free=%u largest=%u)", static_cast<unsigned>(PNG_DECODER_SIZE),
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return nullptr;
+  }
+
+ private:
+  std::unique_ptr<PNG> heap_;
+  uint8_t* scratch_ = nullptr;
+  PNG* decoder_ = nullptr;
+};
 
 // PNGdec keeps TWO scanlines in its internal ucPixels buffer (current + previous)
 // and each scanline includes a leading filter byte.
@@ -356,20 +383,13 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 }  // namespace
 
 bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
-  if (!pngDecoderFits()) return false;
-
-  std::unique_ptr<PNG> png(new (std::nothrow) PNG());
-  if (!png) {
-    // The decoder is one ~42 KB object: free heap can be ample while no single block fits, so
-    // the largest block is the number that explains this failure.
-    LOG_ERR("PNG", "Failed to allocate PNG decoder for dimensions (free=%u largest=%u)",
-            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    return false;
-  }
+  PngDecoderSlot slot;
+  PNG* png = slot.acquire(/*allowScratch=*/false);
+  if (!png) return false;
 
   int rc = png->open(imagePath.c_str(), pngOpenWithHandle, pngCloseWithHandle, pngReadWithHandle, pngSeekWithHandle,
                      nullptr);
-  const ScopedCleanup cleanup{[&png]() { png->close(); }};
+  const ScopedCleanup cleanup{[png]() { png->close(); }};
 
   if (rc != 0) {
     LOG_ERR("PNG", "Failed to open PNG for dimensions: %d", rc);
@@ -383,17 +403,12 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
                                                     const RenderConfig& config) {
   LOG_DBG("PNG", "Decoding PNG: %s", imagePath.c_str());
 
-  if (!pngDecoderFits()) return false;
-
-  // Heap-allocate the PNG decoder - freed at end of function
-  std::unique_ptr<PNG> png(new (std::nothrow) PNG());
-  if (!png) {
-    LOG_ERR("PNG", "Failed to allocate PNG decoder");
-    return false;
-  }
+  PngDecoderSlot slot;
+  PNG* png = slot.acquire(/*allowScratch=*/config.cacheOnly && config.decoderMayUseLentFramebuffer);
+  if (!png) return false;
 
   PngContext ctx;
-  ctx.decoder = png.get();
+  ctx.decoder = png;
   ctx.renderer = &renderer;
   ctx.config = &config;
   ctx.cacheOnly = config.cacheOnly;
@@ -412,7 +427,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   int rc = png->open(imagePath.c_str(), pngOpenWithHandle, pngCloseWithHandle, pngReadWithHandle, pngSeekWithHandle,
                      pngDrawCallback);
-  const ScopedCleanup cleanup{[&png]() { png->close(); }};
+  const ScopedCleanup cleanup{[png]() { png->close(); }};
   if (rc != PNG_SUCCESS) {
     LOG_ERR("PNG", "Failed to open PNG: %d", rc);
     return false;
@@ -479,6 +494,14 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     LOG_ERR("PNG", "Aborting decode to avoid PNGdec internal buffer overflow");
     return false;
   }
+
+  // Two scanlines for PNGdec's de-filter, sized to this image rather than to the widest one allowed.
+  auto rowBuffer = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(requiredInternal));
+  if (!rowBuffer) {
+    LOG_ERR("PNG", "Failed to allocate PNG row buffer (%d bytes)", requiredInternal);
+    return false;
+  }
+  png->setRowBuffer(rowBuffer.get(), requiredInternal);
 
   if (!isSupportedBitDepth(pixelType, bitsPerSample)) {
     warnUnsupportedFeature(
@@ -557,6 +580,10 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   }
 
   return true;
+}
+
+bool PngToFramebufferConverter::decoderFitsHeap() {
+  return ESP.getMaxAllocHeap() >= PNG_DECODER_SIZE && ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PNG;
 }
 
 bool PngToFramebufferConverter::supportsFormat(const std::string& extension) {

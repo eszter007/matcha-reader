@@ -1,6 +1,7 @@
 #include "ImageBlock.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,7 @@
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PngToFramebufferConverter.h"
 
 // Cache file format:
 // - uint16_t width
@@ -81,6 +83,8 @@ bool imageFailedThisRender(const std::string& path) {
   }
   return false;
 }
+
+bool deferredDecode = false;
 
 void rememberImageFailure(const std::string& path) {
   if (failedImageCount == MAX_RENDER_IMAGE_FAILURES || imageFailedThisRender(path)) return;
@@ -358,6 +362,16 @@ bool ImageBlock::needsDecode() const { return !imageFailedThisRender(imagePath) 
 
 void ImageBlock::clearRenderFailures() { failedImageCount = 0; }
 
+bool ImageBlock::needsFramebufferLoanToDecode() const {
+  return FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap() && !hasValidCache();
+}
+
+bool ImageBlock::consumeDeferredDecode() {
+  const bool deferred = deferredDecode;
+  deferredDecode = false;
+  return deferred;
+}
+
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
 
 void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
@@ -493,6 +507,15 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;
   }
 
+  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) {
+    LOG_INF("IMG", "Deferring PNG decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
+            imagePath.c_str());
+    deferredDecode = true;
+    rememberImageFailure(imagePath);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
+    return;
+  }
+
   LOG_DBG("IMG", "Decoding and caching: %s", imagePath.c_str());
 
   RenderConfig config;
@@ -575,7 +598,7 @@ void ImageBlock::fitWithin(const int availW, const int availH, int& w, int& h) {
 }
 
 ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shouldCancel)(const void*),
-                                             const void* cancelCtx) const {
+                                             const void* cancelCtx, const bool decoderInLentFramebuffer) const {
   // BMP never streams a pixel cache (the BMP converter rejects cacheOnly) and renders fast
   // without one -- nothing to warm.
   const size_t dotPos = imagePath.rfind('.');
@@ -641,6 +664,7 @@ ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shoul
   config.performanceMode = false;
   config.useExactDimensions = true;
   config.cacheOnly = true;  // stream only the .2bp cache; never touch the framebuffer
+  config.decoderMayUseLentFramebuffer = decoderInLentFramebuffer;
   config.cachePath = cachePath;
   config.shouldCancel = shouldCancel;
   config.cancelCtx = cancelCtx;
