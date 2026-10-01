@@ -320,6 +320,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // anti-aliasing is on, the inline images always. Reads the page afresh (the post-render tail's
   // warm reuses the single-page cache). Cancelled by input; controller RAM is re-synced either way.
   void renderVerticalGrayPlanes(bool withText, bool withImages);
+  void renderVerticalGrayPlanesFullFrame(const VerticalPage* vpage, bool withText, bool withImages);
   // Page index whose glyphs currently sit in the SD-font mini cache from the idle next-page
   // warm; -1 = cache cold/unknown. Kindle-class turns: the NEXT page's glyphs are loaded
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
