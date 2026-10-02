@@ -176,6 +176,9 @@ class VerticalSection {
   // The page holding the element with this id (a TOC or footnote target), through the anchor table
   // written after the page index. nullopt if the chapter has no such anchor.
   std::optional<int> getPageForAnchor(const std::string& anchor) const;
+  // getPageForAnchor() for several ids in one pass over the anchor table: pages[i] is the page of
+  // anchors[i], or -1 if the chapter has no such anchor.
+  void findAnchorPages(const std::vector<std::string>& anchors, std::vector<int>& pages) const;
   const VerticalPage* getPage() const;
   const VerticalPage* getPage(int pageIndex) const;
   // True when the most recent getPage() returned nullptr only because the page's glyph vector

@@ -4551,23 +4551,33 @@ int EpubReaderActivity::currentTocIndex() const {
   const int first = epub->getTocIndexForSpineIndex(currentSpineIndex);
   if (first < 0 || (!section && !verticalSection)) return first;
   const int currentPage = verticalSection ? verticalSection->currentPage : section->currentPage;
-  // Bounds the SD reads for a book with one huge file of many sections.
+  // Bounds the TOC reads for a book with one huge file of many sections.
   static constexpr int MAX_SECTIONS_SCANNED = 64;
   const int last = std::min(epub->getTocItemsCount(), first + 1 + MAX_SECTIONS_SCANNED);
-  int best = first;
+  // The later entries of this file, then all their pages in one pass over the anchor table.
+  std::vector<int> tocIndices;
+  std::vector<std::string> anchors;
+  tocIndices.reserve(8);
+  anchors.reserve(8);
   for (int i = first + 1; i < last; i++) {
-    const auto item = epub->getTocItem(i);
+    auto item = epub->getTocItem(i);
     if (item.spineIndex != currentSpineIndex) break;
     if (item.anchor.empty()) continue;
-    std::optional<int> page;
-    if (verticalSection) {
-      page = verticalSection->getPageForAnchor(item.anchor);
-    } else if (const auto p = section->getPageForAnchor(item.anchor)) {
-      page = *p;
-    }
-    if (!page) continue;
-    if (*page > currentPage) break;
-    best = i;
+    tocIndices.push_back(i);
+    anchors.push_back(std::move(item.anchor));
+  }
+  if (anchors.empty()) return first;
+  std::vector<int> pages;
+  if (verticalSection) {
+    verticalSection->findAnchorPages(anchors, pages);
+  } else {
+    section->findAnchorPages(anchors, pages);
+  }
+  int best = first;
+  for (size_t i = 0; i < pages.size(); i++) {
+    if (pages[i] < 0) continue;
+    if (pages[i] > currentPage) break;
+    best = tocIndices[i];
   }
   return best;
 }

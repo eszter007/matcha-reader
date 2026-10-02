@@ -821,6 +821,45 @@ std::optional<uint16_t> Section::findAnchor(const std::string& anchor) const {
   return getPageForAnchor(anchor);
 }
 
+void Section::findAnchorPages(const std::vector<std::string>& anchors, std::vector<int>& pages) const {
+  pages.assign(anchors.size(), -1);
+  size_t unresolved = anchors.size();
+  if (build_ && build_->parser) {
+    for (const auto& [key, page] : build_->parser->getAnchors()) {
+      for (size_t i = 0; i < anchors.size(); i++) {
+        if (pages[i] < 0 && key == anchors[i]) {
+          pages[i] = page;
+          unresolved--;
+        }
+      }
+    }
+  }
+  if (unresolved == 0) return;
+
+  HalFile f;
+  if (!openCommittedFile(f)) return;
+  const uint32_t fileSize = f.size();
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
+  uint32_t anchorMapOffset;
+  serialization::readPod(f, anchorMapOffset);
+  if (anchorMapOffset == 0 || anchorMapOffset >= fileSize) return;
+  f.seek(anchorMapOffset);
+  uint16_t count;
+  serialization::readPod(f, count);
+  std::string key;
+  for (uint16_t n = 0; n < count && unresolved > 0; n++) {
+    uint16_t page;
+    serialization::readString(f, key);
+    serialization::readPod(f, page);
+    for (size_t i = 0; i < anchors.size(); i++) {
+      if (pages[i] < 0 && key == anchors[i]) {
+        pages[i] = page;
+        unresolved--;
+      }
+    }
+  }
+}
+
 uint16_t Section::estimatedTotalPages() const {
   // Extrapolation from a suspended session's watermark trailer. A static snapshot, so no EMA
   // damping is needed. Also the best guess while a rebuild is running but hasn't laid out
