@@ -3252,113 +3252,54 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     return res != ImageBlock::WarmResult::Cancelled;
   };
 
-  if (useVerticalText()) {
-    if (!verticalSection || verticalSection->pageCount == 0) {
-      return;
-    }
-    // Constructed only on the spine-boundary branch (its ctor builds a path string -- avoidable
-    // churn on the common within-chapter turn), but declared at this scope because it must
-    // outlive vp: getPage() hands out a pointer into the section's page cache.
-    std::optional<VerticalSection> nextV;
-    const VerticalPage* vp = nullptr;
-    const int nextPage = verticalSection->currentPage + 1;
-    if (nextPage < verticalSection->pageCount) {
-      vp = verticalSection->getPage(nextPage);
-    } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
-      // Last page of the chapter: the next page lives in the next spine item. In JP books each
-      // full-page illustration is its own one-page spine item, so this cross-boundary peek is
-      // the common case -- silentIndexNextChapterIfNeeded has already built the section file.
-      nextV.emplace(epub, currentSpineIndex + 1, renderer);
-      if (nextV->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana()) &&
-          nextV->pageCount > 0) {
-        vp = nextV->getPage(0);
-      } else {
-        // Kept: this line means the next chapter has no section file, i.e. the silent index did
-        // not build it and the reader is one turn from a multi-second foreground build.
-        LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", currentSpineIndex + 1);
-      }
-    }
-    // Warm the image on the next page and, if that one is already cached, keep looking ahead
-    // within this chapter. Building a 464x717 cache takes ~4.4s on device, so meeting an
-    // illustration with a cold cache stalls the turn; spending otherwise idle time on the ones
-    // further ahead makes every later image page open immediately. Cheap to repeat: warmCache()
-    // returns AlreadyWarm after a 4-byte header read once the cache exists.
-    const auto warmVerticalPage = [&](const VerticalPage& page) -> bool {
-      if (!page.isImagePage()) {
-        // Inline images ride in the text as glyphs whose text is "path\tsrc\twidth\theight".
-        for (const auto& g : page.glyphs) {
-          if (!VerticalParsedText::isImageMarker(g.codepoint)) continue;
-          const std::string& info = page.glyphTextStr(g);
-          const size_t t1 = info.find('\t');
-          const size_t t2 = t1 == std::string::npos ? t1 : info.find('\t', t1 + 1);
-          const size_t t3 = t2 == std::string::npos ? t2 : info.find('\t', t2 + 1);
-          if (t3 == std::string::npos) continue;
-          const int w = atoi(info.c_str() + t2 + 1);
-          const int h = atoi(info.c_str() + t3 + 1);
-          if (w <= 0 || h <= 0) continue;
-          if (!warmBlock(ImageBlock(info.substr(0, t1), info.substr(t1 + 1, t2 - t1 - 1), static_cast<int16_t>(w),
-                                    static_cast<int16_t>(h)))) {
-            return false;
-          }
+  // Per layout only: warm the images of one page, of this chapter or of a neighbouring one.
+  // Everything else -- what to warm and in which order -- is the shared walk below.
+  const bool vertical = useVerticalText();
+  int currentPage = 0;
+  int pageCount = 0;
+  if (vertical) {
+    if (!verticalSection) return;
+    currentPage = verticalSection->currentPage;
+    pageCount = verticalSection->pageCount;
+  } else {
+    if (!section) return;
+    currentPage = section->currentPage;
+    pageCount = section->pageCount;
+  }
+  if (pageCount == 0) return;
+
+  const auto warmVerticalPage = [&](const VerticalPage& page) -> bool {
+    if (!page.isImagePage()) {
+      // Inline images ride in the text as glyphs whose text is "path\tsrc\twidth\theight".
+      for (const auto& g : page.glyphs) {
+        if (!VerticalParsedText::isImageMarker(g.codepoint)) continue;
+        const std::string& info = page.glyphTextStr(g);
+        const size_t t1 = info.find('\t');
+        const size_t t2 = t1 == std::string::npos ? t1 : info.find('\t', t1 + 1);
+        const size_t t3 = t2 == std::string::npos ? t2 : info.find('\t', t2 + 1);
+        if (t3 == std::string::npos) continue;
+        const int w = atoi(info.c_str() + t2 + 1);
+        const int h = atoi(info.c_str() + t3 + 1);
+        if (w <= 0 || h <= 0) continue;
+        if (!warmBlock(ImageBlock(info.substr(0, t1), info.substr(t1 + 1, t2 - t1 - 1), static_cast<int16_t>(w),
+                                  static_cast<int16_t>(h)))) {
+          return false;
         }
-        return true;  // keep scanning
       }
-      if (page.imageRotated) {
-        const int reserve = readerBottomReserve(/*verticalMode=*/false);
-        ImageBlock block(page.imagePath, page.imageSrcPath, page.imageWidth, page.imageHeight);
-        block.setRotated(true, static_cast<int16_t>(reserve));
-        return warmBlock(block);
-      }
-      // Same fit the render path computes -- shared helper keeps the cache dims identical.
-      int iw = page.imageWidth;
-      int ih = page.imageHeight;
-      ImageBlock::fitWithin(viewportWidth, viewportHeight, iw, ih);
-      return warmBlock(
-          ImageBlock(page.imagePath, page.imageSrcPath, static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
-    };
-
-    if (currentPageDeferred) {
-      const VerticalPage* shown = verticalSection->getPage(verticalSection->currentPage);
-      if (shown && warmVerticalPage(*shown)) redrawAfterDeferredDecode(verticalSection->currentPage, true);
-      return;  // the redraw's own tail resumes the lookahead
+      return true;
     }
-    if (vp && !warmVerticalPage(*vp)) return;  // cancelled: the reader wants the render task back
-    // Then the page behind, for a turn back.
-    if (verticalSection->currentPage > 0) {
-      const VerticalPage* prev = verticalSection->getPage(verticalSection->currentPage - 1);
-      if (prev && !warmVerticalPage(*prev)) return;
+    if (page.imageRotated) {
+      const int reserve = readerBottomReserve(/*verticalMode=*/false);
+      ImageBlock block(page.imagePath, page.imageSrcPath, page.imageWidth, page.imageHeight);
+      block.setRotated(true, static_cast<int16_t>(reserve));
+      return warmBlock(block);
     }
-    // Then the rest of the chapter, once per chapter: the whole scan is repeated only after a
-    // cancel or a change of chapter or page size.
-    const ImageWarmScope scope{currentSpineIndex,          viewportWidth, viewportHeight, fontId,
-                               verticalSection->pageCount, true};
-    // The shown page's grayscale refine goes first; the render tail after it resumes the scan.
-    if (imageWarmChapterDone_ == scope || imageRefinePending()) return;
-
-    for (int ahead = 2; ahead < verticalSection->pageCount; ahead++) {
-      const int page = verticalSection->currentPage + ahead;
-      if (page >= verticalSection->pageCount) break;
-      // Re-check the heap per page: getPage() may pull a page in from the section file.
-      if (!imageWarmHeapOk() || imageWarmShouldCancel(this) || imageRefinePending()) return;
-      const VerticalPage* aheadPage = verticalSection->getPage(page);
-      if (!aheadPage) return;  // unread (heap/SD): not a finished scan, so it is retried
-      if (!warmVerticalPage(*aheadPage)) return;
-    }
-    // The pages before this one, nearest first.
-    for (int page = verticalSection->currentPage - 2; page >= 0; page--) {
-      if (!imageWarmHeapOk() || imageWarmShouldCancel(this) || imageRefinePending()) return;
-      const VerticalPage* behind = verticalSection->getPage(page);
-      if (!behind) return;
-      if (!warmVerticalPage(*behind)) return;
-    }
-    imageWarmChapterDone_ = scope;
-    return;
-  }
-
-  if (!section || section->pageCount == 0) {
-    return;
-  }
-  constexpr int IMAGE_WARM_LOOKAHEAD_PAGES = 8;
+    // Same fit the render path computes -- shared helper keeps the cache dims identical.
+    int iw = page.imageWidth;
+    int ih = page.imageHeight;
+    ImageBlock::fitWithin(viewportWidth, viewportHeight, iw, ih);
+    return warmBlock(ImageBlock(page.imagePath, page.imageSrcPath, static_cast<int16_t>(iw), static_cast<int16_t>(ih)));
+  };
   const auto warmHorizontalPage = [&](const Page& page) -> bool {
     for (const auto& el : page.elements) {
       if (el->getTag() == TAG_PageImage && !warmBlock(static_cast<const PageImage&>(*el).getImageBlock())) {
@@ -3367,60 +3308,85 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     }
     return true;
   };
+  // false: stop the walk (cancelled, or the page could not be read -- heap/SD -- so a scan that
+  // reached it is not finished and will be retried).
+  const auto warmPage = [&](const int page) -> bool {
+    if (vertical) {
+      const VerticalPage* vp = verticalSection->getPage(page);
+      return vp && warmVerticalPage(*vp);
+    }
+    auto hp = section->loadPageAt(page);
+    return hp && warmHorizontalPage(*hp);
+  };
+  // Up to `budget` pages of the neighbouring chapter, from its near end; returns pages visited.
+  const auto warmAdjacentChapter = [&](const int spine, const bool forward, const int budget) -> int {
+    int visited = 0;
+    if (vertical) {
+      VerticalSection adjacent(epub, spine, renderer);
+      if (!adjacent.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana()) ||
+          adjacent.pageCount == 0) {
+        // Kept: the neighbouring chapter has no section file, i.e. the silent index did not build
+        // it and the reader is one turn from a multi-second foreground build.
+        LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", spine);
+        return 0;
+      }
+      for (int p = forward ? 0 : adjacent.pageCount - 1; p >= 0 && p < adjacent.pageCount && visited < budget;
+           p += forward ? 1 : -1, visited++) {
+        if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) break;
+        const VerticalPage* vp = adjacent.getPage(p);
+        if (!vp || !warmVerticalPage(*vp)) break;
+      }
+      return visited;
+    }
+    Section adjacent(epub, spine, renderer);
+    if (!adjacent.loadSectionFile(readerSpec(viewportWidth, viewportHeight)) || adjacent.pageCount == 0) return 0;
+    for (int p = forward ? 0 : adjacent.pageCount - 1; p >= 0 && p < adjacent.pageCount && visited < budget;
+         p += forward ? 1 : -1, visited++) {
+      if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) break;
+      auto hp = adjacent.loadPageAt(p);
+      if (!hp || !warmHorizontalPage(*hp)) break;
+    }
+    return visited;
+  };
 
+  // The page on screen showed a placeholder for a PNG it could not decode in place: decode it
+  // first and draw the page again; the redraw's own tail resumes the lookahead.
   if (currentPageDeferred) {
-    auto shown = section->loadPageAt(section->currentPage);
-    if (shown && warmHorizontalPage(*shown)) redrawAfterDeferredDecode(section->currentPage, false);
-    return;  // the redraw's own tail resumes the lookahead
+    if (warmPage(currentPage)) redrawAfterDeferredDecode(currentPage, vertical);
+    return;
   }
 
+  // Building a full-page image cache takes seconds on device (~4.4 s for 464x717), so meeting one
+  // cold stalls the turn. Warm in the reader's turn direction first, then one page the other way
+  // for a turn back, then the rest of the chapter once, then across the chapter boundary in the turn
+  // direction. Cheap to repeat: warmCache() returns AlreadyWarm after a header read.
+  constexpr int IMAGE_WARM_LOOKAHEAD_PAGES = 8;
   const bool forward = lastTurnForward_.load(std::memory_order_relaxed);
   const int direction = forward ? 1 : -1;
   int warmedAhead = 0;
-  for (int pageIndex = section->currentPage + direction;
-       pageIndex >= 0 && pageIndex < section->pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
-       pageIndex += direction, warmedAhead++) {
+  for (int page = currentPage + direction; page >= 0 && page < pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
+       page += direction, warmedAhead++) {
     if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) return;
-    auto page = section->loadPageAt(pageIndex);
-    if (!page || !warmHorizontalPage(*page)) return;
+    if (!warmPage(page)) return;
   }
-  // One page the other way, for a turn back.
-  {
-    const int behind = section->currentPage - direction;
-    if (behind >= 0 && behind < section->pageCount) {
-      if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) return;
-      auto page = section->loadPageAt(behind);
-      if (page && !warmHorizontalPage(*page)) return;
-    }
+  const int behind = currentPage - direction;
+  if (behind >= 0 && behind < pageCount) {
+    if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) return;
+    if (!warmPage(behind)) return;
   }
-  // Then the rest of the chapter, once per chapter (repeated only after a cancel or a change of
-  // chapter or page size), so no image in it is decoded while the reader waits.
-  const ImageWarmScope scope{currentSpineIndex, viewportWidth, viewportHeight, fontId, section->pageCount, false};
+  // The rest of the chapter, once per chapter: repeated only after a cancel or a change of chapter
+  // or page size. The shown page's grayscale refine goes first; the next render tail resumes.
+  const ImageWarmScope scope{currentSpineIndex, viewportWidth, viewportHeight, fontId, pageCount, vertical};
   if (imageWarmChapterDone_ != scope && !imageRefinePending()) {
-    for (int pageIndex = 0; pageIndex < section->pageCount; pageIndex++) {
+    for (int page = 0; page < pageCount; page++) {
       if (!imageWarmHeapOk() || imageWarmShouldCancel(this) || imageRefinePending()) return;
-      auto page = section->loadPageAt(pageIndex);
-      if (!page) return;  // unread (heap/SD): not a finished scan, so it is retried
-      if (!page->hasImages()) continue;
-      if (!warmHorizontalPage(*page)) return;
+      if (!warmPage(page)) return;
     }
     imageWarmChapterDone_ = scope;
   }
-
-  // Continue the same short lookahead across the chapter boundary in the
-  // reader's actual turn direction.
   const int adjacentSpine = currentSpineIndex + direction;
   if (warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES && adjacentSpine >= 0 && adjacentSpine < epub->getSpineItemsCount()) {
-    Section adjacentSection(epub, adjacentSpine, renderer);
-    if (adjacentSection.loadSectionFile(readerSpec(viewportWidth, viewportHeight)) && adjacentSection.pageCount > 0) {
-      for (int pageIndex = forward ? 0 : adjacentSection.pageCount - 1;
-           pageIndex >= 0 && pageIndex < adjacentSection.pageCount && warmedAhead < IMAGE_WARM_LOOKAHEAD_PAGES;
-           pageIndex += direction, warmedAhead++) {
-        if (!imageWarmHeapOk() || imageWarmShouldCancel(this)) return;
-        auto page = adjacentSection.loadPageAt(pageIndex);
-        if (!page || !warmHorizontalPage(*page)) return;
-      }
-    }
+    warmAdjacentChapter(adjacentSpine, forward, IMAGE_WARM_LOOKAHEAD_PAGES - warmedAhead);
   }
 }
 
