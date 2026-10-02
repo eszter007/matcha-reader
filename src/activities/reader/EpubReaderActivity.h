@@ -276,6 +276,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // Everything after a page reached the panel, vertical or horizontal: sync-error notice, panel
   // hand-off, screenshot, popups, image warm, and the toolbar redrawn over the new page.
   void finishPageRender(uint16_t viewportWidth, uint16_t viewportHeight);
+  // Background next-chapter build: the two layouts differ only in these two steps.
+  enum class SilentBuildResult : uint8_t { Built, Cancelled, Failed };
+  int builtChapterPageCount(int spineIndex, uint16_t viewportWidth, uint16_t viewportHeight) const;  // -1: unbuilt
+  SilentBuildResult buildChapterSilently(int spineIndex, uint16_t viewportWidth, uint16_t viewportHeight);
   // Cache-only decode of a PNG whose decoder does not fit the heap, inside a framebuffer loan.
   ImageBlock::WarmResult warmImageWithFramebufferLoan(const ImageBlock& block);
   bool imageWarmHeapOk() const;
