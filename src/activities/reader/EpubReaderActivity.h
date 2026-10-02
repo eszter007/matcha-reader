@@ -349,6 +349,30 @@ class EpubReaderActivity final : public ReaderActivity {
     bool resyncIfSkipped = false;  // re-sync the controller even when no plane could be drawn
   };
   enum class GrayPassResult : uint8_t { Shown, Cancelled, Skipped };
+
+  // A page with images, horizontal or vertical: B/W at once, grays once the reader rests on the
+  // page (readerLoop's idle refine), or -- with an absolute waveform -- right behind its base.
+  struct ImagePageSpec {
+    int page = 0;
+    bool refineOnly = false;  // this render IS the idle refine: the B/W page is already on the glass
+    bool wantsGray = true;    // false when nothing on the page has gray tones (see imageWantsGrayPass)
+    bool absolute = false;    // UC8279 absolute quality waveform: base and planes in one go
+    GrayPassSpec gray;
+  };
+  // drawPage puts the B/W page (status bar included) into the framebuffer; drawPlanes draws one
+  // gray plane. Both run on the refine too: the B/W page is the baseline the re-sync reads from.
+  template <typename DrawPage, typename DrawPlanes>
+  void presentImagePage(const ImagePageSpec& spec, DrawPage&& drawPage, DrawPlanes&& drawPlanes);
+  uint32_t imageRefineKey(int page) const {
+    return (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(page);
+  }
+  // Whether this render is the idle refine readerLoop requested for `page` (consumes the request).
+  bool takeRequestedImageRefine(int page) {
+    return requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == imageRefineKey(page);
+  }
+  // A 1-bit BMP has no gray tones for the planes to lift, and the BMP decoder writes no pixel
+  // cache, so a gray pass would re-decode it from SD for no visible change.
+  static bool imageWantsGrayPass(const std::string& imagePath);
   template <typename Draw, typename Cancel>
   GrayPassResult runGrayPass(const GrayPassSpec& spec, Draw&& draw, Cancel&& cancel);
   // Page index whose glyphs currently sit in the SD-font mini cache from the idle next-page
