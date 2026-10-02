@@ -333,7 +333,24 @@ class EpubReaderActivity final : public ReaderActivity {
   // anti-aliasing is on, the inline images always. Reads the page afresh (the post-render tail's
   // warm reuses the single-page cache). Cancelled by input; controller RAM is re-synced either way.
   void renderVerticalGrayPlanes(bool withText, bool withImages);
-  void renderVerticalGrayPlanesFullFrame(const VerticalPage* vpage, bool withText, bool withImages);
+
+  // One grayscale pass over the B/W page already on the glass: both planes drawn by `draw` and shown
+  // with one gray waveform. Strip panels upload band by band from a small scratch; panels without
+  // strip uploads (UC8279: X4 Pro, X4C) take whole frames with the B/W page parked meanwhile.
+  // `cancel` is polled between bands and planes; a cancelled pass shows nothing. Either way the
+  // controller is re-synced from the B/W framebuffer for the next differential turn.
+  struct GrayPassSpec {
+    // Band uploads, or whole frames with the B/W page parked. Taken from the capabilities of the
+    // grayscale mode in use (an absolute mode can lack strips where the overlay mode has them).
+    bool strips = true;
+    int stripRows = 80;            // preferred band height; falls back to 80 when the scratch won't fit
+    uint8_t clear = 0x00;          // plane background: 0x00 overlay masks, 0xFF absolute planes
+    bool absolute = false;         // an absolute base already started: abort it if no plane is drawn
+    bool resyncIfSkipped = false;  // re-sync the controller even when no plane could be drawn
+  };
+  enum class GrayPassResult : uint8_t { Shown, Cancelled, Skipped };
+  template <typename Draw, typename Cancel>
+  GrayPassResult runGrayPass(const GrayPassSpec& spec, Draw&& draw, Cancel&& cancel);
   // Page index whose glyphs currently sit in the SD-font mini cache from the idle next-page
   // warm; -1 = cache cold/unknown. Kindle-class turns: the NEXT page's glyphs are loaded
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
