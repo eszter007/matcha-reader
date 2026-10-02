@@ -52,6 +52,9 @@ struct RenderConfig {
   // (BMP never streams a cache); decodeToFramebuffer fails fast if cachePath is empty or the
   // cache stream can't start, since the decode would produce nothing.
   bool cacheOnly = false;
+  // Cache-only decodes only: the caller holds a GfxRenderer::FrameBufferLoan for this decode, so the
+  // PNG decoder may sit in the lent framebuffer bytes (buildscratch) when the heap cannot hold it.
+  bool decoderMayUseLentFramebuffer = false;
 
   // Cooperative cancellation, polled once per decode block/scanline. Return true to abort: the
   // decode stops within one block and the partial cache file is dropped, so a background warm

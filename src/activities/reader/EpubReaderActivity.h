@@ -4,6 +4,7 @@
 #include <Epub/PageLink.h>
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
+#include <Epub/blocks/ImageBlock.h>
 
 #include <atomic>
 #include <memory>
@@ -254,6 +255,15 @@ class EpubReaderActivity final : public ReaderActivity {
   };
   ImageWarmScope imageWarmChapterDone_;
   std::string imageWarmFailedPath_;  // render task only: give-up-once decode-failure target
+  struct DeferredRedrawKey {
+    int spine = -1;
+    int page = -1;
+    bool vertical = false;
+    bool operator==(const DeferredRedrawKey& o) const {
+      return spine == o.spine && page == o.page && vertical == o.vertical;
+    }
+  };
+  DeferredRedrawKey lastDeferredRedraw_;  // render task only
   static constexpr uint32_t NO_IMAGE_REFINE = UINT32_MAX;
   std::atomic<uint32_t> pendingImageRefine_{NO_IMAGE_REFINE};
   std::atomic<uint32_t> requestedImageRefine_{NO_IMAGE_REFINE};
@@ -263,6 +273,9 @@ class EpubReaderActivity final : public ReaderActivity {
            requestedImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE;
   }
   void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
+  // Cache-only decode of a PNG whose decoder does not fit the heap, inside a framebuffer loan.
+  ImageBlock::WarmResult warmImageWithFramebufferLoan(const ImageBlock& block);
+  bool imageWarmHeapOk() const;
   static bool imageWarmShouldCancel(const void* ctx);
   // True when the next turn has already been requested: a button is physically down, or a render
   // is queued on this task. Call from the render task only.

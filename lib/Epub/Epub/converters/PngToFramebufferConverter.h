@@ -13,5 +13,8 @@ class PngToFramebufferConverter final : public ImageToFramebufferDecoder {
   }
 
   static bool supportsFormat(const std::string& extension);
+  // Whether the heap can hold the decoder object right now. When it cannot, a cache-only decode
+  // still succeeds inside a framebuffer loan (GfxRenderer::FrameBufferLoan).
+  static bool decoderFitsHeap();
   const char* getFormatName() const override { return "PNG"; }
 };
