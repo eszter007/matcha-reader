@@ -2,6 +2,11 @@ name: Compile Release Candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      rc_label:
+        description: 'Shown in the version after the base version, e.g. rc-3 -> 1.6.5-rc-3+<sha>'
+        required: false
+        default: 'rc'
 
 jobs:
   build-release-candidate:
@@ -79,6 +84,7 @@ jobs:
 
       - name: Build CrossPoint Release Candidate
         env:
+          CROSSPOINT_RC_LABEL: ${{ inputs.rc_label || 'rc' }}
           CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
         run: pio run -e ${{ matrix.pio_env }} -j1
 

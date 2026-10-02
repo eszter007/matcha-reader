@@ -113,7 +113,7 @@ jobs:
           "$penv_python" -c "import platformio; print('penv Core', platformio.VERSION)"
 
       - name: Build CrossPoint
-        run: CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)" pio run -e "$PIO_ENV" -j1
+        run: CROSSPOINT_RC_LABEL=rc CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)" pio run -e "$PIO_ENV" -j1
 
       - name: Name release asset
         run: |
