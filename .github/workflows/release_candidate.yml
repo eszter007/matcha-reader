@@ -61,6 +61,17 @@ jobs:
           key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio6119s481-${{ runner.os }}-
 
+      - name: Validate RC label
+        env:
+          RC_LABEL: ${{ inputs.rc_label || 'rc' }}
+        run: |
+          # OTA treats a build as an RC only if its version contains "-rc"
+          # (OtaUpdater::isUpdateNewer); anything else never offers the final release.
+          if ! [[ "$RC_LABEL" =~ ^rc(-[0-9A-Za-z]+)?$ ]]; then
+            echo "rc_label must be rc or rc-<n> (letters/digits), got: $RC_LABEL" >&2
+            exit 1
+          fi
+
       - name: Extract env
         run: |
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
