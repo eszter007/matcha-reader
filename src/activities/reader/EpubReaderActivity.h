@@ -273,6 +273,9 @@ class EpubReaderActivity final : public ReaderActivity {
            requestedImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE;
   }
   void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
+  // Everything after a page reached the panel, vertical or horizontal: sync-error notice, panel
+  // hand-off, screenshot, popups, image warm, and the toolbar redrawn over the new page.
+  void finishPageRender(uint16_t viewportWidth, uint16_t viewportHeight);
   // Cache-only decode of a PNG whose decoder does not fit the heap, inside a framebuffer loan.
   ImageBlock::WarmResult warmImageWithFramebufferLoan(const ImageBlock& block);
   bool imageWarmHeapOk() const;

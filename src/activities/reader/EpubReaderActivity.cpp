@@ -2378,30 +2378,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       renderVerticalGrayPlanes(/*withText=*/true, /*withImages=*/false);
     }
 
-    showPendingSyncSaveError();
-
-    // The page is in the framebuffer: a panel picked from the menu may now open over it.
-    if (panelAfterRender.load(std::memory_order_relaxed) != PanelAfterRender::None) {
-      panelPageReady.store(true, std::memory_order_release);
-    }
-
-    if (pendingScreenshot) {
-      pendingScreenshot = false;
-      ScreenshotUtil::takeScreenshot(renderer);
-    }
-
-    if (showBookmarkMessage) {
-      GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));
-    }
-
-    // Last: warm the NEXT page's image pixel cache while this page is on screen, so landing on
-    // a full-page illustration is a cache read + FAST pass instead of a multi-second decode.
-    // Cancellable per decode block the moment any input or queued render arrives.
-    warmNextPageImageCache(viewportWidth, viewportHeight);
-
-    if (showDictionaryMessage) {
-      GUI.drawPopup(renderer, tr(STR_DICT_NO_DICT_SET));
-    }
+    finishPageRender(viewportWidth, viewportHeight);
     return;
   }
 
@@ -2848,8 +2825,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     markPageRendered();
   }
   runPostRenderTail(viewportWidth, viewportHeight, /*vertical=*/false, orientedMarginLeft, orientedMarginTop);
+  finishPageRender(viewportWidth, viewportHeight);
+}
 
-  showPendingSyncSaveError();
+void EpubReaderActivity::finishPageRender(const uint16_t viewportWidth, const uint16_t viewportHeight) {
+  if (pendingSyncSaveError) {
+    pendingSyncSaveError = false;
+    GUI.drawPopup(renderer, tr(STR_SAVE_PROGRESS_FAILED));
+  }
 
   // The page is in the framebuffer: a panel picked from the menu may now open over it.
   if (panelAfterRender.load(std::memory_order_relaxed) != PanelAfterRender::None) {
@@ -2865,8 +2848,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));
   }
 
-  // Last: warm the NEXT page's image pixel cache while this page is on screen (see the
-  // identical call at the vertical path's tail).
+  // Warm the NEXT page's image pixel cache while this page is on screen, so landing on a full-page
+  // illustration is a cache read + FAST pass instead of a multi-second decode. Cancellable per
+  // decode block the moment any input or queued render arrives.
   warmNextPageImageCache(viewportWidth, viewportHeight);
 
   if (showDictionaryMessage) {
