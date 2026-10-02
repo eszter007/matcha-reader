@@ -799,6 +799,33 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
+#if LOG_LEVEL >= 2
+        // Debug builds only: remote control for driving a test from the host (scripts/devctl.py).
+      } else if (cmd.startsWith("RMDIR:")) {
+        // Drop one book cache, e.g. /.crosspoint/epub_<hash>.
+        const String path = cmd.substring(6);
+        if (path.startsWith("/.crosspoint/") && path.indexOf("..") < 0) {
+          LOG_INF("CMD", "rmdir %s -> %d", path.c_str(), Storage.removeDir(path.c_str()));
+        } else {
+          LOG_ERR("CMD", "rmdir refused outside /.crosspoint/: %s", path.c_str());
+        }
+      } else if (cmd.startsWith("OPEN:")) {
+        LOG_INF("CMD", "open %s", cmd.substring(5).c_str());
+        activityManager.goToReader(std::string(cmd.substring(5).c_str()));
+      } else if (cmd == "HOME") {
+        LOG_INF("CMD", "home");
+        activityManager.goHome();
+      } else if (cmd.startsWith("PRESS:")) {
+        // Hardware button index, not the logical (remappable) one.
+        static constexpr const char* kNames[] = {"BACK", "CONFIRM", "LEFT", "RIGHT", "UP", "DOWN", "POWER"};
+        const String name = cmd.substring(6);
+        for (uint8_t i = 0; i < 7; i++) {
+          if (name == kNames[i]) {
+            gpio.injectPress(i);
+            LOG_INF("CMD", "press %s", kNames[i]);
+          }
+        }
+#endif
       }
     }
   }

@@ -50,6 +50,12 @@ class HalGPIO {
   enum class DeviceType : uint8_t { X4, X3 };
 
  private:
+  // injectPress() state, as button bitmasks.
+  uint8_t injQueued_ = 0xFF;
+  uint8_t injDown_ = 0;
+  uint8_t injPressed_ = 0;
+  uint8_t injReleased_ = 0;
+
   DeviceType _deviceType = DeviceType::X4;
 
  public:
@@ -71,6 +77,9 @@ class HalGPIO {
 
   // Button input methods
   void update();
+  // Queue one synthetic press+release of a button (serial CMD:PRESS in debug builds): it is down for
+  // one update() and released on the next, so short-press handlers see it like a real tap.
+  void injectPress(uint8_t buttonIndex) { injQueued_ = buttonIndex; }
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;

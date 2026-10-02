@@ -141,6 +141,16 @@ void HalGPIO::begin() {
 
 void HalGPIO::update() {
   inputMgr.update();
+  // Synthetic press: down for one frame, released on the next.
+  injPressed_ = 0;
+  injReleased_ = 0;
+  if (injDown_) {
+    injReleased_ = injDown_;
+    injDown_ = 0;
+  } else if (injQueued_ != 0xFF) {
+    injPressed_ = injDown_ = static_cast<uint8_t>(1u << injQueued_);
+    injQueued_ = 0xFF;
+  }
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;
@@ -148,17 +158,23 @@ void HalGPIO::update() {
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
-bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
+bool HalGPIO::isPressed(uint8_t buttonIndex) const {
+  return (injDown_ >> buttonIndex & 1) || inputMgr.isPressed(buttonIndex);
+}
 
-bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
+bool HalGPIO::wasPressed(uint8_t buttonIndex) const {
+  return (injPressed_ >> buttonIndex & 1) || inputMgr.wasPressed(buttonIndex);
+}
 
-bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
+bool HalGPIO::wasAnyPressed() const { return injPressed_ || inputMgr.wasAnyPressed(); }
 
 bool HalGPIO::anyButtonDownRaw() { return inputMgr.getState() != 0; }
 
-bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
+bool HalGPIO::wasReleased(uint8_t buttonIndex) const {
+  return (injReleased_ >> buttonIndex & 1) || inputMgr.wasReleased(buttonIndex);
+}
 
-bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
+bool HalGPIO::wasAnyReleased() const { return injReleased_ || inputMgr.wasAnyReleased(); }
 
 bool HalGPIO::rawInputActive() {
   if (inputMgr.isPowerButtonPhysicallyPressed()) return true;
