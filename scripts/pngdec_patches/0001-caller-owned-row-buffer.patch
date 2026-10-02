@@ -11,6 +11,11 @@ and alignment). DecodePNG returns PNG_NO_BUFFER when it is missing or too
 small. The decoder object shrinks by the old array, and small enough to
 fit in the lent framebuffer (see PngToFramebufferConverter).
 
+Two fixes ride along. The row-buffer guard returns PNG_NO_BUFFER rather
+than 0, which decode() would hand back as PNG_SUCCESS (finalizing a cache
+of blank rows). And the IDAT loop fails the decode on a read that returns
+no bytes: iLen never shrank, so a dead SD read spun the render task.
+
 ---
 --- a/src/PNGdec.h
 +++ b/src/PNGdec.h
@@ -53,19 +58,19 @@ fit in the lent framebuffer (see PngToFramebufferConverter).
      return _png.iHeight * _png.iPitch;
 --- a/src/png.inl
 +++ b/src/png.inl
-@@ -769,6 +769,12 @@
-     
-     // Either the image buffer must be allocated or a draw callback must be set before entering
-     if (pPage->pImage == NULL && pPage->pfnDraw == NULL) {
-+        pPage->iError = PNG_NO_BUFFER;
-+        return 0;
-+    }
-+    // The row buffer is caller-owned (setRowBuffer); refuse to decode into one too small for two
-+    // aligned scanlines (plus the RGB565 palette tail when PNG_FAST_PALETTE asks for it).
-+    if (pPage->ucPixels == NULL || pPage->iPixelsSize < (pPage->iPitch + 1) * 2 + 32 + ((iOptions & PNG_FAST_PALETTE) ? 512 : 0)) {
+@@ -772,6 +772,12 @@
          pPage->iError = PNG_NO_BUFFER;
          return 0;
      }
++    // The row buffer is caller-owned (setRowBuffer); refuse to decode into one too small for two
++    // aligned scanlines (plus the RGB565 palette tail when PNG_FAST_PALETTE asks for it).
++    if (pPage->ucPixels == NULL || pPage->iPixelsSize < (pPage->iPitch + 1) * 2 + 32 + ((iOptions & PNG_FAST_PALETTE) ? 512 : 0)) {
++        pPage->iError = PNG_NO_BUFFER;
++        return PNG_NO_BUFFER; // not 0: decode() hands this back, and 0 is PNG_SUCCESS
++    }
+     // Use internal buffer to maintain the current and previous lines
+     y = (int)(intptr_t)&pPage->ucPixels[0];
+     y &= 15; // make sure we're 16-byte aligned, -1 for filter byte
 @@ -852,7 +858,7 @@
                      int i, iColors = 1 << pPage->ucBpp;
                      uint16_t usPixel, *d;
@@ -75,7 +80,22 @@ fit in the lent framebuffer (see PngToFramebufferConverter).
                      for (i=0; i<iColors; i++) {
                      usPixel = (s[2] >> 3); // blue
                      usPixel |= ((s[1] >> 2) << 5); // green
-@@ -925,7 +931,7 @@
+@@ -886,6 +892,14 @@
+                     if (iOffset >= iBytesRead) {
+                         // we ran out of data; get some more
+                         iBytesRead = (*pPage->pfnRead)(&pPage->PNGFile, pPage->ucFileBuf, (iLen > PNG_FILE_BUF_SIZE) ? PNG_FILE_BUF_SIZE : iLen);
++                        if (iBytesRead <= 0) {
++                            // A dead read never shrinks iLen: without this the loop spins forever.
++                            pPage->iError = PNG_DECODE_ERROR;
++                            iBytesRead = 0;
++                            iLen = 0;
++                            bDone = TRUE;
++                            break;
++                        }
+                         iFileOffset += iBytesRead;
+                         iOffset = 0;
+                     } else {
+@@ -925,7 +939,7 @@
                                  pngd.iPitch = pPage->iPitch;
                                  pngd.iWidth = pPage->iWidth;
                                  pngd.pPalette = pPage->ucPalette;

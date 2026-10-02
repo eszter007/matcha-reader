@@ -468,6 +468,18 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;  // Successfully rendered from cache
   }
 
+  // Before the extraction below: it needs the same scarce contiguous heap (a 32KB inflate window),
+  // and the warm task extracts too, inside the framebuffer loan where the window can use the lent
+  // bytes. Deferring after a failed extraction left an unextracted PNG as a placeholder for good.
+  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) {
+    LOG_INF("IMG", "Deferring PNG decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
+            imagePath.c_str());
+    deferredDecode = true;
+    rememberImageFailure(imagePath);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
+    return;
+  }
+
   // The build only header-probed the image for dimensions; pull the actual
   // file out of the book now, on first visit to the page.
   if (!srcPath.empty() && extractFn && !Storage.exists(imagePath.c_str())) {
@@ -502,15 +514,6 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
-    rememberImageFailure(imagePath);
-    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
-    return;
-  }
-
-  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) {
-    LOG_INF("IMG", "Deferring PNG decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
-            imagePath.c_str());
-    deferredDecode = true;
     rememberImageFailure(imagePath);
     renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
     return;
