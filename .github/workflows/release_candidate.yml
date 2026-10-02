@@ -67,7 +67,7 @@ jobs:
         run: |
           # OTA treats a build as an RC only if its version contains "-rc"
           # (OtaUpdater::isUpdateNewer); anything else never offers the final release.
-          if ! [[ "$RC_LABEL" =~ ^rc(-[0-9A-Za-z]+)*$ ]]; then
+          if ! [[ "$RC_LABEL" =~ ^rc(-[0-9A-Za-z]+)?$ ]]; then
             echo "rc_label must be rc or rc-<n> (letters/digits), got: $RC_LABEL" >&2
             exit 1
           fi
