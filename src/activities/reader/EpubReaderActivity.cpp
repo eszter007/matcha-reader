@@ -2874,129 +2874,132 @@ void EpubReaderActivity::finishPageRender(const uint16_t viewportWidth, const ui
   }
 }
 
-void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
+int EpubReaderActivity::builtChapterPageCount(const int spineIndex, const uint16_t viewportWidth,
+                                              const uint16_t viewportHeight) const {
   if (useVerticalText()) {
-    // Fire over the last few pages, and on short chapters (image-only illustration chapters are
-    // one page each -- with the old penultimate-page-only trigger a run of them showed the
-    // Indexing popup on every page turn).
-    //
-    // The window must be wide enough for SEVERAL attempts, not one. The heap gate below rejects
-    // on transient fragmentation (observed: maxAlloc 69620 on one turn, 114676 two turns later),
-    // so a single-attempt window loses the chapter to that sampling noise and the transition pays
-    // a multi-second foreground build. Only the first attempt to pass does any work.
-    constexpr int SILENT_INDEX_WINDOW_PAGES = 5;
-    if (!epub || !verticalSection || verticalSection->pageCount < 1) return;
-    if (verticalSection->currentPage < verticalSection->pageCount - SILENT_INDEX_WINDOW_PAGES) return;
+    VerticalSection built(epub, spineIndex, renderer);
+    return built.loadSectionFile(effectiveReaderFontId(), viewportWidth, viewportHeight, SETTINGS.lineSpacing,
+                                 useFurigana())
+               ? built.pageCount
+               : -1;
+  }
+  // A partial file counts as unbuilt: its page count is only a watermark.
+  Section built(epub, spineIndex, renderer);
+  return built.loadSectionFile(readerSpec(viewportWidth, viewportHeight)) && !built.isPartial() ? built.pageCount : -1;
+}
 
-    // A skip below set a backoff: retrying every tick releases the font caches each time
-    // (cold glyphs on the next turn) while the heap plateau that caused the skip rarely
-    // moves within a second. One attempt per backoff window is plenty.
-    if (silentIndexBackoffUntilMs_ != 0 && millis() < silentIndexBackoffUntilMs_) return;
-
-    const int fontId = effectiveReaderFontId();
-    // The first unbuilt chapter ahead, looking past one already-built one-page chapter: a
-    // full-page illustration is read in a second, too briefly for the build after it to run there,
-    // so the chapter behind it has to be built from here.
-    int nextSpineIndex = currentSpineIndex + 1;
-    for (int ahead = 0;; ahead++) {
-      if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
-      VerticalSection built(epub, nextSpineIndex, renderer);
-      if (!built.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana())) break;
-      if (ahead > 0 || built.pageCount > 1) return;
-      nextSpineIndex++;
+EpubReaderActivity::SilentBuildResult EpubReaderActivity::buildChapterSilently(const int spineIndex,
+                                                                               const uint16_t viewportWidth,
+                                                                               const uint16_t viewportHeight) {
+  if (useVerticalText()) {
+    VerticalSection next(epub, spineIndex, renderer);
+    next.setBuildCancelHook(this, &EpubReaderActivity::imageWarmShouldCancel);
+    if (next.createSectionFile(effectiveReaderFontId(), viewportWidth, viewportHeight, SETTINGS.lineSpacing,
+                               useFurigana())) {
+      return SilentBuildResult::Built;
     }
-    VerticalSection nextVSection(epub, nextSpineIndex, renderer);
+    // A cancelled vertical build persists nothing: the next attempt starts clean.
+    return next.lastBuildCancelled() ? SilentBuildResult::Cancelled : SilentBuildResult::Failed;
+  }
+  // The horizontal build is incremental: lay it out in short slices and check for input between
+  // them. On a cancel the Section's destructor keeps the pages laid out so far as a partial file,
+  // so the work is not lost (see Section::suspendBuild).
+  constexpr uint32_t SLICE_MS = 50;
+  Section next(epub, spineIndex, renderer);
+  if (!next.startBuild(readerSpec(viewportWidth, viewportHeight))) return SilentBuildResult::Failed;
+  while (!next.isBuildComplete()) {
+    if (imageWarmShouldCancel(this)) return SilentBuildResult::Cancelled;
+    if (!next.buildSomeMore(0, SLICE_MS)) return SilentBuildResult::Failed;
+  }
+  return SilentBuildResult::Built;
+}
 
-    constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
+void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
+  const bool vertical = useVerticalText();
+  if (!epub) return;
+  // Fire over the last few pages, and on short chapters (image-only illustration chapters are
+  // one page each -- with a penultimate-page-only trigger a run of them showed the Indexing popup
+  // on every page turn). The window must be wide enough for SEVERAL attempts, not one: the heap
+  // gate below rejects on transient fragmentation (observed: maxAlloc 69620 on one turn, 114676 two
+  // turns later), so a single-attempt window loses the chapter to that sampling noise and the
+  // transition pays a multi-second foreground build. Only the first attempt to pass does any work.
+  constexpr int SILENT_INDEX_WINDOW_PAGES = 5;
+  int currentPage = 0;
+  int pageCount = 0;
+  if (vertical) {
+    if (!verticalSection) return;
+    currentPage = verticalSection->currentPage;
+    pageCount = verticalSection->pageCount;
+  } else {
+    // Never while this chapter is still building: the silent build would fight it for the heap
+    // and the RenderLock, and loop() has more of this chapter to lay out first.
+    if (!section || section->isBuilding()) return;
+    currentPage = section->currentPage;
+    pageCount = section->pageCount;
+  }
+  if (pageCount < 1 || currentPage < pageCount - SILENT_INDEX_WINDOW_PAGES) return;
 
-    // Do NOT add a heap pre-gate above the release below. Free heap while reading sits near this
-    // floor (~95K) and the release is worth ~40-50K, so any pre-release check rejects attempts
-    // that would have passed. The post-release gate is the only meaningful reading. Skipping a
-    // release costs ~250ms; the foreground build a missed index causes costs 5-13s.
-    //
-    // The vertical build is the most memory-intensive step in the reader, and this
-    // silent path runs it at the worst heap moment: right after a page render, with
-    // the glyph slab fully warmed AND the current chapter still resident. Hand the
-    // build the font memory first, like the mainline vertical build does. This is why the call
-    // runs BEFORE the idle glyph warm: the release empties the mini-font cache, so warming first
-    // would throw that work away and leave the next turn cold.
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->releaseAllFontMemory();
-      // The release just emptied the mini-font cache, so the idle warm's page is no longer
-      // warm. Without this the NEXT render trusts prewarmedVPage_, skips prewarmVerticalPageGlyphs
-      // entirely, and resolves every glyph one at a time through the on-demand miss path.
-      prewarmedVPage_ = -1;
-      prewarmedHPage_ = -1;
-    }
+  // A skip or cancel below set a backoff: retrying every tick releases the font caches each time
+  // (cold glyphs on the next turn), and a reader paging through a chapter's closing pages would
+  // restart the build on every turn so it never reaches the end. One attempt per window is plenty.
+  if (silentIndexBackoffUntilMs_ != 0 && millis() < silentIndexBackoffUntilMs_) return;
 
-    // Post-release gate: if the largest block is STILL small, this build would run the whole
-    // gauntlet degraded -- observed at maxAlloc=63476: styled blocks skipped, glyphs dropped,
-    // and the section stamped stale THE MOMENT it was written. That is throwaway work that
-    // also leaves short pages on screen if the reader pages into it this session. Leave the
-    // section unbuilt instead: a roomier later tick retries, and the foreground open path
-    // (which frees more up front and early-renders) builds it properly on arrival.
-    if (ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
-      LOG_DBG("ERS", "Silent vertical index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
-      // Backoff must stay well under WINDOW * turn duration (~600ms/turn), or one rejection
-      // consumes the whole window. A rejected attempt costs the font rebuild the release above
-      // forces (~250-400ms on the next render) -- cheap against the foreground build it avoids.
-      silentIndexBackoffUntilMs_ = millis() + 1500;
-      return;
-    }
-    silentIndexBackoffUntilMs_ = 0;
-
-    LOG_DBG("ERS", "Silently indexing next vertical chapter: %d (maxAlloc=%u)", nextSpineIndex, ESP.getMaxAllocHeap());
-    // This build owns the render task for as long as it runs -- up to 18s on a 282-page chapter,
-    // measured. Every OTHER tail task already yields the task back on a button press; without the
-    // same courtesy here a turn pressed during the build sat frozen for the whole of it, and the
-    // window fires on every chapter shorter than SILENT_INDEX_WINDOW_PAGES, which in a Japanese
-    // book is every one-page illustration spine at the front. Cancelling costs the partial layout
-    // (nothing is persisted), but the foreground build that then runs carries the early-render
-    // hook, so the reader sees the page in seconds instead of waiting out the whole chapter.
-    imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
-    nextVSection.setBuildCancelHook(this, &EpubReaderActivity::imageWarmShouldCancel);
-    if (!nextVSection.createSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana())) {
-      if (nextVSection.lastBuildCancelled()) {
-        // Back off exactly as a heap skip does: without it a reader paging through a chapter's
-        // closing pages restarts the build on every turn and it never reaches the end.
-        silentIndexBackoffUntilMs_ = millis() + 1500;
-      } else {
-        LOG_ERR("ERS", "Failed silent indexing for vertical chapter: %d", nextSpineIndex);
-      }
-    }
-    return;
+  // The first unbuilt chapter ahead, looking past one already-built one-page chapter: a full-page
+  // illustration is read in a second, too briefly for the build after it to run there, so the
+  // chapter behind it has to be built from here.
+  int nextSpineIndex = currentSpineIndex + 1;
+  for (int ahead = 0;; ahead++) {
+    if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) return;
+    const int built = builtChapterPageCount(nextSpineIndex, viewportWidth, viewportHeight);
+    if (built < 0) break;
+    if (ahead > 0 || built > 1) return;
+    nextSpineIndex++;
   }
 
-  if (!epub || !section || section->pageCount < 1) {
-    return;
+  // Do NOT add a heap pre-gate above the release below. Free heap while reading sits near the
+  // vertical floor (~95K) and the release is worth ~40-50K, so any pre-release check rejects
+  // attempts that would have passed. Skipping a release costs ~250ms; the foreground build a missed
+  // index causes costs 5-13s. The build runs at the worst heap moment -- right after a page render,
+  // with the glyph slab warm and the current chapter resident -- so it gets the font memory first.
+  // This is why the call runs BEFORE the idle glyph warm: the release empties the mini-font cache.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseAllFontMemory();
+    // The release emptied the mini-font cache, so the idle warm's page is no longer warm. Without
+    // this the next render trusts the claim, skips its prewarm, and resolves every glyph one at a
+    // time through the on-demand miss path.
+    prewarmedVPage_ = -1;
+    prewarmedHPage_ = -1;
   }
 
-  // Build the next chapter cache while the last two pages are on screen. Also fires for
-  // single-page chapters (image-only illustration chapters are one page each -- with the
-  // old penultimate-page-only trigger a run of them showed Indexing on every page turn).
-  if (section->currentPage < section->pageCount - 2) {
+  // Post-release gate, vertical only (the most memory-hungry build in the reader): if the largest
+  // block is STILL small the build runs degraded -- observed at maxAlloc=63476: styled blocks
+  // skipped, glyphs dropped, the section stamped stale the moment it was written. Leave it unbuilt:
+  // a roomier tick retries, and the foreground open (which frees more first) builds it properly.
+  constexpr uint32_t SILENT_VBUILD_MIN_ALLOC = 96 * 1024;
+  constexpr uint32_t SILENT_INDEX_BACKOFF_MS = 1500;  // well under WINDOW * a turn (~600 ms)
+  if (vertical && ESP.getMaxAllocHeap() < SILENT_VBUILD_MIN_ALLOC) {
+    LOG_DBG("ERS", "Silent index skipped, heap too tight (maxAlloc=%u)", ESP.getMaxAllocHeap());
+    silentIndexBackoffUntilMs_ = millis() + SILENT_INDEX_BACKOFF_MS;
     return;
   }
-  // Never while this chapter is still building: the silent build would fight it for the
-  // heap and the RenderLock, and loop() has more of this chapter to lay out first.
-  if (section->isBuilding()) {
-    return;
-  }
+  silentIndexBackoffUntilMs_ = 0;
 
-  const int nextSpineIndex = currentSpineIndex + 1;
-  if (nextSpineIndex < 0 || nextSpineIndex >= epub->getSpineItemsCount()) {
-    return;
-  }
-
-  const ReaderRenderSpec spec = readerSpec(viewportWidth, viewportHeight);
-  Section nextSection(epub, nextSpineIndex, renderer);
-  if (nextSection.loadSectionFile(spec) && !nextSection.isPartial()) {
-    return;
-  }
-
-  LOG_DBG("ERS", "Silently indexing next chapter: %d", nextSpineIndex);
-  if (!nextSection.createSectionFile(spec)) {
-    LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
+  LOG_DBG("ERS", "Silently indexing chapter %d (%s, maxAlloc=%u)", nextSpineIndex, vertical ? "vertical" : "horizontal",
+          ESP.getMaxAllocHeap());
+  // The build owns the render task for as long as it runs -- up to 18 s on a 282-page vertical
+  // chapter, measured. Like every other tail task it yields the task back on a button press; the
+  // foreground build that then runs early-renders, so the reader sees the page in seconds.
+  imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+  switch (buildChapterSilently(nextSpineIndex, viewportWidth, viewportHeight)) {
+    case SilentBuildResult::Built:
+      break;
+    case SilentBuildResult::Cancelled:
+      LOG_DBG("ERS", "Silent index of chapter %d cancelled by input", nextSpineIndex);
+      silentIndexBackoffUntilMs_ = millis() + SILENT_INDEX_BACKOFF_MS;
+      break;
+    case SilentBuildResult::Failed:
+      LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
+      break;
   }
 }
 
