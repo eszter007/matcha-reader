@@ -1458,7 +1458,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
-      const int spineIdx = currentSpineIndex;
+      const int tocIdx = currentTocIndex();
       // Release the section while the chapter list is up (mirrors the
       // TEXT_SETTINGS path): picking a chapter resets it anyway, and its
       // tens-of-KB footprint is the difference between the chapter list
@@ -1475,28 +1475,27 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         }
         section.reset();
       }
-      startActivityForResult(
-          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, spineIdx),
-          [this](const ActivityResult& result) {
-            if (result.isCancelled) {
-              openReaderMenu();
-              return;
-            }
-            const auto& chapterResult = std::get<ChapterResult>(result.data);
-            RenderLock lock(*this);
+      startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, tocIdx),
+                             [this](const ActivityResult& result) {
+                               if (result.isCancelled) {
+                                 openReaderMenu();
+                                 return;
+                               }
+                               const auto& chapterResult = std::get<ChapterResult>(result.data);
+                               RenderLock lock(*this);
 
-            clearDeferredReposition();
-            currentSpineIndex = chapterResult.spineIndex;
+                               clearDeferredReposition();
+                               currentSpineIndex = chapterResult.spineIndex;
 
-            // If anchor is not empty, it will be used later to calculate the page number.
-            pendingAnchor = chapterResult.anchor;
+                               // If anchor is not empty, it will be used later to calculate the page number.
+                               pendingAnchor = chapterResult.anchor;
 
-            // Otherwise page 0 will be used.
-            nextPageNumber = 0;
+                               // Otherwise page 0 will be used.
+                               nextPageNumber = 0;
 
-            section.reset();
-            verticalSection.reset();
-          });
+                               section.reset();
+                               verticalSection.reset();
+                             });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::FOOTNOTES: {
@@ -4545,6 +4544,44 @@ bool EpubReaderActivity::usesToolbarMenu() const {
   return SETTINGS.readerMenuStyle == CrossPointSettings::READER_MENU_TOOLBAR;
 }
 
+// The TOC entry the reader is in: the chapter file's first entry, advanced past each later entry of the
+// same file whose anchor lies on or before the current page (sections within one file).
+int EpubReaderActivity::currentTocIndex() const {
+  if (!epub) return -1;
+  const int first = epub->getTocIndexForSpineIndex(currentSpineIndex);
+  if (first < 0 || (!section && !verticalSection)) return first;
+  const int currentPage = verticalSection ? verticalSection->currentPage : section->currentPage;
+  // Bounds the TOC reads for a book with one huge file of many sections.
+  static constexpr int MAX_SECTIONS_SCANNED = 64;
+  const int last = std::min(epub->getTocItemsCount(), first + 1 + MAX_SECTIONS_SCANNED);
+  // The later entries of this file, then all their pages in one pass over the anchor table.
+  std::vector<int> tocIndices;
+  std::vector<std::string> anchors;
+  tocIndices.reserve(8);
+  anchors.reserve(8);
+  for (int i = first + 1; i < last; i++) {
+    auto item = epub->getTocItem(i);
+    if (item.spineIndex != currentSpineIndex) break;
+    if (item.anchor.empty()) continue;
+    tocIndices.push_back(i);
+    anchors.push_back(std::move(item.anchor));
+  }
+  if (anchors.empty()) return first;
+  std::vector<int> pages;
+  if (verticalSection) {
+    verticalSection->findAnchorPages(anchors, pages);
+  } else {
+    section->findAnchorPages(anchors, pages);
+  }
+  int best = first;
+  for (size_t i = 0; i < pages.size(); i++) {
+    if (pages[i] < 0) continue;
+    if (pages[i] > currentPage) break;
+    best = tocIndices[i];
+  }
+  return best;
+}
+
 std::string EpubReaderActivity::currentChapterTitle() const {
   if (!epub) return "";
   const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
@@ -4712,7 +4749,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
       toolbarControl = 2;
       break;
     case Overlay::Contents:
-      panelIndex = std::max(0, epub->getTocIndexForSpineIndex(currentSpineIndex));
+      panelIndex = std::max(0, currentTocIndex());
       // Fresh viewport opening on the current chapter, cursor shown or not.
       toolbarUi->nav().reset(panelIndex);
       toolbarUi->nav().top = panelIndex;

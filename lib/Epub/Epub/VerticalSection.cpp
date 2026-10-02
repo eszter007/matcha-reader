@@ -2065,6 +2065,36 @@ std::optional<int> VerticalSection::getPageForAnchor(const std::string& anchor) 
   return std::nullopt;
 }
 
+void VerticalSection::findAnchorPages(const std::vector<std::string>& anchors, std::vector<int>& pages) const {
+  pages.assign(anchors.size(), -1);
+  if (anchors.empty() || anchorTableOffset_ == 0 || pageCount == 0) return;
+  // Offsets first, pages after: getPageForVisibleTextOffset() reads the file too.
+  std::vector<uint32_t> offsets(anchors.size(), UINT32_MAX);
+  {
+    HalFile file;
+    if (!Storage.openFileForRead("VSC", filePath, file) || !file.seek(anchorTableOffset_)) return;
+    uint16_t count = 0;
+    serialization::readPod(file, count);
+    std::string id;
+    size_t unresolved = anchors.size();
+    for (uint16_t n = 0; n < count && unresolved > 0; n++) {
+      uint32_t offset = 0;
+      if (!serialization::readString(file, id)) return;
+      serialization::readPod(file, offset);
+      for (size_t i = 0; i < anchors.size(); i++) {
+        if (offsets[i] == UINT32_MAX && id == anchors[i]) {
+          offsets[i] = offset;
+          unresolved--;
+        }
+      }
+    }
+  }
+  for (size_t i = 0; i < anchors.size(); i++) {
+    if (offsets[i] == UINT32_MAX) continue;
+    if (const auto page = getPageForVisibleTextOffset(offsets[i])) pages[i] = *page;
+  }
+}
+
 std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t offset) const {
   if (pageOffsets_.empty()) return std::nullopt;
   HalFile file;

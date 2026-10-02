@@ -156,6 +156,10 @@ class Section {
   // (covers finalized sections and partials from a previous session).
   std::optional<uint16_t> findAnchor(const std::string& anchor) const;
 
+  // findAnchor() for several ids in one pass over the anchor map: pages[i] is the page of
+  // anchors[i], or -1 if it is not reached yet / not in the chapter.
+  void findAnchorPages(const std::vector<std::string>& anchors, std::vector<int>& pages) const;
+
   // True if this spine's unzipped HTML is already cached, so a build won't pay the (multi-second on a
   // giant spine) zip inflation. Lets the reader skip the indexing popup on a fast reopen/rebuild.
   bool hasHtmlCache() const;
