@@ -82,7 +82,12 @@ namespace {
 // of the chapter -- most visibly a <span class="em-sesame"> putting sesame marks on every
 // character after it. Cached pages carry the marks and the pagination they caused.
 // v137: an image is rotated only when it fills the page (ImageBlock::fillsPage).
-constexpr uint8_t VSECTION_FILE_VERSION = 137;
+// v138: an anchor table (element id -> visible text offset) follows the page index, so TOC and
+// footnote jumps land on their page instead of the chapter's first.
+constexpr uint8_t VSECTION_FILE_VERSION = 138;
+// Same policy as the horizontal parser (ChapterHtmlSlimParser): <span> ids are converter noise
+// (one per Kobo text fragment, thousands per chapter), never link targets; the rest is capped.
+constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -153,6 +158,8 @@ struct TextExtractor {
   //
   // <rt> text IS counted (rp is the excluded one), matching isNonVisibleElement().
   uint32_t visibleTextOffset = 0;
+  // Element ids met in the chapter, with the visible text offset where each element starts.
+  std::vector<std::pair<std::string, uint32_t>>* anchors = nullptr;
   bool insideBody = false;
   // Offset of the first character of currentText / rubyBase, captured when each goes from
   // empty to non-empty. That is what a RubyRun is stamped with.
@@ -465,6 +472,14 @@ struct TextExtractor {
       return;
     }
     if (strcasecmp(name, "body") == 0) self->insideBody = true;
+    if (self->anchors && strcasecmp(name, "span") != 0 && self->anchors->size() < MAX_ANCHORS_PER_CHAPTER) {
+      for (int i = 0; atts[i]; i += 2) {
+        if (strcmp(atts[i], "id") == 0 && atts[i + 1][0] != '\0') {
+          self->anchors->emplace_back(atts[i + 1], self->visibleTextOffset);
+          break;
+        }
+      }
+    }
     if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
       if (self->resolveBlockStyle(name, atts, params) &&
@@ -1693,6 +1708,8 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   extractor.sink = &sink;
   extractor.rubyHarvest = &sink.rubyHarvest;
   extractor.blockStyles = &blockStyles;
+  buildAnchors_.clear();
+  extractor.anchors = &buildAnchors_;
   // Pin every buffer that lives across the whole build to its worst case NOW, while the heap
   // is freshest -- mid-build growth (doubling alloc-copy-free) plants persistent blocks in
   // the region the per-flush transients need, shredding the largest contiguous block over the
@@ -1843,6 +1860,14 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   for (const uint32_t off : pageOffsets_) {
     serialization::writePod(file, off);
   }
+  anchorTableOffset_ = static_cast<uint32_t>(file.position());
+  const auto anchorCount = static_cast<uint16_t>(buildAnchors_.size());
+  serialization::writePod(file, anchorCount);
+  for (const auto& [id, offset] : buildAnchors_) {
+    serialization::writeString(file, id);
+    serialization::writePod(file, offset);
+  }
+  std::vector<std::pair<std::string, uint32_t>>().swap(buildAnchors_);
 
   pageCount = static_cast<uint16_t>(pageOffsets_.size());
   if (!file.seek(HEADER_PAGECOUNT_OFFSET)) {
@@ -1895,7 +1920,8 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   // diverge by more than roughly one page's worth of text, the two parsers have drifted and
   // cross-mode position restore is silently landing on the wrong page.
   const auto lastStart = getVisibleTextOffsetForPage(static_cast<int>(pageCount) - 1);
-  LOG_DBG("VSC", "Cached %u vertical pages (streamed); chapter spans %u chars", pageCount, lastStart.value_or(0));
+  LOG_DBG("VSC", "Cached %u vertical pages (streamed); chapter spans %u chars, %u anchors", pageCount,
+          lastStart.value_or(0), anchorCount);
   return true;
 }
 
@@ -1987,6 +2013,7 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
 
   file.close();
   pageCount = cachedPageCount;
+  anchorTableOffset_ = indexOffset + static_cast<uint32_t>(cachedPageCount) * sizeof(uint32_t);
   LOG_DBG("VSC", "Opened cache: %u vertical pages (index only, %u bytes resident)", pageCount,
           static_cast<unsigned>(pageOffsets_.size() * sizeof(uint32_t)));
   return true;
@@ -2018,6 +2045,22 @@ std::optional<uint32_t> VerticalSection::getVisibleTextOffsetForPage(const int p
     return std::nullopt;
   }
   return offset;
+}
+
+std::optional<int> VerticalSection::getPageForAnchor(const std::string& anchor) const {
+  if (anchor.empty() || anchorTableOffset_ == 0 || pageCount == 0) return std::nullopt;
+  HalFile file;
+  if (!Storage.openFileForRead("VSC", filePath, file) || !file.seek(anchorTableOffset_)) return std::nullopt;
+  uint16_t count = 0;
+  serialization::readPod(file, count);
+  std::string id;
+  for (uint16_t i = 0; i < count; i++) {
+    uint32_t offset = 0;
+    if (!serialization::readString(file, id)) return std::nullopt;
+    serialization::readPod(file, offset);
+    if (id == anchor) return getPageForVisibleTextOffset(offset);
+  }
+  return std::nullopt;
 }
 
 std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t offset) const {

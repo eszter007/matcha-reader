@@ -29,6 +29,10 @@ class VerticalSection {
 
   // File offset of each serialized page record within the cache file.
   std::vector<uint32_t> pageOffsets_;
+  // File offset of the anchor table (id -> visible text offset), right after the page index.
+  uint32_t anchorTableOffset_ = 0;
+  // Filled by the build's parser, written after the page index, then released.
+  std::vector<std::pair<std::string, uint32_t>> buildAnchors_;
 
   // Single-page read cache backing getPage()'s returned pointer. Mutable because getPage() is
   // const to callers (a read) but faults the page in from SD. The pointer returned by getPage()
@@ -168,6 +172,10 @@ class VerticalSection {
   // The page holding `offset`: the last page whose own offset is <= it. nullopt if the chapter
   // has no pages or the records cannot be read.
   std::optional<int> getPageForVisibleTextOffset(uint32_t offset) const;
+
+  // The page holding the element with this id (a TOC or footnote target), through the anchor table
+  // written after the page index. nullopt if the chapter has no such anchor.
+  std::optional<int> getPageForAnchor(const std::string& anchor) const;
   const VerticalPage* getPage() const;
   const VerticalPage* getPage(int pageIndex) const;
   // True when the most recent getPage() returned nullptr only because the page's glyph vector

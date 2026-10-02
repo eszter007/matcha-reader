@@ -2111,6 +2111,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // position drifted backwards on every switch. Clamp once, after the remap.
         verticalSection->currentPage = nextPageNumber;
       }
+      // A TOC or footnote target inside the chapter. Resolved after the position below, which it
+      // outranks like any explicit jump.
+      const std::string anchor = std::move(pendingAnchor);
       pendingAnchor.clear();
 
       // Content anchor first, page fraction only as the fallback. The offset names an exact
@@ -2139,6 +2142,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         verticalSection->currentPage = 0;
       } else if (verticalSection->currentPage >= verticalSection->pageCount) {
         verticalSection->currentPage = verticalSection->pageCount - 1;
+      }
+
+      if (!anchor.empty()) {
+        if (const auto page = verticalSection->getPageForAnchor(anchor)) {
+          LOG_DBG("ERS", "Resolved anchor '%s' to vertical page %d", anchor.c_str(), *page);
+          verticalSection->currentPage = *page;
+        } else {
+          LOG_DBG("ERS", "Anchor '%s' not found in vertical section %d", anchor.c_str(), currentSpineIndex);
+        }
       }
 
       if (pendingPercentJump && verticalSection->pageCount > 0) {
