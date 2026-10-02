@@ -84,7 +84,9 @@ namespace {
 // v137: an image is rotated only when it fills the page (ImageBlock::fillsPage).
 // v138: an anchor table (element id -> visible text offset) follows the page index, so TOC and
 // footnote jumps land on their page instead of the chapter's first.
-constexpr uint8_t VSECTION_FILE_VERSION = 138;
+// v139: a rotated run followed by 。、 reserves room for the mark at the head of its cell (117。
+// had the 。 drawn over the 7).
+constexpr uint8_t VSECTION_FILE_VERSION = 139;
 // Same policy as the horizontal parser (ChapterHtmlSlimParser): <span> ids are converter noise
 // (one per Kobo text fragment, thousands per chapter), never link targets; the rest is capped.
 constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;

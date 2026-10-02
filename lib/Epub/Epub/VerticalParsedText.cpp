@@ -967,7 +967,9 @@ struct VerticalParsedText::LayoutCursor {
       o.renderer_.ensureSdCardFontReady(o.fontId_, nextChar, static_cast<uint8_t>(1u << (next.style & 3)));
       GlyphInk ink;
       if (measureGlyphInk(o.renderer_, o.fontId_, next.codepoint, next.style, &ink) && ink.height > 0) {
-        offset = geom.baselineInCellPx - ink.top;
+        // 。、 are drawn at the head of their cell (rightAlignedInk, HalfEmHead), not on the baseline.
+        offset = Kinsoku::verticalShiftType(next.codepoint) == 1 ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
+                                                                 : geom.baselineInCellPx - ink.top;
       }
     }
     // A miss is worth caching too -- it is the expensive case, and a glyph the font lacks
