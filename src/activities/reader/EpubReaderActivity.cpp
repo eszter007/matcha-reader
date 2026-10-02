@@ -2226,6 +2226,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
 
       currentPageFootnotes.clear();
+      // The overlay and the full-frame gray pass share the renderer's single stored-BW slot, and
+      // finishPageRender() snapshots the new page for an open toolbar. Release the old snapshot
+      // first, as the horizontal path does: a low-heap re-store returns before freeing it, which
+      // would leak ~48 KB and lose the panel-to-toolbar restore.
+      discardOverlayPage();
       // Per page render, as renderContents() scopes it: a PNG deferred to the warm task must not
       // stay memoized as failed when the redraw after its decode comes round.
       ImageBlock::clearRenderFailures();
