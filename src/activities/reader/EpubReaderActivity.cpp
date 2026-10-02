@@ -2200,6 +2200,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     bool imagePageDisplayed = false;
     bool textPageHasImages = false;
+    bool imagePageRefreshAsync = false;  // its B/W refresh is still running: wait after the tail
     {
       const auto* vpage = verticalSection->getPage();
       if (!vpage) {
@@ -2267,92 +2268,53 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           }
         };
 
-        // Same display sequence as the manga reader: one FAST BW pass, then the grayscale
-        // planes. The image was decoded with 4-level Bayer dithering, and a plain BW display
-        // renders gray levels 0-1 as solid black -- a mid-dark cover half showed as one black
-        // blob until the grayscale planes lift the dark tones. (No blank-white intermediate
-        // pass: it read as a distracting flash on full-page images.)
-        // A FAST pass is differential: it only drives pixels that differ from the controller's RED
-        // plane, so it cannot replace what is physically on the glass when that plane is not the
-        // previous frame. Three cases where it is not, matching renderPage()'s image branch:
-        // pagesUntilFullRefresh == 0 is the reader's first paint (deep-sleep wake discards
-        // controller RAM, leaving the sleep screen on the panel -- #237), a manual refresh must
-        // scrub regardless, and gray planes from a preceding image page sit in RED until a
-        // non-FAST pass rewrites it.
-        const uint32_t imageKey =
-            (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage);
-        // The idle refine: the BW picture is already on the glass. Redraw it into the framebuffer
-        // (a RAM/cache read) for the planes' cleanup below, without driving the panel again.
-        const bool grayscaleRefineOnly =
-            requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == imageKey;
-        const bool cleanImageBasePending =
-            !grayscaleRefineOnly &&
-            (forcedRefreshPending || pagesUntilFullRefresh == 0 || renderer.panelHasGrayPlanes());
-        if (!grayscaleRefineOnly) forcedRefreshPending = false;
-        drawImagePage();
-        renderStatusBar();
-        if (!grayscaleRefineOnly) {
-          renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-        }
-
-        // The grayscale refine below re-reads the pixel cache several times (~1s+) and the BW
-        // image is ALREADY a valid picture on the persistent e-ink. Snapshot the input stamp so
-        // the refine can be ABANDONED the instant the reader turns the page: flipping through
-        // illustrations then feels instant (BW shows fast, the next turn is honoured immediately)
-        // while dwelling on a page still refines all the way to 4-level grayscale.
-        imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
-
-        // A 1-bit BMP has no gray tones for the planes to lift, and the BMP decoder writes no
-        // .pxc cache, so each strip pass below would be a full SD re-decode of an image the BW
-        // pass already displayed completely -- measured 1587ms per turn (3 decodes) plus the
-        // ~1.7s gray waveform for zero visual change. Converter-produced books ship exactly
-        // these mono BMPs. One header read decides it.
-        const bool monoBmp = FsHelpers::hasBmpExtension(vpage->imagePath) &&
-                             BmpToFramebufferConverter::isMonochromeStatic(vpage->imagePath);
-
-        // BW first: the grayscale planes wait until the reader stays on the page (readerLoop), so
-        // flipping through illustrations costs one fast refresh each.
-        // Any panel with grayscale: the gray pass takes strips or whole frames, whichever it has.
-        const bool canGray = renderer.grayscaleCapabilities().supported();
-        if (!grayscaleRefineOnly && !monoBmp && canGray) {
-          pendingImageRefine_.store(imageKey, std::memory_order_relaxed);
-        }
-        if (grayscaleRefineOnly && !monoBmp && canGray && !imageWarmShouldCancel(this)) {
-          // Each grayscale strip re-reads the WHOLE pixel cache (the .pxc is row-major in logical
-          // image space, so a physical band can't seek to just its rows), so the read cost scales
-          // with the strip COUNT: 160-row strips make a 480px page 3 strips instead of 6.
-          GrayPassSpec spec;
-          spec.strips = renderer.supportsStripGrayscale();
-          spec.stripRows = 160;
-          runGrayPass(spec, drawImagePage, [this] { return imageWarmShouldCancel(this); });
-        }
-        // Gray charge in the image region needs the HALF ghost-cleanup on the next page. A mono
-        // BMP skipped the gray pass entirely, so it left no charge -- normal refresh cadence.
-        if (!monoBmp) pagesUntilFullRefresh = 1;
+        ImagePageSpec spec;
+        spec.page = verticalSection->currentPage;
+        spec.refineOnly = takeRequestedImageRefine(spec.page);
+        spec.asyncBw = canShowImagePageAsync();
+        imagePageRefreshAsync = spec.asyncBw && !spec.refineOnly;
+        spec.gray.strips = renderer.supportsStripGrayscale();
+        // Each strip re-reads the WHOLE pixel cache (it is row-major in image space, so a physical
+        // band can't seek to its rows): 160-row strips make a 480px page 3 strips instead of 6.
+        spec.gray.stripRows = 160;
+        presentImagePage(
+            spec,
+            [&] {
+              drawImagePage();
+              renderStatusBar();
+            },
+            drawImagePage, [&] { return imageWantsGrayPass(vpage->imagePath); });
         imagePageDisplayed = true;
       } else {
-        const uint32_t pageKey =
-            (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(verticalSection->currentPage);
         textPageHasImages = VerticalTextBlock(*vpage).hasImages();
-        if (textPageHasImages &&
-            requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == pageKey) {
-          // The idle refine of a text page's inline images: the B/W page is already on the glass.
-          // Redraw it into the framebuffer (glyphs are warm, the images a cache read) as the base
-          // the planes' cleanup re-syncs from, then add the grays -- text too when AA is on.
-          renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true);
-          renderStatusBar();
-          imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
-          renderVerticalGrayPlanes(SETTINGS.textAntiAliasing, /*withImages=*/textPageHasImages);
-          return;
-        }
-        renderedVPage_ = verticalSection->currentPage;  // see the post-render warm block below
-        const bool vGlyphsWarm = prewarmedVPage_ == verticalSection->currentPage;
-        renderVerticalPageBody(*vpage, vGlyphsWarm);
-        // Inline images show B/W now and refine to grayscale once the page is left idle
-        // (readerLoop), as image pages do: flipping through costs one fast refresh each.
-        if (textPageHasImages && renderer.grayscaleCapabilities().supported()) {
+        ImagePageSpec spec;
+        spec.page = verticalSection->currentPage;
+        spec.refineOnly = textPageHasImages && takeRequestedImageRefine(spec.page);
+        if (!spec.refineOnly) renderedVPage_ = verticalSection->currentPage;  // see the post-render warm block
+        const bool vGlyphsWarm = spec.refineOnly || prewarmedVPage_ == verticalSection->currentPage;
+        if (textPageHasImages) {
+          // Shown like any page with images: B/W now, the grays (text too when AA is on) once the
+          // reader rests on the page, so flipping through costs one refresh each.
+          spec.asyncBw = canShowImagePageAsync();
+          imagePageRefreshAsync = spec.asyncBw && !spec.refineOnly;
+          spec.gray.strips = renderer.supportsStripGrayscale();
+          spec.gray.stripRows = 160;
+          presentImagePage(
+              spec,
+              [&] {
+                renderVerticalPageBody(*vpage, vGlyphsWarm);
+                renderStatusBar();
+              },
+              [&] {
+                renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true,
+                                       /*imagesOnly=*/!SETTINGS.textAntiAliasing);
+              },
+              [] { return true; });
           ImageBlock::releaseRenderCache();
-          pendingImageRefine_.store(pageKey, std::memory_order_relaxed);
+          if (spec.refineOnly) return;
+          imagePageDisplayed = true;
+        } else {
+          renderVerticalPageBody(*vpage, vGlyphsWarm);
         }
         // Re-assert the claim for the page the body just prewarmed (it cleared it above).
         if (!vGlyphsWarm) prewarmedVPage_ = verticalSection->currentPage;
@@ -2409,7 +2371,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     // End of the overlap window. Everything past this point may draw: the popups below, the
     // screenshot's framebuffer read, and the image warm's cache decode.
-    if (overlapRefresh) renderer.waitRefreshComplete();
+    if (overlapRefresh || imagePageRefreshAsync) renderer.waitRefreshComplete();
 
     if (textAa && overlapRefresh) {
       imageWarmStampSnapshot_ = grayInputStamp;  // a key pressed since the render abandons the grays
@@ -3538,22 +3500,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   const bool pageHasImages = page->hasImages();
   shownPageHasImages_ = pageHasImages;
-  const bool manualRefreshPending = !grayscaleRefineOnly && forcedRefreshPending;
-  if (!grayscaleRefineOnly) forcedRefreshPending = false;
-  // The reader starts with zero here, which means the normal refresh cycle
-  // would use a HALF refresh for its first page. Keep that same clean base for
-  // image pages: a FAST refresh otherwise runs directly over the
-  // retained frame after a silent restart (for example, when returning from
-  // KOReader sync), leaving the old UI mixed with the image.
-  // panelHasGrayPlanes(): the page we are leaving ran a grayscale pass, so the controller's RED
-  // RAM holds a gray plane rather than the previous B/W frame. A FAST refresh is a differential
-  // update against that RAM, so the incoming image would be diffed against a gray plane and the
-  // OLD picture stays visible under the new one (two image pages in a row -- a cover followed by
-  // an illustration -- overlaid). The `pagesUntilFullRefresh = 1` set below already routes the
-  // next ORDINARY page onto the HALF cleanup for the same reason; it cannot help here, because
-  // an image page reaching this branch reads that same counter as 1, not 0, and picks FAST.
-  const bool cleanImageBasePending =
-      !grayscaleRefineOnly && (manualRefreshPending || pagesUntilFullRefresh == 0 || renderer.panelHasGrayPlanes());
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   const bool absoluteImageGrayscale = pageHasImages && !gpio.deviceIsX3() &&
@@ -3583,43 +3529,48 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     if (absoluteImageGrayscale) renderStatusBar();
   };
 
-  // Skip the placeholder pre-pass on cold image pages: it caused a visible two-stage update
-  // (placeholder boxes, then the real image) and an extra panel cycle.
-  // Instead, keep the previous page displayed while decoding and do a single refresh to the final image.
-  // The idle refine draws the B/W page too, without displaying it: renderPage() cleared the
-  // framebuffer, and the planes' cleanup below re-syncs the controller's differential baseline
-  // from it. A white baseline leaves the next FAST turn unable to erase this page's image.
+  if (pageHasImages) {
+    ImagePageSpec spec;
+    spec.page = section->currentPage;
+    spec.refineOnly = grayscaleRefineOnly;
+    spec.absolute = absoluteImageGrayscale;
+    spec.gray.strips = grayscale.stripUploads;
+    spec.gray.stripRows = 160;  // every strip re-reads the image's whole pixel cache
+    spec.gray.clear = absoluteImageGrayscale ? 0xFF : 0x00;
+    spec.gray.absolute = absoluteImageGrayscale;
+    spec.gray.resyncIfSkipped = absoluteImageGrayscale;
+    presentImagePage(
+        spec,
+        [&] {
+          page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
+          renderStatusBar();
+        },
+        renderGrayscalePass,
+        [&] {
+          // Text AA has gray tones of its own; otherwise only images that are not 1-bit BMPs do.
+          if (needsTextGrayscale) return true;
+          for (const auto& el : page->elements) {
+            if (el->getTag() == TAG_PageImage &&
+                imageWantsGrayPass(static_cast<const PageImage&>(*el).getImageBlock().getImagePath())) {
+              return true;
+            }
+          }
+          return false;
+        });
+    LOG_DBG("ERS", "Page render (images): prewarm=%lums total=%lums refine=%d", tPrewarm - t0, millis() - t0,
+            grayscaleRefineOnly);
+    return;
+  }
+
+  forcedRefreshPending = false;
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
   renderStatusBar();
   const auto tBwRender = millis();
-  auto tDisplay = tBwRender;
-
-  if (!grayscaleRefineOnly && absoluteImageGrayscale) {
-    const auto baseMode = cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
-    if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, baseMode)) {
-      LOG_ERR("ERS", "Could not start absolute image page; displaying B/W");
-      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
-      return;
-    }
-    LOG_DBG("ERS", "UC8279 image page: absolute quality waveform");
-    pagesUntilFullRefresh = 1;
-  } else if (!grayscaleRefineOnly && pageHasImages) {
-    // Put the final image on the panel in one pass. The old selective-blank
-    // double refresh showed a white frame and delayed the picture; grayscale
-    // now refines separately after the page stays idle.
-    renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-    // The image's own page is handled above and doesn't count toward the full
-    // refresh cadence. But the grayscale pass below leaves gray charge in the
-    // image region that a plain fast diff on the *next* page can't clear, so
-    // text there ghosts gray (#2190). Force the next ordinary page onto the
-    // HALF ghost-cleanup path, which drives every pixel to its target
-    // regardless of residue.
-    pagesUntilFullRefresh = 1;
-  } else if (!grayscaleRefineOnly && combinedGrayscaleBase) {
+  if (combinedGrayscaleBase) {
     // Stash the base without activating; displayGrayBuffer() below commits
     // base + grays as one waveform.
     ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
-  } else if (!grayscaleRefineOnly && needsAnyGrayscale) {
+  } else if (needsAnyGrayscale) {
     if (pagesUntilFullRefresh <= 1) {
       // A cleanup refresh settles X3 correctly only when its grayscale
       // preconditioning waveform runs before the gray planes are written.
@@ -3634,23 +3585,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
       pagesUntilFullRefresh--;
     }
-  } else if (!grayscaleRefineOnly) {
+  } else {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
-  tDisplay = millis();
-
-  if (!grayscaleRefineOnly && pageHasImages) {
-    const uint32_t currentKey =
-        (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
-    pendingImageRefine_.store(currentKey, std::memory_order_relaxed);
-    LOG_DBG("ERS", "Page render (image BW): prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
-            tBwRender - tPrewarm, tDisplay - tBwRender, tDisplay - t0);
-    return;
-  }
-
-  if (grayscaleRefineOnly) {
-    imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
-  }
+  const auto tDisplay = millis();
 
   // Tiled grayscale: render each plane band-by-band, leaving the BW
   // framebuffer intact so no full-frame storeBwBuffer is needed; controller
@@ -4118,6 +4056,67 @@ EpubReaderActivity::GrayPassResult EpubReaderActivity::runGrayPass(const GrayPas
   LOG_DBG("ERS", "Gray pass (%s): planes=%lums display=%lums resync=%lums cancelled=%d",
           strips ? "strips" : "full frame", tDisplay - t0, tResync - tDisplay, millis() - tResync, cancelled);
   return cancelled ? GrayPassResult::Cancelled : GrayPassResult::Shown;
+}
+
+bool EpubReaderActivity::imageWantsGrayPass(const std::string& imagePath) {
+  return !(FsHelpers::hasBmpExtension(imagePath) && BmpToFramebufferConverter::isMonochromeStatic(imagePath));
+}
+
+template <typename DrawPage, typename DrawPlanes, typename WantsGray>
+void EpubReaderActivity::presentImagePage(const ImagePageSpec& spec, DrawPage&& drawPage, DrawPlanes&& drawPlanes,
+                                          WantsGray&& wantsGray) {
+  const auto cancel = [this] { return imageWarmShouldCancel(this); };
+  // Every render draws the B/W page: the idle refine needs it in the framebuffer as the baseline
+  // the planes' re-sync reads from (renderPage() cleared it), without driving the panel again.
+  drawPage();
+  const bool grayTones = wantsGray();
+  if (spec.refineOnly) {
+    // The B/W image is already a valid picture on the glass and the refine re-reads the pixel cache
+    // several times: abandon it the instant the reader turns the page.
+    imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+    if (grayTones && !cancel()) runGrayPass(spec.gray, drawPlanes, cancel);
+    ImageBlock::releaseRenderCache();
+    if (grayTones) pagesUntilFullRefresh = 1;
+    return;
+  }
+
+  // A FAST pass is differential: it only drives pixels that differ from the controller's previous
+  // frame, so it cannot replace what is on the glass when that frame is not the previous page.
+  // Three cases need the clean HALF base: the reader's first paint (pagesUntilFullRefresh == 0;
+  // deep-sleep wake discards controller RAM, leaving the sleep screen on the panel -- #237), a
+  // manual refresh, and gray planes from a preceding image page still sitting in that RAM (the
+  // new image would be diffed against a gray plane and the old picture stay visible under it).
+  const bool cleanBase = forcedRefreshPending || pagesUntilFullRefresh == 0 || renderer.panelHasGrayPlanes();
+  forcedRefreshPending = false;
+  const auto baseMode = cleanBase ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+
+  if (spec.absolute) {
+    // UC8279: the absolute quality waveform takes its planes straight after the base.
+    if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, baseMode)) {
+      LOG_ERR("ERS", "Could not start absolute image page; displaying B/W");
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+      return;
+    }
+    imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
+    runGrayPass(spec.gray, drawPlanes, cancel);
+    pagesUntilFullRefresh = 1;
+    return;
+  }
+
+  // The final image in one pass (no blank-white intermediate: it read as a flash on full-page
+  // images); the grays follow once the reader rests on the page, so flipping through illustrations
+  // costs one refresh each.
+  if (spec.asyncBw) {
+    renderer.displayBufferAsync(baseMode);
+  } else {
+    renderer.displayBuffer(baseMode);
+  }
+  if (grayTones && renderer.grayscaleCapabilities().supported()) {
+    pendingImageRefine_.store(imageRefineKey(spec.page), std::memory_order_relaxed);
+  }
+  // Gray charge in the image region needs the HALF ghost-cleanup on the next page (#2190). An image
+  // with no gray tones leaves none: normal cadence.
+  if (grayTones) pagesUntilFullRefresh = 1;
 }
 
 void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const bool withImages) {
