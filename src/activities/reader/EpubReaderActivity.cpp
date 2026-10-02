@@ -116,16 +116,14 @@ int clampPage(const int page, const int pageCount) {
   return page >= pageCount ? pageCount - 1 : page;
 }
 
-// The page a saved position lands on after a (re)pagination, horizontal or vertical. Its content
-// offset first: it names an exact character and is immune to re-pagination. Failing that, the saved
-// page scaled by how the chapter's page count changed -- a guess that lands up to a page away and
-// drifts a little further on every switch. Clamped to the chapter.
-template <typename OffsetToPage>
-int repaginatedPage(const int savedPage, const int pageCount, const std::optional<uint32_t>& offset,
-                    const int savedPageCount, OffsetToPage&& offsetToPage) {
-  if (offset.has_value()) {
-    if (const auto page = offsetToPage(*offset)) return clampPage(*page, pageCount);
-  }
+// The page a saved position lands on after a (re)pagination, horizontal or vertical. offsetPage is
+// the page the saved content offset resolves to, if any: it follows the text across re-pagination,
+// though an image-only page shares its offset with neighbouring text and may resolve beside it.
+// Failing that, the saved page scaled by how the chapter's page count changed -- a guess that lands
+// up to a page away and drifts a little further on every switch. Clamped to the chapter.
+int repaginatedPage(const int savedPage, const int pageCount, const std::optional<int> offsetPage,
+                    const int savedPageCount) {
+  if (offsetPage.has_value()) return clampPage(*offsetPage, pageCount);
   int page = savedPage;
   if (savedPageCount > 0 && pageCount != savedPageCount) {
     page = static_cast<int>(static_cast<float>(savedPage) / static_cast<float>(savedPageCount) *
@@ -2149,10 +2147,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       // outranks the saved content offset (its page number still gets the page-count rescale).
       if (currentSpineIndex == cachedSpineIndex) {
         const bool useOffset = !hadExplicitPageJump && !pendingPercentJump;
-        verticalSection->currentPage = repaginatedPage(
-            verticalSection->currentPage, verticalSection->pageCount,
-            useOffset ? cachedVisibleTextOffset : std::nullopt, cachedChapterTotalPageCount,
-            [&](const uint32_t offset) { return verticalSection->getPageForVisibleTextOffset(offset); });
+        verticalSection->currentPage =
+            repaginatedPage(verticalSection->currentPage, verticalSection->pageCount,
+                            useOffset && cachedVisibleTextOffset
+                                ? verticalSection->getPageForVisibleTextOffset(*cachedVisibleTextOffset)
+                                : std::nullopt,
+                            cachedChapterTotalPageCount);
       } else {
         verticalSection->currentPage = clampPage(verticalSection->currentPage, verticalSection->pageCount);
       }
@@ -3028,9 +3028,10 @@ bool EpubReaderActivity::applyDeferredReposition() {
   // Re-derive the page from the saved content offset after a settings reflow.
   // Older 4/6-byte progress files retain the page-fraction fallback.
   if (currentSpineIndex == cachedSpineIndex) {
-    const int newPage =
-        repaginatedPage(section->currentPage, section->pageCount, cachedVisibleTextOffset, cachedChapterTotalPageCount,
-                        [&](const uint32_t offset) { return section->getPageForVisibleTextOffset(offset); });
+    const int newPage = repaginatedPage(
+        section->currentPage, section->pageCount,
+        cachedVisibleTextOffset ? section->getPageForVisibleTextOffset(*cachedVisibleTextOffset) : std::nullopt,
+        cachedChapterTotalPageCount);
     if (newPage != section->currentPage) {
       section->currentPage = newPage;
       changed = true;
