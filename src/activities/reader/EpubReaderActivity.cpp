@@ -2312,62 +2312,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
         // BW first: the grayscale planes wait until the reader stays on the page (readerLoop), so
         // flipping through illustrations costs one fast refresh each.
-        if (!grayscaleRefineOnly && !monoBmp && renderer.supportsStripGrayscale()) {
+        // Any panel with grayscale: the gray pass takes strips or whole frames, whichever it has.
+        const bool canGray = renderer.grayscaleCapabilities().supported();
+        if (!grayscaleRefineOnly && !monoBmp && canGray) {
           pendingImageRefine_.store(imageKey, std::memory_order_relaxed);
         }
-        if (grayscaleRefineOnly && !monoBmp && renderer.supportsStripGrayscale() && !imageWarmShouldCancel(this)) {
-          const int gh = renderer.getDisplayHeight();
-          const int gwBytes = renderer.getDisplayWidthBytes();
+        if (grayscaleRefineOnly && !monoBmp && canGray && !imageWarmShouldCancel(this)) {
           // Each grayscale strip re-reads the WHOLE pixel cache (the .pxc is row-major in logical
           // image space, so a physical band can't seek to just its rows), so the read cost scales
-          // with the strip COUNT. Taller strips = fewer strips = fewer whole-cache re-reads: at
-          // 160 rows a 480px page is 3 strips instead of 6, roughly halving the ~13 reads that made
-          // image page turns slow. The taller scratch is 16KB vs 8KB; if that doesn't fit on a
-          // fragmented (X3) heap, fall back to the original 80-row strip -- never worse than before,
-          // and the BW-only path below still catches a total allocation failure.
-          int stripRows = 160;
-          auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
-          if (!scratch) {
-            stripRows = 80;
-            scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
-          }
-          if (!scratch) {
-            LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); image stays BW this page", gwBytes * stripRows);
-          } else {
-            bool cancelled = false;
-            renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-            for (int y = 0; y < gh && !cancelled; y += stripRows) {
-              if (imageWarmShouldCancel(this)) {
-                cancelled = true;
-                break;
-              }
-              const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
-              renderer.beginStripTarget(scratch.get(), y, rows);
-              renderer.clearScreen(0x00);
-              drawImagePage();
-              renderer.endStripTarget();
-              renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
-            }
-            renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-            for (int y = 0; y < gh && !cancelled; y += stripRows) {
-              if (imageWarmShouldCancel(this)) {
-                cancelled = true;
-                break;
-              }
-              const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
-              renderer.beginStripTarget(scratch.get(), y, rows);
-              renderer.clearScreen(0x00);
-              drawImagePage();
-              renderer.endStripTarget();
-              renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
-            }
-            renderer.setRenderMode(GfxRenderer::BW);
-            // On cancel, don't show the half-built grayscale -- leave the BW image already on the
-            // e-ink. Either way reset the controller's grayscale planes; the next page turn does a
-            // full clear+render+display, so the rebase content is transient.
-            if (!cancelled) renderer.displayGrayBuffer();
-            renderer.cleanupGrayscaleWithFrameBuffer();
-          }
+          // with the strip COUNT: 160-row strips make a 480px page 3 strips instead of 6.
+          GrayPassSpec spec;
+          spec.strips = renderer.supportsStripGrayscale();
+          spec.stripRows = 160;
+          runGrayPass(spec, drawImagePage, [this] { return imageWarmShouldCancel(this); });
         }
         // Gray charge in the image region needs the HALF ghost-cleanup on the next page. A mono
         // BMP skipped the gray pass entirely, so it left no charge -- normal refresh cadence.
@@ -3801,142 +3758,38 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
               cancelled);
     } else {
       // Per-strip scratch tier: blocking panels (X3) and the OOM fallback.
-      // The strip writes below need the panel idle, so wait out any pending
-      // async refresh first (no-op on blocking panels).
-      auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
-      if (!scratch && pageHasImages) {
-        stripRows = 80;
-        scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
-      }
-      renderer.waitRefreshComplete();
-      if (!scratch) {
-        LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * stripRows);
-        if (absoluteImageGrayscale) {
-          // displayGrayscaleBase(Absolute) already started a pass and its planes will now never
-          // be written. setRenderMode(BW) is the cancellation path, and without it the next page
-          // inherits absoluteGrayPlanes and the controller's half-filled buffers. Neither
-          // condition below covers this: both require !pageHasImages, which absolute implies.
-          renderer.setRenderMode(GfxRenderer::BW);
-        }
-        if (overlapRefresh || combinedGrayscaleBase || absoluteImageGrayscale) {
-          // The BW refresh ran the shadow-free async path, so controller RAM's
-          // differential baseline was never rebuilt. Even with AA skipped it must
-          // be re-synced from the intact BW framebuffer, or the next differential
-          // update diffs against stale contents. On the combined-base path the
-          // base activation is still deferred; this cleanup commits it so the
-          // page reaches the panel even without its grays.
-          renderer.cleanupGrayscaleWithFrameBuffer();
-        }
-      } else {
-        // Bands may be streamed in any order: X4 windows each via setRamArea,
-        // X3 via PTL.
-        bool cancelled = false;
-        renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-        for (int y = 0; y < gh && !cancelled; y += stripRows) {
-          if (shouldCancel()) {
-            cancelled = true;
-            break;
-          }
-          const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
-          renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
-          renderGrayscalePass();
-          renderer.endStripTarget();
-          renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
-        }
-        const auto tGrayLsb = millis();
-
-        // MSB plane.
-        renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-        for (int y = 0; y < gh && !cancelled; y += stripRows) {
-          if (shouldCancel()) {
-            cancelled = true;
-            break;
-          }
-          const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
-          renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
-          renderGrayscalePass();
-          renderer.endStripTarget();
-          renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
-        }
-        const auto tGrayMsb = millis();
-
-        // After displayGrayBuffer, not before: setRenderMode(BW) cancels an unfinished
-        // absolute pass and would discard the planes just uploaded. displayGrayBuffer
-        // clears absoluteGrayPlanes itself, so this is a plain mode switch once the
-        // planes are shown -- and still the wanted cleanup when cancelled.
-        if (!cancelled) renderer.displayGrayBuffer();
-        renderer.setRenderMode(GfxRenderer::BW);
-        const auto tGrayDisplay = millis();
-
-        // BW framebuffer is intact; re-sync controller RAM for the next
-        // differential page turn directly from it.
-        renderer.cleanupGrayscaleWithFrameBuffer();
-        const auto tCleanup = millis();
-
-        const auto tEnd = millis();
-        LOG_DBG("ERS",
-                "Page render (tiled): prewarm=%lums bw_render=%lums display=%lums gray_lsb=%lums "
-                "gray_msb=%lums gray_display=%lums cleanup=%lums total=%lums cancelled=%d",
-                tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayLsb - tDisplay, tGrayMsb - tGrayLsb,
-                tGrayDisplay - tGrayMsb, tCleanup - tGrayDisplay, tEnd - t0, cancelled);
-      }
+      GrayPassSpec spec;
+      spec.strips = true;
+      spec.stripRows = stripRows;
+      spec.clear = absoluteImageGrayscale ? 0xFF : 0x00;
+      spec.absolute = absoluteImageGrayscale;
+      // The BW refresh ran the shadow-free async path (or, on the combined base, its activation is
+      // still deferred), so the controller's differential baseline must be re-synced even when no
+      // plane could be drawn -- the cleanup also commits a deferred combined base.
+      spec.resyncIfSkipped = overlapRefresh || combinedGrayscaleBase || absoluteImageGrayscale;
+      runGrayPass(spec, renderGrayscalePass, shouldCancel);
+      LOG_DBG("ERS", "Page render (tiled): prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
+              tBwRender - tPrewarm, tDisplay - tBwRender, millis() - t0);
     }
+  } else if (needsAnyGrayscale) {
+    // Whole-frame planes for a mode without strip uploads.
+    GrayPassSpec spec;
+    spec.strips = false;
+    spec.clear = absoluteImageGrayscale ? 0xFF : 0x00;
+    spec.absolute = absoluteImageGrayscale;
+    // The absolute base waveform already ran: without its planes the controller still needs re-syncing.
+    spec.resyncIfSkipped = absoluteImageGrayscale;
+    runGrayPass(spec, renderGrayscalePass, [&] {
+      return pageHasImages ? imageWarmShouldCancel(this)
+                           : imageWarmInputStamp_.load(std::memory_order_relaxed) != inputStamp;
+    });
+    LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
+            tBwRender - tPrewarm, tDisplay - tBwRender, millis() - t0);
   } else {
-    // Fallback path for a controller without strip support. grayscale rendering
-    // TODO: Only do this if font supports it
-    if (needsAnyGrayscale) {
-      // Save the BW frame before the grayscale passes overwrite it, restore
-      // after. Only needed when grayscale actually renders.
-      if (!renderer.storeBwBuffer()) {
-        LOG_ERR("ERS", "Failed to store BW buffer for grayscale render; skipping grayscale this page");
-        if (absoluteImageGrayscale) {
-          // The absolute base waveform already ran; cancel the pass and re-sync the controller
-          // from the intact BW framebuffer, or the next differential turn draws on stale RAM.
-          renderer.setRenderMode(GfxRenderer::BW);
-          renderer.cleanupGrayscaleWithFrameBuffer();
-        }
-        const auto tEnd = millis();
-        LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
-                tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
-        return;
-      }
-      const auto tBwStore = millis();
-
-      renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
-      renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-      renderGrayscalePass();
-      renderer.copyGrayscaleLsbBuffers();
-      const auto tGrayLsb = millis();
-
-      // Render and copy to MSB buffer
-      renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
-      renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-      renderGrayscalePass();
-      renderer.copyGrayscaleMsbBuffers();
-      const auto tGrayMsb = millis();
-
-      // display grayscale part
-      renderer.displayGrayBuffer();
-      const auto tGrayDisplay = millis();
-      renderer.setRenderMode(GfxRenderer::BW);
-      renderer.restoreBwBuffer();
-      const auto tBwRestore = millis();
-
-      const auto tEnd = millis();
-      LOG_DBG("ERS",
-              "Page render: prewarm=%lums bw_render=%lums display=%lums bw_store=%lums "
-              "gray_lsb=%lums gray_msb=%lums gray_display=%lums bw_restore=%lums total=%lums",
-              tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tBwStore - tDisplay, tGrayLsb - tBwStore,
-              tGrayMsb - tGrayLsb, tGrayDisplay - tGrayMsb, tBwRestore - tGrayDisplay, tEnd - t0);
-    } else {
-      // No text AA and no images: BW frame already displayed above, no grayscale
-      // to render, so no save/restore.
-      const auto tEnd = millis();
-      LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
-              tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
-    }
+    // No text AA and no images: BW frame already displayed above, no grayscale
+    // to render, so no save/restore.
+    LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
+            tBwRender - tPrewarm, tDisplay - tBwRender, millis() - t0);
   }
 }
 
@@ -4185,112 +4038,104 @@ void EpubReaderActivity::renderVerticalPageBody(const VerticalPage& vpage, const
   }
 }
 
-void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const bool withImages) {
+template <typename Draw, typename Cancel>
+EpubReaderActivity::GrayPassResult EpubReaderActivity::runGrayPass(const GrayPassSpec& spec, Draw&& draw,
+                                                                   Cancel&& cancel) {
   const auto t0 = millis();
   renderer.waitRefreshComplete();  // the plane writes need the panel idle
-  const auto tWait = millis();
-  const VerticalPage* vpage = verticalSection ? verticalSection->getPage() : nullptr;
-  if (!renderer.supportsStripGrayscale()) {
-    renderVerticalGrayPlanesFullFrame(vpage, withText, withImages);
-    return;
-  }
-  const int gh = renderer.getDisplayHeight();
-  const int gwBytes = renderer.getDisplayWidthBytes();
-  // Every strip re-reads an image's whole pixel cache, so images take the taller strip; text culls
-  // out-of-band glyphs and stays on the smaller scratch.
-  int stripRows = withImages ? 160 : 80;
-  auto scratch = vpage ? makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows) : nullptr;
-  if (vpage && !scratch && stripRows > 80) {
-    stripRows = 80;
-    scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
-  }
-  bool cancelled = !scratch;
-  if (!scratch) LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); page stays B/W", gwBytes * stripRows);
-  for (int plane = 0; plane < 2 && !cancelled; plane++) {
-    const bool lsb = plane == 0;
-    renderer.setRenderMode(lsb ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
-    for (int y = 0; y < gh; y += stripRows) {
-      if (imageWarmShouldCancel(this)) {
+  const auto skip = [&](const char* why) {
+    LOG_ERR("ERS", "Grayscale pass skipped (%s); page stays B/W", why);
+    // An absolute base whose planes will now never arrive is cancelled by the switch back to BW.
+    if (spec.absolute) renderer.setRenderMode(GfxRenderer::BW);
+    if (spec.resyncIfSkipped) renderer.cleanupGrayscaleWithFrameBuffer();
+    return GrayPassResult::Skipped;
+  };
+  bool cancelled = false;
+  const bool strips = spec.strips;
+  if (strips) {
+    const int gh = renderer.getDisplayHeight();
+    const int gwBytes = renderer.getDisplayWidthBytes();
+    int stripRows = spec.stripRows;
+    auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
+    if (!scratch && stripRows > 80) {
+      stripRows = 80;
+      scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * stripRows);
+    }
+    if (!scratch) return skip("no strip scratch");
+    // Bands may be streamed in any order: X4 windows each via setRamArea, X3 via PTL.
+    for (int plane = 0; plane < 2 && !cancelled; plane++) {
+      const bool lsb = plane == 0;
+      renderer.setRenderMode(lsb ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
+      for (int y = 0; y < gh; y += stripRows) {
+        if (cancel()) {
+          cancelled = true;
+          break;
+        }
+        const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
+        renderer.beginStripTarget(scratch.get(), y, rows);
+        renderer.clearScreen(spec.clear);
+        draw();
+        renderer.endStripTarget();
+        renderer.writeGrayscalePlaneStrip(lsb, scratch.get(), y, rows);
+      }
+    }
+  } else {
+    if (!renderer.storeBwBuffer()) return skip("B/W page could not be parked");
+    for (int plane = 0; plane < 2 && !cancelled; plane++) {
+      const bool lsb = plane == 0;
+      renderer.clearScreen(spec.clear);
+      renderer.setRenderMode(lsb ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
+      // Checked again after the draw: a key pressed meanwhile skips the upload and the waveform.
+      if (cancel()) {
         cancelled = true;
         break;
       }
-      const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
-      renderer.beginStripTarget(scratch.get(), y, rows);
-      renderer.clearScreen(0x00);
-      renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true, /*imagesOnly=*/!withText);
-      renderer.endStripTarget();
-      renderer.writeGrayscalePlaneStrip(lsb, scratch.get(), y, rows);
+      draw();
+      if (cancel()) {
+        cancelled = true;
+        break;
+      }
+      if (lsb) {
+        renderer.copyGrayscaleLsbBuffers();
+      } else {
+        renderer.copyGrayscaleMsbBuffers();
+      }
     }
   }
-  const auto tPlanes = millis();
+  const auto tDisplay = millis();
+  // After displayGrayBuffer, not before: setRenderMode(BW) cancels an unfinished absolute pass and
+  // would discard the planes just uploaded. When cancelled, it is that wanted cleanup.
   if (!cancelled) renderer.displayGrayBuffer();
   renderer.setRenderMode(GfxRenderer::BW);
-  // The B/W framebuffer is intact; re-sync controller RAM from it for the next differential turn.
-  renderer.cleanupGrayscaleWithFrameBuffer();
-  LOG_DBG("ERS", "Vertical gray planes (text=%d images=%d): wait=%lums planes=%lums display=%lums cancelled=%d",
-          withText, withImages, tWait - t0, tPlanes - tWait, millis() - tPlanes, cancelled);
+  const auto tResync = millis();
+  // Re-sync controller RAM from the B/W page for the next differential turn (the full-frame path
+  // first puts the parked page back).
+  if (strips) {
+    renderer.cleanupGrayscaleWithFrameBuffer();
+  } else {
+    renderer.restoreBwBuffer();
+  }
+  LOG_DBG("ERS", "Gray pass (%s): planes=%lums display=%lums resync=%lums cancelled=%d",
+          strips ? "strips" : "full frame", tDisplay - t0, tResync - tDisplay, millis() - tResync, cancelled);
+  return cancelled ? GrayPassResult::Cancelled : GrayPassResult::Shown;
+}
+
+void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const bool withImages) {
+  if (const VerticalPage* vpage = verticalSection ? verticalSection->getPage() : nullptr) {
+    // Every strip re-reads an image's whole pixel cache, so images take the taller strip; text culls
+    // out-of-band glyphs and stays on the smaller scratch.
+    GrayPassSpec spec;
+    spec.strips = renderer.supportsStripGrayscale();
+    spec.stripRows = withImages ? 160 : 80;
+    runGrayPass(
+        spec, [&] { renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true, /*imagesOnly=*/!withText); },
+        [this] { return imageWarmShouldCancel(this); });
+  }
   if (withImages) {
     ImageBlock::releaseRenderCache();
     // Image grays leave charge a plain FAST diff cannot clear; the next page takes the HALF cleanup.
     pagesUntilFullRefresh = 1;
   }
-}
-
-void EpubReaderActivity::renderVerticalGrayPlanesFullFrame(const VerticalPage* vpage, const bool withText,
-                                                           const bool withImages) {
-  // Panels without strip uploads (the UC8279 on the X4 Pro and X4C) take each plane as a whole
-  // frame, so the planes are drawn over the framebuffer with the B/W page parked meanwhile -- the
-  // same fallback renderContents() uses for horizontal pages.
-  const auto finish = [&] {
-    if (!withImages) return;
-    ImageBlock::releaseRenderCache();
-    // Image grays leave charge a plain FAST diff cannot clear; the next page takes the HALF cleanup.
-    pagesUntilFullRefresh = 1;
-  };
-  if (!vpage || !renderer.storeBwBuffer()) {
-    LOG_ERR("ERS", "Could not park the B/W page for vertical gray planes; page stays B/W");
-    finish();
-    return;
-  }
-  const auto t0 = millis();
-  unsigned long renderMs = 0;
-  unsigned long copyMs = 0;
-  bool cancelled = false;
-  for (int plane = 0; plane < 2 && !cancelled; plane++) {
-    if (imageWarmShouldCancel(this)) {
-      cancelled = true;
-      break;
-    }
-    const bool lsb = plane == 0;
-    const auto tRender = millis();
-    renderer.clearScreen(0x00);
-    renderer.setRenderMode(lsb ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
-    renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true, /*imagesOnly=*/!withText);
-    const auto tCopy = millis();
-    renderMs += tCopy - tRender;
-    // A key pressed while the plane was drawn: skip the upload and the gray waveform.
-    if (imageWarmShouldCancel(this)) {
-      cancelled = true;
-      break;
-    }
-    if (lsb) {
-      renderer.copyGrayscaleLsbBuffers();
-    } else {
-      renderer.copyGrayscaleMsbBuffers();
-    }
-    copyMs += millis() - tCopy;
-  }
-  const auto tDisplay = millis();
-  if (!cancelled) renderer.displayGrayBuffer();
-  renderer.setRenderMode(GfxRenderer::BW);
-  const auto tRestore = millis();
-  // Puts the B/W page back and re-syncs controller RAM from it for the next differential turn.
-  renderer.restoreBwBuffer();
-  LOG_DBG("ERS",
-          "Vertical gray planes, full frame (text=%d images=%d): render=%lums upload=%lums display=%lums "
-          "restore=%lums total=%lums cancelled=%d",
-          withText, withImages, renderMs, copyMs, tRestore - tDisplay, millis() - tRestore, millis() - t0, cancelled);
-  finish();
 }
 
 void EpubReaderActivity::buildNoticeThunk(void* ctx) {
