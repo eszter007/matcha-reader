@@ -2905,8 +2905,13 @@ EpubReaderActivity::SilentBuildResult EpubReaderActivity::buildChapterSilently(c
   // them. On a cancel the Section's destructor keeps the pages laid out so far as a partial file,
   // so the work is not lost (see Section::suspendBuild).
   constexpr uint32_t SLICE_MS = 50;
+  const ReaderRenderSpec spec = readerSpec(viewportWidth, viewportHeight);
   Section next(epub, spineIndex, renderer);
-  if (!next.startBuild(readerSpec(viewportWidth, viewportHeight))) return SilentBuildResult::Failed;
+  // Load an existing partial into THIS instance before building over it: suspendBuild() keeps the
+  // larger of the old partial and the new pages only when it knows the partial is there, so a
+  // cancelled retry never shrinks the persisted watermark.
+  next.loadSectionFile(spec);
+  if (!next.startBuild(spec)) return SilentBuildResult::Failed;
   while (!next.isBuildComplete()) {
     if (imageWarmShouldCancel(this)) return SilentBuildResult::Cancelled;
     if (!next.buildSomeMore(0, SLICE_MS)) return SilentBuildResult::Failed;
