@@ -2200,6 +2200,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     bool imagePageDisplayed = false;
     bool textPageHasImages = false;
+    bool imagePageRefreshAsync = false;  // its B/W refresh is still running: wait after the tail
     {
       const auto* vpage = verticalSection->getPage();
       if (!vpage) {
@@ -2270,7 +2271,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         ImagePageSpec spec;
         spec.page = verticalSection->currentPage;
         spec.refineOnly = takeRequestedImageRefine(spec.page);
-        spec.wantsGray = imageWantsGrayPass(vpage->imagePath);
+        spec.asyncBw = canShowImagePageAsync();
+        imagePageRefreshAsync = spec.asyncBw && !spec.refineOnly;
         spec.gray.strips = renderer.supportsStripGrayscale();
         // Each strip re-reads the WHOLE pixel cache (it is row-major in image space, so a physical
         // band can't seek to its rows): 160-row strips make a 480px page 3 strips instead of 6.
@@ -2281,7 +2283,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               drawImagePage();
               renderStatusBar();
             },
-            drawImagePage);
+            drawImagePage, [&] { return imageWantsGrayPass(vpage->imagePath); });
         imagePageDisplayed = true;
       } else {
         textPageHasImages = VerticalTextBlock(*vpage).hasImages();
@@ -2293,6 +2295,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (textPageHasImages) {
           // Shown like any page with images: B/W now, the grays (text too when AA is on) once the
           // reader rests on the page, so flipping through costs one refresh each.
+          spec.asyncBw = canShowImagePageAsync();
+          imagePageRefreshAsync = spec.asyncBw && !spec.refineOnly;
           spec.gray.strips = renderer.supportsStripGrayscale();
           spec.gray.stripRows = 160;
           presentImagePage(
@@ -2304,7 +2308,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               [&] {
                 renderVerticalPageBody(*vpage, /*glyphsAlreadyWarm=*/true,
                                        /*imagesOnly=*/!SETTINGS.textAntiAliasing);
-              });
+              },
+              [] { return true; });
           ImageBlock::releaseRenderCache();
           if (spec.refineOnly) return;
           imagePageDisplayed = true;
@@ -2366,7 +2371,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     // End of the overlap window. Everything past this point may draw: the popups below, the
     // screenshot's framebuffer read, and the image warm's cache decode.
-    if (overlapRefresh) renderer.waitRefreshComplete();
+    if (overlapRefresh || imagePageRefreshAsync) renderer.waitRefreshComplete();
 
     if (textAa && overlapRefresh) {
       imageWarmStampSnapshot_ = grayInputStamp;  // a key pressed since the render abandons the grays
@@ -3525,18 +3530,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   };
 
   if (pageHasImages) {
-    // Text AA has gray tones of its own; otherwise only images that are not 1-bit BMPs do.
-    bool wantsGray = needsTextGrayscale;
-    for (const auto& el : page->elements) {
-      if (el->getTag() == TAG_PageImage &&
-          imageWantsGrayPass(static_cast<const PageImage&>(*el).getImageBlock().getImagePath())) {
-        wantsGray = true;
-      }
-    }
     ImagePageSpec spec;
     spec.page = section->currentPage;
     spec.refineOnly = grayscaleRefineOnly;
-    spec.wantsGray = wantsGray;
     spec.absolute = absoluteImageGrayscale;
     spec.gray.strips = grayscale.stripUploads;
     spec.gray.stripRows = 160;  // every strip re-reads the image's whole pixel cache
@@ -3549,7 +3545,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
           renderStatusBar();
         },
-        renderGrayscalePass);
+        renderGrayscalePass,
+        [&] {
+          // Text AA has gray tones of its own; otherwise only images that are not 1-bit BMPs do.
+          if (needsTextGrayscale) return true;
+          for (const auto& el : page->elements) {
+            if (el->getTag() == TAG_PageImage &&
+                imageWantsGrayPass(static_cast<const PageImage&>(*el).getImageBlock().getImagePath())) {
+              return true;
+            }
+          }
+          return false;
+        });
     LOG_DBG("ERS", "Page render (images): prewarm=%lums total=%lums refine=%d", tPrewarm - t0, millis() - t0,
             grayscaleRefineOnly);
     return;
@@ -4055,19 +4062,21 @@ bool EpubReaderActivity::imageWantsGrayPass(const std::string& imagePath) {
   return !(FsHelpers::hasBmpExtension(imagePath) && BmpToFramebufferConverter::isMonochromeStatic(imagePath));
 }
 
-template <typename DrawPage, typename DrawPlanes>
-void EpubReaderActivity::presentImagePage(const ImagePageSpec& spec, DrawPage&& drawPage, DrawPlanes&& drawPlanes) {
+template <typename DrawPage, typename DrawPlanes, typename WantsGray>
+void EpubReaderActivity::presentImagePage(const ImagePageSpec& spec, DrawPage&& drawPage, DrawPlanes&& drawPlanes,
+                                          WantsGray&& wantsGray) {
   const auto cancel = [this] { return imageWarmShouldCancel(this); };
   // Every render draws the B/W page: the idle refine needs it in the framebuffer as the baseline
   // the planes' re-sync reads from (renderPage() cleared it), without driving the panel again.
   drawPage();
+  const bool grayTones = wantsGray();
   if (spec.refineOnly) {
     // The B/W image is already a valid picture on the glass and the refine re-reads the pixel cache
     // several times: abandon it the instant the reader turns the page.
     imageWarmStampSnapshot_ = imageWarmInputStamp_.load(std::memory_order_relaxed);
-    if (spec.wantsGray && !cancel()) runGrayPass(spec.gray, drawPlanes, cancel);
+    if (grayTones && !cancel()) runGrayPass(spec.gray, drawPlanes, cancel);
     ImageBlock::releaseRenderCache();
-    if (spec.wantsGray) pagesUntilFullRefresh = 1;
+    if (grayTones) pagesUntilFullRefresh = 1;
     return;
   }
 
@@ -4097,13 +4106,17 @@ void EpubReaderActivity::presentImagePage(const ImagePageSpec& spec, DrawPage&& 
   // The final image in one pass (no blank-white intermediate: it read as a flash on full-page
   // images); the grays follow once the reader rests on the page, so flipping through illustrations
   // costs one refresh each.
-  renderer.displayBuffer(baseMode);
-  if (spec.wantsGray && renderer.grayscaleCapabilities().supported()) {
+  if (spec.asyncBw) {
+    renderer.displayBufferAsync(baseMode);
+  } else {
+    renderer.displayBuffer(baseMode);
+  }
+  if (grayTones && renderer.grayscaleCapabilities().supported()) {
     pendingImageRefine_.store(imageRefineKey(spec.page), std::memory_order_relaxed);
   }
   // Gray charge in the image region needs the HALF ghost-cleanup on the next page (#2190). An image
   // with no gray tones leaves none: normal cadence.
-  if (spec.wantsGray) pagesUntilFullRefresh = 1;
+  if (grayTones) pagesUntilFullRefresh = 1;
 }
 
 void EpubReaderActivity::renderVerticalGrayPlanes(const bool withText, const bool withImages) {
