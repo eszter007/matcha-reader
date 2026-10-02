@@ -42,3 +42,4 @@ gemini.key
 /sdkconfig.*
 sdkconfig.sticky
 flake.*
+.devctl/
