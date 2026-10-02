@@ -110,6 +110,35 @@ constexpr uint32_t IMAGE_WARM_LOAN_MIN_ALLOC = 12 * 1024;
 // The page's framebuffer bytes, parked here while a decode borrows the framebuffer.
 constexpr char FRAMEBUFFER_STASH_PATH[] = "/.crosspoint/fbstash.bin";
 
+// A page index kept inside a chapter of pageCount pages (0 for an empty chapter).
+int clampPage(const int page, const int pageCount) {
+  if (pageCount <= 0 || page < 0) return 0;
+  return page >= pageCount ? pageCount - 1 : page;
+}
+
+// The page a saved position lands on after a (re)pagination, horizontal or vertical. Its content
+// offset first: it names an exact character and is immune to re-pagination. Failing that, the saved
+// page scaled by how the chapter's page count changed -- a guess that lands up to a page away and
+// drifts a little further on every switch. Clamped to the chapter.
+template <typename OffsetToPage>
+int repaginatedPage(const int savedPage, const int pageCount, const std::optional<uint32_t>& offset,
+                    const int savedPageCount, OffsetToPage&& offsetToPage) {
+  if (offset.has_value()) {
+    if (const auto page = offsetToPage(*offset)) return clampPage(*page, pageCount);
+  }
+  int page = savedPage;
+  if (savedPageCount > 0 && pageCount != savedPageCount) {
+    page = static_cast<int>(static_cast<float>(savedPage) / static_cast<float>(savedPageCount) *
+                            static_cast<float>(pageCount));
+  }
+  return clampPage(page, pageCount);
+}
+
+// The page a percent jump within a chapter (0..1 of it) lands on.
+int pageForSpineProgress(const float progress, const int pageCount) {
+  return clampPage(static_cast<int>(progress * static_cast<float>(pageCount)), pageCount);
+}
+
 int clampPercent(int percent) {
   if (percent < 0) {
     return 0;
@@ -2116,33 +2145,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       const std::string anchor = std::move(pendingAnchor);
       pendingAnchor.clear();
 
-      // Content anchor first, page fraction only as the fallback. The offset names an exact
-      // character and is immune to re-pagination; the fraction is a guess that lands the reader
-      // up to a page away and drifts a little further on every switch.
-      bool resolvedByOffset = false;
-      if (currentSpineIndex == cachedSpineIndex && cachedVisibleTextOffset.has_value() && !hadExplicitPageJump &&
-          !pendingPercentJump) {
-        if (const auto page = verticalSection->getPageForVisibleTextOffset(*cachedVisibleTextOffset)) {
-          verticalSection->currentPage = *page;
-          resolvedByOffset = true;
-        }
+      // The carried position, for the chapter it was saved in. An explicit jump or a percent jump
+      // outranks the saved content offset (its page number still gets the page-count rescale).
+      if (currentSpineIndex == cachedSpineIndex) {
+        const bool useOffset = !hadExplicitPageJump && !pendingPercentJump;
+        verticalSection->currentPage = repaginatedPage(
+            verticalSection->currentPage, verticalSection->pageCount,
+            useOffset ? cachedVisibleTextOffset : std::nullopt, cachedChapterTotalPageCount,
+            [&](const uint32_t offset) { return verticalSection->getPageForVisibleTextOffset(offset); });
+      } else {
+        verticalSection->currentPage = clampPage(verticalSection->currentPage, verticalSection->pageCount);
       }
       cachedVisibleTextOffset.reset();
-      if (cachedChapterTotalPageCount > 0) {
-        if (!resolvedByOffset && currentSpineIndex == cachedSpineIndex &&
-            verticalSection->pageCount != cachedChapterTotalPageCount) {
-          const float progress =
-              static_cast<float>(verticalSection->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
-          verticalSection->currentPage = static_cast<int>(progress * verticalSection->pageCount);
-        }
-        cachedChapterTotalPageCount = 0;
-      }
-
-      if (verticalSection->pageCount == 0 || verticalSection->currentPage < 0) {
-        verticalSection->currentPage = 0;
-      } else if (verticalSection->currentPage >= verticalSection->pageCount) {
-        verticalSection->currentPage = verticalSection->pageCount - 1;
-      }
+      cachedChapterTotalPageCount = 0;
 
       if (!anchor.empty()) {
         if (const auto page = verticalSection->getPageForAnchor(anchor)) {
@@ -2154,11 +2169,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
 
       if (pendingPercentJump && verticalSection->pageCount > 0) {
-        int newPage = static_cast<int>(pendingSpineProgress * static_cast<float>(verticalSection->pageCount));
-        if (newPage >= verticalSection->pageCount) {
-          newPage = verticalSection->pageCount - 1;
-        }
-        verticalSection->currentPage = newPage;
+        verticalSection->currentPage = pageForSpineProgress(pendingSpineProgress, verticalSection->pageCount);
       }
       pendingPercentJump = false;
     }
@@ -2657,11 +2668,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     if (pendingPercentJump && section->pageCount > 0) {
       // Apply the pending percent jump now that we know the new section's page count.
-      int newPage = static_cast<int>(pendingSpineProgress * static_cast<float>(section->pageCount));
-      if (newPage >= section->pageCount) {
-        newPage = section->pageCount - 1;
-      }
-      section->currentPage = newPage;
+      section->currentPage = pageForSpineProgress(pendingSpineProgress, section->pageCount);
       pendingPercentJump = false;
     }
   }
@@ -3021,22 +3028,9 @@ bool EpubReaderActivity::applyDeferredReposition() {
   // Re-derive the page from the saved content offset after a settings reflow.
   // Older 4/6-byte progress files retain the page-fraction fallback.
   if (currentSpineIndex == cachedSpineIndex) {
-    int newPage = section->currentPage;
-    bool mappedOffset = false;
-    if (cachedVisibleTextOffset.has_value()) {
-      if (const auto offsetPage = section->getPageForVisibleTextOffset(*cachedVisibleTextOffset)) {
-        newPage = *offsetPage;
-        mappedOffset = true;
-      }
-    }
-    if (!mappedOffset && cachedChapterTotalPageCount > 0 && section->pageCount != cachedChapterTotalPageCount) {
-      const float progress = static_cast<float>(section->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
-      newPage = static_cast<int>(progress * static_cast<float>(section->pageCount));
-    }
-    if (newPage < 0) newPage = 0;
-    if (section->pageCount > 0 && newPage >= static_cast<int>(section->pageCount)) {
-      newPage = section->pageCount - 1;
-    }
+    const int newPage =
+        repaginatedPage(section->currentPage, section->pageCount, cachedVisibleTextOffset, cachedChapterTotalPageCount,
+                        [&](const uint32_t offset) { return section->getPageForVisibleTextOffset(offset); });
     if (newPage != section->currentPage) {
       section->currentPage = newPage;
       changed = true;
