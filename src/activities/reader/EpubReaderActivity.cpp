@@ -2213,6 +2213,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
 
       currentPageFootnotes.clear();
+      // Per page render, as renderContents() scopes it: a PNG deferred to the warm task must not
+      // stay memoized as failed when the redraw after its decode comes round.
+      ImageBlock::clearRenderFailures();
       const auto start = millis();
       if (vpage->isImagePage()) {
         const int reserve = readerBottomReserve(/*verticalMode=*/false);

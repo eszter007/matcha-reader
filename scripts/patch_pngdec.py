@@ -30,7 +30,7 @@ TARGETS = (
      "90c411c0d7e20eda4abafedc1b244e5f38b184c758a7681fbb094326d1ee2472"),
     ("src/png.inl",
      "8008f43fb74e578df3651791da4fb4ac74cb87f946ec6910aeab703fa5b5ea65",
-     "1c87ae48c4bc8056fccb2dea30dfd42730139d95ad4b5bc195118afa5b7c158c"),
+     "4331a9a790225d9cf2cd6b6e57f4257a70c21094ffb88df84d487976b417c3ff"),
 )
 
 
@@ -68,7 +68,9 @@ def apply_patch(project_dir, dependency_dir):
         elif current == patched:
             states.append("patched")
         else:
-            raise RuntimeError("Unrecognized PNGdec source: " + relative)
+            # Usually a copy patched by an older revision of the patch.
+            raise RuntimeError("Unrecognized PNGdec source: " + relative +
+                               "; delete .pio/libdeps/*/PNGdec and rebuild")
     if all(state == "patched" for state in states):
         return
     if any(state == "patched" for state in states):
