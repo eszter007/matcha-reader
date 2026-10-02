@@ -52,6 +52,26 @@ class CancellablePrint final : public Print {
   void* cancelCtx;
 };
 
+// Notes when the sink took less than it was offered: an early-stop reader (an image-header probe)
+// stops that way on purpose. ZipFile::readFileToStream treats such a stop as success under
+// allowEarlyStop; this lets the content-access path do the same instead of reporting a failure.
+class StopTrackingPrint final : public Print {
+ public:
+  explicit StopTrackingPrint(Print& output) : output(output) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* buffer, size_t size) override {
+    const size_t written = output.write(buffer, size);
+    if (written != size) stopped = true;
+    return written;
+  }
+
+  bool stopped = false;
+
+ private:
+  Print& output;
+};
+
 // Drops a present-but-incomplete artifact so the conversion that follows retries instead of
 // inheriting the partial file. Absent paths are a no-op.
 bool bmpCacheIsUsable(const char* moduleName, const std::string& path) {
@@ -1156,16 +1176,23 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
   if (shouldCancel) {
     CancellablePrint cancellable(out, shouldCancel, cancelCtx);
     if (contentaccess::handles(itemSource, path)) {
-      return contentaccess::readToStream(itemSource, path, cancellable);
+      return readProtectedItemToStream(path, cancellable, allowEarlyStop);
     }
     return ZipFile(filepath).readFileToStream(path.c_str(), cancellable, chunkSize, allowEarlyStop);
   }
 
   if (contentaccess::handles(itemSource, path)) {
-    return contentaccess::readToStream(itemSource, path, out);
+    return readProtectedItemToStream(path, out, allowEarlyStop);
   }
 
   return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize, allowEarlyStop);
+}
+
+bool Epub::readProtectedItemToStream(const std::string& path, Print& out, const bool allowEarlyStop) const {
+  StopTrackingPrint tracked(out);
+  if (contentaccess::readToStream(itemSource, path, tracked)) return true;
+  // Same contract as ZipFile::readFileToStream: a sink that stopped taking bytes has what it needs.
+  return allowEarlyStop && tracked.stopped;
 }
 
 bool Epub::extractItemToFile(const std::string& itemHref, const std::string& destPath) const {
