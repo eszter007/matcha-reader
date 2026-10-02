@@ -803,11 +803,14 @@ void loop() {
         // Debug builds only: remote control for driving a test from the host (scripts/devctl.py).
       } else if (cmd.startsWith("RMDIR:")) {
         // Drop one book cache, e.g. /.crosspoint/epub_<hash>.
+        // Exactly one directory directly under /.crosspoint/: never the root itself, ".", "..", or
+        // anything nested.
         const String path = cmd.substring(6);
-        if (path.startsWith("/.crosspoint/") && path.indexOf("..") < 0) {
+        const String name = path.startsWith("/.crosspoint/") ? path.substring(13) : String();
+        if (name.length() > 0 && name != "." && name != ".." && name.indexOf('/') < 0) {
           LOG_INF("CMD", "rmdir %s -> %d", path.c_str(), Storage.removeDir(path.c_str()));
         } else {
-          LOG_ERR("CMD", "rmdir refused outside /.crosspoint/: %s", path.c_str());
+          LOG_ERR("CMD", "rmdir refused (one /.crosspoint/<cache> directory only): %s", path.c_str());
         }
       } else if (cmd.startsWith("OPEN:")) {
         LOG_INF("CMD", "open %s", cmd.substring(5).c_str());
@@ -821,8 +824,11 @@ void loop() {
         const String name = cmd.substring(6);
         for (uint8_t i = 0; i < 7; i++) {
           if (name == kNames[i]) {
-            gpio.injectPress(i);
-            LOG_INF("CMD", "press %s", kNames[i]);
+            if (gpio.injectPress(i)) {
+              LOG_INF("CMD", "press %s", kNames[i]);
+            } else {
+              LOG_ERR("CMD", "press %s dropped: queue full", kNames[i]);
+            }
           }
         }
 #endif

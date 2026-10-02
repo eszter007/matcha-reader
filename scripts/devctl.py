@@ -34,43 +34,74 @@ def save_shot(buf):
     Image.frombytes("1", (W, H), bytes(buf)).rotate(-90, expand=True).save(SHOT)
 
 
+MARKER = b"SCREENSHOT_START:"
+FOOTER = b"SCREENSHOT_END\n"
+
+
+def take_commands():
+    """Claim the command file atomically: producers appending afterwards start a fresh one."""
+    claimed = CMD + ".sending"
+    try:
+        os.rename(CMD, claimed)
+    except FileNotFoundError:
+        return []
+    with open(claimed) as f:
+        lines = [line.strip() for line in f if line.strip()]
+    os.remove(claimed)
+    return lines
+
+
+def split_log(pending):
+    """Text that is safe to log now, and the rest to keep: a screenshot, or a marker cut in half."""
+    start = pending.find(MARKER)
+    if start >= 0:
+        return pending[:start], pending[start:]
+    # Hold back a tail that could be the start of a marker split across reads.
+    for keep in range(min(len(MARKER) - 1, len(pending)), 0, -1):
+        if MARKER.startswith(pending[-keep:]):
+            return pending[:-keep], pending[-keep:]
+    return pending, b""
+
+
 def run():
     log = open(LOG, "ab", buffering=0)
-    pending = b""
+    unsent = []  # survives reconnects; a command is dropped only once it was written
     while True:
         ports = glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/ttyACM*")
         if not ports:
             time.sleep(0.5)
             continue
+        pending = b""
         try:
             port = serial.Serial(ports[0], 115200, timeout=0.2)
             print("open", ports[0], flush=True)
             while True:
-                if os.path.exists(CMD):
-                    with open(CMD) as f:
-                        lines = [line.strip() for line in f if line.strip()]
-                    os.remove(CMD)
-                    for line in lines:
-                        port.write(("CMD:" + line + "\n").encode())
-                        time.sleep(0.05)
+                unsent += take_commands()
+                while unsent:
+                    port.write(("CMD:" + unsent[0] + "\n").encode())
+                    port.flush()
+                    unsent.pop(0)
+                    time.sleep(0.05)
                 data = port.read(65536)
                 if not data:
                     continue
                 pending += data
-                start = pending.find(b"SCREENSHOT_START:")
-                if start >= 0:
-                    nl = pending.find(b"\n", start)
-                    end = pending.find(b"SCREENSHOT_END\n", nl if nl >= 0 else start)
-                    if nl < 0 or end < 0:
-                        continue  # wait for the whole frame
-                    size = int(pending[start + 17:nl])
-                    save_shot(pending[nl + 1:nl + 1 + size])
-                    log.write(pending[:start] + b"[screenshot saved]\n")
-                    pending = pending[end + len(b"SCREENSHOT_END\n"):]
+                text, pending = split_log(pending)
+                log.write(text)
+                if not pending.startswith(MARKER):
                     continue
-                log.write(pending)
-                pending = b""
+                nl = pending.find(b"\n")
+                end = pending.find(FOOTER, nl) if nl >= 0 else -1
+                if end < 0:
+                    continue  # wait for the whole frame
+                size = int(pending[len(MARKER):nl])
+                save_shot(pending[nl + 1:nl + 1 + size])
+                log.write(b"[screenshot saved]\n")
+                pending = pending[end + len(FOOTER):]
         except Exception as error:  # unplugged, sleeping, rebooting: reconnect
+            # Keep whatever log text arrived, but never carry half a frame into the next connection.
+            if pending and not pending.startswith(MARKER):
+                log.write(pending)
             print("drop", error, flush=True)
             time.sleep(0.5)
 

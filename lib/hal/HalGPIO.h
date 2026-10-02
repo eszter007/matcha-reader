@@ -50,8 +50,12 @@ class HalGPIO {
   enum class DeviceType : uint8_t { X4, X3 };
 
  private:
-  // injectPress() state, as button bitmasks.
-  uint8_t injQueued_ = 0xFF;
+  // injectPress() state. Taps wait in a small FIFO (drained one per press+release cycle); the
+  // rest are button bitmasks for the current update().
+  static constexpr uint8_t INJECT_QUEUE_SIZE = 16;
+  uint8_t injQueue_[INJECT_QUEUE_SIZE] = {};
+  uint8_t injHead_ = 0;
+  uint8_t injCount_ = 0;
   uint8_t injDown_ = 0;
   uint8_t injPressed_ = 0;
   uint8_t injReleased_ = 0;
@@ -79,7 +83,8 @@ class HalGPIO {
   void update();
   // Queue one synthetic press+release of a button (serial CMD:PRESS in debug builds): it is down for
   // one update() and released on the next, so short-press handlers see it like a real tap.
-  void injectPress(uint8_t buttonIndex) { injQueued_ = buttonIndex; }
+  // Returns false (the tap is dropped) when the queue is full.
+  bool injectPress(uint8_t buttonIndex);
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;

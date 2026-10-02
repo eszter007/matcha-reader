@@ -147,13 +147,21 @@ void HalGPIO::update() {
   if (injDown_) {
     injReleased_ = injDown_;
     injDown_ = 0;
-  } else if (injQueued_ != 0xFF) {
-    injPressed_ = injDown_ = static_cast<uint8_t>(1u << injQueued_);
-    injQueued_ = 0xFF;
+  } else if (injCount_ > 0) {
+    injPressed_ = injDown_ = static_cast<uint8_t>(1u << injQueue_[injHead_]);
+    injHead_ = static_cast<uint8_t>((injHead_ + 1) % INJECT_QUEUE_SIZE);
+    injCount_--;
   }
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;
+}
+
+bool HalGPIO::injectPress(const uint8_t buttonIndex) {
+  if (buttonIndex > BTN_POWER || injCount_ >= INJECT_QUEUE_SIZE) return false;
+  injQueue_[(injHead_ + injCount_) % INJECT_QUEUE_SIZE] = buttonIndex;
+  injCount_++;
+  return true;
 }
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
