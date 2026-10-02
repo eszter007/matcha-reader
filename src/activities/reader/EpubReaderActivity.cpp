@@ -2460,13 +2460,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
 
     if (showBookmarkMessage) {
-      GUI.drawPopup(renderer, tr(STR_BOOKMARK_ADDED));
+      GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));
     }
 
     // Last: warm the NEXT page's image pixel cache while this page is on screen, so landing on
     // a full-page illustration is a cache read + FAST pass instead of a multi-second decode.
     // Cancellable per decode block the moment any input or queued render arrives.
     warmNextPageImageCache(viewportWidth, viewportHeight);
+
+    if (showDictionaryMessage) {
+      GUI.drawPopup(renderer, tr(STR_DICT_NO_DICT_SET));
+    }
     return;
   }
 
