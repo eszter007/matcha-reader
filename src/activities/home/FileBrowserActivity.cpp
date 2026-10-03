@@ -603,8 +603,11 @@ bool FileBrowserActivity::handleCustomInput() {
 
 bool FileBrowserActivity::handleButtons() {
   if (mode == Mode::Books && mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS)) {
-    app.clearTapFlash();
-    showEntryActions();
+    // The entry actions belong to the row under the cursor; on a band there is none.
+    if (ringFocus() == TabRing::Focus::Content) {
+      app.clearTapFlash();
+      showEntryActions();
+    }
     return true;
   }
 

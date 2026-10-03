@@ -737,7 +737,9 @@ bool LibraryListActivity::handleButtons() {
   // ActivityManager::loop() before any activity runs, so it cannot land in
   // the freshly opened confirmation and select its default.
   if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS)) {
-    if (tabsFocused()) {
+    if (ringFocus() == TabRing::Focus::BottomBar) {
+      // Nothing to hold on a bar slot, and the row selection underneath is not where the cursor is.
+    } else if (tabsFocused()) {
       if (!degraded) toggleSortDirection();
     } else if (isRecentSort(sortOrder)) {
       showRecentBookOptions(selectedEntry());
