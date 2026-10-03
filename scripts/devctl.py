@@ -7,6 +7,7 @@ Everything the device prints is appended to <outdir>/device.log; it reconnects a
 reboots. To drive the device, append lines to <outdir>/cmd.txt; each is sent as `CMD:<line>`:
 
     PRESS:<BACK|CONFIRM|LEFT|RIGHT|UP|DOWN|POWER>   hardware button press + release
+    HOLD:<button>:<ms>                              keep the button down for <ms> (1..10000)
     OPEN:/path/to/book.epub                         open a book in the reader
     HOME                                            go to Home
     RMDIR:/.crosspoint/epub_<hash>                  drop one book cache
