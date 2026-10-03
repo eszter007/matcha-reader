@@ -1092,6 +1092,10 @@ bool Section::suspendBuild() {
       partialBytesConsumed_ = consumed;
       partialTotalBytes_ = build_->totalBytes;
       LOG_INF("SCT", "Suspended build: %u pages persisted", builtPageCount_);
+    } else if (partial_ && !Storage.exists(filePath.c_str())) {
+      // The swap removes the old partial before its rename, so a failed rename loses it too.
+      partial_ = false;
+      partialPageCount_ = 0;
     }
   }
 
