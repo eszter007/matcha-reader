@@ -818,14 +818,27 @@ void loop() {
       } else if (cmd == "HOME") {
         LOG_INF("CMD", "home");
         activityManager.goHome();
-      } else if (cmd.startsWith("PRESS:")) {
-        // Hardware button index, not the logical (remappable) one.
+      } else if (cmd.startsWith("PRESS:") || cmd.startsWith("HOLD:")) {
+        // PRESS:<BTN> is a tap; HOLD:<BTN>:<ms> keeps the button down that long (long presses,
+        // key repeat). Hardware button index, not the logical (remappable) one.
         static constexpr const char* kNames[] = {"BACK", "CONFIRM", "LEFT", "RIGHT", "UP", "DOWN", "POWER"};
-        const String name = cmd.substring(6);
+        static constexpr long kMaxHoldMs = 10000;
+        const bool hold = cmd.startsWith("HOLD:");
+        String name = cmd.substring(hold ? 5 : 6);
+        long holdMs = 0;
+        if (hold) {
+          const int sep = name.indexOf(':');
+          holdMs = sep >= 0 ? name.substring(sep + 1).toInt() : 0;
+          if (sep >= 0) name = name.substring(0, sep);
+          if (holdMs <= 0 || holdMs > kMaxHoldMs) {
+            LOG_ERR("CMD", "hold %s: duration must be 1..%ld ms", name.c_str(), kMaxHoldMs);
+            name = "";
+          }
+        }
         for (uint8_t i = 0; i < 7; i++) {
           if (name == kNames[i]) {
-            if (gpio.injectPress(i)) {
-              LOG_INF("CMD", "press %s", kNames[i]);
+            if (gpio.injectPress(i, static_cast<uint16_t>(holdMs))) {
+              LOG_INF("CMD", "%s %s %ld ms", hold ? "hold" : "press", kNames[i], holdMs);
             } else {
               LOG_ERR("CMD", "press %s dropped: queue full", kNames[i]);
             }
