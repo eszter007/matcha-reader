@@ -245,8 +245,6 @@ void OpdsServerListActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   syncListViewport(screen, props);
-  // One cursor on screen: while a band holds it, no row is highlighted.
-  if (topBandFocused || tabFocus >= 0) props.selectedIndex = -1;
   screen.list(props);
 }
 
