@@ -1185,7 +1185,14 @@ std::unique_ptr<Page> Section::loadPageAt(const int page) const {
     return nullptr;
   }
 
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 5);
+  // Bound by the committed file's own page count, not the caller's: during a build the reader's
+  // pageCount runs ahead of a partial on disk, and an index past the LUT reads a garbage position.
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(uint16_t));
+  uint16_t filePageCount;
+  serialization::readPod(f, filePageCount);
+  if (page < 0 || page >= filePageCount) {
+    return nullptr;
+  }
   uint32_t lutOffset;
   serialization::readPod(f, lutOffset);
   f.seek(lutOffset + sizeof(uint32_t) * page);
