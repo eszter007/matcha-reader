@@ -517,8 +517,8 @@ void EpubReaderActivity::onReaderExit() {
 }
 
 bool EpubReaderActivity::buildTickHeapGate() {
-  if (buildHeapPauseGeneration_ != sectionGeneration_) {
-    buildHeapPauseGeneration_ = sectionGeneration_;
+  if (buildHeapPauseGeneration_ != buildGeneration_) {
+    buildHeapPauseGeneration_ = buildGeneration_;
     buildHeapPausedSinceMs_ = 0;
     buildHeapPauseReleased_ = false;
   }
@@ -777,6 +777,7 @@ void EpubReaderActivity::readerLoop() {
         LOG_INF("ERS", "Background build stalled on heap (free=%u maxAlloc=%u); suspending it", ESP.getFreeHeap(),
                 ESP.getMaxAllocHeap());
         section->suspendBuild();
+        buildGeneration_++;
         // Not a failure: the partial serves its pages and crossing its watermark extends it in
         // render(). Only the lazy background restart, which would stall the same way, stays off.
         partialRebuildStartFailed = true;
@@ -784,8 +785,6 @@ void EpubReaderActivity::readerLoop() {
         // follows a render, and nothing else would render until the next key press.
         requestUpdate();
         buildHeapPaused = false;
-        buildHeapPausedSinceMs_ = 0;
-        buildHeapPauseReleased_ = false;
       }
     }
   }
@@ -2451,7 +2450,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // makeUniqueNoThrow, not bare new: with -fno-exceptions a failed new aborts the firmware
     // instead of returning null, and this allocation can land on a badly fragmented heap.
     section = makeUniqueNoThrow<Section>(epub, currentSpineIndex, renderer);
-    sectionGeneration_++;
+    buildGeneration_++;
     if (!section) {
       LOG_ERR("ERS", "OOM allocating Section");
       // Mark this spine failed so render() stops retrying the same allocation every frame --
@@ -4359,7 +4358,10 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     {
       RenderLock lock(*this);
       page = section->loadPage(section->currentPage);
-      if (page && section->isBuilding()) section->suspendBuild();
+      if (page && section->isBuilding()) {
+        section->suspendBuild();
+        buildGeneration_++;
+      }
       if (page) {
         releaseReloadableMemory();
       }

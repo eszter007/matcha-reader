@@ -489,10 +489,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // When the current pause began (0: not paused), and whether it has already released the caches.
   uint32_t buildHeapPausedSinceMs_ = 0;
   bool buildHeapPauseReleased_ = false;
-  // Which Section the pause belongs to. Bumped for every Section created (under the render lock),
-  // so a chapter turn's new build never inherits the old one's timer or release, even when the
-  // loop never saw a moment without a build in between.
-  uint32_t sectionGeneration_ = 0;
+  // Which build the pause belongs to. Bumped for every Section created and every build suspended
+  // (both under the render lock) -- the only two ways a new build can begin -- so a build never
+  // inherits an earlier one's timer or release.
+  uint32_t buildGeneration_ = 0;
   uint32_t buildHeapPauseGeneration_ = 0;
   // A pause this long, caches already released, means the build's own context holds the heap below
   // the floors and no tick will ever run: suspend it (the partial stays) instead of holding it.
