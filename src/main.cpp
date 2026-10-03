@@ -840,7 +840,7 @@ void loop() {
             if (gpio.injectPress(i, static_cast<uint16_t>(holdMs))) {
               LOG_INF("CMD", "%s %s %ld ms", hold ? "hold" : "press", kNames[i], holdMs);
             } else {
-              LOG_ERR("CMD", "press %s dropped: queue full", kNames[i]);
+              LOG_ERR("CMD", "%s %s dropped: queue full", hold ? "hold" : "press", kNames[i]);
             }
           }
         }

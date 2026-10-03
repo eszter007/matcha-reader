@@ -68,6 +68,8 @@ class HalGPIO {
   unsigned long injDownSinceMs_ = 0;
   uint16_t injHoldMs_ = 0;
   unsigned long injHeldMs_ = 0;
+  // The hold time has run; the press is released on the next update().
+  bool injReleaseDue_ = false;
 
   DeviceType _deviceType = DeviceType::X4;
 

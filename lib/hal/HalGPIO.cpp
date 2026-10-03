@@ -146,9 +146,14 @@ void HalGPIO::update() {
   injReleased_ = 0;
   if (injDown_) {
     injHeldMs_ = millis() - injDownSinceMs_;
-    if (injHeldMs_ >= injHoldMs_) {
+    if (injReleaseDue_ || injHoldMs_ == 0) {
       injReleased_ = injDown_;
       injDown_ = 0;
+      injReleaseDue_ = false;
+    } else if (injHoldMs_ > 0 && injHeldMs_ >= injHoldMs_) {
+      // A hold stays down for one more update once its time has run, so handlers see a frame
+      // that is both pressed and at the full hold time (wasLongPressed at exactly the threshold).
+      injReleaseDue_ = true;
     }
   } else if (injCount_ > 0) {
     const InjectedPress next = injQueue_[injHead_];
@@ -156,6 +161,7 @@ void HalGPIO::update() {
     injDownSinceMs_ = millis();
     injHoldMs_ = next.holdMs;
     injHeldMs_ = 0;
+    injReleaseDue_ = false;
     injHead_ = static_cast<uint8_t>((injHead_ + 1) % INJECT_QUEUE_SIZE);
     injCount_--;
   }
@@ -207,7 +213,11 @@ unsigned long HalGPIO::getHeldTime() const {
   return inputMgr.getHeldTime();
 }
 
-unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }
+unsigned long HalGPIO::getPowerButtonHeldTime() const {
+  // An injected Power press reports its own hold time, as getHeldTime() does.
+  if (((injDown_ | injReleased_) >> BTN_POWER) & 1) return injHeldMs_;
+  return inputMgr.getPowerButtonHeldTime();
+}
 
 bool HalGPIO::hasTouch() const { return inputMgr.hasTouch(); }
 
