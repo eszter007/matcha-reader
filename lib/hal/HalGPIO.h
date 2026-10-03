@@ -50,15 +50,26 @@ class HalGPIO {
   enum class DeviceType : uint8_t { X4, X3 };
 
  private:
-  // injectPress() state. Taps wait in a small FIFO (drained one per press+release cycle); the
+  // injectPress() state. Presses wait in a small FIFO (drained one per press+release cycle); the
   // rest are button bitmasks for the current update().
+  struct InjectedPress {
+    uint8_t button = 0;
+    uint16_t holdMs = 0;  // 0: a tap, released on the next update()
+  };
   static constexpr uint8_t INJECT_QUEUE_SIZE = 16;
-  uint8_t injQueue_[INJECT_QUEUE_SIZE] = {};
+  InjectedPress injQueue_[INJECT_QUEUE_SIZE] = {};
   uint8_t injHead_ = 0;
   uint8_t injCount_ = 0;
   uint8_t injDown_ = 0;
   uint8_t injPressed_ = 0;
   uint8_t injReleased_ = 0;
+  // The press in flight: when it went down, how long it stays down, and its hold time as of the
+  // last update() (kept through the release frame, which is when handlers read it).
+  unsigned long injDownSinceMs_ = 0;
+  uint16_t injHoldMs_ = 0;
+  unsigned long injHeldMs_ = 0;
+  // The hold time has run; the press is released on the next update().
+  bool injReleaseDue_ = false;
 
   DeviceType _deviceType = DeviceType::X4;
 
@@ -81,10 +92,11 @@ class HalGPIO {
 
   // Button input methods
   void update();
-  // Queue one synthetic press+release of a button (serial CMD:PRESS in debug builds): it is down for
-  // one update() and released on the next, so short-press handlers see it like a real tap.
-  // Returns false (the tap is dropped) when the queue is full.
-  bool injectPress(uint8_t buttonIndex);
+  // Queue one synthetic press+release of a button (serial CMD:PRESS / CMD:HOLD in debug builds).
+  // holdMs 0 is a tap: down for one update() and released on the next, so short-press handlers
+  // see it like a real one. Otherwise the button stays down that long and reports its hold time,
+  // so long-press and key-repeat handlers fire. Returns false (dropped) when the queue is full.
+  bool injectPress(uint8_t buttonIndex, uint16_t holdMs = 0);
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;
