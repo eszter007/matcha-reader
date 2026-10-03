@@ -384,13 +384,15 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
 // planes are written to settle them. Combined-base panels (Paper Mono) defer the base instead, so
 // base and planes go out as one waveform -- displaying it separately re-drives the whole page.
 inline void displayGrayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
-  if (pagesUntilFullRefresh > 1) {
+  // A promoted refresh (the control center's Refresh tile) is a cleanup request: the turn's
+  // grayscale base is no displayBuffer() and would leave it queued for some later screen.
+  if (pagesUntilFullRefresh > 1 && !renderer.refreshPromotionPending()) {
     renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
     pagesUntilFullRefresh--;
     return;
   }
   if (renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined) {
-    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+    renderer.displayGrayscaleBase(renderer.takePromotedRefresh(HalDisplay::HALF_REFRESH));
   } else {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     renderer.preconditionGrayscale();
