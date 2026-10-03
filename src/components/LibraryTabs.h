@@ -4,6 +4,8 @@
 
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
+#include "components/UiAppHost.h"
+#include "components/UiTabBand.h"
 #include "components/themes/BaseTheme.h"
 
 // The Library's tab band, shared by the activities that draw it. In the Cover Grid theme it
@@ -21,17 +23,15 @@ enum Tab : int { Books = 0, Shelves = 1, Opds = 2, Files = 3 };
 // 4 in the Cover Grid theme, 2 elsewhere.
 int count();
 
-// Tab band for `active`; pass Opds or Files from those screens.
-std::vector<TabInfo> build(int active);
+// The band's tabs with `active` marked, for UiTabBand; returns how many. `tabs` holds MAX_TABS.
+constexpr int MAX_TABS = 4;
+int bandItems(freeink::ui::TabItem* tabs, int active);
+UiTabBand::Options bandOptions(bool focused, bool hasTouch, freeink::ui::ActionId action = 0);
 
-// Where the band sits, under the header.
-Rect barRect(const GfxRenderer& renderer, const MappedInputManager& input);
-
-// Height the band occupies, 0 when there is none to draw.
-int height(const MappedInputManager& input);
-
-// Tab under a tap, or -1. `y` outside the band always misses.
-int hitTest(const GfxRenderer& renderer, const MappedInputManager& input, int x, int y, int active);
+// The band as a UiTabBand, at the top of the screen's remaining content. Taps dispatch `action`
+// with the tab's index.
+void buildBand(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, int active, bool focused, bool hasTouch,
+               freeink::ui::ActionId action);
 
 // Switch to the activity that owns `tab`. A no-op for the tab already showing.
 void activate(int tab);

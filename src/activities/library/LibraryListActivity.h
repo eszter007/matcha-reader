@@ -125,7 +125,11 @@ class LibraryListActivity final : public UiTabListActivity {
   // Ring 0 is the strip; the selected BOOK is ring - 1, with the strip keeping
   // row 0 as the working selection exactly as the pre-ring code did.
   int selectedEntry() const;
-  bool tabsFocused() const { return ringPos() == 0; }
+  bool tabsFocused() const { return ringFocus() == TabRing::Focus::TopTabs; }
+  // Left on the tab band opens search here, and a hold steps the tabs.
+  bool ringTopTabsLeftRightStep() const override { return false; }
+  // A degraded list draws no tab band.
+  int ringTopTabCount() const override { return degraded ? 0 : tabCount(); }
 
   // --- pinned recently-opened overlay ---------------------------------------
   // On the unfiltered Recent shelf the RecentBooksStore entries sit on top, in

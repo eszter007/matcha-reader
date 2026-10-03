@@ -5,40 +5,39 @@
 #include "activities/Activity.h"
 #include "components/HomeTabBar.h"
 #include "components/UITheme.h"
+#include "components/UiTabBand.h"
 
 namespace LibraryTabs {
 
 int count() { return HomeTabBar::enabled() ? 4 : 2; }
 
-std::vector<TabInfo> build(const int active) {
-  std::vector<TabInfo> tabs;
-  tabs.reserve(count());
-  tabs.push_back({tr(STR_TAB_BOOKS), active == Books});
-  tabs.push_back({tr(STR_TAB_SHELVES), active == Shelves});
-  if (count() > 2) {
-    tabs.push_back({tr(STR_TAB_OPDS), active == Opds});
-    tabs.push_back({tr(STR_TAB_FILES), active == Files});
+int bandItems(freeink::ui::TabItem* tabs, const int active) {
+  static constexpr StrId LABELS[MAX_TABS] = {StrId::STR_TAB_BOOKS, StrId::STR_TAB_SHELVES, StrId::STR_TAB_OPDS,
+                                             StrId::STR_TAB_FILES};
+  const int n = count();
+  for (int i = 0; i < n; i++) {
+    tabs[i].label = I18n::getInstance().get(LABELS[i]);
+    tabs[i].value = static_cast<int16_t>(i);
+    tabs[i].selected = i == active;
   }
-  return tabs;
+  return n;
 }
 
-Rect barRect(const GfxRenderer& renderer, const MappedInputManager& input) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  return Rect{0, static_cast<int16_t>(metrics.topPadding + metrics.headerHeight),
-              static_cast<int16_t>(renderer.getScreenWidth()),
-              static_cast<int16_t>(tabBandHeight(metrics, input.hasTouch()))};
+UiTabBand::Options bandOptions(const bool focused, const bool hasTouch, const freeink::ui::ActionId action) {
+  UiTabBand::Options options;
+  options.action = action;
+  options.focused = focused;
+  options.hasTouch = hasTouch;
+  // Two tabs in equal slots (themes other than Cover Grid): keep the pill near its label.
+  options.pillMaxPad = 16;
+  return options;
 }
 
-int height(const MappedInputManager& input) {
-  return tabBandHeight(UITheme::getInstance().getMetrics(), input.hasTouch());
-}
-
-int hitTest(const GfxRenderer& renderer, const MappedInputManager& input, const int x, const int y, const int active) {
-  const Rect bar = barRect(renderer, input);
-  if (y < bar.y || y >= bar.y + bar.height) return -1;
-  int tab = -1;
-  if (!UITheme::getInstance().getTheme().tabIndexFromPoint(renderer, bar, build(active), x, y, tab)) return -1;
-  return tab;
+void buildBand(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const int active, const bool focused,
+               const bool hasTouch, const freeink::ui::ActionId action) {
+  freeink::ui::TabItem tabs[MAX_TABS];
+  const int n = bandItems(tabs, active);
+  UiTabBand::build(screen, renderer, tabs, n, bandOptions(focused, hasTouch, action));
 }
 
 void activate(const int tab) {

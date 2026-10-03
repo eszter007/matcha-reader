@@ -14,12 +14,16 @@
 #include "activities/Activity.h"
 #include "components/CoverWorker.h"
 #include "components/OptionPopup.h"
+#include "components/TabRing.h"
 #include "components/UITheme.h"  // TabInfo, Rect
+#include "components/UiTabBand.h"
 #include "util/ButtonNavigator.h"
 
-class CoverLibraryActivity final : public Activity {
+class CoverLibraryActivity final : public Activity, public TabRing::Host {
  private:
   ButtonNavigator buttonNavigator;
+  // The Library's tab band, the same FreeInkUI band the list screens build.
+  UiTabBand::Host tabBand_;
   // Long-press menu on a cover (stats / read / unread / delete), shared with the Home grid.
   OptionPopup optionPopup;
   // Bottom tab bar cursor for button boards; -1 when nothing in the band is focused.
@@ -29,8 +33,25 @@ class CoverLibraryActivity final : public Activity {
   // Tab to open on, from the tab band of whichever screen switched here.
   int requestedTab = 0;
   int contentIndex = 0;
-  // contentIndex when the current Next/Previous press began; -1 once a hold has restored it.
+  // contentIndex and tabFocus when the current Next/Previous press began; the index is -1 once a
+  // hold has restored them.
   int holdStartContentIndex_ = -1;
+  int holdStartTabFocus_ = -1;
+  // A Confirm release acts on the tab band only when its press began on this screen: the release
+  // of the click that opened the Library must not step a tab.
+  bool confirmPressSeen_ = false;
+
+  // TabRing::Host. The top tabs are the Library's (Books, Shelves, and in Cover Grid OPDS and
+  // Files, which are other screens); an open shelf has no tabs, only its grid and the bar.
+  int ringTopTabCount() const override;
+  int ringActiveTopTab() const override { return selectedTab; }
+  void ringSelectTopTab(int index) override;
+  HomeTab ringBottomTab() const override { return HomeTab::Library; }
+  bool ringHasContent() const override;
+  TabRing::Focus ringFocus() const override;
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
+  int& ringBarSlot() override { return tabFocus; }
+  void ringChanged() override { requestUpdate(); }
   int scrollRow = 0;      // Books tab: first visible grid row
   int shelvesScroll = 0;  // Shelves tab: first visible list row
 
@@ -60,10 +81,6 @@ class CoverLibraryActivity final : public Activity {
     int bookCount = 0;
   };
   std::vector<ShelfInfo> shelves;
-  // Confirm onto the OPDS or Files tab switches activity on the RELEASE, not the press; the tab
-  // is parked here while the key is still down so the next screen never sees that release as
-  // "open the selected row". -1 when nothing is pending.
-  int pendingTab = -1;
   bool shelvesLoaded = false;
 
   // Shelf detail view
@@ -114,14 +131,15 @@ class CoverLibraryActivity final : public Activity {
   // Clearing the flag is not enough: the frame still showing the selector has to be replaced,
   // and a touch that changes nothing else (a swipe against the end stop, a tap on the current
   // cover, a tap on the active tab) requests no redraw of its own.
+  // The content highlight is drawn only while the content holds the cursor: with it in the
+  // bottom bar, a second highlight on the last cover would read as two selections.
+  bool contentCursorShown() const { return selectorVisible && tabFocus < 0; }
   void hideSelector() {
     if (!selectorVisible) return;
     selectorVisible = false;
     requestUpdate();
   }
-  // One definition of the tab bar, used by both the renderer and the hit test, so the
-  // labels and the touch targets cannot drift apart.
-  [[nodiscard]] std::vector<TabInfo> buildTabs() const;
+  // Where the tab band sits, so a touch on it never falls through to the grid.
   [[nodiscard]] Rect tabBarRect() const;
   // Same idea for the Shelves list, which is rows rather than the cover grid: the renderer and
   // the hit test below share this geometry instead of each deriving its own.
@@ -263,7 +281,7 @@ class CoverLibraryActivity final : public Activity {
 
  public:
   explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialTab = 0)
-      : Activity("RecentBooks", renderer, mappedInput), requestedTab(initialTab) {}
+      : Activity("RecentBooks", renderer, mappedInput), tabBand_(renderer), requestedTab(initialTab) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -107,8 +107,8 @@ drawn filled. Nothing opens "on top" any more, so there is no stack to back out 
 
 On a button-only device the bar is part of one navigation ring rather than a separate thing to reach: **Up/Down** walk a
 screen's own tabs, then its rows, then the bottom bar; **Confirm** steps the tabs at the top and past the last one drops
-into the bar; **Left/Right** move along the bar, and **Confirm** on the tab you are already in hands the cursor back to
-the top. A grey outline marks whatever the cursor is on. Details in
+into the bar; **Left/Right** step the tabs at the top and move along the bar, and **Confirm** on the tab you are already
+in hands the cursor back to the first tab at the top. A grey outline marks whatever the cursor is on. Details in
 [§3.1.1](USER_GUIDE.md#311-tabs-and-button-navigation-cover-grid-theme).
 
 Covers are built in the background, so the grid appears at once with titles standing in for artwork the device has not

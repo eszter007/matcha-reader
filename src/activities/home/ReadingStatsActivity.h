@@ -5,11 +5,15 @@
 #include "ReadingStatsStore.h"
 #include "activities/Activity.h"
 #include "components/StatsWidgets.h"
+#include "components/TabRing.h"
+#include "components/UiTabBand.h"
 #include "components/themes/BaseTheme.h"
 #include "util/ButtonNavigator.h"
 
-class ReadingStatsActivity final : public Activity {
+class ReadingStatsActivity final : public Activity, public TabRing::Host {
   ButtonNavigator buttonNavigator;
+  // The language tabs, the same FreeInkUI band the list screens build.
+  UiTabBand::Host tabBand_;
   // Swallows the release that ends a long Back press, so going home does not also finish().
   bool backLongPressFired = false;
   int scrollOffset = 0;
@@ -43,15 +47,29 @@ class ReadingStatsActivity final : public Activity {
 
   // nullptr on the All tab, which reads the store's unfiltered totals.
   const char* selectedCode() const;
-  std::vector<TabInfo> buildTabs() const;
   void selectTab(int index);
   void stepTab(int direction);
   static std::string makeTabLabel(const char* code);
   bool stepMonthFromTap();
 
+  // TabRing::Host. The page is one scrolling view under the tabs, so the cursor is either on the
+  // page (tabs included: Confirm steps them from anywhere) or in the bottom bar.
+  int ringTopTabCount() const override { return static_cast<int>(tabLabels.size()); }
+  int ringActiveTopTab() const override { return selectedTab; }
+  void ringSelectTopTab(int index) override { selectTab(index); }
+  HomeTab ringBottomTab() const override { return HomeTab::Stats; }
+  // Left/Right step the month on the page.
+  bool ringContentLeftRightToBar() const override { return false; }
+  TabRing::Focus ringFocus() const override {
+    return tabFocus >= 0 ? TabRing::Focus::BottomBar : TabRing::Focus::Content;
+  }
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
+  int& ringBarSlot() override { return tabFocus; }
+  void ringChanged() override { requestUpdate(); }
+
  public:
   explicit ReadingStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("ReadingStats", renderer, mappedInput) {}
+      : Activity("ReadingStats", renderer, mappedInput), tabBand_(renderer) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

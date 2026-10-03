@@ -56,14 +56,14 @@ class FileBrowserActivity final : public UiListActivity {
   // the root of an ordinary browse, never in the firmware picker or inside a folder, where the
   // header's Back means "up" and the band would claim you are somewhere you are not.
   bool showsLibraryTabs() const { return hasTabBar() && basepath == "/"; }
-  int libraryTabBandHeight() const { return showsLibraryTabs() ? LibraryTabs::height(mappedInput) : 0; }
   // The browser is the Library's Files tab, so the bottom bar marks Library while it is up.
   // The firmware picker is a modal errand and carries no bar at all.
   HomeTab tabBarTab() const override { return mode == Mode::Books ? HomeTab::Library : HomeTab::Count; }
-  // The Library band above the list is a stop on the ring while it is drawn.
-  bool hasTopBand() const override { return showsLibraryTabs(); }
-  void stepTopBand(int direction) override;
-  void onTabBandExit() override;
+  // The Library band above the list is the ring's top tabs while it is drawn; selecting another
+  // switches to that view's screen.
+  int ringTopTabCount() const override { return showsLibraryTabs() ? LibraryTabs::count() : 0; }
+  int ringActiveTopTab() const override { return LibraryTabs::Files; }
+  void ringSelectTopTab(int index) override { LibraryTabs::activate(index); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onRowLongPress(int index) override;

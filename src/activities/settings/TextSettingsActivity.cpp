@@ -235,11 +235,8 @@ bool TextSettingsActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (ringPos() == 0) {
-      switchTab();
-    } else {
-      activateRow(ringPos() - 1);
-    }
+    // Confirm on the tab band is TabRing's (handleTabBarInput runs first).
+    if (ringPos() != 0) activateRow(ringPos() - 1);
     return true;
   }
 

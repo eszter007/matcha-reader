@@ -672,8 +672,6 @@ void CoverLibraryActivity::warmOnePendingProgress() {
   // No requestUpdate: visible entries are still filled synchronously during their render.
 }
 
-std::vector<TabInfo> CoverLibraryActivity::buildTabs() const { return LibraryTabs::build(selectedTab); }
-
 Rect CoverLibraryActivity::tabBarRect() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   return Rect{0, static_cast<int16_t>(metrics.topPadding + metrics.headerHeight),
@@ -758,6 +756,7 @@ int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const
 
 void CoverLibraryActivity::onEnter() {
   Activity::onEnter();
+  tabBand_.begin();
   lastInputMs = millis();
 
   if (RECENT_BOOKS.pruneMissing()) {
@@ -797,26 +796,61 @@ void CoverLibraryActivity::onExit() {
   shelfBookProgress.clear();
 }
 
+int CoverLibraryActivity::ringTopTabCount() const { return openShelfIndex >= 0 ? 0 : LibraryTabs::count(); }
+
+bool CoverLibraryActivity::ringHasContent() const {
+  return openShelfIndex >= 0 ? !shelfBooks.empty() : getContentItemCount() > 0;
+}
+
+void CoverLibraryActivity::ringSelectTopTab(const int index) {
+  // TabRing took this key before loop() could snapshot the press: a hold that follows must not
+  // restore the snapshot of some earlier press.
+  holdStartContentIndex_ = -1;
+  // OPDS and Files are the Library's other screens.
+  if (index >= TAB_COUNT) {
+    LibraryTabs::activate(index);
+    return;
+  }
+  selectedTab = index;
+  contentIndex = 0;
+  scrollRow = 0;
+  shelvesScroll = 0;
+  selectorVisible = true;
+  if (selectedTab == 1 && !shelvesLoaded) loadShelves();
+}
+
+TabRing::Focus CoverLibraryActivity::ringFocus() const {
+  if (tabFocus >= 0) return TabRing::Focus::BottomBar;
+  if (openShelfIndex >= 0) return TabRing::Focus::Content;
+  return contentIndex == 0 ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
+}
+
+void CoverLibraryActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Library) : -1;
+  selectorVisible = true;
+  if (focus == TabRing::Focus::BottomBar) return;
+  if (openShelfIndex >= 0) {
+    shelfContentIndex = atEnd && !shelfBooks.empty() ? static_cast<int>(shelfBooks.size()) - 1 : 0;
+    return;
+  }
+  if (focus == TabRing::Focus::TopTabs) {
+    contentIndex = 0;
+    scrollRow = 0;
+    shelvesScroll = 0;
+    return;
+  }
+  contentIndex = atEnd ? getContentItemCount() : 1;
+}
+
 void CoverLibraryActivity::loop() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
-  {
-    const auto routed = HomeTabBar::route(mappedInput, renderer, HomeTab::Library, tabFocus);
-    if (routed == HomeTabBar::Input::Exited) {
-      // Confirm on the Library tab, from the bottom bar: back to the top of the ring, which on
-      // this screen is the Books tab of its own band.
-      tabFocus = -1;
-      contentIndex = 0;
-      selectedTab = 0;
-      scrollRow = 0;
-      shelvesScroll = 0;
-      selectorVisible = true;
-      requestUpdate();
-      return;
-    }
-    if (routed != HomeTabBar::Input::None) {
-      requestUpdate();
-      return;
-    }
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen_ = true;
+  if (!confirmPressSeen_ && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) return;
+  if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) {
+    // TabRing took this key before the hold snapshot below was refreshed: a hold that follows
+    // must not restore the snapshot of some earlier press.
+    holdStartContentIndex_ = -1;
+    return;
   }
   // Raw state catches the press before any early return below and cancels background SD/decode
   // work even when the debounced edge has not been emitted yet.
@@ -835,6 +869,7 @@ void CoverLibraryActivity::loop() {
   if (openShelfIndex >= 0) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       openShelfIndex = -1;
+      tabFocus = -1;
       shelfBooks.clear();
       shelfBookProgress.clear();
       requestUpdate();
@@ -905,7 +940,7 @@ void CoverLibraryActivity::loop() {
     // its release opens the focused book the instant the shelf appears (see shelfConfirmPressSeen).
     if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) shelfConfirmPressSeen = true;
 
-    if (shelfConfirmPressSeen && shelfContentIndex < static_cast<int>(shelfBooks.size())) {
+    if (tabFocus < 0 && shelfConfirmPressSeen && shelfContentIndex < static_cast<int>(shelfBooks.size())) {
       // Shelves are where manga folders are browsed; without this they had no route to stats.
       // Same menu and same release handling as the Books grid below.
       if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS)) {
@@ -923,69 +958,39 @@ void CoverLibraryActivity::loop() {
     }
 
     const int shelfItemCount = static_cast<int>(shelfBooks.size());
-    if (shelfItemCount > 0) {
-      buttonNavigator.onNextPress([this, shelfItemCount] {
-        shelfContentIndex = ButtonNavigator::nextIndex(shelfContentIndex, shelfItemCount);
-        selectorVisible = true;
-        requestUpdate();
-      });
-      buttonNavigator.onPreviousPress([this, shelfItemCount] {
-        shelfContentIndex = ButtonNavigator::previousIndex(shelfContentIndex, shelfItemCount);
-        selectorVisible = true;
-        requestUpdate();
-      });
-    }
+    buttonNavigator.onNextPress([this, shelfItemCount] {
+      if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, 1);
+      if (shelfContentIndex >= shelfItemCount - 1) return TabRing::leaveContent(*this, 1);
+      shelfContentIndex++;
+      selectorVisible = true;
+      requestUpdate();
+    });
+    buttonNavigator.onPreviousPress([this] {
+      if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, -1);
+      if (shelfContentIndex <= 0) return TabRing::leaveContent(*this, -1);
+      shelfContentIndex--;
+      selectorVisible = true;
+      requestUpdate();
+    });
     return;
   }
 
   bool hasChangedTab = false;
 
-  if (pendingTab >= 0) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      const int tab = pendingTab;
-      pendingTab = -1;
-      LibraryTabs::activate(tab);
-    }
-    return;
-  }
-
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    if (contentIndex == 0) {
-      // LibraryTabs::count(), not the two this screen draws itself: in the Cover Grid theme the
-      // band carries OPDS and Files too, and cycling modulo 2 left them reachable only by touch.
-      const int next = (selectedTab + 1) % LibraryTabs::count();
-      if (next >= LibraryTabs::Opds) {
-        // Deferred to the release: leaving on the press edge hands the release of the same
-        // physical click to the browser, which opened whatever row its cursor was on -- so the
-        // Files tab appeared to jump straight into a folder.
-        pendingTab = next;
-        return;
-      }
-      selectedTab = next;
-      hasChangedTab = true;
-      if (selectedTab == 1 && !shelvesLoaded) loadShelves();
+  // Confirm on the tab band and on the bottom bar is TabRing's (above). A shelf opens on the press.
+  if (tabFocus < 0 && selectedTab == 1 && contentIndex > 0 &&
+      mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    const int itemIdx = contentIndex - 1;
+    if (itemIdx < static_cast<int>(shelves.size())) {
+      LOG_DBG("RBA", "Opening shelf: %s", shelves[itemIdx].folderPath.c_str());
+      openShelfIndex = itemIdx;
+      shelfConfirmPressSeen = false;
+      shelfContentIndex = 0;
+      shelfScrollRow = 0;
+      selectorVisible = true;  // opened with a key, so the shelf opens with its cursor shown
+      loadShelfBooks(shelves[itemIdx].folderPath);
       requestUpdate();
-    } else {
-      const int itemIdx = contentIndex - 1;
-      if (selectedTab == 0) {
-        // Nothing here: Recents books open on RELEASE (below). Opening on the press edge
-        // returns from loop() at once, so getHeldTime() never reached LONG_PRESS_MS and the
-        // long press was unreachable (803fcf3c until now). Shelves keep press-to-act: no
-        // long press to make room for.
-        (void)itemIdx;
-      } else {
-        if (itemIdx < static_cast<int>(shelves.size())) {
-          LOG_DBG("RBA", "Opening shelf: %s", shelves[itemIdx].folderPath.c_str());
-          openShelfIndex = itemIdx;
-          shelfConfirmPressSeen = false;
-          shelfContentIndex = 0;
-          shelfScrollRow = 0;
-          selectorVisible = true;  // opened with a key, so the shelf opens with its cursor shown
-          loadShelfBooks(shelves[itemIdx].folderPath);
-          requestUpdate();
-          return;
-        }
-      }
+      return;
     }
   }
 
@@ -996,7 +1001,7 @@ void CoverLibraryActivity::loop() {
     return;
   }
 
-  if (selectedTab == 0 && contentIndex > 0) {
+  if (tabFocus < 0 && selectedTab == 0 && contentIndex > 0) {
     const int itemIdx = contentIndex - 1;
     if (itemIdx < static_cast<int>(recentBooks.size())) {
       // Fires while still held, so the gesture completes without waiting for release.
@@ -1065,32 +1070,29 @@ void CoverLibraryActivity::loop() {
     const int gridHeight = gridContentHeight();
     const int itemCount = getContentItemCount();
 
-    // Tab bar: hit-test through the theme, which lays the targets out exactly as
-    // drawTabBar draws the labels -- same scroll offset, same skip rule, same text
-    // widths. Two equal columns across the full width did not match: the labels are
-    // packed to the left, so "Shelves" ignored a tap on the word and answered to one
-    // on empty space in the right half instead.
+    // Tab band: its tabs are FreeInkUI touch targets, so they are exactly where it drew them.
+    const int tab = tabBand_.tappedTab(mappedInput);
+    if (tab >= 0) {
+      hideSelector();
+      if (tab >= TAB_COUNT) {
+        // OPDS and Files are their own screens; the band they draw carries on from here.
+        LibraryTabs::activate(tab);
+        return;
+      }
+      if (tab != selectedTab) {
+        ringSelectTopTab(tab);
+        selectorVisible = false;  // a touch, so no key cursor
+        requestUpdate();
+      }
+      return;
+    }
+    // The band swallows the contact either way: a tap that lands in the gap between labels must
+    // not fall through to the grid below.
     const Rect barRect = tabBarRect();
     int tabX = 0;
     int tabY = 0;
     if (mappedInput.wasScreenTapped(tabX, tabY) && tabY >= barRect.y && tabY < barRect.y + barRect.height) {
-      hideSelector();  // a touch, whether or not it lands on a label
-      int tab = -1;
-      if (GUI.tabIndexFromPoint(renderer, barRect, buildTabs(), tabX, tabY, tab) && tab != selectedTab) {
-        if (tab >= LibraryTabs::Opds) {
-          // OPDS and Files are their own activities; the band they draw carries on from here.
-          LibraryTabs::activate(tab);
-          return;
-        }
-        selectedTab = tab;
-        if (selectedTab == 1 && !shelvesLoaded) loadShelves();
-        contentIndex = 0;
-        scrollRow = 0;
-        shelvesScroll = 0;
-        requestUpdate();
-      }
-      // The bar swallows the contact either way: a tap that lands in the gap between
-      // labels must not fall through to the grid below.
+      hideSelector();
       return;
     }
 
@@ -1129,7 +1131,8 @@ void CoverLibraryActivity::loop() {
     // swallows every tap -- including that one, which is why the chevron did nothing on the
     // themes that draw it.
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      if (contentIndex > 0) {
+      if (contentIndex > 0 || tabFocus >= 0) {
+        tabFocus = -1;
         contentIndex = 0;
         scrollRow = 0;
         shelvesScroll = 0;
@@ -1165,53 +1168,46 @@ void CoverLibraryActivity::loop() {
     }
   }
 
-  // Release, not press: leaving on the press edge hands the release of the same
-  // physical click to whichever activity comes next, which then acts on it too.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (contentIndex > 0) {
-      contentIndex = 0;
-      scrollRow = 0;
-      shelvesScroll = 0;
-      selectorVisible = true;
-      requestUpdate();
-    } else {
-      onGoHome();
-    }
-    return;
-  }
-
-  const int totalItems = getContentItemCount() + 1;
-
   // A press moves at once; a hold steps the Books/Shelves tab instead. The press has already
-  // moved one step when the hold is recognised, so the first repeat puts contentIndex back
-  // where the press found it -- otherwise a hold begun on the tab row would leave it.
+  // moved one step when the hold is recognised, so the first repeat puts the cursor back where
+  // the press found it -- otherwise a hold begun on the tab row would leave it.
   if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
       mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
     holdStartContentIndex_ = contentIndex;
+    holdStartTabFocus_ = tabFocus;
   }
   const auto restoreHoldStart = [this] {
     if (holdStartContentIndex_ < 0) return;
     contentIndex = holdStartContentIndex_;
+    tabFocus = holdStartTabFocus_;
     holdStartContentIndex_ = -1;
+    // The press's own frame may already be on screen with the cursor where the press moved it.
+    requestUpdate();
   };
 
-  buttonNavigator.onNextPress([this, totalItems] {
-    contentIndex = ButtonNavigator::nextIndex(contentIndex, totalItems);
+  const int itemCount = getContentItemCount();
+  buttonNavigator.onNextPress([this, itemCount] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, 1);
+    if (contentIndex >= itemCount) return TabRing::leaveContent(*this, 1);
+    contentIndex++;
     selectorVisible = true;
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousPress([this, totalItems] {
-    contentIndex = ButtonNavigator::previousIndex(contentIndex, totalItems);
+  buttonNavigator.onPreviousPress([this] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, -1);
+    if (contentIndex <= 1) return TabRing::leaveContent(*this, -1);
+    contentIndex--;
     selectorVisible = true;
     requestUpdate();
   });
 
-  // A hold steps between the two tabs this screen owns. Files is deliberately not in the ring:
-  // reaching it means leaving for the browser, which is not something a key repeat should do by
-  // scrolling past it. Confirm on the tab band is the way there.
+  // A hold steps between the two tabs this screen owns. OPDS and Files are deliberately not in
+  // it: reaching them means leaving for another screen, which is not something a key repeat
+  // should do by scrolling past. Confirm or Left/Right on the tab band is the way there.
   buttonNavigator.onNextContinuous([this, &hasChangedTab, &restoreHoldStart] {
     restoreHoldStart();
+    if (tabFocus >= 0) return;  // a hold in the bottom bar steps nothing
     hasChangedTab = true;
     selectedTab = ButtonNavigator::nextIndex(selectedTab, TAB_COUNT);
     requestUpdate();
@@ -1219,6 +1215,7 @@ void CoverLibraryActivity::loop() {
 
   buttonNavigator.onPreviousContinuous([this, &hasChangedTab, &restoreHoldStart] {
     restoreHoldStart();
+    if (tabFocus >= 0) return;  // a hold in the bottom bar steps nothing
     hasChangedTab = true;
     selectedTab = ButtonNavigator::previousIndex(selectedTab, TAB_COUNT);
     requestUpdate();
@@ -1412,7 +1409,7 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
-                 selectorVisible && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
+                 contentCursorShown() && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1524,7 +1521,7 @@ void CoverLibraryActivity::renderShelvesTab(int contentTop, int contentHeight) {
 
   for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
     const int itemY = contentTop + (i - scrollOffset) * rowHeight;
-    drawShelfRow(i, itemY, selectorVisible && i == selectedItem);
+    drawShelfRow(i, itemY, contentCursorShown() && i == selectedItem);
   }
 
   if (shelfCount > visibleItems) {
@@ -1594,7 +1591,7 @@ void CoverLibraryActivity::renderShelfBooksView(int contentTop, int contentHeigh
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
-                 selectorVisible && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
+                 contentCursorShown() && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1610,6 +1607,8 @@ bool CoverLibraryActivity::tryPartialSelectionRedraw() {
   // move, and taking it after a touch would paint one back onto a screen that must not show it.
   if (!selectorVisible) return false;
   if (openShelfIndex != lastRendered.openShelf || selectedTab != lastRendered.tab) return false;
+  // A cursor entering or leaving the bottom bar repaints the bar too, which this path does not.
+  if (tabFocus != lastRendered.tabFocus) return false;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
@@ -1762,7 +1761,14 @@ void CoverLibraryActivity::render(RenderLock&&) {
                  nullptr, HomeTabBar::showsBackButton(true));
 
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
-  GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), selectorVisible && contentIndex == 0 && tabFocus < 0);
+  {
+    freeink::ui::TabItem tabs[LibraryTabs::MAX_TABS];
+    const int tabCount = LibraryTabs::bandItems(tabs, selectedTab);
+    tabBand_.render(
+        tabs, tabCount,
+        LibraryTabs::bandOptions(selectorVisible && contentIndex == 0 && tabFocus < 0, mappedInput.hasTouch()),
+        tabBarY);
+  }
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - HomeTabBar::bottomInset() - metrics.verticalSpacing;

@@ -661,9 +661,9 @@ void LibraryListActivity::handleBackAction() {
   } else if (groupsCollapsed) {
     restoreExpandedList();
   } else if (!tabsFocused() && !degraded) {
-    // Keep the current list and viewport while returning focus to the tabs.
-    nav.selected = 0;
-    requestUpdate();
+    // Keep the current list and viewport while returning focus to the tabs (from the rows or
+    // from the bottom bar).
+    ringSetFocus(TabRing::Focus::TopTabs, false);
   } else {
     onGoHome();
   }
@@ -737,7 +737,9 @@ bool LibraryListActivity::handleButtons() {
   // ActivityManager::loop() before any activity runs, so it cannot land in
   // the freshly opened confirmation and select its default.
   if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS)) {
-    if (tabsFocused()) {
+    if (ringFocus() == TabRing::Focus::BottomBar) {
+      // Nothing to hold on a bar slot, and the row selection underneath is not where the cursor is.
+    } else if (tabsFocused()) {
       if (!degraded) toggleSortDirection();
     } else if (isRecentSort(sortOrder)) {
       showRecentBookOptions(selectedEntry());
@@ -757,11 +759,7 @@ bool LibraryListActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (tabsFocused()) {
-      stepTab(1);
-      return true;
-    }
-    if (count > 0) activateIndex(selectedEntry());
+    if (count > 0 && !tabsFocused()) activateIndex(selectedEntry());
     return true;
   }
 
@@ -775,13 +773,22 @@ void LibraryListActivity::navigateButtons() {
       mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
     navigationStartedOnTabs = tabsFocused();
   }
+  // One ring, through TabRing: tabs, rows, bottom bar. Previous on the tabs is the exception:
+  // it opens search on release (below), so it does not walk the ring from there.
   buttonNavigator.onNextPress([this, count] {
-    if (count > 0) moveRingTo(ringPos() == count ? 1 : ringPos() + 1);
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, 1);
+    if (count <= 0 || ringPos() >= count) return TabRing::leaveContent(*this, 1);
+    moveRingTo(ringPos() + 1);
   });
-  buttonNavigator.onPreviousPress([this, count] {
-    if ((!navigationStartedOnTabs || degraded) && count > 0) {
-      moveRingTo(ringPos() <= 1 ? count : ringPos() - 1);
+  buttonNavigator.onPreviousPress([this] {
+    const auto focus = ringFocus();
+    if (focus == TabRing::Focus::BottomBar) return TabRing::step(*this, -1);
+    if (focus == TabRing::Focus::TopTabs) {
+      if (degraded) TabRing::step(*this, -1);
+      return;
     }
+    if (ringPos() <= 1) return TabRing::leaveContent(*this, -1);
+    moveRingTo(ringPos() - 1);
   });
   // Search is an activation: defer it so holding Previous can still step tabs.
   buttonNavigator.onPreviousRelease([this] {
@@ -792,17 +799,19 @@ void LibraryListActivity::navigateButtons() {
   // where fast travel through a long shelf is what a hold means.
   buttonNavigator.onNextContinuous([this, count, &nav] {
     if (navigationStartedOnTabs) {
-      activeNav().selected = 0;
+      // Back onto the tabs first: the press may have carried the cursor into the rows or, on an
+      // empty list, into the bottom bar.
+      ringSetFocus(TabRing::Focus::TopTabs, false);
       stepTab(1);
-    } else if (count > 0) {
+    } else if (count > 0 && ringFocus() == TabRing::Focus::Content) {
       moveRingTo(ButtonNavigator::nextPageIndex(selectedEntry(), count, nav.pageRows()) + 1);
     }
   });
   buttonNavigator.onPreviousContinuous([this, count, &nav] {
     if (navigationStartedOnTabs) {
-      activeNav().selected = 0;
+      ringSetFocus(TabRing::Focus::TopTabs, false);
       stepTab(-1);
-    } else if (count > 0) {
+    } else if (count > 0 && ringFocus() == TabRing::Focus::Content) {
       moveRingTo(ButtonNavigator::previousPageIndex(selectedEntry(), count, nav.pageRows()) + 1);
     }
   });
