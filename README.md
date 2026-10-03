@@ -77,6 +77,8 @@ Panels are detected at conversion time, along with their text and translations, 
 
 **Rotate Panels** (Settings, on by default) turns a panel whose shape does not match the screen, so a wide panel fills the display and you turn the device to read it. Switch it off to keep every panel upright inside the current orientation. **Panels Only** skips the full page overviews. Both are covered in [§6.4](USER_GUIDE.md#64-reading-manga).
 
+**Refresh Frequency** counts every panel step as a page, so at **1 page** each panel gets a full refresh and no ghost of the previous panel stays behind.
+
 Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or see [Converting manga](#converting-manga).
 
 <p align="center">

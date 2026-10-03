@@ -285,6 +285,12 @@ class GfxRenderer {
     promotedRefreshPending_ = true;
     promotedRefresh_ = mode;
   }
+  // For a caller whose waveform is not a displayBuffer() (a deferred grayscale base): whether a
+  // promotion is waiting, and taking it -- `mode` when none is.
+  [[nodiscard]] bool refreshPromotionPending() const { return promotedRefreshPending_; }
+  HalDisplay::RefreshMode takePromotedRefresh(const HalDisplay::RefreshMode mode) const {
+    return applyPromotedRefresh(mode);
+  }
   // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
   // grayscale strip rendering) can overlap the panel's refresh time. The
   // framebuffer must stay untouched until waitRefreshComplete(). Falls back to

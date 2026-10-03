@@ -503,25 +503,7 @@ void XtcReaderActivity::renderPage() {
       }
     }
 
-    if (pagesUntilFullRefresh <= 1) {
-      // Periodic ghost cleanup: scrub via the normal path, then run the
-      // settle flavor of the grayscale base pass (DTM planes are equal after
-      // the display sync, so only the gentle reinforcement cells fire).
-      // Combined-base panels (Paper Mono) instead defer the base so the gray
-      // planes below join it in one waveform.
-      if (renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined) {
-        renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
-      } else {
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-        renderer.preconditionGrayscale();
-      }
-      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
-    } else {
-      // OEM grayscale pipeline base: differential "AA-pre-BW(mid)" update as
-      // the page turn on X3; plain FAST refresh on X4 (previous behavior).
-      renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
-      pagesUntilFullRefresh--;
-    }
+    ReaderUtils::displayGrayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
     // Pass 2: LSB buffer - mark DARK gray only (XTH value 1)
     // In LUT: 0 bit = apply gray effect, 1 bit = untouched

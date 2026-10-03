@@ -2360,14 +2360,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const uint32_t grayInputStamp = imageWarmInputStamp_.load(std::memory_order_relaxed);
     if (!imagePageDisplayed) {  // image pages already displayed (double-fast + grayscale planes)
       renderStatusBar();
-      if (textAa && pagesUntilFullRefresh <= 1) {
-        // A cleanup refresh settles the grays only when the preconditioning runs before the planes.
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-        renderer.preconditionGrayscale();
-        pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
-      } else if (textAa && !overlapRefresh) {
-        renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
-        pagesUntilFullRefresh--;
+      // A cleanup refresh is never overlapped: its preconditioning must run before the planes.
+      if (textAa && (pagesUntilFullRefresh <= 1 || !overlapRefresh)) {
+        ReaderUtils::displayGrayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
       } else {
         ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
       }
@@ -3523,25 +3518,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, !useFurigana());
   renderStatusBar();
   const auto tBwRender = millis();
-  if (combinedGrayscaleBase) {
-    // Stash the base without activating; displayGrayBuffer() below commits
-    // base + grays as one waveform.
-    ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
-  } else if (needsAnyGrayscale) {
-    if (pagesUntilFullRefresh <= 1) {
-      // A cleanup refresh settles X3 correctly only when its grayscale
-      // preconditioning waveform runs before the gray planes are written.
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-      renderer.preconditionGrayscale();
-      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
-    } else if (overlapRefresh) {
-      // Async form: start the waveform and return so the grayscale plane rendering
-      // below overlaps the panel's refresh time instead of following it.
-      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/true);
-    } else {
-      renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
-      pagesUntilFullRefresh--;
-    }
+  if (needsAnyGrayscale && !combinedGrayscaleBase && overlapRefresh && pagesUntilFullRefresh > 1) {
+    // Async form: start the waveform and return so the grayscale plane rendering
+    // below overlaps the panel's refresh time instead of following it.
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/true);
+  } else if (needsAnyGrayscale || combinedGrayscaleBase) {
+    ReaderUtils::displayGrayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
   } else {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }

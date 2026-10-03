@@ -994,7 +994,7 @@ void MangaReaderActivity::renderFullPage() {
     renderer.fillRect(bwStatusX - 2, bwStatusY - 1, bwStatusW + 4, renderer.getLineHeight(SMALL_FONT_ID) + 2, false);
     renderer.drawText(SMALL_FONT_ID, bwStatusX, bwStatusY, bwStatus, true);
 
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
     if (rotatePage) renderer.setOrientation(savedOrientation);
     // Arm the next-page prefetch like the grayscale path (prefetch itself skips BMP -- see there).
     nextPagePrefetched = false;
@@ -1033,7 +1033,7 @@ void MangaReaderActivity::renderFullPage() {
 
   // Display with grayscale: BW first, then LSB/MSB planes for 4-level gray.
   renderer.storeBwBuffer();
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  ReaderUtils::displayGrayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
   // Read the pixels the BW pass just cached instead of re-decoding the JPEG. Falls back to a
   // real decode if the cache write failed (e.g. under memory pressure) or wasn't enabled.
@@ -1230,14 +1230,19 @@ void MangaReaderActivity::renderPanelZoom() {
   }
 
   if (bwOnly) {
-    // Single black-and-white wave; no grayscale planes, nothing to defer.
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    // Single black-and-white wave; no grayscale planes, nothing to defer. A panel step counts as a
+    // page for the refresh cadence: ghosts of the previous panel are what the cleanup is for.
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   } else if (!grayUpgrade) {
     // Fresh entry: show the BW image with one FAST wave and defer the slower 4-level gray wave to a
     // dwell (loop() requests it once the reader stops stepping). Rapid panel-to-panel navigation
     // thus pays a single wave per panel instead of two. The BW pass above also streamed the .2bp
     // cache (for JPEG crops), so the deferred upgrade reads those pixels back instead of re-decoding.
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    // A cleanup preconditions now, ahead of the planes the upgrade writes.
+    if (!ReaderUtils::cleanGrayBaseIfDue(renderer, pagesUntilFullRefresh, /*planesFollowNow=*/false)) {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      pagesUntilFullRefresh--;
+    }
     panelGrayPending = true;
   } else {
     // Deferred upgrade: the BW image is already on screen (initial entry showed it), so skip the BW
