@@ -474,11 +474,20 @@ class EpubReaderActivity final : public ReaderActivity {
   // Gate for a background build tick: true when the heap can take parse allocations.
   // Updates buildHeapPaused as a side effect.
   bool buildTickHeapGate();
+  // Frees what reloads on demand (font caches, so the prewarmed-page claims go too). The one way
+  // the reader trades caches for heap, in either layout.
+  void releaseReloadableMemory();
   // True while the background build is gated on the heap floors. Lets skipLoopDelay()
   // return the loop to normal delay/power-saving during the pause: isBuilding() stays
   // true the whole time, and without this the loop would spin at full CPU speed doing
   // no build work — indefinitely, if the build context itself keeps the heap low.
   bool buildHeapPaused = false;
+  // When the current pause began (0: not paused), and whether it has already released the caches.
+  uint32_t buildHeapPausedSinceMs_ = 0;
+  bool buildHeapPauseReleased_ = false;
+  // A pause this long, caches already released, means the build's own context holds the heap below
+  // the floors and no tick will ever run: suspend it (the partial stays) instead of holding it.
+  static constexpr uint32_t BACKGROUND_BUILD_STALL_MS = 3000;
   // Heap floor for optional render-adjacent work (idle prewarm). Page
   // deserialization (TextBlock word vectors/strings) and glyph caching allocate
   // through throwing paths that abort() on OOM; skip deferrable work below it.

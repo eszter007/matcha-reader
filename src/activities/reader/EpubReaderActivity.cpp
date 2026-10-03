@@ -517,15 +517,32 @@ void EpubReaderActivity::onReaderExit() {
 }
 
 bool EpubReaderActivity::buildTickHeapGate() {
-  const size_t freeHeap = ESP.getFreeHeap();
-  const size_t maxBlock = ESP.getMaxAllocHeap();
-  // Below the floors: just wait. The tick is deferrable — page-turn transients
-  // free up between turns and the tick retries every loop pass. Track the
-  // paused state so skipLoopDelay() stops pinning the CPU at full speed while
-  // no build work is actually happening (the gate can stay closed for a long
-  // stretch if the retained build context itself holds the heap down).
-  buildHeapPaused = freeHeap < BACKGROUND_BUILD_MIN_FREE_HEAP || maxBlock < BACKGROUND_BUILD_MIN_MAX_ALLOC;
+  const auto belowFloors = [] {
+    return ESP.getFreeHeap() < BACKGROUND_BUILD_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < BACKGROUND_BUILD_MIN_MAX_ALLOC;
+  };
+  // Below the floors: the tick is deferrable, so wait -- page-turn transients free up between
+  // turns. Once per pause, trade the reloadable caches first. Track the paused state so
+  // skipLoopDelay() stops pinning the CPU at full speed while no build work happens.
+  if (belowFloors() && !buildHeapPauseReleased_) {
+    releaseReloadableMemory();
+    buildHeapPauseReleased_ = true;
+  }
+  buildHeapPaused = belowFloors();
+  if (!buildHeapPaused) {
+    buildHeapPausedSinceMs_ = 0;
+    buildHeapPauseReleased_ = false;
+  } else if (buildHeapPausedSinceMs_ == 0) {
+    buildHeapPausedSinceMs_ = millis();
+  }
   return !buildHeapPaused;
+}
+
+void EpubReaderActivity::releaseReloadableMemory() {
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  // The release emptied the mini-font cache, so no page is warm any more. A stale claim makes the
+  // next render skip its prewarm and resolve every glyph one at a time through the miss path.
+  prewarmedVPage_ = -1;
+  prewarmedHPage_ = -1;
 }
 
 void EpubReaderActivity::showBuildPopup() {
@@ -733,19 +750,34 @@ void EpubReaderActivity::readerLoop() {
   {
     RenderLock lock{RenderLock::Try{}};
     // The heap gate is re-read inside the lock: a render that won the lock race can expand
-    // retained glyph buffers, invalidating a pre-lock reading. cppcheck cannot see the
-    // cross-task mutation, so it flags the second call as always true.
-    // cppcheck-suppress knownConditionTrueFalse
-    if (lock.held() && backgroundBuildWanted() && buildTickHeapGate()) {
-      if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, BACKGROUND_BUILD_BUDGET_MS)) {
-        LOG_ERR("ERS", "Background section build failed");
-        section.reset();
-        requestUpdate();
-      } else if (section->isBuildComplete() && applyDeferredReposition()) {
-        // The chapter re-paginated since the saved progress (settings changed): we now know the
-        // real page count, so re-render at the remapped page. No-op for an unchanged resume.
-        requestUpdate();
+    // retained glyph buffers, invalidating a pre-lock reading.
+    if (lock.held() && backgroundBuildWanted()) {
+      if (buildTickHeapGate()) {
+        if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, BACKGROUND_BUILD_BUDGET_MS)) {
+          LOG_ERR("ERS", "Background section build failed");
+          section.reset();
+          requestUpdate();
+        } else if (section->isBuildComplete() && applyDeferredReposition()) {
+          // The chapter re-paginated since the saved progress (settings changed): we now know the
+          // real page count, so re-render at the remapped page. No-op for an unchanged resume.
+          requestUpdate();
+        }
+      } else if (millis() - buildHeapPausedSinceMs_ >= BACKGROUND_BUILD_STALL_MS) {
+        LOG_INF("ERS", "Background build stalled on heap (free=%u maxAlloc=%u); suspending it", ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+        section->suspendBuild();
+        // Not a failure: the partial serves its pages and crossing its watermark extends it in
+        // render(). Only the lazy background restart, which would stall the same way, stays off.
+        partialRebuildStartFailed = true;
+        buildHeapPaused = false;
+        buildHeapPausedSinceMs_ = 0;
+        buildHeapPauseReleased_ = false;
       }
+    } else if (lock.held()) {
+      // No build to drive: a pause left over from an earlier one must not count against the next.
+      buildHeapPaused = false;
+      buildHeapPausedSinceMs_ = 0;
+      buildHeapPauseReleased_ = false;
     }
   }
 
@@ -1678,9 +1710,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
     // Japanese book). Freeing the Epub alone leaves those pinned, fragmenting the heap so WiFi +
     // the TLS handshake dip below MIN_HEAP_FOR_TLS and OOM. The Translate Page path (same
     // handshake) already does this; the reader re-warms fonts lazily on return.
-    if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->releaseAllFontMemory();
-    }
+    releaseReloadableMemory();
   }
   LOG_DBG("KOSync", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
 
@@ -2007,9 +2037,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const bool cannotPrewarm = maxAlloc < PREWARM_MIN_ALLOC_READ;
     if (maxAlloc < RESUME_HEAP_FLOOR && (starvedSinceLastRender || cannotPrewarm)) {
       LOG_INF("ERS", "Low heap before render (maxAlloc=%u < %u); releasing font memory", maxAlloc, RESUME_HEAP_FLOOR);
-      fcm->releaseAllFontMemory();
-      prewarmedVPage_ = -1;  // the release just emptied the mini-font cache (vertical)
-      prewarmedHPage_ = -1;  // ...and the horizontal warm
+      releaseReloadableMemory();
       LOG_INF("ERS", "After font release: maxAlloc=%u", ESP.getMaxAllocHeap());
     }
   }
@@ -2066,9 +2094,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // FontDecompressor.cpp) is dead weight at this exact moment since nothing has been drawn
         // yet; free it (and the persistent glyph slab) to hand that headroom to the
         // extraction/layout step that needs it most.
-        if (auto* fcm = renderer.getFontCacheManager()) {
-          fcm->releaseAllFontMemory();
-        }
+        releaseReloadableMemory();
 
         // Early first render: show the reader's page the moment it is laid out (a couple of
         // seconds in) instead of after the whole chapter builds (~17s for a 431-page book).
@@ -2219,8 +2245,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           // would force an expensive rebuild (which needs far more heap and would fail too).
           // Reclaim the font memory to recover headroom and re-render; the retry then fits.
           LOG_ERR("ERS", "Vertical page read refused on low heap; keeping cache and retrying");
-          if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-          prewarmedVPage_ = -1;
+          releaseReloadableMemory();
           requestUpdate();
           automaticPageTurnActive = false;
           showPendingSyncSaveError();
@@ -2556,9 +2581,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           // free the font decompressor's buffers (hot group + glyph slab) first to hand that
           // headroom to the build, same rationale as the identical call on the vertical-mode build
           // path above.
-          if (auto* fcm = renderer.getFontCacheManager()) {
-            fcm->releaseAllFontMemory();
-          }
+          releaseReloadableMemory();
 
           const unsigned long buildStartMs = millis();
           bool started;
@@ -2978,14 +3001,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   // index causes costs 5-13s. The build runs at the worst heap moment -- right after a page render,
   // with the glyph slab warm and the current chapter resident -- so it gets the font memory first.
   // This is why the call runs BEFORE the idle glyph warm: the release empties the mini-font cache.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseAllFontMemory();
-    // The release emptied the mini-font cache, so the idle warm's page is no longer warm. Without
-    // this the next render trusts the claim, skips its prewarm, and resolves every glyph one at a
-    // time through the on-demand miss path.
-    prewarmedVPage_ = -1;
-    prewarmedHPage_ = -1;
-  }
+  releaseReloadableMemory();
 
   // Post-release gate, vertical only (the most memory-hungry build in the reader): if the largest
   // block is STILL small the build runs degraded -- observed at maxAlloc=63476: styled blocks
@@ -4286,11 +4302,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       RenderLock lock(*this);
       selectCtx.cellPx = verticalCellPx(renderer, effectiveReaderFontId());
       selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
-      if (auto* fcm = renderer.getFontCacheManager()) {
-        fcm->releaseAllFontMemory();
-        prewarmedVPage_ = -1;  // the release emptied the mini font cache
-        prewarmedHPage_ = -1;
-      }
+      releaseReloadableMemory();
       LOG_DBG("ERS", "Word lookup (vertical): maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
       // Start of the NEXT page, so a word split across the boundary can still be looked up
       // (#201). Fetched BEFORE the current page and copied into a string: getPage() hands out a
@@ -4347,11 +4359,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       page = section->loadPage(section->currentPage);
       if (page && section->isBuilding()) section->suspendBuild();
       if (page) {
-        if (auto* fcm = renderer.getFontCacheManager()) {
-          fcm->releaseAllFontMemory();
-          prewarmedVPage_ = -1;
-          prewarmedHPage_ = -1;
-        }
+        releaseReloadableMemory();
       }
     }
     if (page) {
@@ -4470,9 +4478,7 @@ void EpubReaderActivity::openTranslationPanel() {
       RenderLock lock(*this);  // the render task may still be in its warm tail
       section.reset();
       verticalSection.reset();
-      if (auto* fcm = renderer.getFontCacheManager()) {
-        fcm->releaseAllFontMemory();
-      }
+      releaseReloadableMemory();
     }
     startActivityForResult(std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pageText)),
                            [this](const ActivityResult&) { requestUpdate(); });
