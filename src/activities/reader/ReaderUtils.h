@@ -378,26 +378,31 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   }
 }
 
-// Display the B/W base of a page whose grayscale planes follow, on the refresh cadence. A turn
-// takes the grayscale base pass (X3's differential base; plain FAST elsewhere). The periodic
-// cleanup scrubs ghosts with a HALF refresh and then preconditions, which X3 needs before the
-// planes are written to settle them. Combined-base panels (Paper Mono) defer the base instead, so
-// base and planes go out as one waveform -- displaying it separately re-drives the whole page.
-inline void displayGrayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
-  // A promoted refresh (the control center's Refresh tile) is a cleanup request: the turn's
-  // grayscale base is no displayBuffer() and would leave it queued for some later screen.
-  if (pagesUntilFullRefresh > 1 && !renderer.refreshPromotionPending()) {
-    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
-    pagesUntilFullRefresh--;
-    return;
-  }
-  if (renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined) {
+// The periodic cleanup for a page whose grayscale planes follow, now or later: a HALF refresh
+// that scrubs ghosts, then the preconditioning X3 needs before any planes are written. False
+// when it is not due. A promoted refresh (the control center's Refresh tile) makes it due: a
+// grayscale base is no displayBuffer() and would leave the promotion queued for a later screen.
+// `planesFollowNow`: Combined-base panels (Paper Mono) then defer the base so base and planes go
+// out as one waveform; planes that may never come (a panel's deferred upgrade) need it shown now.
+inline bool cleanGrayBaseIfDue(const GfxRenderer& renderer, int& pagesUntilFullRefresh, const bool planesFollowNow) {
+  if (pagesUntilFullRefresh > 1 && !renderer.refreshPromotionPending()) return false;
+  if (planesFollowNow && renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined) {
     renderer.displayGrayscaleBase(renderer.takePromotedRefresh(HalDisplay::HALF_REFRESH));
   } else {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     renderer.preconditionGrayscale();
   }
   pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+  return true;
+}
+
+// Display the B/W base of a page whose grayscale planes follow, on the refresh cadence: the
+// cleanup above when due, else the grayscale base pass (X3's differential base; plain FAST
+// elsewhere; deferred on Paper Mono).
+inline void displayGrayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+  if (cleanGrayBaseIfDue(renderer, pagesUntilFullRefresh, /*planesFollowNow=*/true)) return;
+  renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+  pagesUntilFullRefresh--;
 }
 
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build

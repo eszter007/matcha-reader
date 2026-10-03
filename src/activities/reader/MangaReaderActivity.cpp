@@ -1238,7 +1238,11 @@ void MangaReaderActivity::renderPanelZoom() {
     // dwell (loop() requests it once the reader stops stepping). Rapid panel-to-panel navigation
     // thus pays a single wave per panel instead of two. The BW pass above also streamed the .2bp
     // cache (for JPEG crops), so the deferred upgrade reads those pixels back instead of re-decoding.
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    // A cleanup preconditions now, ahead of the planes the upgrade writes.
+    if (!ReaderUtils::cleanGrayBaseIfDue(renderer, pagesUntilFullRefresh, /*planesFollowNow=*/false)) {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      pagesUntilFullRefresh--;
+    }
     panelGrayPending = true;
   } else {
     // Deferred upgrade: the BW image is already on screen (initial entry showed it), so skip the BW
