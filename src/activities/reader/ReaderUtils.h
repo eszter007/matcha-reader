@@ -378,23 +378,24 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   }
 }
 
-// Display the B/W base of a page whose grayscale pass follows. Panels that
-// combine the base (Paper Mono) defer the activation so base + gray planes go
-// out as one waveform — displaying the base separately makes the gray pass
-// re-drive the whole text body (a visible flash). Other panels display
-// normally. Same refresh-cadence bookkeeping as displayWithRefreshCycle.
-inline void displayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
-  if (renderer.grayscaleCapabilities().base != HalDisplay::GrayscaleBase::Combined) {
-    displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+// Display the B/W base of a page whose grayscale planes follow, on the refresh cadence. A turn
+// takes the grayscale base pass (X3's differential base; plain FAST elsewhere). The periodic
+// cleanup scrubs ghosts with a HALF refresh and then preconditions, which X3 needs before the
+// planes are written to settle them. Combined-base panels (Paper Mono) defer the base instead, so
+// base and planes go out as one waveform -- displaying it separately re-drives the whole page.
+inline void displayGrayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+  if (pagesUntilFullRefresh > 1) {
+    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+    pagesUntilFullRefresh--;
     return;
   }
-  const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
-  renderer.displayGrayscaleBase(mode);
-  if (pagesUntilFullRefresh <= 1) {
-    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+  if (renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined) {
+    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   } else {
-    pagesUntilFullRefresh--;
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    renderer.preconditionGrayscale();
   }
+  pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
 }
 
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build
