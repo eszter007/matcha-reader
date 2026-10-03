@@ -1130,7 +1130,8 @@ void CoverLibraryActivity::loop() {
     // swallows every tap -- including that one, which is why the chevron did nothing on the
     // themes that draw it.
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      if (contentIndex > 0) {
+      if (contentIndex > 0 || tabFocus >= 0) {
+        tabFocus = -1;
         contentIndex = 0;
         scrollRow = 0;
         shelvesScroll = 0;
@@ -1164,22 +1165,6 @@ void CoverLibraryActivity::loop() {
       }
       return;
     }
-  }
-
-  // Release, not press: leaving on the press edge hands the release of the same
-  // physical click to whichever activity comes next, which then acts on it too.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (contentIndex > 0 || tabFocus >= 0) {
-      tabFocus = -1;
-      contentIndex = 0;
-      scrollRow = 0;
-      shelvesScroll = 0;
-      selectorVisible = true;
-      requestUpdate();
-    } else {
-      onGoHome();
-    }
-    return;
   }
 
   // A press moves at once; a hold steps the Books/Shelves tab instead. The press has already
@@ -1617,6 +1602,8 @@ bool CoverLibraryActivity::tryPartialSelectionRedraw() {
   // move, and taking it after a touch would paint one back onto a screen that must not show it.
   if (!selectorVisible) return false;
   if (openShelfIndex != lastRendered.openShelf || selectedTab != lastRendered.tab) return false;
+  // A cursor entering or leaving the bottom bar repaints the bar too, which this path does not.
+  if (tabFocus != lastRendered.tabFocus) return false;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();

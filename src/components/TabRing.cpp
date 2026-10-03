@@ -98,9 +98,11 @@ TabRing::Result TabRing::handleInput(Host& host, const MappedInputManager& input
 
   const Focus at = host.ringFocus();
   // Left/Right are taken on the press: they double as Previous/Next, which the screens act on at
-  // the press, so a release here would come after the cursor had already left the band.
-  const bool left = input.wasPressed(Button::Left);
-  const bool right = input.wasPressed(Button::Right);
+  // the press, so a release here would come after the cursor had already left the band. The
+  // screen directions, not the raw keys: in a rotated layout the raw pair runs vertically and is
+  // what the screens walk the ring with.
+  const bool left = input.wasPressed(Button::ScreenLeft);
+  const bool right = input.wasPressed(Button::ScreenRight);
 
   if (at == Focus::TopTabs) {
     const int count = host.ringTopTabCount();
