@@ -100,6 +100,11 @@ class SdCardFont {
   // previously fetched metrics.
   void clearCache();
 
+  // clearCache() without the retention bet: the mini arenas go even with plenty of total free
+  // heap, for a caller short on CONTIGUOUS heap. The advance tables and kern/ligature class maps
+  // stay, so a layout in progress keeps measuring without reloading them.
+  void releaseRenderCaches();
+
   // Drop the persistent advance cache. Call when unloading the SD font or
   // when font/size/family/glyph-table state changes, or to recover a failed bitmap allocation.
   void clearPersistentCache();
