@@ -1,6 +1,7 @@
 #include "EpubReaderActivity.h"
 
 #include <DictIndex.h>
+#include <Epub/Kinsoku.h>
 #include <Epub/Page.h>
 #include <Epub/PageTextExtractor.h>
 #include <Epub/VerticalSection.h>
@@ -407,13 +408,13 @@ void EpubReaderActivity::onReaderEnter() {
       cachedChapterTotalPageCount = data[4] + (data[5] << 8);
       verticalOverride = static_cast<int8_t>(data[6]);
       furiganaOverride = static_cast<int8_t>(data[7]);
-      // Drop a forced-vertical flag stored against a non-Japanese book (set before
-      // vertical was restricted to Japanese books, or on a book whose language was
+      // Drop a forced-vertical flag stored against a non-CJK book (set before
+      // vertical was restricted to CJK books, or on a book whose language was
       // later corrected). useVerticalText() already ignores it; clearing it here
       // keeps the stored state honest, so the reader menu shows what is in effect.
       // Rewritten to progress.bin by the next save.
-      if (verticalOverride == 1 && !isJapaneseBook()) {
-        LOG_INF("ERS", "Clearing forced-vertical flag on a non-Japanese book");
+      if (verticalOverride == 1 && !isCjkBook()) {
+        LOG_INF("ERS", "Clearing forced-vertical flag on a non-CJK book");
         verticalOverride = -1;
       }
       if (dataSize >= 13) {
@@ -435,9 +436,14 @@ void EpubReaderActivity::onReaderEnter() {
     }
   }
 
-  // Japanese books (or forced vertical text) need the proper-size JP fallback font; plain
+  // CJK books (or forced vertical text) need the proper-size companion font; plain
   // Latin books must not pay its SD load / RAM (user-reported).
-  sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+  sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+  // Word lookup reads the converted dictionary of the book's language, and traditional Chinese
+  // sets its vertical punctuation differently from Japanese. Both are process-wide and decided
+  // once per book here, before any layout or lookup runs.
+  DictIndex::setLanguageFolder(cjk::dictIndexFolder(fontScript()));
+  Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
 
   loadCachedBookmarks();
 }
@@ -585,7 +591,9 @@ void EpubReaderActivity::showBuildPopup() {
 }
 
 void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
-  if (isJapaneseBook()) {
+  // Japanese always takes the scan-based panel. Chinese does too once its converted dictionary
+  // is on the card; without one it still gets the StarDict picker below, character by character.
+  if (isJapaneseBook() || (isChineseBook() && DictIndex::isAvailable())) {
     openWordLookupPanel(pageOnScreen, lookupAtX, lookupAtY);
     return;
   }
@@ -1317,14 +1325,13 @@ void EpubReaderActivity::openReaderMenu() {
   const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
   // Word Lookup is about the text's language, not its layout direction, so it must not be
   // gated by verticalOverride==0 (explicitly reading a Japanese book horizontally shouldn't
-  // hide the dictionary) -- but a book whose EPUB metadata doesn't declare dc:language=ja
-  // (isJapaneseBook() false) should still get it if the user has explicitly forced vertical
-  // mode on for it, since that's the same signal useVerticalText() already treats as
-  // sufficient evidence of Japanese content. Previously this used isJapaneseBook() alone,
-  // so a mis-tagged EPUB with vertical text manually forced on would render vertically but
-  // never show Word Lookup at all.
-  const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
-  const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
+  // hide the dictionary) -- but a book whose EPUB metadata doesn't declare a CJK language
+  // should still get it if the user has explicitly forced vertical mode on for it, since
+  // that's the same signal useVerticalText() already treats as sufficient evidence of
+  // Japanese content. Previously this used isJapaneseBook() alone, so a mis-tagged EPUB with
+  // vertical text manually forced on would render vertically but never show Word Lookup at all.
+  const bool isCjkContent = isCjkBook() || verticalOverride == 1;
+  const bool hasWordLookup = isCjkContent && (verticalSection || section) && DictIndex::isAvailable();
   bool hasPageText = false;
   if (verticalSection) {
     // getPage() faults the page into the section's SINGLE shared page slot -- the same slot the
@@ -1346,7 +1353,7 @@ void EpubReaderActivity::openReaderMenu() {
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !sectionFootnotes.empty() || !currentPageFootnotes.empty(), !cachedBookmarks.empty(), hasWordLookup,
           useVerticalText(), useFurigana(), hasPageText, /*imageReaderMinimal=*/false, /*mangaMode=*/false,
-          /*hideGenericLookup=*/isJapaneseBook(), /*showPanelsOnlyToggle=*/false, /*panelsOnlyEnabled=*/false,
+          /*hideGenericLookup=*/hideGenericLookup(), /*showPanelsOnlyToggle=*/false, /*panelsOnlyEnabled=*/false,
           /*scrubOnEnter=*/shownPageHasImages_),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
@@ -1400,9 +1407,9 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
       section.reset();
       verticalSection.reset();
     }
-    // Forcing vertical text on a non-ja book is the same signal isJapaneseBook() covers at
-    // open: JP fallback follows it.
-    sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+    // Forcing vertical text on a non-CJK book is the same signal the book's script covers at
+    // open: the companion font follows it.
+    sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
   }
   if (furiganaOverrideIn >= 0 && furiganaOverrideIn != (useFurigana() ? 1 : 0)) {
     furiganaOverride = furiganaOverrideIn;
@@ -1491,7 +1498,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // carry them: a MenuResult, read via get_if since SettingsActivity only sets one when
       // showVerticalToggle() was true here, so std::monostate elsewhere is expected.
       startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                                /*finishOnBack=*/true, isJapaneseBook(),
+                                                                /*finishOnBack=*/true, bookScript(),
                                                                 epub ? epub->getLanguage() : std::string{},
                                                                 showVerticalToggle(), useVerticalText(), useFurigana(),
                                                                 /*mangaMode=*/false,
@@ -1501,7 +1508,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                  applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
                                }
                                sdFontSystem.ensureLoaded(renderer);
-                               sdFontSystem.setJpFallbackNeeded(renderer, isJapaneseBook() || useVerticalText());
+                               sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
                                // Reading Orientation now only changes via this screen (removed from the reader's
                                // own quick menu, which used to apply it straight from the popup via
                                // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
@@ -4237,7 +4244,7 @@ int EpubReaderActivity::effectiveReaderFontId() const {
   // The substitution itself lives on SdCardFontSystem so the settings preview reaches the same
   // answer -- it used to ask getReaderFontId() directly and drew a Japanese book in the built-in
   // face at a size the built-in does not have, disagreeing with the page on both counts.
-  return sdFontSystem.effectiveReaderFontId(isJapaneseBook() || useVerticalText());
+  return sdFontSystem.effectiveReaderFontId(fontScript());
 }
 
 bool EpubReaderActivity::repaintVerticalPageForPanelThunk(void* ctx) {
@@ -4262,8 +4269,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
   requestVerticalBuildNotice();
   if (!epub) return;
   if (!DictIndex::isAvailable()) {
-    LOG_ERR("ERS", "Word lookup: no Japanese dictionary (%s / %s)", DictIndex::vocabIdxPath(),
-            DictIndex::vocabDatPath());
+    LOG_ERR("ERS", "Word lookup: no dictionary (%s / %s)", DictIndex::vocabIdxPath(), DictIndex::vocabDatPath());
     // Say so on the page, as the other-language lookup does when it finds no dictionary.
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
@@ -4345,7 +4351,8 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         if (!lookup) {
           LOG_ERR("ERS", "OOM: word lookup panel");
         } else {
-          lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), {}, bookPath});
+          lookup->setMiningContext(
+              {getBookTitle(), getBookAuthor(), std::move(miningTail), epub->getLanguage(), bookPath});
           panel = std::move(lookup);
         }
       }
@@ -4442,7 +4449,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         requestUpdate();  // the build was suspended for the panel; the next render resumes it
         return;
       }
-      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), {}, bookPath});
+      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), epub->getLanguage(), bookPath});
       startActivityForResult(std::move(lookup), [this](const ActivityResult&) { requestUpdate(); });
     }
   }
@@ -4604,23 +4611,23 @@ std::string EpubReaderActivity::currentChapterTitle() const {
   return tr(STR_UNNAMED);
 }
 
-// The rows shown, as kTextRowNames indices. Japanese books omit Paragraph Alignment and Focus
+// The rows shown, as kTextRowNames indices. CJK books omit Paragraph Alignment and Focus
 // Reading for Vertical Text / Furigana; a Latin book switched to vertical keeps every row; other
 // books show the upstream five. Listed rather than offset, so a new row cannot alias another.
 namespace {
-constexpr int kJapaneseTextRows[] = {0, 1, 2, kRowVerticalText, kRowFurigana};
+constexpr int kCjkTextRows[] = {0, 1, 2, kRowVerticalText, kRowFurigana};
 constexpr int kAllTextRows[] = {0, 1, 2, 3, kRowFocusReading, kRowVerticalText, kRowFurigana};
 static_assert(std::size(kAllTextRows) == kTextRowCount, "every text row listed");
 }  // namespace
 
 int EpubReaderActivity::textRowCount() const {
-  if (isJapaneseBook()) return static_cast<int>(std::size(kJapaneseTextRows));
+  if (isCjkBook()) return static_cast<int>(std::size(kCjkTextRows));
   return showVerticalToggle() ? kTextRowCount : kBaseTextRowCount;
 }
 
 int EpubReaderActivity::textRowAt(const int visibleIndex) const {
   if (visibleIndex < 0 || visibleIndex >= textRowCount()) return -1;
-  return isJapaneseBook() ? kJapaneseTextRows[visibleIndex] : kAllTextRows[visibleIndex];
+  return isCjkBook() ? kCjkTextRows[visibleIndex] : kAllTextRows[visibleIndex];
 }
 
 std::string EpubReaderActivity::textRowName(int row) const {
@@ -5055,16 +5062,16 @@ void EpubReaderActivity::handleOverlayInput() {
           RenderLock lock;  // the picker paints the framebuffer next
           settleOverlayRefresh();
         }
-        startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                                      TextSettingsActivity::Tab::Family,
-                                                                      isJapaneseBook(), useVerticalText()),
-                               [this](const ActivityResult&) {
-                                 applyReaderTextSettings();
-                                 overlay = Overlay::Text;  // back to the Text panel
-                                 panelIndex = 0;
-                                 if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
-                                 requestUpdate();                    // re-render page + Text panel
-                               });
+        startActivityForResult(
+            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                   TextSettingsActivity::Tab::Family, bookScript(), useVerticalText()),
+            [this](const ActivityResult&) {
+              applyReaderTextSettings();
+              overlay = Overlay::Text;  // back to the Text panel
+              panelIndex = 0;
+              if (toolbarUi) toolbarUi->begin();  // the picker drew its own FUI screen
+              requestUpdate();                    // re-render page + Text panel
+            });
       } else if (row == kRowFocusReading) {
         // Focus Reading is a genuine on/off: a tap toggles and applies live.
         SETTINGS.focusReadingEnabled = SETTINGS.focusReadingEnabled ? 0 : 1;
@@ -5260,11 +5267,11 @@ void EpubReaderActivity::buildMoreActions() {
   using MA = EpubReaderMenuActivity::MenuAction;
   // Mirrors the full menu's row set -- this fork's buildMenuItems takes the Japanese-reading
   // flags -- minus the two rows the toolbar's own Contents and Text panels already cover.
-  const bool isJapaneseContent = isJapaneseBook() || verticalOverride == 1;
-  const bool hasWordLookup = isJapaneseContent && (verticalSection || section) && DictIndex::isAvailable();
+  const bool isCjkContent = isCjkBook() || verticalOverride == 1;
+  const bool hasWordLookup = isCjkContent && (verticalSection || section) && DictIndex::isAvailable();
   moreItems = EpubReaderMenuActivity::buildMenuItems(
       !sectionFootnotes.empty() || !currentPageFootnotes.empty(), !cachedBookmarks.empty(), hasWordLookup,
-      /*imageReaderMinimal=*/false, /*mangaMode=*/false, /*hideGenericLookup=*/isJapaneseBook(),
+      /*imageReaderMinimal=*/false, /*mangaMode=*/false, /*hideGenericLookup=*/hideGenericLookup(),
       /*showPanelsOnlyToggle=*/false);
   moreItems.erase(std::remove_if(moreItems.begin(), moreItems.end(),
                                  [](const auto& item) {
@@ -5618,21 +5625,35 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   return localPos;
 }
 
-bool EpubReaderActivity::isJapaneseBook() const {
-  if (!epub) return false;
-  const auto& lang = epub->getLanguage();
-  return lang.size() >= 2 && lang[0] == 'j' && lang[1] == 'a';
+CjkScript EpubReaderActivity::bookScript() const {
+  return epub ? cjk::scriptForLanguage(epub->getLanguage()) : CjkScript::None;
+}
+
+CjkScript EpubReaderActivity::fontScript() const {
+  const CjkScript script = bookScript();
+  if (script != CjkScript::None) return script;
+  return verticalOverride == 1 ? CjkScript::Japanese : CjkScript::None;
+}
+
+bool EpubReaderActivity::isJapaneseBook() const { return bookScript() == CjkScript::Japanese; }
+
+bool EpubReaderActivity::isChineseBook() const { return cjk::isChinese(bookScript()); }
+
+// The generic (StarDict) lookup row is redundant where the scan-based panel serves the book:
+// always for Japanese, and for Chinese once its converted dictionary is present.
+bool EpubReaderActivity::hideGenericLookup() const {
+  return isJapaneseBook() || (isChineseBook() && DictIndex::isAvailable());
 }
 
 // Whether Vertical Text / Furigana are meaningful for this book at all -- shared by opening
 // Reader Settings (to decide whether to show the two toggles there) and this menu's own
 // MenuResult (kept in sync even though nothing here can change them anymore).
 //
-// verticalOverride is persisted per book in progress.bin, so a book whose metadata isn't
-// dc:language=ja but that has vertical forced on reopens in tategaki -- vertical columns, CJK
-// breaking, no word spaces. Gating on isJapaneseBook() alone would then hide the only control
+// verticalOverride is persisted per book in progress.bin, so a book whose metadata isn't a CJK
+// language but that has vertical forced on reopens in tategaki -- vertical columns, CJK
+// breaking, no word spaces. Gating on isCjkBook() alone would then hide the only control
 // that turns it back off, leaving the book permanently unreadable.
-bool EpubReaderActivity::showVerticalToggle() const { return isJapaneseBook() || verticalOverride == 1; }
+bool EpubReaderActivity::showVerticalToggle() const { return isCjkBook() || verticalOverride == 1; }
 
 bool EpubReaderActivity::useReversedPageTurn() const {
   // Gated on useVerticalText(), not just the toggle: that is already the authority on whether this
@@ -5643,15 +5664,18 @@ bool EpubReaderActivity::useReversedPageTurn() const {
 }
 
 bool EpubReaderActivity::useVerticalText() const {
-  // Vertical (tategaki) is a Japanese typesetting mode: it stacks characters in
+  // Vertical (tategaki) is a CJK typesetting mode: it stacks characters in
   // columns and breaks per-character, so a Latin book laid out this way loses its
-  // word spaces and is unreadable. Never apply it to a non-Japanese book, not even
+  // word spaces and is unreadable. Never apply it to a non-CJK book, not even
   // with the per-book override forced on -- that override is persisted in
   // progress.bin, so once set it would follow the book forever.
-  if (!isJapaneseBook()) return false;
+  if (!isCjkBook()) return false;
   if (verticalOverride == 0) return false;
   if (verticalOverride == 1) return true;
-  return true;  // auto: isJapaneseBook() is true here
+  // Auto: Japanese books are vertical by default. Chinese EPUBs are horizontal far more often
+  // than not (every mainland book, and Taiwanese non-fiction), so they open horizontal and the
+  // per-book toggle turns a vertical Taiwanese novel on.
+  return isJapaneseBook();
 }
 
 uint8_t EpubReaderActivity::readerBottomReserve(const bool verticalMode) const {

@@ -1117,14 +1117,24 @@ dictionaries/
     vocab.idx    vocab.dat    vocab.spx      # vocabulary (required)
     names.idx    names.dat    names.spx      # names (recommended)
     grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
+  zh/                          # Chinese, converted CC-CEDICT (simplified and traditional)
+    vocab.idx    vocab.dat    vocab.spx    vocab.title
 ```
 
-Japanese works differently from the rest. It always uses the converted files in `dictionaries/jp/`, split into
-vocabulary, names and grammar, because lookup needs the readings and deinflection that a plain StarDict file does
-not carry. Convert them from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject)
-or any other Yomitan dictionary with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/),
-which also handles jmdict-simplified JSON and MDict `.mdx` input. Every other language uses ordinary StarDict, one
-folder per dictionary, with no conversion needed.
+Japanese and Chinese work differently from the rest. They always use the converted files in `dictionaries/jp/`
+and `dictionaries/zh/`, because lookup segments the page by dictionary word, which a plain StarDict file cannot
+drive. Japanese splits into vocabulary, names and grammar: convert them from
+[Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other
+Yomitan dictionary with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/), which also
+handles jmdict-simplified JSON and MDict `.mdx` input. Chinese converts with the script in `tools/dict_convert/`
+and `--lang zh`, from the raw CC-CEDICT text file, the MoE 重編國語辭典 JSON, a Yomitan zip or an `.mdx`; the
+README's Setup section has the commands. One `zh/` folder serves both scripts: every entry is indexed under its
+traditional and its simplified form, and the panel shows the other one under the reading. `vocab.title` names the
+dictionary in the panel footer. Every other language uses ordinary StarDict, one folder per dictionary, with no
+conversion needed.
+
+A Chinese book with no converted dictionary falls back to the StarDict picker, which can only select one character
+at a time, so convert CC-CEDICT first.
 
 **Several dictionaries in one language.** Give each its own folder, such as `en/collins/` and `en/wiktionary/`. A
 lookup checks all of the book language's dictionaries, up to four, and shows every entry it finds as one run of
@@ -1170,6 +1180,28 @@ English, and any language without rules of its own, falls back to plurals, posse
 The rules cover regular word forms. French verbs that share no stem with their infinitive — `est` and `fut` for
 *être*, `ont` and `eut` for *avoir*, `vais` for *aller* — cannot be reached by any rule, and need a `.syn` file
 in the dictionary folder instead. Many dictionaries ship one; see [docs/dictionary.md](docs/dictionary.md).
+
+### 6.6 Chinese Books
+
+A book tagged `zh` in any form (`zh-CN`, `zh-Hans`, `zh-TW`, `zh-Hant`, `zh-HK`, `cmn`) is read with the same
+tools as a Japanese one, once `dictionaries/zh/` holds a converted dictionary (§6.5):
+
+- **Word Lookup** scans the page into dictionary words by longest match and lands only on words with an entry,
+  exactly as in §6.2. There is nothing to deinflect, so every form on the page is looked up as written. The entry
+  opens with the pinyin above the glosses (and zhuyin after it, when the dictionary was converted with `--zhuyin`),
+  then the other script's form of the word when it differs (`說話 / 说话`), then the definitions. A word in both
+  CC-CEDICT and the MoE dictionary shows the MoE entry under the English one.
+- **Vertical Text** is offered in Reader Settings for every Chinese book and starts off. Turn it on for a Taiwanese
+  novel and the page is set in right-to-left columns; a traditional-Chinese book centres 。，、 in their square,
+  as Taiwanese print does, while a simplified one keeps the Japanese upper-right placement. The choice is
+  remembered per book, like the Japanese toggle.
+- **Manhua** converted with `--language zh` get the same in-bubble lookup as manga (§6.4).
+- **Sentence mining** files Chinese cards in `sentences-zh.csv`, with the pinyin in the reading column.
+- **Fonts.** The built-in CJK glyphs cover the common Japanese characters only, so install a Noto Sans SC or TC
+  font from **Settings → Manage Fonts** (or convert one, README Setup step 3). The font is picked by the book's
+  tag: SC for simplified, TC for traditional. With only a Japanese font on the card, Chinese renders in Japanese
+  glyph shapes, which is readable but not what a Chinese book looks like in print. Without any SD font, everyday
+  simplified characters show as empty boxes, and so do Chinese titles on the Home screen.
 
 ## 7. Reading Stats
 

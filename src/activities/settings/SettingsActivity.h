@@ -11,6 +11,7 @@
 #include "CrossPointSettings.h"
 #include "activities/UiTabListActivity.h"
 #include "components/OptionPopup.h"
+#include "util/CjkScript.h"
 
 enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
 
@@ -232,7 +233,9 @@ struct SettingInfo {
 class SettingsActivity final : public UiTabListActivity {
   int initialCategory = 0;
   bool finishOnBack = false;
-  bool japaneseBook = false;
+  // Script of the book that pushed this screen (None from Home or a Latin book). CJK books use
+  // the converted-dictionary flow, so the StarDict picker is omitted for them.
+  CjkScript bookScript = CjkScript::None;
   std::string dictionaryLanguage;
   // Vertical Text / Furigana: per-book overrides that live on the pushing reader activity, not
   // in CrossPointSettings. showReaderToggles gates whether they appear at all (mirrors the
@@ -340,7 +343,7 @@ class SettingsActivity final : public UiTabListActivity {
   // mangaMode hides settings that do not apply to image-based manga books.
   // hideMangaOnlySettings hides Rotate Panels in non-manga embedded Reader Settings.
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
-                            const bool finishOnBack = false, const bool japaneseBook = false,
+                            const bool finishOnBack = false, const CjkScript bookScript = CjkScript::None,
                             std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
                             const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
                             const bool mangaMode = false, const bool hideMangaOnlySettings = false,
@@ -348,7 +351,7 @@ class SettingsActivity final : public UiTabListActivity {
       : UiTabListActivity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),
-        japaneseBook(japaneseBook),
+        bookScript(bookScript),
         dictionaryLanguage(std::move(dictionaryLanguage)),
         showReaderToggles(showReaderToggles),
         verticalTextState(verticalTextEnabled),

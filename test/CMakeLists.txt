@@ -74,6 +74,7 @@ add_subdirectory(side_buttons)
 add_subdirectory(button_press_navigation)
 add_subdirectory(tab_ring)
 add_subdirectory(sentence_mining)
+add_subdirectory(cjk_script)
 
 add_subdirectory(inflate_stream)
 add_subdirectory(fs_helpers)

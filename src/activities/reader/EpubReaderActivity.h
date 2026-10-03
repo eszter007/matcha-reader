@@ -17,6 +17,7 @@
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
+#include "util/CjkScript.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -689,7 +690,17 @@ class EpubReaderActivity final : public ReaderActivity {
 
   bool useFurigana() const;
   bool isJapaneseBook() const;
+  bool isChineseBook() const;
+  // Japanese or Chinese: contiguous CJK text that uses the scan-based word lookup, the vertical
+  // layout engine and a CJK companion font.
+  bool isCjkBook() const { return bookScript() != CjkScript::None; }
+  // From dc:language. None for every non-CJK tag.
+  CjkScript bookScript() const;
+  // What the page is set in: the book's script, or Japanese when vertical text is forced on a
+  // book with no CJK tag (the same signal useVerticalText() reads).
+  CjkScript fontScript() const;
   bool showVerticalToggle() const;
+  bool hideGenericLookup() const;
   void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
 
   // The orientation the current layout was built for. The control center's

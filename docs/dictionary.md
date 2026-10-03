@@ -2,6 +2,10 @@
 
 Look up words while reading an EPUB using an offline StarDict dictionary stored on the SD card.
 
+Japanese and Chinese books do not use StarDict: they read converted files from `/dictionaries/jp/` and
+`/dictionaries/zh/`, because their text has no word spaces and the lookup segments the page by dictionary word.
+See the README's Setup section for the converter commands; everything below is about the other languages.
+
 ## Supported Format
 
 The reader supports **StarDict** dictionaries. When searching for dictionaries online, look for "StarDict format" or files with `.dict`, `.idx`, and `.ifo` extensions.

@@ -1,14 +1,20 @@
-#!/ usr / bin / env python3
+#!/usr/bin/env python3
 """Convert dictionary files to binary index files for CrossPoint Reader.
 
 Supported input formats:
+  Japanese (--lang ja, the default)
   - jmdict-simplified JSON (.json / .json.tgz)
   - Yomitan/Yomichan (.zip containing term_bank_N.json)
   - MDict (.mdx) — requires: pip install readmdict
+  Chinese (--lang zh)
+  - CC-CEDICT raw text (.u8 / .txt: "繁體 简体 [pin1 yin1] /gloss/gloss/")
+  - MoE 重編國語辭典 as the g0v moedict JSON (dict-revised.json, also .json.xz)
+  - Yomitan .zip (e.g. the CC-CEDICT Yomitan build) and MDict .mdx, as above
 
 Emits (basename set by --name, default "vocab"):
-  vocab.idx  -- sorted array of 40-byte records (headword + offset + length + priority)
-  vocab.dat  -- variable-length definition text blob
+  vocab.idx   -- sorted array of 40-byte records (headword + offset + length + priority)
+  vocab.dat   -- variable-length definition text blob
+  vocab.title -- the dictionary's display name (Chinese, or when --title is given)
 
 Usage:
 #JMdict(default — downloads if no-- input given)
@@ -19,10 +25,19 @@ Usage:
 
 #MDict.mdx file
     python3 convert_jmdict.py --input dictionary.mdx --output-dir ./output
+
+#Chinese : CC - CEDICT, ranked by a frequency list, with zhuyin beside the pinyin
+    python3 convert_jmdict.py --lang zh --input cedict_1_0_ts_utf-8_mdbg.txt \
+        --frequency dict.txt --zhuyin --output-dir /sd/dictionaries/zh/
+
+#Chinese : CC - CEDICT and the MoE dictionary merged into one vocabulary file
+    python3 convert_jmdict.py --lang zh --input cedict_ts.u8 --input dict-revised.json.xz \
+        --output-dir /sd/dictionaries/zh/
 """
 
 import argparse
 import json
+import math
 import os
 import re
 import struct
@@ -54,10 +69,11 @@ def strip_html(html: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def write_binary(records: list, output_dir: str, name: str = "vocab"):
+def write_binary(records: list, output_dir: str, name: str = "vocab", title: str = ""):
     """Write (headword_bytes, definition_bytes, priority, pos_flags) tuples to idx+dat files.
 
-    Expects records to be pre-validated (headword_bytes < HEADWORD_SIZE).
+    Expects records to be pre-validated (headword_bytes < HEADWORD_SIZE). A non-empty title is
+    written to <name>.title, which the device shows in the lookup panel's footer.
     """
     records.sort(key=lambda r: r[0])
 
@@ -69,25 +85,20 @@ def write_binary(records: list, output_dir: str, name: str = "vocab"):
     index_entries = []
 
     with open(dat_path, "wb") as dat_f:
-        prev_def = None
-        prev_offset = 0
-        prev_length = 0
+        # One copy per distinct definition: a Chinese entry is indexed under both its traditional
+        # and simplified form, which sort far apart, and a Japanese one under kanji and kana.
+        stored = {}
 
         for hw_bytes, def_bytes, priority, pos_flags in records:
-            if def_bytes == prev_def:
-                offset = prev_offset
-                length = prev_length
-            else:
-                offset = dat_offset
-                length = len(def_bytes)
-                if length > 0xFFFF:
-                    length = 0xFFFF
-                    def_bytes = def_bytes[:0xFFFF]
+            if len(def_bytes) > 0xFFFF:
+                def_bytes = def_bytes[:0xFFFF]
+            hit = stored.get(def_bytes)
+            if hit is None:
+                hit = (dat_offset, len(def_bytes))
                 dat_f.write(def_bytes)
                 dat_offset += len(def_bytes)
-                prev_def = def_bytes
-                prev_offset = offset
-                prev_length = length
+                stored[def_bytes] = hit
+            offset, length = hit
 
             padded_hw = hw_bytes + b"\x00" * (HEADWORD_SIZE - len(hw_bytes))
             index_entries.append((padded_hw, offset, length, priority, pos_flags))
@@ -96,11 +107,22 @@ def write_binary(records: list, output_dir: str, name: str = "vocab"):
         for padded_hw, offset, length, priority, pos_flags in index_entries:
             idx_f.write(struct.pack(RECORD_FORMAT, padded_hw, offset, length, priority, pos_flags))
 
+    title_path = os.path.join(output_dir, f"{name}.title")
+    # The device reads the first 39 bytes; keep whole characters within that.
+    title = title.strip().encode("utf-8")[:36].decode("utf-8", errors="ignore").strip()
+    if title:
+        with open(title_path, "w", encoding="utf-8") as title_f:
+            title_f.write(title + "\n")
+    elif os.path.exists(title_path):
+        os.remove(title_path)  # a stale name from an earlier conversion would mislabel this one
+
     dat_size = os.path.getsize(dat_path)
     idx_size = os.path.getsize(idx_path)
     print(f"Output:")
     print(f"  {idx_path}: {idx_size:,} bytes ({len(index_entries):,} records)")
     print(f"  {dat_path}: {dat_size:,} bytes")
+    if title:
+        print(f"  {title_path}: {title}")
     print(f"  Total: {(idx_size + dat_size) / 1024 / 1024:.1f} MB")
 
 # ── JMdict(jmdict - simplified JSON) ─────────────────────────────
@@ -213,8 +235,8 @@ def format_definition_jmdict(entry: dict) -> str:
     return "\n".join(parts)
 
 
-def convert_jmdict(json_path: str, output_dir: str, name: str = "vocab"):
-    """Convert JMdict JSON to binary index + data files."""
+def convert_jmdict(json_path: str) -> list:
+    """Convert JMdict JSON to index records."""
     print(f"Loading {json_path}...")
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -252,7 +274,7 @@ def convert_jmdict(json_path: str, output_dir: str, name: str = "vocab"):
             records.append((hw_bytes, def_bytes, priority, kana_flags))
 
     print(f"Generated {len(records)} index records")
-    write_binary(records, output_dir, name)
+    return records
 
 # ── Yomitan / Yomichan(.zip) ───────────────────────────────────
 
@@ -428,11 +450,17 @@ def find_redirect_target(definitions) -> str:
     return search(definitions)
 
 
-def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
-    """Convert a Yomitan/Yomichan .zip dictionary to binary index + data files."""
+def convert_yomitan(zip_path: str, reading_records: bool = True) -> tuple:
+    """Convert a Yomitan/Yomichan .zip dictionary to index records.
+
+    reading_records=False skips the extra record per kana reading. Chinese dictionaries carry
+    pinyin in the reading field, which no page text ever matches, so the records would only
+    bloat the index. Returns (records, title).
+    """
     import zipfile
 
     print(f"Loading {zip_path}...")
+    title = ""
 
     with zipfile.ZipFile(zip_path, "r") as z:
         names = z.namelist()
@@ -440,7 +468,8 @@ def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
         if "index.json" in names:
             with z.open("index.json") as f:
                 meta = json.load(f)
-            print(f"  Dictionary: {meta.get('title', '(unknown)')}")
+            title = str(meta.get("title", ""))
+            print(f"  Dictionary: {title or '(unknown)'}")
             print(f"  Format version: {meta.get('format', meta.get('version', '?'))}")
 
         term_banks = sorted(n for n in names if re.match(r"term_bank_\d+\.json$", n))
@@ -504,7 +533,7 @@ def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
                 seen_headwords.add(hw_bytes)
                 records.append((hw_bytes, def_bytes, priority, pos_flags))
 
-            if reading and reading != headword and not redirect:
+            if reading_records and reading and reading != headword and not redirect:
                 r_bytes = reading.encode("utf-8")
                 if len(r_bytes) < HEADWORD_SIZE and r_bytes not in seen_headwords:
                     r_def = format_definition_yomitan(reading, reading, definitions)
@@ -517,13 +546,13 @@ def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
             entry_count += 1
 
     print(f"Processed {entry_count} Yomitan entries → {len(records)} index records")
-    write_binary(records, output_dir, name)
+    return records, title
 
 # ── MDict(.mdx) ────────────────────────────────────────────────
 
 
-def convert_mdict(mdx_path: str, output_dir: str, name: str = "vocab"):
-    """Convert an MDict .mdx file to binary index + data files.
+def convert_mdict(mdx_path: str) -> list:
+    """Convert an MDict .mdx file to index records.
 
     Requires: pip install readmdict
     Optional: pip install python-lzo  (for LZO-compressed dictionaries)
@@ -573,36 +602,340 @@ def convert_mdict(mdx_path: str, output_dir: str, name: str = "vocab"):
         entry_count += 1
 
     print(f"Processed {entry_count} MDict entries ({skipped} skipped) → {len(records)} index records")
-    write_binary(records, output_dir, name)
+    return records
+
+# ── Chinese : pinyin and zhuyin ────────────────────────────────
+
+_TONE_MARKS = {
+    "a": "āáǎà", "e": "ēéěè", "i": "īíǐì", "o": "ōóǒò", "u": "ūúǔù", "ü": "ǖǘǚǜ",
+    "A": "ĀÁǍÀ", "E": "ĒÉĚÈ", "I": "ĪÍǏÌ", "O": "ŌÓǑÒ", "U": "ŪÚǓÙ", "Ü": "ǕǗǙǛ",
+}
+_SYLLABLE_RE = re.compile(r"^([A-Za-zü:]+?)([1-5])$")
+
+
+def pinyin_syllable_to_marks(syllable: str) -> str:
+    """'ni3' -> 'nǐ', 'lu:4' -> 'lǜ', 'ma5' -> 'ma'. Anything else is returned unchanged."""
+    m = _SYLLABLE_RE.match(syllable)
+    if not m:
+        return syllable
+    base = m.group(1).replace("u:", "ü").replace("U:", "Ü")
+    tone = int(m.group(2))
+    if tone == 5:
+        return base
+    lower = base.lower()
+    if "a" in lower:
+        idx = lower.index("a")
+    elif "e" in lower:
+        idx = lower.index("e")
+    elif "ou" in lower:
+        idx = lower.index("ou")
+    else:
+        idx = -1
+        for i, ch in enumerate(lower):
+            if ch in "aeiouü":
+                idx = i  # the LAST vowel takes the mark (iu -> iù, ui -> uì)
+        if idx < 0:
+            return base  # m2, ng2, hm5: no vowel to mark
+    marked = _TONE_MARKS[base[idx]][tone - 1]
+    return base[:idx] + marked + base[idx + 1:]
+
+
+def pinyin_to_marks(numbered: str) -> str:
+    """Convert a space-separated numbered-tone string ('ni3 hao3') to diacritics."""
+    return " ".join(pinyin_syllable_to_marks(part) for part in numbered.split(" "))
+
+
+_ZHUYIN_INITIALS = [
+    ("zh", "ㄓ"), ("ch", "ㄔ"), ("sh", "ㄕ"), ("b", "ㄅ"), ("p", "ㄆ"), ("m", "ㄇ"), ("f", "ㄈ"),
+    ("d", "ㄉ"), ("t", "ㄊ"), ("n", "ㄋ"), ("l", "ㄌ"), ("g", "ㄍ"), ("k", "ㄎ"), ("h", "ㄏ"),
+    ("j", "ㄐ"), ("q", "ㄑ"), ("x", "ㄒ"), ("r", "ㄖ"), ("z", "ㄗ"), ("c", "ㄘ"), ("s", "ㄙ"),
+]
+_ZHUYIN_FINALS = {
+    "a": "ㄚ", "o": "ㄛ", "e": "ㄜ", "ê": "ㄝ", "ai": "ㄞ", "ei": "ㄟ", "ao": "ㄠ", "ou": "ㄡ",
+    "an": "ㄢ", "en": "ㄣ", "ang": "ㄤ", "eng": "ㄥ", "er": "ㄦ", "i": "ㄧ", "ia": "ㄧㄚ",
+    "io": "ㄧㄛ", "ie": "ㄧㄝ", "iai": "ㄧㄞ", "iao": "ㄧㄠ", "iu": "ㄧㄡ", "ian": "ㄧㄢ",
+    "in": "ㄧㄣ", "iang": "ㄧㄤ", "ing": "ㄧㄥ", "iong": "ㄩㄥ", "u": "ㄨ", "ua": "ㄨㄚ",
+    "uo": "ㄨㄛ", "uai": "ㄨㄞ", "ui": "ㄨㄟ", "uan": "ㄨㄢ", "un": "ㄨㄣ", "uang": "ㄨㄤ",
+    "ueng": "ㄨㄥ", "ong": "ㄨㄥ", "ü": "ㄩ", "üe": "ㄩㄝ", "üan": "ㄩㄢ", "ün": "ㄩㄣ",
+}
+# Syllables written with y/w carry the medial in the spelling, not in a separate initial.
+_ZHUYIN_WHOLE = {
+    "zhi": "ㄓ", "chi": "ㄔ", "shi": "ㄕ", "ri": "ㄖ", "zi": "ㄗ", "ci": "ㄘ", "si": "ㄙ",
+    "yi": "ㄧ", "ya": "ㄧㄚ", "yo": "ㄧㄛ", "ye": "ㄧㄝ", "yai": "ㄧㄞ", "yao": "ㄧㄠ", "you": "ㄧㄡ",
+    "yan": "ㄧㄢ", "yin": "ㄧㄣ", "yang": "ㄧㄤ", "ying": "ㄧㄥ", "yong": "ㄩㄥ",
+    "wu": "ㄨ", "wa": "ㄨㄚ", "wo": "ㄨㄛ", "wai": "ㄨㄞ", "wei": "ㄨㄟ", "wan": "ㄨㄢ", "wen": "ㄨㄣ",
+    "wang": "ㄨㄤ", "weng": "ㄨㄥ",
+    "yu": "ㄩ", "yue": "ㄩㄝ", "yuan": "ㄩㄢ", "yun": "ㄩㄣ",
+    "r": "ㄦ", "m": "ㄇ", "n": "ㄋ", "ng": "ㄫ", "hm": "ㄏㄇ", "hng": "ㄏㄫ",
+}
+_ZHUYIN_TONES = {1: "", 2: "ˊ", 3: "ˇ", 4: "ˋ"}
+
+
+def pinyin_syllable_to_zhuyin(syllable: str) -> str:
+    """'ni3' -> 'ㄋㄧˇ', 'lu:4' -> 'ㄌㄩˋ', 'ma5' -> '˙ㄇㄚ'. Unknown syllables come back unchanged."""
+    m = _SYLLABLE_RE.match(syllable)
+    if not m:
+        return syllable
+    base = m.group(1).lower().replace("u:", "ü").replace("v", "ü")
+    tone = int(m.group(2))
+    body = _ZHUYIN_WHOLE.get(base)
+    if body is None:
+        initial = ""
+        rest = base
+        for latin, bopomofo in _ZHUYIN_INITIALS:
+            if base.startswith(latin):
+                initial, rest = bopomofo, base[len(latin):]
+                break
+        # After j/q/x (and y, handled above) a written u is ü.
+        if initial in ("ㄐ", "ㄑ", "ㄒ") and rest.startswith("u"):
+            rest = "ü" + rest[1:]
+        final = _ZHUYIN_FINALS.get(rest)
+        if final is None or (not initial and rest != base):
+            return syllable
+        body = initial + final
+    if tone == 5:
+        return "˙" + body
+    return body + _ZHUYIN_TONES[tone]
+
+
+def pinyin_to_zhuyin(numbered: str) -> str:
+    return " ".join(pinyin_syllable_to_zhuyin(part) for part in numbered.split(" "))
+
+
+_BRACKETED_PINYIN_RE = re.compile(r"\[([A-Za-z0-9:\u00fc\u00dc ,]+)\]")
+
+
+def prettify_cedict_gloss(gloss: str) -> str:
+    """CEDICT glosses embed numbered pinyin in brackets (CL:個|个[ge4], see 你好[ni3 hao3])."""
+    return _BRACKETED_PINYIN_RE.sub(lambda m: "[" + pinyin_to_marks(m.group(1)) + "]", gloss)
+
+
+# ── Chinese : frequency ranking ────────────────────────────────
+
+_HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\U00020000-\U0003134f]")
+UNRANKED_PRIORITY = 60  # entries absent from the frequency list
+
+
+def rank_to_priority(rank: int) -> int:
+    """1 -> 255, 10 -> 227, 1000 -> 171, 100000 -> 115: log-scaled so the common words spread."""
+    return max(UNRANKED_PRIORITY + 1, min(255, 255 - int(round(28 * math.log10(rank)))))
+
+
+def load_frequency(path: str, kind: str = "auto") -> dict:
+    """Read a word list into {word: priority}.
+
+    Accepts jieba dict.txt ("word count pos"), BCC/SUBTLEX exports ("word<TAB>count"), and
+    graded lists such as HSK or TOCFL CSVs where the order of the rows IS the ranking. The word
+    is the first Han field of each row; a count is the first number after it. kind=auto ranks by
+    count when most rows carry one, else by row order; count/rank force either.
+    """
+    rows = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip().lstrip("\ufeff")
+            if not line or line.startswith("#"):
+                continue
+            fields = [x.strip().strip('"') for x in re.split(r"[\t,]|\s+", line) if x.strip()]
+            word = next((x for x in fields if _HAN_RE.search(x)), None)
+            if not word:
+                continue
+            count = None
+            for x in fields[fields.index(word) + 1:]:
+                try:
+                    count = float(x)
+                    break
+                except ValueError:
+                    continue
+            rows.append((word, count))
+    if not rows:
+        print(f"WARNING: no words found in frequency list {path}", file=sys.stderr)
+        return {}
+    with_count = sum(1 for _, c in rows if c is not None)
+    # A graded list's level column is numeric too (HSK 1-9, TOCFL 1-7), but it is not a count:
+    # auto treats small numbers as levels and keeps the file's own order.
+    largest = max((c for _, c in rows if c is not None), default=0.0)
+    use_count = kind == "count" or (kind == "auto" and with_count >= 0.8 * len(rows) and largest > 100)
+    if use_count:
+        rows.sort(key=lambda r: -(r[1] or 0.0))
+    priorities = {}
+    for rank, (word, _) in enumerate(rows, start=1):
+        p = rank_to_priority(rank)
+        if p > priorities.get(word, 0):
+            priorities[word] = p
+    print(f"Frequency list {path}: {len(priorities):,} words, ranked by {'count' if use_count else 'row order'}")
+    return priorities
+
+
+def apply_frequency(records: list, priorities: dict) -> list:
+    if not priorities:
+        return records
+    return [(hw, d, priorities.get(hw.decode("utf-8"), UNRANKED_PRIORITY), pos) for hw, d, _, pos in records]
+
+
+# ── CC - CEDICT(.u8 / .txt) ────────────────────────────────────
+
+_CEDICT_LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[([^\]]*)\]\s+/(.*)/\s*$")
+
+
+def format_definition_cedict(trad: str, simp: str, pinyin: str, glosses: list, zhuyin: bool) -> str:
+    reading = pinyin_to_marks(pinyin)
+    if zhuyin:
+        reading += " " + pinyin_to_zhuyin(pinyin)
+    parts = ["【" + reading + "】"]
+    if trad != simp:
+        parts.append(f"{trad} / {simp}")
+    glosses = [prettify_cedict_gloss(g) for g in glosses if g][:12]
+    if len(glosses) == 1:
+        parts.append(glosses[0])
+    else:
+        parts.extend(f"{i + 1}. {g}" for i, g in enumerate(glosses))
+    return "\n".join(parts)
+
+
+def convert_cedict(path: str, zhuyin: bool = False) -> list:
+    """Convert a raw CC-CEDICT file to index records, one per traditional and simplified form."""
+    print(f"Loading {path}...")
+    records = []
+    entries = 0
+    skipped = 0
+    opener = __import__("gzip").open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not line or line.startswith("#"):
+                continue
+            m = _CEDICT_LINE_RE.match(line.rstrip("\n"))
+            if not m:
+                skipped += 1
+                continue
+            trad, simp, pinyin, body = m.groups()
+            glosses = [g.strip() for g in body.split("/")]
+            definition = format_definition_cedict(trad, simp, pinyin, glosses, zhuyin)
+            def_bytes = definition.encode("utf-8")
+            entries += 1
+            for hw in dict.fromkeys((trad, simp)):  # both forms, once each
+                hw_bytes = hw.encode("utf-8")
+                if len(hw_bytes) >= HEADWORD_SIZE:
+                    skipped += 1
+                    continue
+                records.append((hw_bytes, def_bytes, 100, POS_OTHER))
+    print(f"Processed {entries} CC-CEDICT entries ({skipped} skipped) → {len(records)} index records")
+    return records
+
+
+# ── MoE 重編國語辭典(g0v moedict JSON) ─────────────────────────
+
+_MOE_GLYPH_REF_RE = re.compile(r"\{\[[0-9a-fA-F]+\]\}")
+
+
+def _moe_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return " ".join(_moe_text(v) for v in value)
+    text = strip_html(str(value))
+    return _MOE_GLYPH_REF_RE.sub("□", text).strip()
+
+
+def format_definition_moedict(entry: dict) -> str:
+    parts = []
+    for heteronym in entry.get("heteronyms", [])[:3]:
+        reading = " · ".join(x for x in (_moe_text(heteronym.get("bopomofo")), _moe_text(heteronym.get("pinyin"))) if x)
+        if reading:
+            parts.append("【" + reading + "】")
+        definitions = heteronym.get("definitions", [])[:8]
+        numbered = len(definitions) > 1
+        for i, d in enumerate(definitions):
+            line = ""
+            kind = _moe_text(d.get("type"))
+            if kind:
+                line += f"[{kind}] "
+            if numbered:
+                line += f"{i + 1}. "
+            line += _moe_text(d.get("def"))
+            parts.append(line)
+            for example in (d.get("example") or [])[:2]:
+                parts.append("  " + _moe_text(example))
+            for quote in (d.get("quote") or [])[:1]:
+                parts.append("  " + _moe_text(quote))
+    return "\n".join(p for p in parts if p.strip())
+
+
+def convert_moedict(path: str) -> list:
+    """Convert the g0v dict-revised.json (MoE 重編國語辭典修訂本) to index records."""
+    print(f"Loading {path}...")
+    if path.endswith(".xz"):
+        import lzma
+        with lzma.open(path, "rt", encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    records = []
+    skipped = 0
+    for entry in data:
+        title = _moe_text(entry.get("title", ""))
+        if not title or "□" in title:
+            skipped += 1
+            continue
+        definition = format_definition_moedict(entry)
+        if not definition:
+            skipped += 1
+            continue
+        hw_bytes = title.encode("utf-8")
+        if len(hw_bytes) >= HEADWORD_SIZE:
+            skipped += 1
+            continue
+        # Below CC-CEDICT's default so a merged file shows the bilingual entry first.
+        records.append((hw_bytes, definition.encode("utf-8"), 90, POS_OTHER))
+    print(f"Processed {len(records)} MoE entries ({skipped} skipped)")
+    return records
 
 # ── Format detection & main ─────────────────────────────────────
 
 
-def detect_format(path: str) -> str:
-    """Detect input format from file extension."""
-    lower = path.lower()
+def detect_format(path: str, lang: str = "ja") -> str:
+    """Detect input format from file extension (and, for Chinese, the file name)."""
+    lower = os.path.basename(path.lower())
     if lower.endswith(".mdx"):
         return "mdict"
     if lower.endswith(".zip"):
         return "yomitan"
+    if lower.endswith(".u8") or lower.endswith(".u8.gz") or "cedict" in lower:
+        return "cedict"
+    if lang == "zh" and (lower.endswith(".json") or lower.endswith(".json.xz")):
+        return "moedict"
     if lower.endswith(".json") or lower.endswith(".json.tgz") or lower.endswith(".tgz"):
         return "jmdict"
+    if lang == "zh":
+        return "cedict"
     return "jmdict"
+
+
+DEFAULT_TITLES = {"cedict": "CC-CEDICT", "moedict": "MoE 國語辭典", "jmdict": ""}
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Convert dictionary files to CrossPoint binary index.\n\n"
-        "Supported formats: JMdict JSON, Yomitan .zip, MDict .mdx",
+        "Supported formats: JMdict JSON, Yomitan .zip, MDict .mdx, CC-CEDICT text, MoE (g0v) JSON",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--input",
-        help="Path to input dictionary file. Format auto-detected from extension: "
-        ".json/.tgz → JMdict, .zip → Yomitan, .mdx → MDict. "
-        "If omitted, downloads jmdict-simplified.",
+        action="append",
+        help="Path to an input dictionary file. Format auto-detected from extension: "
+        ".json/.tgz → JMdict, .zip → Yomitan, .mdx → MDict, .u8/.txt → CC-CEDICT, "
+        ".json(.xz) with --lang zh → MoE. Repeat to merge several dictionaries into one file; "
+        "a word in both shows both entries. If omitted, downloads jmdict-simplified.",
     )
     parser.add_argument("--output-dir", default="output", help="Output directory (default: output)")
+    parser.add_argument(
+        "--lang",
+        default="ja",
+        choices=["ja", "zh"],
+        help="Language of the dictionary: ja (default) or zh. Chinese skips the reading records "
+        "(pinyin never appears in page text) and names the dictionary for the lookup footer.",
+    )
     parser.add_argument(
         "--name",
         default="vocab",
@@ -614,22 +947,38 @@ def main():
     )
     parser.add_argument(
         "--format",
-        choices=["jmdict", "yomitan", "mdict"],
-        help="Force input format (overrides auto-detection)",
+        choices=["jmdict", "yomitan", "mdict", "cedict", "moedict"],
+        help="Force input format for every --input (overrides auto-detection)",
+    )
+    parser.add_argument(
+        "--title",
+        help="Dictionary name shown in the lookup panel footer (written to <name>.title). "
+        "Defaults to the Yomitan title, CC-CEDICT, or MoE 國語辭典 for Chinese inputs.",
+    )
+    parser.add_argument(
+        "--zhuyin",
+        action="store_true",
+        help="CC-CEDICT: show zhuyin (bopomofo) beside the pinyin, for Taiwanese Mandarin.",
+    )
+    parser.add_argument(
+        "--frequency",
+        help="Word list that ranks the entries (jieba dict.txt, a BCC/SUBTLEX export, or a graded "
+        "HSK/TOCFL CSV). Common words get a higher priority, which orders the entries shown "
+        "for a word found in several dictionaries.",
+    )
+    parser.add_argument(
+        "--frequency-kind",
+        default="auto",
+        choices=["auto", "count", "rank"],
+        help="How to read --frequency: by the count column, by row order, or auto (default).",
     )
     args = parser.parse_args()
 
-    if args.input:
-        fmt = args.format or detect_format(args.input)
-        print(f"Detected format: {fmt}")
-
-        if fmt == "mdict":
-            convert_mdict(args.input, args.output_dir, args.name)
-        elif fmt == "yomitan":
-            convert_yomitan(args.input, args.output_dir, args.name)
-        else:
-            convert_jmdict(args.input, args.output_dir, args.name)
-    else:
+    if not args.input:
+        if args.lang == "zh":
+            print("Error: --lang zh needs --input (a CC-CEDICT file, MoE JSON, Yomitan zip or .mdx).",
+                  file=sys.stderr)
+            sys.exit(1)
         if args.name != "vocab":
             print(
                 f"Error: --name {args.name} without --input would write the auto-downloaded "
@@ -639,8 +988,39 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        json_path = download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))
-        convert_jmdict(json_path, args.output_dir, args.name)
+        args.input = [download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))]
+
+    records = []
+    titles = []
+    for path in args.input:
+        fmt = args.format or detect_format(path, args.lang)
+        print(f"{path}: format {fmt}")
+        title = DEFAULT_TITLES.get(fmt, "")
+        if fmt == "mdict":
+            part = convert_mdict(path)
+            title = os.path.splitext(os.path.basename(path))[0]
+        elif fmt == "yomitan":
+            part, title = convert_yomitan(path, reading_records=args.lang == "ja")
+        elif fmt == "cedict":
+            part = convert_cedict(path, zhuyin=args.zhuyin)
+        elif fmt == "moedict":
+            part = convert_moedict(path)
+        else:
+            part = convert_jmdict(path)
+        records.extend(part)
+        if title:
+            titles.append(title)
+
+    if args.frequency:
+        records = apply_frequency(records, load_frequency(args.frequency, args.frequency_kind))
+
+    title = args.title or ""
+    if not title and args.lang == "zh" and titles:
+        joined = " + ".join(dict.fromkeys(titles))
+        title = joined if len(joined.encode("utf-8")) <= 36 else titles[0]
+    write_binary(records, args.output_dir, args.name, title)
+    if args.lang == "zh":
+        print("Install under /dictionaries/zh/ on the SD card (or /.dictionaries/zh/).")
 
 
 if __name__ == "__main__":

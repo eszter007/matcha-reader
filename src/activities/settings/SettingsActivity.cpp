@@ -89,9 +89,10 @@ void SettingsActivity::rebuildSettingsLists() {
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
-  // Japanese books use their own dictionary flow, so omit the regular picker there.
+  // Japanese and Chinese books use their own dictionary flow, so omit the regular picker there.
   std::vector<DictionaryEntry> dictionaries;
-  if (!japaneseBook && (!finishOnBack || selectedCategoryIndex == 1)) DictionaryRegistry::discover(dictionaries);
+  const bool cjkBook = bookScript != CjkScript::None;
+  if (!cjkBook && (!finishOnBack || selectedCategoryIndex == 1)) DictionaryRegistry::discover(dictionaries);
 
   // Reader-launched settings lock the UI to one category while the book remains
   // resident. Avoid materializing every web/device setting in that low-heap path.
@@ -590,7 +591,7 @@ void SettingsActivity::toggleCurrentSetting() {
                                                                                 : StrId::STR_CAT_SHORTCUTS;
         startActivityForResult(
             std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/0, /*finishOnBack=*/true,
-                                               /*japaneseBook=*/false, std::string{}, /*showReaderToggles=*/false,
+                                               CjkScript::None, std::string{}, /*showReaderToggles=*/false,
                                                /*verticalTextEnabled=*/false, /*furiganaEnabled=*/false,
                                                /*mangaMode=*/false, /*hideMangaOnlySettings=*/false, category),
             [this](const ActivityResult&) {
@@ -669,7 +670,7 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::TextSettings:
         startActivityForResult(
             std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                   TextSettingsActivity::Tab::Family, japaneseBook, verticalTextState),
+                                                   TextSettingsActivity::Tab::Family, bookScript, verticalTextState),
             [this](const ActivityResult&) {
               saveSettings();
               rebuildSettingsLists();

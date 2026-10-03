@@ -73,12 +73,13 @@ static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MI
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                           const SdCardFontRegistry* registry, Tab initialTab, const bool japaneseBook,
-                                           const bool verticalText)
+                                           const SdCardFontRegistry* registry, Tab initialTab,
+                                           const CjkScript bookScript, const bool verticalText)
     : UiTabListActivity("TextSettings", renderer, mappedInput),
       registry_(registry),
       tab_(initialTab),
-      japaneseBook_(japaneseBook),
+      bookScript_(bookScript),
+      cjkBook_(bookScript != CjkScript::None),
       verticalText_(verticalText) {}
 
 const char* TextSettingsActivity::tabLabel(const int index) const { return I18N.get(TAB_NAME_IDS[index]); }
@@ -116,13 +117,13 @@ void TextSettingsActivity::rebuildFamilyList() {
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      // The JP extension families (NotoSansJP/NotoSerifJP) are the Japanese half of
+      // The CJK extension families (NotoSansJP/SC/TC and the serifs) are the CJK half of
       // the built-in Noto Serif/Sans entries, not fonts in their own right: listing
-      // them would show four Noto rows instead of two, and selecting one directly
+      // them would show many Noto rows instead of two, and selecting one directly
       // makes it the reader font for Latin books too, bypassing the coverage-driven
-      // companion logic in SdCardFontSystem::ensureJpFallback(). Hidden here for the
-      // same reason the settings picker hides them -- see isBuiltinJpExtension.
-      if (SdCardFontSystem::isBuiltinJpExtension(families[i].name)) continue;
+      // companion logic in SdCardFontSystem::ensureCjkFallback(). Hidden here for the
+      // same reason the settings picker hides them -- see isBuiltinCjkExtension.
+      if (SdCardFontSystem::isBuiltinCjkExtension(families[i].name)) continue;
       // Same reasoning for a wider-coverage cut of a family already on this list
       // (NotoSerifExtended over Noto Serif): one typeface is one row, and the base row's
       // selection resolves to whichever of the two suits the book being opened.
@@ -333,13 +334,14 @@ void TextSettingsActivity::drawChrome() {
   const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
                              ? sizes_[currentSizeIndex_].name.c_str()
                              : "";
-  // The two flags are independent: a Japanese book read horizontally is (true, false), and the
-  // reader passes isJapaneseBook() and useVerticalText() separately. cppcheck sees only ctor
-  // sites where they happen to agree and calls the operands the same value.
+  // The two inputs are independent: a Japanese book read horizontally is (Japanese, false), and
+  // the reader passes its script and useVerticalText() separately. A forced-vertical book with no
+  // CJK tag previews in the Japanese face, the same face the page renders with.
   // cppcheck-suppress knownConditionTrueFalse
-  const bool japaneseFace = japaneseBook_ || verticalText_;
+  const CjkScript previewScript =
+      bookScript_ != CjkScript::None ? bookScript_ : (verticalText_ ? CjkScript::Japanese : CjkScript::None);
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(japaneseFace));
+                              previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(previewScript));
 }
 
 // Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer
@@ -600,8 +602,8 @@ int TextSettingsActivity::listCount() const {
     case Tab::Layout:
       return visibleLayoutRows(nullptr);
     case Tab::Style:
-      // Japanese books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
-      return japaneseBook_ ? 2 : static_cast<int>(StyleRow::Count);
+      // CJK books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
+      return cjkBook_ ? 2 : static_cast<int>(StyleRow::Count);
     default:
       return 0;
   }
@@ -628,6 +630,6 @@ TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visi
 }
 
 TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {
-  if (!japaneseBook_) return static_cast<StyleRow>(visibleIndex);
+  if (!cjkBook_) return static_cast<StyleRow>(visibleIndex);
   return visibleIndex == 0 ? StyleRow::EmbeddedStyle : StyleRow::AntiAliasing;
 }

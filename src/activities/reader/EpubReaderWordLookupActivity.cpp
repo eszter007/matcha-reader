@@ -29,6 +29,16 @@
 #include "fontIds.h"
 #include "util/SentenceMining.h"
 
+namespace {
+// Footer name of the vocabulary dictionary: the converter's title file when it wrote one, else
+// the historical default for the Japanese folder, else a generic word for any other language.
+const char* vocabSourceName() {
+  const char* title = DictIndex::vocabTitle();
+  if (title && title[0] != '\0') return title;
+  return strcmp(DictIndex::languageFolder(), "jp") == 0 ? "JMdict" : tr(STR_DICTIONARY);
+}
+}  // namespace
+
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
                                                            const uint16_t spineIndex, const uint16_t pageIndex,
@@ -1116,7 +1126,11 @@ void EpubReaderWordLookupActivity::saveSentence() {
   // The footer label is "JMdict | Tatoeba [1][2]"; the card names the dictionary only.
   const std::string_view label = visibleLabel() ? visibleLabel() : "";
   card.dictionary = std::string(label.substr(0, label.find(" | ")));
-  miningStatus_ = sentencemining::append(card, sentencemining::JAPANESE) ? MiningStatus::Saved : MiningStatus::Failed;
+  // Filed under the book's language (the dictionary folder follows it); a book with no tag is
+  // Japanese, which is the only language the panel served before Chinese joined it.
+  std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
+  if (language.empty()) language = sentencemining::JAPANESE;
+  miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
   if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
   requestUpdate();
 }
@@ -1326,7 +1340,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     resultGrammar = std::move(metadata.grammar);
     resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
                    : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
-                                                                        : "JMdict";
+                                                                        : vocabSourceName();
     resultDictionaryLabel = std::move(metadata.source);
     prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;

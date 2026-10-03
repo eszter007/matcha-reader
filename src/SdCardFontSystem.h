@@ -5,6 +5,8 @@
 #include <SdCardFontRegistry.h>
 #include <VectorFontSupport.h>
 
+#include "util/CjkScript.h"
+
 #if CROSSPOINT_VECTOR_FONTS
 #include <FontPsram.h>  // PsramVector for resident TTF bytes
 #endif
@@ -42,11 +44,11 @@ class SdCardFontSystem {
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t pointSize) const;
 
-  /// Declare whether the current reading context needs proper Japanese rendering (Japanese
-  /// EPUB, forced vertical text, manga). The JP fallback font is only loaded while needed --
-  /// opening a non-CJK book must not pay the SD font load or hold its tables in RAM.
-  /// Applies immediately (loads/unloads the fallback and recomputes the global fallback).
-  void setJpFallbackNeeded(GfxRenderer& renderer, bool needed);
+  /// Declare which CJK script the current reading context needs rendered properly (a Japanese
+  /// or Chinese EPUB, forced vertical text, manga), or None. The companion font is only loaded
+  /// while needed -- opening a non-CJK book must not pay the SD font load or hold its tables in
+  /// RAM. Applies immediately (loads/unloads the fallback and recomputes the global fallback).
+  void setCjkFallbackNeeded(GfxRenderer& renderer, CjkScript script);
 
   /// Release every resident SD font -- the selected family, its companion fallback, their
   /// size-matched UI fallback registrations, and the glyph slabs FontCacheManager holds for
@@ -56,7 +58,7 @@ class SdCardFontSystem {
   /// which frees the glyph slabs but leaves the SdCardFont objects themselves allocated. The
   /// saved selection is kept, and so is the JP-fallback policy; ensureLoaded() restores both when
   /// text rendering is needed again. To drop the Japanese companion for good, the caller says so
-  /// with setJpFallbackNeeded(renderer, false) -- releasing memory does not decide policy.
+  /// with setCjkFallbackNeeded(renderer, CjkScript::None) -- releasing memory does not decide policy.
   void releaseAllResidentFonts(GfxRenderer& renderer);
 
   /// Font ID of the loaded companion/fallback font (0 when none). See effective-reader-font
@@ -71,7 +73,7 @@ class SdCardFontSystem {
   /// family; the companion is chosen for Japanese and would set an English book in a Japanese
   /// face). EVERY site that renders book text must ask this rather than getReaderFontId():
   /// layout, drawing and the settings preview alike, or they disagree about both face and size.
-  int effectiveReaderFontId(bool jpBook) const;
+  int effectiveReaderFontId(CjkScript script) const;
 
   /// True when the currently selected reader font covers the codepoint. Built-in fonts are
   /// treated as Latin-complete and CJK-less (their CJK subset is a degraded fallback, not
@@ -79,14 +81,16 @@ class SdCardFontSystem {
   bool selectedFontCovers(uint32_t cp) const;
 
   /// True for SD families that are the CJK extension of a built-in family (NotoSansJP,
-  /// NotoSerifJP): hidden from font pickers and used automatically as the Japanese glyph
-  /// fallback instead of being selected directly.
-  static bool isBuiltinJpExtension(const std::string& familyName);
+  /// NotoSerifJP, and the SC/TC Chinese cuts): hidden from font pickers and used automatically
+  /// as the CJK glyph fallback instead of being selected directly.
+  static bool isBuiltinCjkExtension(const std::string& familyName);
+  /// Which script an extension family is cut for (None for any other family).
+  static CjkScript extensionScript(const std::string& familyName);
 
   /// Families hidden from the picker that can nonetheless end up rendering the row named by
   /// `sdFamilyName` (empty for the built-in family `fontFamily`): the coverage variant that
   /// stands in for it (resolveSelectedFamily), and on a built-in row the JP companion that
-  /// carries a Japanese book (ensureJpFallback + EpubReaderActivity::effectiveReaderFontId).
+  /// carries a CJK book (ensureCjkFallback + EpubReaderActivity::effectiveReaderFontId).
   /// Their installed sizes are therefore selectable on that row -- see readerFontPointSizes().
   ///
   /// Writes up to `cap` entries into `out` and returns how many. Static and registry-driven so
@@ -154,19 +158,23 @@ class SdCardFontSystem {
   // stand-in choice in resolveSelectedFamily(): a size only a stand-in has must render with it.
   bool faceShipsSize(const std::string& familyName, uint8_t pt) const;
 
-  /// Below this largest-free-block figure, ensureJpFallback() drops the glyph caches before
+  /// Below this largest-free-block figure, ensureCjkFallback() drops the glyph caches before
   /// loading the companion. Set above the biggest single block that load asks for -- a broad CJK
   /// face's interval table at a large point size, measured at 26,592 B for NotoSansJP 20 -- so
   /// the release happens while it can still help rather than after the failure.
   static constexpr uint32_t COMPANION_LOAD_HEADROOM = 40 * 1024;
 
-  void ensureJpFallback(GfxRenderer& renderer, uint8_t pointSize);
+  void ensureCjkFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);
   bool loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name, uint32_t cp) const;
+  // The codepoint a face must carry to count as covering the current book's script.
+  uint32_t cjkProbe() const { return cjk::probeCodepoint(cjkScript_); }
+  bool cjkFallbackNeeded() const { return cjkScript_ != CjkScript::None; }
 
   SdCardFontManager fallbackManager_;
   const EpdFontFamily* defaultGlobalFallback_ = nullptr;
-  bool jpFallbackNeeded_ = false;
+  // Script of the open book (None = a Latin book: no companion wanted).
+  CjkScript cjkScript_ = CjkScript::None;
   // Load the active SD family at the built-in UI point sizes and register each
   // as a size-matched script fallback for the corresponding UI font, so book
   // titles/list rows in scripts the built-ins lack (CJK, Greek, Cyrillic, ...)
