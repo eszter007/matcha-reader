@@ -21,11 +21,16 @@ struct UiScreen {
     nav.syncToProps({0, 0, 200, height}, 20, 0, count, props, offset);
   }
 };
+struct TabRing {
+  enum class Focus { TopTabs, Content, BottomBar };
+};
 struct UiListActivity {
   fui::ListNav nav;
   int count = 16;
+  TabRing::Focus focus = TabRing::Focus::Content;
   fui::ListNav& activeNav() { return nav; }
   int listCount() const { return count; }
+  TabRing::Focus ringFocus() const { return focus; }
   void syncListViewport(UiScreen&, fui::ListProps&, int = 0);
 };
 """ + method + r"""
@@ -56,6 +61,18 @@ int main() {
     nav.requestSelection(3 + offset);
     activity.syncListViewport(screen, props, offset);
     assert(nav.top == 2 && props.topIndex == 2);
+
+    // One cursor on screen: a band holding the cursor draws no selected row, without touching
+    // the row selection, and content focus draws it again.
+    const int selected = nav.selected;
+    for (auto band : {TabRing::Focus::TopTabs, TabRing::Focus::BottomBar}) {
+      activity.focus = band;
+      activity.syncListViewport(screen, props, offset);
+      assert(props.selectedIndex == -1 && nav.selected == selected);
+    }
+    activity.focus = TabRing::Focus::Content;
+    activity.syncListViewport(screen, props, offset);
+    assert(props.selectedIndex == selected - offset && nav.selected == selected);
   }
 }
 """
