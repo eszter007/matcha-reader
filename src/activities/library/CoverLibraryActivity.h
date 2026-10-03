@@ -128,6 +128,9 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   // Clearing the flag is not enough: the frame still showing the selector has to be replaced,
   // and a touch that changes nothing else (a swipe against the end stop, a tap on the current
   // cover, a tap on the active tab) requests no redraw of its own.
+  // The content highlight is drawn only while the content holds the cursor: with it in the
+  // bottom bar, a second highlight on the last cover would read as two selections.
+  bool contentCursorShown() const { return selectorVisible && tabFocus < 0; }
   void hideSelector() {
     if (!selectorVisible) return;
     selectorVisible = false;

@@ -847,7 +847,12 @@ void CoverLibraryActivity::loop() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen_ = true;
   if (!confirmPressSeen_ && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) return;
-  if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) return;
+  if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) {
+    // TabRing took this key before the hold snapshot below was refreshed: a hold that follows
+    // must not restore the snapshot of some earlier press.
+    holdStartContentIndex_ = -1;
+    return;
+  }
   // Raw state catches the press before any early return below and cancels background SD/decode
   // work even when the debounced edge has not been emitted yet.
   if (mappedInput.anyButtonDownRaw()) {
@@ -1204,6 +1209,7 @@ void CoverLibraryActivity::loop() {
   // should do by scrolling past. Confirm or Left/Right on the tab band is the way there.
   buttonNavigator.onNextContinuous([this, &hasChangedTab, &restoreHoldStart] {
     restoreHoldStart();
+    if (tabFocus >= 0) return;  // a hold in the bottom bar steps nothing
     hasChangedTab = true;
     selectedTab = ButtonNavigator::nextIndex(selectedTab, TAB_COUNT);
     requestUpdate();
@@ -1211,6 +1217,7 @@ void CoverLibraryActivity::loop() {
 
   buttonNavigator.onPreviousContinuous([this, &hasChangedTab, &restoreHoldStart] {
     restoreHoldStart();
+    if (tabFocus >= 0) return;  // a hold in the bottom bar steps nothing
     hasChangedTab = true;
     selectedTab = ButtonNavigator::previousIndex(selectedTab, TAB_COUNT);
     requestUpdate();
@@ -1404,7 +1411,7 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(bookProgress.size()) ? bookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, recentBooks[idx].coverBmpPath, recentBooks[idx].title, pct,
-                 selectorVisible && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
+                 contentCursorShown() && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1516,7 +1523,7 @@ void CoverLibraryActivity::renderShelvesTab(int contentTop, int contentHeight) {
 
   for (int i = scrollOffset; i < std::min(scrollOffset + visibleItems, shelfCount); i++) {
     const int itemY = contentTop + (i - scrollOffset) * rowHeight;
-    drawShelfRow(i, itemY, selectorVisible && i == selectedItem);
+    drawShelfRow(i, itemY, contentCursorShown() && i == selectedItem);
   }
 
   if (shelfCount > visibleItems) {
@@ -1586,7 +1593,7 @@ void CoverLibraryActivity::renderShelfBooksView(int contentTop, int contentHeigh
     const int cellY = contentTop + row * rowStride;
     const int pct = idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1;
     drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
-                 selectorVisible && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
+                 contentCursorShown() && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in

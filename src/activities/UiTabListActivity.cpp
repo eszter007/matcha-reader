@@ -102,10 +102,12 @@ void UiTabListActivity::navigateButtons() {
   });
   buttonNavigator.onNextContinuous([this] {
     restoreHoldStart();
+    if (tabFocus >= 0) return;  // a hold in the bottom bar steps nothing
     stepTab(1);
   });
   buttonNavigator.onPreviousContinuous([this] {
     restoreHoldStart();
+    if (tabFocus >= 0) return;
     stepTab(-1);
   });
 }

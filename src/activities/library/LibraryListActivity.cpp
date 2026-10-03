@@ -799,7 +799,9 @@ void LibraryListActivity::navigateButtons() {
   // where fast travel through a long shelf is what a hold means.
   buttonNavigator.onNextContinuous([this, count, &nav] {
     if (navigationStartedOnTabs) {
-      activeNav().selected = 0;
+      // Back onto the tabs first: the press may have carried the cursor into the rows or, on an
+      // empty list, into the bottom bar.
+      ringSetFocus(TabRing::Focus::TopTabs, false);
       stepTab(1);
     } else if (count > 0 && ringFocus() == TabRing::Focus::Content) {
       moveRingTo(ButtonNavigator::nextPageIndex(selectedEntry(), count, nav.pageRows()) + 1);
@@ -807,7 +809,7 @@ void LibraryListActivity::navigateButtons() {
   });
   buttonNavigator.onPreviousContinuous([this, count, &nav] {
     if (navigationStartedOnTabs) {
-      activeNav().selected = 0;
+      ringSetFocus(TabRing::Focus::TopTabs, false);
       stepTab(-1);
     } else if (count > 0 && ringFocus() == TabRing::Focus::Content) {
       moveRingTo(ButtonNavigator::previousPageIndex(selectedEntry(), count, nav.pageRows()) + 1);

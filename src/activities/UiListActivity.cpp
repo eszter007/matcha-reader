@@ -209,6 +209,7 @@ bool UiListActivity::handleTabBarInput() {
   const uint32_t before = activityManager.updateRequestCount();
   const auto result = TabRing::handleInput(*this, mappedInput, renderer);
   if (result == TabRing::Result::None) return false;
+  onRingInputConsumed();
   if (result == TabRing::Result::BarStepped) {
     // A step between bar slots: when it is the only thing pending, render() repaints just the band.
     const uint32_t lastStep = bandStepRequest_;

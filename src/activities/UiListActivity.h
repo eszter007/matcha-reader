@@ -90,6 +90,8 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
   bool hasTabBar() const;
   // Bottom-bar touch and the keys on either band, through TabRing; runs before handleButtons().
   bool handleTabBarInput();
+  // TabRing consumed this pass's key, so navigateButtons() never saw its press.
+  virtual void onRingInputConsumed() {}
 
   // --- shared state ----------------------------------------------------------
   // Selection + viewport (selected/top/visibleRows/followOnBuild). Access via
