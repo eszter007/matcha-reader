@@ -494,8 +494,9 @@ count × {
 ```
 
 `offset` is the element's visible text offset in its low 31 bits. The top bit
-(`ANCHOR_BEFORE_IMAGE`, `0x80000000`) is set when no visible text lies between the anchor and the
-next image. An image page adds no visible characters, so it starts at the same offset as the
+(`ANCHOR_BEFORE_IMAGE`, `0x80000000`) is set when nothing that is laid out lies between the
+anchor and the next image; the offset is then the image's own (inter-tag whitespace counts
+towards offsets but is not laid out). An image page adds no visible characters, so it starts at the same offset as the
 text page after it. A flagged anchor resolves to the **first** page starting at its offset (the
 image), an unflagged one to the last page starting at or before it.
 

@@ -171,6 +171,10 @@ struct TextExtractor {
   // The chapter's TOC targets: recorded whatever their tag and past the cap, as the horizontal
   // parser does -- they are the anchors a jump actually asks for.
   const std::vector<std::string>* tocAnchors = nullptr;
+  // Anchors (the last N of `anchors`) recorded since the last character that was laid out. If an
+  // image comes next, they point at it. Counted rather than compared by offset: dropped inter-tag
+  // whitespace advances visibleTextOffset without putting anything on the page.
+  size_t anchorsPending = 0;
   bool insideBody = false;
   // Offset of the first character of currentText / rubyBase, captured when each goes from
   // empty to non-empty. That is what a RubyRun is stamped with.
@@ -492,6 +496,7 @@ struct TextExtractor {
           if (general ||
               std::find(self->tocAnchors->begin(), self->tocAnchors->end(), atts[i + 1]) != self->tocAnchors->end()) {
             self->anchors->emplace_back(atts[i + 1], self->visibleTextOffset);
+            self->anchorsPending++;
           }
           break;
         }
@@ -576,6 +581,7 @@ struct TextExtractor {
         // near-empty full image page per gaiji; keep the text flowing with
         // replacement text instead (alt / filename codepoint / geta mark).
         self->beginTextRunIfEmpty();
+        self->anchorsPending = 0;
         self->currentText += gaijiReplacementText(src ? src : "", alt ? alt : "");
       } else if (src && src[0] != '\0') {
         // Complete the paragraph built so far, then emit the image in document order. (For the
@@ -584,17 +590,20 @@ struct TextExtractor {
         // for the usual block-level images.)
         self->flushParagraph();
         if (self->anchors) {
-          // Every anchor recorded since the last visible character points at this image.
-          for (auto it = self->anchors->rbegin(); it != self->anchors->rend(); ++it) {
-            if ((it->second & ~ANCHOR_BEFORE_IMAGE) != self->visibleTextOffset) break;
-            it->second |= ANCHOR_BEFORE_IMAGE;
+          // Every anchor recorded since the last laid-out character points at this image. Stamp it
+          // with the image's own offset, which is what its page starts at.
+          const size_t total = self->anchors->size();
+          for (size_t i = total - std::min(self->anchorsPending, total); i < total; i++) {
+            (*self->anchors)[i].second = self->visibleTextOffset | ANCHOR_BEFORE_IMAGE;
           }
         }
+        self->anchorsPending = 0;
         if (self->sink) self->sink->onImage(std::string(src), self->visibleTextOffset);
       }
     }
     if (strcasecmp(name, "br") == 0 || strcasecmp(name, "br/") == 0) {
       if (!self->inRuby) {
+        self->anchorsPending = 0;  // a blank line is laid out
         self->beginTextRunIfEmpty();
         self->currentText.push_back('\n');
       }
@@ -707,8 +716,10 @@ struct TextExtractor {
     if (self->skipDepth >= 0) return;
     if (self->inRp) return;
     if (self->inRt) {
+      self->anchorsPending = 0;
       self->appendChecked(self->rubyAnnotation, s, static_cast<size_t>(len));
     } else if (self->inRuby) {
+      self->anchorsPending = 0;
       if (self->rubyBase.empty()) self->rubyBaseOffset = offsetOfThisRun;
       self->appendChecked(self->rubyBase, s, static_cast<size_t>(len));
     } else {
@@ -736,6 +747,7 @@ struct TextExtractor {
         // codepoints later. All of it is ASCII, so bytes and codepoints agree here.
         self->currentTextOffset = offsetOfThisRun + static_cast<uint32_t>(firstInk);
       }
+      self->anchorsPending = 0;  // text that is laid out
       if (!self->appendChecked(self->currentText, s, static_cast<size_t>(len))) {
         // Hand the buffered text on (frees it, allocates nothing) and try once more before dropping.
         self->emitRuns(false);
@@ -775,6 +787,7 @@ struct TextExtractor {
       }
 
       if (self->inRp) return;
+      self->anchorsPending = 0;
       if (self->inRt) {
         self->rubyAnnotation.append(resolved);
       } else if (self->inRuby) {
