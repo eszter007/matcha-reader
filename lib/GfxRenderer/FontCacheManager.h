@@ -25,6 +25,10 @@ class FontCacheManager {
   // Everything faults back in on demand. For heap-critical transitions (e.g.
   // web-server + WiFi startup, image decode, dictionary, sleep).
   void releaseAllFontMemory();
+  // Release what rendering holds -- SD mini arenas (forced, see SdCardFont::releaseRenderCaches),
+  // per-scope TTF caches, the decompressor's cache and glyph slab -- but keep every measurement
+  // cache, so a section build in progress can keep laying out without rebuilding them.
+  void releaseRenderMemory();
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F, bool accumulate = true);
   // True if fontId is backed by an SD-card font (SdCardFont::prewarm(), one-open bulk-load path)
   // rather than a built-in compressed font (FontDecompressor's own group-cache prewarm, which has

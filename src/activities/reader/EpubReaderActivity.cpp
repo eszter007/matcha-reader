@@ -538,10 +538,7 @@ bool EpubReaderActivity::buildTickHeapGate() {
 }
 
 void EpubReaderActivity::releaseRenderFontMemory() {
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->clearCache();
-    if (auto* d = fcm->getDecompressor()) d->freeGlyphSlab();
-  }
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseRenderMemory();
   prewarmedVPage_ = -1;
   prewarmedHPage_ = -1;
 }

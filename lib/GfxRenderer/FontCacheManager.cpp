@@ -64,6 +64,22 @@ void FontCacheManager::clearCache() {
 #endif
 }
 
+void FontCacheManager::releaseRenderMemory() {
+  if (fontDecompressor_) {
+    fontDecompressor_->clearCache();
+    fontDecompressor_->freeGlyphSlab();
+  }
+  for (auto& [id, font] : sdCardFonts_) {
+    font->releaseRenderCaches();
+  }
+  if (auto* fallback = unregisteredFallback()) fallback->releaseRenderCaches();
+#if CROSSPOINT_VECTOR_FONTS
+  for (auto& [id, font] : ttfFonts_) {
+    if (font) font->clearCache();
+  }
+#endif
+}
+
 void FontCacheManager::releaseAllFontMemory() {
   clearCache();
   // The emergency path also surrenders the persistent advance tables (up to ~6KB per active
