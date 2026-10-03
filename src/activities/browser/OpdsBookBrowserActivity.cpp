@@ -125,6 +125,9 @@ void OpdsBookBrowserActivity::onBackEvent(const fui::ActionEvent&, void* user) {
 
 void OpdsBookBrowserActivity::onTabEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<OpdsBookBrowserActivity*>(user);
+  // A download holds the screen until it finishes or is cancelled; its progress callback routes
+  // touch, so a tab tap can arrive here mid-transfer.
+  if (self->state == BrowserState::DOWNLOADING) return;
   if (event.value < 0 || event.value >= LibraryTabs::count()) return;
   self->app.clearTapFlash();
   // The OPDS tab itself goes back to the server list, one level up from any catalog page.
