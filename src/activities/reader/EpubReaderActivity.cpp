@@ -4370,9 +4370,11 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     // nullptr and Word Lookup silently did nothing in horizontal mode while vertical (which has
     // no incremental build) worked. loadPage() serves from the active build first.
     std::unique_ptr<Page> page;
+    // Read before the suspend: a failed one drops `section` (the page itself is already owned here).
+    const int pageIndex = section->currentPage;
     {
       RenderLock lock(*this);
-      page = section->loadPage(section->currentPage);
+      page = section->loadPage(pageIndex);
       if (page && section->isBuilding()) suspendSectionBuild();
       if (page) {
         releaseReloadableMemory();
@@ -4399,7 +4401,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);  // see the vertical path
       std::string miningTail;                                          // see the vertical path
       miningTail.reserve(kMiningTailChars * 3);
-      if (auto nextPage = section ? section->loadPageAt(section->currentPage + 1) : nullptr) {
+      if (auto nextPage = section ? section->loadPageAt(pageIndex + 1) : nullptr) {
         // Flattened the way initFromPage() flattens the current page -- a separating space only
         // between two ASCII words, CJK runs concatenated -- so a split Japanese word still meets
         // its continuation. PageTextExtractor spaces EVERY word, which would break that; walking
@@ -4443,9 +4445,9 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         }
       }
 
-      auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
-          renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
-          static_cast<uint16_t>(section->currentPage), lookupTail);
+      auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
+                                                                    static_cast<uint16_t>(currentSpineIndex),
+                                                                    static_cast<uint16_t>(pageIndex), lookupTail);
       if (!lookup) {
         LOG_ERR("ERS", "OOM: word lookup panel");
         requestUpdate();  // the build was suspended for the panel; the next render resumes it
