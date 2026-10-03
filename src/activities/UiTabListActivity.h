@@ -61,7 +61,7 @@ class UiTabListActivity : public UiListActivity {
   // TabRing::Host: the tab band is ring position 0 here, the rows 1..N.
   int ringTopTabCount() const override { return tabCount(); }
   int ringActiveTopTab() const override { return activeTab(); }
-  void ringSelectTopTab(int index) override { onTabAction(index); }
+  void ringSelectTopTab(int index) override;
   TabRing::Focus ringFocus() const override;
   void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
   void buildTabBar(UiScreen& screen);

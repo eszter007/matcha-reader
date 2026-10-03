@@ -128,6 +128,8 @@ class LibraryListActivity final : public UiTabListActivity {
   bool tabsFocused() const { return ringFocus() == TabRing::Focus::TopTabs; }
   // Left on the tab band opens search here, and a hold steps the tabs.
   bool ringTopTabsLeftRightStep() const override { return false; }
+  // A degraded list draws no tab band.
+  int ringTopTabCount() const override { return degraded ? 0 : tabCount(); }
 
   // --- pinned recently-opened overlay ---------------------------------------
   // On the unfiltered Recent shelf the RecentBooksStore entries sit on top, in

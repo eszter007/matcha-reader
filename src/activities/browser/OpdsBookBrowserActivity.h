@@ -104,6 +104,8 @@ class OpdsBookBrowserActivity final : public Activity, private UiAppHost, public
   HomeTab ringBottomTab() const override { return inLibraryTab() ? HomeTab::Library : HomeTab::Count; }
   void ringActivateBottomTab(HomeTab tab) override { goToHomeTab(static_cast<int>(tab)); }
   bool ringHasContent() const override { return state == BrowserState::BROWSING && !entries.empty(); }
+  // Left on the catalog opens search (leftSearchPending); Up/Down reach the bar.
+  bool ringContentLeftRightToBar() const override { return false; }
   TabRing::Focus ringFocus() const override;
   void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
   int& ringBarSlot() override { return tabFocus; }

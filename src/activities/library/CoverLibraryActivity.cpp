@@ -804,6 +804,9 @@ bool CoverLibraryActivity::ringHasContent() const {
 }
 
 void CoverLibraryActivity::ringSelectTopTab(const int index) {
+  // TabRing took this key before loop() could snapshot the press: a hold that follows must not
+  // restore the snapshot of some earlier press.
+  holdStartContentIndex_ = -1;
   // OPDS and Files are the Library's other screens.
   if (index >= TAB_COUNT) {
     LibraryTabs::activate(index);

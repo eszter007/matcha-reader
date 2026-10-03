@@ -57,6 +57,13 @@ void UiTabListActivity::moveRingTo(const int ringIndex) {
   requestUpdate();
 }
 
+void UiTabListActivity::ringSelectTopTab(const int index) {
+  // TabRing took this key before navigateButtons() could snapshot the press, so a hold that
+  // follows must not restore the snapshot of some earlier press.
+  holdStart_.pending = false;
+  onTabAction(index);
+}
+
 TabRing::Focus UiTabListActivity::ringFocus() const {
   if (tabFocus >= 0) return TabRing::Focus::BottomBar;
   return ringPos() == 0 ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
