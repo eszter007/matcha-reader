@@ -1764,10 +1764,11 @@ void CoverLibraryActivity::render(RenderLock&&) {
   {
     freeink::ui::TabItem tabs[LibraryTabs::MAX_TABS];
     const int tabCount = LibraryTabs::bandItems(tabs, selectedTab);
-    tabBand_.render(
-        tabs, tabCount,
-        LibraryTabs::bandOptions(selectorVisible && contentIndex == 0 && tabFocus < 0, mappedInput.hasTouch()),
-        tabBarY);
+    // The band is drawn focused while the cursor's place is the tabs, whether or not a key
+    // cursor is showing: on a touch board selectorVisible is off, and the active pill would
+    // otherwise be grey here but solid on the Library's other views (Files, OPDS).
+    tabBand_.render(tabs, tabCount, LibraryTabs::bandOptions(contentIndex == 0 && tabFocus < 0, mappedInput.hasTouch()),
+                    tabBarY);
   }
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
