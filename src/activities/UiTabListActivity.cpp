@@ -80,6 +80,8 @@ void UiTabListActivity::restoreHoldStart() {
   holdStart_.pending = false;
   activeNav().selected = holdStart_.selected;
   tabFocus = holdStart_.tabFocus;
+  // The press's own frame may already be on screen with the cursor where the press moved it.
+  requestUpdate();
 }
 
 void UiTabListActivity::navigateButtons() {

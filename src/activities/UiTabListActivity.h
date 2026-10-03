@@ -63,7 +63,10 @@ class UiTabListActivity : public UiListActivity {
   int ringActiveTopTab() const override { return activeTab(); }
   void ringSelectTopTab(int index) override;
   // A hold that follows must not restore the snapshot of some earlier press.
-  void onRingInputConsumed() override { holdStart_.pending = false; }
+  void onRingInputConsumed() override {
+    holdStart_.pending = false;
+    navigationStartedOnTabs = false;
+  }
   TabRing::Focus ringFocus() const override;
   void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
   void buildTabBar(UiScreen& screen);

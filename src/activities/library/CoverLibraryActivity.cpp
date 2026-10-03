@@ -1185,6 +1185,8 @@ void CoverLibraryActivity::loop() {
     contentIndex = holdStartContentIndex_;
     tabFocus = holdStartTabFocus_;
     holdStartContentIndex_ = -1;
+    // The press's own frame may already be on screen with the cursor where the press moved it.
+    requestUpdate();
   };
 
   const int itemCount = getContentItemCount();
