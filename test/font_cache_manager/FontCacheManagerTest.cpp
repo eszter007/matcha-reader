@@ -145,3 +145,22 @@ TEST(FontCacheManagerTest, IncrementalPrewarmRequestsAccumulation) {
   ASSERT_EQ(1, font.prewarmCallCount);
   EXPECT_TRUE(font.prewarmCalls[0].accumulate);
 }
+
+TEST(FontCacheManagerTest, ReleaseRenderMemoryKeepsMeasurementCaches) {
+  SdCardFont readerFont;
+  SdCardFont fallbackFont;
+  const std::map<int, EpdFontFamily> noBuiltinFonts;
+  const std::map<int, SdCardFont*> sdFonts{{-17, &readerFont}, {23, &fallbackFont}};
+  FontCacheManager manager(noBuiltinFonts, sdFonts, kNoTtfFonts);
+
+  manager.releaseRenderMemory();
+
+  // A build in progress measures with the advance tables: the render release must not drop them.
+  EXPECT_EQ(1, readerFont.renderReleases);
+  EXPECT_EQ(1, fallbackFont.renderReleases);
+  EXPECT_EQ(0, readerFont.persistentClears);
+  EXPECT_EQ(0, fallbackFont.persistentClears);
+
+  manager.releaseAllFontMemory();
+  EXPECT_EQ(1, readerFont.persistentClears);
+}

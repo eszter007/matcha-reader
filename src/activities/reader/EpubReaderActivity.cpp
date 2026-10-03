@@ -517,6 +517,11 @@ void EpubReaderActivity::onReaderExit() {
 }
 
 bool EpubReaderActivity::buildTickHeapGate() {
+  if (buildHeapPauseGeneration_ != sectionGeneration_) {
+    buildHeapPauseGeneration_ = sectionGeneration_;
+    buildHeapPausedSinceMs_ = 0;
+    buildHeapPauseReleased_ = false;
+  }
   const auto belowFloors = [] {
     return ESP.getFreeHeap() < BACKGROUND_BUILD_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < BACKGROUND_BUILD_MIN_MAX_ALLOC;
   };
@@ -782,11 +787,6 @@ void EpubReaderActivity::readerLoop() {
         buildHeapPausedSinceMs_ = 0;
         buildHeapPauseReleased_ = false;
       }
-    } else if (lock.held()) {
-      // No build to drive: a pause left over from an earlier one must not count against the next.
-      buildHeapPaused = false;
-      buildHeapPausedSinceMs_ = 0;
-      buildHeapPauseReleased_ = false;
     }
   }
 
@@ -2451,6 +2451,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // makeUniqueNoThrow, not bare new: with -fno-exceptions a failed new aborts the firmware
     // instead of returning null, and this allocation can land on a badly fragmented heap.
     section = makeUniqueNoThrow<Section>(epub, currentSpineIndex, renderer);
+    sectionGeneration_++;
     if (!section) {
       LOG_ERR("ERS", "OOM allocating Section");
       // Mark this spine failed so render() stops retrying the same allocation every frame --
