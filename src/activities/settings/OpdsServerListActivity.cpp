@@ -123,26 +123,7 @@ bool OpdsServerListActivity::handleCustomInput() {
       return true;
     }
   }
-  // Confirm on the band steps to the next Library tab; Files, not the bottom bar, comes next.
-  if (topBandFocused && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    stepTopBand(1);
-    return true;
-  }
   return false;
-}
-
-void OpdsServerListActivity::stepTopBand(const int direction) {
-  const int count = LibraryTabs::count();
-  LibraryTabs::activate((LibraryTabs::Opds + direction + count) % count);
-}
-
-// The bottom bar is the last stop on the Library's ring; leaving it returns to the first view.
-void OpdsServerListActivity::onTabBandExit() {
-  if (isLibraryTab()) {
-    LibraryTabs::activate(LibraryTabs::Books);
-    return;
-  }
-  UiListActivity::onTabBandExit();
 }
 
 void OpdsServerListActivity::drawChrome() {

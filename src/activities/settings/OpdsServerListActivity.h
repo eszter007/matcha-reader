@@ -4,6 +4,7 @@
 
 #include "activities/UiListActivity.h"
 #include "components/HomeTabBar.h"
+#include "components/LibraryTabs.h"
 #include "components/OptionPopup.h"
 
 /**
@@ -33,9 +34,9 @@ class OpdsServerListActivity final : public UiListActivity {
   // the bottom bar, the same way the file browser is its Files tab.
   bool isLibraryTab() const { return pickerMode && HomeTabBar::enabled(); }
   HomeTab tabBarTab() const override { return isLibraryTab() ? HomeTab::Library : HomeTab::Count; }
-  bool hasTopBand() const override { return isLibraryTab(); }
-  void stepTopBand(int direction) override;
-  void onTabBandExit() override;
+  int ringTopTabCount() const override { return isLibraryTab() ? LibraryTabs::count() : 0; }
+  int ringActiveTopTab() const override { return LibraryTabs::Opds; }
+  void ringSelectTopTab(int index) override { LibraryTabs::activate(index); }
   void drawChrome() override;
 
   bool pickerMode = false;

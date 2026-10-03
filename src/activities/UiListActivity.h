@@ -4,6 +4,7 @@
 
 #include "activities/Activity.h"
 #include "components/HomeTabBar.h"
+#include "components/TabRing.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
 
@@ -17,7 +18,7 @@
 //
 // Screens that are not a single list (sliders, tab layouts, state machines)
 // should NOT derive from this — they use UiAppHost directly.
-class UiListActivity : public Activity, protected UiAppHost {
+class UiListActivity : public Activity, protected UiAppHost, public TabRing::Host {
  public:
   void onEnter() override;
   void loop() override;
@@ -87,7 +88,7 @@ class UiListActivity : public Activity, protected UiAppHost {
   virtual HomeTab tabBarTab() const { return HomeTab::Count; }
   // True while the bar is on screen for this activity.
   bool hasTabBar() const;
-  // Touch and Left/Right handling for the band; call from handleCustomInput().
+  // Bottom-bar touch and the keys on either band, through TabRing; runs before handleButtons().
   bool handleTabBarInput();
 
   // --- shared state ----------------------------------------------------------
@@ -108,17 +109,19 @@ class UiListActivity : public Activity, protected UiAppHost {
   // Books/Shelves/Files). Only screens that override hasTopBand() ever set it.
   bool topBandFocused = false;
 
-  // --- the ring --------------------------------------------------------------
-  // Up/Down walk one ring: this screen's own band (when it has one), then the rows, then the
-  // bottom bar. Without it the cursor was trapped in the list and neither band was reachable
-  // from a button board.
-  virtual bool hasTopBand() const { return false; }
-  // Left/Right while the cursor is on the top band. Default: nothing to step.
-  virtual void stepTopBand(int) {}
-  void enterBottomBand();
-  // Where the cursor goes when Confirm on the bottom bar lands on the tab this screen already
-  // is: back to the top of the ring.
-  virtual void onTabBandExit();
+  // --- the ring (TabRing::Host) ----------------------------------------------
+  // Up/Down walk one ring: this screen's own top tabs (a subclass that has them overrides the
+  // three ringTopTab hooks), then the rows, then the bottom bar. TabRing makes every decision;
+  // this base only maps it onto tabFocus / topBandFocused / the list selection.
+  int ringTopTabCount() const override { return 0; }
+  int ringActiveTopTab() const override { return 0; }
+  void ringSelectTopTab(int) override {}
+  HomeTab ringBottomTab() const override { return hasTabBar() ? tabBarTab() : HomeTab::Count; }
+  bool ringHasContent() const override { return listCount() > 0; }
+  TabRing::Focus ringFocus() const override;
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
+  int& ringBarSlot() override { return tabFocus; }
+  void ringChanged() override { requestUpdate(); }
 
  private:
   // A selection move that arrived while a render was in flight, applied by loop() as soon as the

@@ -58,7 +58,12 @@ class UiTabListActivity : public UiListActivity {
   // --- screen helpers --------------------------------------------------------
   // The shared tab band: theme-driven pill treatment (label-hugging Lyra vs
   // full-slot RoundedRaff), Lyra focused band wash, always-on divider.
-  void onTabBandExit() override;
+  // TabRing::Host: the tab band is ring position 0 here, the rows 1..N.
+  int ringTopTabCount() const override { return tabCount(); }
+  int ringActiveTopTab() const override { return activeTab(); }
+  void ringSelectTopTab(int index) override { onTabAction(index); }
+  TabRing::Focus ringFocus() const override;
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
   void buildTabBar(UiScreen& screen);
   // Cover Grid pill geometry, shared by the painter and the outline pass so both agree.
   static constexpr int16_t PILL_PAD_H = 20;

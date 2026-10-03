@@ -57,7 +57,16 @@ void UiTabListActivity::moveRingTo(const int ringIndex) {
   requestUpdate();
 }
 
-void UiTabListActivity::onTabBandExit() { moveRingTo(0); }
+TabRing::Focus UiTabListActivity::ringFocus() const {
+  if (tabFocus >= 0) return TabRing::Focus::BottomBar;
+  return ringPos() == 0 ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
+}
+
+void UiTabListActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(tabBarTab()) : -1;
+  if (focus == TabRing::Focus::TopTabs) moveRingTo(0);
+  if (focus == TabRing::Focus::Content) moveRingTo(atEnd ? listCount() : 1);
+}
 
 void UiTabListActivity::restoreHoldStart() {
   if (!holdStart_.pending) return;
@@ -72,32 +81,17 @@ void UiTabListActivity::navigateButtons() {
     navigationStartedOnTabs = ringPos() == 0 && tabFocus < 0;
     holdStart_ = {activeNav().selected, tabFocus, true};
   }
-  // One ring: the tab band (index 0), the rows (1..listCount), then the bottom bar. A press walks
-  // it straight away; a hold steps the tab instead, see holdStart_.
-  const int ringSize = listCount() + 1;
-  buttonNavigator.onNextPress([this, ringSize] {
-    if (tabFocus >= 0) {
-      tabFocus = -1;
-      moveRingTo(0);
-      return;
-    }
-    if (hasTabBar() && ringPos() >= ringSize - 1) {
-      enterBottomBand();
-      return;
-    }
-    moveRingTo(ButtonNavigator::nextIndex(ringPos(), ringSize));
+  // A press walks the ring at once (TabRing decides every move between the parts); a hold steps
+  // the tab instead, see holdStart_.
+  buttonNavigator.onNextPress([this] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, 1);
+    if (ringPos() >= listCount()) return TabRing::leaveContent(*this, 1);
+    moveRingTo(ringPos() + 1);
   });
-  buttonNavigator.onPreviousPress([this, ringSize] {
-    if (tabFocus >= 0) {
-      tabFocus = -1;
-      moveRingTo(ringSize - 1);
-      return;
-    }
-    if (hasTabBar() && ringPos() <= 0) {
-      enterBottomBand();
-      return;
-    }
-    moveRingTo(ButtonNavigator::previousIndex(ringPos(), ringSize));
+  buttonNavigator.onPreviousPress([this] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, -1);
+    if (ringPos() <= 1) return TabRing::leaveContent(*this, -1);
+    moveRingTo(ringPos() - 1);
   });
   buttonNavigator.onNextContinuous([this] {
     restoreHoldStart();
@@ -222,7 +216,7 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
     tabs[i].selected = activeTab() == i;
     tabs[i].indicator = tabIndicator(i);
   }
-  const bool tabsFocused = ringPos() == 0;
+  const bool tabsFocused = ringFocus() == TabRing::Focus::TopTabs;
   if (HomeTabBar::enabled()) {
     buildPillTabBar(screen, tabs, count, tabsFocused);
     return;

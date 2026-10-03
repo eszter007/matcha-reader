@@ -127,72 +127,33 @@ void UiListActivity::loop() {
   navigateButtons();
 }
 
-void UiListActivity::onTabBandExit() {
-  topBandFocused = hasTopBand();
-  if (!topBandFocused) moveSelectionTo(0);
+TabRing::Focus UiListActivity::ringFocus() const {
+  if (tabFocus >= 0) return TabRing::Focus::BottomBar;
+  return topBandFocused ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
 }
 
-void UiListActivity::enterBottomBand() {
-  tabFocus = static_cast<int>(tabBarTab());
-  topBandFocused = false;
-  requestUpdate();
+void UiListActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(tabBarTab()) : -1;
+  topBandFocused = focus == TabRing::Focus::TopTabs;
+  if (focus == TabRing::Focus::Content) {
+    const int count = listCount();
+    moveSelectionTo(atEnd && count > 0 ? count - 1 : 0);
+  }
 }
 
 void UiListActivity::navigateButtons() {
   const int count = listCount();
   auto& n = activeNav();
-  // One ring: top band (when the screen has one) -> rows -> bottom bar -> back to the top.
-  const auto stepDown = [this, count] {
-    if (tabFocus >= 0) {
-      tabFocus = -1;
-      if (hasTopBand()) {
-        topBandFocused = true;
-      } else {
-        moveSelectionTo(0);
-      }
-      requestUpdate();
-      return;
-    }
-    if (topBandFocused) {
-      topBandFocused = false;
-      moveSelectionTo(0);
-      return;
-    }
-    if (hasTabBar() && (count <= 0 || selectionCursor() >= count - 1)) {
-      enterBottomBand();
-      return;
-    }
-    moveSelectionTo(ButtonNavigator::nextIndex(selectionCursor(), count));
-  };
-  const auto stepUp = [this, count] {
-    if (tabFocus >= 0) {
-      tabFocus = -1;
-      moveSelectionTo(count > 0 ? count - 1 : 0);
-      requestUpdate();
-      return;
-    }
-    if (topBandFocused) {
-      topBandFocused = false;
-      if (hasTabBar()) {
-        enterBottomBand();
-      } else {
-        moveSelectionTo(count > 0 ? count - 1 : 0);
-      }
-      return;
-    }
-    if (selectionCursor() <= 0 && (hasTopBand() || hasTabBar())) {
-      if (hasTopBand()) {
-        topBandFocused = true;
-        requestUpdate();
-      } else {
-        enterBottomBand();
-      }
-      return;
-    }
-    moveSelectionTo(ButtonNavigator::previousIndex(selectionCursor(), count));
-  };
-  buttonNavigator.onNextPress(stepDown);
-  buttonNavigator.onPreviousPress(stepUp);
+  buttonNavigator.onNextPress([this, count] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, 1);
+    if (count <= 0 || selectionCursor() >= count - 1) return TabRing::leaveContent(*this, 1);
+    moveSelectionTo(selectionCursor() + 1);
+  });
+  buttonNavigator.onPreviousPress([this, count] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, -1);
+    if (selectionCursor() <= 0) return TabRing::leaveContent(*this, -1);
+    moveSelectionTo(selectionCursor() - 1);
+  });
   // Page by the rows the last build actually drew (pageRows), not the
   // fixed-height visibleRows estimate: with wrapped labels the estimate
   // overshoots and rows between pages would never be shown. The measurement
@@ -201,11 +162,11 @@ void UiListActivity::navigateButtons() {
   // A hold pages through the rows. If the press that started it carried the cursor onto a band,
   // there is nothing to page, and moving the hidden row selection would only surprise later.
   buttonNavigator.onNextContinuous([this, count, &n] {
-    if (tabFocus >= 0 || topBandFocused) return;
+    if (ringFocus() != TabRing::Focus::Content) return;
     moveSelectionTo(ButtonNavigator::nextPageIndex(selectionCursor(), count, n.inputPageRows()));
   });
   buttonNavigator.onPreviousContinuous([this, count, &n] {
-    if (tabFocus >= 0 || topBandFocused) return;
+    if (ringFocus() != TabRing::Focus::Content) return;
     moveSelectionTo(ButtonNavigator::previousPageIndex(selectionCursor(), count, n.inputPageRows()));
   });
 }
@@ -245,46 +206,18 @@ void UiListActivity::drawChrome() {
 bool UiListActivity::hasTabBar() const { return tabBarTab() != HomeTab::Count && HomeTabBar::enabled(); }
 
 bool UiListActivity::handleTabBarInput() {
-  if (topBandFocused) {
-    // Left/Right belong to the screen's own band while the cursor is on it. Taken on the press,
-    // before navigateButtons() reads the same key as NavPrevious/NavNext and leaves the band.
-    if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-      stepTopBand(-1);
-      return true;
-    }
-    if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
-      stepTopBand(1);
-      return true;
-    }
-    // Confirm advances the ring rather than acting on a row the cursor is not on.
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      if (hasTabBar()) {
-        enterBottomBand();
-      } else {
-        topBandFocused = false;
-        moveSelectionTo(0);
-      }
-      return true;
-    }
-  }
-  if (!hasTabBar()) return false;
-  const auto routed = HomeTabBar::route(mappedInput, renderer, tabBarTab(), tabFocus, !topBandFocused);
-  if (routed == HomeTabBar::Input::Exited) {
-    // Confirm on the tab you are already in hands the cursor back to the top of the ring.
-    tabFocus = -1;
-    onTabBandExit();
-    requestUpdate();
-    return true;
-  }
-  if (routed == HomeTabBar::Input::FocusMoved) {
-    const uint32_t before = activityManager.updateRequestCount();
+  const uint32_t before = activityManager.updateRequestCount();
+  const auto result = TabRing::handleInput(*this, mappedInput, renderer);
+  if (result == TabRing::Result::None) return false;
+  if (result == TabRing::Result::BarStepped) {
+    // A step between bar slots: when it is the only thing pending, render() repaints just the band.
     const uint32_t lastStep = bandStepRequest_;
     const bool onlyBandPending = before == lastRenderRequest_ || (lastStep != 0 && before == lastStep);
-    requestUpdate();
     bandStepRequest_ = onlyBandPending ? activityManager.updateRequestCount() : 0;
+  } else {
+    app.clearTapFlash();
   }
-  if (routed == HomeTabBar::Input::Consumed) app.clearTapFlash();
-  return routed != HomeTabBar::Input::None;
+  return true;
 }
 
 void UiListActivity::drawFooter() {

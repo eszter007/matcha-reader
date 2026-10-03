@@ -155,9 +155,10 @@ screen is reachable without leaving it:
   rows or covers, then the bottom bar, and round again.
 - **Confirm** on a screen's own tabs steps to the next one — **Books**, **Shelves**, **OPDS**, **Files** in the Library, the
   categories in Settings, the languages in Insights — and past the last one it moves the cursor into the bottom bar.
-- **Left** and **Right**, once the cursor is in the bottom bar, move between Home, Library, File Transfer, Insights and
-  Settings. **Confirm** goes to the highlighted tab; **Confirm** on the tab you are already in hands the cursor back to
-  the top of the screen, closing the ring.
+- **Left** and **Right** on a screen's own tabs step to the previous or next one. Once the cursor is in the bottom bar
+  they move between Home, Library, File Transfer, Insights and Settings. **Confirm** goes to the highlighted tab;
+  **Confirm** on the tab you are already in hands the cursor back to the first tab at the top of the screen, closing
+  the ring.
 - **Back** still leaves the screen, and holding it still goes Home.
 
 A grey outline marks whatever the cursor is on, whether that is a cover, a row or a tab.
@@ -1192,7 +1193,7 @@ language at all — TXT, XTC and manga converted without `--language` — collec
 | --- | --- |
 | Confirm | Next tab. Past the last one the cursor moves into the bottom tab bar (Cover Grid theme). |
 | Left / Right | Previous or next month, while the cursor is on the page. The button hints name the month they move to. |
-| Up / Down | Scroll. Down past the end of the page moves the cursor into the bottom tab bar. |
+| Up / Down | Scroll. Down past the end of the page moves the cursor into the bottom tab bar; Down again returns to the top of the page, Up to its end. |
 | Back | Back one screen. Hold it to go home. |
 
 On a touch device, tap a tab, or flick left and right across the page to step through them.

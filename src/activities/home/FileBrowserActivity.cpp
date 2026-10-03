@@ -762,25 +762,6 @@ void FileBrowserActivity::drawChrome() {
   }
 }
 
-// Left/Right on the band walk the Library's three views; Books and Shelves live in the other
-// activity, so stepping onto them switches to it.
-// The bottom bar is the last stop on the Library's ring, so leaving it returns to the first
-// Library view rather than to Files, which is where the cursor just came from.
-void FileBrowserActivity::onTabBandExit() {
-  if (showsLibraryTabs()) {
-    LibraryTabs::activate(LibraryTabs::Books);
-    return;
-  }
-  UiListActivity::onTabBandExit();
-}
-
-void FileBrowserActivity::stepTopBand(const int direction) {
-  const int count = LibraryTabs::count();
-  if (count <= 1) return;
-  const int next = (LibraryTabs::Files + direction + count) % count;
-  if (next != LibraryTabs::Files) LibraryTabs::activate(next);
-}
-
 void FileBrowserActivity::drawFooter() {
   if (hasTabBar()) {
     UiListActivity::drawFooter();

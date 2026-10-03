@@ -208,10 +208,9 @@ void OpdsBookBrowserActivity::loop() {
         requestUpdate();
       };
       buttonNavigator.onNextPress([this, &moveSelection] {
-        // Past the last row the cursor carries on into the bottom bar, as on every tab screen.
+        // Past the last row the cursor carries on round the ring, as on every tab screen.
         if (inLibraryTab() && selectorIndex >= static_cast<int>(entries.size()) - 1) {
-          tabFocus = static_cast<int>(HomeTab::Library);
-          requestUpdate();
+          TabRing::leaveContent(*this, 1);
           return;
         }
         moveSelection(ButtonNavigator::nextIndex(selectorIndex, entries.size()));
@@ -220,8 +219,7 @@ void OpdsBookBrowserActivity::loop() {
         if (leftSearchPending) return;
         // Above the first row the cursor goes up onto the Library band.
         if (inLibraryTab() && selectorIndex <= 0) {
-          bandFocused = true;
-          requestUpdate();
+          TabRing::leaveContent(*this, -1);
           return;
         }
         moveSelection(ButtonNavigator::previousIndex(selectorIndex, entries.size()));
@@ -571,92 +569,50 @@ bool OpdsBookBrowserActivity::handleTabInput() {
       return true;
     }
   }
-  bool tapped = false;
-  const int slot = HomeTabBar::hitTest(mappedInput, renderer, tapped);
-  if (slot >= 0) {
-    if (tapped) goToHomeTab(slot);
-    return true;
-  }
+  if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) return true;
 
   using Button = MappedInputManager::Button;
-  const bool hasRows = state == BrowserState::BROWSING && !entries.empty();
-
-  if (bandFocused) {
-    // Cursor on the Library band: Left/Right step to the neighbouring tab (on the press, before the
-    // list reads them as Up/Down), Confirm to the next one, Down/Up move on around the ring.
-    if (mappedInput.wasPressed(Button::Left)) {
-      goToLibraryTab(LibraryTabs::Opds - 1);
-    } else if (mappedInput.wasPressed(Button::Right)) {
-      goToLibraryTab(LibraryTabs::Opds + 1);
-    } else if (mappedInput.wasReleased(Button::Confirm)) {
-      goToLibraryTab((LibraryTabs::Opds + 1) % LibraryTabs::count());
-    } else if (mappedInput.wasPressed(Button::NavNext)) {
-      bandFocused = false;
-      if (!hasRows) tabFocus = static_cast<int>(HomeTab::Library);
-      requestUpdate();
-    } else if (mappedInput.wasPressed(Button::NavPrevious)) {
-      bandFocused = false;
-      tabFocus = static_cast<int>(HomeTab::Library);
-      requestUpdate();
-    } else if (mappedInput.wasReleased(Button::Back)) {
-      bandFocused = false;
-      return false;  // Back still leaves, as everywhere
-    }
-    return true;
-  }
-
-  if (tabFocus < 0) {
-    // Nothing to move through (an error, an empty feed): Down/Up go straight to the bar or band.
-    if (!hasRows && (state == BrowserState::BROWSING || state == BrowserState::ERROR)) {
+  if (ringFocus() == TabRing::Focus::Content) {
+    // Nothing to move through (an error, an empty feed): Down/Up go straight round the ring.
+    if (!ringHasContent() && (state == BrowserState::BROWSING || state == BrowserState::ERROR)) {
       if (mappedInput.wasPressed(Button::NavNext)) {
-        tabFocus = static_cast<int>(HomeTab::Library);
-        requestUpdate();
+        TabRing::leaveContent(*this, 1);
         return true;
       }
       if (mappedInput.wasPressed(Button::NavPrevious)) {
-        bandFocused = true;
-        requestUpdate();
+        TabRing::leaveContent(*this, -1);
         return true;
       }
     }
     return false;
   }
-  // Cursor in the bottom bar: Left/Right walk it (on the press, before the list reads them as
-  // Up/Down), Confirm switches, Down carries on to the band, Up goes back to the last row.
-  if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-    tabFocus = (tabFocus + HomeTabBar::COUNT - 1) % HomeTabBar::COUNT;
-    requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
-    tabFocus = (tabFocus + 1) % HomeTabBar::COUNT;
-    requestUpdate();
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (tabFocus == static_cast<int>(HomeTab::Library)) {
-      tabFocus = -1;
-      requestUpdate();
-    } else {
-      goToHomeTab(tabFocus);
-    }
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::NavNext)) {
+  // Cursor on a band: Down/Up move on round the ring, Back still leaves, and nothing else
+  // reaches the catalog.
+  if (mappedInput.wasPressed(Button::NavNext)) {
+    TabRing::step(*this, 1);
+  } else if (mappedInput.wasPressed(Button::NavPrevious)) {
+    TabRing::step(*this, -1);
+  } else if (mappedInput.wasReleased(Button::Back)) {
     tabFocus = -1;
-    bandFocused = true;
-    requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
-    tabFocus = -1;
-    if (!hasRows) {
-      bandFocused = true;
-    } else {
-      selectorIndex = static_cast<int>(entries.size()) - 1;
-      listNav.selected = selectorIndex;
-      listNav.follow(static_cast<int>(entries.size()));
-    }
-    requestUpdate();
-  } else if (!mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    return true;  // nothing else reaches the catalog while the bar holds the cursor
-  } else {
-    tabFocus = -1;  // Back still leaves, as everywhere
+    bandFocused = false;
     return false;
   }
   return true;
+}
+
+TabRing::Focus OpdsBookBrowserActivity::ringFocus() const {
+  if (tabFocus >= 0) return TabRing::Focus::BottomBar;
+  return bandFocused ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
+}
+
+void OpdsBookBrowserActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Library) : -1;
+  bandFocused = focus == TabRing::Focus::TopTabs;
+  if (focus == TabRing::Focus::Content && !entries.empty()) {
+    selectorIndex = atEnd ? static_cast<int>(entries.size()) - 1 : 0;
+    listNav.selected = selectorIndex;
+    listNav.follow(static_cast<int>(entries.size()));
+  }
 }
 
 void OpdsBookBrowserActivity::navigateBack() {

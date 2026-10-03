@@ -5,10 +5,11 @@
 #include "ReadingStatsStore.h"
 #include "activities/Activity.h"
 #include "components/StatsWidgets.h"
+#include "components/TabRing.h"
 #include "components/themes/BaseTheme.h"
 #include "util/ButtonNavigator.h"
 
-class ReadingStatsActivity final : public Activity {
+class ReadingStatsActivity final : public Activity, public TabRing::Host {
   ButtonNavigator buttonNavigator;
   // Swallows the release that ends a long Back press, so going home does not also finish().
   bool backLongPressFired = false;
@@ -48,6 +49,21 @@ class ReadingStatsActivity final : public Activity {
   void stepTab(int direction);
   static std::string makeTabLabel(const char* code);
   bool stepMonthFromTap();
+
+  // TabRing::Host. The page is one scrolling view under the tabs, so the cursor is either on the
+  // page (tabs included: Confirm steps them from anywhere) or in the bottom bar.
+  int ringTopTabCount() const override { return static_cast<int>(tabLabels.size()); }
+  int ringActiveTopTab() const override { return selectedTab; }
+  void ringSelectTopTab(int index) override { selectTab(index); }
+  HomeTab ringBottomTab() const override { return HomeTab::Stats; }
+  // Left/Right step the month on the page.
+  bool ringContentLeftRightToBar() const override { return false; }
+  TabRing::Focus ringFocus() const override {
+    return tabFocus >= 0 ? TabRing::Focus::BottomBar : TabRing::Focus::Content;
+  }
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
+  int& ringBarSlot() override { return tabFocus; }
+  void ringChanged() override { requestUpdate(); }
 
  public:
   explicit ReadingStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

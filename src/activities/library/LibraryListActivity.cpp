@@ -757,11 +757,7 @@ bool LibraryListActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (tabsFocused()) {
-      stepTab(1);
-      return true;
-    }
-    if (count > 0) activateIndex(selectedEntry());
+    if (count > 0 && !tabsFocused()) activateIndex(selectedEntry());
     return true;
   }
 

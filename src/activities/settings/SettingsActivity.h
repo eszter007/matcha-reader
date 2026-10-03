@@ -290,6 +290,8 @@ class SettingsActivity final : public UiTabListActivity {
   // --- UiTabListActivity contract ---
   int listCount() const override { return settingsCount; }
   int tabCount() const override { return isSubmenu() ? 1 : categoryCount; }
+  // Embedded in the reader the category band is hidden and locked: no top tabs on the ring.
+  int ringTopTabCount() const override { return finishOnBack ? 0 : tabCount(); }
   int activeTab() const override { return isSubmenu() ? 0 : selectedCategoryIndex; }
   const char* tabLabel(int index) const override {
     return I18N.get(isSubmenu() ? submenuCategory : categoryNames[index]);

@@ -83,6 +83,14 @@ void ReadingStatsActivity::stepTab(const int direction) {
   selectTab((selectedTab + direction + count) % count);
 }
 
+void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Stats) : -1;
+  // The top of the ring is the top of the page, where the tabs are; coming up out of the bar
+  // lands at the page's end.
+  if (focus == TabRing::Focus::TopTabs) scrollOffset = 0;
+  if (focus == TabRing::Focus::Content) scrollOffset = atEnd ? maxScrollOffset : 0;
+}
+
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
   READING_STATS_STORE.loadFromFile();
@@ -119,19 +127,7 @@ bool ReadingStatsActivity::stepMonthFromTap() {
 }
 
 void ReadingStatsActivity::loop() {
-  // The band takes Left/Right only while the cursor is in it; on the page they step the month.
-  const auto routed = HomeTabBar::route(mappedInput, renderer, HomeTab::Stats, tabFocus, tabFocus >= 0);
-  if (routed == HomeTabBar::Input::Exited) {
-    // Confirm on the Insights tab hands the cursor back to the band at the top, the same cycle
-    // the Library has: tabs, then the bar, then back to the tabs.
-    tabFocus = -1;
-    requestUpdate();
-    return;
-  }
-  if (routed != HomeTabBar::Input::None) {
-    if (routed == HomeTabBar::Input::FocusMoved) requestUpdate();
-    return;
-  }
+  if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) return;
   // Tap leaves Insights, hold goes home; same gesture as the language screen.
   if (backLongPressFired) {
     if (!mappedInput.isPressed(MappedInputManager::Button::Back)) backLongPressFired = false;
@@ -149,23 +145,15 @@ void ReadingStatsActivity::loop() {
     return;
   }
   if (tabFocus >= 0) {
-    // Cursor in the band: Up is the way back to the page, Down stays put so the band is the end
-    // of the ring rather than a wrap back to the top of a long page. Back above still leaves.
-    if (mappedInput.wasPressed(MappedInputManager::Button::ScreenUp)) {
-      tabFocus = -1;
-      requestUpdate();
-    }
+    // Cursor in the bar: Up goes back to the end of the page, Down carries on to its top.
+    if (mappedInput.wasPressed(MappedInputManager::Button::ScreenUp)) TabRing::step(*this, -1);
+    if (mappedInput.wasPressed(MappedInputManager::Button::ScreenDown)) TabRing::step(*this, 1);
     return;
   }
   // Confirm cycles the tabs -- All, then one per language -- and past the last one steps into
-  // the bottom bar, which is the ring's last stop.
+  // the bottom bar.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (HomeTabBar::enabled() && selectedTab >= static_cast<int>(tabLabels.size()) - 1) {
-      tabFocus = static_cast<int>(HomeTab::Stats);
-      requestUpdate();
-      return;
-    }
-    stepTab(1);
+    TabRing::confirmTopTabs(*this);
     return;
   }
   // Tapping a tab picks it, hit-tested through the theme so the targets land where drawTabBar
@@ -219,11 +207,8 @@ void ReadingStatsActivity::loop() {
       requestUpdate();
       return;
     }
-    // Bottom of the page: the next Down carries on into the tab band.
-    if (HomeTabBar::enabled() && tabFocus < 0) {
-      tabFocus = static_cast<int>(HomeTab::Stats);
-      requestUpdate();
-    }
+    // Bottom of the page: the next Down carries on into the bottom bar.
+    if (TabRing::hasBottomBar(*this)) TabRing::leaveContent(*this, 1);
   });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::ScreenUp}, [this] {
     if (scrollOffset > 0) {

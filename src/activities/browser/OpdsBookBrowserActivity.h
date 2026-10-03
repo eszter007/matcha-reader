@@ -7,6 +7,8 @@
 
 #include "OpdsServerStore.h"
 #include "activities/Activity.h"
+#include "components/LibraryTabs.h"
+#include "components/TabRing.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
 
@@ -14,7 +16,7 @@
  * Activity for browsing and downloading books from an OPDS server.
  * Supports navigation through catalog hierarchy and downloading EPUBs.
  */
-class OpdsBookBrowserActivity final : public Activity, private UiAppHost {
+class OpdsBookBrowserActivity final : public Activity, private UiAppHost, public TabRing::Host {
  public:
   enum class BrowserState { CHECK_WIFI, WIFI_SELECTION, LOADING, BROWSING, DOWNLOADING, ERROR, SEARCH_INPUT };
 
@@ -94,6 +96,18 @@ class OpdsBookBrowserActivity final : public Activity, private UiAppHost {
   bool bandFocused = false;
   // Band and bottom-bar input; true when it consumed the pass.
   bool handleTabInput();
+  // TabRing::Host: the catalog is the Library's OPDS view, so its top tabs are the Library's and
+  // leaving for another tab goes through goToLibraryTab / goToHomeTab (they record exitTarget).
+  int ringTopTabCount() const override { return inLibraryTab() ? LibraryTabs::count() : 0; }
+  int ringActiveTopTab() const override { return LibraryTabs::Opds; }
+  void ringSelectTopTab(int index) override { goToLibraryTab(index); }
+  HomeTab ringBottomTab() const override { return inLibraryTab() ? HomeTab::Library : HomeTab::Count; }
+  void ringActivateBottomTab(HomeTab tab) override { goToHomeTab(static_cast<int>(tab)); }
+  bool ringHasContent() const override { return state == BrowserState::BROWSING && !entries.empty(); }
+  TabRing::Focus ringFocus() const override;
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
+  int& ringBarSlot() override { return tabFocus; }
+  void ringChanged() override { requestUpdate(); }
   // Free heap under which a feed fetch first drops the SD-font caches: 38 KB failed the TLS
   // handshake, 66 KB succeeded.
   static constexpr uint32_t FETCH_FREE_HEAP_FLOOR = 60000;

@@ -443,16 +443,9 @@ int SettingsActivity::enabledRingFrom(int ring, const int direction) const {
 
 bool SettingsActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // Confirm on the category tabs is TabRing's (handleTabBarInput runs first).
     if (ringPos() == 0) {
-      // Embedded single-category mode (reader menu): the category row is locked.
-      if (finishOnBack) return true;
-      // Past the last category the ring carries on into the bottom bar, the same cycle the
-      // Library has: tabs, then the bar, then back to the tabs.
-      if (hasTabBar() && selectedCategoryIndex >= categoryCount - 1) {
-        enterBottomBand();
-        return true;
-      }
-      stepTab(1);
+      return true;
     } else {
       const int row = ringPos() - 1;
       if (row >= 0 && row < static_cast<int>(rowItems_.size()) && !rowItems_[row].enabled) return true;

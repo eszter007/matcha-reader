@@ -14,10 +14,11 @@
 #include "activities/Activity.h"
 #include "components/CoverWorker.h"
 #include "components/OptionPopup.h"
+#include "components/TabRing.h"
 #include "components/UITheme.h"  // TabInfo, Rect
 #include "util/ButtonNavigator.h"
 
-class CoverLibraryActivity final : public Activity {
+class CoverLibraryActivity final : public Activity, public TabRing::Host {
  private:
   ButtonNavigator buttonNavigator;
   // Long-press menu on a cover (stats / read / unread / delete), shared with the Home grid.
@@ -29,8 +30,25 @@ class CoverLibraryActivity final : public Activity {
   // Tab to open on, from the tab band of whichever screen switched here.
   int requestedTab = 0;
   int contentIndex = 0;
-  // contentIndex when the current Next/Previous press began; -1 once a hold has restored it.
+  // contentIndex and tabFocus when the current Next/Previous press began; the index is -1 once a
+  // hold has restored them.
   int holdStartContentIndex_ = -1;
+  int holdStartTabFocus_ = -1;
+  // A Confirm release acts on the tab band only when its press began on this screen: the release
+  // of the click that opened the Library must not step a tab.
+  bool confirmPressSeen_ = false;
+
+  // TabRing::Host. The top tabs are the Library's (Books, Shelves, and in Cover Grid OPDS and
+  // Files, which are other screens); an open shelf has no tabs, only its grid and the bar.
+  int ringTopTabCount() const override;
+  int ringActiveTopTab() const override { return selectedTab; }
+  void ringSelectTopTab(int index) override;
+  HomeTab ringBottomTab() const override { return HomeTab::Library; }
+  bool ringHasContent() const override;
+  TabRing::Focus ringFocus() const override;
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
+  int& ringBarSlot() override { return tabFocus; }
+  void ringChanged() override { requestUpdate(); }
   int scrollRow = 0;      // Books tab: first visible grid row
   int shelvesScroll = 0;  // Shelves tab: first visible list row
 
@@ -60,10 +78,6 @@ class CoverLibraryActivity final : public Activity {
     int bookCount = 0;
   };
   std::vector<ShelfInfo> shelves;
-  // Confirm onto the OPDS or Files tab switches activity on the RELEASE, not the press; the tab
-  // is parked here while the key is still down so the next screen never sees that release as
-  // "open the selected row". -1 when nothing is pending.
-  int pendingTab = -1;
   bool shelvesLoaded = false;
 
   // Shelf detail view
