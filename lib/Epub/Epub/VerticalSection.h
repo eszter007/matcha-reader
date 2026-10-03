@@ -171,7 +171,9 @@ class VerticalSection {
 
   // The page holding `offset`: the last page whose own offset is <= it. nullopt if the chapter
   // has no pages or the records cannot be read.
-  std::optional<int> getPageForVisibleTextOffset(uint32_t offset) const;
+  // preferFirstAtOffset: of several pages starting exactly at `offset` (image pages add no
+  // characters, so they share the start of the text page after them), the first instead.
+  std::optional<int> getPageForVisibleTextOffset(uint32_t offset, bool preferFirstAtOffset = false) const;
 
   // The page holding the element with this id (a TOC or footnote target), through the anchor table
   // written after the page index. nullopt if the chapter has no such anchor.

@@ -474,6 +474,37 @@ if (parsedSize != fileSize) {
 }
 ```
 
+## `vsections/<spine>.bin` (vertical section cache)
+
+One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
+its trailer only; the page records are written and read by `VerticalSection.cpp`.
+
+### Version 140
+
+The page index (`pageCount` × `u32` file offsets) is followed by the **anchor table**, which lets
+TOC and footnote jumps land on their page:
+
+```
+u16 count
+count × {
+  u32 length
+  u8  id[length]   // element id, UTF-8, no terminator
+  u32 offset       // see below
+}
+```
+
+`offset` is the element's visible text offset in its low 31 bits. The top bit
+(`ANCHOR_BEFORE_IMAGE`, `0x80000000`) is set when nothing that is laid out lies between the
+anchor and the next image; the offset is then the image's own (inter-tag whitespace counts
+towards offsets but is not laid out). An image page adds no visible characters, so it starts at the same offset as the
+text page after it. A flagged anchor resolves to the **first** page starting at its offset (the
+image), an unflagged one to the last page starting at or before it.
+
+The table holds every `id` that is not on a `<span>`, up to 1,024 per chapter, plus the chapter's
+TOC targets regardless of tag and cap. A short read anywhere in the table fails the lookup.
+
+v139 caches have no flag and may lack TOC targets, so they are rebuilt once on first open.
+
 ## `ruby.bin`
 
 Per-book furigana glossary: unique `(base text, ruby reading)` pairs harvested from
