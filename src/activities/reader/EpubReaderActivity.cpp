@@ -524,7 +524,7 @@ bool EpubReaderActivity::buildTickHeapGate() {
   // turns. Once per pause, trade the reloadable caches first. Track the paused state so
   // skipLoopDelay() stops pinning the CPU at full speed while no build work happens.
   if (belowFloors() && !buildHeapPauseReleased_) {
-    releaseReloadableMemory();
+    releaseRenderFontMemory();
     buildHeapPauseReleased_ = true;
   }
   buildHeapPaused = belowFloors();
@@ -535,6 +535,15 @@ bool EpubReaderActivity::buildTickHeapGate() {
     buildHeapPausedSinceMs_ = millis();
   }
   return !buildHeapPaused;
+}
+
+void EpubReaderActivity::releaseRenderFontMemory() {
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+    if (auto* d = fcm->getDecompressor()) d->freeGlyphSlab();
+  }
+  prewarmedVPage_ = -1;
+  prewarmedHPage_ = -1;
 }
 
 void EpubReaderActivity::releaseReloadableMemory() {
@@ -769,6 +778,9 @@ void EpubReaderActivity::readerLoop() {
         // Not a failure: the partial serves its pages and crossing its watermark extends it in
         // render(). Only the lazy background restart, which would stall the same way, stays off.
         partialRebuildStartFailed = true;
+        // Redraw with the heap back: a picture the page deferred is decoded by the warm that
+        // follows a render, and nothing else would render until the next key press.
+        requestUpdate();
         buildHeapPaused = false;
         buildHeapPausedSinceMs_ = 0;
         buildHeapPauseReleased_ = false;
@@ -4150,16 +4162,8 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   renderer.displayBuffer();
   earlyPageActuallyDisplayed_ = true;
   // The build resumes the moment this returns and needs its headroom back: the prewarm above
-  // re-claimed font page slots and the decompressor glyph slab that the build path explicitly
-  // released before starting. Deliberately NOT releaseAllFontMemory(): that would also drop
-  // the SD fonts' advance tables, which the build's measurement is actively using -- their
-  // mid-build 16KB rebuild allocation fails under build pressure (observed: a stream of
-  // buildAdvanceTable OOM errors and deeper maxAlloc dips that dropped glyphs). clearCache()
-  // frees what the render claimed while leaving the measurement caches intact.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->clearCache();
-    if (auto* d = fcm->getDecompressor()) d->freeGlyphSlab();
-  }
+  // re-claimed font page slots and the glyph slab that the build path released before starting.
+  releaseRenderFontMemory();
   LOG_DBG("ERS", "Early first render of page %d in %dms", pageIndex, millis() - start);
 }
 

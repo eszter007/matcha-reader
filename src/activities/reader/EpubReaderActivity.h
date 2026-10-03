@@ -477,6 +477,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // Frees what reloads on demand (font caches, so the prewarmed-page claims go too). The one way
   // the reader trades caches for heap, in either layout.
   void releaseReloadableMemory();
+  // Frees only what a render claims (font page slots, the glyph slab), keeping the SD fonts'
+  // advance tables: a build in progress measures with them, and rebuilding their 16KB under build
+  // pressure fails (buildAdvanceTable OOM, dropped glyphs). For heap handed back to a live build.
+  void releaseRenderFontMemory();
   // True while the background build is gated on the heap floors. Lets skipLoopDelay()
   // return the loop to normal delay/power-saving during the pause: isBuilding() stays
   // true the whole time, and without this the loop would spin at full CPU speed doing
