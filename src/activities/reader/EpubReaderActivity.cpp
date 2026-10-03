@@ -4020,6 +4020,9 @@ EpubReaderActivity::GrayPassResult EpubReaderActivity::runGrayPass(const GrayPas
     }
   }
   const auto tDisplay = millis();
+  // One more look before the waveform: a key pressed while the last plane was uploading would
+  // otherwise wait out the whole gray refresh.
+  if (!cancelled && cancel()) cancelled = true;
   // After displayGrayBuffer, not before: setRenderMode(BW) cancels an unfinished absolute pass and
   // would discard the planes just uploaded. When cancelled, it is that wanted cleanup.
   if (!cancelled) renderer.displayGrayBuffer();
@@ -4261,6 +4264,10 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
   if (!DictIndex::isAvailable()) {
     LOG_ERR("ERS", "Word lookup: no Japanese dictionary (%s / %s)", DictIndex::vocabIdxPath(),
             DictIndex::vocabDatPath());
+    // Say so on the page, as the other-language lookup does when it finds no dictionary.
+    showDictionaryMessage = true;
+    dictionaryMessageTime = millis();
+    requestUpdate();
     return;
   }
   // The scan-result cache path lets a re-open of the same page skip the dictionary scan.

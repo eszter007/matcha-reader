@@ -86,7 +86,13 @@ namespace {
 // footnote jumps land on their page instead of the chapter's first.
 // v139: a rotated run followed by 。、 reserves room for the mark at the head of its cell (117。
 // had the 。 drawn over the 7).
-constexpr uint8_t VSECTION_FILE_VERSION = 139;
+// v140: TOC targets are recorded whatever their tag and past the cap, and an anchor that sits
+// directly before an image carries ANCHOR_BEFORE_IMAGE, so it resolves to the image's page.
+constexpr uint8_t VSECTION_FILE_VERSION = 140;
+// Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
+// image page adds no visible characters, so it shares its start offset with the text page after
+// it; this is what tells the two apart.
+constexpr uint32_t ANCHOR_BEFORE_IMAGE = 0x80000000u;
 // Same policy as the horizontal parser (ChapterHtmlSlimParser): <span> ids are converter noise
 // (one per Kobo text fragment, thousands per chapter), never link targets; the rest is capped.
 constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
@@ -162,6 +168,9 @@ struct TextExtractor {
   uint32_t visibleTextOffset = 0;
   // Element ids met in the chapter, with the visible text offset where each element starts.
   std::vector<std::pair<std::string, uint32_t>>* anchors = nullptr;
+  // The chapter's TOC targets: recorded whatever their tag and past the cap, as the horizontal
+  // parser does -- they are the anchors a jump actually asks for.
+  const std::vector<std::string>* tocAnchors = nullptr;
   bool insideBody = false;
   // Offset of the first character of currentText / rubyBase, captured when each goes from
   // empty to non-empty. That is what a RubyRun is stamped with.
@@ -474,10 +483,16 @@ struct TextExtractor {
       return;
     }
     if (strcasecmp(name, "body") == 0) self->insideBody = true;
-    if (self->anchors && strcasecmp(name, "span") != 0 && self->anchors->size() < MAX_ANCHORS_PER_CHAPTER) {
-      for (int i = 0; atts[i]; i += 2) {
-        if (strcmp(atts[i], "id") == 0 && atts[i + 1][0] != '\0') {
-          self->anchors->emplace_back(atts[i + 1], self->visibleTextOffset);
+    if (self->anchors) {
+      const bool general = strcasecmp(name, "span") != 0 && self->anchors->size() < MAX_ANCHORS_PER_CHAPTER;
+      const bool hasToc = self->tocAnchors && !self->tocAnchors->empty();
+      if (general || hasToc) {
+        for (int i = 0; atts[i]; i += 2) {
+          if (strcmp(atts[i], "id") != 0 || atts[i + 1][0] == '\0') continue;
+          if (general ||
+              std::find(self->tocAnchors->begin(), self->tocAnchors->end(), atts[i + 1]) != self->tocAnchors->end()) {
+            self->anchors->emplace_back(atts[i + 1], self->visibleTextOffset);
+          }
           break;
         }
       }
@@ -568,6 +583,13 @@ struct TextExtractor {
         // accumulate-then-interleave code placed the image before the whole paragraph; identical
         // for the usual block-level images.)
         self->flushParagraph();
+        if (self->anchors) {
+          // Every anchor recorded since the last visible character points at this image.
+          for (auto it = self->anchors->rbegin(); it != self->anchors->rend(); ++it) {
+            if ((it->second & ~ANCHOR_BEFORE_IMAGE) != self->visibleTextOffset) break;
+            it->second |= ANCHOR_BEFORE_IMAGE;
+          }
+        }
         if (self->sink) self->sink->onImage(std::string(src), self->visibleTextOffset);
       }
     }
@@ -1712,6 +1734,17 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   extractor.blockStyles = &blockStyles;
   buildAnchors_.clear();
   extractor.anchors = &buildAnchors_;
+  // This spine's TOC targets (a handful: one per TOC entry pointing into the file).
+  std::vector<std::string> tocAnchors;
+  if (const int firstToc = epub->getTocIndexForSpineIndex(spineIndex); firstToc >= 0) {
+    tocAnchors.reserve(8);
+    for (int i = firstToc; i < epub->getTocItemsCount(); i++) {
+      auto entry = epub->getTocItem(i);
+      if (entry.spineIndex != spineIndex) break;
+      if (!entry.anchor.empty()) tocAnchors.push_back(std::move(entry.anchor));
+    }
+  }
+  extractor.tocAnchors = &tocAnchors;
   // Pin every buffer that lives across the whole build to its worst case NOW, while the heap
   // is freshest -- mid-build growth (doubling alloc-copy-free) plants persistent blocks in
   // the region the per-flush transients need, shredding the largest contiguous block over the
@@ -1730,6 +1763,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
       ESP.getMaxAllocHeap() >= kInitialOffsetBytes + kOffsetHeadroom &&
       ESP.getFreeHeap() >= kInitialOffsetBytes + kOffsetHeadroom) {
     pageOffsets_.reserve(kInitialOffsetCapacity);
+  }
+  // The anchor list lives across the build too. A typical chapter has a few dozen ids; reserving
+  // for those keeps its doubling growth out of the build's first flushes, and the full 1024-entry
+  // cap (~28KB of pairs) is too much to pin up front.
+  constexpr size_t kInitialAnchorCapacity = 64;
+  constexpr size_t kInitialAnchorBytes = kInitialAnchorCapacity * sizeof(std::pair<std::string, uint32_t>);
+  if (ESP.getMaxAllocHeap() >= kInitialAnchorBytes + kOffsetHeadroom &&
+      ESP.getFreeHeap() >= kInitialAnchorBytes + kOffsetHeadroom) {
+    buildAnchors_.reserve(kInitialAnchorCapacity);
   }
 
   XML_Parser parser = XML_ParserCreate(nullptr);
@@ -2053,14 +2095,16 @@ std::optional<int> VerticalSection::getPageForAnchor(const std::string& anchor) 
   if (anchor.empty() || anchorTableOffset_ == 0 || pageCount == 0) return std::nullopt;
   HalFile file;
   if (!Storage.openFileForRead("VSC", filePath, file) || !file.seek(anchorTableOffset_)) return std::nullopt;
+  // A short read is a truncated cache: fail rather than resolve the anchor to offset 0.
   uint16_t count = 0;
-  serialization::readPod(file, count);
+  if (!serialization::readPod(file, count)) return std::nullopt;
   std::string id;
   for (uint16_t i = 0; i < count; i++) {
     uint32_t offset = 0;
-    if (!serialization::readString(file, id)) return std::nullopt;
-    serialization::readPod(file, offset);
-    if (id == anchor) return getPageForVisibleTextOffset(offset);
+    if (!serialization::readString(file, id) || !serialization::readPod(file, offset)) return std::nullopt;
+    if (id == anchor) {
+      return getPageForVisibleTextOffset(offset & ~ANCHOR_BEFORE_IMAGE, (offset & ANCHOR_BEFORE_IMAGE) != 0);
+    }
   }
   return std::nullopt;
 }
@@ -2074,13 +2118,12 @@ void VerticalSection::findAnchorPages(const std::vector<std::string>& anchors, s
     HalFile file;
     if (!Storage.openFileForRead("VSC", filePath, file) || !file.seek(anchorTableOffset_)) return;
     uint16_t count = 0;
-    serialization::readPod(file, count);
+    if (!serialization::readPod(file, count)) return;
     std::string id;
     size_t unresolved = anchors.size();
     for (uint16_t n = 0; n < count && unresolved > 0; n++) {
       uint32_t offset = 0;
-      if (!serialization::readString(file, id)) return;
-      serialization::readPod(file, offset);
+      if (!serialization::readString(file, id) || !serialization::readPod(file, offset)) break;
       for (size_t i = 0; i < anchors.size(); i++) {
         if (offsets[i] == UINT32_MAX && id == anchors[i]) {
           offsets[i] = offset;
@@ -2091,11 +2134,14 @@ void VerticalSection::findAnchorPages(const std::vector<std::string>& anchors, s
   }
   for (size_t i = 0; i < anchors.size(); i++) {
     if (offsets[i] == UINT32_MAX) continue;
-    if (const auto page = getPageForVisibleTextOffset(offsets[i])) pages[i] = *page;
+    const auto page =
+        getPageForVisibleTextOffset(offsets[i] & ~ANCHOR_BEFORE_IMAGE, (offsets[i] & ANCHOR_BEFORE_IMAGE) != 0);
+    if (page) pages[i] = *page;
   }
 }
 
-std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t offset) const {
+std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t offset,
+                                                                const bool preferFirstAtOffset) const {
   if (pageOffsets_.empty()) return std::nullopt;
   HalFile file;
   if (!Storage.openFileForRead("VSC", filePath, file)) return std::nullopt;
@@ -2121,6 +2167,16 @@ std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t o
       lo = mid + 1;
     } else {
       hi = mid - 1;
+    }
+  }
+  if (preferFirstAtOffset) {
+    // Pages sharing this exact start: image pages, then the text page after them. Take the first.
+    while (best > 0) {
+      const auto here = pageStart(best);
+      const auto before = pageStart(best - 1);
+      if (!here || !before) return std::nullopt;
+      if (*here != offset || *before != offset) break;
+      best--;
     }
   }
   return best;
