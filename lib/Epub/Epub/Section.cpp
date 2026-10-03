@@ -1072,8 +1072,8 @@ bool Section::finalizeBuild() {
   return true;
 }
 
-void Section::suspendBuild() {
-  if (!build_) return;
+bool Section::suspendBuild() {
+  if (!build_) return pageCount > 0;
 
   // Only worth persisting if this build produced pages a pre-existing partial doesn't
   // already cover; otherwise keep the older (bigger) partial and just drop the tmp.
@@ -1109,6 +1109,7 @@ void Section::suspendBuild() {
   buildComplete_ = false;
   pageCount = partial_ ? partialPageCount_ : 0;
   builtPageCount_ = 0;
+  return pageCount > 0;
 }
 
 void Section::abandonBuild() {

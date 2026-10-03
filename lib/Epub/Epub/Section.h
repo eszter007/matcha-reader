@@ -142,7 +142,9 @@ class Section {
   // its pages instantly and only rebuild in the background. Called by the destructor, so
   // any teardown path (exit, sleep, navigation) keeps the work already done. Keeps a
   // pre-existing partial when it covers more pages than this build reached.
-  void suspendBuild();
+  // True when the section still has pages to serve afterwards (the new partial, or an older one
+  // it kept); false when the commit failed with nothing older to fall back on.
+  bool suspendBuild();
   // True when a partial file was loaded: pageCount is a watermark, not the chapter total.
   bool isPartial() const { return partial_; }
 

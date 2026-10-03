@@ -548,6 +548,22 @@ void EpubReaderActivity::releaseRenderFontMemory() {
   prewarmedHPage_ = -1;
 }
 
+bool EpubReaderActivity::startSectionBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
+  prewarmedVPage_ = -1;
+  prewarmedHPage_ = -1;
+  return section->startBuild(spec, popupFn);
+}
+
+bool EpubReaderActivity::suspendSectionBuild() {
+  const bool pagesLeft = section->suspendBuild();
+  buildGeneration_++;
+  if (pagesLeft) return true;
+  LOG_ERR("ERS", "Suspended build kept no pages; laying the chapter out again");
+  section.reset();
+  requestUpdate();
+  return false;
+}
+
 void EpubReaderActivity::releaseReloadableMemory() {
   if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
   // The release emptied the mini-font cache, so no page is warm any more. A stale claim makes the
@@ -741,7 +757,7 @@ void EpubReaderActivity::readerLoop() {
         section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
       // Reuse the last render's viewport so the extension paginates identically to the partial.
       const ReaderRenderSpec buildSpec = readerSpec(buildViewportWidth, buildViewportHeight);
-      if (!section->startBuild(buildSpec)) {
+      if (!startSectionBuild(buildSpec)) {
         // Not fatal: the partial keeps serving its pages; crossing the watermark falls back to
         // the blocking extension in render(). Don't retry every tick.
         partialRebuildStartFailed = true;
@@ -776,8 +792,7 @@ void EpubReaderActivity::readerLoop() {
       } else if (millis() - buildHeapPausedSinceMs_ >= BACKGROUND_BUILD_STALL_MS) {
         LOG_INF("ERS", "Background build stalled on heap (free=%u maxAlloc=%u); suspending it", ESP.getFreeHeap(),
                 ESP.getMaxAllocHeap());
-        section->suspendBuild();
-        buildGeneration_++;
+        suspendSectionBuild();
         // Not a failure: the partial serves its pages and crossing its watermark extends it in
         // render(). Only the lazy background restart, which would stall the same way, stays off.
         partialRebuildStartFailed = true;
@@ -2599,7 +2614,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             // inflation peak). The chunk loop below runs without it so the popup
             // can draw mid-build; background chunks never had the loan either.
             GfxRenderer::FrameBufferLoan loan(renderer);
-            started = section->startBuild(renderSpec, [this] { showBuildPopup(); });
+            started = startSectionBuild(renderSpec, [this] { showBuildPopup(); });
           }
           if (!started) {
             LOG_ERR("ERS", "Failed to start section build");
@@ -2719,7 +2734,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
   while (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
     // Start a build to extend a partial toward the requested page.
-    if (!section->isBuilding() && !section->startBuild(renderSpec)) {
+    if (!section->isBuilding() && !startSectionBuild(renderSpec)) {
       LOG_ERR("ERS", "Failed to start partial extension build");
       section.reset();
       showBuildError();
@@ -4358,10 +4373,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     {
       RenderLock lock(*this);
       page = section->loadPage(section->currentPage);
-      if (page && section->isBuilding()) {
-        section->suspendBuild();
-        buildGeneration_++;
-      }
+      if (page && section->isBuilding()) suspendSectionBuild();
       if (page) {
         releaseReloadableMemory();
       }
@@ -4387,7 +4399,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       lookupTail.reserve(WordSelectionScan::kLookupContextChars * 4);  // see the vertical path
       std::string miningTail;                                          // see the vertical path
       miningTail.reserve(kMiningTailChars * 3);
-      if (auto nextPage = section->loadPageAt(section->currentPage + 1)) {
+      if (auto nextPage = section ? section->loadPageAt(section->currentPage + 1) : nullptr) {
         // Flattened the way initFromPage() flattens the current page -- a separating space only
         // between two ASCII words, CJK runs concatenated -- so a split Japanese word still meets
         // its continuation. PageTextExtractor spaces EVERY word, which would break that; walking

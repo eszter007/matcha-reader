@@ -481,6 +481,13 @@ class EpubReaderActivity final : public ReaderActivity {
   // free heap, keeping the SD fonts' advance tables: a build in progress measures with them, and rebuilding their 16KB
   // under build pressure fails (buildAdvanceTable OOM, dropped glyphs). For heap handed back to a live build.
   void releaseRenderFontMemory();
+  // Every build of `section` starts here: Section::startBuild() empties the font caches, so the
+  // prewarmed-page claims go with them.
+  bool startSectionBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);
+  // Suspends `section`'s build and starts a new pause generation. When the commit failed and no
+  // pages are left, drops the section so render() lays the chapter out again rather than showing
+  // it empty. Returns whether `section` is still there.
+  bool suspendSectionBuild();
   // True while the background build is gated on the heap floors. Lets skipLoopDelay()
   // return the loop to normal delay/power-saving during the pause: isBuilding() stays
   // true the whole time, and without this the loop would spin at full CPU speed doing
