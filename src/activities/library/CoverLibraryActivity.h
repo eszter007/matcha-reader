@@ -16,11 +16,14 @@
 #include "components/OptionPopup.h"
 #include "components/TabRing.h"
 #include "components/UITheme.h"  // TabInfo, Rect
+#include "components/UiTabBand.h"
 #include "util/ButtonNavigator.h"
 
 class CoverLibraryActivity final : public Activity, public TabRing::Host {
  private:
   ButtonNavigator buttonNavigator;
+  // The Library's tab band, the same FreeInkUI band the list screens build.
+  UiTabBand::Host tabBand_;
   // Long-press menu on a cover (stats / read / unread / delete), shared with the Home grid.
   OptionPopup optionPopup;
   // Bottom tab bar cursor for button boards; -1 when nothing in the band is focused.
@@ -136,9 +139,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
     selectorVisible = false;
     requestUpdate();
   }
-  // One definition of the tab bar, used by both the renderer and the hit test, so the
-  // labels and the touch targets cannot drift apart.
-  [[nodiscard]] std::vector<TabInfo> buildTabs() const;
+  // Where the tab band sits, so a touch on it never falls through to the grid.
   [[nodiscard]] Rect tabBarRect() const;
   // Same idea for the Shelves list, which is rows rather than the cover grid: the renderer and
   // the hit test below share this geometry instead of each deriving its own.
@@ -280,7 +281,7 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
 
  public:
   explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialTab = 0)
-      : Activity("RecentBooks", renderer, mappedInput), requestedTab(initialTab) {}
+      : Activity("RecentBooks", renderer, mappedInput), tabBand_(renderer), requestedTab(initialTab) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

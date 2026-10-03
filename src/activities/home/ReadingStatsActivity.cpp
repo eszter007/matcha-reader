@@ -61,15 +61,6 @@ std::string ReadingStatsActivity::makeTabLabel(const char* code) {
   return out;
 }
 
-std::vector<TabInfo> ReadingStatsActivity::buildTabs() const {
-  std::vector<TabInfo> tabs;
-  tabs.reserve(tabLabels.size());
-  for (int i = 0; i < static_cast<int>(tabLabels.size()); i++) {
-    tabs.push_back({tabLabels[i].c_str(), i == selectedTab});
-  }
-  return tabs;
-}
-
 void ReadingStatsActivity::selectTab(const int index) {
   if (index == selectedTab || index < 0 || index >= static_cast<int>(tabLabels.size())) return;
   selectedTab = index;
@@ -93,6 +84,7 @@ void ReadingStatsActivity::ringSetFocus(const TabRing::Focus focus, const bool a
 
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
+  tabBand_.begin();
   READING_STATS_STORE.loadFromFile();
   READING_STATS_STORE.getLanguages(languages);
   tabLabels.clear();
@@ -156,15 +148,18 @@ void ReadingStatsActivity::loop() {
     TabRing::confirmTopTabs(*this);
     return;
   }
-  // Tapping a tab picks it, hit-tested through the theme so the targets land where drawTabBar
-  // put the labels: same scroll offset, same skip rule for tabs the row is too narrow to show.
-  if (tabBar.width > 0) {
+  // Tapping a tab picks it: the tabs are FreeInkUI touch targets, exactly where the band drew them.
+  {
+    const int tab = tabBand_.tappedTab(mappedInput);
+    if (tab >= 0) {
+      selectTab(tab);
+      return;
+    }
+    // Swallowed either way: a tap in the gap between labels must not fall through to the cards.
     int tabX = 0;
     int tabY = 0;
-    if (mappedInput.wasScreenTapped(tabX, tabY) && tabY >= tabBar.y && tabY < tabBar.y + tabBar.height) {
-      int tab = -1;
-      if (GUI.tabIndexFromPoint(renderer, tabBar, buildTabs(), tabX, tabY, tab)) selectTab(tab);
-      // Swallowed either way: a tap in the gap between labels must not fall through to the cards.
+    if (tabBar.width > 0 && mappedInput.wasScreenTapped(tabX, tabY) && tabY >= tabBar.y &&
+        tabY < tabBar.y + tabBar.height) {
       return;
     }
   }
@@ -304,10 +299,26 @@ void ReadingStatsActivity::render(RenderLock&&) {
   renderer.fillRect(0, 0, screen.width, headerBottom - metrics.verticalSpacing, false);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  tr(STR_STATS), nullptr, HomeTabBar::showsBackButton(true));
-  // Kept for loop()'s hit test, so taps land exactly where the labels were drawn. Always drawn
-  // focused: on this screen Confirm acts on the tabs and nothing else.
+  // Kept for loop(), so a tap in the band's gaps is swallowed. Drawn focused while the cursor is
+  // on the page: Confirm acts on the tabs there and nothing else.
   tabBar = Rect{0, tabBarY, screen.width, tabBarH};
-  GUI.drawTabBar(renderer, tabBar, buildTabs(), true);
+  {
+    constexpr int MAX_TABS = 12;
+    freeink::ui::TabItem tabs[MAX_TABS];
+    const int total = static_cast<int>(tabLabels.size());
+    const int count = std::min(total, MAX_TABS);
+    // Past MAX_TABS languages the array holds the run that ends on the selected one.
+    const int first = std::clamp(selectedTab - count + 1, 0, total - count);
+    for (int i = 0; i < count; i++) {
+      tabs[i].label = tabLabels[first + i].c_str();
+      tabs[i].value = static_cast<int16_t>(first + i);
+      tabs[i].selected = first + i == selectedTab;
+    }
+    UiTabBand::Options options;
+    options.focused = tabFocus < 0;
+    options.hasTouch = mappedInput.hasTouch();
+    tabBand_.render(tabs, count, options, tabBarY);
+  }
 
   if (HomeTabBar::enabled()) {
     HomeTabBar::draw(renderer, HomeTab::Stats, tabFocus);

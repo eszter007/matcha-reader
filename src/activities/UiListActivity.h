@@ -25,9 +25,11 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
   void render(RenderLock&&) override;
 
  protected:
-  // Base-owned row action; subclass-registered actions start at ACTION_USER.
+  // Base-owned actions: a list row, and a top tab (UiTabBand). Subclass-registered actions start
+  // at ACTION_USER.
   static constexpr freeink::ui::ActionId ACTION_ROW = 1;
-  static constexpr freeink::ui::ActionId ACTION_USER = 2;
+  static constexpr freeink::ui::ActionId ACTION_TAB = 2;
+  static constexpr freeink::ui::ActionId ACTION_USER = 3;
 
   UiListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                  bool wantsTouchLongPress = false);
@@ -52,6 +54,9 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
   // Bounds-checked ACTION_ROW dispatch. Default: selection follows the tapped
   // row, then long-press/activate. UiTabListActivity remaps row -> ring.
   virtual void onRowAction(const freeink::ui::ActionEvent& event);
+  // A tap on one of the screen's top tabs (bounds already checked). Default: switch to it; the
+  // tab already showing just swallows the tap.
+  virtual void onTabAction(int index);
   // The button-navigation tail of loop(): release steps the selection, hold
   // jumps by page. UiTabListActivity replaces it with the ring walk.
   virtual void navigateButtons();
@@ -142,6 +147,7 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
 
   static void screenTrampoline(UiScreen& screen, void* user);
   static void rowActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
+  static void tabActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
   // Named apart from UiAppHost::routeTouch so the host overload stays visible
   // (not name-hidden) to subclasses with extra touch surfaces.
   bool routeListTouch();

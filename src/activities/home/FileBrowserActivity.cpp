@@ -564,23 +564,6 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
 bool FileBrowserActivity::handleCustomInput() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
 
-  if (showsLibraryTabs()) {
-    int tabX = 0;
-    int tabY = 0;
-    if (mappedInput.wasScreenTapped(tabX, tabY)) {
-      const int tab = LibraryTabs::hitTest(renderer, mappedInput, tabX, tabY, LibraryTabs::Files);
-      if (tab >= 0) {
-        // The band swallows the contact either way: a tap in the gap between labels must not
-        // fall through to the row underneath.
-        if (tab != LibraryTabs::Files) {
-          app.clearTapFlash();
-          LibraryTabs::activate(tab);
-        }
-        return true;
-      }
-    }
-  }
-
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
   if (mode == Mode::Books && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
@@ -674,10 +657,15 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Content below the GUI.drawHeader band, above the button hints -- or above the tab bar that
   // replaces them in the Cover Grid theme, so the last row clears it instead of hiding behind it.
-  screen.setContentMarginFromScreen(
-      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + libraryTabBandHeight()), 0,
-                  static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
-  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                                static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
+  // The Library's own band, with Files marked: this screen is that tab, so leaving it for Books
+  // or Shelves is a tab switch rather than a trip back through Home.
+  if (showsLibraryTabs()) {
+    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Files, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
+  } else {
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  }
 
   // Full path band at the bottom: separator on top, left-truncated so the
   // deepest directory stays visible.
@@ -757,12 +745,6 @@ void FileBrowserActivity::drawChrome() {
   // Back still means "up a folder" below the root; at the root the tab bar covers it.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str(), nullptr,
                  HomeTabBar::showsBackButton(hasTabBar() && basepath == "/"));
-  // The Library's own band, with Files marked: this screen is that tab, so leaving it for Books
-  // or Shelves is a tab switch rather than a trip back through Home.
-  if (showsLibraryTabs()) {
-    GUI.drawTabBar(renderer, LibraryTabs::barRect(renderer, mappedInput), LibraryTabs::build(LibraryTabs::Files),
-                   topBandFocused);
-  }
 }
 
 void FileBrowserActivity::drawFooter() {

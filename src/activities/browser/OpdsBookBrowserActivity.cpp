@@ -36,6 +36,7 @@ constexpr fui::ActionId ACTION_ROW = 1;
 constexpr fui::ActionId ACTION_SEARCH = 2;
 constexpr fui::ActionId ACTION_CANCEL = 3;
 constexpr fui::ActionId ACTION_BACK = 4;
+constexpr fui::ActionId ACTION_TAB = 5;  // Library band, value = LibraryTabs tab
 constexpr int DOWNLOAD_PROGRESS_STEP_PERCENT = 5;
 constexpr unsigned long DOWNLOAD_PROGRESS_MIN_UPDATE_MS = 5000;
 
@@ -66,6 +67,7 @@ void OpdsBookBrowserActivity::onEnter() {
   app.on(ACTION_SEARCH, &OpdsBookBrowserActivity::onSearchEvent, this);
   app.on(ACTION_CANCEL, &OpdsBookBrowserActivity::onCancelEvent, this);
   app.on(ACTION_BACK, &OpdsBookBrowserActivity::onBackEvent, this);
+  app.on(ACTION_TAB, &OpdsBookBrowserActivity::onTabEvent, this);
   app.setScreen(&OpdsBookBrowserActivity::rootScreen, this);
   requestUpdate();
 
@@ -119,6 +121,14 @@ void OpdsBookBrowserActivity::onBackEvent(const fui::ActionEvent&, void* user) {
   if (self->state != BrowserState::BROWSING) return;
   self->app.clearTapFlash();
   self->navigateBack();
+}
+
+void OpdsBookBrowserActivity::onTabEvent(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<OpdsBookBrowserActivity*>(user);
+  if (event.value < 0 || event.value >= LibraryTabs::count()) return;
+  self->app.clearTapFlash();
+  // The OPDS tab itself goes back to the server list, one level up from any catalog page.
+  self->goToLibraryTab(event.value);
 }
 
 void OpdsBookBrowserActivity::onCancelEvent(const fui::ActionEvent&, void* user) {
@@ -307,11 +317,14 @@ void OpdsBookBrowserActivity::screenHeader(UiScreen& screen, const bool withSear
                         static_cast<int16_t>(metrics.headerHeight)},
               header);
   // In the Library the band sits under the header and the bottom bar replaces the button hints.
-  const int bandHeight = inLibraryTab() ? LibraryTabs::height(mappedInput) : 0;
   const int bottom = inLibraryTab() ? HomeTabBar::bottomInset() : metrics.buttonHintsHeight;
-  screen.setContentMarginFromScreen(fui::Insets{
-      static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + bandHeight + metrics.verticalSpacing), 0,
-      static_cast<int16_t>(bottom), 0});
+  screen.setContentMarginFromScreen(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0, static_cast<int16_t>(bottom), 0});
+  if (inLibraryTab()) {
+    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Opds, bandFocused, mappedInput.hasTouch(), ACTION_TAB);
+  } else {
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  }
 }
 
 void OpdsBookBrowserActivity::buildBrowsingScreen(UiScreen& screen) {
@@ -422,11 +435,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
   if (!inLibraryTab()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderUi();
-  if (inLibraryTab()) {
-    GUI.drawTabBar(renderer, LibraryTabs::barRect(renderer, mappedInput), LibraryTabs::build(LibraryTabs::Opds),
-                   bandFocused);
-    HomeTabBar::draw(renderer, HomeTab::Library, tabFocus);
-  }
+  if (inLibraryTab()) HomeTabBar::draw(renderer, HomeTab::Library, tabFocus);
   renderer.displayBuffer();
 }
 
@@ -558,17 +567,9 @@ void OpdsBookBrowserActivity::goToHomeTab(const int tab) {
 bool OpdsBookBrowserActivity::handleTabInput() {
   if (!inLibraryTab()) return false;
 
-  int tx = 0;
-  int ty = 0;
-  if (mappedInput.wasScreenTapped(tx, ty)) {
-    // The OPDS tab itself goes back to the server list, one level up from any catalog page.
-    const int tab = LibraryTabs::hitTest(renderer, mappedInput, tx, ty, LibraryTabs::Opds);
-    if (tab >= 0) {
-      app.clearTapFlash();
-      goToLibraryTab(tab);
-      return true;
-    }
-  }
+  // Taps on the Library band are FreeInkUI targets (UiTabBand). BROWSING routes every touch
+  // further down; the other states route here, so the band also works over an error or a load.
+  if (state != BrowserState::BROWSING && routeTouch(mappedInput)) return true;
   if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) return true;
 
   using Button = MappedInputManager::Button;

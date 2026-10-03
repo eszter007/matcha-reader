@@ -65,6 +65,7 @@ class OpdsBookBrowserActivity final : public Activity, private UiAppHost, public
   static void onSearchEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onCancelEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onBackEvent(const freeink::ui::ActionEvent& event, void* user);
+  static void onTabEvent(const freeink::ui::ActionEvent& event, void* user);
   void screenHeader(UiScreen& screen, bool withSearch);
   void buildBrowsingScreen(UiScreen& screen);
   void buildDownloadScreen(UiScreen& screen);

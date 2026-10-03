@@ -23,6 +23,7 @@ void UiListActivity::onEnter() {
   activeNav().reset();
   resetUi();
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
+  app.on(ACTION_TAB, &UiListActivity::tabActionTrampoline, this);
   app.setScreen(&UiListActivity::screenTrampoline, this);
   requestUpdate();
 }
@@ -35,6 +36,17 @@ void UiListActivity::rowActionTrampoline(const fui::ActionEvent& event, void* us
   auto* self = static_cast<UiListActivity*>(user);
   if (event.value < 0 || event.value >= self->listCount()) return;
   self->onRowAction(event);
+}
+
+void UiListActivity::tabActionTrampoline(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<UiListActivity*>(user);
+  if (event.value < 0 || event.value >= self->ringTopTabCount()) return;
+  self->onTabAction(event.value);
+}
+
+void UiListActivity::onTabAction(const int index) {
+  app.clearTapFlash();
+  if (index != ringActiveTopTab()) ringSelectTopTab(index);
 }
 
 void UiListActivity::onRowAction(const fui::ActionEvent& event) {

@@ -37,7 +37,6 @@ class OpdsServerListActivity final : public UiListActivity {
   int ringTopTabCount() const override { return isLibraryTab() ? LibraryTabs::count() : 0; }
   int ringActiveTopTab() const override { return LibraryTabs::Opds; }
   void ringSelectTopTab(int index) override { LibraryTabs::activate(index); }
-  void drawChrome() override;
 
   bool pickerMode = false;
   OptionPopup optionPopup;

@@ -108,30 +108,7 @@ void OpdsServerListActivity::rebuildRowItems() {
 
 bool OpdsServerListActivity::handleCustomInput() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
-  if (!isLibraryTab()) return false;
-
-  int tabX = 0;
-  int tabY = 0;
-  if (mappedInput.wasScreenTapped(tabX, tabY)) {
-    const int tab = LibraryTabs::hitTest(renderer, mappedInput, tabX, tabY, LibraryTabs::Opds);
-    if (tab >= 0) {
-      // The band swallows the contact either way, so a tap between labels never reaches a row.
-      if (tab != LibraryTabs::Opds) {
-        app.clearTapFlash();
-        LibraryTabs::activate(tab);
-      }
-      return true;
-    }
-  }
   return false;
-}
-
-void OpdsServerListActivity::drawChrome() {
-  UiListActivity::drawChrome();
-  if (isLibraryTab()) {
-    GUI.drawTabBar(renderer, LibraryTabs::barRect(renderer, mappedInput), LibraryTabs::build(LibraryTabs::Opds),
-                   topBandFocused);
-  }
 }
 
 void OpdsServerListActivity::onBackButton() {
@@ -233,17 +210,17 @@ void OpdsServerListActivity::buildScreen(UiScreen& screen) {
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   if (isLibraryTab()) {
     // Below the Library band, above the bottom bar that replaces the button hints.
-    screen.setContentMarginFromScreen(
-        fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + LibraryTabs::height(mappedInput)),
-                    0, static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
+    screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                                  static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
+    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Opds, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
   } else {
     screen.setContentMarginFromScreen(fui::Insets{
         static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
         static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
         static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height) + metrics.buttonHintsHeight),
         static_cast<int16_t>(safe.x)});
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   }
-  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   const int itemCount = getItemCount();
   if (itemCount == 0) {

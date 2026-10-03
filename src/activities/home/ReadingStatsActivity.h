@@ -6,11 +6,14 @@
 #include "activities/Activity.h"
 #include "components/StatsWidgets.h"
 #include "components/TabRing.h"
+#include "components/UiTabBand.h"
 #include "components/themes/BaseTheme.h"
 #include "util/ButtonNavigator.h"
 
 class ReadingStatsActivity final : public Activity, public TabRing::Host {
   ButtonNavigator buttonNavigator;
+  // The language tabs, the same FreeInkUI band the list screens build.
+  UiTabBand::Host tabBand_;
   // Swallows the release that ends a long Back press, so going home does not also finish().
   bool backLongPressFired = false;
   int scrollOffset = 0;
@@ -44,7 +47,6 @@ class ReadingStatsActivity final : public Activity, public TabRing::Host {
 
   // nullptr on the All tab, which reads the store's unfiltered totals.
   const char* selectedCode() const;
-  std::vector<TabInfo> buildTabs() const;
   void selectTab(int index);
   void stepTab(int direction);
   static std::string makeTabLabel(const char* code);
@@ -67,7 +69,7 @@ class ReadingStatsActivity final : public Activity, public TabRing::Host {
 
  public:
   explicit ReadingStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("ReadingStats", renderer, mappedInput) {}
+      : Activity("ReadingStats", renderer, mappedInput), tabBand_(renderer) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -672,8 +672,6 @@ void CoverLibraryActivity::warmOnePendingProgress() {
   // No requestUpdate: visible entries are still filled synchronously during their render.
 }
 
-std::vector<TabInfo> CoverLibraryActivity::buildTabs() const { return LibraryTabs::build(selectedTab); }
-
 Rect CoverLibraryActivity::tabBarRect() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   return Rect{0, static_cast<int16_t>(metrics.topPadding + metrics.headerHeight),
@@ -758,6 +756,7 @@ int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const
 
 void CoverLibraryActivity::onEnter() {
   Activity::onEnter();
+  tabBand_.begin();
   lastInputMs = millis();
 
   if (RECENT_BOOKS.pruneMissing()) {
@@ -1071,32 +1070,29 @@ void CoverLibraryActivity::loop() {
     const int gridHeight = gridContentHeight();
     const int itemCount = getContentItemCount();
 
-    // Tab bar: hit-test through the theme, which lays the targets out exactly as
-    // drawTabBar draws the labels -- same scroll offset, same skip rule, same text
-    // widths. Two equal columns across the full width did not match: the labels are
-    // packed to the left, so "Shelves" ignored a tap on the word and answered to one
-    // on empty space in the right half instead.
+    // Tab band: its tabs are FreeInkUI touch targets, so they are exactly where it drew them.
+    const int tab = tabBand_.tappedTab(mappedInput);
+    if (tab >= 0) {
+      hideSelector();
+      if (tab >= TAB_COUNT) {
+        // OPDS and Files are their own screens; the band they draw carries on from here.
+        LibraryTabs::activate(tab);
+        return;
+      }
+      if (tab != selectedTab) {
+        ringSelectTopTab(tab);
+        selectorVisible = false;  // a touch, so no key cursor
+        requestUpdate();
+      }
+      return;
+    }
+    // The band swallows the contact either way: a tap that lands in the gap between labels must
+    // not fall through to the grid below.
     const Rect barRect = tabBarRect();
     int tabX = 0;
     int tabY = 0;
     if (mappedInput.wasScreenTapped(tabX, tabY) && tabY >= barRect.y && tabY < barRect.y + barRect.height) {
-      hideSelector();  // a touch, whether or not it lands on a label
-      int tab = -1;
-      if (GUI.tabIndexFromPoint(renderer, barRect, buildTabs(), tabX, tabY, tab) && tab != selectedTab) {
-        if (tab >= LibraryTabs::Opds) {
-          // OPDS and Files are their own activities; the band they draw carries on from here.
-          LibraryTabs::activate(tab);
-          return;
-        }
-        selectedTab = tab;
-        if (selectedTab == 1 && !shelvesLoaded) loadShelves();
-        contentIndex = 0;
-        scrollRow = 0;
-        shelvesScroll = 0;
-        requestUpdate();
-      }
-      // The bar swallows the contact either way: a tap that lands in the gap between
-      // labels must not fall through to the grid below.
+      hideSelector();
       return;
     }
 
@@ -1765,7 +1761,14 @@ void CoverLibraryActivity::render(RenderLock&&) {
                  nullptr, HomeTabBar::showsBackButton(true));
 
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
-  GUI.drawTabBar(renderer, tabBarRect(), buildTabs(), selectorVisible && contentIndex == 0 && tabFocus < 0);
+  {
+    freeink::ui::TabItem tabs[LibraryTabs::MAX_TABS];
+    const int tabCount = LibraryTabs::bandItems(tabs, selectedTab);
+    tabBand_.render(
+        tabs, tabCount,
+        LibraryTabs::bandOptions(selectorVisible && contentIndex == 0 && tabFocus < 0, mappedInput.hasTouch()),
+        tabBarY);
+  }
 
   const int contentTop = tabBarY + metrics.tabBarHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - HomeTabBar::bottomInset() - metrics.verticalSpacing;

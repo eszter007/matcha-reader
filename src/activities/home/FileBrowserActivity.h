@@ -56,7 +56,6 @@ class FileBrowserActivity final : public UiListActivity {
   // the root of an ordinary browse, never in the firmware picker or inside a folder, where the
   // header's Back means "up" and the band would claim you are somewhere you are not.
   bool showsLibraryTabs() const { return hasTabBar() && basepath == "/"; }
-  int libraryTabBandHeight() const { return showsLibraryTabs() ? LibraryTabs::height(mappedInput) : 0; }
   // The browser is the Library's Files tab, so the bottom bar marks Library while it is up.
   // The firmware picker is a modal errand and carries no bar at all.
   HomeTab tabBarTab() const override { return mode == Mode::Books ? HomeTab::Library : HomeTab::Count; }
