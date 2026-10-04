@@ -8,6 +8,8 @@
 #include <SdCardFontRegistry.h>
 #include <esp_heap_caps.h>
 
+#include <algorithm>
+
 SdCardFontManager::~SdCardFontManager() {
   for (auto& lf : loaded_) {
     delete lf.font;
@@ -102,6 +104,27 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
   }
 
   return loadFile(*file, family.name.c_str(), renderer);
+}
+
+bool SdCardFontManager::hasSize(const uint8_t pointSize) const {
+  return std::any_of(loaded_.begin(), loaded_.end(),
+                     [pointSize](const LoadedFont& lf) { return lf.size == pointSize; });
+}
+
+void SdCardFontManager::unloadExtra(const int fontId, GfxRenderer& renderer) {
+  for (size_t i = 1; i < loaded_.size(); i++) {
+    if (loaded_[i].fontId != fontId) continue;
+    SdCardFont* font = loaded_[i].font;
+    renderer.removeFont(fontId);
+    // Same care as unloadAll(): nothing may keep pointing at a deleted font.
+    if (renderer.getFallbackSdFont() == font) renderer.setFallbackSdFont(nullptr);
+    if (auto* fcm = renderer.getFontCacheManager(); fcm && fcm->getFallbackSdFont() == font) {
+      fcm->setFallbackSdFont(nullptr);
+    }
+    delete font;
+    loaded_.erase(loaded_.begin() + static_cast<std::ptrdiff_t>(i));
+    return;
+  }
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {

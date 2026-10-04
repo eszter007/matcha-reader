@@ -330,11 +330,33 @@ void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int
   const auto* family = registry_.findFamily(manager_.currentFamilyName());
   if (!family) return;
 
+  const bool wasResident = manager_.hasSize(pointSize);
   const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, pointSize);
   if (sdFontId == 0) return;
   renderer.setFallbackFont(primaryFontId, sdFontId);
   const auto builtinIt = renderer.getFontMap().find(primaryFontId);
   if (builtinIt != renderer.getFontMap().end()) renderer.setFamilyFallback(sdFontId, &builtinIt->second);
+  // Remember it for releaseWordLookupFallback(): the font when this call loaded it, and in any
+  // case the mapping, which must not outlive a font another primary's release unloads.
+  const bool ownedAlready = std::any_of(std::begin(lookupExtras_), std::end(lookupExtras_),
+                                        [sdFontId](const LookupExtra& e) { return e.sdFontId == sdFontId; });
+  if (!wasResident || ownedAlready) {
+    for (auto& extra : lookupExtras_) {
+      if (extra.primaryFontId == primaryFontId || extra.primaryFontId == 0) {
+        extra = {primaryFontId, sdFontId};
+        break;
+      }
+    }
+  }
+}
+
+void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
+  for (auto& extra : lookupExtras_) {
+    if (extra.sdFontId == 0) continue;
+    renderer.clearFallbackFont(extra.primaryFontId);
+    manager_.unloadExtra(extra.sdFontId, renderer);  // a no-op the second time for a shared font
+    extra = {};
+  }
 }
 
 int SdCardFontSystem::effectiveReaderFontId(const bool jpBook) const {

@@ -139,6 +139,7 @@ void DictionaryDefinitionActivity::onExit() {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseAllFontMemory();
   }
+  sdFontSystem.releaseWordLookupFallback(renderer);
 }
 
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
