@@ -48,6 +48,14 @@ void appendMetadataText(std::string& out, const XML_Char* text, const int len, b
       spacePending = true;
       continue;
     }
+    // A byte-order mark (U+FEFF, EF BB BF) is not text: no font has a glyph for it, so a title
+    // that starts with one logged a missing glyph wherever it was drawn. Skipped before the pending
+    // space or separator is written, so the mark leaves nothing behind. Expat hands over whole
+    // UTF-8 characters, so the three bytes always arrive in one call.
+    if (c == '\xEF' && i + 2 < len && text[i + 1] == '\xBB' && text[i + 2] == '\xBF') {
+      i += 2;
+      continue;
+    }
 
     if (out.size() >= MAX_METADATA_TEXT) {
       LOG_DBG("COF", "Metadata text exceeds %u bytes; truncating", static_cast<unsigned>(MAX_METADATA_TEXT));
@@ -62,11 +70,6 @@ void appendMetadataText(std::string& out, const XML_Char* text, const int len, b
     }
     spacePending = false;
     out.push_back(c);
-    // A byte-order mark (U+FEFF, EF BB BF) inside the element is not text: no font has a glyph for
-    // it, so a title that starts with one logged a missing glyph wherever it was drawn. Checked
-    // on the accumulated string, so a mark split across two character-data calls is caught too.
-    const size_t n = out.size();
-    if (n >= 3 && c == '\xBF' && out[n - 2] == '\xBB' && out[n - 3] == '\xEF') out.resize(n - 3);
   }
 }
 }  // namespace
