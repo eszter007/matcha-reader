@@ -680,10 +680,7 @@ void HomeActivity::render(RenderLock&&) {
   // Back carries no action on the home menu, so it gets no hint. It used to open
   // the most recent book, which sits under a button the reader otherwise treats
   // as "go back" and was too easy to hit by accident.
-  // Back reopens the last book from here (see loop()); say so while there is one to reopen.
-  const bool backResumes = hasContinueReading && !recentBooks.empty();
-  const auto labels =
-      mappedInput.mapLabels(backResumes ? tr(STR_RESUME) : "", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Captured before lastRenderValid is set: it is this fork's firstRenderDone, and the
