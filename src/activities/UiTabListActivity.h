@@ -60,6 +60,10 @@ class UiTabListActivity : public UiListActivity {
   int ringTopTabCount() const override { return tabCount(); }
   int ringActiveTopTab() const override { return activeTab(); }
   void ringSelectTopTab(int index) override;
+  // Left/Right step the tabs only where the screen also has the bottom bar, the layout in which
+  // that pair is horizontal everywhere. Without one they are this list's Previous/Next, which is
+  // what its button hints call them (Up/Down): on the tab band they walk on into the rows.
+  bool ringTopTabsLeftRightStep() const override { return TabRing::hasBottomBar(*this); }
   // A hold that follows must not restore the snapshot of some earlier press.
   void onRingInputConsumed() override {
     holdStart_.pending = false;
