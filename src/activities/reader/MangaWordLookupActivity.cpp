@@ -135,6 +135,10 @@ void MangaWordLookupActivity::onExit() {
   }
   // Return the dictionary cache memory (~30KB) to the pool -- see EpubReaderWordLookupActivity.
   DictIndex::releaseCaches();
+  {
+    RenderLock lock;
+    sdFontSystem.releaseWordLookupFallback(renderer);
+  }
   BookStats::addCounts(mining_.bookPath.c_str(), static_cast<uint32_t>(countedLookups_.size()), 0);
   Activity::onExit();
 }

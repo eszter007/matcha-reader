@@ -290,6 +290,11 @@ void EpubReaderWordLookupActivity::onExit() {
   // Return the dictionary cache memory (~30KB) to the pool -- the reader needs it for heavy
   // operations like re-pagination (zip inflate wants one contiguous 32KB block).
   DictIndex::releaseCaches();
+  {
+    // The panel's SD font was loaded mid-session, on top of the heap; see the declaration.
+    RenderLock lock;
+    sdFontSystem.releaseWordLookupFallback(renderer);
+  }
   BookStats::addCounts(mining_.bookPath.c_str(), static_cast<uint32_t>(countedLookups_.size()), 0);
   Activity::onExit();
 }
