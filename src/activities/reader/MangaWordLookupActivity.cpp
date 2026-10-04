@@ -18,6 +18,7 @@
 #include "DefinitionTextRenderer.h"
 #include "DictSourceNames.h"
 #include "MappedInputManager.h"
+#include "PanelTouch.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
@@ -510,47 +511,37 @@ void MangaWordLookupActivity::loop() {
       sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
   const auto scrollUpButton =
       sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
-  // Outside the card is "put it away", as in the English and Japanese panels: the card floats
-  // over the page, so a tap around it reads as dismissing it. Checked before the paging below so
-  // the two cannot both claim one contact.
-  int tapX = 0;
-  int tapY = 0;
-  if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
-    const auto box = DictionaryPanel::compute(renderer).box;
-    if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+  // The gestures every floating panel answers, read in one place (PanelTouch): a tap outside the
+  // card puts it away, up/down swipes scroll a long definition a screenful at a time, and a page
+  // turn steps to the previous/next word, as this panel's own left/right buttons do.
+  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult)) {
+    case PanelTouch::Action::Close: {
       ActivityResult result;
       result.isCancelled = true;
       setResult(std::move(result));
       finish();
       return;
     }
-    const auto add = DictionaryPanel::compute(renderer).addButton;
-    if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+    case PanelTouch::Action::AddButton:
       saveSentence();
       return;
+    case PanelTouch::Action::ScrollDown:
+    case PanelTouch::Action::ScrollUp: {
+      const int scroll = touch == PanelTouch::Action::ScrollDown ? 1 : -1;
+      const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
+      if (hasResult && target != scrollOffset) {
+        scrollOffset = target;
+        miningStatus_ = MiningStatus::None;
+        requestUpdate();
+      }
+      return;
     }
-  }
-
-  // Tap zones, inverted zones, swipes or inverted swipes -- whatever the reader is set to, through
-  // the same helper the page turns and the other panels use. A turn steps to the previous/next
-  // word, as this panel's own left/right buttons do: the entry itself scrolls on the vertical
-  // swipe below.
-  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  if (touchTurn.prev || touchTurn.next) {
-    moveCursor(touchTurn.next ? 1 : -1);
-    return;
-  }
-
-  // Up/down swipes scroll a long definition a screenful at a time, whatever the page-turn setting
-  // says -- the same gesture as the EPUB panels.
-  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
-    const int target = std::clamp(scrollOffset + scroll * visibleCapacity, 0, maxScroll);
-    if (hasResult && target != scrollOffset) {
-      scrollOffset = target;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
-    }
-    return;
+    case PanelTouch::Action::Next:
+    case PanelTouch::Action::Previous:
+      moveCursor(touch == PanelTouch::Action::Next ? 1 : -1);
+      return;
+    case PanelTouch::Action::None:
+      break;
   }
 
   buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });

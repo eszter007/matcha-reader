@@ -23,7 +23,9 @@
 #include "DefinitionTextRenderer.h"
 #include "DictSourceNames.h"
 #include "Epub/Page.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
+#include "PanelTouch.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
@@ -852,6 +854,7 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
       provisionalGlyph = SIZE_MAX;
       cursorIndex = hit;
       refreshCursorBoxes();
+      haptic_feedback::touchAction();
       enterDefinition();
       return false;
     }
@@ -1601,53 +1604,45 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     finish();
     return false;
   }
-  // Outside the card is "put it away", exactly as in the English panel (#278): the card floats
-  // over the page, so a tap on the page around it reads as dismissing it rather than as paging a
-  // definition the finger is not even on. Closes the whole panel rather than stepping back to
-  // select mode -- the gesture means "back to the book", and Back is still there for the page.
-  // Checked before paging so the two cannot both claim the same contact.
-  int tapX = 0;
-  int tapY = 0;
-  if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
-    const auto box = DictionaryPanel::compute(renderer).box;
-    if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+  // The gestures every floating panel answers, read in one place (PanelTouch). A tap outside the
+  // card closes the whole panel rather than stepping back to select mode: the gesture means "back
+  // to the book", and Back is still there for the page. Up/down swipes scroll within the entry and
+  // stop at its ends; a page turn goes to the neighbouring entry page -- the next source in the
+  // paged view, the next word otherwise. A turn never scrolls, and a scroll never turns.
+  switch (const auto touch = PanelTouch::read(renderer, mappedInput, hasResult)) {
+    case PanelTouch::Action::Close: {
       ActivityResult result;
       result.isCancelled = true;
       setResult(std::move(result));
       finish();
       return false;
     }
-    const auto add = DictionaryPanel::compute(renderer).addButton;
-    if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+    case PanelTouch::Action::AddButton:
       saveSentence();
       return false;
+    case PanelTouch::Action::ScrollDown:
+    case PanelTouch::Action::ScrollUp: {
+      const int scroll = touch == PanelTouch::Action::ScrollDown ? 1 : -1;
+      const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
+      if (hasResult && target != scrollOffset) {
+        scrollOffset = target;
+        miningStatus_ = MiningStatus::None;
+        requestUpdate();
+      }
+      return false;
     }
-  }
-
-  // Two axes, two jobs -- the same split the buttons below make. Up/down swipes scroll within the
-  // entry on screen, whatever the page-turn setting says, and stop at its ends. Left/right follows
-  // the reader's page-turn setting (tap zones, inverted zones, swipes, inverted swipes, or nothing
-  // when touch controls are off) and turns to the neighbouring entry page: the next source in the
-  // paged view, the next word otherwise. A turn never scrolls, and a scroll never turns.
-  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
-    const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
-    if (hasResult && target != scrollOffset) {
-      scrollOffset = target;
-      miningStatus_ = MiningStatus::None;
-      requestUpdate();
+    case PanelTouch::Action::Next:
+    case PanelTouch::Action::Previous: {
+      const int delta = touch == PanelTouch::Action::Next ? 1 : -1;
+      if (pagedDefinition()) {
+        moveSection(delta);
+      } else {
+        moveCursor(delta);
+      }
+      return false;
     }
-    return false;
-  }
-
-  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  if (touchTurn.prev || touchTurn.next) {
-    const int delta = touchTurn.next ? 1 : -1;
-    if (pagedDefinition()) {
-      moveSection(delta);
-    } else {
-      moveCursor(delta);
-    }
-    return false;
+    case PanelTouch::Action::None:
+      break;
   }
 
   if (ReaderUtils::wordLookupPowerClick(mappedInput)) {

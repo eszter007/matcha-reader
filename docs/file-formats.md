@@ -95,6 +95,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 97 (fork numbering)
+
+Absorbs upstream's version 50. The header adds `paragraphIndentSpaces` after
+`extraParagraphSpacing`. The value participates in cache validation, so sections with different
+indentation settings are rebuilt.
+
 ### Version 94 (fork numbering)
 
 Carries upstream's v45 to v48. Internal EPUB links keep CSS superscript and
@@ -270,7 +276,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 94
+#define EXPECTED_VERSION 97
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -427,6 +433,7 @@ struct SectionBin {
     s32 fontId;
     float lineCompression;
     bool extraParagraphSpacing;
+    u8 paragraphIndentSpaces;
     u8 paragraphAlignment;
     u16 viewportWidth;
     u16 viewportHeight;

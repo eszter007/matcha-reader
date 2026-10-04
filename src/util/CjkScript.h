@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <string_view>
 
 // Which CJK typesetting and dictionary conventions a book follows, from its language tag.
@@ -58,8 +60,9 @@ inline bool isUnscriptedChinese(std::string_view tag) {
   while (!rest.empty()) {
     const size_t next = rest.find_first_of("-_");
     const std::string_view sub = rest.substr(0, next);
-    for (const char* stated : {"hant", "tw", "hk", "mo", "hans", "cn", "sg"}) {
-      if (subtagIs(sub, stated)) return false;
+    static constexpr const char* kStated[] = {"hant", "tw", "hk", "mo", "hans", "cn", "sg"};
+    if (std::any_of(std::begin(kStated), std::end(kStated), [sub](const char* s) { return subtagIs(sub, s); })) {
+      return false;
     }
     rest = next == std::string_view::npos ? std::string_view{} : rest.substr(next + 1);
   }
@@ -156,16 +159,14 @@ struct ScriptSniff {
   void feed(const uint8_t* data, const size_t len) {
     for (size_t i = 0; i < len; i++) {
       const uint8_t b = data[i];
-      uint32_t cp = 0;
       if (pendingNeed) {
         if ((b & 0xC0) != 0x80) {
           pendingNeed = 0;  // malformed: resync on this byte
         } else {
           pending = (pending << 6) | (b & 0x3F);
           if (++pendingHave < pendingNeed) continue;
-          cp = pending;
           pendingNeed = 0;
-          count(cp);
+          count(pending);
           continue;
         }
       }
@@ -263,10 +264,7 @@ struct ScriptSniff {
         0x8FC7, 0x6837, 0x5F00, 0x5B66, 0x73B0, 0x540E, 0x70B9, 0x89C1, 0x95EE, 0x4E1C, 0x95E8, 0x8F66, 0x4E66, 0x957F,
         0x51E0, 0x5E94, 0x4E24, 0x8BA4, 0x8BA9, 0x7ECF, 0x5173, 0x5B9E, 0x8BDD, 0x542C, 0x4ECE, 0x5934, 0x5C14, 0x4E1A,
         0x7231, 0x56FE, 0x7535, 0x673A, 0x4F53, 0x8BD5, 0x5199, 0x8BFB, 0x9A6C, 0x9E1F, 0x9F99, 0x53F6, 0x4E07, 0x4E0E};
-    for (const uint16_t c : kSimplified) {
-      if (c == cp) return true;
-    }
-    return false;
+    return std::find(std::begin(kSimplified), std::end(kSimplified), cp) != std::end(kSimplified);
   }
   static bool isTraditionalOnly(const uint32_t cp) {
     static constexpr uint16_t kTraditional[] = {
@@ -274,10 +272,7 @@ struct ScriptSniff {
         0x904E, 0x6A23, 0x958B, 0x5B78, 0x73FE, 0x5F8C, 0x9EDE, 0x898B, 0x554F, 0x6771, 0x9580, 0x8ECA, 0x66F8, 0x9577,
         0x5E7E, 0x61C9, 0x5169, 0x8A8D, 0x8B93, 0x7D93, 0x95DC, 0x5BE6, 0x8A71, 0x807D, 0x5F9E, 0x982D, 0x723E, 0x696D,
         0x611B, 0x5716, 0x96FB, 0x6A5F, 0x9AD4, 0x8A66, 0x5BEB, 0x8B80, 0x99AC, 0x9CE5, 0x9F8D, 0x8449, 0x842C, 0x8207};
-    for (const uint16_t c : kTraditional) {
-      if (c == cp) return true;
-    }
-    return false;
+    return std::find(std::begin(kTraditional), std::end(kTraditional), cp) != std::end(kTraditional);
   }
 };
 

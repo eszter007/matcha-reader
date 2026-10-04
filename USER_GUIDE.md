@@ -52,7 +52,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [Chapter Navigation](#chapter-navigation)
     - [Auto Page Turn](#auto-page-turn)
     - [Tilt Page Turn (X3 only)](#tilt-page-turn-x3-only)
-    - [Footnote Navigation](#footnote-navigation)
+    - [Links and footnotes](#links-and-footnotes)
     - [Dictionary Lookup](#dictionary-lookup)
     - [System Navigation](#system-navigation)
     - [Supported Languages](#supported-languages)
@@ -387,6 +387,10 @@ open a list when selected.
   - "ON" - Vertical space will be added between paragraphs in Reading Mode
   - "OFF" - Paragraphs will not have vertical space added, but will have first-line indentation
 
+- **Paragraph Indentation** (Text Settings > Layout): How far the first line of a paragraph is indented, from "Off" to
+  five spaces; two by default. It applies to horizontal text, and takes the place of an indent the book sets for
+  itself (a hanging indent, where the book pulls the first line *out*, is kept). Vertical text is not affected.
+
 - **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` or `/.dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
 
 - **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode, horizontal and vertical (Japanese) text alike, furigana included. Note this slows down page turns slightly: the grey edges follow the black-and-white page about half a second later, and a page turn before then skips them. Images inside vertical text turn grayscale once you stay on the page, whether or not this is on.
@@ -409,6 +413,13 @@ open a list when selected.
 
 - **Navigate with Side Buttons in Word Lookup** (on by default): Lets the side buttons step between words during
   Word Lookup. See [Word Lookup](#61-word-lookup).
+
+- **Haptic Feedback** (devices with a vibration motor only): A short tap when the device accepts a touch.
+  "On Touch" covers taps, long presses and touch page turns; "On Touch + Page Turn" adds the capacitive page
+  buttons; "Off" silences it. A touch that does nothing (a turn past the first page, a tap on the tab you are
+  already in) stays silent.
+
+- **Haptic Intensity**: Low, Medium or High.
 
 - **Reversed page turn (Vertical & Manga)** (off by default): Flips which button turns the page forward, for the two things that are read right-to-left.
 
@@ -458,7 +469,7 @@ open a list when selected.
   - "Sleep" - A short press puts the device into sleep mode
   - "Next Page" - A short press in reading mode turns to the next page; a long press turns the device off
   - "Previous Page" - A short press in reading mode turns back one page
-  - "Footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
+  - "Links and footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
   - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
   - "Confirm" - A short press acts as the Confirm button. It earns its place on touch devices, which have no front Confirm key.
@@ -473,7 +484,7 @@ open a list when selected.
 
 - **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
 
-- **Quick-return from footnotes**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
+- **Quick return from links**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
 
 #### 3.6.4 System
 
@@ -494,6 +505,9 @@ open a list when selected.
   [§6.4](#64-chinese-books)): the built-in CJK glyphs are the Japanese set, so menus would show boxes without one.
 
 - **Keyboard Layouts**: Choose which on-screen keyboard layouts are offered when typing.
+
+- **Plugins**: Lists the plugins installed on the SD card that have a screen on the device. A plugin is a folder
+  on the card; adding or updating one needs no firmware update. See [docs/sd-plugins.md](docs/sd-plugins.md).
 
 - **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi.
 
@@ -828,11 +842,11 @@ so it fills the screen, and you tilt the device to look at it. A smaller image s
 upright and at no more than its own size: a figure between paragraphs, with its caption, or a narrow heading strip
 or diagram among the columns of vertical text.
 
-### Footnote Navigation
+### Links and footnotes
 
-When reading an EPUB that contains footnotes, you can navigate to the footnote text by selecting the footnote reference in the book. From the footnote, you can return to your original reading position.
+Internal EPUB links include chapter links, cross-references, and footnotes. Tap a link on a touchscreen device, or choose "Links and footnotes" from the Reader Menu to select a link. Press Back to return to the previous location.
 
-If the device goes to sleep or you close the book while viewing a footnote, the book reopens to your original reading position, not the footnote.
+If the device sleeps or you close the book after following a link, the book reopens on the page you were viewing. Back still returns you to where you followed the link. The reader keeps the three most recent return positions.
 
 To read the notes without leaving the page, choose **Footnotes** in the reader menu (or set the power button or a
 side button to it). The page's notes open in the same floating panel as the dictionary: the footer names the note's
@@ -878,7 +892,7 @@ Press **Confirm** while reading to open the Reader Menu. From here you can acces
 Available options include:
 
 - **Select Chapter** – Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
-- **Footnotes** – Navigate to the footnotes for the current section *(only shown in books that contain footnotes)*.
+- **Links and footnotes** – Select an internal link on the current page. This option appears when the page contains links.
 - **Look Up** – Select a word on the current page and show its dictionary definition (see [docs/dictionary.md](docs/dictionary.md)). Requires a dictionary to be selected in **Settings → Reader → Dictionary**.
 - **Reading Orientation** – Cycle through screen orientations without leaving the reader.
 - **Auto Turn (Pages Per Minute)** – Cycle through automatic page turn speed options for hands-free reading.

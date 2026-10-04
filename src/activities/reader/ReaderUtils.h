@@ -14,6 +14,7 @@
 #include <string_view>
 
 #include "BookStats.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "activities/ActivityManager.h"

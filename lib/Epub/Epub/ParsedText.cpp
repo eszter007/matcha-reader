@@ -759,22 +759,15 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   if (!isFirstLine || !isNaturalAlign) {
     return 0;
   }
-  if (blockStyle.textIndentDefined) {
-    if (blockStyle.textIndent < 0 || !extraParagraphSpacing) {
-      return blockStyle.textIndent;
-    }
-    return 0;
-  }
-  if (!extraParagraphSpacing) {
-    return scaleSpace(renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR), wordSpacingPercent) * 3;
-  }
-  return 0;
+  if (blockStyle.textIndentDefined && blockStyle.textIndent < 0) return blockStyle.textIndent;
+  if (paragraphIndentSpaces == 0) return 0;
+  return scaleSpace(renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR), wordSpacingPercent) * paragraphIndentSpaces;
 }
 
 int ParsedText::resolveLineIndent(const size_t lineIndex, const GfxRenderer& renderer, const int fontId) const {
   if (blockStyle.hasDropCap()) {
     // The enlarged letter takes the place of the first-line indent -- applying both would push
-    // the opening words a further three spaces off a column that is already inset.
+    // the opening words a further paragraph indent off a column that is already inset.
     return lineIndex < blockStyle.dropCapLines ? blockStyle.dropCapIndent : 0;
   }
   return resolveFirstLineIndent(lineIndex == 0 && !dropCapLinesEmitted, renderer, fontId);
@@ -1530,14 +1523,12 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
       if (availableWidth > 0 &&
           hyphenateWordAtIndex(currentIndex, availableWidth, renderer, fontId, wordWidths, allowFallbackBreaks)) {
         // Prefix now fits; append it to this line and move to next line
-        lineWidth += spacing + wordWidths[currentIndex];
         ++currentIndex;
         break;
       }
 
       // Could not split: force at least one word per line to avoid infinite loop
       if (currentIndex == lineStart) {
-        lineWidth += candidateWidth;
         ++currentIndex;
       }
       break;

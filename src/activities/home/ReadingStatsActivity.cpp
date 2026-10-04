@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "components/HomeTabBar.h"
@@ -114,6 +115,7 @@ bool ReadingStatsActivity::stepMonthFromTap() {
   } else {
     return false;
   }
+  haptic_feedback::touchAction();
   requestUpdate();
   return true;
 }

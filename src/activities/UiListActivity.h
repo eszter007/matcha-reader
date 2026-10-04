@@ -95,6 +95,10 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
   bool hasTabBar() const;
   // Bottom-bar touch and the keys on either band, through TabRing; runs before handleButtons().
   bool handleTabBarInput();
+  // Routes this pass's touch to the registered actions (rows, top-band pills). True when one took
+  // it. For a subclass state that handles input itself and still wants its bands to answer.
+  // Named apart from UiAppHost::routeTouch so the host overload stays visible (not name-hidden).
+  bool routeListTouch();
   // TabRing consumed this pass's key, so navigateButtons() never saw its press.
   virtual void onRingInputConsumed() {}
 
@@ -148,9 +152,5 @@ class UiListActivity : public Activity, protected UiAppHost, public TabRing::Hos
   static void screenTrampoline(UiScreen& screen, void* user);
   static void rowActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
   static void tabActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
-  // Named apart from UiAppHost::routeTouch so the host overload stays visible
-  // (not name-hidden) to subclasses with extra touch surfaces.
-  bool routeListTouch();
-
   const bool wantsTouchLongPress;
 };

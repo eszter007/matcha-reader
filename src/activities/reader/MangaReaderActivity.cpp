@@ -24,6 +24,7 @@
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
+#include "HapticFeedback.h"
 #include "MangaBookmarksActivity.h"
 #include "MangaChapterSelectionActivity.h"
 #include "MangaWordLookupActivity.h"
@@ -217,6 +218,7 @@ void MangaReaderActivity::onExit() {
   }
 
   saveProgress();
+  flushReaderSession();
   endOfBookOptionsReady.store(false, std::memory_order_release);
   endOfBookOptions.reset();
   panels.clear();
@@ -525,6 +527,8 @@ bool MangaReaderActivity::renderEndOfBook() {
                               EpdFontFamily::BOLD);
   }
   renderer.displayBuffer();
+  // Credits the last page's dwell and brings the session's progress to the end of the book.
+  sessionReporter_.pageRendered(progressBasisPoints());
   return true;
 }
 
@@ -610,6 +614,7 @@ void MangaReaderActivity::loop() {
   }
 
   if (holdGlyph >= 0) {
+    haptic_feedback::touchAction(/*longPress=*/true);
     launchWordLookupAt(std::move(holdText), holdGlyph);
     return;
   }
@@ -696,6 +701,7 @@ void MangaReaderActivity::loop() {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else if (viewMode == ViewMode::PanelZoom || viewMode == ViewMode::FullPage) {
+      if (touchMenu) haptic_feedback::touchAction();
       launchMenu();
       return;
     }
@@ -746,6 +752,12 @@ void MangaReaderActivity::loop() {
 
   if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
 
+  // What the turn below may change, to tell a turn that happened from one that was refused
+  // (Previous on the first page).
+  const uint32_t pageBefore = currentPage;
+  const int panelBefore = currentPanel;
+  const ViewMode modeBefore = viewMode;
+
   if (viewMode == ViewMode::PanelZoom) {
     if (nextTriggered) nextPanel();
     if (prevTriggered) prevPanel();
@@ -771,6 +783,26 @@ void MangaReaderActivity::loop() {
     }
     if (prevTriggered) prevPage();
   }
+
+  const bool moved = currentPage != pageBefore || currentPanel != panelBefore || viewMode != modeBefore;
+  // A panel step is reading, the same as a page turn.
+  sessionReporter_.noteTurn(nextTriggered && !prevTriggered, moved);
+  if (moved && (touch.prev || touch.next)) haptic_feedback::touchAction();
+}
+
+void MangaReaderActivity::prepareForSleep() { flushReaderSession(); }
+
+// A manga book is a folder, so its document id comes from the panel index inside it: one file
+// per book, written once at conversion.
+void MangaReaderActivity::flushReaderSession() {
+  if (!book) return;
+  sessionReporter_.flush(book->getFolder(), book->getFolder() + "/panels.idx");
+}
+
+int MangaReaderActivity::progressBasisPoints() const {
+  if (!book || book->getPageCount() == 0) return 0;
+  if (currentPage >= book->getPageCount()) return 10000;
+  return static_cast<int>(static_cast<uint64_t>(currentPage) * 10000 / book->getPageCount());
 }
 
 void MangaReaderActivity::render(RenderLock&&) {
@@ -799,6 +831,7 @@ void MangaReaderActivity::render(RenderLock&&) {
   }
 
   saveProgress();
+  sessionReporter_.pageRendered(progressBasisPoints());
 
   if (translationAfterRender.load(std::memory_order_relaxed)) {
     translationPageReady.store(true, std::memory_order_release);

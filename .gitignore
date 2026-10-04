@@ -41,5 +41,6 @@ gemini.key
 /dependencies.lock
 /sdkconfig.*
 sdkconfig.sticky
+sdkconfig.x4pro
 flake.*
 .devctl/

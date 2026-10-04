@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <memory>
 
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
@@ -898,6 +899,7 @@ void CoverLibraryActivity::loop() {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
       hideSelector();
       if (hit >= 0) {
+        haptic_feedback::touchAction(/*longPress=*/true);
         shelfContentIndex = hit;
         showBookActions(shelfBooks[hit].path, shelfBooks[hit].title,
                         hit < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[hit].percent : -1);
@@ -917,6 +919,7 @@ void CoverLibraryActivity::loop() {
       const int hit = gridIndexAtPoint(shelfTouchX, shelfTouchY, contentTop, contentHeight, shelfScrollRow, shelfCount);
       hideSelector();
       if (hit >= 0) {
+        haptic_feedback::touchAction();
         shelfContentIndex = hit;
         LOG_DBG("RBA", "Tapped shelf book: %s", shelfBooks[hit].path.c_str());
         onSelectBook(shelfBooks[hit].path);
@@ -1115,6 +1118,7 @@ void CoverLibraryActivity::loop() {
       hideSelector();
       // Stats are for books; a shelf has none.
       if (hit >= 0 && selectedTab == 0 && hit < static_cast<int>(recentBooks.size())) {
+        haptic_feedback::touchAction(/*longPress=*/true);
         contentIndex = hit + 1;
         showBookActions(recentBooks[hit].path, recentBooks[hit].title,
                         hit < static_cast<int>(bookProgress.size()) ? bookProgress[hit].percent : -1);
@@ -1152,6 +1156,7 @@ void CoverLibraryActivity::loop() {
       const int hit = hitAtPoint(gx, gy);
       hideSelector();
       if (hit >= 0) {
+        haptic_feedback::touchAction();
         contentIndex = hit + 1;
         if (selectedTab == 0) {
           if (hit < static_cast<int>(recentBooks.size())) {

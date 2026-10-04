@@ -10,6 +10,7 @@
 
 #include "BookStats.h"
 #include "CrossPointSettings.h"
+#include "HapticFeedback.h"
 #include "PanelTouch.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
@@ -209,11 +210,11 @@ void DictionaryDefinitionActivity::loop() {
       return;
     case PanelTouch::Action::Next:
     case PanelTouch::Action::ScrollDown:
-      stepPage(1);
+      if (stepPage(1)) haptic_feedback::touchAction();
       return;
     case PanelTouch::Action::Previous:
     case PanelTouch::Action::ScrollUp:
-      stepPage(-1);
+      if (stepPage(-1)) haptic_feedback::touchAction();
       return;
     case PanelTouch::Action::None:
       break;

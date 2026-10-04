@@ -1,5 +1,6 @@
 #pragma once
 
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
@@ -21,9 +22,13 @@ inline Action read(const GfxRenderer& renderer, const MappedInputManager& input,
   if (input.wasScreenTapped(tx, ty)) {
     const auto layout = DictionaryPanel::compute(renderer);
     const auto& box = layout.box;
-    if (tx < box.x || tx >= box.x + box.width || ty < box.y || ty >= box.y + box.height) return Action::Close;
+    if (tx < box.x || tx >= box.x + box.width || ty < box.y || ty >= box.y + box.height) {
+      haptic_feedback::touchAction();
+      return Action::Close;
+    }
     const auto& add = layout.addButton;
     if (hasAddButton && tx >= add.x && tx < add.x + add.width && ty >= add.y && ty < add.y + add.height) {
+      haptic_feedback::touchAction();
       return Action::AddButton;
     }
   }
