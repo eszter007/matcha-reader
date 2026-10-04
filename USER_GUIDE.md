@@ -1058,6 +1058,18 @@ Copy a Japanese EPUB to the SD card and open it from the Library. Vertical text 
 book declares `<dc:language>ja</dc:language>`, with no setting to find. A book with no tag, or the wrong one, is
 recognised by the kana in its text the first time it opens.
 
+The device shows the furigana a book carries; **it does not generate furigana**. A book that ships without any
+can be pre-processed once on a computer, before it is copied to the card:
+
+```bash
+python3 tools/furigana_ruby/add_furigana_ruby.py --ai --gemini-key-file gemini.key book.epub book-furigana.epub
+```
+
+A kanji's reading depends on the word and sentence it is in, so the script reads the text in context with Gemini:
+the book's text is sent to it, sentence by sentence, under your own API key (the same key Page Translation uses).
+Furigana the book already has is kept. A reading is added only when it fits the word as written — 食べる read
+たべる puts た over 食 and leaves べる alone — and a word whose reading does not fit is left bare.
+
 The reader menu (**Confirm**) gains **Vertical Text** and **Furigana** switches for Japanese books. Both
 toggle in place without leaving the menu, and both are remembered per book.
 
@@ -1153,6 +1165,7 @@ pre-processed once on a computer, before it is copied to the card:
 python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.txt book.epub book-pinyin.epub
 ```
 
+- `--ai --gemini-key-file gemini.key` picks each character's reading in context with Gemini. Recommended: see below.
 - `--zhuyin` writes zhuyin (bopomofo) instead of pinyin.
 - `--frequency dict.txt --skip-top 1500` leaves the 1,500 commonest words bare, so only the words you are likely
   to need carry a reading.
@@ -1160,11 +1173,17 @@ python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.t
 The script needs Python and the CC-CEDICT file (README Setup step 2). Copy the resulting EPUB to the card and open
 it; the **Furigana** toggle in the reader menu shows or hides the pinyin, and is remembered per book.
 
-The readings come from the dictionary, word by word. A character with several readings takes the one its word is
-listed under, and a character standing alone takes its first dictionary reading, which is occasionally not the one
-meant (石 as *dàn* rather than *shí*).
+Without `--ai` the readings come from the dictionary, word by word. A character with several readings takes the
+one its word is listed under, and a character standing alone takes its first dictionary reading, which is often not
+the one meant: 石 comes out as *dàn* rather than *shí*, 說 as *shuì* rather than *shuō*, 無 as *mó* rather than *wú*.
 
-<p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 with pinyin above every character"></p>
+With `--ai` the book's text is sent to Gemini, sentence by sentence, under your own API key (the same key Page
+Translation uses), and each character's reading is chosen in context. A reading the model gives is used only when
+CC-CEDICT lists it for that character; otherwise the dictionary's is kept, so a bad answer cannot put a made-up
+reading in the book. On the first chapter of 紅樓夢 this corrected about one reading in twelve. It takes roughly a
+minute per thousand characters, so a whole novel is a long run.
+
+<p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 with pinyin above every character, added with --ai"></p>
 
 #### Vertical Text
 
