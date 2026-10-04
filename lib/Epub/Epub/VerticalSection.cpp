@@ -91,7 +91,9 @@ namespace {
 // directly before an image carries ANCHOR_BEFORE_IMAGE, so it resolves to the image's page.
 // v141: the header gains the signed character spacing (px added to the step between characters
 // down a column), part of cache validation.
-constexpr uint8_t VSECTION_FILE_VERSION = 141;
+// v142: the header gains the right margin (px), which decides how much the first column holds
+// back for its ruby.
+constexpr uint8_t VSECTION_FILE_VERSION = 142;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -811,8 +813,8 @@ namespace {
 // ---- Page (de)serialization (cache format v37) -----------------------------------------------
 // File layout:
 //   header: u8 version, i32 fontId, u16 viewportWidth, u16 viewportHeight, u8 lineSpacing,
-//           u8 furigana, i8 characterSpacing, u16 pageCount, u32 indexOffset          (pageCount/indexOffset patched
-//           post-stream)
+//           u8 furigana, i8 characterSpacing, u16 rightMargin, u16 pageCount, u32 indexOffset (pageCount/indexOffset
+//           patched post-stream)
 //   page records (variable length, written as pages are laid out)
 //   footer at indexOffset: pageCount x u32 file offset of each page record
 // The footer lets loadSectionFile() open a chapter by reading only the header + 4 bytes/page,
@@ -1577,13 +1579,14 @@ struct LayoutPageSink final : ParagraphSink {
 // field instead of failing -- adding the furigana flag without updating it wrote pageCount over the
 // flag, and a chapter whose page count happened to equal the flag passed the parameter check and
 // then read its page table from a shifted offset ("empty chapter").
-constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
-                                           + sizeof(int)       // fontId
-                                           + sizeof(uint16_t)  // viewportWidth
-                                           + sizeof(uint16_t)  // viewportHeight
-                                           + sizeof(uint8_t)   // lineSpacing
-                                           + sizeof(uint8_t)   // furiganaFlag
-                                           + sizeof(int8_t);   // characterSpacing
+constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)      // version
+                                           + sizeof(int)        // fontId
+                                           + sizeof(uint16_t)   // viewportWidth
+                                           + sizeof(uint16_t)   // viewportHeight
+                                           + sizeof(uint8_t)    // lineSpacing
+                                           + sizeof(uint8_t)    // furiganaFlag
+                                           + sizeof(int8_t)     // characterSpacing
+                                           + sizeof(uint16_t);  // rightMarginPx
 
 }  // namespace
 
@@ -1701,6 +1704,13 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec&
       furiganaEnabled ? kGapQuarterEmsWithRuby[clampedLineSpacing] : kGapQuarterEmsPlain[clampedLineSpacing];
   layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
   layout.setCharacterSpacingPx(spec.characterSpacing);
+  // The first column's ruby sits in the right margin (JLREQ Fig 2.37) and is half an em wide.
+  // Where the margin is narrower than that -- a large font at a small screen margin -- the ruby
+  // would be drawn back over its own base characters, so the text area gives up the shortfall
+  // and no more: at a margin that already holds the ruby, the column stays flush right.
+  if (furiganaEnabled) {
+    layout.setRightPaddingPx(std::max(0, (emPx + 1) / 2 - static_cast<int>(spec.rightMarginPx)));
+  }
 
   LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
                       viewportHeight);
@@ -1932,6 +1942,7 @@ bool VerticalSection::createSectionFile(const ReaderRenderSpec& spec) {
   const uint8_t furiganaFlag = furiganaEnabled ? 1 : 0;
   serialization::writePod(file, furiganaFlag);
   serialization::writePod(file, spec.characterSpacing);
+  serialization::writePod(file, spec.rightMarginPx);
   const uint16_t pageCountPlaceholder = 0;
   const uint32_t indexOffsetPlaceholder = 0;
   serialization::writePod(file, pageCountPlaceholder);
@@ -2069,10 +2080,12 @@ bool VerticalSection::loadSectionFile(const ReaderRenderSpec& spec, const bool r
   serialization::readPod(file, cachedFurigana);
   int8_t cachedCharacterSpacing;
   serialization::readPod(file, cachedCharacterSpacing);
+  uint16_t cachedRightMargin;
+  serialization::readPod(file, cachedRightMargin);
 
   if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight ||
       cachedLineSpacing != lineSpacing || cachedFurigana != (furiganaEnabled ? 1 : 0) ||
-      cachedCharacterSpacing != spec.characterSpacing) {
+      cachedCharacterSpacing != spec.characterSpacing || cachedRightMargin != spec.rightMarginPx) {
     file.close();
     LOG_DBG("VSC", "Parameter mismatch, clearing cache");
     clearCache();

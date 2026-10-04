@@ -40,6 +40,10 @@ struct ReaderRenderSpec {
   // taking it from the store. Layout and drawing must agree on it: TextBlock::render shifts
   // words down by exactly the reserve this adds.
   bool furiganaEnabled = true;
+  // Matcha, vertical text: the margin right of the text area, bezel inset included. The first
+  // column's ruby is drawn there, and where it is narrower than the ruby the layout holds back
+  // the difference. Set by the reader like fontId; 0 (the default) reserves the full ruby width.
+  uint16_t rightMarginPx = 0;
 
   bool operator==(const ReaderRenderSpec&) const = default;
 };
