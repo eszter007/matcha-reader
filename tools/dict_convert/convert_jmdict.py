@@ -1232,7 +1232,9 @@ def detect_format(path: str, lang: str = "ja") -> str:
     return "jmdict"
 
 
-DEFAULT_TITLES = {"cedict": "CC-CEDICT", "moedict": "國語辭典", "jmdict": "", "tsv": ""}
+# Latin only: the panel footer is set in the 8 pt UI font, and the CJK cuts start at 12 pt, so a
+# title with hanzi in it is drawn half as large again as every other footer.
+DEFAULT_TITLES = {"cedict": "CC-CEDICT", "moedict": "MoE", "jmdict": "", "tsv": ""}
 
 
 def main():
@@ -1276,7 +1278,7 @@ def main():
     parser.add_argument(
         "--title",
         help="Dictionary name shown in the lookup panel footer (written to <name>.title). "
-        "Defaults to the Yomitan title, CC-CEDICT, or 國語辭典 for Chinese inputs.",
+        "Defaults to the Yomitan title, CC-CEDICT, or MoE for Chinese inputs.",
     )
     parser.add_argument(
         "--zhuyin",

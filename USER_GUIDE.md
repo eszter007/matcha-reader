@@ -977,7 +977,7 @@ actually has.
 A word listed in both the vocabulary and the grammar dictionary shows both entries. In a book each gets its
 own page, and for short function words such as こと or よう the grammar page opens first; step to the other the way
 you page through an entry. The same goes for a Chinese word with several readings or several dictionaries (好
-hǎo and 好 hào, the CC-CEDICT entry and the 國語辭典 one): one page each, with its own reading in the header.
+hǎo and 好 hào, the CC-CEDICT entry and the MoE one): one page each, with its own reading in the header.
 Tapping a word in manga shows the grammar entry below the vocabulary one. Manga lookups where you step from word
 to word keep one entry per word so stepping stays quick: a short function word shows its grammar entry there,
 anything else its vocabulary entry.
