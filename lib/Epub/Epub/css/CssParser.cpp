@@ -1737,7 +1737,10 @@ bool CssParser::validateCache() const {
 
   uint16_t ruleCount = 0;
   if (file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount)) return false;
-  if (ruleCount == 0 || ruleCount > MAX_CACHED_RULES) {
+  // An empty table is what a book without a stylesheet publishes (endCacheAppend); nothing may
+  // follow it.
+  if (ruleCount == 0) return file.available() == 0;
+  if (ruleCount > MAX_CACHED_RULES) {
     LOG_DBG("CSS", "Invalid cache rule count (%u)", ruleCount);
     return false;
   }
@@ -1939,8 +1942,10 @@ bool CssParser::endCacheAppend(const bool discard) {
   cacheAppendActive_ = false;
   // Every failure path drops only the half-written temp file. Whatever rulesCache already held
   // stays where it is: a partial parse is "could not produce it now", not "there is nothing to
-  // produce", so it must not take a good cache down with it.
-  if (discard || appendedRuleCount_ == 0) {
+  // produce", so it must not take a good cache down with it. A complete parse that found no
+  // rules IS "nothing to produce": it is published as an empty table, or a book without a
+  // stylesheet would re-parse on every open and fail every section's cache load.
+  if (discard) {
     cacheAppendFile_.close();
     Storage.remove((cachePath + rulesCacheTmp).c_str());
     return false;

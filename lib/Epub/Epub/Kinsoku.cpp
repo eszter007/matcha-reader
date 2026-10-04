@@ -4,10 +4,14 @@ namespace Kinsoku {
 
 namespace {
 
+bool g_centredPunctuation = false;
+
 // Closing brackets / quotation marks (both halfwidth-in-fullwidth-box JIS
 // punctuation and the CJK bracket block).
 bool isClosingBracket(uint32_t cp) {
   switch (cp) {
+    case 0xFE42:  // ﹂
+    case 0xFE44:  // ﹄
     case 0x3009:  // 〉
     case 0x300B:  // 》
     case 0x300D:  // 」
@@ -32,6 +36,8 @@ bool isClosingBracket(uint32_t cp) {
 
 bool isOpeningBracket(uint32_t cp) {
   switch (cp) {
+    case 0xFE41:  // ﹁
+    case 0xFE43:  // ﹃
     case 0x3008:  // 〈
     case 0x300A:  // 《
     case 0x300C:  // 「
@@ -124,18 +130,20 @@ bool isAlwaysUpright(uint32_t codepoint) {
   // CJK ideographs, hiragana, katakana, and ideographic punctuation are
   // always drawn upright in tategaki, regardless of the kinsoku rules
   // above (kinsoku only governs *position*, not orientation).
-  if (codepoint >= 0x3040 && codepoint <= 0x30FF) return true;  // Hiragana + Katakana
-  if (codepoint >= 0x3400 && codepoint <= 0x9FFF) return true;  // CJK Unified + Ext A
-  if (codepoint >= 0xF900 && codepoint <= 0xFAFF) return true;  // CJK Compat Ideographs
-  if (codepoint >= 0x3000 && codepoint <= 0x303F) return true;  // CJK punctuation
-  if (codepoint >= 0xFF00 && codepoint <= 0xFFEF) return true;  // Fullwidth forms
-  if (codepoint >= 0x2460 && codepoint <= 0x24FF) return true;  // Enclosed Alphanumerics ①②③
-  if (codepoint >= 0x2500 && codepoint <= 0x257F) return true;  // Box Drawing
-  if (codepoint >= 0x25A0 && codepoint <= 0x25FF) return true;  // Geometric Shapes ■●▲
-  if (codepoint >= 0x2600 && codepoint <= 0x26FF) return true;  // Miscellaneous Symbols ☀☁☂
-  if (codepoint >= 0x2700 && codepoint <= 0x27BF) return true;  // Dingbats ✓✗✠
-  if (codepoint >= 0x3200 && codepoint <= 0x32FF) return true;  // Enclosed CJK ㈠㊀
-  if (codepoint >= 0x3300 && codepoint <= 0x33FF) return true;  // CJK Compatibility ㌀㍻
+  if (codepoint >= 0x3040 && codepoint <= 0x30FF) return true;    // Hiragana + Katakana
+  if (codepoint >= 0x3400 && codepoint <= 0x9FFF) return true;    // CJK Unified + Ext A
+  if (codepoint >= 0xF900 && codepoint <= 0xFAFF) return true;    // CJK Compat Ideographs
+  if (codepoint >= 0x20000 && codepoint <= 0x3134F) return true;  // CJK Ext B-G (rare hanzi)
+  if (codepoint >= 0xFE30 && codepoint <= 0xFE4F) return true;    // vertical forms ﹁﹂﹃﹄
+  if (codepoint >= 0x3000 && codepoint <= 0x303F) return true;    // CJK punctuation
+  if (codepoint >= 0xFF00 && codepoint <= 0xFFEF) return true;    // Fullwidth forms
+  if (codepoint >= 0x2460 && codepoint <= 0x24FF) return true;    // Enclosed Alphanumerics ①②③
+  if (codepoint >= 0x2500 && codepoint <= 0x257F) return true;    // Box Drawing
+  if (codepoint >= 0x25A0 && codepoint <= 0x25FF) return true;    // Geometric Shapes ■●▲
+  if (codepoint >= 0x2600 && codepoint <= 0x26FF) return true;    // Miscellaneous Symbols ☀☁☂
+  if (codepoint >= 0x2700 && codepoint <= 0x27BF) return true;    // Dingbats ✓✗✠
+  if (codepoint >= 0x3200 && codepoint <= 0x32FF) return true;    // Enclosed CJK ㈠㊀
+  if (codepoint >= 0x3300 && codepoint <= 0x33FF) return true;    // CJK Compatibility ㌀㍻
   return false;
 }
 
@@ -186,13 +194,32 @@ bool isRotatedRunCharacter(uint32_t codepoint) {
 // 1 = comma/period: shift right and up (bottom-left → upper-right)
 // 2 = closing bracket/quote: shift right and up
 // 3 = opening bracket/quote: shift up only (already on right side of em-box)
+void setCentredPunctuation(const bool centred) { g_centredPunctuation = centred; }
+bool centredPunctuation() { return g_centredPunctuation; }
+
+uint32_t verticalFormOf(const uint32_t codepoint) {
+  if (!g_centredPunctuation) return codepoint;
+  switch (codepoint) {
+    case 0x201C:  // “
+      return 0xFE41;
+    case 0x201D:  // ”
+      return 0xFE42;
+    case 0x2018:  // ‘
+      return 0xFE43;
+    case 0x2019:  // ’
+      return 0xFE44;
+    default:
+      return codepoint;
+  }
+}
+
 int verticalShiftType(uint32_t cp) {
   switch (cp) {
     case 0x3001:  // 、
     case 0x3002:  // 。
     case 0xFF0C:  // ，
     case 0xFF0E:  // ．
-      return 1;
+      return g_centredPunctuation ? 5 : 1;
     case 0x3009:  // 〉
     case 0x300B:  // 》
     case 0x300D:  // 」

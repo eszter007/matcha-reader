@@ -89,9 +89,10 @@ void SettingsActivity::rebuildSettingsLists() {
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
-  // Japanese books use their own dictionary flow, so omit the regular picker there.
+  // Japanese and Chinese books use their own dictionary flow, so omit the regular picker there.
   std::vector<DictionaryEntry> dictionaries;
-  if (!japaneseBook && (!finishOnBack || selectedCategoryIndex == 1)) DictionaryRegistry::discover(dictionaries);
+  const bool cjkBook = bookScript != CjkScript::None;
+  if (!cjkBook && (!finishOnBack || selectedCategoryIndex == 1)) DictionaryRegistry::discover(dictionaries);
 
   // Reader-launched settings lock the UI to one category while the book remains
   // resident. Avoid materializing every web/device setting in that low-heap path.
@@ -253,6 +254,19 @@ void SettingsActivity::rebuildSettingsLists() {
                             SettingInfo::DynamicToggle(
                                 StrId::STR_FURIGANA_LABEL, [this] { return furiganaState; },
                                 [this](const bool v) { furiganaState = v; }, StrId::STR_CAT_READER));
+    }
+    // Book Language: for any text book, since its point is a book whose tag is wrong or missing
+    // (a Chinese EPUB tagged en gets no lookup, no CJK font and no vertical text until re-tagged).
+    if (!mangaMode && finishOnBack && languageState >= 0) {
+      readerSettings.insert(
+          readerSettings.begin() + 1,
+          SettingInfo::DynamicEnum(
+              StrId::STR_BOOK_LANGUAGE,
+              {StrId::STR_BOOK_LANG_AUTO, StrId::STR_BOOK_LANG_JA, StrId::STR_BOOK_LANG_ZH_HANS,
+               StrId::STR_BOOK_LANG_ZH_HANT, StrId::STR_BOOK_LANG_YUE},
+              [this] { return static_cast<uint8_t>(languageState); },
+              [this](const uint8_t v) { languageState = static_cast<int8_t>(v % cjk::LANGUAGE_CHOICE_COUNT); }, nullptr,
+              StrId::STR_CAT_READER));
     }
     // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
     // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
@@ -469,9 +483,14 @@ bool SettingsActivity::handleButtons() {
       // explicitly -1/0/0 (unused by that handler) rather than MenuResult's own defaults
       // (action=-1, but orientation/pageTurnOption default to 0 already -- see ActivityResult.h)
       // -- spelled out here so a value doesn't get silently relied on either way.
-      if (showReaderToggles) {
-        setResult(MenuResult{-1, 0, 0, static_cast<int8_t>(verticalTextState ? 1 : 0),
-                             static_cast<int8_t>(furiganaState ? 1 : 0)});
+      if (showReaderToggles || languageState >= 0) {
+        // Only a toggle the user flipped is reported; one never shown or left alone stays -1, or a
+        // Book Language change in this visit would be undone by the direction the book had before.
+        const auto toggle = [this](const bool shown, const bool now, const bool initial) {
+          return shown && now != initial ? static_cast<int8_t>(now ? 1 : 0) : int8_t{-1};
+        };
+        setResult(MenuResult{-1, 0, 0, toggle(showReaderToggles, verticalTextState, initialVerticalTextState),
+                             toggle(showReaderToggles, furiganaState, initialFuriganaState), languageState});
       }
       finish();
       return true;
@@ -590,7 +609,7 @@ void SettingsActivity::toggleCurrentSetting() {
                                                                                 : StrId::STR_CAT_SHORTCUTS;
         startActivityForResult(
             std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/0, /*finishOnBack=*/true,
-                                               /*japaneseBook=*/false, std::string{}, /*showReaderToggles=*/false,
+                                               CjkScript::None, std::string{}, /*showReaderToggles=*/false,
                                                /*verticalTextEnabled=*/false, /*furiganaEnabled=*/false,
                                                /*mangaMode=*/false, /*hideMangaOnlySettings=*/false, category),
             [this](const ActivityResult&) {
@@ -669,7 +688,7 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::TextSettings:
         startActivityForResult(
             std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                   TextSettingsActivity::Tab::Family, japaneseBook, verticalTextState),
+                                                   TextSettingsActivity::Tab::Family, bookScript, verticalTextState),
             [this](const ActivityResult&) {
               saveSettings();
               rebuildSettingsLists();

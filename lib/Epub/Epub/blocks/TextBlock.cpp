@@ -157,6 +157,109 @@ bool TextBlock::hasRuby() const {
   return false;
 }
 
+struct TextBlock::RubyDrawInfo {
+  int x;
+  int width;
+  std::string text;
+  BidiUtils::BidiBaseDir baseDir;
+};
+
+// Resolve ruby collisions left-to-right to prevent adjacent ruby texts from overlapping.
+// wordShift[i] is how far word i moves right of its laid-out position to make room.
+void TextBlock::layoutRuby(const GfxRenderer& renderer, const int fontId, const int x, std::vector<int>& wordShift,
+                           std::vector<RubyDrawInfo>& rubies) const {
+  wordShift.assign(numWords, 0);
+  rubies.resize(numWords);
+  int accumulatedShift = 0;
+  int lastEnd = -9999;
+  for (uint16_t i = 0; i < numWords; i++) {
+    wordShift[i] = accumulatedShift;
+    if (i < rubyTexts.size() && !rubyTexts[i].empty() && (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) == 0) {
+      // Find the group size (how many words are part of this ruby annotation)
+      int groupWordCount = 1;
+      while (i + groupWordCount < numWords && (wordStyle(i + groupWordCount) & EpdFontFamily::RUBY_CONTINUE) != 0) {
+        groupWordCount++;
+      }
+
+      // Compute actual width for the group
+      int groupActualWidth = 0;
+      for (int k = 0; k < groupWordCount; ++k) {
+        groupActualWidth +=
+            renderer.getTextAdvanceX(fontId, wordText(i + k), wordStyle(i + k), blockStyle.letterSpacing);
+      }
+
+      const char* word = wordText(i);
+      const int leaderWordX = xposArr[i] + x;
+      const int leaderWordX_shifted = leaderWordX + accumulatedShift;
+      const auto baseDir =
+          static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
+      const int rubyWidth =
+          renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
+      const int screenWidth = renderer.getScreenWidth();
+
+      int rubyX = 0;
+      int groupDrawX = 0;
+      if (rubyWidth > groupActualWidth) {
+        rubyX = leaderWordX_shifted - (rubyWidth - groupActualWidth) / 2;
+        if (i == 0) {
+          rubyX = std::max(leaderWordX_shifted, rubyX);
+        }
+        if (rubyX < lastEnd) {
+          rubyX = lastEnd;
+        }
+        groupDrawX = rubyX + (rubyWidth - groupActualWidth) / 2;
+      } else {
+        groupDrawX = leaderWordX_shifted;
+        rubyX = groupDrawX + (groupActualWidth - rubyWidth) / 2;
+        if (i == 0) {
+          rubyX = std::max(leaderWordX_shifted, rubyX);
+        }
+        if (rubyX < lastEnd) {
+          const int push = lastEnd - rubyX;
+          rubyX = lastEnd;
+          groupDrawX += push;
+        }
+      }
+      rubyX = std::max(0, std::min(rubyX, screenWidth - rubyWidth));
+      // Keep groupDrawX aligned if rubyX was clamped by screen edges
+      if (rubyWidth > groupActualWidth) {
+        groupDrawX = rubyX + (rubyWidth - groupActualWidth) / 2;
+      }
+
+      rubies[i] = {rubyX, rubyWidth, rubyTexts[i], baseDir};
+      lastEnd = rubyX + rubyWidth;
+
+      // Propagate shift to all words in the group and subsequent words
+      const int groupShift = groupDrawX - leaderWordX;
+      accumulatedShift = groupShift;
+      for (int k = 0; k < groupWordCount; ++k) {
+        wordShift[i + k] = accumulatedShift;
+      }
+      i += groupWordCount - 1;
+    }
+  }
+}
+
+void TextBlock::wordPlacements(const GfxRenderer& renderer, const int baseFontId, const int x, const int y,
+                               const bool suppressRuby, std::vector<WordPlacement>& out) const {
+  out.clear();
+  if (!isValid) return;
+  const int fontId = blockStyle.resolveFontId(baseFontId);
+  std::vector<int> wordShift;
+  if (hasRuby()) {
+    std::vector<RubyDrawInfo> rubies;
+    layoutRuby(renderer, fontId, x, wordShift, rubies);
+  }
+  const int wordY = y + (suppressRuby ? 0 : getRubyShift(renderer.getFontAscenderSize(fontId)));
+  out.reserve(numWords);
+  for (uint16_t i = 0; i < numWords; i++) {
+    const int32_t fontSlot = fontsPresent ? wordFontArr[i] : 0;
+    const int wordFontId = (!isWordScaleTag(fontSlot) && fontSlot != 0) ? fontSlot : fontId;
+    const int wordX = xposArr[i] + x + (wordShift.empty() ? 0 : wordShift[i]);
+    out.push_back({static_cast<int16_t>(wordX), static_cast<int16_t>(wordY), wordFontId});
+  }
+}
+
 void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const int x, const int y,
                        const bool suppressRuby) const {
   if (!isValid) {
@@ -190,92 +293,14 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
                               static_cast<EpdFontFamily::Style>(dropCap.style));
   }
 
-  // Resolve ruby collisions left-to-right to prevent adjacent ruby texts from overlapping
-  struct RubyDrawInfo {
-    int x;
-    int width;
-    std::string text;
-    BidiUtils::BidiBaseDir baseDir;
-  };
   // hasRuby() is an O(numWords) scan, so resolve it once here rather than per word.
   // Both arrays below are only ever read when the line carries ruby, so they stay
   // empty (zero allocations) for the ruby-less case, which is every line of a
-  // non-CJK book. Sized lazily inside the branch.
+  // non-CJK book.
   const bool blockHasRuby = hasRuby();
   std::vector<int> wordShiftArr;
   std::vector<RubyDrawInfo> rubies;
-  if (blockHasRuby) {
-    wordShiftArr.assign(numWords, 0);
-    rubies.resize(numWords);
-    int accumulatedShift = 0;
-    int lastEnd = -9999;
-    for (uint16_t i = 0; i < numWords; i++) {
-      wordShiftArr[i] = accumulatedShift;
-      if (i < rubyTexts.size() && !rubyTexts[i].empty() && (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) == 0) {
-        // Find the group size (how many words are part of this ruby annotation)
-        int groupWordCount = 1;
-        while (i + groupWordCount < numWords && (wordStyle(i + groupWordCount) & EpdFontFamily::RUBY_CONTINUE) != 0) {
-          groupWordCount++;
-        }
-
-        // Compute actual width for the group
-        int groupActualWidth = 0;
-        for (int k = 0; k < groupWordCount; ++k) {
-          groupActualWidth +=
-              renderer.getTextAdvanceX(fontId, wordText(i + k), wordStyle(i + k), blockStyle.letterSpacing);
-        }
-
-        const char* word = wordText(i);
-        const int leaderWordX = xposArr[i] + x;
-        const int leaderWordX_shifted = leaderWordX + accumulatedShift;
-        const auto baseDir =
-            static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
-        const int rubyWidth =
-            renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
-        const int screenWidth = renderer.getScreenWidth();
-
-        int rubyX = 0;
-        int groupDrawX = 0;
-        if (rubyWidth > groupActualWidth) {
-          rubyX = leaderWordX_shifted - (rubyWidth - groupActualWidth) / 2;
-          if (i == 0) {
-            rubyX = std::max(leaderWordX_shifted, rubyX);
-          }
-          if (rubyX < lastEnd) {
-            rubyX = lastEnd;
-          }
-          groupDrawX = rubyX + (rubyWidth - groupActualWidth) / 2;
-        } else {
-          groupDrawX = leaderWordX_shifted;
-          rubyX = groupDrawX + (groupActualWidth - rubyWidth) / 2;
-          if (i == 0) {
-            rubyX = std::max(leaderWordX_shifted, rubyX);
-          }
-          if (rubyX < lastEnd) {
-            const int push = lastEnd - rubyX;
-            rubyX = lastEnd;
-            groupDrawX += push;
-          }
-        }
-        rubyX = std::max(0, std::min(rubyX, screenWidth - rubyWidth));
-        // Keep groupDrawX aligned if rubyX was clamped by screen edges
-        if (rubyWidth > groupActualWidth) {
-          groupDrawX = rubyX + (rubyWidth - groupActualWidth) / 2;
-        }
-
-        rubies[i] = {rubyX, rubyWidth, rubyTexts[i], baseDir};
-        lastEnd = rubyX + rubyWidth;
-
-        // Propagate shift to all words in the group and subsequent words
-        const int groupShift = groupDrawX - leaderWordX;
-        accumulatedShift = groupShift;
-        for (int k = 0; k < groupWordCount; ++k) {
-          wordShiftArr[i + k] = accumulatedShift;
-        }
-        i += groupWordCount - 1;
-      }
-    }
-  }
+  if (blockHasRuby) layoutRuby(renderer, fontId, x, wordShiftArr, rubies);
 
   struct DecorationLineTracker {
     EpdFontFamily::Style style;

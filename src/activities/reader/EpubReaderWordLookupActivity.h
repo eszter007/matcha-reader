@@ -24,7 +24,7 @@ class Page;
 // which is the same headroom the scan and the dictionary caches need. It works from the page
 // geometry below plus the pixels the reader already left in the framebuffer, and when those
 // pixels are gone (returning from a definition) it asks the reader to paint them again.
-struct VerticalSelectContext {
+struct WordSelectContext {
   int marginLeft = 0;
   int marginTop = 0;
   // Kihon-hanmen cell, measured by the reader while its fonts were still resident. Measuring it
@@ -45,6 +45,10 @@ struct VerticalSelectContext {
   // which is what a hold means on the glass (#278).
   int lookupAtX = -1;
   int lookupAtY = -1;
+  // The page is set in horizontal lines rather than vertical columns. A glyph's "column" is then
+  // its line and its "row" its x, cellPx is the line's height, and each glyph brings its own
+  // width; the cursor steps along the line and jumps between lines.
+  bool lines = false;
   bool valid() const { return repaintPage != nullptr && cellPx > 0; }
 };
 
@@ -56,21 +60,24 @@ class EpubReaderWordLookupActivity final : public Activity {
   // later re-open of the same unchanged page loads it back and skips scanning entirely.
   // Vertical (tategaki) reading mode. With a valid selectContext the panel opens in SELECT mode:
   // the page stays on screen with the current word highlighted, and the definition view is only
-  // entered on Confirm. Without one it opens straight into the definition view (the horizontal
-  // and manga behaviour).
+  // entered on Confirm. Without one it opens straight into the definition view (the manga
+  // behaviour).
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         const VerticalPage& page, std::string scanCachePath = "",
                                         uint16_t spineIndex = 0, uint16_t pageIndex = 0,
-                                        const VerticalSelectContext& selectContext = {},
+                                        const WordSelectContext& selectContext = {},
                                         // Start of the next page, so a word split across the page
                                         // boundary still resolves. See appendLookupContext().
                                         const std::string& lookupContext = "", uint32_t lookupContextParagraph = 0);
-  // Horizontal (yokogaki) reading mode.
+  // Horizontal (yokogaki) reading mode. Select mode as above, given a selectContext with
+  // lines set and the geometry that places the page's glyphs.
   explicit EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Page& page,
                                         std::string scanCachePath = "", uint16_t spineIndex = 0, uint16_t pageIndex = 0,
                                         // See the vertical constructor: start of the next page, so
                                         // a word split across the boundary still resolves.
-                                        const std::string& lookupContext = "");
+                                        const std::string& lookupContext = "",
+                                        const WordSelectContext& selectContext = {},
+                                        const WordSelectionScan::LineGeometry* geometry = nullptr);
 
   // What a saved sentence-mining card needs from the reader; see sentencemining::BookContext.
   using MiningContext = sentencemining::BookContext;
@@ -91,7 +98,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   // dictionary entry. Confirm moves Select -> Definition, Back moves back.
   enum class Mode : uint8_t { Select, Definition };
   Mode mode = Mode::Definition;
-  VerticalSelectContext selectCtx;
+  WordSelectContext selectCtx;
 
   // --- Select mode state -------------------------------------------------------------------
   // The framebuffer holds the page, so a cursor move only has to XOR two boxes.
@@ -191,6 +198,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   // highlight and the tap hit-test go through it, so they cannot drift apart. Main task only
   // (it reads the scan vectors).
   int buildBoxesFor(int selectableIndex, HighlightBox* out) const;
+  // Width of one glyph's cursor box: its own advance on a page set in lines, else the cell.
+  int glyphWidth(const WordSelectionScan::GlyphRef& glyph) const;
   // Selectable index whose word covers the screen point, or -1 for a tap that missed every word
   // (a gutter, a margin, unscanned text). Main task only.
   int selectableIndexAtPoint(int x, int y) const;
@@ -240,6 +249,7 @@ class EpubReaderWordLookupActivity final : public Activity {
   // string: these are the dictionaries' own names, the same way the English panel shows the
   // .ifo's bookname. Null until a lookup lands.
   const char* resultSource = nullptr;
+  uint8_t resultDict = 0;  // DictIndex::DICT_* slot the entry came from (0 = none)
   std::string resultDictionaryLabel;
   const char* dictionaryLabel() const {
     return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();
@@ -308,6 +318,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   // on every later occurrence too. No entry -> no line.
   void prependBookReading(const std::string& surface);
 
+  // Open on the page with a word cursor when the reader supplied a select context.
+  void beginSelectMode();
   void reclaimFontHeap();
   void initScanFromCacheOrBurst(const char* label);
   void runInitialBurst(const char* label);

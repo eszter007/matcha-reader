@@ -78,6 +78,9 @@ class Epub {
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
+  // True when the OPF spine declares page-progression-direction="rtl": the publisher's layout
+  // is right-to-left, i.e. vertical columns for a CJK book.
+  bool pageProgressionRtl() const;
   std::string getCoverBmpPath(bool cropped = false, bool originalThresholds = false) const;
   bool generateCoverBmp(bool cropped = false, bool originalThresholds = false) const;
   std::string getThumbBmpPath() const;

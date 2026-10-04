@@ -50,6 +50,16 @@ class DictIndex {
   // Check whether the dictionary files exist on the SD card.
   static bool isAvailable();
 
+  // Select the language folder the files are read from: "jp" (default) or "zh". The reader sets
+  // it when a book opens. Switching releases every cache, so call it between lookup sessions.
+  static void setLanguageFolder(const char* folder);
+  static const char* languageFolder();
+
+  // Display name of a dictionary slot (DICT_JMDICT, DICT_NAMES or DICT_GRAMMAR), from the
+  // <folder>/vocab.title, names.title or grammar.title the converter wrote. Empty when absent;
+  // the caller then falls back to a name of its own.
+  static const char* slotTitle(uint8_t dict);
+
   // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
   // filenames (jmdict/jmnedict) -- resolved at runtime by the accessors below, so existing SD
   // cards keep working without any re-conversion or renaming.

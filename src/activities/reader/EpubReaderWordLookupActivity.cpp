@@ -21,6 +21,7 @@
 #include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
+#include "DictSourceNames.h"
 #include "Epub/Page.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
@@ -32,7 +33,7 @@
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
                                                            const uint16_t spineIndex, const uint16_t pageIndex,
-                                                           const VerticalSelectContext& selectContext,
+                                                           const WordSelectContext& selectContext,
                                                            const std::string& lookupContext,
                                                            const uint32_t lookupContextParagraph)
     : Activity("WordLookup", renderer, mappedInput),
@@ -42,13 +43,7 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanPage(pageIndex) {
   const size_t slash = this->scanCachePath.find_last_of('/');
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
-  if (selectCtx.valid()) {
-    mode = Mode::Select;
-    // Nothing has to be painted for the first frame when the reader's page is still on screen:
-    // the cursor is two XOR-ed rectangles over pixels that are already there.
-    selectPageDrawn = selectCtx.pageOnScreen;
-    pageBehindCard = selectCtx.pageOnScreen;
-  }
+  beginSelectMode();
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
   if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, lookupContextParagraph);
@@ -58,18 +53,31 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const Page& page, std::string scanCachePath,
                                                            const uint16_t spineIndex, const uint16_t pageIndex,
-                                                           const std::string& lookupContext)
+                                                           const std::string& lookupContext,
+                                                           const WordSelectContext& selectContext,
+                                                           const WordSelectionScan::LineGeometry* geometry)
     : Activity("WordLookup", renderer, mappedInput),
+      selectCtx(selectContext),
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
   const size_t slash = this->scanCachePath.find_last_of('/');
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
+  beginSelectMode();
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
-  scan.initFromPage(page);
+  scan.initFromPage(page, selectCtx.valid() ? geometry : nullptr);
   // Horizontal glyphs all carry paragraphIndex 0, so the context matches by construction.
   if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, 0);
   initScanFromCacheOrBurst("horizontal");
+}
+
+void EpubReaderWordLookupActivity::beginSelectMode() {
+  if (!selectCtx.valid()) return;
+  mode = Mode::Select;
+  // Nothing has to be painted for the first frame when the reader's page is still on screen:
+  // the cursor is two XOR-ed rectangles over pixels that are already there.
+  selectPageDrawn = selectCtx.pageOnScreen;
+  pageBehindCard = selectCtx.pageOnScreen;
 }
 
 // Self-heal fragmentation BEFORE the scan builds its glyph vectors. Two reasons this must run
@@ -854,11 +862,19 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
   // axis, so which PHYSICAL buttons those are changes with orientation: in portrait the side
   // buttons step and the front pair jumps columns, in landscape they trade places. That is the
   // point -- the gesture stays "down the column as you see it".
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenDown, [this] { moveSelection(1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenUp, [this] { moveSelection(-1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenLeft, [this] { jumpColumn(1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenRight, [this] { jumpColumn(-1); });
+  // A page set in lines turns the same two moves a quarter: along the line is left/right, the
+  // next line is down, and lines run top to bottom where columns run right to left.
+  using Button = MappedInputManager::Button;
+  const bool lines = selectCtx.lines;
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenRight : Button::ScreenDown, [this] { moveSelection(1); });
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenLeft : Button::ScreenUp, [this] { moveSelection(-1); });
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenDown : Button::ScreenLeft, [this] { jumpColumn(1); });
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenUp : Button::ScreenRight, [this] { jumpColumn(-1); });
   return true;
+}
+
+int EpubReaderWordLookupActivity::glyphWidth(const WordSelectionScan::GlyphRef& glyph) const {
+  return selectCtx.lines && glyph.width != 0 ? glyph.width : selectCtx.cellPx;
 }
 
 int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, HighlightBox* out) const {
@@ -880,9 +896,18 @@ int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, Highl
     while (j < end && scan.allGlyphs[j].column == column) j++;
     const auto& firstCell = scan.allGlyphs[i];
     const auto& lastCell = scan.allGlyphs[j - 1];
+    HighlightBox& box = out[count++];
+    if (selectCtx.lines) {
+      // A run along one line: from its first glyph's left edge to its last one's right edge.
+      box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
+      box.y = static_cast<int16_t>(firstCell.y + selectCtx.marginTop);
+      box.w = static_cast<int16_t>(lastCell.x + glyphWidth(lastCell) - firstCell.x);
+      box.h = static_cast<int16_t>(cellPx);
+      i = j;
+      continue;
+    }
     const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
     const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
-    HighlightBox& box = out[count++];
     // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the
     // neighbouring column's ink and of any ruby, which is drawn outside the cell.
     box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
@@ -987,8 +1012,8 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   if (provisionalGlyph < scan.onPageGlyphCount()) {
     const auto& glyph = scan.allGlyphs[provisionalGlyph];
     boxes[0] = HighlightBox{static_cast<int16_t>(glyph.x + selectCtx.marginLeft),
-                            static_cast<int16_t>(glyph.y + selectCtx.marginTop), static_cast<int16_t>(selectCtx.cellPx),
-                            static_cast<int16_t>(selectCtx.cellPx)};
+                            static_cast<int16_t>(glyph.y + selectCtx.marginTop),
+                            static_cast<int16_t>(glyphWidth(glyph)), static_cast<int16_t>(selectCtx.cellPx)};
     count = 1;
   } else {
     count = buildBoxesFor(cursorIndex, boxes);
@@ -1121,7 +1146,11 @@ void EpubReaderWordLookupActivity::saveSentence() {
   // The footer label is "JMdict | Tatoeba [1][2]"; the card names the dictionary only.
   const std::string_view label = visibleLabel() ? visibleLabel() : "";
   card.dictionary = std::string(label.substr(0, label.find(" | ")));
-  miningStatus_ = sentencemining::append(card, sentencemining::JAPANESE) ? MiningStatus::Saved : MiningStatus::Failed;
+  // Filed under the book's language (the dictionary folder follows it); a book with no tag is
+  // Japanese, which is the only language the panel served before Chinese joined it.
+  std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
+  if (language.empty()) language = sentencemining::JAPANESE;
+  miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
   if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
   requestUpdate();
 }
@@ -1132,8 +1161,12 @@ std::string EpubReaderWordLookupActivity::buildLookupText() const {
   if (allStart >= scan.allGlyphs.size()) return text;
   const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
   int charCount = 0;
+  // A provisional (not yet scanned) glyph has no word of its own: full window, longest match.
+  const int limit = provisionalGlyph < scan.onPageGlyphCount() || cursorIndex < 0
+                        ? WordSelectionScan::kMaxLookupChars
+                        : scan.lookupCharLimit(static_cast<size_t>(cursorIndex));
 
-  for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < WordSelectionScan::kMaxLookupChars; i++) {
+  for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < limit; i++) {
     const auto& g = scan.allGlyphs[i];
     if (g.paragraphIndex != paraIdx) break;
     WordSelectionScan::encodeUtf8(g.codepoint, text);
@@ -1226,6 +1259,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   resultReading.clear();
   resultGrammar.clear();
   resultSource = nullptr;
+  resultDict = 0;
   resultDictionaryLabel.clear();
   sectionText.clear();
   sectionLabel.clear();
@@ -1308,7 +1342,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       hasResult = true;
       resultHeadword = digitPrefix + text.substr(0, nb);
       resultDefinition = tr(STR_LOOKUP_NAME);  // no dictionary entry -- label it as a name
-      resultSource = "JMnedict";
+      resultDict = DictIndex::DICT_NAMES;
+      resultSource = dictsource::name(resultDict);
       resultMatchLen = static_cast<int>(nameRun);
       // Names are the glossary's prime case: the book's own furigana is often the ONLY
       // source for a name's reading.
@@ -1329,9 +1364,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
     resultReading = std::move(metadata.reading);
     resultGrammar = std::move(metadata.grammar);
-    resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
-                   : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
-                                                                        : "JMdict";
+    resultDict = result.entry.sourceDict;
+    resultSource = dictsource::name(resultDict);
     resultDictionaryLabel = std::move(metadata.source);
     prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;
@@ -1386,7 +1420,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
           resultReading = std::move(grammarMetadata.reading);
           resultGrammar = std::move(grammarMetadata.grammar);
           resultDictionaryLabel = std::move(grammarMetadata.source);
-          resultSource = "Grammar";
+          resultDict = DictIndex::DICT_GRAMMAR;
+          resultSource = dictsource::name(resultDict);
         } else if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
                                            DictIndex::grammarDatPath(), gramEntry)) {
           // Paged: the grammar entry gets its own page beside the vocab one, and opens first.
@@ -1493,9 +1528,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     if (grammar != sectionKind.end()) currentSection = static_cast<int>(grammar - sectionKind.begin());
   }
   if (sectionText.empty())
-    DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
-                                                          ? resultHeadword
-                                                          : std::string());
+    DefinitionText::formatEntryBody(resultDefinition,
+                                    resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string());
   requestUpdate();
 }
 
@@ -1713,8 +1747,9 @@ void EpubReaderWordLookupActivity::moveSection(const int delta) {
 // Split the merged definition into one piece per source. DictIndex joins the entries it merges
 // with "\n\n---\n", and the grammar entry is appended under its own "— Grammar: … —" heading;
 // each piece ends with the attribution line its converter wrote ("JMdict | Tatoeba"), which is
-// lifted out of the body and shown in the panel footer instead. Tategaki only -- horizontal and
-// manga keep the single scrolling blob, where Left/Right move the word cursor.
+// lifted out of the body and shown in the panel footer instead. Only where the panel opened on
+// the page with a word cursor (a book, vertical or horizontal) -- manga keeps the single
+// scrolling blob, where Left/Right move the word cursor.
 void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
   sectionText.clear();
   sectionLabel.clear();
@@ -1771,8 +1806,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
 
   // Vocab until the grammar separator is crossed; a name lookup has no separators at all, so its
   // single piece takes the kind the lookup itself resolved.
-  StrId kind = resultSource != nullptr && strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
-                                                                                : StrId::STR_DICT_KIND_VOCAB;
+  StrId kind = resultDict == DictIndex::DICT_NAMES ? StrId::STR_DICT_KIND_NAME : StrId::STR_DICT_KIND_VOCAB;
   std::string grammarHead;  // the pattern named by the grammar heading, once it is seen
   // Cut at whichever separator comes first, repeatedly.
   size_t pos = 0;
@@ -1904,9 +1938,7 @@ const char* EpubReaderWordLookupActivity::visibleKind() const {
   if (!sectionKind.empty() && currentSection < static_cast<int>(sectionKind.size()))
     return I18N.get(sectionKind[currentSection]);
   if (resultSource == nullptr) return nullptr;
-  return I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
-                  : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
-                                                          : StrId::STR_DICT_KIND_VOCAB);
+  return I18N.get(dictsource::kind(resultDict));
 }
 
 const char* EpubReaderWordLookupActivity::visibleReading() const {

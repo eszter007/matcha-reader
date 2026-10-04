@@ -811,6 +811,11 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
       // Accumulate characters into the (never-growing) line buffer until too wide.
       lineBuf.clear();
       size_t lastSpaceBreak = std::string::npos;  // bytes of accepted prefix ending after a space
+      // The line overflowed between two characters of which one is CJK: that is a break
+      // opportunity in its own right, and falling back to the last space would strand whatever
+      // precedes it -- a sense number alone on its line above a Chinese definition.
+      bool brokeInCjk = false;
+      bool previousCjk = false;
       size_t pos = remStart;
       const int lineWidth = availableWidth(firstParagraphLine);
       while (pos < remEndFixed) {
@@ -835,8 +840,12 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
           if (!keepPunct) {
             lineBuf.resize(lineBuf.size() - charLen);  // reject the overflowing character
           }
+          brokeInCjk = previousCjk || (charLen == 3 && utf8IsCjkCodepoint(cp));
           break;
         }
+        previousCjk = charLen == 3 && utf8IsCjkCodepoint(((c0 & 0x0F) << 12) |
+                                                         ((static_cast<unsigned char>(text[pos + 1]) & 0x3F) << 6) |
+                                                         (static_cast<unsigned char>(text[pos + 2]) & 0x3F));
         // Labels that are still part of the text must not be split off it. An example's marker
         // was dropped from `remStart`, so its first line starts at real text and needs no guard.
         const size_t unbreakablePrefix = !firstParagraphLine ? 0 : alphaLabel ? 2 : indented ? 3 : 0;
@@ -852,7 +861,7 @@ WrapResult DrawWrappedImpl(const GfxRenderer& renderer, const int fontId, const 
         if (cl > remLen) cl = remLen;
         lineBuf.assign(text, remStart, cl);
         remStart += cl;
-      } else if (lastSpaceBreak != std::string::npos && lastSpaceBreak > 0) {
+      } else if (!brokeInCjk && lastSpaceBreak != std::string::npos && lastSpaceBreak > 0) {
         // Break at the last space to keep Latin words intact.
         remStart += lastSpaceBreak;
         lineBuf.resize(lastSpaceBreak);

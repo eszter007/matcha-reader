@@ -31,7 +31,7 @@ int daysSinceEpoch(uint16_t y, uint8_t m, uint8_t d) {
 }
 
 int dowFromDate(uint16_t y, uint8_t m, uint8_t d) {
-  return (daysSinceEpoch(y, m, d) + 1) % 7;  // 0=Sun
+  return daysSinceEpoch(y, m, d) % 7;  // 0=Sun
 }
 
 void subtractDays(uint16_t& y, uint8_t& m, uint8_t& d, int n) {

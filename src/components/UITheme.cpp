@@ -398,7 +398,7 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   // ones, else the percentage. A negative percent means the caller has not read it yet -- draw
   // nothing rather than a wrong badge.
   if (progressPercent < 0) return;
-  char badgeBuf[8];
+  char badgeBuf[32];  // a translated "Read" runs to nine two-byte letters
   if (progressPercent <= 0) {
     snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
   } else if (progressPercent >= 100) {

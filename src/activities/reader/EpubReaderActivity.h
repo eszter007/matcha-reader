@@ -17,6 +17,7 @@
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
+#include "util/CjkScript.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -157,6 +158,13 @@ class EpubReaderActivity final : public ReaderActivity {
   int8_t verticalOverride = -1;
   // Per-book furigana override: -1 = auto (on by default), 0 = off, 1 = on
   int8_t furiganaOverride = -1;
+  // Per-book language (cjk::LanguageChoice): LANG_AUTO follows the tag, else the user's pick for a
+  // mis-tagged book. Kept with the sniff result in the book's language.bin.
+  uint8_t languageOverride = 0;
+  // What the content sniff found when the tag named no CJK language: 0 = not yet sniffed,
+  // a LanguageChoice, or LANGUAGE_SNIFFED_NONE for a Latin book (so it is not sniffed again).
+  uint8_t detectedLanguage = 0;
+  static constexpr uint8_t LANGUAGE_SNIFFED_NONE = 0xFF;
   unsigned long bookmarkMessageTime = 0UL;
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
@@ -436,6 +444,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // would misread every press as "past the last page" and jump to the next spine (observed:
   // a press during the build teleported the reader to the end of the book).
   std::atomic<bool> verticalBuildInProgress_{false};
+  // Totals the early-rendered page's status bar showed; see refreshEarlyPageStatusBar().
+  int earlyShownChapterPages_ = 0;
+  int earlyShownBookPages_ = 0;
+  void refreshEarlyPageStatusBar();
   // True when the page currently on the panel drew images. Overlays opened on top
   // of it need a HALF pass to scrub the charge a FAST diff leaves behind.
   bool shownPageHasImages_ = false;
@@ -617,12 +629,12 @@ class EpubReaderActivity final : public ReaderActivity {
   std::atomic<bool> panelPageReady{false};
   void openPanelAfterRender(PanelAfterRender panel);
   void openTranslationPanel();
-  // Repaints the current vertical page (body + status bar) for the word-lookup panel's select
-  // view, which owns no page of its own -- a VerticalPage copy would cost ~15KB, the same
-  // headroom the scan and the dictionary caches need. Called from the panel's render(), i.e.
-  // under the render lock, which is what the section's shared single-page slot requires.
-  static bool repaintVerticalPageForPanelThunk(void* ctx);
-  bool repaintVerticalPageForPanel();
+  // Repaints the current page, vertical or horizontal (body + status bar), for the word-lookup
+  // panel's select view, which owns no page of its own -- a VerticalPage copy would cost ~15KB,
+  // the same headroom the scan and the dictionary caches need. Called from the panel's render(),
+  // i.e. under the render lock, which is what the section's shared single-page slot requires.
+  static bool repaintPageForPanelThunk(void* ctx);
+  bool repaintPageForPanel();
   static constexpr uint16_t kSpineProbeFailed = 0xFFFF;  // session marker: cache probe failed, don't retry
   // Page numbering across the logical ToC chapter: spine files without their own ToC entry
   // (inline illustration files etc.) inherit the previous entry's tocIndex, so the "page X/Y"
@@ -689,8 +701,38 @@ class EpubReaderActivity final : public ReaderActivity {
 
   bool useFurigana() const;
   bool isJapaneseBook() const;
+  bool isChineseBook() const;
+  // Japanese or Chinese: contiguous CJK text that uses the scan-based word lookup, the vertical
+  // layout engine and a CJK companion font.
+  bool isCjkBook() const { return bookScript() != CjkScript::None; }
+  // From dc:language. None for every non-CJK tag.
+  CjkScript bookScript() const;
+  // Recomputed where the language settles (after the open-time sniff, and on an override):
+  // bookScript() sits on the render path and must not build the language tag each call.
+  void refreshBookScript();
+  // Everything that follows from the book's language: its script, the companion font, the
+  // dictionary folder and the vertical punctuation mode. Run at open and on an override.
+  void applyLanguageState();
+  CjkScript bookScript_ = CjkScript::None;
+  std::string effectiveLanguage_;
+  // What the page is set in: the book's script, or Japanese when vertical text is forced on a
+  // book with no CJK tag (the same signal useVerticalText() reads).
+  CjkScript fontScript() const;
   bool showVerticalToggle() const;
+  bool hideGenericLookup() const;
   void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
+  // The language the book is read as: the override, else the EPUB tag when it names a CJK
+  // language, else what the content sniff found, else the tag as written (possibly empty).
+  std::string effectiveLanguage() const;
+  // Book Language from Reader Settings: re-tags the book and rebuilds the layout for it.
+  void applyLanguageOverride(int8_t choice);
+  // Decide a tagless or mis-tagged book's language from its text, once per book.
+  void sniffLanguageIfNeeded();
+  void loadLanguageChoice();
+  void saveLanguageChoice() const;
+  // Drop the laid-out sections, keeping the reading position for the rebuild (a layout-affecting
+  // per-book setting changed).
+  void dropSectionsKeepingPosition();
 
   // The orientation the current layout was built for. The control center's
   // orientation tile can move SETTINGS.orientation while this reader sits on
@@ -711,7 +753,12 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }
   std::string getBookAuthor() const override { return epub ? epub->getAuthor() : ""; }
   std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : ""; }
-  const char* getBookLanguage() const override { return epub ? epub->getLanguage().c_str() : nullptr; }
+  // The language the book is read as (override, tag or sniff), so stats and sentence mining file
+  // a sniffed Chinese book under zh, not under its wrong tag.
+  const char* getBookLanguage() const override {
+    if (!epub) return nullptr;
+    return effectiveLanguage_.empty() ? epub->getLanguage().c_str() : effectiveLanguage_.c_str();
+  }
   void onReaderEnter() override;
   void onReaderExit() override;
   void readerLoop() override;

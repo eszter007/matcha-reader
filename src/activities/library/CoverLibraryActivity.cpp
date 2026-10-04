@@ -19,6 +19,7 @@
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/home/XtcProgressUtil.h"
 #include "components/BookActionsMenu.h"
@@ -764,6 +765,9 @@ void CoverLibraryActivity::onEnter() {
   }
 
   loadRecentBooks();
+  // A title beyond the built-in CJK subset (Chinese, a rare kanji) needs the SD companion for the
+  // grid and shelf labels. This list is the whole last card scan, so one pass covers both tabs.
+  sdFontSystem.setUiCjkNeededForTitles(renderer, recentBooks, [](const auto& book) { return book.title.c_str(); });
   loadBookProgress();
   shelvesLoaded = false;
   coverWorker_.start("LibraryCover");

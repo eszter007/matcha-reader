@@ -93,6 +93,9 @@ class TextBlock final : public Block {
   static constexpr uint8_t MAX_DROP_CAP_SCALE = 16;
 
  private:
+  struct RubyDrawInfo;
+  void layoutRuby(const GfxRenderer& renderer, int fontId, int x, std::vector<int>& wordShift,
+                  std::vector<RubyDrawInfo>& rubies) const;
   BlockStyle blockStyle;
   uint16_t numWords = 0;
   uint16_t textBytes = 0;  // total size of the text region, including NULs
@@ -187,6 +190,15 @@ class TextBlock final : public Block {
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSuffixX(const uint16_t i) const { return focusPresent ? focusSuffixXArr[i] : 0; }
   bool hasRuby() const;
+  // Where render() draws each word: its left edge, the top of its line box, and its font. For
+  // a caller that needs a line's glyph positions without drawing it (the word-lookup cursor).
+  struct WordPlacement {
+    int16_t x;
+    int16_t y;
+    int fontId;
+  };
+  void wordPlacements(const GfxRenderer& renderer, int baseFontId, int x, int y, bool suppressRuby,
+                      std::vector<WordPlacement>& out) const;
   int getRubyShift(int ascender) const { return hasRuby() ? (ascender / 2) : 0; }
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
   std::vector<LinkSpan> takeLinkSpans() { return std::move(linkSpans); }

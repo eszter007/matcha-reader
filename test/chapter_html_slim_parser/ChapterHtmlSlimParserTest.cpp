@@ -1,5 +1,6 @@
 #include <Epub.h>
 #include <Epub/Page.h>
+#include <Epub/parsers/XhtmlDoctype.h>
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
 
@@ -989,4 +990,42 @@ TEST(KoreanLayout, HangulGluedAcrossInlineStyleIsUnbreakable) {
   // 가나 한국 fits in 36 px, but 어 is glued to 한국, so the whole word moves down.
   const std::vector<std::vector<std::string>> expected{{"가나"}, {"한국", "어"}};
   EXPECT_EQ(stubLineWords, expected);
+}
+
+TEST(XhtmlDoctypeTest, FeedsADoctypeWhereTheChapterNamesNoDtd) {
+  const auto patch = [](const char* text) { return xhtml::findDoctypePatch(text, std::strlen(text)); };
+
+  // No DOCTYPE: fed right before the root element, after the XML declaration.
+  auto p = patch("<?xml version=\"1.0\"?>\n<html><body>&nbsp;</body></html>");
+  EXPECT_TRUE(p.inject);
+  EXPECT_EQ(p.keep, 22u);
+  EXPECT_EQ(p.skip, 0u);
+
+  // UTF-16, with a BOM or without: an ASCII DOCTYPE would corrupt it, so it is left alone.
+  const char utf16le[] = "\xFF\xFE<\0h\0t\0m\0l\0>\0";
+  EXPECT_FALSE(xhtml::findDoctypePatch(utf16le, sizeof(utf16le) - 1).inject);
+  const char utf16be[] = "\xFE\xFF\0<\0h\0t\0m\0l\0>";
+  EXPECT_FALSE(xhtml::findDoctypePatch(utf16be, sizeof(utf16be) - 1).inject);
+  const char utf16NoBom[] = "<\0h\0t\0m\0l\0>\0";
+  EXPECT_FALSE(xhtml::findDoctypePatch(utf16NoBom, sizeof(utf16NoBom) - 1).inject);
+
+  // HTML5's bare DOCTYPE is replaced.
+  p = patch("<!DOCTYPE html><html/>");
+  EXPECT_TRUE(p.inject);
+  EXPECT_EQ(p.keep, 0u);
+  EXPECT_EQ(p.skip, 15u);
+  p = patch("<!-- c --><!doctype html>\n<html/>");
+  EXPECT_TRUE(p.inject);
+  EXPECT_EQ(p.keep, 10u);
+  EXPECT_EQ(p.skip, 15u);
+
+  // A DOCTYPE that names a DTD, or carries its own declarations, is the document's business.
+  EXPECT_FALSE(patch("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"x.dtd\"><html/>").inject);
+  EXPECT_FALSE(patch("<!DOCTYPE html SYSTEM \"x.dtd\"><html/>").inject);
+  EXPECT_FALSE(patch("<!DOCTYPE html [<!ENTITY nbsp \"&#160;\">]><html/>").inject);
+
+  // A prolog that runs past the first read cannot be judged.
+  EXPECT_FALSE(patch("<?xml version=\"1.0\"").inject);
+  EXPECT_FALSE(patch("<!DOCTYPE html").inject);
+  EXPECT_FALSE(patch("  \n").inject);
 }

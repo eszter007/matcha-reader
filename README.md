@@ -1,6 +1,6 @@
-# Matcha Reader, a Japanese learning fork of CrossPoint
+# Matcha Reader, a language-learning fork of CrossPoint
 
-A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for ESP32 devices (XTEINK X4, X3, X4C, X4-Pro, Papermono, Sticky), built for reading Japanese. Vertical text, instant dictionary lookup with verb deinflection, a manga panel reader where you can look up words right in the speech bubbles, and page translation, all on e-ink.
+A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for ESP32 devices (XTEINK X4, X3, X4C, X4-Pro, Papermono, Sticky), built for reading books and comics in a language you are learning. It is set up first for **Japanese** and **Chinese** (Mandarin in simplified or traditional characters, and Cantonese), and gives learners of French, English and other languages the same lookup, sentence-mining and translation tools.
 
 It includes all features of upstream CrossPoint and runs on any supported ESP32 device. You can try it first in the [simulator](https://github.com/eszter007/crosspoint-simulator-ios) — no device needed — on your desktop or as an iPhone app.
 
@@ -17,13 +17,65 @@ It includes all features of upstream CrossPoint and runs on any supported ESP32 
 
 Full instructions live in the [User Guide](USER_GUIDE.md). This page is the short version.
 
+### What each learner gets
+
+| | Japanese | Mandarin, simplified | Mandarin, traditional | Cantonese | Other languages |
+| --- | --- | --- | --- | --- | --- |
+| Book tag | `ja` | `zh-CN`, `zh-Hans` | `zh-TW`, `zh-Hant`, `zh-HK` | `yue` | `fr`, `en`, `de`, … |
+| Word lookup | Page split into words, conjugations undone | Page split into words by frequency | Same | Same | Word by word, with word-form rules (fullest for French) |
+| Reading shown | Kana | Pinyin | Pinyin and zhuyin | Pinyin and jyutping | — |
+| Level tag | — | HSK | TOCFL | — | — |
+| Dictionary | Jitendex / JMdict, names, grammar | CC-CEDICT | CC-CEDICT + MoE 重編國語辭典 | CC-Canto + CC-CEDICT | Any StarDict |
+| Dictionary folder | `dictionaries/jp/` | `dictionaries/zh/` | `dictionaries/zh/` | `dictionaries/yue/` | `dictionaries/<lang>/<name>/` |
+| Text layout | Vertical by default | Horizontal | Vertical when the book is right-to-left | As traditional | Horizontal |
+| Readings above the text | Furigana from the book | Pinyin added with a script | Pinyin or zhuyin added with a script | — | — |
+| Font | Built in; SD font optional | SD font required (Noto Sans SC) | SD font required (Noto Sans TC) | SD font required (Noto Sans TC) | Built in |
+| Comics | Manga, lookup in the bubbles | Manhua, same | Manhua, same | Manhua, same | Comics, same |
+| Saved sentences | `sentences-ja.csv` | `sentences-zh.csv` | `sentences-zh.csv` | `sentences-yue.csv` | `sentences-<lang>.csv` |
+
+A plain `zh` tag is taken as simplified or traditional by the characters the book uses. What the level, zhuyin and jyutping rows show depends on how the dictionary was built; the ready-made packs and the commands in [Setup](#setup) produce exactly this table.
+
 ---
 
 ## Features
 
-### Vertical Japanese text
+### Word lookup, in every language
 
-Japanese books are detected from their metadata and set vertically: right-to-left columns, kinsoku line breaking, sesame emphasis marks, and furigana beside the kanji. A per-book toggle overrides the detection when you disagree with it.
+Look up any word on the page, vertically or horizontally. The page is scanned first, so in Japanese and Chinese the cursor only lands on words that actually have an entry.
+
+Lookup opens on the page itself: the current word is highlighted where it stands, and the definition opens only when you press Look Up. In vertical text the side buttons step word by word down the column and Left and Right jump a column; in horizontal text Left and Right step along the line and the side buttons jump a line. Back returns to the highlighted page, so several words on a page are a few presses apart. The cursor opens mid-page and the scan starts there too, so the half you are looking at is ready first; words it has not reached yet can still be selected, and the highlight moves as soon as the scan arrives. No button labels are drawn over the page — the text would be covered by them.
+
+On a touch device, long-pressing a word on the page opens its definition directly — no setting to turn on, and no cursor to move first. A press that lands between words opens ordinary word selection instead. The panel pages by touch however the reader is set to turn pages, and a tap outside it puts it away.
+
+The definition opens as a panel floating over the page you were reading: the word sits above a divider at the top, the entry fills the middle, and along the bottom the entry's type and dictionary (`Vocab | JMdict`, `Vocab | CC-CEDICT`) sit on the left with a counter on the right. In books the entry is paged a screenful at a time and the counter shows the page; manga scrolls the entry freely and the counter shows your position among the page's words instead.
+
+Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text. See [Setup](#setup) for the dictionary files, and [§6.1](USER_GUIDE.md#61-word-lookup) for how to drive lookup.
+
+<p align="center">
+  <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence, the save button in the top-right corner and Vocab | JMdict | Tatoeba in the footer">
+  <img src="docs/images/screenshots/chinese-text.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) in traditional Chinese">
+  <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢 (Project Gutenberg): 繁華 with pinyin and zhuyin, both scripts, two senses, and Vocab | CC-CEDICT + MoE in the footer">
+</p>
+
+#### Sentence mining
+
+Save a looked-up word together with the sentence it came from, ready to import into Anki. With a definition open, press **Select**, or tap the **+** in the panel's top-right corner on a touch device. The footer shows **Saved** until you move on. It works in every language, in books and in comics.
+
+Each save adds one line to a CSV file per language in the `sentence-mining` folder on the SD card: `sentences-ja.csv`, `sentences-zh.csv`, `sentences-yue.csv`, `sentences-en.csv` and so on. The language is the dictionary's, so a file can be imported into its own deck. Each line holds the word in its dictionary form, its reading (kana for Japanese; pinyin, with zhuyin or jyutping when the dictionary has them, for Chinese), the sentence with the word in bold, the whole dictionary entry, the book, author, date and dictionary, plus tags (`matcha` and the book title).
+
+To import, open the file in Anki with **File → Import**. The first lines of the file tell Anki the layout, so there is nothing to set up. The files only ever grow; import the same file again later and Anki updates the cards it already has instead of adding them twice, because every card carries a stable ID.
+
+A sentence cut off by the end of the page is finished from the next page. The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. On devices without a clock chip (the X4) a restart loses the time, so the date can lag until the next Wi-Fi connection.
+
+#### Page translation
+
+Translates the current page to English with Gemini, in the same floating panel as the dictionary, over the page you are reading. Works in a book in any language. Needs Wi-Fi and your own API key; a saved network is joined from inside the panel.
+
+<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
+
+### For Japanese learners
+
+**Vertical text.** Japanese books are detected from their metadata and set vertically: right-to-left columns, kinsoku line breaking, sesame emphasis marks, and furigana beside the kanji. A per-book toggle overrides the detection when you disagree with it, and a second one shows or hides the furigana.
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="260" alt="Vertical Japanese text">
@@ -31,51 +83,55 @@ Japanese books are detected from their metadata and set vertically: right-to-lef
 </p>
 <p align="center"><em>The same passage, Vertical Text on and off</em></p>
 
-### Dictionary and word lookup
+**Conjugations resolve to the dictionary form** on their own: 読んで becomes 読む, 食べませんでした becomes 食べる.
 
-Look up any word on the page, vertically or horizontally. Conjugations resolve to the dictionary form on their own (読んで becomes 読む, 食べませんでした becomes 食べる), and the page is scanned first so you only land on words that actually have an entry.
+**Vocabulary, names and grammar** each come from their own dictionary. A word listed in both vocabulary and grammar shows both entries: in a book as separate pages (grammar first for short function words like こと), and below each other when you tap a word in manga. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book.
 
-In vertical text, lookup opens on the page itself: the current word is highlighted where it stands, the side buttons step word by word down the column, Left and Right jump a column, and the definition opens only when you press Look Up. Back returns to the highlighted page, so several words on a page are a few presses apart. The cursor opens mid-page and the scan starts there too, so the half you are looking at is ready first; words it has not reached yet can still be selected, and the highlight moves as soon as the scan arrives. No button labels are drawn over the page — vertical text would be covered by them. Horizontal text opens straight into the definition view as before.
+**A word broken across a page break still resolves.** The lookup reads a few characters past the end of the page, so the half you can see finds the whole word; the highlight stays on the page and covers only the characters that are there.
 
-A word broken across a page break still resolves. The lookup reads a few characters past the end of the page, so the half you can see finds the whole word; the highlight stays on the page and covers only the characters that are there.
+**A font is built in.** The built-in Noto covers the common Japanese characters; an SD font (Noto Sans or Serif JP) looks better and fills in rare kanji.
 
-On a touch device, long-pressing a word on the page opens its definition directly — no setting to turn on, and no cursor to move first. A press that lands between words opens ordinary word selection instead. The panel pages by touch however the reader is set to turn pages, and a tap outside it puts it away.
+### For Chinese learners
 
-The definition itself opens as a panel floating over the page you were reading: the word sits above a divider at the top, the entry fills the middle, and along the bottom the entry's type and dictionary (`Vocab | JMdict`) sit on the left with a counter on the right. In vertical text and in English books the entry is paged a screenful at a time and the counter shows the page; horizontal Japanese and manga scroll the entry freely and the counter shows your position among the page's words instead.
+Chinese books get the same scan-based lookup as Japanese: each run of characters is split into dictionary words and the cursor lands only on words with an entry. The split weighs the whole run by word frequency rather than grabbing the longest match at each step, so 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚. There is no conjugation to undo, so a word like 說話 or 中国 resolves as soon as it is on the page.
 
-Vocabulary, names and grammar each come from their own dictionary. A word listed in both vocabulary and grammar shows both entries: in vertical text as separate pages (grammar first for short function words like こと), and below each other when you tap a word in manga. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
+The three kinds of Chinese book differ in what the entry shows and which files they read:
 
-Other languages get the same treatment from their StarDict dictionaries. A word at the start of a sentence keeps its accents and still resolves (`École` finds `école`), and French adds its own rules: `l'eau` looks up `eau`, `journaux` finds `journal`, `heureuse` finds `heureux`, and the regular conjugations resolve to the infinitive (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`). The same coverage extends to `-eindre`/`-aindre`/`-oindre` verbs (`éteignit` finds `éteindre`, `craignait` finds `craindre`), `-aître` verbs (`connaissons` finds `connaître`), `-uire` verbs (`conduisit` finds `conduire`), and adverbs formed from an adjective (`lentement` finds `lent`). English and everything else fall back to plurals and verb endings. Irregular verbs that share no stem with their infinitive — and a verb's irregular passé simple, like `connus` or `naquit` — need a `.syn` file in the dictionary folder — see [docs/dictionary.md](docs/dictionary.md).
+- **Mandarin in simplified characters** (`zh-CN`, `zh-Hans`). The entry opens with pinyin and, with the simplified pack, the word's **HSK** level. Books open horizontally. Font: Noto Sans SC.
+- **Mandarin in traditional characters** (`zh-TW`, `zh-Hant`, `zh-HK`). The entry shows pinyin and **zhuyin**, the word's **TOCFL** level, and under the English entry a monolingual one from the Ministry of Education's 重編國語辭典. A book whose EPUB declares right-to-left page progression (Taiwanese novels, as a rule) opens in vertical columns, and 。，、 sit centred in their square, as Taiwanese print sets them. Font: Noto Sans TC.
+- **Cantonese** (`yue`). Reads its own dictionary folder, built from CC-Canto and CC-CEDICT together, because Cantonese has words a Mandarin dictionary does not list. The entry shows pinyin and **jyutping**. Laid out like a traditional-Chinese book. Saved sentences go to `sentences-yue.csv`.
 
-In French books, a literary verb-subject inversion like `songeai-je` or `pense-t-il` splits into two selectable words (`songeai`/`je`, `pense`/`il`), so both the verb and the pronoun look up on their own. A genuine compound like `rendez-vous` or `grand-mère` still selects as one word.
+Common to all three:
 
-Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.
+- **Both scripts are indexed**, so a traditional dictionary serves a simplified book and the other way round, and the entry shows the other form (`說話 / 说话`).
+- **The common sense comes first**: entries are ranked by a frequency list. Proper nouns can go to their own names dictionary and a grammar list to the grammar slot, exactly as for Japanese. Example sentences with translations come from Tatoeba.
+- **A wrong or missing language tag is caught.** A book is recognised from its text the first time it opens, and **Reader Settings → Book Language** re-tags any book by hand (Auto, Japanese, Chinese (Simplified), Chinese (Traditional), Cantonese), so a Chinese EPUB labelled `en` still gets its dictionary, font and layout.
+- **Pinyin above the text** works the way furigana does: the book carries it. The device does not work pinyin out itself, so the EPUB is prepared once on your computer: `tools/pinyin_ruby/add_pinyin_ruby.py` adds pinyin (or zhuyin) ruby to every word, optionally skipping the commonest words, and the Furigana toggle shows or hides it on the device.
 
-#### Sentence mining
+<p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character, added by the pinyin script"></p>
+<p align="center"><em>紅樓夢 after the pinyin script, Furigana switched on</em></p>
 
-Save a looked-up word together with the sentence it came from, ready to import into Anki. With a definition open, press **Select**, or tap the **+** in the panel's top-right corner on a touch device. The footer shows **Saved** until you move on. It works in Japanese and other-language books and in manga.
+- **Vertical Text** in Reader Settings overrides the layout either way, per book.
+- **An SD font is required.** The built-in CJK glyphs are the common Japanese set, so a Chinese book without one shows empty boxes for everyday characters such as 这, 说 or 們.
+- **The interface** can be switched to 简体中文 or 繁體中文.
 
-Each save adds one line to a CSV file per language in the `sentence-mining` folder on the SD card: `sentences-ja.csv`, `sentences-en.csv` and so on. The language is the dictionary's, so a file can be imported into its own deck. Each line holds the word in its dictionary form, its reading (Japanese only), the sentence with the word in bold, the whole dictionary entry, the book, author, date and dictionary, plus tags (`matcha` and the book title).
+### For learners of other languages
 
-To import, open the file in Anki with **File → Import**. The first lines of the file tell Anki the layout, so there is nothing to set up. The files only ever grow; import the same file again later and Anki updates the cards it already has instead of adding them twice, because every card carries a stable ID.
+Every other language is looked up in ordinary StarDict dictionaries, picked by the book's language tag; nothing needs converting. A word on the page is rarely in the shape the dictionary lists it under, so a lookup that misses is retried with word-form rules:
 
-A sentence cut off by the end of the page is finished from the next page. The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. On devices without a clock chip (the X4) a restart loses the time, so the date can lag until the next Wi-Fi connection.
+- **Every language:** a word at the start of a sentence keeps its accents and still resolves (`École` finds `école`).
+- **French** has the fullest rules. `l'eau` looks up `eau`, `journaux` finds `journal`, `heureuse` finds `heureux`, and the regular conjugations resolve to the infinitive (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`). The same coverage extends to `-eindre`/`-aindre`/`-oindre` verbs (`éteignit` finds `éteindre`, `craignait` finds `craindre`), `-aître` verbs (`connaissons` finds `connaître`), `-uire` verbs (`conduisit` finds `conduire`), and adverbs formed from an adjective (`lentement` finds `lent`). A literary verb-subject inversion like `songeai-je` or `pense-t-il` splits into two selectable words (`songeai`/`je`, `pense`/`il`), while a genuine compound like `rendez-vous` or `grand-mère` still selects as one word.
+- **English and everything else** fall back to plurals and verb endings.
 
-<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence, the save button in the top-right corner and Vocab | JMdict | Tatoeba in the footer"></p>
+Irregular verbs that share no stem with their infinitive — and a verb's irregular passé simple, like `connus` or `naquit` — need a `.syn` file in the dictionary folder; see [docs/dictionary.md](docs/dictionary.md).
 
-### Page translation
+### Manga, manhua and comics
 
-Translates the current page to English with Gemini, in the same floating panel as the dictionary, over the page you are reading. Works in any book, not only Japanese ones. Needs Wi-Fi and your own API key; a saved network is joined from inside the panel.
+Panels are detected at conversion time, along with their text and translations, so lookup and translation work offline and appear instantly. Move panel by panel in reading order, each one scaled to fill the screen. The language is set when you convert (`--language ja`, `zh`, `yue`, `fr`, …), and it decides which dictionary the speech bubbles are looked up in.
 
-<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
+**Look up any word right in the picture.** On a touch device, hold a word in a speech bubble and its dictionary entry opens, the same as in a book. With buttons, open Word Lookup and an outline appears around a word on the page; the page-turn keys move it word by word and Confirm looks it up. The outline leaves the word readable, and it works on the full page and on zoomed or rotated panels. Books converted before this feature need converting again to get it; see [§6.6](USER_GUIDE.md#66-manga-manhua-and-comics).
 
-### Manga panel reader
-
-Panels are detected at conversion time, along with their text and translations, so lookup and translation work offline and appear instantly. Move panel by panel in reading order, each one scaled to fill the screen.
-
-**Look up any word right in the picture.** On a touch device, hold a word in a speech bubble and its dictionary entry opens, the same as in a book. With buttons, open Word Lookup and an outline appears around a word on the page; the page-turn keys move it word by word and Confirm looks it up. The outline leaves the word readable, and it works on the full page and on zoomed or rotated panels. Books converted before this feature need converting again to get it; see [§6.4](USER_GUIDE.md#64-reading-manga).
-
-**Rotate Panels** (Settings, on by default) turns a panel whose shape does not match the screen, so a wide panel fills the display and you turn the device to read it. Switch it off to keep every panel upright inside the current orientation. **Panels Only** skips the full page overviews. Both are covered in [§6.4](USER_GUIDE.md#64-reading-manga).
+**Rotate Panels** (Settings, on by default) turns a panel whose shape does not match the screen, so a wide panel fills the display and you turn the device to read it. Switch it off to keep every panel upright inside the current orientation. **Panels Only** skips the full page overviews. Both are covered in [§6.6](USER_GUIDE.md#66-manga-manhua-and-comics).
 
 **Refresh Frequency** counts every panel step as a page, so at **1 page** each panel gets a full refresh and no ghost of the previous panel stays behind.
 
@@ -87,6 +143,13 @@ Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/
   <img src="docs/images/screenshots/manga-word-select.png" width="200" alt="A word in a speech bubble outlined for lookup">
   <img src="docs/images/screenshots/manga-word-lookup.png" width="200" alt="Dictionary entry for a word picked from a speech bubble">
 </p>
+<p align="center"><em>Japanese manga</em></p>
+
+<p align="center">
+  <img src="docs/images/screenshots/manhua-panel-zoom.png" width="200" alt="A manhua panel zoomed to fill the screen, its speech bubble in simplified Chinese">
+  <img src="docs/images/screenshots/manhua-word-lookup.png" width="200" alt="Dictionary entry for 帮助, picked from that speech bubble: pinyin, zhuyin, both scripts, two senses and example sentences">
+</p>
+<p align="center"><em>Chinese manhua</em></p>
 
 ### Library
 
@@ -158,7 +221,7 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 ### Also in this fork
 
 - Per-book reader settings: font, size, spacing, margins and orientation are remembered per book
-- A built-in CJK fallback font, so the odd kanji in a non-Japanese book still renders
+- A built-in CJK fallback font, so the odd kanji in a non-Japanese book still renders (common Japanese characters only: a Chinese book needs the SD font from Setup, which Home also picks up for Chinese titles)
 - **Optimize EPUB** on upload: splits single-file Japanese novels into real chapters with a working table of contents, and fits images to the screen as dithered 1-bit BMPs
 - More of the book's own CSS respected: headings sized as headings, line spacing, page breaks, boxed asides, and rules written as `.callout p`
 - Drop caps: a chapter opening styled with `::first-letter { font-size: … }` gets the enlarged initial the book asked for, with the first few lines wrapping around it
@@ -192,29 +255,29 @@ To make `.cpfont` files:
 
 Once flashed, **Settings → Update** checks this repository's releases and downloads the asset matching your device, so an update keeps the Matcha features rather than replacing them with stock CrossPoint. Pre-releases (nightlies) are never offered over the air — install those by flashing.
 
-**2. Install dictionaries.** Word lookup needs at least a vocabulary dictionary.
-
-Dictionaries are picked by the book's language. Put each one in `dictionaries/<lang>/`, using the language shorthand: `de` for German, `en` for English, `fr` for French, and so on. A book tagged with that language then selects it automatically.
+**2. Install dictionaries.** Word lookup needs at least a vocabulary dictionary for each language you read. A book's language tag picks the folder, so you can keep several languages on one card and never choose by hand.
 
 ```
 dictionaries/
-  en/your_dictionary_name/     # English, StarDict files
-  fr/your_dictionary_name/     # French, StarDict files
-  jp/                          # Japanese, Yomitan files converted for the device
+  jp/                          # Japanese
     vocab.idx    vocab.dat    vocab.spx      # vocabulary (required)
     names.idx    names.dat    names.spx      # names (recommended)
     grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
+  zh/                          # Mandarin, simplified and traditional books alike
+    vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
+    names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
+    grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
+  yue/                         # Cantonese
+    vocab.idx    vocab.dat    vocab.spx    vocab.title
+  en/your_dictionary_name/     # English, StarDict files
+  fr/your_dictionary_name/     # French, StarDict files
 ```
 
-Japanese is the exception: it always uses the converted files in `dictionaries/jp/`, from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other Yomitan dictionary. Every other language uses plain StarDict.
+The folder can also be called `.dictionaries/`, which hides it from the file browser. It works exactly the same.
 
-You can put several dictionaries in one language, each in its own folder (`en/collins/`, `en/wiktionary/`). A lookup checks all of them, up to four, and shows every entry it finds one after another: page past the end of one dictionary's entry and the next dictionary's follows, with the footer naming the dictionary and its place (`Collins (1/2)`). The dictionary picked in Settings comes first if it is one of them, then the rest by folder name. Saving a sentence records the dictionary whose entry is on screen.
+##### Japanese
 
-The dictionary you pick in Settings is also the fallback, used when the book has no language or no folder matches it. Reader Settings shows which dictionary a book reads first.
-
-The folder can also be called `.dictionaries/`, which hides it from the file browser. It works exactly the same, including `jp/`.
-
-Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the script:
+Japanese always uses the converted files in `dictionaries/jp/`. Convert them from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other Yomitan dictionary with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the script:
 
 ```bash
 python3 tools/dict_convert/convert_jmdict.py \
@@ -222,13 +285,84 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dictionaries/jp/    # add --name names / --name grammar for the others
 ```
 
-**3. Install a Japanese font** (optional). The built-in Noto handles Japanese, but a dedicated font looks better. Convert any TTF or OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/<Family>_<size>.cpfont` — one file per point size, and the size in the filename is the size offered in Text Settings. An SD card Japanese font also fills in rare kanji elsewhere, such as dictionary entries and book titles.
+##### Chinese: Mandarin, simplified or traditional
 
-Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP` become the Japanese half of **Noto Sans** / **Noto Serif**, and a `…Extended` name widens the font it is named after. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead.
+Ready-made packs come from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh): unzip the **simplified** or the **traditional** one onto the card so that it holds `dictionaries/zh/`. Install one, not both: they share the folder. Either pack serves books in both scripts, because every entry is indexed under both forms; they differ in what the entry shows.
 
-**4. Set up translation** (optional). Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and save it as `/system/gemini.key` on the card. A hidden `/.system/` folder works too.
+| | Simplified pack | Traditional (Taiwanese) pack |
+| --- | --- | --- |
+| Reading | Pinyin | Pinyin and zhuyin |
+| Level tag | [HSK 3.0](https://github.com/ivankra/hsk30) | [TOCFL](https://github.com/ivankra/tocfl) |
+| Entries | CC-CEDICT | CC-CEDICT, with the MoE 重編國語辭典 entry under it |
+| Ranked by | [jieba](https://github.com/fxsjy/jieba) `dict.txt` (MIT) | jieba `dict.txt.big`, which carries traditional forms too |
+| Example sentences | Simplified | Traditional |
 
-Using all of it: [§6 of the User Guide](USER_GUIDE.md#6-japanese-reading-features).
+To build your own, the same script takes `--lang zh`. Sources: the raw [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict) file, the Taiwan Ministry of Education's 重編國語辭典 as the [g0v `dict-revised.json`](https://github.com/g0v/moedict-data), or a Yomitan build such as [CC-CEDICT for Yomitan](https://github.com/MarvNC/cc-cedict-yomitan). The first command below is the simplified set, the second the Taiwanese one:
+
+```bash
+python3 tools/dict_convert/convert_jmdict.py --lang zh \
+  --input cedict_1_0_ts_utf-8_mdbg.txt --frequency dict.txt --split-names \
+  --levels hsk30.csv --level-name HSK \
+  --output-dir /path/to/sd/dictionaries/zh/
+
+python3 tools/dict_convert/convert_jmdict.py --lang zh --zhuyin --split-names \
+  --input cedict_1_0_ts_utf-8_mdbg.txt --input dict-revised.json.xz \
+  --frequency dict.txt.big --levels tocfl-202307.csv --level-name TOCFL \
+  --output-dir /path/to/sd/dictionaries/zh/
+```
+
+`--frequency` puts the common sense of a word first and makes the page segment by frequency; any list with one word per row works, and a word missing from it takes the rank of its other-script form, so a simplified list still ranks a traditional book. `--split-names` sends proper nouns to the names dictionary.
+
+Optional extras, for either set:
+
+- **Example sentences** from [Tatoeba](https://tatoeba.org/en/downloads): download the Chinese–English sentence pairs and add `--examples "Sentence pairs in Mandarin Chinese-English.tsv"`, and every entry of two or more characters shows up to two short sentences with their translations.
+- **A grammar reference** goes in the grammar slot from any two-column file, pattern and explanation, with `--format tsv --name grammar`; the [Chinese Grammar Wiki](https://resources.allsetlearning.com/chinese/grammar/) is CC BY-NC-SA, so that one is for your own card only.
+- **Pinyin above the text itself**: annotate the EPUB once before copying it to the card.
+
+  ```bash
+  python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.txt \
+    --frequency dict.txt --skip-top 1500 book.epub book-pinyin.epub   # --zhuyin for bopomofo
+  ```
+
+##### Chinese: Cantonese
+
+Cantonese is its own language with its own words, so a `yue` book reads `dictionaries/yue/` instead. Build it from [CC-Canto](https://cantonese.org/download.html), which holds the Cantonese-only vocabulary with jyutping, merged with CC-CEDICT for everything the two languages share, and the readings file so the shared words carry jyutping too:
+
+```bash
+python3 tools/dict_convert/convert_jmdict.py --lang yue \
+  --input cccanto-webdist.txt --input cedict_1_0_ts_utf-8_mdbg.txt \
+  --jyutping cccedict-canto-readings.txt --output-dir /path/to/sd/dictionaries/yue/
+```
+
+The converter writes the `.spx` sparse index that makes lookups fast itself; only a copy of the script run outside the repository needs `python3 scripts/gen_dict_spx.py` on the folder afterwards. CC-CEDICT is CC BY-SA; the MoE dictionary is CC BY-ND and is shortened for the screen without changing its wording; Tatoeba sentences are CC BY.
+
+##### Other languages
+
+Every other language uses plain StarDict, with no conversion: put each dictionary in `dictionaries/<lang>/<name>/`, using the language shorthand (`de` for German, `en` for English, `fr` for French, and so on). A book tagged with that language then selects it automatically.
+
+You can put several dictionaries in one language, each in its own folder (`en/collins/`, `en/wiktionary/`). A lookup checks all of them, up to four, and shows every entry it finds one after another: page past the end of one dictionary's entry and the next dictionary's follows, with the footer naming the dictionary and its place (`Collins (1/2)`). The dictionary picked in Settings comes first if it is one of them, then the rest by folder name. Saving a sentence records the dictionary whose entry is on screen.
+
+The dictionary you pick in Settings is also the fallback, used when the book has no language or no folder matches it. Reader Settings shows which dictionary a book reads first.
+
+**3. Install a font for Japanese or Chinese.**
+
+| You read | Font | Needed? |
+| --- | --- | --- |
+| Japanese | Noto Sans JP / Noto Serif JP | Optional: the built-in Noto handles Japanese, a dedicated font looks better and adds rare kanji |
+| Mandarin, simplified | Noto Sans SC / Noto Serif SC | Required |
+| Mandarin, traditional; Cantonese | Noto Sans TC / Noto Serif TC (or HK) | Required |
+
+Chinese needs one because the built-in CJK glyphs are the common Japanese set: a Chinese book without an SD font shows empty boxes for everyday characters such as 这, 说 or 們. With only a Japanese font on the card, Chinese renders in Japanese glyph shapes.
+
+Convert any TTF or OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/<Family>_<size>.cpfont` — one file per point size, and the size in the filename is the size offered in Text Settings. **Reader Settings → Text Settings → Manage Fonts** (the last row of the font list) downloads ready-made ones; the Noto Sans and Serif JP, SC and TC cuts appear there once the next font release is published, until then convert them with the browser tool. An SD card CJK font also fills in rare characters elsewhere, such as dictionary entries and book titles on Home and in the Library.
+
+Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP`, `NotoSansSC` / `NotoSerifSC` and `NotoSansTC` / `NotoSerifTC` (or `…HK`) become the Japanese, simplified-Chinese and traditional-Chinese halves of **Noto Sans** / **Noto Serif**, picked by the book's language, and a `…Extended` name widens the font it is named after. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead.
+
+**4. Switch the interface language** (optional). The menus can be set to 日本語, 简体中文 or 繁體中文, among others, under **Settings → System → Language**. The Chinese ones come as language packs: put the pack from the release in `/.crosspoint/lang/` first. A Chinese interface keeps the SD font loaded for the menus, so install the font before switching.
+
+**5. Set up translation** (optional). Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and save it as `/system/gemini.key` on the card. A hidden `/.system/` folder works too.
+
+Using all of it: [§6 of the User Guide](USER_GUIDE.md#6-language-learning-features).
 
 ---
 

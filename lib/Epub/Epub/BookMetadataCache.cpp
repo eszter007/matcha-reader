@@ -12,7 +12,7 @@
 #include "FsHelpers.h"
 
 namespace {
-constexpr uint8_t BOOK_CACHE_VERSION = 10;  // v10: ignore ambiguous guide text references
+constexpr uint8_t BOOK_CACHE_VERSION = 11;  // v11: spine page-progression-direction flag
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
@@ -196,7 +196,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
       sizeof(BOOK_CACHE_VERSION) + /* LUT Offset */ sizeof(uint32_t) + sizeof(spineCount) + sizeof(tocCount);
   const uint32_t metadataSize = metadata.title.size() + metadata.author.size() + metadata.language.size() +
                                 metadata.coverItemHref.size() + metadata.textReferenceHref.size() +
-                                sizeof(uint32_t) * 5;
+                                sizeof(uint32_t) * 5 + sizeof(uint8_t);
   const uint32_t lutSize = sizeof(uint32_t) * spineCount + sizeof(uint32_t) * tocCount;
   const uint32_t lutOffset = headerASize + metadataSize;
 
@@ -211,6 +211,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   serialization::writeString(bookOut, metadata.language);
   serialization::writeString(bookOut, metadata.coverItemHref);
   serialization::writeString(bookOut, metadata.textReferenceHref);
+  serialization::writePod(bookOut, static_cast<uint8_t>(metadata.pageProgressionRtl ? 1 : 0));
 
   // Loop through spine entries, writing LUT positions
   spineIn.seek(0);
@@ -468,13 +469,16 @@ bool BookMetadataCache::load() {
   // A cache file that cannot be read through is treated as absent, not as a book with empty
   // metadata: the caller rebuilds it, where a half-loaded cache would be believed and kept.
   // This is the path that aborted on a device whose SD card was failing mid-read.
+  uint8_t pageProgressionRtl = 0;
   const bool headerOk = serialization::readPod(bookFile, lutOffset) && serialization::readPod(bookFile, spineCount) &&
                         serialization::readPod(bookFile, tocCount) &&
                         serialization::readString(bookFile, coreMetadata.title) &&
                         serialization::readString(bookFile, coreMetadata.author) &&
                         serialization::readString(bookFile, coreMetadata.language) &&
                         serialization::readString(bookFile, coreMetadata.coverItemHref) &&
-                        serialization::readString(bookFile, coreMetadata.textReferenceHref);
+                        serialization::readString(bookFile, coreMetadata.textReferenceHref) &&
+                        serialization::readPod(bookFile, pageProgressionRtl);
+  coreMetadata.pageProgressionRtl = pageProgressionRtl != 0;
   if (!headerOk) {
     LOG_ERR("BMC", "Cache header unreadable or corrupt; discarding");
     bookFile.close();

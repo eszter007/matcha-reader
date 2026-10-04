@@ -809,6 +809,19 @@ static inline uint8_t sampleGlyphInk(const uint8_t* bitmap, const bool is2Bit, c
   return static_cast<uint8_t>((top * (65536 - fy) + bottom * fy + 32768) >> 16);
 }
 
+// Mean ink over the block of source texels [x0, x1) x [y0, y1) that one destination pixel covers
+// when a glyph is drawn smaller. A point sample takes one texel of that block and drops the rest,
+// so a one-texel stroke of a hanzi falls between samples and the character loses a line.
+static inline uint8_t averageGlyphInk(const uint8_t* bitmap, const bool is2Bit, const bool binarize, const int gw,
+                                      const int x0, const int y0, const int x1, const int y1) {
+  uint32_t sum = 0;
+  for (int y = y0; y < y1; ++y) {
+    for (int x = x0; x < x1; ++x) sum += glyphTexelInk(bitmap, is2Bit, binarize, y * gw + x);
+  }
+  const int count = (x1 - x0) * (y1 - y0);
+  return count > 0 ? static_cast<uint8_t>(sum / static_cast<uint32_t>(count)) : 0;
+}
+
 // Word Lookup needs a few larger sizes, but the built-in small font is the only one that has
 // the desired CJK fallback. Scale its bitmap directly instead of adding another font family.
 static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode,
@@ -826,9 +839,8 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
   const int baseY = cursorY - scaleSigned(glyph->top, scale);
   if (!renderer.glyphIntersectsStrip(baseX, baseY, baseX + width - 1, baseY + height - 1)) return;
 
-  // Enlarging only. Shrinking keeps the old point sample: it needs the opposite filter (average the
-  // texels a destination pixel covers, so thin stems cannot fall between samples), which is its own
-  // change. At 1:1 drawTextScaled() has already returned above.
+  // Enlarging interpolates between texels; shrinking averages the texels a destination pixel
+  // covers. At 1:1 drawTextScaled() has already returned above.
   const bool interpolate = scale > 256;
   // Guarded by interpolate: scale is caller-supplied and drawTextScaled does not reject 0, which
   // would divide by zero here even though the loops below would not run.
@@ -849,6 +861,7 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
     // Each branch divides only for the coordinate it uses; the other value is never read.
     const int32_t syFP = interpolate ? ((2 * dstY + 1) * stepFP) / 2 - 32768 : 0;
     const int srcY = interpolate ? 0 : std::min<int>(glyph->height - 1, (dstY * 256) / scale);
+    const int srcYEnd = interpolate ? 0 : std::clamp<int>(((dstY + 1) * 256) / scale, srcY + 1, glyph->height);
     for (int dstX = 0; dstX < width; ++dstX) {
       // The BW pass reads the glyph as a solid shape; the grayscale passes need the real tones.
       const bool binarize = renderMode == GfxRenderer::BW && !crispEnlarge;
@@ -858,7 +871,8 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
         ink = sampleGlyphInk(bitmap, fontData->is2Bit, binarize, glyph->width, glyph->height, sxFP, syFP);
       } else {
         const int srcX = std::min<int>(glyph->width - 1, (dstX * 256) / scale);
-        ink = glyphTexelInk(bitmap, fontData->is2Bit, binarize, srcY * glyph->width + srcX);
+        const int srcXEnd = std::clamp<int>(((dstX + 1) * 256) / scale, srcX + 1, glyph->width);
+        ink = averageGlyphInk(bitmap, fontData->is2Bit, binarize, glyph->width, srcX, srcY, srcXEnd, srcYEnd);
       }
       if (renderMode == GfxRenderer::BW) {
         // Half coverage or more takes the pixel. The panel has one bit here, so this cannot be a
@@ -867,7 +881,9 @@ static void renderCharAtScale(const GfxRenderer& renderer, const GfxRenderer::Re
         //
         // ink is binarized here, so this is coverage of the shape the old renderer drew, and a
         // point sample is 0 or 255 either way -- an unenlarged glyph renders exactly as before.
-        const bool inked = interpolate ? ink >= 128 : ink > 0;
+        // Shrunk: a third of the block. A stroke one texel wide fills half of a two-texel block
+        // and a third of a three-texel one, and it must survive both.
+        const bool inked = interpolate ? ink >= 128 : ink >= 80;
         if (inked) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
         continue;
       }
@@ -951,6 +967,10 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   // Redirected SD fallback: batch-load before either advance-based or bounds-based measurement.
   if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
 
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
+    return layoutTextScaled(resolvedFontId, 0, 0, renderedText, redirected.cjk, redirected.nonCjk, /*draw=*/false, true,
+                            style, letterSpacing);
+  }
   if (fontIt->second.getFallback() || letterSpacing != 0) {
     return getTextAdvanceX(fontId, renderedText, style, letterSpacing);
   }
@@ -983,6 +1003,15 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   // Route CJK-bearing strings to the fallback font when the requested font
   // lacks the glyphs (e.g. Chinese book titles drawn with a Latin UI font).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
+    // A fallback of another size, drawn at the requested font's: its scaled line box centred in
+    // the one the caller laid out for.
+    const int top = y + (getLineHeight(fontId) - scalePositive(getLineHeight(resolvedFontId), redirected.cjk)) / 2;
+    std::string visual;
+    layoutTextScaled(resolvedFontId, x, top, resolveVisualText(text, visual, baseDir), redirected.cjk,
+                     redirected.nonCjk, /*draw=*/true, black, style, letterSpacing);
+    return;
+  }
 
   std::string visual;
   const char* renderedText = resolveVisualText(text, visual, baseDir);
@@ -1087,55 +1116,72 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
   if (text == nullptr || *text == '\0') return;
 
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  // Both scales apply: the caller's, and the one that brings a fallback to this font's size.
+  const FallbackScale redirected = redirectScale(fontId, resolvedFontId);
+  const auto compose = [scale](const uint16_t other) {
+    return static_cast<uint16_t>((static_cast<uint32_t>(scale) * other) >> 8);
+  };
   std::string visual;
-  const char* renderedText = resolveVisualText(text, visual, baseDir);
+  layoutTextScaled(resolvedFontId, x, y, resolveVisualText(text, visual, baseDir), compose(redirected.cjk),
+                   compose(redirected.nonCjk), /*draw=*/true, black, style, letterSpacing);
+}
+
+int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const int y, const char* renderedText,
+                                  const uint16_t scale, const uint16_t nonCjkScale, const bool draw, const bool black,
+                                  const EpdFontFamily::Style style, const int8_t letterSpacing) const {
+  if (draw && fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(renderedText, resolvedFontId, style);
+    return 0;
+  }
+
+  // An SD font keeps only what the page needed in RAM: batch-load this string's glyphs, as
+  // drawText() does for a redirected string, or the loop below reads bitmaps that are not there.
+  if (sdCardFonts_.find(resolvedFontId) != sdCardFonts_.end()) {
+    ensureSdGlyphsResident(resolvedFontId, renderedText, style, !draw);
+  }
+
+  const auto fontIt = fontMap.find(resolvedFontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
+    return 0;
+  }
+  const auto& font = fontIt->second;
   const int yPos = y + scaleSigned(getFontAscenderSize(resolvedFontId), scale);
   int lastBaseX = x;
   int lastBaseLeft = 0;
   int lastBaseWidth = 0;
   int lastBaseTop = 0;
   int32_t prevAdvanceFP = 0;
-  // Advance is accumulated UNSCALED and the running total scaled once per glyph, so the pen ends
-  // at exactly x + scalePositive(total) -- the value getTextWidthScaled reports. Scaling each
-  // delta instead rounds every glyph independently, and those errors accumulate: a long word
-  // drawn that way is several pixels wider than it was measured, which is fine for a standalone
-  // string but silently overlaps the next word once scaled text goes through paragraph layout.
-  int unscaledAdvance = 0;
-
-  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
-    fontCacheManager_->recordText(renderedText, resolvedFontId, style);
-    return;
-  }
-
-  const auto fontIt = fontMap.find(resolvedFontId);
-  if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
-    return;
-  }
-  const auto& font = fontIt->second;
+  uint16_t prevScale = scale;
+  // The pen is kept in 1/256 px and each advance enters it at its own glyph's scale, so it ends
+  // at exactly the value this same walk reports as the width. Rounding each glyph's advance to a
+  // pixel instead lets the errors add up: a long word drawn that way is several pixels wider than
+  // it was measured, and overlaps the next word once scaled text goes through paragraph layout.
+  int32_t pen256 = 0;
   const char* textCursor = renderedText;
   uint32_t cp;
   uint32_t prevCp = 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&textCursor)))) {
     if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      if (!draw) continue;
       const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
       if (!combiningGlyph) continue;
       const auto anchor = combiningMark::anchorFor(cp);
       const int raiseBy =
           combiningMark::raiseAboveBase(anchor, combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::anchorOver(
-          anchor, lastBaseX, scaleSigned(lastBaseLeft, scale), scaleSigned(lastBaseWidth, scale),
-          scaleSigned(combiningGlyph->left, scale), scaleSigned(combiningGlyph->width, scale));
-      renderCharAtScale(*this, renderMode, font, cp, combiningX, yPos - scaleSigned(raiseBy, scale), black, style,
-                        scale);
+          anchor, lastBaseX, scaleSigned(lastBaseLeft, prevScale), scaleSigned(lastBaseWidth, prevScale),
+          scaleSigned(combiningGlyph->left, prevScale), scaleSigned(combiningGlyph->width, prevScale));
+      renderCharAtScale(*this, renderMode, font, cp, combiningX, yPos - scaleSigned(raiseBy, prevScale), black, style,
+                        prevScale);
       continue;
     }
 
     cp = font.applyLigatures(cp, textCursor, style);
     if (prevCp != 0) {
       const auto kernFP = font.getKerning(prevCp, cp, style);
-      unscaledAdvance += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
-      lastBaseX = x + scalePositive(unscaledAdvance, scale);
+      pen256 += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing) * prevScale;
+      lastBaseX = x + static_cast<int>((pen256 + 128) / 256);
     }
 
     const EpdGlyph* glyph = font.getGlyph(cp, style);
@@ -1145,9 +1191,14 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
     if (isSupSub) prevAdvanceFP = (prevAdvanceFP + 1) / 2;
-    renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, scale);
+    // What the font borrows from its fallback family (a companion's built-in Latin) is that
+    // family's size, not the font's: it takes its own scale.
+    prevScale = nonCjkScale != scale && font.drawsFromFallback(cp, style) ? nonCjkScale : scale;
+    if (draw) renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, prevScale);
     prevCp = cp;
   }
+  pen256 += fp4::toPixel(prevAdvanceFP) * prevScale;  // final glyph's advance
+  return std::max(0, static_cast<int>((pen256 + 128) / 256));
 }
 
 namespace {
@@ -2844,9 +2895,10 @@ int GfxRenderer::getLineHeight(const int fontId, const float compression) const 
 int GfxRenderer::textBaselineOffset(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   // Mirrors drawText()'s own yPos derivation; keep the two in step.
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
-  int offset = getFontAscenderSize(resolvedFontId);
+  const uint16_t redirected = redirectScale(fontId, resolvedFontId).cjk;
+  int offset = scalePositive(getFontAscenderSize(resolvedFontId), redirected);
   if (resolvedFontId != fontId) {
-    offset += (getLineHeight(fontId) - getLineHeight(resolvedFontId)) / 2;
+    offset += (getLineHeight(fontId) - scalePositive(getLineHeight(resolvedFontId), redirected)) / 2;
   }
   return offset;
 }

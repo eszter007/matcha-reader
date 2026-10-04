@@ -1,14 +1,20 @@
-#!/ usr / bin / env python3
+#!/usr/bin/env python3
 """Convert dictionary files to binary index files for CrossPoint Reader.
 
 Supported input formats:
+  Japanese (--lang ja, the default)
   - jmdict-simplified JSON (.json / .json.tgz)
   - Yomitan/Yomichan (.zip containing term_bank_N.json)
   - MDict (.mdx) — requires: pip install readmdict
+  Chinese (--lang zh)
+  - CC-CEDICT raw text (.u8 / .txt: "繁體 简体 [pin1 yin1] /gloss/gloss/")
+  - MoE 重編國語辭典 as the g0v moedict JSON (dict-revised.json, also .json.xz)
+  - Yomitan .zip (e.g. the CC-CEDICT Yomitan build) and MDict .mdx, as above
 
 Emits (basename set by --name, default "vocab"):
-  vocab.idx  -- sorted array of 40-byte records (headword + offset + length + priority)
-  vocab.dat  -- variable-length definition text blob
+  vocab.idx   -- sorted array of 40-byte records (headword + offset + length + priority)
+  vocab.dat   -- variable-length definition text blob
+  vocab.title -- the dictionary's display name (Chinese, or when --title is given)
 
 Usage:
 #JMdict(default — downloads if no-- input given)
@@ -19,15 +25,32 @@ Usage:
 
 #MDict.mdx file
     python3 convert_jmdict.py --input dictionary.mdx --output-dir ./output
+
+#Chinese : CC - CEDICT, ranked by a frequency list, with zhuyin beside the pinyin
+    python3 convert_jmdict.py --lang zh --input cedict_1_0_ts_utf-8_mdbg.txt \
+        --frequency dict.txt --zhuyin --output-dir /sd/dictionaries/zh/
+
+#Chinese : CC - CEDICT and the MoE dictionary merged into one vocabulary file
+    python3 convert_jmdict.py --lang zh --input cedict_ts.u8 --input dict-revised.json.xz \
+        --output-dir /sd/dictionaries/zh/
 """
 
 import argparse
 import json
+import math
 import os
 import re
 import struct
 import sys
 import urllib.request
+
+# The sparse-index generator lives with the firmware scripts; the device reads its .spx beside
+# each .idx to answer a lookup in two SD reads instead of twenty.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+try:
+    from gen_dict_spx import gen_one as _gen_spx
+except ImportError:  # running from a copy of this file alone
+    _gen_spx = None
 
 JMDICT_URL = "https://github.com/scriptin/jmdict-simplified/releases/latest/download/jmdict-eng-3.5.0.json.tgz"
 HEADWORD_SIZE = 32
@@ -54,10 +77,11 @@ def strip_html(html: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def write_binary(records: list, output_dir: str, name: str = "vocab"):
+def write_binary(records: list, output_dir: str, name: str = "vocab", title: str = ""):
     """Write (headword_bytes, definition_bytes, priority, pos_flags) tuples to idx+dat files.
 
-    Expects records to be pre-validated (headword_bytes < HEADWORD_SIZE).
+    Expects records to be pre-validated (headword_bytes < HEADWORD_SIZE). A non-empty title is
+    written to <name>.title, which the device shows in the lookup panel's footer.
     """
     records.sort(key=lambda r: r[0])
 
@@ -69,25 +93,20 @@ def write_binary(records: list, output_dir: str, name: str = "vocab"):
     index_entries = []
 
     with open(dat_path, "wb") as dat_f:
-        prev_def = None
-        prev_offset = 0
-        prev_length = 0
+        # One copy per distinct definition: a Chinese entry is indexed under both its traditional
+        # and simplified form, which sort far apart, and a Japanese one under kanji and kana.
+        stored = {}
 
         for hw_bytes, def_bytes, priority, pos_flags in records:
-            if def_bytes == prev_def:
-                offset = prev_offset
-                length = prev_length
-            else:
-                offset = dat_offset
-                length = len(def_bytes)
-                if length > 0xFFFF:
-                    length = 0xFFFF
-                    def_bytes = def_bytes[:0xFFFF]
+            if len(def_bytes) > 0xFFFF:
+                def_bytes = def_bytes[:0xFFFF]
+            hit = stored.get(def_bytes)
+            if hit is None:
+                hit = (dat_offset, len(def_bytes))
                 dat_f.write(def_bytes)
                 dat_offset += len(def_bytes)
-                prev_def = def_bytes
-                prev_offset = offset
-                prev_length = length
+                stored[def_bytes] = hit
+            offset, length = hit
 
             padded_hw = hw_bytes + b"\x00" * (HEADWORD_SIZE - len(hw_bytes))
             index_entries.append((padded_hw, offset, length, priority, pos_flags))
@@ -96,11 +115,29 @@ def write_binary(records: list, output_dir: str, name: str = "vocab"):
         for padded_hw, offset, length, priority, pos_flags in index_entries:
             idx_f.write(struct.pack(RECORD_FORMAT, padded_hw, offset, length, priority, pos_flags))
 
+    title_path = os.path.join(output_dir, f"{name}.title")
+    # The device reads the first 39 bytes; keep whole characters within that.
+    title = title.strip().encode("utf-8")[:36].decode("utf-8", errors="ignore").strip()
+    if title:
+        with open(title_path, "w", encoding="utf-8") as title_f:
+            title_f.write(title + "\n")
+    elif os.path.exists(title_path):
+        os.remove(title_path)  # a stale name from an earlier conversion would mislabel this one
+
     dat_size = os.path.getsize(dat_path)
     idx_size = os.path.getsize(idx_path)
     print(f"Output:")
     print(f"  {idx_path}: {idx_size:,} bytes ({len(index_entries):,} records)")
     print(f"  {dat_path}: {dat_size:,} bytes")
+    if title:
+        print(f"  {title_path}: {title}")
+    spx_path = os.path.join(output_dir, f"{name}.spx")
+    if _gen_spx is not None and index_entries:
+        _gen_spx(idx_path, spx_path)
+        print(f"  {spx_path}: {os.path.getsize(spx_path):,} bytes (sparse index)")
+    elif os.path.exists(spx_path):
+        os.remove(spx_path)  # a stale sidecar for an older .idx would be ignored, but keep it tidy
+        print(f"  {name}.spx: not generated (scripts/gen_dict_spx.py not found); run it on the folder")
     print(f"  Total: {(idx_size + dat_size) / 1024 / 1024:.1f} MB")
 
 # ── JMdict(jmdict - simplified JSON) ─────────────────────────────
@@ -213,8 +250,8 @@ def format_definition_jmdict(entry: dict) -> str:
     return "\n".join(parts)
 
 
-def convert_jmdict(json_path: str, output_dir: str, name: str = "vocab"):
-    """Convert JMdict JSON to binary index + data files."""
+def convert_jmdict(json_path: str) -> list:
+    """Convert JMdict JSON to index records."""
     print(f"Loading {json_path}...")
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -252,7 +289,7 @@ def convert_jmdict(json_path: str, output_dir: str, name: str = "vocab"):
             records.append((hw_bytes, def_bytes, priority, kana_flags))
 
     print(f"Generated {len(records)} index records")
-    write_binary(records, output_dir, name)
+    return records
 
 # ── Yomitan / Yomichan(.zip) ───────────────────────────────────
 
@@ -428,11 +465,17 @@ def find_redirect_target(definitions) -> str:
     return search(definitions)
 
 
-def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
-    """Convert a Yomitan/Yomichan .zip dictionary to binary index + data files."""
+def convert_yomitan(zip_path: str, reading_records: bool = True) -> tuple:
+    """Convert a Yomitan/Yomichan .zip dictionary to index records.
+
+    reading_records=False skips the extra record per kana reading. Chinese dictionaries carry
+    pinyin in the reading field, which no page text ever matches, so the records would only
+    bloat the index. Returns (records, title).
+    """
     import zipfile
 
     print(f"Loading {zip_path}...")
+    title = ""
 
     with zipfile.ZipFile(zip_path, "r") as z:
         names = z.namelist()
@@ -440,7 +483,8 @@ def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
         if "index.json" in names:
             with z.open("index.json") as f:
                 meta = json.load(f)
-            print(f"  Dictionary: {meta.get('title', '(unknown)')}")
+            title = str(meta.get("title", ""))
+            print(f"  Dictionary: {title or '(unknown)'}")
             print(f"  Format version: {meta.get('format', meta.get('version', '?'))}")
 
         term_banks = sorted(n for n in names if re.match(r"term_bank_\d+\.json$", n))
@@ -504,7 +548,7 @@ def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
                 seen_headwords.add(hw_bytes)
                 records.append((hw_bytes, def_bytes, priority, pos_flags))
 
-            if reading and reading != headword and not redirect:
+            if reading_records and reading and reading != headword and not redirect:
                 r_bytes = reading.encode("utf-8")
                 if len(r_bytes) < HEADWORD_SIZE and r_bytes not in seen_headwords:
                     r_def = format_definition_yomitan(reading, reading, definitions)
@@ -517,13 +561,13 @@ def convert_yomitan(zip_path: str, output_dir: str, name: str = "vocab"):
             entry_count += 1
 
     print(f"Processed {entry_count} Yomitan entries → {len(records)} index records")
-    write_binary(records, output_dir, name)
+    return records, title
 
 # ── MDict(.mdx) ────────────────────────────────────────────────
 
 
-def convert_mdict(mdx_path: str, output_dir: str, name: str = "vocab"):
-    """Convert an MDict .mdx file to binary index + data files.
+def convert_mdict(mdx_path: str) -> list:
+    """Convert an MDict .mdx file to index records.
 
     Requires: pip install readmdict
     Optional: pip install python-lzo  (for LZO-compressed dictionaries)
@@ -573,36 +617,660 @@ def convert_mdict(mdx_path: str, output_dir: str, name: str = "vocab"):
         entry_count += 1
 
     print(f"Processed {entry_count} MDict entries ({skipped} skipped) → {len(records)} index records")
-    write_binary(records, output_dir, name)
+    return records
+
+# ── Chinese : pinyin and zhuyin ────────────────────────────────
+
+_TONE_MARKS = {
+    "a": "āáǎà", "e": "ēéěè", "i": "īíǐì", "o": "ōóǒò", "u": "ūúǔù", "ü": "ǖǘǚǜ",
+    "A": "ĀÁǍÀ", "E": "ĒÉĚÈ", "I": "ĪÍǏÌ", "O": "ŌÓǑÒ", "U": "ŪÚǓÙ", "Ü": "ǕǗǙǛ",
+}
+_SYLLABLE_RE = re.compile(r"^([A-Za-zü:]+?)([1-5])$")
+
+
+def pinyin_syllable_to_marks(syllable: str) -> str:
+    """'ni3' -> 'nǐ', 'lu:4' -> 'lǜ', 'ma5' -> 'ma'. Anything else is returned unchanged."""
+    m = _SYLLABLE_RE.match(syllable)
+    if not m:
+        return syllable
+    base = m.group(1).replace("u:", "ü").replace("U:", "Ü")
+    tone = int(m.group(2))
+    if tone == 5:
+        return base
+    lower = base.lower()
+    if "a" in lower:
+        idx = lower.index("a")
+    elif "e" in lower:
+        idx = lower.index("e")
+    elif "ou" in lower:
+        idx = lower.index("ou")
+    else:
+        idx = -1
+        for i, ch in enumerate(lower):
+            if ch in "aeiouü":
+                idx = i  # the LAST vowel takes the mark (iu -> iù, ui -> uì)
+        if idx < 0:
+            return base  # m2, ng2, hm5: no vowel to mark
+    marked = _TONE_MARKS[base[idx]][tone - 1]
+    return base[:idx] + marked + base[idx + 1:]
+
+
+def pinyin_to_marks(numbered: str) -> str:
+    """Convert a space-separated numbered-tone string ('ni3 hao3') to diacritics."""
+    return " ".join(pinyin_syllable_to_marks(part) for part in numbered.split(" "))
+
+
+_ZHUYIN_INITIALS = [
+    ("zh", "ㄓ"), ("ch", "ㄔ"), ("sh", "ㄕ"), ("b", "ㄅ"), ("p", "ㄆ"), ("m", "ㄇ"), ("f", "ㄈ"),
+    ("d", "ㄉ"), ("t", "ㄊ"), ("n", "ㄋ"), ("l", "ㄌ"), ("g", "ㄍ"), ("k", "ㄎ"), ("h", "ㄏ"),
+    ("j", "ㄐ"), ("q", "ㄑ"), ("x", "ㄒ"), ("r", "ㄖ"), ("z", "ㄗ"), ("c", "ㄘ"), ("s", "ㄙ"),
+]
+_ZHUYIN_FINALS = {
+    "a": "ㄚ", "o": "ㄛ", "e": "ㄜ", "ê": "ㄝ", "ai": "ㄞ", "ei": "ㄟ", "ao": "ㄠ", "ou": "ㄡ",
+    "an": "ㄢ", "en": "ㄣ", "ang": "ㄤ", "eng": "ㄥ", "er": "ㄦ", "i": "ㄧ", "ia": "ㄧㄚ",
+    "io": "ㄧㄛ", "ie": "ㄧㄝ", "iai": "ㄧㄞ", "iao": "ㄧㄠ", "iu": "ㄧㄡ", "ian": "ㄧㄢ",
+    "in": "ㄧㄣ", "iang": "ㄧㄤ", "ing": "ㄧㄥ", "iong": "ㄩㄥ", "u": "ㄨ", "ua": "ㄨㄚ",
+    "uo": "ㄨㄛ", "uai": "ㄨㄞ", "ui": "ㄨㄟ", "uan": "ㄨㄢ", "un": "ㄨㄣ", "uang": "ㄨㄤ",
+    "ueng": "ㄨㄥ", "ong": "ㄨㄥ", "ü": "ㄩ", "üe": "ㄩㄝ", "üan": "ㄩㄢ", "ün": "ㄩㄣ",
+}
+# Syllables written with y/w carry the medial in the spelling, not in a separate initial.
+_ZHUYIN_WHOLE = {
+    "zhi": "ㄓ", "chi": "ㄔ", "shi": "ㄕ", "ri": "ㄖ", "zi": "ㄗ", "ci": "ㄘ", "si": "ㄙ",
+    "yi": "ㄧ", "ya": "ㄧㄚ", "yo": "ㄧㄛ", "ye": "ㄧㄝ", "yai": "ㄧㄞ", "yao": "ㄧㄠ", "you": "ㄧㄡ",
+    "yan": "ㄧㄢ", "yin": "ㄧㄣ", "yang": "ㄧㄤ", "ying": "ㄧㄥ", "yong": "ㄩㄥ",
+    "wu": "ㄨ", "wa": "ㄨㄚ", "wo": "ㄨㄛ", "wai": "ㄨㄞ", "wei": "ㄨㄟ", "wan": "ㄨㄢ", "wen": "ㄨㄣ",
+    "wang": "ㄨㄤ", "weng": "ㄨㄥ",
+    "yu": "ㄩ", "yue": "ㄩㄝ", "yuan": "ㄩㄢ", "yun": "ㄩㄣ",
+    "r": "ㄦ", "m": "ㄇ", "n": "ㄋ", "ng": "ㄫ", "hm": "ㄏㄇ", "hng": "ㄏㄫ",
+}
+_ZHUYIN_TONES = {1: "", 2: "ˊ", 3: "ˇ", 4: "ˋ"}
+
+
+def pinyin_syllable_to_zhuyin(syllable: str) -> str:
+    """'ni3' -> 'ㄋㄧˇ', 'lu:4' -> 'ㄌㄩˋ', 'ma5' -> '˙ㄇㄚ'. Unknown syllables come back unchanged."""
+    m = _SYLLABLE_RE.match(syllable)
+    if not m:
+        return syllable
+    base = m.group(1).lower().replace("u:", "ü").replace("v", "ü")
+    tone = int(m.group(2))
+    body = _ZHUYIN_WHOLE.get(base)
+    if body is None:
+        initial = ""
+        rest = base
+        for latin, bopomofo in _ZHUYIN_INITIALS:
+            if base.startswith(latin):
+                initial, rest = bopomofo, base[len(latin):]
+                break
+        # After j/q/x (and y, handled above) a written u is ü.
+        if initial in ("ㄐ", "ㄑ", "ㄒ") and rest.startswith("u"):
+            rest = "ü" + rest[1:]
+        final = _ZHUYIN_FINALS.get(rest)
+        if final is None or (not initial and rest != base):
+            return syllable
+        body = initial + final
+    if tone == 5:
+        return "˙" + body
+    return body + _ZHUYIN_TONES[tone]
+
+
+def pinyin_to_zhuyin(numbered: str) -> str:
+    return " ".join(pinyin_syllable_to_zhuyin(part) for part in numbered.split(" "))
+
+
+_BRACKETED_PINYIN_RE = re.compile(r"\[([A-Za-z0-9:\u00fc\u00dc ,]+)\]")
+
+
+# A word given in both scripts inside a gloss: 個|个, 237號房間|237号房间, 對…|对…. Not every bar:
+# only one that touches a CJK character.
+_CJK_CLASS = "[\u3400-\u9fff\uf900-\ufaff]"
+_SCRIPT_PAIR_BAR_RE = re.compile(rf"(?<={_CJK_CLASS})\||\|(?={_CJK_CLASS})")
+_CLASSIFIER_RE = re.compile(r"\bCL:(?=\S)")
+
+
+def prettify_cedict_gloss(gloss: str) -> str:
+    """CEDICT glosses carry their own markup for cross-references: both scripts joined by a bar
+    and numbered pinyin in brackets (CL:個|个[ge4], see 你好[ni3 hao3]). Written out for a reader:
+    "CL: 個/个 (gè)", "see 你好 (nǐ hǎo)"."""
+    gloss = _BRACKETED_PINYIN_RE.sub(lambda m: " (" + pinyin_to_marks(m.group(1)) + ")", gloss)
+    gloss = _SCRIPT_PAIR_BAR_RE.sub("/", gloss)
+    return _CLASSIFIER_RE.sub("CL: ", gloss)
+
+
+# ── Chinese : frequency ranking ────────────────────────────────
+
+_HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\U00020000-\U0003134f]")
+# A graded list's level: 1-9, or a band such as 7-9.
+_LEVEL_RE = re.compile(r"[1-9](?:-[1-9])?")
+UNRANKED_PRIORITY = 60  # entries absent from the frequency list
+
+
+def _split_variants(cell: str) -> list:
+    """The Han words in one list cell: HSK and TOCFL write variants as 爸爸|爸 and 你/妳."""
+    return [w for w in re.split(r"[/|｜、]", cell) if _HAN_RE.search(w)]
+
+
+def rank_to_priority(rank: int) -> int:
+    """1 -> 255, 10 -> 227, 1000 -> 171, 100000 -> 115: log-scaled so the common words spread."""
+    return max(UNRANKED_PRIORITY + 1, min(255, 255 - int(round(28 * math.log10(rank)))))
+
+
+def load_frequency(path: str, kind: str = "auto") -> dict:
+    """Read a word list into {word: priority}.
+
+    Accepts jieba dict.txt ("word count pos"), BCC/SUBTLEX exports ("word<TAB>count"), and
+    graded lists such as HSK or TOCFL CSVs where the order of the rows IS the ranking. The word
+    is the first Han field of each row; a count is the first number after it. kind=auto ranks by
+    count when most rows carry one, else by row order; count/rank force either.
+    """
+    rows = []
+    graded = False  # a level band (7-9) seen: the numbers in this file are levels, not counts
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip().lstrip("\ufeff")
+            if not line or line.startswith("#"):
+                continue
+            fields = [x.strip().strip('"') for x in re.split(r"[\t,]|\s+", line) if x.strip()]
+            wordAt = next((i for i, x in enumerate(fields) if _HAN_RE.search(x)), None)
+            if wordAt is None:
+                continue
+            count = None
+            for x in fields[wordAt + 1:]:
+                if re.fullmatch(r"[1-9]-[1-9]", x):
+                    graded = True  # HSK's 7-9 band: this column is a level, not a count
+                    break
+                try:
+                    count = float(x)  # a plain small number may still be a count (jieba: 說 3)
+                    break
+                except ValueError:
+                    continue
+            # 你/妳, 爸爸|爸: every variant in the cell is the same word.
+            for word in _split_variants(fields[wordAt]):
+                rows.append((word, count))
+    if not rows:
+        print(f"WARNING: no words found in frequency list {path}", file=sys.stderr)
+        return {}
+    with_count = sum(1 for _, c in rows if c is not None)
+    # A graded list's level column is numeric too (HSK 1-9, TOCFL 1-7), but it is not a count:
+    # auto treats small numbers as levels and keeps the file's own order.
+    largest = max((c for _, c in rows if c is not None), default=0.0)
+    use_count = kind == "count" or (kind == "auto" and not graded and with_count >= 0.8 * len(rows) and largest > 100)
+    if use_count:
+        rows.sort(key=lambda r: -(r[1] or 0.0))
+    priorities = {}
+    for rank, (word, _) in enumerate(rows, start=1):
+        p = rank_to_priority(rank)
+        if p > priorities.get(word, 0):
+            priorities[word] = p
+    print(f"Frequency list {path}: {len(priorities):,} words, ranked by {'count' if use_count else 'row order'}")
+    return priorities
+
+
+def apply_frequency(records: list, priorities: dict, twins: dict = None) -> list:
+    """Replace each record's priority with its frequency rank, taken from either script's form of
+    the word (twins, from CC-CEDICT): the lists are written in one script, and the device segments
+    a traditional book with the traditional records."""
+    if not priorities:
+        return records
+    twins = twins or {}
+    out = []
+    for hw, d, _, pos in records:
+        word = hw.decode("utf-8")
+        # The larger of the two forms' ranks: jieba's list is simplified but carries a few stray
+        # traditional characters with tiny counts (說 3, 這 7), which must not outrank 说 and 这.
+        p = max(priorities.get(word, 0), priorities.get(twins.get(word, ""), 0)) or UNRANKED_PRIORITY
+        out.append((hw, d, p, pos))
+    return out
+
+
+# ── CC - CEDICT(.u8 / .txt) ────────────────────────────────────
+
+# CC-CEDICT, and CC-Canto's extension of it with a {jyutping} field after the pinyin.
+_CEDICT_LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[([^\]]*)\](?:\s+\{([^}]*)\})?\s+/(.*)/\s*$")
+# cccedict-canto-readings: "繁 简 [pin1 yin1] {jyut6 ping3}" with no glosses.
+_CANTO_READING_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[([^\]]*)\]\s+\{([^}]*)\}")
+
+
+def format_definition_cedict(trad: str, simp: str, pinyin: str, glosses: list, zhuyin: bool,
+                             jyutping: str = "", level: str = "", examples: list = None) -> str:
+    reading = pinyin_to_marks(pinyin)
+    if zhuyin:
+        reading += " " + pinyin_to_zhuyin(pinyin)
+    if jyutping:
+        reading += " · " + jyutping
+    # The device's entry renderer speaks Jitendex's layout: "• gloss" bullets, one sense per
+    # blank-line-separated group, "→ note" lines, and any other line an example sentence. An
+    # entry without bullets is taken for a names dictionary and gets every line numbered.
+    parts = ["【" + reading + "】"]
+    if level:
+        parts.append(f"[{level}]")  # a tag line: the device shows it on the entry's grammar line
+    if trad != simp:
+        parts.append(f"→ {trad} / {simp}")
+    glosses = [prettify_cedict_gloss(g) for g in glosses if g][:12]
+    parts.extend(f"• {g}\n" for g in glosses)
+    # Example sentences, each with its translation on the next line.
+    for sentence, translation in (examples or []):
+        parts.append(sentence)
+        if translation:
+            parts.append(translation)
+    return "\n".join(parts)
+
+
+# ── Example sentences(Tatoeba) ─────────────────────────────────
+
+EXAMPLES_PER_ENTRY = 2
+EXAMPLE_MAX_CHARS = 40
+
+# The commonest characters that exist in only one script, in matching pairs (mirrors the
+# firmware's content sniff). Tatoeba mixes both; a simplified pack should show simplified
+# sentences, and the other way round.
+_SIMPLIFIED_ONLY = set("这说们个么时国来对会发为还没过样开学现后点见问东门车书长几应两认让经关实话听从头尔业爱图电机体试写读马鸟龙叶万与")
+_TRADITIONAL_ONLY = set("這說們個麼時國來對會發為還沒過樣開學現後點見問東門車書長幾應兩認讓經關實話聽從頭爾業愛圖電機體試寫讀馬鳥龍葉萬與")
+
+
+def sentence_script(sentence: str) -> str:
+    """'simplified', 'traditional', or 'any' when nothing in the sentence tells them apart."""
+    simp = sum(1 for ch in sentence if ch in _SIMPLIFIED_ONLY)
+    trad = sum(1 for ch in sentence if ch in _TRADITIONAL_ONLY)
+    if simp > trad:
+        return "simplified"
+    if trad > simp:
+        return "traditional"
+    return "any"
+
+
+_UNRENDERABLE_EXAMPLE_RE = re.compile(r"Tatoeba|JMdict|JMnedict|【|^\d+\. ")
+
+
+def load_sentence_pairs(path: str, script: str = "any") -> list:
+    """Tatoeba 'sentence pairs' export (id, sentence, id, translation) or a plain two-column
+    sentence<TAB>translation file. Returns [(sentence, translation)] with long sentences dropped:
+    a short example shows the word in use; a long one only costs space on the card. script keeps
+    only sentences written in that script (or in neither distinguishably)."""
+    pairs = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) >= 4:
+                sentence, translation = fields[1].strip(), fields[3].strip()
+            elif len(fields) >= 2:
+                sentence, translation = fields[0].strip(), fields[1].strip()
+            else:
+                continue
+            if not sentence or len(sentence) > EXAMPLE_MAX_CHARS or not _HAN_RE.search(sentence):
+                continue
+            if script != "any" and sentence_script(sentence) not in ("any", script):
+                continue
+            # The device's entry renderer treats a line that mentions a source, holds a 【, or
+            # starts like "3. " as chrome or a sense number, so such a pair would come out mangled.
+            if any(_UNRENDERABLE_EXAMPLE_RE.search(t) for t in (sentence, translation)):
+                continue
+            pairs.append((sentence, translation))
+    pairs.sort(key=lambda p: len(p[0]))  # shortest first, so the cap keeps the clearest ones
+    print(f"Sentence pairs {path}: {len(pairs):,} usable")
+    return pairs
+
+
+def attach_examples(pairs: list, forms: dict, entry_count: int) -> list:
+    """Segment every sentence against the dictionary's headwords (longest match, like the device
+    does) and hand it to the entries of the words it contains, up to EXAMPLES_PER_ENTRY each.
+    forms maps each headword form to its entry index. Single-character words get none: the
+    particles would collect thousands and no reader needs an example of 的."""
+    examples = [[] for _ in range(entry_count)]
+    if not pairs or not forms:
+        return examples
+    max_len = max(len(w) for w in forms)
+    for sentence, translation in pairs:
+        i = 0
+        n = len(sentence)
+        seen = set()
+        while i < n:
+            matched = 0
+            for length in range(min(max_len, n - i), 1, -1):
+                idx = forms.get(sentence[i:i + length])
+                if idx is not None:
+                    matched = length
+                    if idx not in seen and len(examples[idx]) < EXAMPLES_PER_ENTRY:
+                        examples[idx].append((sentence, translation))
+                        seen.add(idx)
+                    break
+            i += matched or 1
+    print(f"Examples attached to {sum(1 for e in examples if e):,} entries")
+    return examples
+
+
+# Capitalised in CC-CEDICT but everyday vocabulary, not names: languages, nationalities, days,
+# festivals, religions and institutions a learner meets in any text.
+_COMMON_NOUN_GLOSS_RE = re.compile(
+    r"\b(language|people|person|ethnic|nationality|citizen|day|\w+day|week|month|festival|holiday|new year|"
+    r"religion|church|bible|god|party|army|navy|games|cup|era|calendar|zodiac|internet|christianity|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"american|british|chinese|japanese|korean|english|french|german|russian|spanish|italian|indian|"
+    r"asian|european|african|western)\b|ism\b|ist\b",
+    re.IGNORECASE)
+
+
+def is_proper_noun_pinyin(pinyin: str, glosses: list = None) -> bool:
+    """CC-CEDICT capitalises the pinyin of proper nouns (Zhong1 guo2, Bei3 jing1). Entries whose
+    glosses read like common nouns (汉语, 中国人, 星期天, 春节) stay in the vocabulary."""
+    syllables = [p for p in pinyin.split(" ") if p and p[0].isalpha()]
+    if not syllables or not syllables[0][0].isupper():
+        return False
+    # "People's Republic of China" in a place's gloss is not the common noun "people".
+    first = re.sub(r"people['\u2019]s", "", (glosses or [""])[0], flags=re.IGNORECASE)
+    return not _COMMON_NOUN_GLOSS_RE.search(first)
+
+
+def load_canto_readings(path: str) -> dict:
+    """{(trad, simp, pinyin): jyutping} from a cccedict-canto-readings file."""
+    out = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not line or line.startswith("#"):
+                continue
+            m = _CANTO_READING_RE.match(line.rstrip("\n"))
+            if m:
+                out[(m.group(1), m.group(2), m.group(3))] = m.group(4).strip()
+    print(f"Jyutping readings {path}: {len(out):,} entries")
+    return out
+
+
+def split_cedict_glosses(body: str) -> list:
+    """Split an entry's "/gloss/gloss/" body into glosses. A slash inside parentheses belongs to
+    the gloss: CC-Canto writes "(phrase / adverb / noun) no, not." as one."""
+    glosses = []
+    depth = 0
+    current = []
+    for ch in body:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth > 0:
+            depth -= 1
+        if ch == "/" and depth == 0:
+            glosses.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    glosses.append("".join(current).strip())
+    return glosses
+
+
+def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, levels: dict = None,
+                   jyutping: dict = None, sentence_pairs: list = None, twins: dict = None,
+                   examples_script: str = "any") -> tuple:
+    """Convert a raw CC-CEDICT (or CC-Canto) file to index records, one per traditional and
+    simplified form. Returns (vocab_records, name_records); the second list is empty unless
+    split_names routes proper nouns (capitalised pinyin) into the names slot. twins, when given,
+    is filled with each form's other-script form, so apply_frequency can rank a traditional
+    record from a simplified word list and the reverse."""
+    print(f"Loading {path}...")
+    levels = levels or {}
+    jyutping = jyutping or {}
+    parsed = []  # (trad, simp, pinyin, canto, glosses)
+    forms = {}
+    skipped = 0
+    opener = __import__("gzip").open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not line or line.startswith("#"):
+                continue
+            m = _CEDICT_LINE_RE.match(line.rstrip("\n"))
+            if not m:
+                skipped += 1
+                continue
+            trad, simp, pinyin, canto, body = m.groups()
+            idx = len(parsed)
+            parsed.append((trad, simp, pinyin, canto, split_cedict_glosses(body)))
+            # Examples go to the everyday entry of a form: 周 the week over the surname, and among
+            # lowercase readings the one with more senses (東西 "thing" over "east and west").
+            glosses = parsed[idx][4]
+            proper = is_proper_noun_pinyin(pinyin, glosses)
+            for form in (trad, simp):
+                held = forms.get(form)
+                if held is None:
+                    forms[form] = idx
+                    continue
+                heldProper = is_proper_noun_pinyin(parsed[held][2], parsed[held][4])
+                if not proper and (heldProper or len(glosses) > len(parsed[held][4])):
+                    forms[form] = idx
+            if twins is not None and trad != simp:
+                twins.setdefault(trad, simp)
+                twins.setdefault(simp, trad)
+    if sentence_pairs and examples_script in ("simplified", "traditional"):
+        # The characters CC-CEDICT itself uses in only one script decide a sentence's script far
+        # more reliably than the short list the firmware's book sniff uses: a 10-character
+        # sentence often holds none of those, and a fifth of Tatoeba is the other script.
+        tradChars = {ch for t, sm, *_ in parsed if t != sm for ch in t}
+        simpChars = {ch for t, sm, *_ in parsed if t != sm for ch in sm}
+        foreign = (tradChars - simpChars) if examples_script == "simplified" else (simpChars - tradChars)
+        before = len(sentence_pairs)
+        sentence_pairs = [pair for pair in sentence_pairs if not any(ch in foreign for ch in pair[0])]
+        print(f"Example sentences: {before - len(sentence_pairs):,} in the other script dropped, {len(sentence_pairs):,} kept")
+    examples = attach_examples(sentence_pairs or [], forms, len(parsed)) if sentence_pairs else None
+
+    records = []
+    names = []
+    for idx, (trad, simp, pinyin, canto, glosses) in enumerate(parsed):
+        level = levels.get(simp) or levels.get(trad) or ""
+        reading_canto = canto or jyutping.get((trad, simp, pinyin), "")
+        definition = format_definition_cedict(trad, simp, pinyin, glosses, zhuyin, reading_canto, level,
+                                              examples[idx] if examples else None)
+        def_bytes = definition.encode("utf-8")
+        target = names if split_names and is_proper_noun_pinyin(pinyin, glosses) else records
+        for hw in dict.fromkeys((trad, simp)):  # both forms, once each
+            hw_bytes = hw.encode("utf-8")
+            if len(hw_bytes) >= HEADWORD_SIZE:
+                skipped += 1
+                continue
+            target.append((hw_bytes, def_bytes, 100, POS_OTHER))
+    print(f"Processed {len(parsed)} CC-CEDICT entries ({skipped} skipped) → {len(records)} vocab records"
+          + (f", {len(names)} name records" if split_names else ""))
+    return records, names
+
+
+# ── Level lists(HSK, TOCFL, TBCL) ──────────────────────────────
+
+def load_levels(path: str, name: str) -> dict:
+    """{word: "HSK 3"} from a graded CSV/TSV: every Han field in a row is a form of the word,
+    and the level is the first field that is a small number or a band such as "7-9"."""
+    out = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip().lstrip("\ufeff")
+            if not line or line.startswith("#"):
+                continue
+            fields = [x.strip().strip('"') for x in re.split(r"[\t,]", line)]
+            words = [w for x in fields for w in _split_variants(x)]
+            if not words:
+                continue
+            # Columns before the word hold ids (a bare row number would read as a level).
+            firstWord = next(i for i, x in enumerate(fields) if _HAN_RE.search(x))
+            level = next((x for x in fields[firstWord + 1:] if _LEVEL_RE.fullmatch(x)), None)
+            if level is None:
+                # The ivankra CSVs carry the level in the row id: L3-0123 (HSK), L0-1001 (TOCFL, where
+                # L0 is the pre-A1 novice band).
+                m = re.match(r"L(\d)-\d+", fields[0]) if fields else None
+                if m:
+                    level = m.group(1)
+            if level is None:
+                continue
+            # TOCFL's band 0 is the pre-A1 "Novice" list; a zero would read like a mistake.
+            if level == "0":
+                level = "Novice"
+            for w in words:
+                out.setdefault(w, f"{name} {level}")
+    print(f"Level list {path}: {len(out):,} forms tagged {name}")
+    return out
+
+
+# ── Plain TSV(pattern <TAB> definition) ────────────────────────
+
+def convert_tsv(path: str) -> list:
+    """Headword<TAB>definition per line, for grammar patterns or name lists from any source. A
+    definition may use \\n for a line break; further tab-separated fields are appended as lines."""
+    print(f"Loading {path}...")
+    records = []
+    skipped = 0
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) < 2 or not fields[0].strip():
+                skipped += 1
+                continue
+            hw_bytes = fields[0].strip().encode("utf-8")
+            if len(hw_bytes) >= HEADWORD_SIZE:
+                skipped += 1
+                continue
+            definition = "\n".join(x.strip().replace("\\n", "\n") for x in fields[1:] if x.strip())
+            records.append((hw_bytes, definition.encode("utf-8"), 100, POS_OTHER))
+    print(f"Processed {len(records)} TSV entries ({skipped} skipped)")
+    return records
+
+
+# ── MoE 重編國語辭典(g0v moedict JSON) ─────────────────────────
+
+# {[8e4f]} text references and raw Plane-15 private-use codepoints: glyphs no font carries.
+_MOE_GLYPH_REF_RE = re.compile(r"\{\[[0-9a-fA-F]+\]\}|[\U000F0000-\U000FFFFD]")
+
+
+def _moe_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return " ".join(_moe_text(v) for v in value)
+    text = strip_html(str(value))
+    return _MOE_GLYPH_REF_RE.sub("□", text).strip()
+
+
+def format_definitions_moedict(entry: dict) -> list:
+    """One definition text per heteronym (reading): the device shows one 【reading】 per record, so
+    好 hǎo and 好 hào become two records rather than one whose second reading would vanish."""
+    out = []
+    for heteronym in entry.get("heteronyms", [])[:3]:
+        parts = []
+        # Pinyin first, then zhuyin: the order a CC-CEDICT entry built with --zhuyin uses.
+        reading = " ".join(x for x in (_moe_text(heteronym.get("pinyin")), _moe_text(heteronym.get("bopomofo"))) if x)
+        if reading:
+            parts.append("【" + reading + "】")
+        definitions = heteronym.get("definitions", [])[:6]
+        for d in definitions:
+            # One bullet per sense (the device numbers them), the part of speech inside it.
+            line = "• "
+            kind = _moe_text(d.get("type"))
+            if kind:
+                line += f"[{kind}] "
+            line += _moe_text(d.get("def")) + "\n"
+            parts.append(line)
+            # One modern example per sense; the classical quotations are left out, they are what
+            # makes the full dictionary 50 MB and a learner rarely reads them on a 6-inch screen.
+            for example in (d.get("example") or [])[:1]:
+                parts.append(_moe_text(example))
+        text = "\n".join(p for p in parts if p.strip())
+        if "•" in text:
+            out.append(text)
+    return out
+
+
+def convert_moedict(path: str) -> list:
+    """Convert the g0v dict-revised.json (MoE 重編國語辭典修訂本) to index records."""
+    print(f"Loading {path}...")
+    if path.endswith(".xz"):
+        import lzma
+        with lzma.open(path, "rt", encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    records = []
+    skipped = 0
+    for entry in data:
+        title = _moe_text(entry.get("title", ""))
+        # Only headwords the page scan can match: a run of hanzi. Phrases with punctuation
+        # (一不做，二不休) and missing glyphs are skipped.
+        if not title or not all(_HAN_RE.match(ch) or ch == "〇" for ch in title):
+            skipped += 1
+            continue
+        definitions = format_definitions_moedict(entry)
+        hw_bytes = title.encode("utf-8")
+        if not definitions or len(hw_bytes) >= HEADWORD_SIZE:
+            skipped += 1
+            continue
+        # Below CC-CEDICT's default so a merged file shows the bilingual entry first.
+        for definition in definitions:
+            records.append((hw_bytes, definition.encode("utf-8"), 90, POS_OTHER))
+    print(f"Processed {len(records)} MoE entries ({skipped} skipped)")
+    return records
+
+def keep_names_together(records: list, name_records: list, bilingual_headwords: set) -> tuple:
+    """With --split-names, CC-CEDICT's 中國 "China" goes to the names slot while the monolingual
+    entry for 中國 from a second dictionary stays in the vocabulary -- and the device asks the
+    vocabulary first, so the reader would get the Chinese definition and never the English one.
+    A headword that CC-CEDICT holds only as a name takes its other entries along to the names
+    slot. bilingual_headwords: every headword CC-CEDICT left in the vocabulary."""
+    name_headwords = {r[0] for r in name_records}
+    kept = []
+    moved = list(name_records)
+    for record in records:
+        if record[0] in name_headwords and record[0] not in bilingual_headwords:
+            moved.append(record)
+        else:
+            kept.append(record)
+    return kept, moved
+
 
 # ── Format detection & main ─────────────────────────────────────
 
 
-def detect_format(path: str) -> str:
-    """Detect input format from file extension."""
-    lower = path.lower()
+def detect_format(path: str, lang: str = "ja") -> str:
+    """Detect input format from file extension (and, for Chinese, the file name)."""
+    lower = os.path.basename(path.lower())
     if lower.endswith(".mdx"):
         return "mdict"
     if lower.endswith(".zip"):
         return "yomitan"
+    if lower.endswith(".u8") or lower.endswith(".u8.gz") or "cedict" in lower or "canto" in lower:
+        return "cedict"
+    if lower.endswith(".tsv"):
+        return "tsv"
+    if lang in ("zh", "yue") and (lower.endswith(".json") or lower.endswith(".json.xz")):
+        return "moedict"
     if lower.endswith(".json") or lower.endswith(".json.tgz") or lower.endswith(".tgz"):
         return "jmdict"
+    if lang in ("zh", "yue"):
+        return "cedict"
     return "jmdict"
+
+
+# Latin only: the panel footer is set in the 8 pt UI font, and the CJK cuts start at 12 pt, so a
+# title with hanzi in it is drawn half as large again as every other footer.
+DEFAULT_TITLES = {"cedict": "CC-CEDICT", "moedict": "MoE", "jmdict": "", "tsv": ""}
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Convert dictionary files to CrossPoint binary index.\n\n"
-        "Supported formats: JMdict JSON, Yomitan .zip, MDict .mdx",
+        "Supported formats: JMdict JSON, Yomitan .zip, MDict .mdx, CC-CEDICT text, MoE (g0v) JSON",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--input",
-        help="Path to input dictionary file. Format auto-detected from extension: "
-        ".json/.tgz → JMdict, .zip → Yomitan, .mdx → MDict. "
-        "If omitted, downloads jmdict-simplified.",
+        action="append",
+        help="Path to an input dictionary file. Format auto-detected from extension: "
+        ".json/.tgz → JMdict, .zip → Yomitan, .mdx → MDict, .u8/.txt → CC-CEDICT, "
+        ".json(.xz) with --lang zh → MoE. Repeat to merge several dictionaries into one file; "
+        "a word in both shows both entries. If omitted, downloads jmdict-simplified.",
     )
     parser.add_argument("--output-dir", default="output", help="Output directory (default: output)")
+    parser.add_argument(
+        "--lang",
+        default="ja",
+        choices=["ja", "zh", "yue"],
+        help="Language of the dictionary: ja (default), zh, or yue for a Cantonese set (CC-Canto "
+        "merged with CC-CEDICT, installed under /dictionaries/yue/). Chinese and Cantonese skip the "
+        "reading records (pinyin never appears in page text) and name the dictionary for the footer.",
+    )
     parser.add_argument(
         "--name",
         default="vocab",
@@ -614,22 +1282,74 @@ def main():
     )
     parser.add_argument(
         "--format",
-        choices=["jmdict", "yomitan", "mdict"],
-        help="Force input format (overrides auto-detection)",
+        choices=["jmdict", "yomitan", "mdict", "cedict", "moedict", "tsv"],
+        help="Force input format for every --input (overrides auto-detection). tsv is "
+        "headword<TAB>definition per line, for grammar patterns or name lists from any source.",
+    )
+    parser.add_argument(
+        "--title",
+        help="Dictionary name shown in the lookup panel footer (written to <name>.title). "
+        "Defaults to the Yomitan title, CC-CEDICT, or MoE for Chinese inputs.",
+    )
+    parser.add_argument(
+        "--zhuyin",
+        action="store_true",
+        help="CC-CEDICT: show zhuyin (bopomofo) beside the pinyin, for Taiwanese Mandarin.",
+    )
+    parser.add_argument(
+        "--frequency",
+        help="Word list that ranks the entries (jieba dict.txt, a BCC/SUBTLEX export, or a graded "
+        "HSK/TOCFL CSV). Common words get a higher priority, which orders the entries shown "
+        "for a word found in several dictionaries.",
+    )
+    parser.add_argument(
+        "--split-names",
+        action="store_true",
+        help="CC-CEDICT: write proper nouns (capitalised pinyin: places, people, dynasties, but "
+        "also languages and nationalities) to names.idx/names.dat beside the vocabulary files, "
+        "so they show as Name entries like JMnedict's.",
+    )
+    parser.add_argument(
+        "--levels",
+        help="Graded word list (HSK 3.0 or TOCFL CSV): CC-CEDICT entries on it get a level tag "
+        "such as [HSK 3] on the entry's grammar line.",
+    )
+    parser.add_argument(
+        "--level-name",
+        default="HSK",
+        help="Label for --levels tags (default HSK; use TOCFL or TBCL for the Taiwanese lists).",
+    )
+    parser.add_argument(
+        "--jyutping",
+        help="cccedict-canto-readings file: adds the Cantonese reading after the pinyin of every "
+        "CC-CEDICT entry it covers (CC-Canto's own .u8 as --input carries jyutping already).",
+    )
+    parser.add_argument(
+        "--examples",
+        help="Tatoeba sentence pairs export (Chinese to English) or a sentence<TAB>translation "
+        "file: each CC-CEDICT entry of two or more characters gets up to two short example "
+        "sentences, shown under its glosses.",
+    )
+    parser.add_argument(
+        "--examples-script",
+        default="any",
+        choices=["any", "simplified", "traditional"],
+        help="Keep only example sentences written in this script (Tatoeba mixes both).",
+    )
+    parser.add_argument(
+        "--frequency-kind",
+        default="auto",
+        choices=["auto", "count", "rank"],
+        help="How to read --frequency: by the count column, by row order, or auto (default).",
     )
     args = parser.parse_args()
 
-    if args.input:
-        fmt = args.format or detect_format(args.input)
-        print(f"Detected format: {fmt}")
-
-        if fmt == "mdict":
-            convert_mdict(args.input, args.output_dir, args.name)
-        elif fmt == "yomitan":
-            convert_yomitan(args.input, args.output_dir, args.name)
-        else:
-            convert_jmdict(args.input, args.output_dir, args.name)
-    else:
+    chinese = args.lang in ("zh", "yue")
+    if not args.input:
+        if chinese:
+            print("Error: --lang zh needs --input (a CC-CEDICT file, MoE JSON, Yomitan zip or .mdx).",
+                  file=sys.stderr)
+            sys.exit(1)
         if args.name != "vocab":
             print(
                 f"Error: --name {args.name} without --input would write the auto-downloaded "
@@ -639,8 +1359,64 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        json_path = download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))
-        convert_jmdict(json_path, args.output_dir, args.name)
+        args.input = [download_jmdict(os.path.join(args.output_dir, "jmdict-eng"))]
+
+    levels = load_levels(args.levels, args.level_name) if args.levels else {}
+    jyutping = load_canto_readings(args.jyutping) if args.jyutping else {}
+    sentence_pairs = load_sentence_pairs(args.examples, args.examples_script) if args.examples else None
+    records = []
+    name_records = []
+    twins = {}  # trad <-> simp forms from CC-CEDICT, for apply_frequency
+    bilingual_headwords = set()  # what CC-CEDICT left in the vocabulary; see keep_names_together
+    titles = []
+    for path in args.input:
+        fmt = args.format or detect_format(path, args.lang)
+        print(f"{path}: format {fmt}")
+        title = DEFAULT_TITLES.get(fmt, "")
+        if fmt == "mdict":
+            part = convert_mdict(path)
+            title = os.path.splitext(os.path.basename(path))[0]
+        elif fmt == "yomitan":
+            part, title = convert_yomitan(path, reading_records=not chinese)
+        elif fmt == "cedict":
+            part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
+                                         jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins,
+                                         examples_script=args.examples_script)
+            name_records.extend(names)
+            bilingual_headwords.update(r[0] for r in part)
+            if "canto" in os.path.basename(path).lower():
+                title = "CC-Canto"
+        elif fmt == "moedict":
+            part = convert_moedict(path)
+        elif fmt == "tsv":
+            part = convert_tsv(path)
+            title = os.path.splitext(os.path.basename(path))[0]
+        else:
+            part = convert_jmdict(path)
+        records.extend(part)
+        if title:
+            titles.append(title)
+
+    if name_records:
+        records, name_records = keep_names_together(records, name_records, bilingual_headwords)
+
+    if args.frequency:
+        priorities = load_frequency(args.frequency, args.frequency_kind)
+        records = apply_frequency(records, priorities, twins)
+        name_records = apply_frequency(name_records, priorities, twins)
+
+    title = args.title or ""
+    if not title and chinese and titles:
+        joined = " + ".join(dict.fromkeys(titles))
+        title = joined if len(joined.encode("utf-8")) <= 36 else titles[0]
+    write_binary(records, args.output_dir, args.name, title)
+    if name_records:
+        if args.name != "vocab":
+            print("Note: --split-names only applies when writing the vocab slot; names kept in the output.")
+        else:
+            write_binary(name_records, args.output_dir, "names", "CC-CEDICT names")  # only convert_cedict splits names
+    if chinese:
+        print(f"Install under /dictionaries/{args.lang}/ on the SD card (or /.dictionaries/{args.lang}/).")
 
 
 if __name__ == "__main__":

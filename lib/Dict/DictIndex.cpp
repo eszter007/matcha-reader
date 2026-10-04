@@ -180,47 +180,89 @@ const char* datFor(const char* idxPath, std::string& cache) {
   return cache.c_str();
 }
 
-// The folder the Japanese dictionary lives in. Two spellings are accepted, the same way the font
+// The language folder the converted dictionary lives in: "jp" (the default, and the only one
+// with legacy locations) or "zh". Selected per book by DictIndex::setLanguageFolder().
+char g_languageFolder[8] = "jp";
+
+bool isJapaneseFolder() { return std::strcmp(g_languageFolder, "jp") == 0; }
+
+// The folder the dictionary lives in. Two spellings are accepted, the same way the font
 // registry accepts /.fonts beside /fonts: the dotted one keeps the folder out of the file browser
 // (hidden by default) and is preferred when both exist. Resolved once and cleared by
 // releaseCaches(), so a dictionary uploaded mid-session into the other root is picked up next
 // session rather than never.
-std::string g_jpRootResolved;
+std::string g_rootResolved;
 
-const char* jpRoot() {
-  if (g_jpRootResolved.empty()) {
-    g_jpRootResolved = Storage.exists("/.dictionaries/jp") ? "/.dictionaries/jp" : "/dictionaries/jp";
+const char* dictRoot() {
+  if (g_rootResolved.empty()) {
+    const std::string hidden = std::string("/.dictionaries/") + g_languageFolder;
+    g_rootResolved = Storage.exists(hidden.c_str()) ? hidden : std::string("/dictionaries/") + g_languageFolder;
   }
-  return g_jpRootResolved.c_str();
+  return g_rootResolved.c_str();
 }
 
 // A DictIndex path constant rewritten under the resolved root. The constants stay full paths
 // because a host-side tool reads them directly; only the folder half is substituted here.
-std::string underJpRoot(const char* path) {
+std::string underRoot(const char* path) {
   const char* leaf = strrchr(path, '/');
-  return std::string(jpRoot()) + (leaf ? leaf : "/");
+  return std::string(dictRoot()) + (leaf ? leaf : "/");
 }
+
+// Display names from the optional <root>/<slot>.title files the converter writes. Empty when
+// absent. Probed once per lookup session (releaseCaches() clears them). Index: 0 vocab, 1 grammar,
+// 2 names (the DICT_* bit position).
+char g_slotTitle[3][40] = {"", "", ""};
+bool g_slotTitleProbed[3] = {false, false, false};
 
 // Storage.exists() on the path as it will actually be opened -- under the resolved root.
 bool existsUnderRoot(const char* path, std::string& out) {
-  out = underJpRoot(path);
+  out = underRoot(path);
   return Storage.exists(out.c_str());
+}
+
+// Interned copy of a resolved path, so the pointer handed out stays valid for the process
+// lifetime. De-duplicated: books alternate between language folders, and each switch re-resolves.
+// A fixed table, not a vector: growing one allocates, and with -fno-exceptions a failed growth
+// aborts instead of returning. The set is bounded -- three slots of index, data and sparse-index
+// paths for each language folder, in the plain and the hidden root.
+const char* internPath(std::string&& v) {
+  static constexpr size_t MAX_INTERNED = 64;
+  static std::unique_ptr<std::string> interned[MAX_INTERNED];
+  static size_t internedCount = 0;
+  for (size_t i = 0; i < internedCount; i++) {
+    if (*interned[i] == v) return interned[i]->c_str();
+  }
+  if (internedCount == MAX_INTERNED) {
+    LOG_ERR("DICT", "Path table full; %s not interned", v.c_str());
+    return nullptr;
+  }
+  auto held = std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v)));
+  if (!held) {
+    LOG_ERR("DICT", "OOM: dictionary path");
+    return nullptr;
+  }
+  interned[internedCount] = std::move(held);
+  return interned[internedCount++]->c_str();
 }
 
 const char* resolveIdxPath(const char*& cache, const char* preferred, const char* jpLegacy, const char* old,
                            const char* legacy) {
   if (cache) return cache;
-  // Probed under the resolved root; the winner is interned so the returned pointer stays valid.
-  static std::vector<std::unique_ptr<std::string>> interned;
   std::string candidate;
-  const auto intern = [](std::string&& v) -> const char* {
-    interned.push_back(std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v))));
-    return interned.back() ? interned.back()->c_str() : nullptr;
-  };
+  // Only the Japanese folder has legacy filenames and the pre-folder /dict locations; any other
+  // language resolves under its own root alone, or it would silently fall back to the Japanese
+  // files through the plain paths below.
+  if (!isJapaneseFolder()) {
+    existsUnderRoot(preferred, candidate);
+    cache = internPath(std::move(candidate));
+    if (!cache) cache = preferred;  // OOM: a stable pointer matters more than the right folder
+    return cache;
+  }
+  // Probed under the resolved root; the winner is interned so the returned pointer stays valid.
   for (const char* p : {preferred, jpLegacy, old, legacy}) {
     if (!p) continue;
     if (existsUnderRoot(p, candidate)) {
-      if (const char* held = intern(std::move(candidate))) {
+      if (const char* held = internPath(std::move(candidate))) {
         if (p == legacy) LOG_INF("DICT", "Using legacy dictionary filename: %s", held);
         cache = held;
         return cache;
@@ -497,6 +539,52 @@ const char* DictIndex::grammarIdxPath() {
 const char* DictIndex::grammarDatPath() { return datFor(grammarIdxPath(), g_grammarDat); }
 
 bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
+
+void DictIndex::setLanguageFolder(const char* folder) {
+  if (!folder || folder[0] == '\0') folder = "jp";
+  if (std::strcmp(g_languageFolder, folder) == 0) return;
+  // Everything cached below is per folder: handles, resolved paths, the miss memo.
+  releaseCaches();
+  std::strncpy(g_languageFolder, folder, sizeof(g_languageFolder) - 1);
+  g_languageFolder[sizeof(g_languageFolder) - 1] = '\0';
+  LOG_DBG("DICT", "Dictionary folder: %s", g_languageFolder);
+}
+
+const char* DictIndex::languageFolder() { return g_languageFolder; }
+
+const char* DictIndex::slotTitle(const uint8_t dict) {
+  const int slot = dict == DICT_GRAMMAR ? 1 : dict == DICT_NAMES ? 2 : 0;
+  char* title = g_slotTitle[slot];
+  if (g_slotTitleProbed[slot]) return title;
+  g_slotTitleProbed[slot] = true;
+  title[0] = '\0';
+  static constexpr const char* kLeaf[3] = {"/vocab.title", "/grammar.title", "/names.title"};
+  const std::string path = std::string(dictRoot()) + kLeaf[slot];
+  HalFile f;
+  if (!Storage.openFileForRead("DICT", path.c_str(), f)) return title;
+  constexpr size_t kCap = sizeof(g_slotTitle[0]);
+  const int n = f.read(reinterpret_cast<uint8_t*>(title), kCap - 1);
+  if (n <= 0) return title;
+  title[n] = '\0';
+  // First line only.
+  for (int i = 0; i < n; i++) {
+    if (title[i] == '\r' || title[i] == '\n') {
+      title[i] = '\0';
+      break;
+    }
+  }
+  // Drop a trailing UTF-8 sequence the fixed-size read cut short.
+  const int len = static_cast<int>(std::strlen(title));
+  int start = len;
+  while (start > 0 && (static_cast<unsigned char>(title[start - 1]) & 0xC0) == 0x80) start--;
+  if (start > 0) {
+    start--;
+    const auto lead = static_cast<unsigned char>(title[start]);
+    const int need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (len - start < need) title[start] = '\0';
+  }
+  return title;
+}
 
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
                              bool needDefinition, uint8_t posMask) {
@@ -839,7 +927,8 @@ bool DictIndex::consumeHeapLimited() {
 }
 
 void DictIndex::releaseCaches() {
-  g_jpRootResolved.clear();  // re-probe /.dictionaries vs /dictionaries next session
+  g_rootResolved.clear();  // re-probe /.dictionaries vs /dictionaries next session
+  for (bool& probed : g_slotTitleProbed) probed = false;
   g_missMemo.reset();
   g_vocabHandles.release();
   g_grammarHandles.release();

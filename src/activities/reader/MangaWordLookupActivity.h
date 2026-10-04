@@ -89,6 +89,7 @@ class MangaWordLookupActivity final : public Activity {
   // Which dictionary the shown entry came from, for the panel footer. Literals, not tr()
   // strings: these are the dictionaries' own names. Null until a lookup lands.
   const char* resultSource = nullptr;
+  uint8_t resultDict = 0;  // DictIndex::DICT_* slot the entry came from (0 = none)
   std::string resultDictionaryLabel;
   const char* dictionaryLabel() const {
     return resultDictionaryLabel.empty() ? resultSource : resultDictionaryLabel.c_str();

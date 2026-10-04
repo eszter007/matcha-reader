@@ -16,6 +16,7 @@
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
@@ -190,6 +191,9 @@ void FileBrowserActivity::loadFiles() {
   std::move(folders.begin(), folders.end(), std::back_inserter(files));
   std::move(recentFiles.begin(), recentFiles.end(), std::back_inserter(files));
   std::move(otherFiles.begin(), otherFiles.end(), std::back_inserter(files));
+  // A listed name with a character the built-in CJK subset lacks (a Chinese title) wants the SD
+  // companion for the UI, as Home does; a Latin folder pays nothing.
+  sdFontSystem.setUiCjkNeededForTitles(renderer, files, [](const std::string& name) { return name.c_str(); });
 }
 
 // fui::ListProps::rowProvider — formats row `index` from files[index] into the

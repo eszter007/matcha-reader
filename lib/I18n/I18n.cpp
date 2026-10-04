@@ -154,6 +154,10 @@ const char* I18n::languageNameForCode(const char* code) {
   for (uint8_t i = 0; i < getLanguageCount(); i++) {
     if (strcmp(upper, LANGUAGE_CODES[i]) == 0) return LANGUAGE_NAMES[i];
   }
+  // Book languages whose UI goes by script, not tag: stats bucket Chinese by its primary subtag,
+  // so simplified and traditional share one endonym. Both names draw with the built-in CJK font.
+  if (strcmp(upper, "ZH") == 0) return "\u4e2d\u6587";  // 中文
+  if (strcmp(upper, "YUE") == 0) return "廣東話";
   return nullptr;
 }
 

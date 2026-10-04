@@ -5,10 +5,12 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <SdCardFont.h>
 #include <TtfEpdFont.h>
+#include <Utf8.h>
 #include <esp_heap_caps.h>
 
 #include <algorithm>
@@ -96,6 +98,10 @@ constexpr UiFontSize kUiFontSizes[] = {
     {UI_10_FONT_ID, 10},
     {UI_12_FONT_ID, 12},
 };
+// The size a companion is loaded at when only the UI needs it: the largest UI size, and the
+// smallest the CJK cuts ship.
+constexpr uint8_t UI_FALLBACK_POINT_SIZE = 12;
+static_assert(std::size(kUiFontSizes) == 3, "SdCardFontSystem::lookupUiPrevious_ holds one entry per UI font");
 
 }  // namespace
 
@@ -116,7 +122,7 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   // written by an older build is migrated, and a coverage variant stands in, at boot too.
   ensureSelectedLoaded(renderer);
 
-  ensureJpFallback(renderer, SETTINGS.fontPointSize);
+  ensureCjkFallback(renderer, SETTINGS.fontPointSize);
   updateGlobalFallback(renderer);
 
   LOG_DBG("SDFS", "SD font system ready (%d families discovered)", registry_.getFamilyCount());
@@ -124,7 +130,7 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
 
 void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
   ensureSelectedLoaded(renderer);
-  ensureJpFallback(renderer, SETTINGS.fontPointSize);
+  ensureCjkFallback(renderer, SETTINGS.fontPointSize);
   updateGlobalFallback(renderer);
 }
 
@@ -139,16 +145,16 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
     registry_.discover();
   }
 
-  // A JP extension family must never be the SELECTED reader font: it is the
-  // Japanese half of a built-in Noto entry and is hidden from both pickers, so a
+  // A CJK extension family must never be the SELECTED reader font: it is the
+  // CJK half of a built-in Noto entry and is hidden from both pickers, so a
   // selection carried over from an older build would be stuck and would render
-  // Latin books in the JP face. Revert it to the matching built-in and let
-  // ensureJpFallback() bring the extension back as the companion where needed.
-  if (SETTINGS.sdFontFamilyName[0] != '\0' && isBuiltinJpExtension(SETTINGS.sdFontFamilyName)) {
-    SETTINGS.fontFamily = normalizedFamilyKey(SETTINGS.sdFontFamilyName) == "notoserifjp"
+  // Latin books in the CJK face. Revert it to the matching built-in and let
+  // ensureCjkFallback() bring the extension back as the companion where needed.
+  if (SETTINGS.sdFontFamilyName[0] != '\0' && isBuiltinCjkExtension(SETTINGS.sdFontFamilyName)) {
+    SETTINGS.fontFamily = normalizedFamilyKey(SETTINGS.sdFontFamilyName).rfind("notoserif", 0) == 0
                               ? CrossPointSettings::NOTOSERIF
                               : CrossPointSettings::NOTOSANS;
-    LOG_INF("SDFS", "Reverting hidden JP extension selection '%s' to built-in", SETTINGS.sdFontFamilyName);
+    LOG_INF("SDFS", "Reverting hidden CJK extension selection '%s' to built-in", SETTINGS.sdFontFamilyName);
     SETTINGS.sdFontFamilyName[0] = '\0';
   }
 
@@ -230,7 +236,7 @@ void SdCardFontSystem::ensureSelectedLoaded(GfxRenderer& renderer) {
   // Free the JP fallback font BEFORE loading the newly selected family: two SD fonts' interval
   // and kern tables don't reliably coexist on this heap (UDDigiKyokasho's sparse-coverage
   // interval table is the known worst case), and a failed load silently clears the user's
-  // selection. ensureJpFallback() re-establishes the fallback afterwards if still needed.
+  // selection. ensureCjkFallback() re-establishes the fallback afterwards if still needed.
   if (!fallbackManager_.currentFamilyName().empty()) {
     fallbackManager_.unloadAll(renderer);
   }
@@ -302,8 +308,13 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
     return;
   }
 
+  registerUiSizes(manager_, *family, renderer);
+}
+
+void SdCardFontSystem::registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family,
+                                       GfxRenderer& renderer) {
   for (const auto& ui : kUiFontSizes) {
-    const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, ui.pointSize);
+    const int sdFontId = mgr.loadFamilyExtraSize(family, renderer, ui.pointSize);
     if (sdFontId != 0) {
       renderer.setFallbackFont(ui.fontId, sdFontId);
       // ...and give that SD font the built-in family of the SAME size as its own next stop.
@@ -318,50 +329,157 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
         renderer.setFamilyFallback(sdFontId, &builtinIt->second);
       }
     } else {
-      LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, familyName.c_str());
+      LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, family.name.c_str());
     }
   }
+}
+
+void SdCardFontSystem::lendCompanionToUiFonts(GfxRenderer& renderer, const int sdFontId, const uint8_t pointSize) {
+  // The companion is resident at ONE size -- the reader's in a book, 12 pt for the UI alone --
+  // and the CJK cuts ship nothing below 12 pt. Unmapped, an 8 or 10 pt UI font takes each
+  // glyph the built-in subset lacks from the global fallback at that size: a Chinese title, a
+  // menu row or a rare kanji in a chapter name draws half its characters larger than the rest.
+  // So every UI font is sent to the resident font, scaled to its own size: no second table in
+  // RAM, and one size across the string.
+  if (sdFontId == 0 || pointSize == 0) return;
+  for (const auto& ui : kUiFontSizes) {
+    const auto scale = static_cast<uint16_t>(ui.pointSize * 256u / pointSize);
+    renderer.setFallbackFont(ui.fontId, sdFontId, scale, scale);
+  }
+}
+
+void SdCardFontSystem::rememberLookupMapping(const int primaryFontId, const int sdFontId, const bool companion,
+                                             const bool loaded) {
+  const auto slot = std::find_if(std::begin(lookupExtras_), std::end(lookupExtras_), [primaryFontId](const auto& e) {
+    return e.primaryFontId == primaryFontId || e.primaryFontId == 0;
+  });
+  if (slot != std::end(lookupExtras_)) *slot = {primaryFontId, sdFontId, companion, loaded};
+}
+
+void SdCardFontSystem::lendUiFontsForLookup(GfxRenderer& renderer, const int sdFontId, const uint8_t pointSize,
+                                            const uint8_t latinPointSize) {
+  if (lookupUiLent_) return;
+  for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
+    const auto& ui = kUiFontSizes[i];
+    const auto previous = renderer.fallbackScaleFor(ui.fontId);
+    lookupUiPrevious_[i] = {renderer.fallbackFontFor(ui.fontId), previous.cjk, previous.nonCjk};
+    renderer.setFallbackFont(ui.fontId, sdFontId, static_cast<uint16_t>(ui.pointSize * 256u / pointSize),
+                             static_cast<uint16_t>(ui.pointSize * 256u / latinPointSize));
+  }
+  lookupUiLent_ = true;
+}
+
+void SdCardFontSystem::borrowFamilyFallbackForLookup(GfxRenderer& renderer, const int sdFontId,
+                                                     const EpdFontFamily* builtin) {
+  // The companion has Latin of its own, in another face and without italics. Keep the
+  // built-in's: a line sent here for one hanzi must not change typeface around it. The font is
+  // shared (the UI's 12 pt, the reader's own size), so what it pointed at before is put back
+  // when the session ends.
+  const auto sdIt = renderer.getFontMap().find(sdFontId);
+  for (auto& saved : lookupFallbackSaved_) {
+    if (saved.sdFontId == sdFontId) break;
+    if (saved.sdFontId != 0 || sdIt == renderer.getFontMap().end()) continue;
+    saved = {sdFontId, sdIt->second.getFallback(), sdIt->second.fallbackIsFirstForNonCjk()};
+    break;
+  }
+  renderer.setFamilyFallback(sdFontId, builtin, /*nonCjkFirst=*/true);
 }
 
 void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int primaryFontId,
                                                 const uint8_t pointSize) {
   // Tiny intentionally stays on the compact built-in path; avoid loading an SD font for it.
-  if (pointSize <= 8 || manager_.currentFamilyName().empty()) return;
-  const auto* family = registry_.findFamily(manager_.currentFamilyName());
+  if (pointSize <= 8) return;
+  // The selected family when it draws the book's script; otherwise the companion that was loaded
+  // because it does not. Without either, the panel takes the companion's reader-size glyphs
+  // through the global fallback, and an entry mixes two sizes wherever the built-in subset
+  // stops: every line of a Chinese entry, a rare kanji of a Japanese one.
+  const std::string& selected = manager_.currentFamilyName();
+  const bool selectedCovers = !selected.empty() && loadedFamilyCovers(manager_, selected, cjkProbe());
+  const bool useCompanion = !fallbackManager_.currentFamilyName().empty() && !selectedCovers;
+  SdCardFontManager& mgr = useCompanion ? fallbackManager_ : manager_;
+  if (mgr.currentFamilyName().empty()) return;
+  const auto* family = registry_.findFamily(mgr.currentFamilyName());
   if (!family) return;
 
-  const bool wasResident = manager_.hasSize(pointSize);
-  const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, pointSize);
-  if (sdFontId == 0) return;
-  renderer.setFallbackFont(primaryFontId, sdFontId);
   const auto builtinIt = renderer.getFontMap().find(primaryFontId);
-  if (builtinIt != renderer.getFontMap().end()) renderer.setFamilyFallback(sdFontId, &builtinIt->second);
-  // Remember it for releaseWordLookupFallback(): the font when this call loaded it, and in any
-  // case the mapping, which must not outlive a font another primary's release unloads.
-  const bool ownedAlready = std::any_of(std::begin(lookupExtras_), std::end(lookupExtras_),
-                                        [sdFontId](const LookupExtra& e) { return e.sdFontId == sdFontId; });
-  if (!wasResident || ownedAlready) {
-    for (auto& extra : lookupExtras_) {
-      if (extra.primaryFontId == primaryFontId || extra.primaryFontId == 0) {
-        extra = {primaryFontId, sdFontId};
-        break;
+  const EpdFontFamily* builtin = builtinIt != renderer.getFontMap().end() ? &builtinIt->second : nullptr;
+
+  if (useCompanion) {
+    // The companion is already resident at the reader's size. Draw it scaled to the panel's
+    // rather than loading a second table beside it: with the selected family, its panel-size
+    // cut and the companion all in RAM, that fourth font leaves an X4 too little heap to load
+    // the entry's glyphs, and the panel opens blank.
+    const int residentId = fallbackManager_.getFontId(family->name);
+    const uint8_t residentPt = fallbackManager_.currentPointSize();
+    if (residentId != 0 && residentPt != 0 && builtin != nullptr) {
+      // One built-in supplies the Latin for every font mapped here (the first to ask, the
+      // definition body); the others take it scaled from that size.
+      if (lookupLatinPointSize_ == 0) {
+        borrowFamilyFallbackForLookup(renderer, residentId, builtin);
+        lookupLatinPointSize_ = pointSize;
       }
+      renderer.setFallbackFont(primaryFontId, residentId, static_cast<uint16_t>(pointSize * 256u / residentPt),
+                               static_cast<uint16_t>(pointSize * 256u / lookupLatinPointSize_));
+      rememberLookupMapping(primaryFontId, residentId, /*companion=*/true, /*loaded=*/false);
+      lendUiFontsForLookup(renderer, residentId, residentPt, lookupLatinPointSize_);
+      return;
     }
   }
+
+  const bool wasResident = mgr.hasSize(pointSize);
+  const int sdFontId = mgr.loadFamilyExtraSize(*family, renderer, pointSize);
+  if (sdFontId == 0) return;
+  renderer.setFallbackFont(primaryFontId, sdFontId);
+  if (builtin != nullptr) {
+    if (useCompanion) {
+      borrowFamilyFallbackForLookup(renderer, sdFontId, builtin);
+    } else {
+      renderer.setFamilyFallback(sdFontId, builtin);
+    }
+  }
+  // Remember it for releaseWordLookupFallback(): the font when this call loaded it, and in any
+  // case the mapping, which must not outlive a font another primary's release unloads.
+  const bool ownedAlready =
+      std::any_of(std::begin(lookupExtras_), std::end(lookupExtras_),
+                  [sdFontId](const LookupExtra& e) { return e.loaded && e.sdFontId == sdFontId; });
+  if (!wasResident || ownedAlready) rememberLookupMapping(primaryFontId, sdFontId, useCompanion, /*loaded=*/true);
+  // The panel's footer, reading and tag lines are set in the UI fonts, which in a book borrow
+  // the companion at the reader's size (see ensureCjkFallback). Lend them this one for the
+  // session instead: it is the panel's own size, and it is already paid for.
+  if (useCompanion) lendUiFontsForLookup(renderer, sdFontId, pointSize, pointSize);
 }
 
 void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
+  if (lookupUiLent_) {
+    for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
+      if (lookupUiPrevious_[i].fontId != 0) {
+        renderer.setFallbackFont(kUiFontSizes[i].fontId, lookupUiPrevious_[i].fontId, lookupUiPrevious_[i].scale,
+                                 lookupUiPrevious_[i].nonCjkScale);
+      } else {
+        renderer.clearFallbackFont(kUiFontSizes[i].fontId);
+      }
+    }
+    lookupUiLent_ = false;
+  }
+  for (auto& saved : lookupFallbackSaved_) {
+    // A font this session loaded is unloaded below; one that was resident gets its fallback back.
+    if (saved.sdFontId != 0) renderer.setFamilyFallback(saved.sdFontId, saved.fallback, saved.nonCjkFirst);
+    saved = {};
+  }
+  lookupLatinPointSize_ = 0;
   for (auto& extra : lookupExtras_) {
-    if (extra.sdFontId == 0) continue;
+    if (extra.primaryFontId == 0) continue;
     renderer.clearFallbackFont(extra.primaryFontId);
-    manager_.unloadExtra(extra.sdFontId, renderer);  // a no-op the second time for a shared font
+    // a no-op the second time for a shared font
+    if (extra.loaded) (extra.companion ? fallbackManager_ : manager_).unloadExtra(extra.sdFontId, renderer);
     extra = {};
   }
 }
 
-int SdCardFontSystem::effectiveReaderFontId(const bool jpBook) const {
-  if (!selectedFontCovers(jpBook ? 0x3042 : 'a')) {
-    if (jpBook) {
+int SdCardFontSystem::effectiveReaderFontId(const CjkScript script) const {
+  const bool cjkBook = script != CjkScript::None;
+  if (!selectedFontCovers(cjkBook ? cjk::probeCodepoint(script) : 'a')) {
+    if (cjkBook) {
       const int companion = companionFontId();
       // 0 means no companion is resident -- it can fail to load under heap pressure. Fall
       // through to the selected font rather than returning 0, which reads as "no font".
@@ -392,9 +510,24 @@ int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*
   return manager_.getFontId(familyName);
 }
 
-bool SdCardFontSystem::isBuiltinJpExtension(const std::string& familyName) {
+CjkScript SdCardFontSystem::extensionScript(const std::string& familyName) {
   const std::string key = normalizedFamilyKey(familyName);
-  return key == "notosansjp" || key == "notoserifjp";
+  std::string suffix;
+  if (key.rfind("notosans", 0) == 0) {
+    suffix = key.substr(8);
+  } else if (key.rfind("notoserif", 0) == 0) {
+    suffix = key.substr(9);
+  } else {
+    return CjkScript::None;
+  }
+  if (suffix == "jp") return CjkScript::Japanese;
+  if (suffix == "sc") return CjkScript::SimplifiedChinese;
+  if (suffix == "tc" || suffix == "hk") return CjkScript::TraditionalChinese;
+  return CjkScript::None;
+}
+
+bool SdCardFontSystem::isBuiltinCjkExtension(const std::string& familyName) {
+  return extensionScript(familyName) != CjkScript::None;
 }
 
 uint8_t SdCardFontSystem::readerStandInFamilies(const SdCardFontRegistry* registry, const char* sdFamilyName,
@@ -407,23 +540,24 @@ uint8_t SdCardFontSystem::readerStandInFamilies(const SdCardFontRegistry* regist
   const std::string base = builtinRow ? builtinFamilyDirName(fontFamily) : sdFamilyName;
   if (const auto* variant = findCoverageVariant(registry, base)) out[count++] = variant;
 
-  // Built-in rows only. ensureJpFallback() loads the companion for a Japanese book just when the
+  // Built-in rows only. ensureCjkFallback() loads the companion for a CJK book just when the
   // row's own face lacks CJK, which is true of the built-ins by definition (selectedFontCovers
   // treats them as Latin-complete and CJK-less) but unknowable here for an SD family: coverage
   // lives in its .cpfont interval table and is only readable once resident. An SD row would
   // otherwise offer sizes that a self-sufficient CJK family never renders at.
   //
   // Matched on the normalized key, like every other family comparison here, so a folder named
-  // "noto sans jp" also pairs, and on the extension ensureJpFallback() ranks first, so the size
-  // offered is the size that loads.
+  // "noto sans jp" also pairs. The JP cut is preferred when several extensions are installed;
+  // every cut ships the same sizes, so whichever ensureCjkFallback() picks loads at that size.
   if (builtinRow && count < cap) {
-    const char* wanted = fontFamily == CrossPointSettings::NOTOSANS ? "notosansjp" : "notoserifjp";
+    const char* wantedStem = fontFamily == CrossPointSettings::NOTOSANS ? "notosans" : "notoserif";
+    const SdCardFontFamilyInfo* best = nullptr;
     for (const auto& fam : registry->getFamilies()) {
-      if (normalizedFamilyKey(fam.name) == wanted) {
-        out[count++] = &fam;
-        break;
-      }
+      const std::string key = normalizedFamilyKey(fam.name);
+      if (key.rfind(wantedStem, 0) != 0 || extensionScript(fam.name) == CjkScript::None) continue;
+      if (!best || extensionScript(fam.name) == CjkScript::Japanese) best = &fam;
     }
+    if (best) out[count++] = best;
   }
   return count;
 }
@@ -488,11 +622,11 @@ bool SdCardFontSystem::faceShipsSize(const std::string& familyName, const uint8_
 
 std::string SdCardFontSystem::resolveSelectedFamily() const {
   const std::string selected = SETTINGS.sdFontFamilyName;
-  // A book that needs Japanese keeps the base as-is. The companion ensureJpFallback() is about
+  // A book that needs CJK keeps the base as-is. The companion ensureCjkFallback() is about
   // to load carries this book's text, so standing a coverage variant in here would only make it
   // the second resident SD font -- the pairing that does not reliably fit this heap. Leaving the
   // base built-in also keeps its `preferSans` ranking working, which reads an empty selection.
-  if (jpFallbackNeeded_) return selected;
+  if (cjkFallbackNeeded()) return selected;
   const std::string base = selected.empty() ? builtinFamilyDirName(SETTINGS.fontFamily) : selected;
   const auto* variant = findCoverageVariant(&registry_, base);
   const std::string resolved = variant ? variant->name : selected;
@@ -505,7 +639,7 @@ std::string SdCardFontSystem::resolveSelectedFamily() const {
   // 20 drew the same pixels. Render with the stand-in that has the size instead.
   //
   // Safe for any book: a stand-in is a superset of the row's Latin coverage by construction -- a
-  // coverage variant widens its base, and the JP extensions are latin-ext + cjk-ext.
+  // coverage variant widens its base, and the CJK extensions are latin-ext + cjk-ext.
   const SdCardFontFamilyInfo* standIns[MAX_STAND_INS];
   const uint8_t count =
       readerStandInFamilies(&registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, MAX_STAND_INS);
@@ -533,12 +667,12 @@ bool SdCardFontSystem::loadedFamilyCovers(const SdCardFontManager& mgr, const st
   return font && font->coversCodepoint(cp);
 }
 
-void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t pointSize) {
+void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t pointSize) {
   // Companion-font need is coverage-driven in BOTH directions:
-  //  - selected font lacks Japanese and the book needs it (jpFallbackNeeded_) -> companion
+  //  - selected font lacks the book's CJK script and the book needs it (cjkScript_) -> companion
   //  - selected font lacks LATIN (UDDigiKyokasho ships cjk-ext only: English words, digits
   //    and UI text would render blank) -> companion, regardless of book language
-  // The JP extension fonts (NotoSansJP/NotoSerifJP, latin-ext + cjk-ext) cover both holes.
+  // The CJK extension fonts (NotoSansJP/SC/TC and the serifs, latin-ext + cjk-ext) cover both.
   // The selected family may be a vector (.ttf/.otf) one, which loads through the FreeInkFont
   // path rather than the .cpfont manager -- so the manager's name is empty for it. Reading the
   // name from the manager alone made a TTF look like "no SD font selected", short-circuiting
@@ -549,55 +683,69 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
 #if CROSSPOINT_VECTOR_FONTS
   if (selected.empty() && ttf_ && !ttfFamily_.empty()) selected = ttfFamily_;
 #endif
-  const bool selectedHasCjk = !selected.empty() && loadedFamilyCovers(manager_, selected, 0x3042);
+  const bool selectedHasCjk = !selected.empty() && loadedFamilyCovers(manager_, selected, cjkProbe());
   const bool selectedHasLatin = selected.empty()  // built-ins always have Latin
                                     ? true
                                     : loadedFamilyCovers(manager_, selected, 'a');
-  // Only load a companion for a book that actually needs Japanese. A Latin book read
+  // Only load a companion for a book that actually needs CJK. A Latin book read
   // with a CJK-only family (UDDigiKyokasho) does NOT: the reader already substitutes
   // the built-in Noto Serif/Sans for it (effectiveReaderFontId). Loading a companion
-  // anyway sets fallbackSdFont_ and redirects the global fallback to a JP family,
+  // anyway sets fallbackSdFont_ and redirects the global fallback to a CJK family,
   // which then prices/draws the built-in font's glyphs -- collapsing the word spaces
-  // and making Latin text render as if it were Japanese. jpFallbackNeeded_ is the
-  // book-level signal; within a Japanese book a companion still covers either hole
+  // and making Latin text render as if it were Japanese. cjkScript_ is the
+  // book-level signal; within a CJK book a companion still covers either hole
   // (no CJK in the selected font, or no Latin for embedded English).
-  const bool needsCompanion = jpFallbackNeeded_ && (!selectedHasCjk || !selectedHasLatin);
+  const bool needsCompanion = cjkFallbackNeeded() && (!selectedHasCjk || !selectedHasLatin);
   if (!needsCompanion) {
-    if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
+    if (!fallbackManager_.currentFamilyName().empty()) {
+      // Unloading clears every UI fallback registration, the selected family's included; put
+      // those back so list rows keep its glyphs after a companion comes and goes.
+      fallbackManager_.unloadAll(renderer);
+      setupUiFallbacks(renderer);
+    }
     return;
   }
 
-  // Selected font (built-in, or a Latin-only SD font) can't render Japanese: pair a
-  // built-in Noto face with its matching JP extension, then try the other extension.
+  // Selected font (built-in, or a Latin-only SD font) can't render the book: pair a built-in
+  // Noto face with the extension cut for the book's script in its own style, then that script
+  // in the other style, then any other CJK cut (a JP font still carries every common hanzi, in
+  // Japanese glyph forms), then anything else on the card.
   const bool preferSans = selected.empty() && SETTINGS.fontFamily == CrossPointSettings::NOTOSANS;
-  auto extensionRank = [preferSans](const std::string& name) {
-    return normalizedFamilyKey(name) == (preferSans ? "notosansjp" : "notoserifjp") ? 0 : 1;
+  const CjkScript wantScript = activeCjkScript();
+  auto extensionRank = [preferSans, wantScript](const std::string& name) {
+    const bool styleMatch = (normalizedFamilyKey(name).rfind("notosans", 0) == 0) == preferSans;
+    const bool scriptMatch = extensionScript(name) == wantScript;
+    return (scriptMatch ? 0 : 2) + (styleMatch ? 0 : 1);
   };
   std::vector<const SdCardFontFamilyInfo*> candidates;
   for (const auto& fam : registry_.getFamilies()) {
     if (fam.name == selected) continue;
-    if (isBuiltinJpExtension(fam.name)) candidates.push_back(&fam);
+    if (isBuiltinCjkExtension(fam.name)) candidates.push_back(&fam);
   }
   std::sort(candidates.begin(), candidates.end(),
             [&extensionRank](const SdCardFontFamilyInfo* a, const SdCardFontFamilyInfo* b) {
               return extensionRank(a->name) < extensionRank(b->name);
             });
   for (const auto& fam : registry_.getFamilies()) {
-    if (fam.name == selected || isBuiltinJpExtension(fam.name)) continue;
+    if (fam.name == selected || isBuiltinCjkExtension(fam.name)) continue;
     candidates.push_back(&fam);
   }
 
+  // Asked for by the UI alone (Home, the file browser): only the list rows need it, so load the
+  // family at the UI size instead of the reader's. That is the one size registerUiSizes() wants
+  // anyway, and it keeps a 16pt interval table out of a screen that also holds cover thumbnails.
+  // The next book open asks again at the reader size and the family reloads at it.
+  const uint8_t loadPt = cjkScript_ != CjkScript::None ? pointSize : UI_FALLBACK_POINT_SIZE;
   for (const auto* fam : candidates) {
     // Which size the companion will actually be asked for: findNearestSize() may land below the
     // point size the picker offered, which is the difference between a size change taking effect
     // and silently doing nothing.
-    const auto* want = fam->findNearestSize(pointSize);
-    LOG_DBG("SDFS", "Companion candidate %s: asked %u -> nearest %u", fam->name.c_str(), pointSize,
+    const auto* want = fam->findNearestSize(loadPt);
+    LOG_DBG("SDFS", "Companion candidate %s: asked %u -> nearest %u", fam->name.c_str(), loadPt,
             want ? want->pointSize : 0);
     // Already loaded at the right size? Keep it.
     if (fallbackManager_.currentFamilyName() == fam->name) {
-      const auto* wanted = fam->findNearestSize(pointSize);
-      if (wanted && wanted->pointSize == fallbackManager_.currentPointSize()) return;
+      if (want && want->pointSize == fallbackManager_.currentPointSize()) return;
     }
     // Make room before asking, the same way ensureSelectedLoaded() does for the selected family.
     // The companion's interval table is one contiguous block -- 26 KB for a broad CJK face at a
@@ -612,14 +760,23 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
                 static_cast<unsigned>(ESP.getMaxAllocHeap()));
       }
     }
-    if (!fallbackManager_.loadFamily(*fam, renderer, pointSize)) {
-      LOG_ERR("SDFS", "Companion %s failed to load at %u (free=%u largest=%u)", fam->name.c_str(), pointSize,
+    if (!fallbackManager_.loadFamily(*fam, renderer, loadPt)) {
+      LOG_ERR("SDFS", "Companion %s failed to load at %u (free=%u largest=%u)", fam->name.c_str(), loadPt,
               static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
       continue;
     }
-    if (loadedFamilyCovers(fallbackManager_, fam->name, 0x3042) &&
+    if (loadedFamilyCovers(fallbackManager_, fam->name, cjkProbe()) &&
         loadedFamilyCovers(fallbackManager_, fam->name, 'a')) {
       LOG_DBG("SDFS", "Companion fallback font: %s", fam->name.c_str());
+      // Asked for by the UI with a built-in family selected: nothing else serves the list rows'
+      // own sizes, so let the companion (loaded at the UI size above). In a book the companion
+      // sits at the reader size and the global fallback serves the few UI glyphs; a second size
+      // table beside it is RAM a page build needs.
+      // The selected family serves the UI sizes itself when it can draw the script; a built-in
+      // face or a Latin-only one (Literata) leaves the UI's hanzi to the companion.
+      if (!selectedHasCjk) {
+        lendCompanionToUiFonts(renderer, fallbackManager_.getFontId(fam->name), fallbackManager_.currentPointSize());
+      }
       return;
     }
     // Loaded fine but doesn't cover both scripts -- not a useful companion.
@@ -627,10 +784,13 @@ void SdCardFontSystem::ensureJpFallback(GfxRenderer& renderer, const uint8_t poi
   }
 
   LOG_ERR("SDFS",
-          "No companion could be loaded at %u -- a Japanese book will fall back to the "
+          "No companion could be loaded at %u -- a CJK book will fall back to the "
           "selected font and its size",
           pointSize);
-  if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
+  if (!fallbackManager_.currentFamilyName().empty()) {
+    fallbackManager_.unloadAll(renderer);
+    setupUiFallbacks(renderer);  // unloadAll() cleared the selected family's UI registrations too
+  }
 }
 
 void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
@@ -643,7 +803,7 @@ void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
     // A companion is loaded exactly because something (Latin or CJK) is missing from the
     // selected font -- it covers both scripts, so it is the most capable last resort.
     target = &renderer.getFontMap().at(fallbackManager_.getFontId(fallback));
-  } else if (!selected.empty() && loadedFamilyCovers(manager_, selected, 0x3042) &&
+  } else if (!selected.empty() && loadedFamilyCovers(manager_, selected, cjkProbe()) &&
              loadedFamilyCovers(manager_, selected, 'a')) {
     // Fully self-sufficient SD font: also serves rare glyphs for the built-in UI fonts.
     target = &renderer.getFontMap().at(manager_.getFontId(selected));
@@ -656,16 +816,54 @@ void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
   if (auto* fcm = renderer.getFontCacheManager()) fcm->setFallbackSdFont(companion);
 }
 
-void SdCardFontSystem::setJpFallbackNeeded(GfxRenderer& renderer, const bool needed) {
-  if (jpFallbackNeeded_ == needed) return;
-  LOG_DBG("SDFS", "JP fallback needed: %d", needed);
-  jpFallbackNeeded_ = needed;
-  // resolveSelectedFamily() reads this flag: a collapsed entry is the base plus a JP companion
-  // for a Japanese book and the wider variant for any other, so the selection is re-resolved
+CjkScript SdCardFontSystem::activeCjkScript() const {
+  if (cjkScript_ != CjkScript::None) return cjkScript_;
+  if (uiCjkScript_ != CjkScript::None) return uiCjkScript_;
+  switch (I18N.getLanguage()) {
+    case Language::ZHS:
+      return CjkScript::SimplifiedChinese;
+    case Language::ZHT:
+      return CjkScript::TraditionalChinese;
+    default:
+      return CjkScript::None;
+  }
+}
+
+void SdCardFontSystem::setCjkFallbackNeeded(GfxRenderer& renderer, const CjkScript script) {
+  // A book decides from here on; the UI's own request is over until Home asks again.
+  if (cjkScript_ == script && uiCjkScript_ == CjkScript::None) return;
+  LOG_DBG("SDFS", "CJK fallback script: %d", static_cast<int>(script));
+  cjkScript_ = script;
+  uiCjkScript_ = CjkScript::None;
+  // resolveSelectedFamily() reads this flag: a collapsed entry is the base plus a CJK companion
+  // for a CJK book and the wider variant for any other, so the selection is re-resolved
   // here rather than only at book open. Called at book/activity boundaries, never mid-render.
   ensureSelectedLoaded(renderer);
-  ensureJpFallback(renderer, SETTINGS.fontPointSize);
+  ensureCjkFallback(renderer, SETTINGS.fontPointSize);
   updateGlobalFallback(renderer);
+}
+
+void SdCardFontSystem::setUiCjkNeeded(GfxRenderer& renderer, const CjkScript script) {
+  if (uiCjkScript_ == script) return;
+  LOG_DBG("SDFS", "UI CJK script: %d", static_cast<int>(script));
+  uiCjkScript_ = script;
+  ensureSelectedLoaded(renderer);
+  ensureCjkFallback(renderer, SETTINGS.fontPointSize);
+  updateGlobalFallback(renderer);
+}
+
+bool SdCardFontSystem::builtinCjkCovers(const uint32_t cp) const {
+  return defaultGlobalFallback_ != nullptr && defaultGlobalFallback_->hasCodepoint(cp);
+}
+
+CjkScript SdCardFontSystem::uiCjkScriptFor(const char* utf8) const {
+  if (!utf8) return CjkScript::None;
+  const auto* p = reinterpret_cast<const unsigned char*>(utf8);
+  while (*p) {
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cjk::isHan(cp) && !builtinCjkCovers(cp)) return CjkScript::SimplifiedChinese;
+  }
+  return CjkScript::None;
 }
 
 void SdCardFontSystem::releaseAllResidentFonts(GfxRenderer& renderer) {
@@ -674,10 +872,10 @@ void SdCardFontSystem::releaseAllResidentFonts(GfxRenderer& renderer) {
 
   // Drop the companion first, then the selected family. manager_.unloadAll() also removes the
   // size-matched UI fallback registrations before deleting their backing SdCardFont objects.
-  // jpFallbackNeeded_ is deliberately left alone: it is policy ("this book wants the Japanese
-  // companion"), not residency, and ensureLoaded() reads it to decide what to restore. Clearing
-  // it here would quietly demote a Japanese book's fallback for any caller that only wanted the
-  // memory back. Callers that mean to change the policy call setJpFallbackNeeded().
+  // cjkScript_ is deliberately left alone: it is policy ("this book wants a CJK companion"),
+  // not residency, and ensureLoaded() reads it to decide what to restore. Clearing it here would
+  // quietly demote a CJK book's fallback for any caller that only wanted the memory back.
+  // Callers that mean to change the policy call setCjkFallbackNeeded().
   if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
   if (!manager_.currentFamilyName().empty()) manager_.unloadAll(renderer);
   updateGlobalFallback(renderer);

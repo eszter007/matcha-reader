@@ -39,7 +39,7 @@ bool XtcReaderActivity::loadBook() {
     return false;
   }
   if (xtc->load()) {
-    sdFontSystem.setJpFallbackNeeded(renderer, false);
+    sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
     return true;
   }
   LOG_ERR("READER", "Failed to load XTC");

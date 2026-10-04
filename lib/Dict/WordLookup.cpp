@@ -1,6 +1,8 @@
 #include "WordLookup.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
 
 #include "Deinflector.h"
 
@@ -52,6 +54,32 @@ bool hasNameChar(const std::string& text) {
 }
 
 }  // namespace
+
+uint8_t WordLookup::lookupAll(const std::string& paragraphText, const size_t byteOffset,
+                              uint8_t priority[MAX_WINDOW_CHARS], const int maxChars) {
+  uint8_t found = 0;
+  if (byteOffset >= paragraphText.size()) return found;
+  const int limit = std::min(maxChars, MAX_WINDOW_CHARS);
+  for (int windowChars = 1; windowChars <= limit; windowChars++) {
+    const size_t windowEnd = advanceChars(paragraphText, byteOffset, windowChars);
+    if (windowEnd <= byteOffset) break;
+    if (windowChars > 1 && windowEnd == advanceChars(paragraphText, byteOffset, windowChars - 1))
+      break;  // text ran out
+    // Stack copy rather than substr(): this runs for every window of every cell of a page.
+    char window[MAX_WINDOW_CHARS * 4 + 1];
+    const size_t windowLen = windowEnd - byteOffset;
+    if (windowLen >= sizeof(window)) break;
+    std::memcpy(window, paragraphText.data() + byteOffset, windowLen);
+    window[windowLen] = '\0';
+    if (std::memchr(window, '\0', windowLen) != nullptr) break;
+    DictEntry entry;
+    if (DictIndex::lookupExact(window, entry, DictIndex::DICT_ALL, /*needDefinition=*/false)) {
+      found |= static_cast<uint8_t>(1u << (windowChars - 1));
+      priority[windowChars - 1] = entry.priority;
+    }
+  }
+  return found;
+}
 
 bool WordLookup::lookup(const std::string& paragraphText, size_t byteOffset, WordLookupResult& out,
                         bool needDefinition) {

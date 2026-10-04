@@ -264,6 +264,7 @@ class ChapterHtmlSlimParser {
   // boundaries.
   XML_Parser xmlParser_ = nullptr;
   HalFile parseFile_;
+  bool firstParseChunk_ = true;  // the prolog is inspected once; see XhtmlDoctype.h
   uint32_t parseStartTime_ = 0;
 
   void updateEffectiveInlineStyle();

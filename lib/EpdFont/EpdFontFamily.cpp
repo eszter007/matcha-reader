@@ -1,5 +1,7 @@
 #include "EpdFontFamily.h"
 
+#include <Utf8.h>
+
 const EpdFont* EpdFontFamily::getFont(const Style style) const {
   // Extract font style bits; render-time overlay bits do not affect font selection.
   const bool hasBold = (style & BOLD) != 0;
@@ -24,7 +26,14 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
 const EpdFontData* EpdFontFamily::getData(const Style style) const { return getFont(style)->data; }
 
+const EpdFont* EpdFontFamily::nonCjkFallbackFont(const uint32_t cp, const Style style) const {
+  if (!fallbackFirstForNonCjk || utf8IsCjkCodepoint(cp)) return nullptr;
+  const EpdFont* fbFont = fallbackFamily->getFont(style);
+  return fbFont->hasGlyph(cp) ? fbFont : nullptr;
+}
+
 const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) const {
+  if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->getGlyph(cp);
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->getGlyph(cp);
   // The requested font may cover cp without it being RAM-resident: SD fonts keep only the
@@ -51,10 +60,20 @@ const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) co
       if (loaded) return loaded;
     }
   }
-  return f->getGlyph(cp);
+  if (const EpdGlyph* own = f->getGlyph(cp)) return own;
+  return missingCjkGlyph(f, cp);
+}
+
+// A hanzi or kana nothing can draw (a Chinese UI with no SD font on the card) and a font with no
+// replacement glyph of its own: stand a question mark in for it, so the label reads as missing
+// characters instead of as a shorter, different word. Only CJK: the other codepoints that reach
+// this point are mostly ones that are meant to draw nothing (joiners, selectors, soft hyphens).
+const EpdGlyph* EpdFontFamily::missingCjkGlyph(const EpdFont* f, const uint32_t cp) {
+  return utf8IsCjkCodepoint(cp) && f->hasGlyph('?') ? f->getGlyph('?') : nullptr;
 }
 
 const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style style) const {
+  if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->getGlyph(cp);
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->getGlyph(cp);
   if (fallbackFamily) {
@@ -65,11 +84,18 @@ const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style s
     const EpdFont* gf = globalFallback_->getFont(style);
     if (gf->hasGlyph(cp)) return gf->getGlyph(cp);
     // Deliberately NO glyphMissHandler here.
+    // Covered but not in RAM: the caller prices it from the companion's advance table.
+    if (gf->hasCodepoint(cp)) return nullptr;
   }
-  return nullptr;
+  if (f->hasCodepoint(cp)) return nullptr;
+  // Nothing anywhere can draw cp, so getGlyph() will hand back this font's replacement glyph:
+  // measure that, or a title of undrawable characters is centred as if it were empty.
+  if (const EpdGlyph* own = f->getGlyph(cp)) return own;
+  return missingCjkGlyph(f, cp);
 }
 
 const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style) const {
+  if (const EpdFont* first = nonCjkFallbackFont(cp, style)) return first->data;  // mirrors getGlyph()
   const EpdFont* f = getFont(style);
   if (f->hasGlyph(cp)) return f->data;
   // Mirrors getGlyph()'s own-font on-demand step above -- the pair must resolve to the same

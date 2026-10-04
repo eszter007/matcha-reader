@@ -4,8 +4,11 @@
 #include <WordLookup.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+class GfxRenderer;
 
 class Page;
 
@@ -35,12 +38,37 @@ class WordSelectionScan {
     // page without a dictionary read per cursor move -- the scan already knew the length and
     // used to discard it. 0 in allGlyphs; treat 0 as "one cell".
     uint8_t matchLen;
+    // Advance in pixels, for a page laid out in lines, where glyphs are not one cell wide. 0 in
+    // a vertical page: its cells are the caller's cellPx.
+    uint8_t width;
   };
+
+  // Where a horizontal page's characters are drawn, one entry per codepoint of every word in
+  // page order. Measured by the reader while its fonts are still resident (measurePage): the
+  // scan itself is built after they are released, when an advance can only be read back off
+  // the card one glyph at a time.
+  struct GlyphBox {
+    uint16_t x;
+    uint16_t y;
+    uint8_t width;
+  };
+  struct LineGeometry {
+    std::unique_ptr<GlyphBox[]> boxes;
+    size_t count = 0;
+    bool valid() const { return boxes != nullptr; }
+  };
+  // suppressRuby: ruby is hidden (shown ruby pushes the base text down its line). Leaves `out`
+  // invalid when the page has no text or the table does not fit in memory.
+  static void measurePage(const Page& page, const GfxRenderer& renderer, int fontId, bool suppressRuby,
+                          LineGeometry& out);
 
   // Populate allGlyphs from a page and reset the state machine. Vertical (tategaki) mode.
   void initFromVerticalPage(const VerticalPage& page);
   // Horizontal (yokogaki) mode: flattens the page's lines into one continuous character stream.
-  void initFromPage(const Page& page);
+  // With a geometry each glyph also gets its place on the page -- x/y as drawn, column = its
+  // line, row = its x, so "the next column" and "the closest row" mean the next line and the
+  // glyph straight below, exactly as they do for a vertical page turned on its side.
+  void initFromPage(const Page& page, const LineGeometry* geometry = nullptr);
   // Manga mode: a plain UTF-8 text blob (panel or combined page text). Newlines are dropped.
   void initFromUtf8Text(const std::string& text);
 
@@ -126,6 +154,22 @@ class WordSelectionScan {
     return (scannedBits[glyphIndex >> 3] >> (glyphIndex & 7)) & 1;
   }
 
+  // Whether the scan segments by weighed whole-run splits (Chinese). The runtime lookup then
+  // takes the scan's word length instead of the longest match from the cursor.
+  bool usesRunSegmentation() const { return chineseMode_; }
+  // Characters the runtime lookup may take from selectable word `selectableIdx`: in Chinese mode
+  // exactly the word the run segmentation chose (和 before 尚未, not 和尚), unless that word was
+  // cut at the page edge and its span is only the on-page part of a longer match; otherwise the
+  // full window, for the longest-match path.
+  int lookupCharLimit(size_t selectableIdx) const {
+    if (!chineseMode_ || selectableIdx >= selectableGlyphs.size() || selectableIdx >= selectToAllIdx.size()) {
+      return kMaxLookupChars;
+    }
+    const uint8_t span = selectableGlyphs[selectableIdx].matchLen;
+    if (span == 0 || selectToAllIdx[selectableIdx] + span >= contextStart) return kMaxLookupChars;
+    return span < kMaxLookupChars ? span : kMaxLookupChars;
+  }
+
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
   // The context is exactly one lookup window: a word beginning on the last on-page character
@@ -190,6 +234,28 @@ class WordSelectionScan {
   void reset();
   uint32_t glyphContentHash() const;
   void scanOnePosition();
+  // Chinese: segment the run of hanzi starting at allGlyphs[from] as a whole, choosing the
+  // split with the best total word priority (the dictionary's frequency rank) rather than the
+  // longest match at each step, and record every word in it. Returns false when the cell does not
+  // start a hanzi run, so the caller falls through to the per-position path.
+  bool scanChineseRun(size_t from);
+  // True while the dictionary folder is Chinese: text with no conjugation, where the kana
+  // heuristics of scanOnePosition() never fire and a crossing ambiguity (结婚的/和尚/未) is best
+  // settled by comparing whole-run splits.
+  bool chineseMode_ = false;
+  // Longest hanzi run the segmenter weighs at once. Chinese clauses rarely run longer between
+  // punctuation marks, and the run can always continue with the next call.
+  static constexpr size_t kRunMax = 24;
+  // Longest window probed per cell. Chinese words are one to four characters and idioms four;
+  // the few longer headwords are proper nouns whose four-character prefix is itself an entry, so
+  // stopping at six saves a quarter of the SD probes a page costs without losing real words.
+  static constexpr int kChineseMaxWindow = 6;
+  // Per-cell candidate priorities for the run being segmented (index: cell, window length - 1)
+  // and the dynamic-programming tables. Members, not locals: ~250 bytes is past the stack budget.
+  uint8_t runPriority_[kRunMax][kMaxLookupChars] = {};
+  uint8_t runFound_[kRunMax] = {};
+  int16_t runBest_[kRunMax + 1] = {};
+  uint8_t runBestLen_[kRunMax + 1] = {};
   // The display filter (bare particles, conjugation fragments), applied to a matched position
   // before it is added to selectableGlyphs.
   bool passesDisplayFilter(size_t allIdx, int matchChars, const std::string& lookupText, size_t matchBytes) const;

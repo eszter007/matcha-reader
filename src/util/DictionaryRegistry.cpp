@@ -17,8 +17,9 @@ namespace {
 // see FileBrowserActivity's showHiddenFiles check).
 constexpr const char* DICT_ROOTS[] = {"/dictionaries", "/.dictionaries"};
 
-// /dictionaries/jp belongs to DictIndex (the Japanese lookup path), not to StarDict: it holds
-// vocab, names and grammar .idx+.dat side by side, at the fixed paths DictIndex.h declares.
+// /dictionaries/jp, /zh and /yue belong to DictIndex (the scan-based lookup path), not to
+// StarDict: each holds vocab, names and grammar .idx+.dat side by side, at the fixed leaf names
+// DictIndex.h declares.
 // Three stems in one folder is exactly what findStem() calls ambiguous, so probing it logged a
 // "multiple index stems" skip on every scan -- a correct outcome reported as a fault, for a
 // folder that was never a StarDict dictionary. Japanese does not use StarDict at all, so the
@@ -27,12 +28,20 @@ constexpr const char* DICT_ROOTS[] = {"/dictionaries", "/.dictionaries"};
 // Only the folder ITSELF is DictIndex's. StarDict dictionaries nested inside it
 // (/dictionaries/jp/<name>/) are still discovered, and folderForLanguage() resolves "ja" to
 // exactly that "jp/" prefix.
-bool isDictIndexFolder(const char* folderName) { return strcmp(folderName, "jp") == 0; }
+bool isDictIndexFolder(const char* folderName) {
+  return strcmp(folderName, "jp") == 0 || strcmp(folderName, "zh") == 0 || strcmp(folderName, "yue") == 0;
+}
 
 std::string languageFolder(const std::string& language) {
   if (language.size() < 2) return {};
-  std::string out = language.substr(0, 2);
+  // Two letters, so "eng" and "en-GB" both find en/. Cantonese has no two-letter code and its
+  // folder is yue/: cut to "yu" it matched nothing, and a StarDict dictionary there was never found.
+  const bool threeLetterPrimary =
+      language.size() == 3 || (language.size() > 3 && (language[3] == '-' || language[3] == '_'));
+  std::string out = language.substr(0, threeLetterPrimary ? 3 : 2);
   std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
+  if (out == "yue") return out;
+  out.resize(2);
   return out == "ja" ? "jp" : out;
 }
 

@@ -23,6 +23,7 @@ struct MenuResult {
   uint8_t pageTurnOption = 0;
   int8_t verticalOverride = -1;
   int8_t furiganaOverride = -1;
+  int8_t languageOverride = -1;  // cjk::LanguageChoice, -1 = untouched
 };
 
 struct ChapterResult {

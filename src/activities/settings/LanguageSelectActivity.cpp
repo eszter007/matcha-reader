@@ -9,6 +9,7 @@
 #include "CrossPointSettings.h"
 #include "I18nKeys.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -44,6 +45,10 @@ void LanguageSelectActivity::onEnter() {
     item.actionValue = static_cast<int16_t>(i);
     rowItems[i] = item;
   }
+
+  // The Chinese entries name themselves in characters the built-in CJK subset lacks (简, 體):
+  // bring the SD companion in for this list, as Home does for a Chinese title.
+  sdFontSystem.setUiCjkNeededForTitles(renderer, rowItems, [](const fui::ListItem& item) { return item.label; });
 }
 
 const char* LanguageSelectActivity::headerTitle() const { return tr(STR_LANGUAGE); }

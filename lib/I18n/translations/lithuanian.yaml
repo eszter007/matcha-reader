@@ -511,7 +511,7 @@ STR_KB_HINT_UPPER_SECONDARY: "Laikykite SELECT DIDŽIOSIOMS raidėms ar antrinia
 STR_KB_HINT_URL_SNIPPETS: "Spauskite URL šablonams"
 STR_KB_TIPS: "Patarimai:"
 STR_NO_BIN_FILES: ".bin failų nerasta"
-STR_NO_DICTIONARY: "Nėra žodyno (įdėkite jmdict.idx/dat į /dict/)"
+STR_NO_DICTIONARY: "Šiai knygai nėra žodyno (žr. Sąranką)"
 STR_NO_MATCH: "Atitikmenų nerasta"
 STR_LOW_MEMORY_RETRY: "Per mažai atminties - bandykite vėl"
 STR_NO_SHELVES: "Lentynų nėra"

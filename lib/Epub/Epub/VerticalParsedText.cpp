@@ -385,6 +385,7 @@ struct ColumnGeometry {
 enum class InkVAlign : uint8_t {
   HalfEmHead,  // 。、 -- centred in the FIRST half em, so the second half is free (JLREQ 3.1.4)
   Centre,      // small kana -- centred in the full em (JLREQ A.11)
+  CentreCell,  // 。，、 in traditional Chinese -- centred in the em on BOTH axes, not right-aligned
 };
 
 // Places a mark's letter face against the RIGHT edge of its cell, from the glyph's own ink box:
@@ -402,7 +403,8 @@ bool rightAlignedInk(const GfxRenderer& renderer, const int fontId, InkMemo& mem
   // Draw resolves ink left as x + glyph->left, and ink top as (cellTop + baselineInCell) - top.
   const int inkTopInCell = vAlign == InkVAlign::HalfEmHead ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
                                                            : std::max(0, (geom.cellPx - ink.height) / 2);
-  *gxOut = geom.columnLeftX(col) + geom.cellPx - ink.left - ink.width;
+  *gxOut = vAlign == InkVAlign::CentreCell ? geom.columnLeftX(col) + (geom.cellPx - ink.width) / 2 - ink.left
+                                           : geom.columnLeftX(col) + geom.cellPx - ink.left - ink.width;
   *gyOut = std::max(0, rowIdx * geom.cellPx + inkTopInCell + ink.top - geom.baselineInCellPx);
   if (inkHeightOut) *inkHeightOut = inkTopInCell + ink.height;
   return true;
@@ -585,7 +587,8 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
     // visibleTextOffset stays 0: this overload takes plain text with no extractor context, so
     // there is no chapter-wide position to attribute it to. Only the annotated path (the one
     // the real chapter build uses) carries offsets.
-    stream_.push_back(PendingChar{cp, paragraphIndex, static_cast<uint32_t>(i), 0, false, {}, 0});
+    stream_.push_back(
+        PendingChar{Kinsoku::verticalFormOf(cp), paragraphIndex, static_cast<uint32_t>(i), 0, false, {}, 0});
     i += consumed;
   }
 }
@@ -723,7 +726,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     if (run.rubyText.empty()) {
       for (size_t k = 0; k < baseCps.size(); k++) {
         if (!canPushStreamChar()) return;
-        stream_.push_back(PendingChar{baseCps[k],
+        stream_.push_back(PendingChar{Kinsoku::verticalFormOf(baseCps[k]),
                                       paragraphIndex,
                                       static_cast<uint32_t>(baseOffsets[k]),
                                       run.style,
@@ -755,7 +758,7 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         std::string slice;
         for (size_t r = rubyStart; r < rubyEnd; r++) utf8AppendCodepoint(rubyCps[r], slice);
         if (!canPushStreamChar()) return;
-        PendingChar pc{baseCps[k],
+        PendingChar pc{Kinsoku::verticalFormOf(baseCps[k]),
                        paragraphIndex,
                        static_cast<uint32_t>(baseOffsets[k]),
                        run.style,
@@ -967,9 +970,12 @@ struct VerticalParsedText::LayoutCursor {
       o.renderer_.ensureSdCardFontReady(o.fontId_, nextChar, static_cast<uint8_t>(1u << (next.style & 3)));
       GlyphInk ink;
       if (measureGlyphInk(o.renderer_, o.fontId_, next.codepoint, next.style, &ink) && ink.height > 0) {
-        // 。、 are drawn at the head of their cell (rightAlignedInk, HalfEmHead), not on the baseline.
-        offset = Kinsoku::verticalShiftType(next.codepoint) == 1 ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
-                                                                 : geom.baselineInCellPx - ink.top;
+        // 。、 are drawn at the head of their cell (rightAlignedInk, HalfEmHead), not on the baseline;
+        // their centred traditional-Chinese form (type 5) sits mid-cell.
+        const int shift = Kinsoku::verticalShiftType(next.codepoint);
+        offset = shift == 1   ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
+                 : shift == 5 ? std::max(0, (geom.cellPx - ink.height) / 2)
+                              : geom.baselineInCellPx - ink.top;
       }
     }
     // A miss is worth caching too -- it is the expensive case, and a glyph the font lacks
@@ -1059,14 +1065,16 @@ struct VerticalParsedText::LayoutCursor {
   // em, and a paragraph's leading ideographic space. Aozora-derived books write that indent as a
   // U+3000 GLYPH rather than CSS, so it is a full em sitting in the column -- giving up half of it
   // still reads as an indent, and it is very often the only thing a short column has to offer.
-  static bool isReducible(const uint32_t cp) { return Kinsoku::verticalShiftType(cp) != 0 || cp == 0x3000; }
+  static bool isHalfEmMark(const uint32_t cp) {
+    const int shift = Kinsoku::verticalShiftType(cp);
+    return shift != 0 && shift != 5;  // type 5 (centred 。，) fills its em
+  }
+  static bool isReducible(const uint32_t cp) { return isHalfEmMark(cp) || cp == 0x3000; }
 
   // How much room a character actually needs at the end of a column. A half-em mark (a closing
   // bracket, 。、) is set in one half of its em and the other half is white, so half a cell is
   // enough for it -- demanding a whole one is what kept a lone 」 off the column it belongs to.
-  int spaceNeededFor(const uint32_t cp) const {
-    return Kinsoku::verticalShiftType(cp) != 0 ? (geom.cellPx + 1) / 2 : geom.cellPx;
-  }
+  int spaceNeededFor(const uint32_t cp) const { return isHalfEmMark(cp) ? (geom.cellPx + 1) / 2 : geom.cellPx; }
 
   // Returns the pixels actually recovered (0 when the column has nothing to give). The caller
   // places its character `applied` px above the grid row, since the tail moved up by that much.
@@ -1291,7 +1299,8 @@ struct VerticalParsedText::LayoutCursor {
         gx = geom.columnLeftX(col) + (geom.cellPx - ink.width) / 2 - ink.left;
       }
     }
-    if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
+    const int shiftType = Kinsoku::verticalShiftType(pc.codepoint);
+    if (shiftType == 1) {
       // 。and 、 occupy a FULL em like every other character -- only their ink sits in one half
       // of it, at the cell's head. Charging them just their ink plus a half em looks tighter per
       // mark but takes a quarter em off the grid at every sentence, so no two columns end at the
@@ -1305,6 +1314,17 @@ struct VerticalParsedText::LayoutCursor {
       } else {
         gx += geom.cellPx / 2;
         gy = std::max(0, gy - geom.cellPx / 2);
+      }
+    } else if (shiftType == 5) {
+      // Traditional Chinese: the mark sits in the middle of its em (CNS 13180 / W3C clreq).
+      int qx = 0, qy = 0;
+      if (rightAlignedInk(o.renderer_, o.fontId_, inkMemo, geom, pc.codepoint, pc.style, col, rowIdx,
+                          InkVAlign::CentreCell, &qx, &qy)) {
+        gx = qx;
+        gy = qy;
+      } else {
+        gx += geom.cellPx / 4;
+        gy = std::max(0, gy - geom.cellPx / 4);
       }
     }
     g.x = static_cast<uint16_t>(gx);
@@ -2165,13 +2185,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           g.row = static_cast<uint16_t>(prev.row + 1);
           int gx = geom.columnLeftX(prev.column);
           int gy = g.row * cellPx;
-          if (Kinsoku::verticalShiftType(pc.codepoint) == 1) {
+          const int pullShift = Kinsoku::verticalShiftType(pc.codepoint);
+          if (pullShift == 1 || pullShift == 5) {
             int qx = 0, qy = 0;
             if (rightAlignedInk(renderer_, fontId_, inkMemo, geom, pc.codepoint, pc.style, prev.column, g.row,
-                                InkVAlign::HalfEmHead, &qx, &qy)) {
+                                pullShift == 1 ? InkVAlign::HalfEmHead : InkVAlign::CentreCell, &qx, &qy)) {
               gx = qx;
               gy = qy;
-            } else {
+            } else if (pullShift == 1) {
               gx += cellPx / 2;
               gy = std::max(0, gy - cellPx / 2);
             }

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <DictIndex.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,7 @@
 
 #include "Epub/Kinsoku.h"
 #include "Epub/Page.h"
+#include "util/CjkScript.h"
 
 namespace {
 // Bare vector growth (reserve()/push_back() past capacity) calls operator new, which aborts the
@@ -48,14 +50,13 @@ bool WordSelectionScan::isLookupableChar(uint32_t cp) {
   if (cp == 0xFE45 || cp == 0xFE46) return false;
   if (cp == 0x30FC) return false;
   if (cp == 0x30FB) return false;
+  if (cp >= 0xFE30 && cp <= 0xFE4F) return false;  // vertical presentation forms (﹁﹂ etc.)
   if (cp == 0x2026 || cp == 0x2025) return false;
   if (cp >= '0' && cp <= '9') return false;
   if (cp >= 0xFF10 && cp <= 0xFF19) return false;
   if (cp >= 0x3040 && cp <= 0x309F) return true;  // Hiragana
   if (cp >= 0x30A0 && cp <= 0x30FF) return true;  // Katakana
-  if (cp >= 0x4E00 && cp <= 0x9FFF) return true;  // CJK Unified
-  if (cp >= 0x3400 && cp <= 0x4DBF) return true;  // CJK Ext A
-  if (cp >= 0xF900 && cp <= 0xFAFF) return true;  // CJK Compat
+  if (cjk::isHan(cp)) return true;
   return cp >= 0x80;
 }
 
@@ -67,9 +68,7 @@ bool WordSelectionScan::isHiragana(uint32_t cp) {
   return (cp >= 0x3040 && cp <= 0x309F) || (Kinsoku::isSmallKana(cp) && cp < 0x30A0);
 }
 
-bool WordSelectionScan::isCJK(uint32_t cp) {
-  return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF);
-}
+bool WordSelectionScan::isCJK(uint32_t cp) { return cjk::isHan(cp); }
 
 bool WordSelectionScan::isDigitCp(uint32_t cp) { return (cp >= '0' && cp <= '9') || (cp >= 0xFF10 && cp <= 0xFF19); }
 
@@ -212,6 +211,9 @@ void WordSelectionScan::reset() {
   allGlyphs.clear();
   selectableGlyphs.clear();
   selectToAllIdx.clear();
+  // Chinese and Cantonese both segment whole runs; Japanese keeps the deinflecting greedy scan.
+  chineseMode_ =
+      std::strcmp(DictIndex::languageFolder(), "zh") == 0 || std::strcmp(DictIndex::languageFolder(), "yue") == 0;
   phase = Phase::Scan;
   scanPos = 0;
   recordFrom = 0;
@@ -302,8 +304,77 @@ void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint3
   markContextScanned();
 }
 
-void WordSelectionScan::initFromPage(const Page& page) {
+namespace {
+// Bytes of the UTF-8 sequence starting at `lead`, clamped to what is left of the word.
+size_t utf8SequenceLength(const unsigned char lead, const size_t remaining) {
+  const size_t length = lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : 4;
+  return std::min(length, remaining);
+}
+}  // namespace
+
+void WordSelectionScan::measurePage(const Page& page, const GfxRenderer& renderer, const int fontId,
+                                    const bool suppressRuby, LineGeometry& out) {
+  out.boxes.reset();
+  out.count = 0;
+  // Count first, so the table is one exact allocation rather than a vector doubling its way up.
+  size_t total = 0;
+  for (const auto& el : page.elements) {
+    if (el->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*el);
+    if (!line.getBlock()) continue;
+    const TextBlock& block = *line.getBlock();
+    for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
+      const char* text = block.wordText(wi);
+      const size_t length = block.wordTextLen(wi);
+      for (size_t b = 0; b < length; b += utf8SequenceLength(static_cast<unsigned char>(text[b]), length - b)) total++;
+    }
+  }
+  if (total == 0) return;
+  auto boxes = makeUniqueNoThrow<GlyphBox[]>(total);
+  if (!boxes) {
+    LOG_ERR("WLS", "OOM: %u glyph boxes; word lookup opens without a page cursor", static_cast<unsigned>(total));
+    return;
+  }
+
+  std::vector<TextBlock::WordPlacement> placements;  // reused line to line
+  size_t at = 0;
+  for (const auto& el : page.elements) {
+    if (el->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*el);
+    if (!line.getBlock()) continue;
+    const TextBlock& block = *line.getBlock();
+    block.wordPlacements(renderer, fontId, line.xPos, line.yPos, suppressRuby, placements);
+    for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
+      const char* text = block.wordText(wi);
+      const size_t length = block.wordTextLen(wi);
+      const bool placed = wi < placements.size();
+      int penX = placed ? placements[wi].x : 0;
+      for (size_t b = 0; b < length;) {
+        const size_t seqLen = utf8SequenceLength(static_cast<unsigned char>(text[b]), length - b);
+        // One glyph at a time, in the font and style the line was laid out with. Kerning is
+        // left out: it only exists between Latin letters, which are never a lookup target here.
+        char utf8[5] = {};
+        memcpy(utf8, text + b, seqLen);
+        const int advance = placed ? renderer.getRenderAdvanceX(placements[wi].fontId, utf8, block.wordStyle(wi)) +
+                                         block.getBlockStyle().letterSpacing
+                                   : 0;
+        boxes[at++] = {static_cast<uint16_t>(std::max(0, penX)),
+                       static_cast<uint16_t>(placed ? std::max<int>(0, placements[wi].y) : 0),
+                       static_cast<uint8_t>(std::clamp(advance, 0, 255))};
+        penX += advance;
+        b += seqLen;
+      }
+    }
+  }
+  out.boxes = std::move(boxes);
+  out.count = total;
+}
+
+void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geometry) {
   reset();
+  if (geometry && !geometry->valid()) geometry = nullptr;
+  size_t boxAt = 0;  // walks geometry->boxes in step with every codepoint of every word
+  uint16_t lineIndex = 0;
   // Horizontal mode: flatten the page's lines into one continuous character
   // stream (single paragraph). Latin words keep their separating spaces; CJK
   // runs are concatenated directly so dictionary lookups see contiguous text.
@@ -328,6 +399,7 @@ void WordSelectionScan::initFromPage(const Page& page) {
     }
     const TextBlock& block = *line.getBlock();
     bool lineHadWord = false;
+    const uint16_t column = lineIndex++;
     for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
       if (oom) break;
       // The arena stores words as NUL-terminated spans, not std::strings (upstream 1.5.0).
@@ -345,12 +417,19 @@ void WordSelectionScan::initFromPage(const Page& page) {
       // join simply finds nothing, exactly as today, while the right one is the whole feature.
       const bool lineFinal = wi + 1 == block.wordCount();
       const bool joinHyphen = lineFinal && word.size() > 1 && word.back() == '-';
+      const size_t boxAfterWord = boxAt + [&word] {
+        size_t count = 0;
+        for (size_t b = 0; b < word.size();
+             b += utf8SequenceLength(static_cast<unsigned char>(word[b]), word.size() - b))
+          count++;
+        return count;
+      }();
       if (joinHyphen) word.remove_suffix(1);
       // Insert a separating space only between two ASCII-word boundaries -- unless the previous
       // line ended mid-word, where a space is exactly what must not appear.
       if (!joinToPrevious && lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&
           isAsciiWord(static_cast<unsigned char>(word[0]))) {
-        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, ' ', 0, 0})) {
+        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, column, 0, ' ', 0, 0, 0})) {
           oom = true;
           break;
         }
@@ -375,12 +454,22 @@ void WordSelectionScan::initFromPage(const Page& page) {
                (static_cast<unsigned char>(word[b + 2]) & 0x3F) << 6 | (static_cast<unsigned char>(word[b + 3]) & 0x3F);
           b += 4;
         }
-        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, 0})) {
+        GlyphRef ref{0, 0, column, 0, cp, 0, 0, 0};
+        if (geometry && boxAt < geometry->count) {
+          const GlyphBox& box = geometry->boxes[boxAt];
+          ref.x = box.x;
+          ref.y = box.y;
+          ref.row = box.x;
+          ref.width = box.width;
+        }
+        boxAt++;
+        if (!pushGlyphSafe(allGlyphs, ref)) {
           oom = true;
           break;
         }
         lastCp = cp;
       }
+      boxAt = boxAfterWord;  // past a stripped hyphen, or the rest of a word a failed push cut short
     }
     // A line that emitted nothing (an empty block) is still a line in between: the pending join
     // cannot reach across it.
@@ -771,6 +860,8 @@ void WordSelectionScan::scanOnePosition() {
   const auto& g = allGlyphs[i];
   if (i < skipUntil) return;
 
+  if (chineseMode_ && isCJK(g.codepoint) && scanChineseRun(i)) return;
+
   const uint32_t paraIdx = g.paragraphIndex;
 
   // Skip leading digits — a number is looked up together with the counter
@@ -1043,6 +1134,100 @@ void WordSelectionScan::scanOnePosition() {
     }
     selectToAllIdx.push_back(i);
   }
+}
+
+bool WordSelectionScan::scanChineseRun(const size_t from) {
+  const uint32_t paraIdx = allGlyphs[from].paragraphIndex;
+  // The run: consecutive hanzi of one paragraph. Punctuation, digits, Latin and tate-chu-yoko
+  // runs end it, and so does the page's context boundary extended by one lookup window.
+  size_t n = 0;
+  while (from + n < allGlyphs.size() && n < kRunMax && allGlyphs[from + n].paragraphIndex == paraIdx &&
+         isCJK(allGlyphs[from + n].codepoint)) {
+    n++;
+  }
+  if (n == 0) return false;
+
+  // Lookup text: the run plus whatever hanzi follow it, so a word that begins near the end of a
+  // run cut at kRunMax still sees its full window. Byte offsets per run cell for the probes.
+  std::string text;
+  text.reserve((n + static_cast<size_t>(kMaxLookupChars)) * 3);
+  uint16_t byteAt[kRunMax + 1];
+  for (size_t j = 0; j < n + static_cast<size_t>(kMaxLookupChars) - 1; j++) {
+    const size_t idx = from + j;
+    if (j <= n) byteAt[j] = static_cast<uint16_t>(text.size());
+    if (idx >= allGlyphs.size() || allGlyphs[idx].paragraphIndex != paraIdx || !isCJK(allGlyphs[idx].codepoint)) break;
+    encodeUtf8(allGlyphs[idx].codepoint, text);
+  }
+
+  for (size_t p = 0; p < n; p++) {
+    std::memset(runPriority_[p], 0, sizeof(runPriority_[p]));
+    runFound_[p] = WordLookup::lookupAll(text, byteAt[p], runPriority_[p], kChineseMaxWindow);
+  }
+
+  // Best split of cells [p, n) by total word cost, the unigram model every Chinese segmenter
+  // uses: a word costs -log P(word). The converter's priority is 255 - 28*log10(rank), so
+  // 255 - priority is log(rank) in units of 12 per e-fold, and under Zipf's law log P(word) is
+  // -log(rank) - log(1/P(commonest)); the commonest word (的) is about 5% of running text, which is
+  // 3 e-folds, 36 units. Without that base term two common single characters would always beat
+  // the word they form (不 + 是 over 不是). With no frequency data every word costs the same and
+  // the split with the fewest words wins: longest match. A cell no entry covers stands alone at a
+  // cost above any word's, never swallowed.
+  constexpr int16_t kWordCost = -(255 + 36);
+  constexpr int16_t kUnknownCost = -400;
+  runBest_[n] = 0;
+  for (size_t p = n; p-- > 0;) {
+    int16_t best = INT16_MIN;
+    uint8_t bestLen = 1;
+    for (int len = 1; len <= kMaxLookupChars; len++) {
+      if (!(runFound_[p] & (1u << (len - 1)))) continue;
+      // A word may run past the run's end (into the tail or the next call's cells): it ends the
+      // run and is scored as one word.
+      const size_t next = std::min(n, p + static_cast<size_t>(len));
+      const int16_t score = static_cast<int16_t>(runBest_[next] + kWordCost + runPriority_[p][len - 1]);
+      if (score > best || (score == best && len > bestLen)) {
+        best = score;
+        bestLen = static_cast<uint8_t>(len);
+      }
+    }
+    if (best == INT16_MIN) {
+      best = static_cast<int16_t>(runBest_[p + 1] + kUnknownCost);
+      bestLen = 0;  // no entry: the cell is passed over, not selectable
+    }
+    runBest_[p] = best;
+    runBestLen_[p] = bestLen;
+  }
+
+  // Record the chosen words. Cells before recordFrom are context only (see aimAtGlyph).
+  size_t p = 0;
+  size_t covered = n;  // cells the chosen words span; the last one may overrun the run
+  while (p < n) {
+    const size_t cell = from + p;
+    const uint8_t len = runBestLen_[p];
+    const size_t advance = std::max<size_t>(len, 1);
+    if (len > 0 && cell >= recordFrom && cell < contextStart) {
+      GlyphRef entry = allGlyphs[cell];
+      size_t span = len;
+      if (cell + span > contextStart) span = contextStart - cell;
+      entry.matchLen = static_cast<uint8_t>(std::min<size_t>(span, 255));
+      if (!pushGlyphSafe(selectableGlyphs, entry)) {
+        scanPos = allGlyphs.size();
+        scanTruncated = true;
+        return true;
+      }
+      selectToAllIdx.push_back(cell);
+    }
+    covered = std::max(covered, p + advance);
+    p += advance;
+  }
+  for (size_t k = 0; k < covered && from + k < allGlyphs.size(); k++) {
+    if (from + k >= recordFrom) markScanned(from + k);
+  }
+  // The cells the words cover are done, including a last word that ran past the run. The walk
+  // continues at the next word boundary: left on a cell this run marked, step() would take it
+  // for another pass's work and re-aim eight cells back, segmenting every run twice.
+  skipUntil = std::max(skipUntil, from + covered);
+  scanPos = std::max(scanPos, std::min(from + covered, allGlyphs.size()));
+  return true;
 }
 
 namespace {
