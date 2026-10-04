@@ -1459,13 +1459,20 @@ class SniffSink : public Print {
 void EpubReaderActivity::sniffLanguageIfNeeded() {
   if (!epub || languageOverride != cjk::LANG_AUTO || detectedLanguage != 0) return;
   if (cjk::scriptForLanguage(epub->getLanguage()) != CjkScript::None) return;  // the tag is enough
-  const int spine = currentSpineIndex;
-  if (spine < 0 || spine >= epub->getSpineItemsCount()) return;
+  const int spineCount = epub->getSpineItemsCount();
+  if (currentSpineIndex < 0 || currentSpineIndex >= spineCount) return;
   // The sink is ~40 bytes; the stream reads the chapter in 1KB chunks and stops after a few
-  // hundred CJK characters, so a tagless Latin book pays one short read, once.
+  // hundred CJK characters, so a tagless Latin book pays one short read, once. A chapter that
+  // holds almost no text (a cover page, a title page) decides nothing, so the next ones are
+  // read too, up to three, and the counts accumulate across them.
   auto sink = makeUniqueNoThrow<SniffSink>();
   if (!sink) return;
-  epub->readItemContentsToStream(epub->getSpineItem(spine).href, *sink, 1024, /*allowEarlyStop=*/true);
+  constexpr uint32_t kTextEnoughToJudge = 300;  // letters and CJK characters
+  for (int spine = currentSpineIndex; spine < spineCount && spine < currentSpineIndex + 3; spine++) {
+    epub->readItemContentsToStream(epub->getSpineItem(spine).href, *sink, 1024, /*allowEarlyStop=*/true);
+    const cjk::ScriptSniff& sn = sink->sniff;
+    if (sn.enough() || sn.han + sn.kana + sn.latin >= kTextEnoughToJudge) break;
+  }
   const CjkScript found = sink->sniff.verdict();
   switch (found) {
     case CjkScript::Japanese:

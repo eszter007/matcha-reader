@@ -44,6 +44,14 @@ import struct
 import sys
 import urllib.request
 
+# The sparse-index generator lives with the firmware scripts; the device reads its .spx beside
+# each .idx to answer a lookup in two SD reads instead of twenty.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+try:
+    from gen_dict_spx import gen_one as _gen_spx
+except ImportError:  # running from a copy of this file alone
+    _gen_spx = None
+
 JMDICT_URL = "https://github.com/scriptin/jmdict-simplified/releases/latest/download/jmdict-eng-3.5.0.json.tgz"
 HEADWORD_SIZE = 32
 RECORD_FORMAT = f"<{HEADWORD_SIZE}sIHBB"  # headword(32) + offset(4) + length(2) + priority(1) + pad(1)
@@ -123,6 +131,13 @@ def write_binary(records: list, output_dir: str, name: str = "vocab", title: str
     print(f"  {dat_path}: {dat_size:,} bytes")
     if title:
         print(f"  {title_path}: {title}")
+    spx_path = os.path.join(output_dir, f"{name}.spx")
+    if _gen_spx is not None and index_entries:
+        _gen_spx(idx_path, spx_path)
+        print(f"  {spx_path}: {os.path.getsize(spx_path):,} bytes (sparse index)")
+    elif os.path.exists(spx_path):
+        os.remove(spx_path)  # a stale sidecar for an older .idx would be ignored, but keep it tidy
+        print(f"  {name}.spx: not generated (scripts/gen_dict_spx.py not found); run it on the folder")
     print(f"  Total: {(idx_size + dat_size) / 1024 / 1024:.1f} MB")
 
 # ── JMdict(jmdict - simplified JSON) ─────────────────────────────
