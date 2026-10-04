@@ -987,6 +987,9 @@ def load_levels(path: str, name: str) -> dict:
                     level = m.group(1)
             if level is None:
                 continue
+            # TOCFL's band 0 is the pre-A1 "Novice" list; a zero would read like a mistake.
+            if level == "0":
+                level = "Novice"
             for w in words:
                 out.setdefault(w, f"{name} {level}")
     print(f"Level list {path}: {len(out):,} forms tagged {name}")

@@ -154,5 +154,5 @@ class ScriptFilters(unittest.TestCase):
             with open(tocfl, "w", encoding="utf-8") as f:
                 f.write("ID,Traditional,Simplified,Pinyin,POS,Variants\nL0-1001,我,我,wǒ,N,\nL3-0012,說話,说话,shuō huà,V,\n")
             levels = conv.load_levels(tocfl, "TOCFL")
-            self.assertEqual(levels["我"], "TOCFL 0")
+            self.assertEqual(levels["我"], "TOCFL Novice")
             self.assertEqual(levels["说话"], "TOCFL 3")
