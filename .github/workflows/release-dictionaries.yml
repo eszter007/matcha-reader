@@ -42,14 +42,15 @@ jobs:
         run: |
           python3 tools/dict_convert/convert_jmdict.py --lang zh \
             --input src/cedict.txt.gz --frequency src/jieba-dict.txt --split-names \
-            --levels src/hsk30.csv --level-name HSK --examples src/pairs.tsv \
+            --levels src/hsk30.csv --level-name HSK --examples src/pairs.tsv --examples-script simplified \
             --output-dir packs/simplified/dictionaries/zh
 
       - name: Build traditional pack
         run: |
           python3 tools/dict_convert/convert_jmdict.py --lang zh --zhuyin --split-names \
             --input src/cedict.txt.gz --input src/dict-revised.json.xz \
-            --frequency src/tocfl.csv --levels src/tocfl.csv --level-name TOCFL --examples src/pairs.tsv \
+            --frequency src/tocfl.csv --levels src/tocfl.csv --level-name TOCFL \
+            --examples src/pairs.tsv --examples-script traditional \
             --output-dir packs/traditional/dictionaries/zh
 
       - name: Write attributions and zip

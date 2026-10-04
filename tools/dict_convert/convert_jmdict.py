@@ -825,11 +825,29 @@ def format_definition_cedict(trad: str, simp: str, pinyin: str, glosses: list, z
 EXAMPLES_PER_ENTRY = 2
 EXAMPLE_MAX_CHARS = 40
 
+# The commonest characters that exist in only one script, in matching pairs (mirrors the
+# firmware's content sniff). Tatoeba mixes both; a simplified pack should show simplified
+# sentences, and the other way round.
+_SIMPLIFIED_ONLY = set("这说们个么时国来对会发为还没过样开学现后点见问东门车书长几应两认让经关实话听从头尔业爱图电机体试写读马鸟龙叶万与")
+_TRADITIONAL_ONLY = set("這說們個麼時國來對會發為還沒過樣開學現後點見問東門車書長幾應兩認讓經關實話聽從頭爾業愛圖電機體試寫讀馬鳥龍葉萬與")
 
-def load_sentence_pairs(path: str) -> list:
+
+def sentence_script(sentence: str) -> str:
+    """'simplified', 'traditional', or 'any' when nothing in the sentence tells them apart."""
+    simp = sum(1 for ch in sentence if ch in _SIMPLIFIED_ONLY)
+    trad = sum(1 for ch in sentence if ch in _TRADITIONAL_ONLY)
+    if simp > trad:
+        return "simplified"
+    if trad > simp:
+        return "traditional"
+    return "any"
+
+
+def load_sentence_pairs(path: str, script: str = "any") -> list:
     """Tatoeba 'sentence pairs' export (id, sentence, id, translation) or a plain two-column
     sentence<TAB>translation file. Returns [(sentence, translation)] with long sentences dropped:
-    a short example shows the word in use; a long one only costs space on the card."""
+    a short example shows the word in use; a long one only costs space on the card. script keeps
+    only sentences written in that script (or in neither distinguishably)."""
     pairs = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -841,6 +859,8 @@ def load_sentence_pairs(path: str) -> list:
             else:
                 continue
             if not sentence or len(sentence) > EXAMPLE_MAX_CHARS or not _HAN_RE.search(sentence):
+                continue
+            if script != "any" and sentence_script(sentence) not in ("any", script):
                 continue
             pairs.append((sentence, translation))
     pairs.sort(key=lambda p: len(p[0]))  # shortest first, so the cap keeps the clearest ones
@@ -960,6 +980,12 @@ def load_levels(path: str, name: str) -> dict:
                 continue
             level = next((x for x in fields if re.fullmatch(r"[1-9](?:-[1-9])?", x)), None)
             if level is None:
+                # The ivankra CSVs carry the level in the row id: L3-0123 (HSK), L0-1001 (TOCFL, where
+                # L0 is the pre-A1 novice band).
+                m = re.match(r"L(\d)-\d+", fields[0]) if fields else None
+                if m:
+                    level = m.group(1)
+            if level is None:
                 continue
             for w in words:
                 out.setdefault(w, f"{name} {level}")
@@ -1014,7 +1040,7 @@ def format_definition_moedict(entry: dict) -> str:
         reading = " · ".join(x for x in (_moe_text(heteronym.get("bopomofo")), _moe_text(heteronym.get("pinyin"))) if x)
         if reading:
             parts.append("【" + reading + "】")
-        definitions = heteronym.get("definitions", [])[:8]
+        definitions = heteronym.get("definitions", [])[:6]
         numbered = len(definitions) > 1
         for i, d in enumerate(definitions):
             line = ""
@@ -1025,10 +1051,10 @@ def format_definition_moedict(entry: dict) -> str:
                 line += f"{i + 1}. "
             line += _moe_text(d.get("def"))
             parts.append(line)
-            for example in (d.get("example") or [])[:2]:
+            # One modern example per sense; the classical quotations are left out, they are what
+            # makes the full dictionary 50 MB and a learner rarely reads them on a 6-inch screen.
+            for example in (d.get("example") or [])[:1]:
                 parts.append("  " + _moe_text(example))
-            for quote in (d.get("quote") or [])[:1]:
-                parts.append("  " + _moe_text(quote))
     return "\n".join(p for p in parts if p.strip())
 
 
@@ -1171,6 +1197,12 @@ def main():
         "sentences, shown under its glosses.",
     )
     parser.add_argument(
+        "--examples-script",
+        default="any",
+        choices=["any", "simplified", "traditional"],
+        help="Keep only example sentences written in this script (Tatoeba mixes both).",
+    )
+    parser.add_argument(
         "--frequency-kind",
         default="auto",
         choices=["auto", "count", "rank"],
@@ -1197,7 +1229,7 @@ def main():
 
     levels = load_levels(args.levels, args.level_name) if args.levels else {}
     jyutping = load_canto_readings(args.jyutping) if args.jyutping else {}
-    sentence_pairs = load_sentence_pairs(args.examples) if args.examples else None
+    sentence_pairs = load_sentence_pairs(args.examples, args.examples_script) if args.examples else None
     records = []
     name_records = []
     titles = []

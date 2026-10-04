@@ -139,3 +139,20 @@ class Examples(unittest.TestCase):
             self.assertEqual(ex[3], [("你好。", "Hello.")])
             text = conv.format_definition_cedict("中國", "中国", "Zhong1 guo2", ["China"], False, examples=ex[0])
             self.assertTrue(text.endswith("China\n  我在中国说话。\n  I speak in China."))
+
+
+class ScriptFilters(unittest.TestCase):
+    def test_sentence_script(self):
+        self.assertEqual(conv.sentence_script("这是说话"), "simplified")
+        self.assertEqual(conv.sentence_script("這是說話"), "traditional")
+        self.assertEqual(conv.sentence_script("人山人海"), "any")
+
+    def test_level_from_row_id(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            tocfl = os.path.join(d, "tocfl.csv")
+            with open(tocfl, "w", encoding="utf-8") as f:
+                f.write("ID,Traditional,Simplified,Pinyin,POS,Variants\nL0-1001,我,我,wǒ,N,\nL3-0012,說話,说话,shuō huà,V,\n")
+            levels = conv.load_levels(tocfl, "TOCFL")
+            self.assertEqual(levels["我"], "TOCFL 0")
+            self.assertEqual(levels["说话"], "TOCFL 3")
