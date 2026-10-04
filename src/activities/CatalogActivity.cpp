@@ -106,31 +106,46 @@ void CatalogActivity::onCancelEvent(const freeink::ui::ActionEvent&, void* user)
 
 bool CatalogActivity::handleCustomInput() {
   if (state == State::WIFI_SELECTION || state == State::SEARCH_INPUT || state == State::DOWNLOADING) return true;
+  // A catalog shown as a tab (a band above it, the bar below) keeps both usable in every settled
+  // state: without this an error screen left them drawn but dead, and a tap on either retried.
+  const bool tabbed = hasTabBar() || ringTopTabCount() > 0;
   if (state == State::ERROR) {
     // Back first: a header back tap is also a screen tap, which means Retry here.
     int x = 0, y = 0;
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       onBackButton();
+    } else if (tabbed && (handleTabBarInput() || routeListTouch())) {
+      // The bar, or a pill of the band, took it.
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) {
       if (wifiConnected())
         retryBrowse();
       else
         launchWifiSelection();
+    } else if (tabbed) {
+      navigateButtons();  // Up/Down still walk the band and the bar
     }
     return true;
   }
   if (state == State::CHECK_WIFI || state == State::LOADING) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) onBackButton();
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      onBackButton();
+    } else if (tabbed && !(handleTabBarInput() || routeListTouch())) {
+      navigateButtons();
+    }
     return true;
   }
   // Previous on a searchable list's top row opens search on release. Lists
   // move on press, so latch that press instead of stepping; holding still
   // pages (navigateButtons() drops the latch when the selection moves).
-  if (mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
-    searchPending = state == State::BROWSING && hasSearch() && nav.selected == 0;
+  // On a tabbed catalog Up belongs to the ring (it leaves the top row for the band), so only Left
+  // opens search there, and only while the cursor is on the rows.
+  const auto searchKey = tabbed ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::NavPrevious;
+  if (mappedInput.wasPressed(searchKey)) {
+    searchPending =
+        state == State::BROWSING && hasSearch() && nav.selected == 0 && ringFocus() == TabRing::Focus::Content;
     return searchPending;
   }
-  if (searchPending && mappedInput.wasReleased(MappedInputManager::Button::NavPrevious)) {
+  if (searchPending && mappedInput.wasReleased(searchKey)) {
     searchPending = false;
     launchSearch();
     return true;

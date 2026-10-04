@@ -46,10 +46,10 @@
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/DeleteUtils.h"
-#include "util/RenameWithState.h"
 #include "util/DictionaryRegistry.h"
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
+#include "util/RenameWithState.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -1175,7 +1175,10 @@ void CrossPointWebServer::handleRename() const {
     newPath += "/";
   }
   newPath += newName;
-  if (protectedpaths::isSensitivePath(itemPath.c_str()) || protectedpaths::isSensitivePath(newPath.c_str())) {
+  // The folder a store lives in counts too: relocated, the store would sit under a path the
+  // check no longer matches.
+  if (protectedpaths::isSensitiveOrHoldsOne(itemPath.c_str()) ||
+      protectedpaths::isSensitiveOrHoldsOne(newPath.c_str())) {
     file.close();
     server->send(403, "text/plain", "Cannot move protected item");
     return;
@@ -1270,7 +1273,10 @@ void CrossPointWebServer::handleMove() const {
     newPath += "/";
   }
   newPath += itemName;
-  if (protectedpaths::isSensitivePath(itemPath.c_str()) || protectedpaths::isSensitivePath(newPath.c_str())) {
+  // The folder a store lives in counts too: relocated, the store would sit under a path the
+  // check no longer matches.
+  if (protectedpaths::isSensitiveOrHoldsOne(itemPath.c_str()) ||
+      protectedpaths::isSensitiveOrHoldsOne(newPath.c_str())) {
     file.close();
     server->send(403, "text/plain", "Cannot move protected item");
     return;
@@ -1351,8 +1357,9 @@ void CrossPointWebServer::handleDelete() const {
       continue;
     }
 
-    // Credential stores stay on the device whatever the listing shows.
-    if (protectedpaths::isSensitivePath(itemPath.c_str())) {
+    // Credential stores stay on the device whatever the listing shows, and so does the folder
+    // they live in: deleting it would take them along.
+    if (protectedpaths::isSensitiveOrHoldsOne(itemPath.c_str())) {
       failedItems += itemPath + " (hidden/system file); ";
       allSuccess = false;
       continue;

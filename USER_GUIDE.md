@@ -387,6 +387,10 @@ open a list when selected.
   - "ON" - Vertical space will be added between paragraphs in Reading Mode
   - "OFF" - Paragraphs will not have vertical space added, but will have first-line indentation
 
+- **Paragraph Indentation** (Text Settings > Layout): How far the first line of a paragraph is indented, from "Off" to
+  five spaces; two by default. It applies to horizontal text, and takes the place of an indent the book sets for
+  itself (a hanging indent, where the book pulls the first line *out*, is kept). Vertical text is not affected.
+
 - **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` or `/.dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
 
 - **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode, horizontal and vertical (Japanese) text alike, furigana included. Note this slows down page turns slightly: the grey edges follow the black-and-white page about half a second later, and a page turn before then skips them. Images inside vertical text turn grayscale once you stay on the page, whether or not this is on.
@@ -409,6 +413,13 @@ open a list when selected.
 
 - **Navigate with Side Buttons in Word Lookup** (on by default): Lets the side buttons step between words during
   Word Lookup. See [Word Lookup](#61-word-lookup).
+
+- **Haptic Feedback** (devices with a vibration motor only): A short tap when the device accepts a touch.
+  "On Touch" covers taps, long presses and touch page turns; "On Touch + Page Turn" adds the capacitive page
+  buttons; "Off" silences it. A touch that does nothing (a turn past the first page, a tap on the tab you are
+  already in) stays silent.
+
+- **Haptic Intensity**: Low, Medium or High.
 
 - **Reversed page turn (Vertical & Manga)** (off by default): Flips which button turns the page forward, for the two things that are read right-to-left.
 
@@ -494,6 +505,9 @@ open a list when selected.
   [§6.4](#64-chinese-books)): the built-in CJK glyphs are the Japanese set, so menus would show boxes without one.
 
 - **Keyboard Layouts**: Choose which on-screen keyboard layouts are offered when typing.
+
+- **Plugins**: Lists the plugins installed on the SD card that have a screen on the device. A plugin is a folder
+  on the card; adding or updating one needs no firmware update. See [docs/sd-plugins.md](docs/sd-plugins.md).
 
 - **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi.
 

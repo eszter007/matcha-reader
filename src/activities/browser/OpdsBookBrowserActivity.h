@@ -61,6 +61,9 @@ class OpdsBookBrowserActivity final : public CatalogActivity {
   // Left on the catalog opens search; Up/Down reach the bar.
   bool ringContentLeftRightToBar() const override { return false; }
   void buildTopBand(UiScreen& screen) override;
+  // Every pill leaves the catalog, the OPDS one included (back to the server list). Ignored while
+  // a download runs: its progress callback routes touches too.
+  void onTabAction(int index) override;
   void restartAfterWifi() override;
   // Out of the browser: to the Library's OPDS tab in the Cover Grid theme, Home elsewhere.
   void leaveBrowser();

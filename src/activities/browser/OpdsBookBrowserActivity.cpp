@@ -75,6 +75,12 @@ void OpdsBookBrowserActivity::buildTopBand(UiScreen& screen) {
   LibraryTabs::buildBand(screen, renderer, LibraryTabs::Opds, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
 }
 
+void OpdsBookBrowserActivity::onTabAction(const int index) {
+  if (state == State::DOWNLOADING) return;
+  app.clearTapFlash();
+  goToLibraryTab(index);
+}
+
 void OpdsBookBrowserActivity::restartAfterWifi() {
   if (exitTarget >= LIBRARY_TAB_BASE) {
     silentRestartToLibraryTab(exitTarget - LIBRARY_TAB_BASE);
@@ -236,6 +242,8 @@ void OpdsBookBrowserActivity::onBackButton() {
   if (state == State::CHECK_WIFI || navigationHistory.empty()) {
     leaveBrowser();
   } else {
+    // The parent feed opens with the cursor on its rows, wherever it was when Back was pressed.
+    if (ringFocus() != TabRing::Focus::Content) ringSetFocus(TabRing::Focus::Content, false);
     currentPath = navigationHistory.back();
     navigationHistory.pop_back();
     releaseEntries();

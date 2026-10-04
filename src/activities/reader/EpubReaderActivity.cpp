@@ -5983,10 +5983,12 @@ ScreenshotInfo EpubReaderActivity::getScreenshotInfo() const {
 
 int EpubReaderActivity::getProgressBasisPoints() const {
   if (isAtEndOfBook()) return 10000;
-  if (!epub || !section || epub->getBookSize() == 0) return getProgressPercent() * 100;
-  const int totalPages = section->estimatedTotalPages();
-  if (totalPages <= 0) return getProgressPercent() * 100;
-  const float chapterProgress = static_cast<float>(section->currentPage) / static_cast<float>(totalPages);
+  // chapterPosition() answers for the vertical and the horizontal section alike.
+  const ChapterPosition position = chapterPosition();
+  if (!epub || (!section && !verticalSection) || !position.hasTotal() || epub->getBookSize() == 0) {
+    return getProgressPercent() * 100;
+  }
+  const float chapterProgress = static_cast<float>(position.pageIndex) / static_cast<float>(position.totalPages);
   const int basisPoints =
       static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 10000.0f + 0.5f);
   return std::clamp(basisPoints, 0, 10000);

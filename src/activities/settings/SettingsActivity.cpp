@@ -707,7 +707,11 @@ void SettingsActivity::toggleCurrentSetting() {
                                });
         break;
       case SettingAction::Plugins:
-        startActivityForResult(std::make_unique<PluginCatalogActivity>(renderer, mappedInput), resultHandler);
+        if (auto activity = makeUniqueNoThrow<PluginCatalogActivity>(renderer, mappedInput)) {
+          startActivityForResult(std::move(activity), resultHandler);
+        } else {
+          LOG_ERR("SETTINGS", "OOM: PluginCatalogActivity");
+        }
         break;
       case SettingAction::KeyboardLayouts:
         if (auto activity = makeUniqueNoThrow<KeyboardLayoutsActivity>(renderer, mappedInput)) {

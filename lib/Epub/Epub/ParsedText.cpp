@@ -767,7 +767,7 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
 int ParsedText::resolveLineIndent(const size_t lineIndex, const GfxRenderer& renderer, const int fontId) const {
   if (blockStyle.hasDropCap()) {
     // The enlarged letter takes the place of the first-line indent -- applying both would push
-    // the opening words a further three spaces off a column that is already inset.
+    // the opening words a further paragraph indent off a column that is already inset.
     return lineIndex < blockStyle.dropCapLines ? blockStyle.dropCapIndent : 0;
   }
   return resolveFirstLineIndent(lineIndex == 0 && !dropCapLinesEmitted, renderer, fontId);

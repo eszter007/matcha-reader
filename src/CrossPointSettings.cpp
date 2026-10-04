@@ -192,10 +192,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   paragraphIndentSpaces = migrateParagraphIndentSpaces(hasSavedWidth, savedWidth, extraParagraphSpacing != 0);
   if (!hasSavedWidth || savedWidth < 0 || savedWidth > 5) needsResave = true;
 
-  // Older files stored one combined touch mode under "touchReaderControls":
-  // 0=off, 1=tap, 2=swipe, 3=inverted tap. Split it into the master toggle
-  // plus the per-direction gesture pair (the generic loop above already folded
-  // out-of-range toggle values back to the On default).
+  // Older files stored one combined touch mode under "touchReaderControls": 0=off, 1=tap,
+  // 2=swipe, 3=inverted tap, 4=inverted swipe (Matcha-only, for right-to-left vertical text).
+  // Split it into the master toggle plus the per-direction gesture pair (the generic loop above
+  // already folded out-of-range toggle values back to the On default).
   if (doc["pageTurnGesture"].isNull() && doc["previousPageGesture"].isNull() &&
       doc["touchReaderControls"].is<uint8_t>()) {
     const uint8_t mode = doc["touchReaderControls"].as<uint8_t>();

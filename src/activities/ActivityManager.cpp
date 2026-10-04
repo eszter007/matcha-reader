@@ -285,7 +285,12 @@ void ActivityManager::goToReadingStats() {
 void ActivityManager::goToJoinNetwork() {
   // Post heap-defrag reboot: enter the web-server activity straight in Join
   // Network mode (skips mode selection, does not reboot again).
-  replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput, /*startInJoinNetwork=*/true));
+  auto activity = makeUniqueNoThrow<CrossPointWebServerActivity>(renderer, mappedInput, /*startInJoinNetwork=*/true);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: file transfer activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
 }
 
 void ActivityManager::goToUsbDrive() {

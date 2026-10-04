@@ -3,16 +3,16 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
-#include <MangaPanel.h>
 #include <KOReaderDocumentId.h>
+#include <MangaPanel.h>
 #include <Memory.h>
 #include <TrustedTime.h>
 
-#include "BookStats.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 
+#include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderActivity.h"
@@ -51,9 +51,12 @@ std::unique_ptr<Activity> ReaderActivity::create(GfxRenderer& renderer, MappedIn
   return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
 }
 
+// No RenderLock here. The session is owned by the render task, which holds that lock for the
+// whole of a vertical chapter build; waiting on it from the loop task would stall every press made
+// during the build -- the turns the mid-build path exists to serve. The outcome is parked instead
+// and applied in markPageRendered(), just before the page it produced is counted.
 void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
-  RenderLock lock(*this);
-  readerSession.noteTurn(forward, succeeded);
+  pendingTurn_.store(forward && succeeded ? TURN_FORWARD : TURN_OTHER, std::memory_order_release);
 }
 
 // The one place every reader reports a page reaching the panel -- horizontal and vertical EPUB
@@ -61,6 +64,8 @@ void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
 // from each render path.
 void ReaderActivity::markPageRendered() {
   pageRendered.store(true, std::memory_order_release);
+  const uint8_t turn = pendingTurn_.exchange(TURN_NONE, std::memory_order_acq_rel);
+  if (turn != TURN_NONE) readerSession.noteTurn(turn == TURN_FORWARD, turn == TURN_FORWARD);
   readerSession.onRenderComplete(millis(), trustedtime::trustedNow(), getProgressBasisPoints());
 }
 
@@ -118,6 +123,11 @@ void ReaderActivity::onExit() {
     RenderLock lock;
     sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
   }
+  // Before onReaderExit(): it releases the book (and may move a finished one), after which
+  // neither the session's document id nor the exit percentage can be computed.
+  flushReaderSession();
+  const int exitPercent = hasBook() ? getScreenshotInfo().progressPercent : 0;
+  const bool hadBook = hasBook();
   onReaderExit();
 
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
@@ -127,13 +137,11 @@ void ReaderActivity::onExit() {
 
   LOG_INF("MEM", "reader exit: free=%u max_block=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
-  // Flush BEFORE the ReaderExit event: the session's final progress must be
-  // durable before a subscriber can act on the exit notification.
-  flushReaderSession();
-
-  if (pluginevents::anySubscriber(pluginevents::Event::ReaderExit)) {
+  // The session was flushed above, so its final progress is durable before a subscriber can act
+  // on the exit notification. A book that never opened has no exit to report.
+  if (hadBook && pluginevents::anySubscriber(pluginevents::Event::ReaderExit)) {
     char percent[8];
-    snprintf(percent, sizeof(percent), "%d", getScreenshotInfo().progressPercent);
+    snprintf(percent, sizeof(percent), "%d", exitPercent);
     const pluginevents::Var vars[] = {{"book", bookPath.c_str()}, {"percent", percent}};
     pluginevents::emit(pluginevents::Event::ReaderExit, vars, 2);
   }
@@ -259,6 +267,8 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
     endOfBookOptions->render(renderer, mappedInput);
   }
   renderer.displayBuffer();
+  // Credits the last page's dwell and brings the session's progress to the end of the book.
+  markPageRendered();
   return true;
 }
 

@@ -26,10 +26,12 @@ inline bool isShortAlias(const char* first, const char* last) {
   return base <= 8 && ext <= 3;
 }
 
-inline bool isSensitivePath(const char* path) {
-  // Canonicalise first ("//", "/./" and ".." would otherwise dodge the prefix
-  // match while still opening the same file).
-  std::string canon;
+// The path as SdFat would resolve it ("//", "/./" and ".." would otherwise dodge
+// a prefix match while still opening the same file). Returns true when a segment
+// is a short alias that could stand for a store or its folder, which no
+// spelling check can rule out.
+inline bool canonicalise(const char* path, std::string& canon) {
+  canon.clear();
   canon.reserve(strlen(path) + 1);
   int depth = 0;
   for (const char* seg = path; *seg;) {
@@ -57,12 +59,38 @@ inline bool isSensitivePath(const char* path) {
     }
     seg += len;
   }
+  return false;
+}
+
+inline bool isSensitivePath(const char* path) {
+  std::string canon;
+  if (canonicalise(path, canon)) return true;
   for (const char* file : SENSITIVE_FILES) {
     // FAT names are case-insensitive.
     if (strncasecmp(canon.c_str(), file, strlen(file)) == 0) return true;
   }
   return false;
 }
+
+// A folder a credential store lives in. Renaming, moving or deleting it takes
+// the store along under a name isSensitivePath() no longer matches, so those
+// operations refuse it as they refuse the store itself. The root is not one:
+// no handler can act on it.
+inline bool holdsSensitivePath(const char* path) {
+  std::string canon;
+  if (canonicalise(path, canon)) return true;
+  if (canon.empty()) return false;
+  for (const char* file : SENSITIVE_FILES) {
+    if (strlen(file) > canon.size() && file[canon.size()] == '/' &&
+        strncasecmp(canon.c_str(), file, canon.size()) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// For an operation that relocates or removes its target.
+inline bool isSensitiveOrHoldsOne(const char* path) { return isSensitivePath(path) || holdsSensitivePath(path); }
 
 // A plugin-supplied path (web request or device.json): absolute, no parent
 // refs, not a credential store.

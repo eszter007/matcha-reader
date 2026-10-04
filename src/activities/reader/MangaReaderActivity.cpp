@@ -695,10 +695,10 @@ void MangaReaderActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
-    if (touchMenu) haptic_feedback::touchAction();
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else if (viewMode == ViewMode::PanelZoom || viewMode == ViewMode::FullPage) {
+      if (touchMenu) haptic_feedback::touchAction();
       launchMenu();
       return;
     }
@@ -748,7 +748,12 @@ void MangaReaderActivity::loop() {
   }
 
   if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
-  if (touch.prev || touch.next) haptic_feedback::touchAction();
+
+  // What the turn below may change, to tell a turn that happened from one that was refused
+  // (Previous on the first page).
+  const uint32_t pageBefore = currentPage;
+  const int panelBefore = currentPanel;
+  const ViewMode modeBefore = viewMode;
 
   if (viewMode == ViewMode::PanelZoom) {
     if (nextTriggered) nextPanel();
@@ -775,6 +780,9 @@ void MangaReaderActivity::loop() {
     }
     if (prevTriggered) prevPage();
   }
+
+  const bool moved = currentPage != pageBefore || currentPanel != panelBefore || viewMode != modeBefore;
+  if (moved && (touch.prev || touch.next)) haptic_feedback::touchAction();
 }
 
 void MangaReaderActivity::render(RenderLock&&) {

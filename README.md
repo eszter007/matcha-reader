@@ -229,6 +229,7 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 - Drop caps: a chapter opening styled with `::first-letter { font-size: … }` gets the enlarged initial the book asked for, with the first few lines wrapping around it
 - **Use Book Margins** (Text Settings > Layout, on by default) keeps the indents a book sets for itself, so epigraphs and long quotations stay inset. Turn it off and those blocks sit flush with the body text. Horizontal books only: in vertical text, Layout lists just Line Spacing and Screen Margin
 - Instant image page turns, since the next image decodes in the background
+- From upstream, and working in vertical and horizontal books alike: SD-card plugins (**Settings → Plugins**, see [docs/sd-plugins.md](docs/sd-plugins.md)), a haptic tap on touch devices with a motor (**Settings → Controls → Haptic Feedback**), and a **Paragraph Indentation** setting (Text Settings > Layout; horizontal text)
 - Next-book suggestions at the end of EPUB, TXT/Markdown, XTC and manga books
 - A file browser that shows everything on the card, with unsupported files greyed out rather than hidden
 - Fully localised, in all the languages CrossPoint ships
