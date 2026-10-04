@@ -247,6 +247,16 @@ class GfxRenderer {
   void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
   void clearFallbackFont(int primaryFontId) { fallbackFontMap_.erase(primaryFontId); }
+  // The fallback font id registered for a primary, 0 when none.
+  int fallbackFontFor(int primaryFontId) const {
+    const auto it = fallbackFontMap_.find(primaryFontId);
+    return it == fallbackFontMap_.end() ? 0 : it->second;
+  }
+  // The font a string is really drawn and measured with: fontId, or its registered fallback when
+  // the string needs it. For a caller that positions text by that font's metrics.
+  int fontIdForText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const {
+    return resolveTextFontId(fontId, text, style);
+  }
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).

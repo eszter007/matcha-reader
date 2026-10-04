@@ -136,7 +136,8 @@ class SdCardFontSystem {
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
 
-  /// Lazily load the selected family's exact CJK fallback size for a native Word Lookup font.
+  /// Lazily load the exact CJK fallback size for a native Word Lookup font, from the selected
+  /// family or, when that cannot draw the book's script, from the companion.
   void ensureWordLookupFallback(GfxRenderer& renderer, int primaryFontId, uint8_t pointSize);
   /// Unload what ensureWordLookupFallback() loaded, when the lookup session ends. A font loaded
   /// mid-session lands at the top of a busy heap; left resident it caps the largest free block
@@ -205,7 +206,9 @@ class SdCardFontSystem {
   bool cjkFallbackNeeded() const { return activeCjkScript() != CjkScript::None; }
   // Register a loaded family's UI point sizes as the size-matched fallback of each built-in UI
   // font, so list rows draw its glyphs at their own size rather than at the reader's.
-  void registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family, GfxRenderer& renderer);
+  // nearestSize: a UI size the family does not ship takes the closest one it does.
+  void registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family, GfxRenderer& renderer,
+                       bool nearestSize = false);
 
   SdCardFontManager fallbackManager_;
   const EpdFontFamily* defaultGlobalFallback_ = nullptr;
@@ -251,8 +254,13 @@ class SdCardFontSystem {
   struct LookupExtra {
     int primaryFontId = 0;
     int sdFontId = 0;
+    bool companion = false;  // loaded by fallbackManager_ rather than manager_
   };
   LookupExtra lookupExtras_[2];
+  // UI fonts lent the lookup panel's companion size for the session (see ensureWordLookupFallback).
+  // and what each was mapped to before, restored when the session ends. One per UI font.
+  bool lookupUiLent_ = false;
+  int lookupUiPrevious_[3] = {};
   std::atomic<bool> registryDirty_{false};
 
 #if CROSSPOINT_VECTOR_FONTS

@@ -101,6 +101,7 @@ constexpr UiFontSize kUiFontSizes[] = {
 // The size a companion is loaded at when only the UI needs it: the largest UI size, and the
 // smallest the CJK cuts ship.
 constexpr uint8_t UI_FALLBACK_POINT_SIZE = 12;
+static_assert(std::size(kUiFontSizes) == 3, "SdCardFontSystem::lookupUiPrevious_ holds one entry per UI font");
 
 }  // namespace
 
@@ -311,9 +312,16 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
 }
 
 void SdCardFontSystem::registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family,
-                                       GfxRenderer& renderer) {
+                                       GfxRenderer& renderer, const bool nearestSize) {
   for (const auto& ui : kUiFontSizes) {
-    const int sdFontId = mgr.loadFamilyExtraSize(family, renderer, ui.pointSize);
+    // The CJK cuts start at 12 pt, so a companion serves the 8 and 10 pt UI fonts from the
+    // nearest size it ships. Unmapped, those fonts take each missing glyph from the global
+    // fallback one by one, and a Chinese title draws half its characters at another size.
+    uint8_t pointSize = ui.pointSize;
+    if (nearestSize) {
+      if (const auto* nearest = family.findNearestSize(ui.pointSize)) pointSize = nearest->pointSize;
+    }
+    const int sdFontId = mgr.loadFamilyExtraSize(family, renderer, pointSize);
     if (sdFontId != 0) {
       renderer.setFallbackFont(ui.fontId, sdFontId);
       // ...and give that SD font the built-in family of the SAME size as its own next stop.
@@ -324,7 +332,7 @@ void SdCardFontSystem::registerUiSizes(SdCardFontManager& mgr, const SdCardFontF
       // typeface. With this, the miss lands on the matching built-in instead.
       const auto& fontMap = renderer.getFontMap();
       const auto builtinIt = fontMap.find(ui.fontId);
-      if (builtinIt != fontMap.end()) {
+      if (builtinIt != fontMap.end() && pointSize == ui.pointSize) {
         renderer.setFamilyFallback(sdFontId, &builtinIt->second);
       }
     } else {
@@ -336,12 +344,24 @@ void SdCardFontSystem::registerUiSizes(SdCardFontManager& mgr, const SdCardFontF
 void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int primaryFontId,
                                                 const uint8_t pointSize) {
   // Tiny intentionally stays on the compact built-in path; avoid loading an SD font for it.
-  if (pointSize <= 8 || manager_.currentFamilyName().empty()) return;
-  const auto* family = registry_.findFamily(manager_.currentFamilyName());
+  if (pointSize <= 8) return;
+  // The selected family when it draws the book's script; otherwise the companion that was loaded
+  // because it does not. Without either, the panel takes the companion's reader-size glyphs
+  // through the global fallback, and an entry mixes two sizes wherever the built-in subset stops.
+  // With a built-in face selected that is every line of a Chinese entry, but only a rare kanji
+  // of a Japanese one -- and redirecting a line also sets its Latin in the companion's face, so
+  // Japanese keeps the built-in subset and its serif glosses.
+  const std::string& selected = manager_.currentFamilyName();
+  const bool selectedCovers = !selected.empty() && loadedFamilyCovers(manager_, selected, cjkProbe());
+  const bool useCompanion = !fallbackManager_.currentFamilyName().empty() && !selectedCovers &&
+                            (!selected.empty() || cjk::isChinese(activeCjkScript()));
+  SdCardFontManager& mgr = useCompanion ? fallbackManager_ : manager_;
+  if (mgr.currentFamilyName().empty()) return;
+  const auto* family = registry_.findFamily(mgr.currentFamilyName());
   if (!family) return;
 
-  const bool wasResident = manager_.hasSize(pointSize);
-  const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, pointSize);
+  const bool wasResident = mgr.hasSize(pointSize);
+  const int sdFontId = mgr.loadFamilyExtraSize(*family, renderer, pointSize);
   if (sdFontId == 0) return;
   renderer.setFallbackFont(primaryFontId, sdFontId);
   const auto builtinIt = renderer.getFontMap().find(primaryFontId);
@@ -353,18 +373,39 @@ void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int
   if (!wasResident || ownedAlready) {
     for (auto& extra : lookupExtras_) {
       if (extra.primaryFontId == primaryFontId || extra.primaryFontId == 0) {
-        extra = {primaryFontId, sdFontId};
+        extra = {primaryFontId, sdFontId, useCompanion};
         break;
       }
     }
   }
+  // The panel's footer, reading and tag lines are set in the UI fonts, which in a book borrow
+  // the companion at the reader's size (see ensureCjkFallback). Lend them this one for the
+  // session instead: it is the panel's own size, and it is already paid for.
+  if (useCompanion && !lookupUiLent_) {
+    for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
+      lookupUiPrevious_[i] = renderer.fallbackFontFor(kUiFontSizes[i].fontId);
+      renderer.setFallbackFont(kUiFontSizes[i].fontId, sdFontId);
+    }
+    lookupUiLent_ = true;
+  }
 }
 
 void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
+  if (lookupUiLent_) {
+    for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
+      if (lookupUiPrevious_[i] != 0) {
+        renderer.setFallbackFont(kUiFontSizes[i].fontId, lookupUiPrevious_[i]);
+      } else {
+        renderer.clearFallbackFont(kUiFontSizes[i].fontId);
+      }
+    }
+    lookupUiLent_ = false;
+  }
   for (auto& extra : lookupExtras_) {
     if (extra.sdFontId == 0) continue;
     renderer.clearFallbackFont(extra.primaryFontId);
-    manager_.unloadExtra(extra.sdFontId, renderer);  // a no-op the second time for a shared font
+    // a no-op the second time for a shared font
+    (extra.companion ? fallbackManager_ : manager_).unloadExtra(extra.sdFontId, renderer);
     extra = {};
   }
 }
@@ -666,7 +707,14 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
       // sits at the reader size and the global fallback serves the few UI glyphs; a second size
       // table beside it is RAM a page build needs.
       if (cjkScript_ == CjkScript::None && manager_.currentFamilyName().empty()) {
-        registerUiSizes(fallbackManager_, *fam, renderer);
+        registerUiSizes(fallbackManager_, *fam, renderer, /*nearestSize=*/true);
+      } else if (manager_.currentFamilyName().empty() && cjk::isChinese(activeCjkScript())) {
+        // A Chinese book is the exception to "no second table in a book". The built-in subset
+        // is Japanese and stops at the first simplified or rarer traditional character, so
+        // every menu row and chapter title would draw part of itself from the subset at the UI
+        // size and the rest from this companion at the reader's. A Japanese book meets that
+        // only on a rare kanji and keeps the RAM.
+        registerUiSizes(fallbackManager_, *fam, renderer, /*nearestSize=*/true);
       }
       return;
     }

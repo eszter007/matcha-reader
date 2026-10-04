@@ -398,7 +398,7 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   // ones, else the percentage. A negative percent means the caller has not read it yet -- draw
   // nothing rather than a wrong badge.
   if (progressPercent < 0) return;
-  char badgeBuf[8];
+  char badgeBuf[32];  // a translated "Read" runs to nine two-byte letters
   if (progressPercent <= 0) {
     snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
   } else if (progressPercent >= 100) {
@@ -407,7 +407,8 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
     snprintf(badgeBuf, sizeof(badgeBuf), "%d%%", progressPercent);
   }
   const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
-  const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
+  // The font the label is really drawn with: a CJK one comes from the companion, which is taller.
+  const int badgeH = renderer.getLineHeight(renderer.fontIdForText(SMALL_FONT_ID, badgeBuf)) + 4;
   const int badgeW = badgeTextW + 12;
   const int badgeX = coverX + coverWidth - badgeW;
   const int badgeY = coverY;

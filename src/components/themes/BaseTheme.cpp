@@ -1165,10 +1165,15 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
     }
 
+    // A title the built-in subset cannot draw goes to the companion font at the companion's
+    // size. Keep it on the bar's baseline, or the taller glyphs run off the bottom of the panel.
+    const int titleFontId = renderer.fontIdForText(SMALL_FONT_ID, title.c_str());
+    const int titleY =
+        textY - std::max(0, renderer.getFontAscenderSize(titleFontId) - renderer.getFontAscenderSize(SMALL_FONT_ID));
     renderer.drawText(SMALL_FONT_ID,
                       titleMarginLeftAdjusted + metrics.statusBarHorizontalMargin + orientedMarginLeft +
                           (availableTitleSpace - titleWidth) / 2,
-                      textY, title.c_str());
+                      titleY, title.c_str());
   }
 }
 
