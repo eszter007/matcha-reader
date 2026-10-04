@@ -5,7 +5,7 @@
 #include <string>
 
 #include "EndOfBookOptions.h"
-#include "ReaderSession.h"
+#include "ReaderSessionReporter.h"
 #include "activities/Activity.h"
 
 class ReaderActivity : public Activity {
@@ -16,12 +16,8 @@ class ReaderActivity : public Activity {
 
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
   std::atomic<bool> endOfBookOptionsReady{false};
-  ReaderSession readerSession;
+  ReaderSessionReporter sessionReporter;
   std::atomic<bool> pageRendered{false};
-  // A turn reported by the loop task, applied to readerSession by the render task when the page
-  // it produced is on the panel (see notePageTurn()).
-  enum : uint8_t { TURN_NONE, TURN_FORWARD, TURN_OTHER };
-  std::atomic<uint8_t> pendingTurn_{TURN_NONE};
   bool bookRemembered = false;
   void markPageRendered();
   void rememberBookOnceRendered();

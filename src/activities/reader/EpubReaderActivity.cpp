@@ -2102,6 +2102,10 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
 // strings are set by openProtectedBook (ContentProtection.cpp).
 bool EpubReaderActivity::handleLoadFailure() {
   if (loadProtectionError.empty()) return false;
+  // loadBook() may have unloaded the resident fonts to give the book one clean region of heap.
+  // onReaderEnter(), which puts them back, never runs for a book that did not open, and under a
+  // CJK interface the dialog below needs the companion for its own text.
+  sdFontSystem.ensureLoaded(renderer);
   const std::string& perr = loadProtectionError;
   StrId msg = StrId::STR_DRM_PROTECTED_FILE;
   bool offerSync = false;

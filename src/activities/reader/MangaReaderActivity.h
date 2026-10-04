@@ -12,6 +12,7 @@
 #include "../../BookmarkEntry.h"
 #include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
+#include "ReaderSessionReporter.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
@@ -26,6 +27,7 @@ class MangaReaderActivity final : public Activity {
 
   void onEnter() override;
   void onExit() override;
+  void prepareForSleep() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool isReaderActivity() const override { return true; }
@@ -69,6 +71,12 @@ class MangaReaderActivity final : public Activity {
 
   enum class ViewMode { FullPage, PanelZoom, TextOverlay };
   ViewMode viewMode = ViewMode::FullPage;
+
+  // Reading-session plugin events, reported the way the other readers report them.
+  ReaderSessionReporter sessionReporter_;
+  // Whole-book progress in basis points; the end screen is 100%.
+  int progressBasisPoints() const;
+  void flushReaderSession();
   // Per-book preference persisted as progress.bin byte 7. Books that physically omit page images
   // still enter their crops regardless of this preference.
   bool panelsOnlyMode = false;

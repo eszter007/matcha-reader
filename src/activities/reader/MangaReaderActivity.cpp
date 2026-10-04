@@ -218,6 +218,7 @@ void MangaReaderActivity::onExit() {
   }
 
   saveProgress();
+  flushReaderSession();
   endOfBookOptionsReady.store(false, std::memory_order_release);
   endOfBookOptions.reset();
   panels.clear();
@@ -526,6 +527,8 @@ bool MangaReaderActivity::renderEndOfBook() {
                               EpdFontFamily::BOLD);
   }
   renderer.displayBuffer();
+  // Credits the last page's dwell and brings the session's progress to the end of the book.
+  sessionReporter_.pageRendered(progressBasisPoints());
   return true;
 }
 
@@ -782,7 +785,24 @@ void MangaReaderActivity::loop() {
   }
 
   const bool moved = currentPage != pageBefore || currentPanel != panelBefore || viewMode != modeBefore;
+  // A panel step is reading, the same as a page turn.
+  sessionReporter_.noteTurn(nextTriggered && !prevTriggered, moved);
   if (moved && (touch.prev || touch.next)) haptic_feedback::touchAction();
+}
+
+void MangaReaderActivity::prepareForSleep() { flushReaderSession(); }
+
+// A manga book is a folder, so its document id comes from the panel index inside it: one file
+// per book, written once at conversion.
+void MangaReaderActivity::flushReaderSession() {
+  if (!book) return;
+  sessionReporter_.flush(book->getFolder(), book->getFolder() + "/panels.idx");
+}
+
+int MangaReaderActivity::progressBasisPoints() const {
+  if (!book || book->getPageCount() == 0) return 0;
+  if (currentPage >= book->getPageCount()) return 10000;
+  return static_cast<int>(static_cast<uint64_t>(currentPage) * 10000 / book->getPageCount());
 }
 
 void MangaReaderActivity::render(RenderLock&&) {
@@ -811,6 +831,7 @@ void MangaReaderActivity::render(RenderLock&&) {
   }
 
   saveProgress();
+  sessionReporter_.pageRendered(progressBasisPoints());
 
   if (translationAfterRender.load(std::memory_order_relaxed)) {
     translationPageReady.store(true, std::memory_order_release);

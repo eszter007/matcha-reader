@@ -21,8 +21,25 @@
 #include <ZipFile.h>
 #include <esp_heap_caps.h>
 
+#include <atomic>
+
 #include "BookKey.h"
+#include "ContentCacheReclaim.h"
 #include "Epub/parsers/EncryptionManifestProbe.h"
+
+namespace contentreclaim {
+namespace {
+std::atomic<TaskHandle_t> blockedTask{nullptr};
+}
+
+Blocked::Blocked() { blockedTask.store(xTaskGetCurrentTaskHandle(), std::memory_order_release); }
+Blocked::~Blocked() { blockedTask.store(nullptr, std::memory_order_release); }
+
+bool blockedOnThisTask() {
+  const TaskHandle_t blocked = blockedTask.load(std::memory_order_acquire);
+  return blocked != nullptr && blocked == xTaskGetCurrentTaskHandle();
+}
+}  // namespace contentreclaim
 
 namespace freeink {
 namespace content {
@@ -41,6 +58,11 @@ void reclaimContentCaches() {
   constexpr size_t CONTENT_WORKING_SET = 64 * 1024;
   const size_t before = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   if (before >= CONTENT_WORKING_SET) return;
+  // Not from a task that runs beside the renderer: see ContentCacheReclaim.h.
+  if (contentreclaim::blockedOnThisTask()) {
+    LOG_DBG("CPRO", "Cache reclaim skipped on a background task (max_block=%u)", static_cast<unsigned>(before));
+    return;
+  }
   freeink::MemoryManager::instance().clearCaches();
   LOG_DBG("CPRO", "Cache reclaim: max_block=%u -> %u, free=%u", static_cast<unsigned>(before),
           static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(ESP.getFreeHeap()));

@@ -192,6 +192,7 @@ HttpDownloader::DownloadError CatalogActivity::downloadFile(const std::string& u
   downloadProgress = downloadTotal = 0;
   lastRenderedPercent = -1;
   lastProgressUpdateMs = 0;
+  lowHeapRefused = false;
   // Rebuildable SD-font caches can hold tens of KB the TLS session needs for
   // a multi-MB file; release them up front (they repopulate on demand) and
   // refuse to start below the floor. A doomed transfer otherwise dies
@@ -200,6 +201,7 @@ HttpDownloader::DownloadError CatalogActivity::downloadFile(const std::string& u
   if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
       ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
     LOG_ERR("CAT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    lowHeapRefused = true;
     return HttpDownloader::HTTP_ERROR;
   }
   return HttpDownloader::downloadToFile(
@@ -212,6 +214,9 @@ void CatalogActivity::finishDownload(const HttpDownloader::DownloadError result)
     onGoHome();
   } else if (result == HttpDownloader::OK || result == HttpDownloader::ABORTED) {
     downloadFinished(result == HttpDownloader::ABORTED);
+  } else if (lowHeapRefused) {
+    lowHeapRefused = false;
+    fail(StrId::STR_LOW_MEMORY_RETRY);
   } else {
     LOG_ERR("CAT", "Download failed: %d", static_cast<int>(result));
     fail(StrId::STR_DOWNLOAD_FAILED);

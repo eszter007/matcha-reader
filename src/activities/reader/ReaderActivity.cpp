@@ -3,13 +3,10 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
-#include <KOReaderDocumentId.h>
 #include <MangaPanel.h>
 #include <Memory.h>
-#include <TrustedTime.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 
 #include "BookStats.h"
@@ -51,22 +48,16 @@ std::unique_ptr<Activity> ReaderActivity::create(GfxRenderer& renderer, MappedIn
   return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
 }
 
-// No RenderLock here. The session is owned by the render task, which holds that lock for the
-// whole of a vertical chapter build; waiting on it from the loop task would stall every press made
-// during the build -- the turns the mid-build path exists to serve. The outcome is parked instead
-// and applied in markPageRendered(), just before the page it produced is counted.
 void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
-  pendingTurn_.store(forward && succeeded ? TURN_FORWARD : TURN_OTHER, std::memory_order_release);
+  sessionReporter.noteTurn(forward, succeeded);
 }
 
-// The one place every reader reports a page reaching the panel -- horizontal and vertical EPUB
-// pages, XTC pages, the end-of-book screen -- so the reading session is fed from here rather than
-// from each render path.
+// The one place every reader here reports a page reaching the panel -- horizontal and vertical
+// EPUB pages, XTC pages, the end-of-book screen -- so the reading session is fed from this point
+// rather than from each render path.
 void ReaderActivity::markPageRendered() {
   pageRendered.store(true, std::memory_order_release);
-  const uint8_t turn = pendingTurn_.exchange(TURN_NONE, std::memory_order_acq_rel);
-  if (turn != TURN_NONE) readerSession.noteTurn(turn == TURN_FORWARD, turn == TURN_FORWARD);
-  readerSession.onRenderComplete(millis(), trustedtime::trustedNow(), getProgressBasisPoints());
+  sessionReporter.pageRendered(getProgressBasisPoints());
 }
 
 void ReaderActivity::onEnter() {
@@ -155,36 +146,7 @@ void ReaderActivity::onExit() {
 
 void ReaderActivity::prepareForSleep() { flushReaderSession(); }
 
-void ReaderActivity::flushReaderSession() {
-  if (!readerSession.isEmitWorthy() || !pluginevents::anySubscriber(pluginevents::Event::ReaderSession)) {
-    readerSession.reset();
-    return;
-  }
-
-  const std::string document = KOReaderDocumentId::calculate(bookPath);
-  const bool validDocument =
-      document.size() == 32 && std::all_of(document.begin(), document.end(), [](const unsigned char c) {
-        return std::isdigit(c) || (c >= 'a' && c <= 'f');
-      });
-  if (validDocument) {
-    char startTime[24];
-    char endTime[24];
-    char duration[16];
-    char startProgress[8];
-    char endProgress[8];
-    snprintf(startTime, sizeof(startTime), "%lld", static_cast<long long>(readerSession.startTime()));
-    snprintf(endTime, sizeof(endTime), "%lld", static_cast<long long>(readerSession.endTime()));
-    snprintf(duration, sizeof(duration), "%lu", static_cast<unsigned long>(readerSession.durationSeconds()));
-    snprintf(startProgress, sizeof(startProgress), "%u", readerSession.startProgressBp());
-    snprintf(endProgress, sizeof(endProgress), "%u", readerSession.endProgressBp());
-    const pluginevents::Var vars[] = {{"book", bookPath.c_str()},       {"document", document.c_str()},
-                                      {"start_time", startTime},        {"end_time", endTime},
-                                      {"duration_seconds", duration},   {"start_progress_bp", startProgress},
-                                      {"end_progress_bp", endProgress}, {"progress_scale", "10000"}};
-    pluginevents::emit(pluginevents::Event::ReaderSession, vars, 8);
-  }
-  readerSession.reset();
-}
+void ReaderActivity::flushReaderSession() { sessionReporter.flush(bookPath, bookPath); }
 
 void ReaderActivity::loop() {
   if (handleLoadFailureInput()) return;

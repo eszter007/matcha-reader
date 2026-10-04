@@ -1,6 +1,7 @@
 #include "CoverWorker.h"
 
 #include <Bitmap.h>
+#include <ContentCacheReclaim.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -73,6 +74,9 @@ void CoverWorker::loop() {
 }
 
 void CoverWorker::runJob() {
+  // This task runs while the owning screen draws, and takes no RenderLock (see shouldCancel()):
+  // a protected book's reads must not clear the render caches from here.
+  const contentreclaim::Blocked noCacheReclaim;
   Result result;
   result.book = job_.book;
   result.fileSize = job_.fileSize;

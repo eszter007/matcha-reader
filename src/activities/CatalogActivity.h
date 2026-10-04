@@ -78,6 +78,9 @@ class CatalogActivity : public UiListActivity {
   void onDownloadProgress(size_t downloaded, size_t total);
   // Download input consumes home gestures before ActivityManager sees them.
   bool goHomeAfterCancel = false;
+  // downloadFile() refused to start for lack of heap: a different message from a transfer that
+  // failed, because the remedy differs (leave the screen and come back, rather than retry).
+  bool lowHeapRefused = false;
   bool searchPending = false;  // NavPrevious pressed on a searchable top row
   int lastRenderedPercent = -1;
   unsigned long lastProgressUpdateMs = 0;
