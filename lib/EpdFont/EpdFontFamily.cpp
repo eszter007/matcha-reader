@@ -84,8 +84,14 @@ const EpdGlyph* EpdFontFamily::getGlyphResident(const uint32_t cp, const Style s
     const EpdFont* gf = globalFallback_->getFont(style);
     if (gf->hasGlyph(cp)) return gf->getGlyph(cp);
     // Deliberately NO glyphMissHandler here.
+    // Covered but not in RAM: the caller prices it from the companion's advance table.
+    if (gf->hasCodepoint(cp)) return nullptr;
   }
-  return nullptr;
+  if (f->hasCodepoint(cp)) return nullptr;
+  // Nothing anywhere can draw cp, so getGlyph() will hand back this font's replacement glyph:
+  // measure that, or a title of undrawable characters is centred as if it were empty.
+  if (const EpdGlyph* own = f->getGlyph(cp)) return own;
+  return missingCjkGlyph(f, cp);
 }
 
 const EpdFontData* EpdFontFamily::getDataForGlyph(const uint32_t cp, const Style style) const {

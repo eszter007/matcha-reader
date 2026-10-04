@@ -206,9 +206,10 @@ class SdCardFontSystem {
   bool cjkFallbackNeeded() const { return activeCjkScript() != CjkScript::None; }
   // Register a loaded family's UI point sizes as the size-matched fallback of each built-in UI
   // font, so list rows draw its glyphs at their own size rather than at the reader's.
-  // nearestSize: a UI size the family does not ship takes the closest one it does.
-  void registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family, GfxRenderer& renderer,
-                       bool nearestSize = false);
+  void registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family, GfxRenderer& renderer);
+  // Send every UI font to the companion's resident font (loaded at pointSize), scaled to the UI
+  // font's own size.
+  void lendCompanionToUiFonts(GfxRenderer& renderer, int sdFontId, uint8_t pointSize);
 
   SdCardFontManager fallbackManager_;
   const EpdFontFamily* defaultGlobalFallback_ = nullptr;
@@ -267,7 +268,11 @@ class SdCardFontSystem {
   // UI fonts lent the lookup panel's companion size for the session (see ensureWordLookupFallback).
   // and what each was mapped to before, restored when the session ends. One per UI font.
   bool lookupUiLent_ = false;
-  int lookupUiPrevious_[3] = {};
+  struct UiMapping {
+    int fontId = 0;
+    uint16_t scale = 256;
+  };
+  UiMapping lookupUiPrevious_[3];
   std::atomic<bool> registryDirty_{false};
 
 #if CROSSPOINT_VECTOR_FONTS

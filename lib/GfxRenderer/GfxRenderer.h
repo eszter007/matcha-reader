@@ -129,12 +129,17 @@ class GfxRenderer {
   // appears at the same point size as the surrounding UI text. Populated by the
   // app-level SD font setup when an SD family is loaded. See resolveTextFontId().
   std::map<int, int> fallbackFontMap_;
+  std::map<int, uint16_t> fallbackScaleMap_;  // primary font id -> scale its fallback draws at
 
   // If `text` contains a CJK codepoint that `fontId` cannot render and `fontId`
   // has a registered fallback, returns the fallback id; otherwise returns
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // The scale a string redirected from fontId to resolvedFontId is drawn and measured at.
+  uint16_t redirectScale(int fontId, int resolvedFontId) const {
+    return resolvedFontId == fontId ? 256 : fallbackScaleFor(fontId);
+  }
 
   // Batch-load `text`'s glyphs into an SD-card font's resident mini tables
   // before a per-glyph measure/draw loop runs. Called when resolveTextFontId
@@ -244,19 +249,34 @@ class GfxRenderer {
   bool isVectorFont(const int fontId) const { return ttfFonts_.find(fontId) != ttfFonts_.end(); }
   // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
-  void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
-  void clearFallbackFonts() { fallbackFontMap_.clear(); }
-  void clearFallbackFont(int primaryFontId) { fallbackFontMap_.erase(primaryFontId); }
+  // scale (8.8 fixed point, 256 = as is): draw the fallback's glyphs that much smaller or larger,
+  // for a fallback that is not the primary's size -- the CJK cuts start at 12 pt, the UI fonts at 8.
+  void setFallbackFont(int primaryFontId, int fallbackFontId, uint16_t scale = 256) {
+    fallbackFontMap_[primaryFontId] = fallbackFontId;
+    if (scale == 256) {
+      fallbackScaleMap_.erase(primaryFontId);
+    } else {
+      fallbackScaleMap_[primaryFontId] = scale;
+    }
+  }
+  void clearFallbackFonts() {
+    fallbackFontMap_.clear();
+    fallbackScaleMap_.clear();
+  }
+  void clearFallbackFont(int primaryFontId) {
+    fallbackFontMap_.erase(primaryFontId);
+    fallbackScaleMap_.erase(primaryFontId);
+  }
+  uint16_t fallbackScaleFor(int primaryFontId) const {
+    const auto it = fallbackScaleMap_.find(primaryFontId);
+    return it == fallbackScaleMap_.end() ? 256 : it->second;
+  }
   // The fallback font id registered for a primary, 0 when none.
   int fallbackFontFor(int primaryFontId) const {
     const auto it = fallbackFontMap_.find(primaryFontId);
     return it == fallbackFontMap_.end() ? 0 : it->second;
   }
-  // The font a string is really drawn and measured with: fontId, or its registered fallback when
-  // the string needs it. For a caller that positions text by that font's metrics.
-  int fontIdForText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const {
-    return resolveTextFontId(fontId, text, style);
-  }
+
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).

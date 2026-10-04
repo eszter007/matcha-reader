@@ -380,9 +380,7 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
   renderer.fillRect(coverX + SHADOW, coverY + coverHeight, coverWidth, SHADOW, true);
 
   if (!hasCover) {
-    // The font the title is really drawn with: a CJK one comes from the companion, whose lines
-    // are taller and would overlap at the small font's spacing.
-    const int lineHeight = renderer.getLineHeight(renderer.fontIdForText(SMALL_FONT_ID, title.c_str()));
+    const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
     constexpr int ICON_SIZE = 32;
     renderer.drawIcon(CoverIcon, coverX + (coverWidth - ICON_SIZE) / 2, coverY + (coverHeight - ICON_SIZE) / 2,
                       ICON_SIZE);
@@ -409,8 +407,7 @@ void UITheme::drawBookCover(GfxRenderer& renderer, const Rect box, const std::st
     snprintf(badgeBuf, sizeof(badgeBuf), "%d%%", progressPercent);
   }
   const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
-  // The font the label is really drawn with: a CJK one comes from the companion, which is taller.
-  const int badgeH = renderer.getLineHeight(renderer.fontIdForText(SMALL_FONT_ID, badgeBuf)) + 4;
+  const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
   const int badgeW = badgeTextW + 12;
   const int badgeX = coverX + coverWidth - badgeW;
   const int badgeY = coverY;
