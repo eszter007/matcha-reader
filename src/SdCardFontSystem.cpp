@@ -347,14 +347,11 @@ void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int
   if (pointSize <= 8) return;
   // The selected family when it draws the book's script; otherwise the companion that was loaded
   // because it does not. Without either, the panel takes the companion's reader-size glyphs
-  // through the global fallback, and an entry mixes two sizes wherever the built-in subset stops.
-  // With a built-in face selected that is every line of a Chinese entry, but only a rare kanji
-  // of a Japanese one -- and redirecting a line also sets its Latin in the companion's face, so
-  // Japanese keeps the built-in subset and its serif glosses.
+  // through the global fallback, and an entry mixes two sizes wherever the built-in subset
+  // stops: every line of a Chinese entry, a rare kanji of a Japanese one.
   const std::string& selected = manager_.currentFamilyName();
   const bool selectedCovers = !selected.empty() && loadedFamilyCovers(manager_, selected, cjkProbe());
-  const bool useCompanion = !fallbackManager_.currentFamilyName().empty() && !selectedCovers &&
-                            (!selected.empty() || cjk::isChinese(activeCjkScript()));
+  const bool useCompanion = !fallbackManager_.currentFamilyName().empty() && !selectedCovers;
   SdCardFontManager& mgr = useCompanion ? fallbackManager_ : manager_;
   if (mgr.currentFamilyName().empty()) return;
   const auto* family = registry_.findFamily(mgr.currentFamilyName());
@@ -365,7 +362,22 @@ void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int
   if (sdFontId == 0) return;
   renderer.setFallbackFont(primaryFontId, sdFontId);
   const auto builtinIt = renderer.getFontMap().find(primaryFontId);
-  if (builtinIt != renderer.getFontMap().end()) renderer.setFamilyFallback(sdFontId, &builtinIt->second);
+  if (builtinIt != renderer.getFontMap().end()) {
+    if (useCompanion) {
+      // The companion has Latin of its own, in another face and without italics. Keep the
+      // built-in's: a line sent here for one hanzi must not change typeface around it. The
+      // font may be shared (the UI's 12 pt, the reader's own size), so what it pointed at before
+      // is put back when the session ends.
+      const auto sdIt = renderer.getFontMap().find(sdFontId);
+      for (auto& saved : lookupFallbackSaved_) {
+        if (saved.sdFontId == sdFontId) break;
+        if (saved.sdFontId != 0 || sdIt == renderer.getFontMap().end()) continue;
+        saved = {sdFontId, sdIt->second.getFallback(), sdIt->second.fallbackIsFirstForNonCjk()};
+        break;
+      }
+    }
+    renderer.setFamilyFallback(sdFontId, &builtinIt->second, /*nonCjkFirst=*/useCompanion);
+  }
   // Remember it for releaseWordLookupFallback(): the font when this call loaded it, and in any
   // case the mapping, which must not outlive a font another primary's release unloads.
   const bool ownedAlready = std::any_of(std::begin(lookupExtras_), std::end(lookupExtras_),
@@ -400,6 +412,11 @@ void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
       }
     }
     lookupUiLent_ = false;
+  }
+  for (auto& saved : lookupFallbackSaved_) {
+    // A font this session loaded is unloaded below; one that was resident gets its fallback back.
+    if (saved.sdFontId != 0) renderer.setFamilyFallback(saved.sdFontId, saved.fallback, saved.nonCjkFirst);
+    saved = {};
   }
   for (auto& extra : lookupExtras_) {
     if (extra.sdFontId == 0) continue;
@@ -706,9 +723,12 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
       // own sizes, so let the companion (loaded at the UI size above). In a book the companion
       // sits at the reader size and the global fallback serves the few UI glyphs; a second size
       // table beside it is RAM a page build needs.
-      if (cjkScript_ == CjkScript::None && manager_.currentFamilyName().empty()) {
+      // The selected family serves the UI sizes itself when it can draw the script; a Latin-only
+      // one (Literata) leaves that to the companion exactly as a built-in face does.
+      const bool uiNeedsCompanion = !selectedHasCjk;
+      if (cjkScript_ == CjkScript::None && uiNeedsCompanion) {
         registerUiSizes(fallbackManager_, *fam, renderer, /*nearestSize=*/true);
-      } else if (manager_.currentFamilyName().empty() && cjk::isChinese(activeCjkScript())) {
+      } else if (uiNeedsCompanion && cjk::isChinese(activeCjkScript())) {
         // A Chinese book is the exception to "no second table in a book". The built-in subset
         // is Japanese and stops at the first simplified or rarer traditional character, so
         // every menu row and chapter title would draw part of itself from the subset at the UI

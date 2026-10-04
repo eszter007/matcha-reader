@@ -42,8 +42,15 @@ class EpdFontFamily {
     return (static_cast<uint8_t>(style) & TEXT_DECORATION_MASK) != 0;
   }
 
-  void setFallback(const EpdFontFamily* fb) { fallbackFamily = fb; }
+  // nonCjkFirst: take everything that is not CJK from the fallback before this family's own
+  // glyphs. For a CJK companion standing in for a built-in face: a line redirected to it for
+  // its hanzi keeps its Latin in the face, and the italics, of the lines around it.
+  void setFallback(const EpdFontFamily* fb, const bool nonCjkFirst = false) {
+    fallbackFamily = fb;
+    fallbackFirstForNonCjk = fb != nullptr && nonCjkFirst;
+  }
   const EpdFontFamily* getFallback() const { return fallbackFamily; }
+  bool fallbackIsFirstForNonCjk() const { return fallbackFirstForNonCjk; }
 
   static void setGlobalFallback(const EpdFontFamily* fb) { globalFallback_ = fb; }
   static const EpdFontFamily* getGlobalFallback() { return globalFallback_; }
@@ -55,6 +62,11 @@ class EpdFontFamily {
   const EpdFont* italic;
   const EpdFont* boldItalic;
   const EpdFontFamily* fallbackFamily = nullptr;
+  bool fallbackFirstForNonCjk = false;
+
+  static const EpdGlyph* missingCjkGlyph(const EpdFont* f, uint32_t cp);
+  // The fallback's font when it, not this family, supplies cp (see setFallback); else null.
+  const EpdFont* nonCjkFallbackFont(uint32_t cp, Style style) const;
 
   const EpdFont* getFont(Style style) const;
 };

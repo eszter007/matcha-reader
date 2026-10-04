@@ -207,9 +207,9 @@ class GfxRenderer {
   // Point one registered family's glyph fallback at another. Used to give an SD font loaded
   // for a UI size a SIZE-MATCHED next stop (the built-in family of that size) instead of
   // letting it fall through to the global fallback, which is the reader-size companion.
-  void setFamilyFallback(int fontId, const EpdFontFamily* fallback) {
+  void setFamilyFallback(int fontId, const EpdFontFamily* fallback, bool nonCjkFirst = false) {
     const auto it = fontMap.find(fontId);
-    if (it != fontMap.end()) it->second.setFallback(fallback);
+    if (it != fontMap.end()) it->second.setFallback(fallback, nonCjkFirst);
   }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
 

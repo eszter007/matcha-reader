@@ -257,6 +257,13 @@ class SdCardFontSystem {
     bool companion = false;  // loaded by fallbackManager_ rather than manager_
   };
   LookupExtra lookupExtras_[2];
+  // What each companion font the lookup session borrowed fell back to before, per font.
+  struct LookupFallbackSaved {
+    int sdFontId = 0;
+    const EpdFontFamily* fallback = nullptr;
+    bool nonCjkFirst = false;
+  };
+  LookupFallbackSaved lookupFallbackSaved_[2];
   // UI fonts lent the lookup panel's companion size for the session (see ensureWordLookupFallback).
   // and what each was mapped to before, restored when the session ends. One per UI font.
   bool lookupUiLent_ = false;
