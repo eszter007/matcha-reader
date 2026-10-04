@@ -313,6 +313,11 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   url += GEMINI_MODEL;
   url += ":generateContent?key=";
   url += apiKey;
+  // Only the translated text. The full reply also carries the model's thought signature and
+  // usage counters -- 9 KB for a page whose translation is 600 bytes -- and the HTTP client
+  // gathers the body in one growing string beside the TLS session: on the device that growth
+  // ran out of contiguous heap and aborted.
+  url += "&$fields=candidates.content.parts.text";
 
   // TLS/HTTP client init needs one large *contiguous* buffer (record buffers, X.509 parsing,
   // etc.), so the gate must check the largest allocatable block, not total free heap -- on a
@@ -352,7 +357,7 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
   auto parts = part["parts"].to<JsonArray>();
   auto textPart = parts.add<JsonObject>();
   textPart["text"] = std::string(
-                         "Translate the following Japanese text to English. "
+                         "Translate the following text to English. "
                          "Return only the translation, no commentary.\n\n") +
                      sourceText;
 
