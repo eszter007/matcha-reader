@@ -13,7 +13,7 @@ It includes all features of upstream CrossPoint and runs on any supported ESP32 
 
 ### Now running on:
 - **ESP32C3-based** Xteink X4 and X3.
-- **ESP32S3-based** Xteink X4Pro and X4Classic, Seeed reTerminal Sticky, M5PaperMono
+- **ESP32S3-based** Xteink X4Pro and X4Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97"
 
 Full instructions live in the [User Guide](USER_GUIDE.md). This page is the short version.
 
