@@ -12,7 +12,7 @@ import sys
 import tempfile
 import zipfile
 
-GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 # Text that must not be touched: tags, existing ruby, scripts/styles, and the <head>.
@@ -77,8 +77,10 @@ def numbered(passages: list) -> str:
 
 def gemini_json(prompt: str, api_key: str, timeout: int = 120, retries: int = 3):
     """The model's JSON answer to prompt, parsed, or None after the retries."""
+    # No temperature: Gemini 3.8 drops the sampling parameters, and a reading is checked against
+    # the word anyway, so a varied answer cannot put a wrong one into the book.
     payload = {"contents": [{"parts": [{"text": prompt}]}],
-               "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}
+               "generationConfig": {"responseMimeType": "application/json"}}
     for _ in range(retries):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tf:
             json.dump(payload, tf)
