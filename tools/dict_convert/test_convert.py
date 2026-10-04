@@ -29,8 +29,11 @@ class PinyinMarks(unittest.TestCase):
         self.assertEqual(conv.pinyin_to_marks("m2"), "m")
 
     def test_bracketed_gloss(self):
-        self.assertEqual(conv.prettify_cedict_gloss("CL:個|个[ge4]"), "CL:個|个[gè]")
-        self.assertEqual(conv.prettify_cedict_gloss("see 你好[ni3 hao3]"), "see 你好[nǐ hǎo]")
+        self.assertEqual(conv.prettify_cedict_gloss("CL:個|个[ge4]"), "CL: 個/个 (gè)")
+        self.assertEqual(conv.prettify_cedict_gloss("see 你好[ni3 hao3]"), "see 你好 (nǐ hǎo)")
+        self.assertEqual(conv.prettify_cedict_gloss("as in 回來|回来[hui2 lai5]"), "as in 回來/回来 (huí lai)")
+        self.assertEqual(conv.prettify_cedict_gloss("a|b 仁, 義|义"), "a|b 仁, 義/义")
+        self.assertEqual(conv.prettify_cedict_gloss("對…|对… etc, 237號房間|237号房间"), "對…/对… etc, 237號房間/237号房间")
 
 
 class Zhuyin(unittest.TestCase):

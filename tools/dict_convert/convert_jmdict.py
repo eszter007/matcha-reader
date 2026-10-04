@@ -720,9 +720,20 @@ def pinyin_to_zhuyin(numbered: str) -> str:
 _BRACKETED_PINYIN_RE = re.compile(r"\[([A-Za-z0-9:\u00fc\u00dc ,]+)\]")
 
 
+# A word given in both scripts inside a gloss: 個|个, 237號房間|237号房间, 對…|对…. Not every bar:
+# only one that touches a CJK character.
+_CJK_CLASS = "[\u3400-\u9fff\uf900-\ufaff]"
+_SCRIPT_PAIR_BAR_RE = re.compile(rf"(?<={_CJK_CLASS})\||\|(?={_CJK_CLASS})")
+_CLASSIFIER_RE = re.compile(r"\bCL:(?=\S)")
+
+
 def prettify_cedict_gloss(gloss: str) -> str:
-    """CEDICT glosses embed numbered pinyin in brackets (CL:個|个[ge4], see 你好[ni3 hao3])."""
-    return _BRACKETED_PINYIN_RE.sub(lambda m: "[" + pinyin_to_marks(m.group(1)) + "]", gloss)
+    """CEDICT glosses carry their own markup for cross-references: both scripts joined by a bar
+    and numbered pinyin in brackets (CL:個|个[ge4], see 你好[ni3 hao3]). Written out for a reader:
+    "CL: 個/个 (gè)", "see 你好 (nǐ hǎo)"."""
+    gloss = _BRACKETED_PINYIN_RE.sub(lambda m: " (" + pinyin_to_marks(m.group(1)) + ")", gloss)
+    gloss = _SCRIPT_PAIR_BAR_RE.sub("/", gloss)
+    return _CLASSIFIER_RE.sub("CL: ", gloss)
 
 
 # ── Chinese : frequency ranking ────────────────────────────────
