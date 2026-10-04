@@ -1185,7 +1185,8 @@ python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.t
   to need carry a reading.
 
 The script needs Python and the CC-CEDICT file (README Setup step 2). Copy the resulting EPUB to the card and open
-it; the **Furigana** toggle in the reader menu shows or hides the pinyin, and is remembered per book.
+it; the **Pinyin / Zhuyin** toggle in the reader menu shows or hides the readings, and is remembered per book.
+It is the same switch Japanese books call **Furigana**, named for what each book carries.
 
 Without `--ai` the readings come from the dictionary, word by word. A character with several readings takes the
 one its word is listed under, and a character standing alone takes its first dictionary reading, which is often not
