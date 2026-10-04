@@ -15,6 +15,7 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SPI.h>
 #include <TrustedTime.h>
 #include <VectorFontSupport.h>
@@ -37,6 +38,7 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/reader/EpubReaderTranslationActivity.h"
+#include "activities/settings/ClockSyncActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/HomeTabBar.h"
 #include "components/LibraryTabs.h"
@@ -817,6 +819,43 @@ void setup() {
   allowSleepAt = millis() + 2000;
 }
 
+// A two-button shortcut: Power held together with a side button. The action runs once per
+// press, and the power release that ends it is swallowed so it does not also run the short
+// power-button action.
+struct PowerCombo {
+  bool armed = true;
+  bool active = false;
+};
+
+// True while the combination owns this loop tick.
+static bool pollPowerCombo(PowerCombo& combo, const uint8_t otherButton, void (*action)()) {
+  if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(otherButton)) {
+    combo.active = true;
+    if (combo.armed) {
+      combo.armed = false;
+      action();
+    }
+    return true;
+  }
+  if (!combo.active) return false;
+  if (gpio.isPressed(HalGPIO::BTN_POWER)) return true;
+  const bool powerReleased = gpio.wasReleased(HalGPIO::BTN_POWER);
+  combo.armed = true;
+  combo.active = false;
+  return powerReleased;
+}
+
+static void startClockSyncFromCombo() {
+  if (ClockSyncActivity::isRunning()) return;
+  // From a book the sync returns to the book; from anywhere else it ends as the Settings row does.
+  auto sync = makeUniqueNoThrow<ClockSyncActivity>(renderer, mappedInputManager, activityManager.isReaderActivity());
+  if (!sync) {
+    LOG_ERR("MAIN", "OOM: ClockSyncActivity");
+    return;
+  }
+  activityManager.pushActivity(std::move(sync));
+}
+
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
@@ -914,6 +953,12 @@ void loop() {
         // The heap now, rather than at the next ten-second tick: for measuring one screen.
         const auto heap = HalMemory::getInternalHeap();
         LOG_INF("CMD", "mem free=%zu min=%zu maxAlloc=%zu", heap.freeBytes, heap.minFreeBytes, heap.largestBlockBytes);
+      } else if (cmd == "CLOCKSYNC") {
+        // The Power + Up action; injected presses are queued one at a time, so the combination
+        // itself cannot be sent.
+        LOG_INF("CMD", "clock sync");
+        powerManager.setPowerSaving(false);  // as the button press would: Wi-Fi cannot start throttled
+        startClockSyncFromCombo();
       } else if (cmd.startsWith("PRESS:") || cmd.startsWith("HOLD:")) {
         // PRESS:<BTN> is a tap; HOLD:<BTN>:<ms> keeps the button down that long (long presses,
         // key repeat). Hardware button index, not the logical (remappable) one.
@@ -961,29 +1006,17 @@ void loop() {
     return;
   }
 
-  static bool screenshotButtonsReleased = true;
-  static bool screenshotComboActive = false;
-  if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
-    screenshotComboActive = true;
-    if (screenshotButtonsReleased) {
-      screenshotButtonsReleased = false;
-      {
+  // Power + Down: screenshot. Power + Up, when switched on in Shortcuts: sync the clock (devices
+  // without a clock chip drift while asleep, which skews the reading stats).
+  static PowerCombo screenshotCombo;
+  static PowerCombo clockSyncCombo;
+  if (pollPowerCombo(screenshotCombo, HalGPIO::BTN_DOWN, [] {
         RenderLock lock;
         ScreenshotUtil::takeScreenshot(renderer);
-      }
-    }
+      })) {
     return;
   }
-  if (screenshotComboActive) {
-    if (gpio.isPressed(HalGPIO::BTN_POWER)) return;
-    if (gpio.wasReleased(HalGPIO::BTN_POWER)) {
-      screenshotButtonsReleased = true;
-      screenshotComboActive = false;
-      return;
-    }
-    screenshotButtonsReleased = true;
-    screenshotComboActive = false;
-  }
+  if (SETTINGS.powerUpClockSync && pollPowerCombo(clockSyncCombo, HalGPIO::BTN_UP, startClockSyncFromCombo)) return;
 
   // Consume the second X4 Pro power-button release so it does not also run a
   // configured short-power action after toggling the frontlight.
@@ -1047,8 +1080,8 @@ void loop() {
 
   if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
-    // If the screenshot combination is potentially being pressed, don't sleep
-    if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
+    // If a power-button combination is potentially being pressed, don't sleep
+    if (gpio.isPressed(HalGPIO::BTN_DOWN) || (SETTINGS.powerUpClockSync && gpio.isPressed(HalGPIO::BTN_UP))) {
       return;
     }
     LOG_DBG("MAIN", "Power button held %lums, sleeping", gpio.getPowerButtonHeldTime());
