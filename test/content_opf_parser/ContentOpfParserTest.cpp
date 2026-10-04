@@ -53,6 +53,31 @@ Octavia E. Butler
   EXPECT_EQ(parser.author, "Ursula K. Le Guin, Octavia E. Butler");
 }
 
+TEST(ContentOpfParserMetadata, DropsByteOrderMarksFromMetadataText) {
+  const std::string xml =
+      "<package xmlns:dc=\"urn:dc\"><metadata><dc:title>\xEF\xBB\xBFKokoro</dc:title>"
+      "<dc:creator>Natsume\xEF\xBB\xBF Soseki</dc:creator></metadata></package>";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.title, "Kokoro");
+  EXPECT_EQ(parser.author, "Natsume Soseki");
+}
+
+TEST(ContentOpfParserMetadata, ByteOrderMarkLeavesNoSpaceOrSeparatorBehind) {
+  const std::string xml =
+      "<package xmlns:dc=\"urn:dc\"><metadata><dc:title>Title \xEF\xBB\xBF</dc:title>"
+      "<dc:creator>First</dc:creator><dc:creator>\xEF\xBB\xBF</dc:creator><dc:creator>Second</dc:creator>"
+      "</metadata></package>";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.title, "Title");
+  EXPECT_EQ(parser.author, "First, Second");
+}
+
 TEST(ContentOpfParserMetadata, StopsBeforeManifestWithoutOpeningTemporaryStorage) {
   const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
     <dc:title>A Wizard of Earthsea</dc:title>
