@@ -13,6 +13,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -518,6 +519,14 @@ void OpdsBookBrowserActivity::rebuildRowItems() {
     item.actionValue = static_cast<int16_t>(rowItems.size());
     rowItems.push_back(item);
   }
+  // A Chinese catalogue lists titles the built-in CJK subset cannot draw: ask for the SD companion
+  // the way Home does, before the rows are painted.
+  CjkScript uiScript = CjkScript::None;
+  for (const auto& entry : entries) {
+    uiScript = sdFontSystem.uiCjkScriptFor(entry.title.c_str());
+    if (uiScript != CjkScript::None) break;
+  }
+  sdFontSystem.setUiCjkNeeded(renderer, uiScript);
 }
 
 void OpdsBookBrowserActivity::releaseEntries() {
