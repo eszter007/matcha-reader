@@ -104,9 +104,26 @@ class ProtectedBookDecryptor : public ContentDecryptor {
     // reconstructing and reopening it per encrypted entry.
     if (!source_.ensureOpen()) return false;
     reclaimContentCaches();
-    if (!book_->decryptEntryToSink(source_, crypto(), itemPath, sink, context)) {
-      LOG_ERR("CPRO", "Decrypt failed: %s (%s), free=%u max_block=%u", itemPath.c_str(), book_->lastError().c_str(),
-              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    // A sink that refuses bytes ends the read on purpose (an image-header probe, a cancelled
+    // background step); the caller decides whether that is a failure, so it is not logged as one.
+    struct Watched {
+      ContentChunkSink sink;
+      void* context;
+      bool stopped;
+    } watched{sink, context, false};
+    const auto forward = [](void* ctx, const uint8_t* data, const size_t size) {
+      auto* w = static_cast<Watched*>(ctx);
+      if (w->sink(w->context, data, size)) return true;
+      w->stopped = true;
+      return false;
+    };
+    if (!book_->decryptEntryToSink(source_, crypto(), itemPath, forward, &watched)) {
+      if (watched.stopped) {
+        LOG_DBG("CPRO", "Read stopped by the sink: %s", itemPath.c_str());
+      } else {
+        LOG_ERR("CPRO", "Decrypt failed: %s (%s), free=%u max_block=%u", itemPath.c_str(), book_->lastError().c_str(),
+                static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      }
       return false;
     }
     return true;
