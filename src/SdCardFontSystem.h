@@ -181,8 +181,9 @@ class SdCardFontSystem {
   void ensureCjkFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);
   bool loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name, uint32_t cp) const;
-  // The script the companion is wanted for: the open book's, else the UI's.
-  CjkScript activeCjkScript() const { return cjkScript_ != CjkScript::None ? cjkScript_ : uiCjkScript_; }
+  // The script the companion is wanted for: the open book's, else the UI's, else the one a Chinese
+  // UI language needs for every menu (the built-in CJK subset is the Japanese set).
+  CjkScript activeCjkScript() const;
   // The codepoint a face must carry to count as covering that script.
   uint32_t cjkProbe() const { return cjk::probeCodepoint(activeCjkScript()); }
   bool cjkFallbackNeeded() const { return activeCjkScript() != CjkScript::None; }

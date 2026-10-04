@@ -486,8 +486,10 @@ open a list when selected.
 
 - **Language**: Set the UI language. English, Japanese, Spanish, French and German are built into the firmware. The
   rest — Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish,
-  Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew and more — are listed
-  too, but marked **Needs pack** until you install a language pack. See [Language Packs (SD Card)](#39-language-packs-sd-card).
+  Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew, Simplified and
+  Traditional Chinese and more — are listed too, but marked **Needs pack** until you install a language pack. See
+  [Language Packs (SD Card)](#39-language-packs-sd-card). A Chinese interface also needs a Chinese SD font (see
+  [§6.6](#66-chinese-books)): the built-in CJK glyphs are the Japanese set, so menus would show boxes without one.
 
 - **Keyboard Layouts**: Choose which on-screen keyboard layouts are offered when typing.
 
@@ -776,6 +778,9 @@ To install one:
 2. Unzip it and copy the `.cplang` file for your language — for example `RU.cplang` — into `/.crosspoint/lang/` on the
    SD card, creating the folder if it is not there. You can copy them all; only the selected one is ever loaded.
 3. Put the card back and pick the language in **Settings → System → Language**.
+
+The two Chinese packs are `ZHS.cplang` (简体中文) and `ZHT.cplang` (繁體中文). With either selected the reader keeps a
+Chinese SD font loaded for the interface, so install one first (**Settings → Manage Fonts**, Noto Sans SC or TC).
 
 A pack is tied to the firmware it was built with. After a firmware update, download the packs from the new release as
 well: a mismatched pack is refused and the language stays on English rather than showing wrong text.

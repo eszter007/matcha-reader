@@ -5,6 +5,7 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <SdCardFont.h>
@@ -676,6 +677,19 @@ void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
   SdCardFont* companion = !fallback.empty() ? fallbackManager_.loadedFont() : nullptr;
   renderer.setFallbackSdFont(companion);
   if (auto* fcm = renderer.getFontCacheManager()) fcm->setFallbackSdFont(companion);
+}
+
+CjkScript SdCardFontSystem::activeCjkScript() const {
+  if (cjkScript_ != CjkScript::None) return cjkScript_;
+  if (uiCjkScript_ != CjkScript::None) return uiCjkScript_;
+  switch (I18N.getLanguage()) {
+    case Language::ZHS:
+      return CjkScript::SimplifiedChinese;
+    case Language::ZHT:
+      return CjkScript::TraditionalChinese;
+    default:
+      return CjkScript::None;
+  }
 }
 
 void SdCardFontSystem::setCjkFallbackNeeded(GfxRenderer& renderer, const CjkScript script) {
