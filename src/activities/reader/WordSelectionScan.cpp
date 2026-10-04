@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <DictIndex.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -303,8 +304,10 @@ void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint3
   markContextScanned();
 }
 
-void WordSelectionScan::initFromPage(const Page& page) {
+void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geometry) {
   reset();
+  std::vector<TextBlock::WordPlacement> placements;  // reused line to line
+  uint16_t lineIndex = 0;
   // Horizontal mode: flatten the page's lines into one continuous character
   // stream (single paragraph). Latin words keep their separating spaces; CJK
   // runs are concatenated directly so dictionary lookups see contiguous text.
@@ -329,6 +332,11 @@ void WordSelectionScan::initFromPage(const Page& page) {
     }
     const TextBlock& block = *line.getBlock();
     bool lineHadWord = false;
+    if (geometry) {
+      block.wordPlacements(*geometry->renderer, geometry->fontId, line.xPos, line.yPos, geometry->suppressRuby,
+                           placements);
+    }
+    const uint16_t column = lineIndex++;
     for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
       if (oom) break;
       // The arena stores words as NUL-terminated spans, not std::strings (upstream 1.5.0).
@@ -351,14 +359,17 @@ void WordSelectionScan::initFromPage(const Page& page) {
       // line ended mid-word, where a space is exactly what must not appear.
       if (!joinToPrevious && lastCp && isAsciiWord(static_cast<unsigned char>(lastCp)) &&
           isAsciiWord(static_cast<unsigned char>(word[0]))) {
-        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, ' ', 0, 0})) {
+        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, column, 0, ' ', 0, 0, 0})) {
           oom = true;
           break;
         }
       }
       joinToPrevious = joinHyphen;
+      const bool placed = geometry && wi < placements.size();
+      int penX = placed ? placements[wi].x : 0;
       size_t b = 0;
       while (b < word.size()) {
+        const size_t glyphStart = b;
         auto c0 = static_cast<unsigned char>(word[b]);
         uint32_t cp;
         if (c0 < 0x80) {
@@ -376,7 +387,21 @@ void WordSelectionScan::initFromPage(const Page& page) {
                (static_cast<unsigned char>(word[b + 2]) & 0x3F) << 6 | (static_cast<unsigned char>(word[b + 3]) & 0x3F);
           b += 4;
         }
-        if (!pushGlyphSafe(allGlyphs, GlyphRef{0, 0, 0, 0, cp, 0, 0})) {
+        GlyphRef ref{0, 0, column, 0, cp, 0, 0, 0};
+        if (placed) {
+          // One glyph at a time, in the font and style the line was laid out with. Kerning is
+          // left out: it only exists between Latin letters, which are never a lookup target here.
+          char utf8[5] = {};
+          memcpy(utf8, word.data() + glyphStart, std::min<size_t>(b - glyphStart, 4));
+          const int advance = geometry->renderer->getTextAdvanceX(placements[wi].fontId, utf8, block.wordStyle(wi),
+                                                                  block.getBlockStyle().letterSpacing);
+          ref.x = static_cast<uint16_t>(std::max(0, penX));
+          ref.y = static_cast<uint16_t>(std::max<int>(0, placements[wi].y));
+          ref.row = ref.x;
+          ref.width = static_cast<uint8_t>(std::clamp(advance, 0, 255));
+          penX += advance;
+        }
+        if (!pushGlyphSafe(allGlyphs, ref)) {
           oom = true;
           break;
         }

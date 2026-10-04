@@ -932,12 +932,16 @@ toggle in place without leaving the menu, and both are remembered per book.
 
 Reader menu → **Word Lookup**.
 
-In **vertical text**, lookup opens on the page you were reading, with the current word highlighted in place:
+In a book, **vertical or horizontal**, lookup opens on the page you were reading, with the current word
+highlighted in place. The buttons follow the text: you step along it one way and jump across it the other.
+
+| Button | Vertical text | Horizontal text |
+| --- | --- | --- |
+| Side buttons (Up / Down) | Previous / next word, down the column | Jump to the line above / below |
+| Left / Right | Jump to the next / previous column (Left runs forward, with the text) | Previous / next word, along the line |
 
 | Button | Action |
 | --- | --- |
-| Side buttons (Up / Down) | Move to the previous / next word, down the column |
-| Left / Right | Jump to the next / previous column (Left runs forward, with the text) |
 | Look Up | Open the definition of the highlighted word |
 | Back | Return to reading |
 | Power (short click) | Leave lookup, when **Short power button click** is set to **Word Lookup** |
@@ -951,10 +955,12 @@ while you choose: words it has not reached yet can still be selected, and the hi
 arrives. A page you have looked at before is mapped instantly from its cache, and the cursor returns to the
 word you left it on.
 
-No button labels are shown in this view: vertical text runs to the bottom of the screen, and a label bar there
-would cover the last line of every column. The buttons are the ones in the table above.
+On a touch device, tap a word on the page to open it, or simply hold a word while reading.
 
-In **horizontal text** and in manga, lookup opens directly in the definition view:
+No button labels are shown in this view: the text runs to the bottom of the screen, and a label bar there
+would cover its last line. The buttons are the ones in the tables above.
+
+In **manga**, lookup opens directly in the definition view:
 
 | Button | Action |
 | --- | --- |
@@ -968,11 +974,13 @@ The counter in the bottom-right corner shows your position (e.g. 10/35), next to
 (e.g. `Vocab | JMdict`) on the left. The page is pre-scanned, so you only ever land on a word the dictionary
 actually has.
 
-A word listed in both the vocabulary and the grammar dictionary shows both entries. In vertical text each gets its
+A word listed in both the vocabulary and the grammar dictionary shows both entries. In a book each gets its
 own page, and for short function words such as こと or よう the grammar page opens first; step to the other the way
-you page through an entry. Tapping a word in manga shows the grammar entry below the vocabulary one. Horizontal
-text, and manga lookups where you step from word to word, keep one entry per word so stepping stays quick: a short
-function word shows its grammar entry there, anything else its vocabulary entry.
+you page through an entry. The same goes for a Chinese word with several readings or several dictionaries (好
+hǎo and 好 hào, the CC-CEDICT entry and the 國語辭典 one): one page each, with its own reading in the header.
+Tapping a word in manga shows the grammar entry below the vocabulary one. Manga lookups where you step from word
+to word keep one entry per word so stepping stays quick: a short function word shows its grammar entry there,
+anything else its vocabulary entry.
 
 <p align="center">
   <img src="docs/images/screenshots/multi-dict-jp-vocab.png" width="240" alt="それなら: the vocabulary page, 1 of 2">

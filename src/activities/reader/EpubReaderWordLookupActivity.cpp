@@ -33,7 +33,7 @@
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
                                                            const uint16_t spineIndex, const uint16_t pageIndex,
-                                                           const VerticalSelectContext& selectContext,
+                                                           const WordSelectContext& selectContext,
                                                            const std::string& lookupContext,
                                                            const uint32_t lookupContextParagraph)
     : Activity("WordLookup", renderer, mappedInput),
@@ -43,13 +43,7 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
       scanPage(pageIndex) {
   const size_t slash = this->scanCachePath.find_last_of('/');
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
-  if (selectCtx.valid()) {
-    mode = Mode::Select;
-    // Nothing has to be painted for the first frame when the reader's page is still on screen:
-    // the cursor is two XOR-ed rectangles over pixels that are already there.
-    selectPageDrawn = selectCtx.pageOnScreen;
-    pageBehindCard = selectCtx.pageOnScreen;
-  }
+  beginSelectMode();
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
   if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, lookupContextParagraph);
@@ -59,18 +53,31 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const Page& page, std::string scanCachePath,
                                                            const uint16_t spineIndex, const uint16_t pageIndex,
-                                                           const std::string& lookupContext)
+                                                           const std::string& lookupContext,
+                                                           const WordSelectContext& selectContext,
+                                                           const WordSelectionScan::LineGeometry* geometry)
     : Activity("WordLookup", renderer, mappedInput),
+      selectCtx(selectContext),
       scanCachePath(std::move(scanCachePath)),
       scanSpine(spineIndex),
       scanPage(pageIndex) {
   const size_t slash = this->scanCachePath.find_last_of('/');
   if (slash != std::string::npos) bookCachePath = this->scanCachePath.substr(0, slash);
+  beginSelectMode();
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
-  scan.initFromPage(page);
+  scan.initFromPage(page, selectCtx.valid() ? geometry : nullptr);
   // Horizontal glyphs all carry paragraphIndex 0, so the context matches by construction.
   if (!lookupContext.empty()) scan.appendLookupContext(lookupContext, 0);
   initScanFromCacheOrBurst("horizontal");
+}
+
+void EpubReaderWordLookupActivity::beginSelectMode() {
+  if (!selectCtx.valid()) return;
+  mode = Mode::Select;
+  // Nothing has to be painted for the first frame when the reader's page is still on screen:
+  // the cursor is two XOR-ed rectangles over pixels that are already there.
+  selectPageDrawn = selectCtx.pageOnScreen;
+  pageBehindCard = selectCtx.pageOnScreen;
 }
 
 // Self-heal fragmentation BEFORE the scan builds its glyph vectors. Two reasons this must run
@@ -855,11 +862,19 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
   // axis, so which PHYSICAL buttons those are changes with orientation: in portrait the side
   // buttons step and the front pair jumps columns, in landscape they trade places. That is the
   // point -- the gesture stays "down the column as you see it".
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenDown, [this] { moveSelection(1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenUp, [this] { moveSelection(-1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenLeft, [this] { jumpColumn(1); });
-  buttonNavigator.onPressAndContinuous(MappedInputManager::Button::ScreenRight, [this] { jumpColumn(-1); });
+  // A page set in lines turns the same two moves a quarter: along the line is left/right, the
+  // next line is down, and lines run top to bottom where columns run right to left.
+  using Button = MappedInputManager::Button;
+  const bool lines = selectCtx.lines;
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenRight : Button::ScreenDown, [this] { moveSelection(1); });
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenLeft : Button::ScreenUp, [this] { moveSelection(-1); });
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenDown : Button::ScreenLeft, [this] { jumpColumn(1); });
+  buttonNavigator.onPressAndContinuous(lines ? Button::ScreenUp : Button::ScreenRight, [this] { jumpColumn(-1); });
   return true;
+}
+
+int EpubReaderWordLookupActivity::glyphWidth(const WordSelectionScan::GlyphRef& glyph) const {
+  return selectCtx.lines && glyph.width != 0 ? glyph.width : selectCtx.cellPx;
 }
 
 int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, HighlightBox* out) const {
@@ -881,9 +896,18 @@ int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, Highl
     while (j < end && scan.allGlyphs[j].column == column) j++;
     const auto& firstCell = scan.allGlyphs[i];
     const auto& lastCell = scan.allGlyphs[j - 1];
+    HighlightBox& box = out[count++];
+    if (selectCtx.lines) {
+      // A run along one line: from its first glyph's left edge to its last one's right edge.
+      box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
+      box.y = static_cast<int16_t>(firstCell.y + selectCtx.marginTop);
+      box.w = static_cast<int16_t>(lastCell.x + glyphWidth(lastCell) - firstCell.x);
+      box.h = static_cast<int16_t>(cellPx);
+      i = j;
+      continue;
+    }
     const int top = std::min(firstCell.y, lastCell.y) + selectCtx.marginTop;
     const int bottom = std::max(firstCell.y, lastCell.y) + selectCtx.marginTop + cellPx;
-    HighlightBox& box = out[count++];
     // Cell-exact, no padding: the cell IS the em box, so the box lands clear of the
     // neighbouring column's ink and of any ruby, which is drawn outside the cell.
     box.x = static_cast<int16_t>(firstCell.x + selectCtx.marginLeft);
@@ -988,8 +1012,8 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   if (provisionalGlyph < scan.onPageGlyphCount()) {
     const auto& glyph = scan.allGlyphs[provisionalGlyph];
     boxes[0] = HighlightBox{static_cast<int16_t>(glyph.x + selectCtx.marginLeft),
-                            static_cast<int16_t>(glyph.y + selectCtx.marginTop), static_cast<int16_t>(selectCtx.cellPx),
-                            static_cast<int16_t>(selectCtx.cellPx)};
+                            static_cast<int16_t>(glyph.y + selectCtx.marginTop),
+                            static_cast<int16_t>(glyphWidth(glyph)), static_cast<int16_t>(selectCtx.cellPx)};
     count = 1;
   } else {
     count = buildBoxesFor(cursorIndex, boxes);
@@ -1723,8 +1747,9 @@ void EpubReaderWordLookupActivity::moveSection(const int delta) {
 // Split the merged definition into one piece per source. DictIndex joins the entries it merges
 // with "\n\n---\n", and the grammar entry is appended under its own "— Grammar: … —" heading;
 // each piece ends with the attribution line its converter wrote ("JMdict | Tatoeba"), which is
-// lifted out of the body and shown in the panel footer instead. Tategaki only -- horizontal and
-// manga keep the single scrolling blob, where Left/Right move the word cursor.
+// lifted out of the body and shown in the panel footer instead. Only where the panel opened on
+// the page with a word cursor (a book, vertical or horizontal) -- manga keeps the single
+// scrolling blob, where Left/Right move the word cursor.
 void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
   sectionText.clear();
   sectionLabel.clear();

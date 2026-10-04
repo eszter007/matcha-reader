@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+class GfxRenderer;
+
 class Page;
 
 // The Word Lookup page pre-scan, extracted from EpubReaderWordLookupActivity into a RESUMABLE
@@ -35,12 +37,26 @@ class WordSelectionScan {
     // page without a dictionary read per cursor move -- the scan already knew the length and
     // used to discard it. 0 in allGlyphs; treat 0 as "one cell".
     uint8_t matchLen;
+    // Advance in pixels, for a page laid out in lines, where glyphs are not one cell wide. 0 in
+    // a vertical page: its cells are the caller's cellPx.
+    uint8_t width;
+  };
+
+  // What placing a horizontal page's glyphs takes: the renderer and reader font its lines were
+  // laid out with, and whether ruby is hidden (shown ruby pushes the base text down its line).
+  struct LineGeometry {
+    const GfxRenderer* renderer = nullptr;
+    int fontId = 0;
+    bool suppressRuby = true;
   };
 
   // Populate allGlyphs from a page and reset the state machine. Vertical (tategaki) mode.
   void initFromVerticalPage(const VerticalPage& page);
   // Horizontal (yokogaki) mode: flattens the page's lines into one continuous character stream.
-  void initFromPage(const Page& page);
+  // With a geometry each glyph also gets its place on the page -- x/y as drawn, column = its
+  // line, row = its x, so "the next column" and "the closest row" mean the next line and the
+  // glyph straight below, exactly as they do for a vertical page turned on its side.
+  void initFromPage(const Page& page, const LineGeometry* geometry = nullptr);
   // Manga mode: a plain UTF-8 text blob (panel or combined page text). Newlines are dropped.
   void initFromUtf8Text(const std::string& text);
 

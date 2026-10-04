@@ -4415,20 +4415,30 @@ int EpubReaderActivity::effectiveReaderFontId() const {
   return sdFontSystem.effectiveReaderFontId(fontScript());
 }
 
-bool EpubReaderActivity::repaintVerticalPageForPanelThunk(void* ctx) {
-  return static_cast<EpubReaderActivity*>(ctx)->repaintVerticalPageForPanel();
+bool EpubReaderActivity::repaintPageForPanelThunk(void* ctx) {
+  return static_cast<EpubReaderActivity*>(ctx)->repaintPageForPanel();
 }
 
-bool EpubReaderActivity::repaintVerticalPageForPanel() {
-  if (!verticalSection) return false;
-  const VerticalPage* page = verticalSection->getPage();
-  if (!page) {
-    // The slot could not be re-faulted (low heap / read error). Report the failure so the panel
+bool EpubReaderActivity::repaintPageForPanel() {
+  bool drew = false;
+  if (verticalSection) {
+    if (const VerticalPage* page = verticalSection->getPage()) {
+      renderVerticalPageBody(*page);
+      drew = true;
+    }
+  } else if (section) {
+    if (const auto page = section->loadPage(section->currentPage)) {
+      page->render(renderer, effectiveReaderFontId(), currentPageLinkMarginLeft, currentPageLinkMarginTop,
+                   !useFurigana());
+      drew = true;
+    }
+  }
+  if (!drew) {
+    // The page could not be re-faulted (low heap / read error). Report the failure so the panel
     // retries rather than keeping a cursor on a blank screen.
     LOG_ERR("ERS", "Word lookup: no page to repaint under the word cursor");
     return false;
   }
-  renderVerticalPageBody(*page);
   renderStatusBar();
   return true;
 }
@@ -4450,13 +4460,13 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     // Page geometry for the panel's word cursor, captured BEFORE the font release below:
     // verticalCellPx probes the reference glyph out of the reader font, and a released SD font
     // answers with the line height instead -- a cell that disagrees with the pixels on screen.
-    VerticalSelectContext selectCtx;
+    WordSelectContext selectCtx;
     int viewableRight = 0;
     int viewableBottom = 0;
     renderer.getOrientedViewableTRBL(&selectCtx.marginTop, &viewableRight, &viewableBottom, &selectCtx.marginLeft);
     selectCtx.marginTop += SETTINGS.screenMargin;
     selectCtx.marginLeft += SETTINGS.screenMargin;
-    selectCtx.repaintPage = &EpubReaderActivity::repaintVerticalPageForPanelThunk;
+    selectCtx.repaintPage = &EpubReaderActivity::repaintPageForPanelThunk;
     selectCtx.repaintCtx = this;
     // Where the finger was, when a long press opened this. The panel replays it as a tap on
     // that word; -1 (the menu and key paths) leaves it to place its own cursor.
@@ -4536,8 +4546,21 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     std::unique_ptr<Page> page;
     // Read before the suspend: a failed one drops `section` (the page itself is already owned here).
     const int pageIndex = section->currentPage;
+    // The same word cursor as the vertical page above, on a page set in lines.
+    WordSelectContext selectCtx;
+    selectCtx.lines = true;
+    selectCtx.marginLeft = currentPageLinkMarginLeft;
+    selectCtx.marginTop = currentPageLinkMarginTop;
+    selectCtx.repaintPage = &EpubReaderActivity::repaintPageForPanelThunk;
+    selectCtx.repaintCtx = this;
+    selectCtx.lookupAtX = lookupAtX;
+    selectCtx.lookupAtY = lookupAtY;
+    const WordSelectionScan::LineGeometry geometry{&renderer, effectiveReaderFontId(), !useFurigana()};
     {
       RenderLock lock(*this);
+      // Before the font release below, like the vertical cell.
+      selectCtx.cellPx = renderer.getLineHeight(geometry.fontId);
+      selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
       page = section->loadPage(pageIndex);
       if (page && section->isBuilding()) suspendSectionBuild();
       if (page) {
@@ -4609,9 +4632,9 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         }
       }
 
-      auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(renderer, mappedInput, *page, scanCachePath,
-                                                                    static_cast<uint16_t>(currentSpineIndex),
-                                                                    static_cast<uint16_t>(pageIndex), lookupTail);
+      auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
+          renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
+          static_cast<uint16_t>(pageIndex), lookupTail, selectCtx, &geometry);
       if (!lookup) {
         LOG_ERR("ERS", "OOM: word lookup panel");
         requestUpdate();  // the build was suspended for the panel; the next render resumes it
