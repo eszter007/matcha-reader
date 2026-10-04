@@ -78,13 +78,11 @@ class Frequency(unittest.TestCase):
 class Cedict(unittest.TestCase):
     def test_definition(self):
         text = conv.format_definition_cedict("說話", "说话", "shuo1 hua4", ["to speak", "to say"], zhuyin=True)
-        self.assertEqual(text, "【shuō huà ㄕㄨㄛ ㄏㄨㄚˋ】\n說話 / 说话\n1. to speak\n2. to say")
+        self.assertEqual(text, "【shuō huà ㄕㄨㄛ ㄏㄨㄚˋ】\n→ 說話 / 说话\n• to speak\n\n• to say\n")
         text = conv.format_definition_cedict("你好", "你好", "ni3 hao3", ["hello"], zhuyin=False)
-        self.assertEqual(text, "【nǐ hǎo】\nhello")
+        self.assertEqual(text, "【nǐ hǎo】\n• hello\n")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class CedictExtras(unittest.TestCase):
@@ -99,7 +97,7 @@ class CedictExtras(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertEqual(m.group(4), "nei5 hou2")
         text = conv.format_definition_cedict("你好", "你好", "ni3 hao3", ["hello"], False, "nei5 hou2", "HSK 1")
-        self.assertEqual(text, "【nǐ hǎo · nei5 hou2】\n[HSK 1]\nhello")
+        self.assertEqual(text, "【nǐ hǎo · nei5 hou2】\n[HSK 1]\n• hello\n")
 
     def test_levels_and_tsv(self):
         import tempfile
@@ -138,7 +136,7 @@ class Examples(unittest.TestCase):
             self.assertEqual(ex[2], [])  # single characters get none
             self.assertEqual(ex[3], [("你好。", "Hello.")])
             text = conv.format_definition_cedict("中國", "中国", "Zhong1 guo2", ["China"], False, examples=ex[0])
-            self.assertTrue(text.endswith("China\n  我在中国说话。\n  I speak in China."))
+            self.assertTrue(text.endswith("China\n\n我在中国说话。\nI speak in China."), text)
 
 
 class ScriptFilters(unittest.TestCase):
@@ -156,3 +154,27 @@ class ScriptFilters(unittest.TestCase):
             levels = conv.load_levels(tocfl, "TOCFL")
             self.assertEqual(levels["我"], "TOCFL Novice")
             self.assertEqual(levels["说话"], "TOCFL 3")
+
+
+class ListParsing(unittest.TestCase):
+    def test_variant_cells_and_id_columns(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "levels.csv")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("ID,Traditional,Simplified,Level\n2,你/妳,你,1\n3,爸爸|爸,爸爸,7-9\n")
+            levels = conv.load_levels(path, "HSK")
+            self.assertEqual(levels["妳"], "HSK 1")
+            self.assertEqual(levels["爸"], "HSK 7-9")
+            # The level column, not a row id or a web number, and never a count.
+            priorities = conv.load_frequency(path)
+            self.assertGreater(priorities["你"], priorities["爸爸"])
+
+    def test_twin_rank_takes_the_larger(self):
+        records = [("說".encode(), b"", 100, 0), ("说".encode(), b"", 100, 0), ("貓".encode(), b"", 100, 0)]
+        out = conv.apply_frequency(records, {"说": 219, "說": 102, "猫": 150}, {"說": "说", "说": "說", "貓": "猫"})
+        self.assertEqual([p for _, _, p, _ in out], [219, 219, 150])
+
+
+if __name__ == "__main__":
+    unittest.main()

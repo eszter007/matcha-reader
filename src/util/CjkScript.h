@@ -105,6 +105,13 @@ struct ScriptSniff {
   uint8_t pendingNeed = 0;
   uint8_t pendingHave = 0;
   bool inTag = false;
+  bool inEntity = false;
+  // Inside <head>, <style>, <script> or <title>: Latin by the byte but not text. Counting an
+  // inline stylesheet would make a Chinese chapter read as Latin.
+  bool skipping = false;
+  char tagName[8] = {};
+  uint8_t tagLen = 0;
+  bool tagNameDone = false;
 
   static constexpr uint32_t ENOUGH_CJK = 400;  // characters: a paragraph or two settles it
   bool enough() const { return han + kana >= ENOUGH_CJK; }
@@ -152,17 +159,51 @@ struct ScriptSniff {
   }
 
  private:
+  static bool tagIs(const char* name, const char* want) {
+    for (size_t i = 0;; i++) {
+      if (lowerAscii(name[i]) != want[i]) return false;
+      if (want[i] == '\0') return true;
+    }
+  }
+
   void count(const uint32_t cp) {
-    // Markup is skipped so tag names and attributes do not count as Latin text.
+    // Markup is skipped so tag names and attributes do not count as Latin text; the tag name is
+    // kept to know when the document's non-text parts begin and end.
+    if (inTag) {
+      if (cp == '>') {
+        inTag = false;
+        tagName[tagLen] = '\0';
+        if (tagIs(tagName, "head") || tagIs(tagName, "style") || tagIs(tagName, "script") || tagIs(tagName, "title")) {
+          skipping = true;
+        } else if (tagIs(tagName, "/head") || tagIs(tagName, "/style") || tagIs(tagName, "/script") ||
+                   tagIs(tagName, "/title") || tagIs(tagName, "body")) {
+          skipping = false;
+        }
+      } else if (!tagNameDone && tagLen < sizeof(tagName) - 1 &&
+                 (cp == '/' || (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || (cp >= '0' && cp <= '9'))) {
+        tagName[tagLen++] = static_cast<char>(cp);
+      } else {
+        tagNameDone = true;
+      }
+      return;
+    }
     if (cp == '<') {
       inTag = true;
+      tagLen = 0;
+      tagNameDone = false;
       return;
     }
-    if (cp == '>') {
-      inTag = false;
+    // &nbsp; and friends: four Latin letters per indent in many Chinese EPUBs.
+    if (inEntity) {
+      if (cp == ';' || !((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || (cp >= '0' && cp <= '9') || cp == '#'))
+        inEntity = false;
       return;
     }
-    if (inTag) return;
+    if (cp == '&') {
+      inEntity = true;
+      return;
+    }
+    if (skipping) return;
     if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0x00C0 && cp <= 0x024F)) {
       latin++;
     } else if ((cp >= 0x3040 && cp <= 0x30FF)) {

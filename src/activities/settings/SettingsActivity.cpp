@@ -484,8 +484,11 @@ bool SettingsActivity::handleButtons() {
       // (action=-1, but orientation/pageTurnOption default to 0 already -- see ActivityResult.h)
       // -- spelled out here so a value doesn't get silently relied on either way.
       if (showReaderToggles || languageState >= 0) {
-        setResult(MenuResult{-1, 0, 0, static_cast<int8_t>(showReaderToggles && verticalTextState ? 1 : 0),
-                             static_cast<int8_t>(showReaderToggles && furiganaState ? 1 : 0), languageState});
+        // Toggles this screen never showed stay -1 (untouched): a 0 would switch a book that the
+        // language row just made Japanese back to horizontal, and turn its furigana off.
+        setResult(MenuResult{-1, 0, 0, showReaderToggles ? static_cast<int8_t>(verticalTextState ? 1 : 0) : int8_t{-1},
+                             showReaderToggles ? static_cast<int8_t>(furiganaState ? 1 : 0) : int8_t{-1},
+                             languageState});
       }
       finish();
       return true;

@@ -105,6 +105,18 @@ TEST(ScriptSniff, LatinBooksStayLatin) {
             CjkScript::SimplifiedChinese);
 }
 
+TEST(ScriptSniff, HeadStylesheetAndEntitiesAreNotText) {
+  // A Sigil-style chapter: 1500 characters of CSS in <head>, then the text with &nbsp; indents.
+  const std::string css =
+      "<html><head><title>Chapter 1</title><style>" + repeat("p { margin: 0 1em; } ", 70) + "</style></head><body>";
+  EXPECT_EQ(sniff(css + repeat("<p>&nbsp;&nbsp;这是一个说话的时候。</p>", 10) + "</body></html>").verdict(),
+            CjkScript::SimplifiedChinese);
+  EXPECT_EQ(sniff(css + repeat("<p>&nbsp;&nbsp;Hello there friend.</p>", 10)).verdict(), CjkScript::None);
+  // A chapter that is only its head decides nothing.
+  const cjk::ScriptSniff headOnly = sniff(css + "</body></html>");
+  EXPECT_EQ(headOnly.han + headOnly.kana + headOnly.latin, 0u);
+}
+
 TEST(ScriptSniff, EnoughStopsEarly) {
   cjk::ScriptSniff s = sniff(repeat("中国", 250));
   EXPECT_TRUE(s.enough());

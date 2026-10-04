@@ -703,6 +703,10 @@ class EpubReaderActivity final : public ReaderActivity {
   bool isCjkBook() const { return bookScript() != CjkScript::None; }
   // From dc:language. None for every non-CJK tag.
   CjkScript bookScript() const;
+  // Recomputed where the language settles (after the open-time sniff, and on an override):
+  // bookScript() sits on the render path and must not build the language tag each call.
+  void refreshBookScript();
+  CjkScript bookScript_ = CjkScript::None;
   // What the page is set in: the book's script, or Japanese when vertical text is forced on a
   // book with no CJK tag (the same signal useVerticalText() reads).
   CjkScript fontScript() const;

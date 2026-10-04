@@ -238,7 +238,7 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dictionaries/jp/    # add --name names / --name grammar for the others
 ```
 
-Chinese uses the same script with `--lang zh`. The first command below is the simplified-Chinese set: CC-CEDICT ranked by the [jieba](https://github.com/fxsjy/jieba) word list (MIT), so the common sense of a word is shown first and the page segments by frequency, with proper nouns split off into the names dictionary and each word tagged with its [HSK 3.0](https://github.com/ivankra/hsk30) level. The second is the Taiwanese set: zhuyin beside the pinyin, the MoE dictionary merged in under the English entry, and the [TOCFL](https://github.com/ivankra/tocfl) list as both ranking and level tags. Any list with one word per row works for `--frequency`.
+Chinese uses the same script with `--lang zh`. The first command below is the simplified-Chinese set: CC-CEDICT ranked by the [jieba](https://github.com/fxsjy/jieba) word list (MIT), so the common sense of a word is shown first and the page segments by frequency, with proper nouns split off into the names dictionary and each word tagged with its [HSK 3.0](https://github.com/ivankra/hsk30) level. The second is the Taiwanese set: zhuyin beside the pinyin, the MoE dictionary merged in under the English entry, ranked by jieba's larger `dict.txt.big` (which carries traditional forms too), and tagged with [TOCFL](https://github.com/ivankra/tocfl) levels. Any list with one word per row works for `--frequency`; a word missing from it takes the rank of its other-script form, so a simplified list still ranks a traditional book.
 
 ```bash
 python3 tools/dict_convert/convert_jmdict.py --lang zh \
@@ -248,7 +248,7 @@ python3 tools/dict_convert/convert_jmdict.py --lang zh \
 
 python3 tools/dict_convert/convert_jmdict.py --lang zh --zhuyin --split-names \
   --input cedict_1_0_ts_utf-8_mdbg.txt --input dict-revised.json.xz \
-  --frequency tocfl-202307.csv --levels tocfl-202307.csv --level-name TOCFL \
+  --frequency dict.txt.big --levels tocfl-202307.csv --level-name TOCFL \
   --output-dir /path/to/sd/dictionaries/zh/
 ```
 

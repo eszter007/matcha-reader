@@ -1067,6 +1067,7 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
   // Lookup text: the run plus whatever hanzi follow it, so a word that begins near the end of a
   // run cut at kRunMax still sees its full window. Byte offsets per run cell for the probes.
   std::string text;
+  text.reserve((n + static_cast<size_t>(kMaxLookupChars)) * 3);
   uint16_t byteAt[kRunMax + 1];
   for (size_t j = 0; j < n + static_cast<size_t>(kMaxLookupChars) - 1; j++) {
     const size_t idx = from + j;
@@ -1080,12 +1081,15 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
     runFound_[p] = WordLookup::lookupAll(text, byteAt[p], runPriority_[p], kChineseMaxWindow);
   }
 
-  // Best split of cells [p, n): the sum of word scores, where a word scores its priority minus a
-  // constant so that every word costs something and a split into fewer, commoner words wins.
-  // Priorities are the converter's log-scaled frequency rank (255 = commonest, 60 = unranked), so
-  // with no frequency data every word costs the same and this reduces to the fewest words --
-  // longest match. A cell no entry covers stands alone at a heavy cost, never swallowed.
-  constexpr int16_t kWordCost = -256;
+  // Best split of cells [p, n) by total word cost, the unigram model every Chinese segmenter
+  // uses: a word costs -log P(word). The converter's priority is 255 - 28*log10(rank), so
+  // 255 - priority is log(rank) in units of 12 per e-fold, and under Zipf's law log P(word) is
+  // -log(rank) - log(1/P(commonest)); the commonest word (的) is about 5% of running text, which is
+  // 3 e-folds, 36 units. Without that base term two common single characters would always beat
+  // the word they form (不 + 是 over 不是). With no frequency data every word costs the same and
+  // the split with the fewest words wins: longest match. A cell no entry covers stands alone at a
+  // cost above any word's, never swallowed.
+  constexpr int16_t kWordCost = -(255 + 36);
   constexpr int16_t kUnknownCost = -400;
   runBest_[n] = 0;
   for (size_t p = n; p-- > 0;) {

@@ -44,9 +44,13 @@ def load_cedict(path: str) -> dict:
             syllables = [p for p in pinyin.split(" ") if p]
             if len(syllables) != len(trad):
                 continue  # 儿化 and odd entries: one syllable per character is what ruby needs
+            proper = conv.is_proper_noun_pinyin(pinyin)
             for hw in (trad, simp):
-                words.setdefault(hw, syllables)
-    return words
+                # The everyday reading wins over a surname's or place's (長 cháng, not Zhǎng).
+                held = words.get(hw)
+                if held is None or (not proper and held[1]):
+                    words[hw] = (syllables, proper)
+    return {hw: held[0] for hw, held in words.items()}
 
 
 def segment(text: str, words: dict):

@@ -438,6 +438,7 @@ void EpubReaderActivity::onReaderEnter() {
   // dictionary, font and layout; Reader Settings' Book Language overrides either.
   loadLanguageChoice();
   sniffLanguageIfNeeded();
+  refreshBookScript();
   if (verticalOverride == 1 && !isCjkBook()) {
     LOG_INF("ERS", "Clearing forced-vertical flag on a non-CJK book");
     verticalOverride = -1;
@@ -1431,10 +1432,14 @@ void EpubReaderActivity::applyLanguageOverride(const int8_t choice) {
   if (choice < 0 || choice >= cjk::LANGUAGE_CHOICE_COUNT || choice == static_cast<int8_t>(languageOverride)) return;
   languageOverride = static_cast<uint8_t>(choice);
   saveLanguageChoice();
+  refreshBookScript();
   // The language decides direction, line breaking, dictionary folder and font, so the layout is
   // rebuilt; a forced-vertical flag left over from a different language no longer applies.
   if (verticalOverride == 1 && !isCjkBook()) verticalOverride = -1;
   dropSectionsKeepingPosition();
+  // Cached vertical layouts bake the punctuation mode and quote forms in and are keyed by font and
+  // viewport only, so a Japanese cache would serve the book now read as Chinese, or the reverse.
+  Storage.removeDir((epub->getCachePath() + "/vsections").c_str());
   sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
   const char* dictFolder = cjk::dictIndexFolderForLanguage(effectiveLanguage());
   DictIndex::setLanguageFolder(dictFolder ? dictFolder : cjk::dictIndexFolder(fontScript()));
@@ -1473,7 +1478,11 @@ void EpubReaderActivity::sniffLanguageIfNeeded() {
     const cjk::ScriptSniff& sn = sink->sniff;
     if (sn.enough() || sn.han + sn.kana + sn.latin >= kTextEnoughToJudge) break;
   }
-  const CjkScript found = sink->sniff.verdict();
+  const cjk::ScriptSniff& sn = sink->sniff;
+  // A sample that holds no text (a read that failed, a book of images) decides nothing lasting:
+  // the verdict serves this session, but is not written down, so the next open looks again.
+  const bool judged = sn.enough() || sn.han + sn.kana + sn.latin >= kTextEnoughToJudge;
+  const CjkScript found = sn.verdict();
   switch (found) {
     case CjkScript::Japanese:
       detectedLanguage = cjk::LANG_JA;
@@ -1488,9 +1497,9 @@ void EpubReaderActivity::sniffLanguageIfNeeded() {
       detectedLanguage = LANGUAGE_SNIFFED_NONE;
       break;
   }
-  LOG_INF("ERS", "Language sniff: tag '%s' -> %u (han %u kana %u latin %u)", epub->getLanguage().c_str(),
-          detectedLanguage, sink->sniff.han, sink->sniff.kana, sink->sniff.latin);
-  saveLanguageChoice();
+  LOG_INF("ERS", "Language sniff: tag '%s' -> %u (han %u kana %u latin %u%s)", epub->getLanguage().c_str(),
+          detectedLanguage, sn.han, sn.kana, sn.latin, judged ? "" : ", not saved");
+  if (judged) saveLanguageChoice();
 }
 
 std::string EpubReaderActivity::effectiveLanguage() const {
@@ -5771,7 +5780,9 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   return localPos;
 }
 
-CjkScript EpubReaderActivity::bookScript() const { return cjk::scriptForLanguage(effectiveLanguage()); }
+CjkScript EpubReaderActivity::bookScript() const { return bookScript_; }
+
+void EpubReaderActivity::refreshBookScript() { bookScript_ = cjk::scriptForLanguage(effectiveLanguage()); }
 
 CjkScript EpubReaderActivity::fontScript() const {
   const CjkScript script = bookScript();

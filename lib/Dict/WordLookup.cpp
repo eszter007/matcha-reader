@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 
 #include "Deinflector.h"
 
@@ -64,10 +65,15 @@ uint8_t WordLookup::lookupAll(const std::string& paragraphText, const size_t byt
     if (windowEnd <= byteOffset) break;
     if (windowChars > 1 && windowEnd == advanceChars(paragraphText, byteOffset, windowChars - 1))
       break;  // text ran out
-    std::string window = paragraphText.substr(byteOffset, windowEnd - byteOffset);
-    if (window.find('\0') != std::string::npos) break;
+    // Stack copy rather than substr(): this runs for every window of every cell of a page.
+    char window[MAX_WINDOW_CHARS * 4 + 1];
+    const size_t windowLen = windowEnd - byteOffset;
+    if (windowLen >= sizeof(window)) break;
+    std::memcpy(window, paragraphText.data() + byteOffset, windowLen);
+    window[windowLen] = '\0';
+    if (std::memchr(window, '\0', windowLen) != nullptr) break;
     DictEntry entry;
-    if (DictIndex::lookupExact(window.c_str(), entry, DictIndex::DICT_ALL, /*needDefinition=*/false)) {
+    if (DictIndex::lookupExact(window, entry, DictIndex::DICT_ALL, /*needDefinition=*/false)) {
       found |= static_cast<uint8_t>(1u << (windowChars - 1));
       priority[windowChars - 1] = entry.priority;
     }

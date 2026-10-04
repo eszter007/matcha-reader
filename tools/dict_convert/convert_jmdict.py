@@ -728,7 +728,14 @@ def prettify_cedict_gloss(gloss: str) -> str:
 # ── Chinese : frequency ranking ────────────────────────────────
 
 _HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\U00020000-\U0003134f]")
+# A graded list's level: 1-9, or a band such as 7-9.
+_LEVEL_RE = re.compile(r"[1-9](?:-[1-9])?")
 UNRANKED_PRIORITY = 60  # entries absent from the frequency list
+
+
+def _split_variants(cell: str) -> list:
+    """The Han words in one list cell: HSK and TOCFL write variants as 爸爸|爸 and 你/妳."""
+    return [w for w in re.split(r"[/|｜、]", cell) if _HAN_RE.search(w)]
 
 
 def rank_to_priority(rank: int) -> int:
@@ -745,23 +752,29 @@ def load_frequency(path: str, kind: str = "auto") -> dict:
     count when most rows carry one, else by row order; count/rank force either.
     """
     rows = []
+    graded = False  # a level band (7-9) seen: the numbers in this file are levels, not counts
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip().lstrip("\ufeff")
             if not line or line.startswith("#"):
                 continue
             fields = [x.strip().strip('"') for x in re.split(r"[\t,]|\s+", line) if x.strip()]
-            word = next((x for x in fields if _HAN_RE.search(x)), None)
-            if not word:
+            wordAt = next((i for i, x in enumerate(fields) if _HAN_RE.search(x)), None)
+            if wordAt is None:
                 continue
             count = None
-            for x in fields[fields.index(word) + 1:]:
+            for x in fields[wordAt + 1:]:
+                if re.fullmatch(r"[1-9]-[1-9]", x):
+                    graded = True  # HSK's 7-9 band: this column is a level, not a count
+                    break
                 try:
-                    count = float(x)
+                    count = float(x)  # a plain small number may still be a count (jieba: 說 3)
                     break
                 except ValueError:
                     continue
-            rows.append((word, count))
+            # 你/妳, 爸爸|爸: every variant in the cell is the same word.
+            for word in _split_variants(fields[wordAt]):
+                rows.append((word, count))
     if not rows:
         print(f"WARNING: no words found in frequency list {path}", file=sys.stderr)
         return {}
@@ -769,7 +782,7 @@ def load_frequency(path: str, kind: str = "auto") -> dict:
     # A graded list's level column is numeric too (HSK 1-9, TOCFL 1-7), but it is not a count:
     # auto treats small numbers as levels and keeps the file's own order.
     largest = max((c for _, c in rows if c is not None), default=0.0)
-    use_count = kind == "count" or (kind == "auto" and with_count >= 0.8 * len(rows) and largest > 100)
+    use_count = kind == "count" or (kind == "auto" and not graded and with_count >= 0.8 * len(rows) and largest > 100)
     if use_count:
         rows.sort(key=lambda r: -(r[1] or 0.0))
     priorities = {}
@@ -781,10 +794,21 @@ def load_frequency(path: str, kind: str = "auto") -> dict:
     return priorities
 
 
-def apply_frequency(records: list, priorities: dict) -> list:
+def apply_frequency(records: list, priorities: dict, twins: dict = None) -> list:
+    """Replace each record's priority with its frequency rank, taken from either script's form of
+    the word (twins, from CC-CEDICT): the lists are written in one script, and the device segments
+    a traditional book with the traditional records."""
     if not priorities:
         return records
-    return [(hw, d, priorities.get(hw.decode("utf-8"), UNRANKED_PRIORITY), pos) for hw, d, _, pos in records]
+    twins = twins or {}
+    out = []
+    for hw, d, _, pos in records:
+        word = hw.decode("utf-8")
+        # The larger of the two forms' ranks: jieba's list is simplified but carries a few stray
+        # traditional characters with tiny counts (說 3, 這 7), which must not outrank 说 and 这.
+        p = max(priorities.get(word, 0), priorities.get(twins.get(word, ""), 0)) or UNRANKED_PRIORITY
+        out.append((hw, d, p, pos))
+    return out
 
 
 # ── CC - CEDICT(.u8 / .txt) ────────────────────────────────────
@@ -802,21 +826,21 @@ def format_definition_cedict(trad: str, simp: str, pinyin: str, glosses: list, z
         reading += " " + pinyin_to_zhuyin(pinyin)
     if jyutping:
         reading += " · " + jyutping
+    # The device's entry renderer speaks Jitendex's layout: "• gloss" bullets, one sense per
+    # blank-line-separated group, "→ note" lines, and any other line an example sentence. An
+    # entry without bullets is taken for a names dictionary and gets every line numbered.
     parts = ["【" + reading + "】"]
     if level:
         parts.append(f"[{level}]")  # a tag line: the device shows it on the entry's grammar line
     if trad != simp:
-        parts.append(f"{trad} / {simp}")
+        parts.append(f"→ {trad} / {simp}")
     glosses = [prettify_cedict_gloss(g) for g in glosses if g][:12]
-    if len(glosses) == 1:
-        parts.append(glosses[0])
-    else:
-        parts.extend(f"{i + 1}. {g}" for i, g in enumerate(glosses))
-    # Example sentences, each with its translation on the next line, indented like Jitendex's.
+    parts.extend(f"• {g}\n" for g in glosses)
+    # Example sentences, each with its translation on the next line.
     for sentence, translation in (examples or []):
-        parts.append("  " + sentence)
+        parts.append(sentence)
         if translation:
-            parts.append("  " + translation)
+            parts.append(translation)
     return "\n".join(parts)
 
 
@@ -896,10 +920,22 @@ def attach_examples(pairs: list, forms: dict, entry_count: int) -> list:
     return examples
 
 
-def is_proper_noun_pinyin(pinyin: str) -> bool:
-    """CC-CEDICT capitalises the pinyin of proper nouns (Zhong1 guo2, Bei3 jing1)."""
+# Capitalised in CC-CEDICT but everyday vocabulary, not names: languages, nationalities, days,
+# festivals, religions and institutions a learner meets in any text.
+_COMMON_NOUN_GLOSS_RE = re.compile(
+    r"\b(language|people|person|ethnic|nationality|citizen|day|week|month|festival|holiday|new year|"
+    r"religion|church|bible|god|party|army|navy|games|cup|era|calendar|zodiac)\b|ism\b|ist\b",
+    re.IGNORECASE)
+
+
+def is_proper_noun_pinyin(pinyin: str, glosses: list = None) -> bool:
+    """CC-CEDICT capitalises the pinyin of proper nouns (Zhong1 guo2, Bei3 jing1). Entries whose
+    glosses read like common nouns (汉语, 中国人, 星期天, 春节) stay in the vocabulary."""
     syllables = [p for p in pinyin.split(" ") if p and p[0].isalpha()]
-    return bool(syllables) and syllables[0][0].isupper()
+    if not syllables or not syllables[0][0].isupper():
+        return False
+    first = (glosses or [""])[0]
+    return not _COMMON_NOUN_GLOSS_RE.search(first)
 
 
 def load_canto_readings(path: str) -> dict:
@@ -917,10 +953,12 @@ def load_canto_readings(path: str) -> dict:
 
 
 def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, levels: dict = None,
-                   jyutping: dict = None, sentence_pairs: list = None) -> tuple:
+                   jyutping: dict = None, sentence_pairs: list = None, twins: dict = None) -> tuple:
     """Convert a raw CC-CEDICT (or CC-Canto) file to index records, one per traditional and
     simplified form. Returns (vocab_records, name_records); the second list is empty unless
-    split_names routes proper nouns (capitalised pinyin) into the names slot."""
+    split_names routes proper nouns (capitalised pinyin) into the names slot. twins, when given,
+    is filled with each form's other-script form, so apply_frequency can rank a traditional
+    record from a simplified word list and the reverse."""
     print(f"Loading {path}...")
     levels = levels or {}
     jyutping = jyutping or {}
@@ -939,8 +977,15 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
             trad, simp, pinyin, canto, body = m.groups()
             idx = len(parsed)
             parsed.append((trad, simp, pinyin, canto, [g.strip() for g in body.split("/")]))
-            forms.setdefault(trad, idx)
-            forms.setdefault(simp, idx)
+            # Examples go to the everyday entry of a form: 東西 "thing" over "east and west",
+            # 周 the week over the surname, so a capitalised entry yields to a later lowercase one.
+            for form in (trad, simp):
+                held = forms.get(form)
+                if held is None or (not is_proper_noun_pinyin(pinyin) and is_proper_noun_pinyin(parsed[held][2])):
+                    forms[form] = idx
+            if twins is not None and trad != simp:
+                twins.setdefault(trad, simp)
+                twins.setdefault(simp, trad)
     examples = attach_examples(sentence_pairs or [], forms, len(parsed)) if sentence_pairs else None
 
     records = []
@@ -951,7 +996,7 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
         definition = format_definition_cedict(trad, simp, pinyin, glosses, zhuyin, reading_canto, level,
                                               examples[idx] if examples else None)
         def_bytes = definition.encode("utf-8")
-        target = names if split_names and is_proper_noun_pinyin(pinyin) else records
+        target = names if split_names and is_proper_noun_pinyin(pinyin, glosses) else records
         for hw in dict.fromkeys((trad, simp)):  # both forms, once each
             hw_bytes = hw.encode("utf-8")
             if len(hw_bytes) >= HEADWORD_SIZE:
@@ -975,10 +1020,12 @@ def load_levels(path: str, name: str) -> dict:
             if not line or line.startswith("#"):
                 continue
             fields = [x.strip().strip('"') for x in re.split(r"[\t,]", line)]
-            words = [x for x in fields if _HAN_RE.search(x)]
+            words = [w for x in fields for w in _split_variants(x)]
             if not words:
                 continue
-            level = next((x for x in fields if re.fullmatch(r"[1-9](?:-[1-9])?", x)), None)
+            # Columns before the word hold ids (a bare row number would read as a level).
+            firstWord = next(i for i, x in enumerate(fields) if _HAN_RE.search(x))
+            level = next((x for x in fields[firstWord + 1:] if _LEVEL_RE.fullmatch(x)), None)
             if level is None:
                 # The ivankra CSVs carry the level in the row id: L3-0123 (HSK), L0-1001 (TOCFL, where
                 # L0 is the pre-A1 novice band).
@@ -1025,7 +1072,8 @@ def convert_tsv(path: str) -> list:
 
 # ── MoE 重編國語辭典(g0v moedict JSON) ─────────────────────────
 
-_MOE_GLYPH_REF_RE = re.compile(r"\{\[[0-9a-fA-F]+\]\}")
+# {[8e4f]} text references and raw Plane-15 private-use codepoints: glyphs no font carries.
+_MOE_GLYPH_REF_RE = re.compile(r"\{\[[0-9a-fA-F]+\]\}|[\U000F0000-\U000FFFFD]")
 
 
 def _moe_text(value) -> str:
@@ -1044,20 +1092,18 @@ def format_definition_moedict(entry: dict) -> str:
         if reading:
             parts.append("【" + reading + "】")
         definitions = heteronym.get("definitions", [])[:6]
-        numbered = len(definitions) > 1
-        for i, d in enumerate(definitions):
-            line = ""
+        for d in definitions:
+            # One bullet per sense (the device numbers them), the part of speech inside it.
+            line = "• "
             kind = _moe_text(d.get("type"))
             if kind:
                 line += f"[{kind}] "
-            if numbered:
-                line += f"{i + 1}. "
-            line += _moe_text(d.get("def"))
+            line += _moe_text(d.get("def")) + "\n"
             parts.append(line)
             # One modern example per sense; the classical quotations are left out, they are what
             # makes the full dictionary 50 MB and a learner rarely reads them on a 6-inch screen.
             for example in (d.get("example") or [])[:1]:
-                parts.append("  " + _moe_text(example))
+                parts.append(_moe_text(example))
     return "\n".join(p for p in parts if p.strip())
 
 
@@ -1075,7 +1121,9 @@ def convert_moedict(path: str) -> list:
     skipped = 0
     for entry in data:
         title = _moe_text(entry.get("title", ""))
-        if not title or "□" in title:
+        # Only headwords the page scan can match: a run of hanzi. Phrases with punctuation
+        # (一不做，二不休) and missing glyphs are skipped.
+        if not title or not all(_HAN_RE.match(ch) or ch == "〇" for ch in title):
             skipped += 1
             continue
         definition = format_definition_moedict(entry)
@@ -1105,11 +1153,11 @@ def detect_format(path: str, lang: str = "ja") -> str:
         return "cedict"
     if lower.endswith(".tsv"):
         return "tsv"
-    if lang == "zh" and (lower.endswith(".json") or lower.endswith(".json.xz")):
+    if lang in ("zh", "yue") and (lower.endswith(".json") or lower.endswith(".json.xz")):
         return "moedict"
     if lower.endswith(".json") or lower.endswith(".json.tgz") or lower.endswith(".tgz"):
         return "jmdict"
-    if lang == "zh":
+    if lang in ("zh", "yue"):
         return "cedict"
     return "jmdict"
 
@@ -1235,6 +1283,7 @@ def main():
     sentence_pairs = load_sentence_pairs(args.examples, args.examples_script) if args.examples else None
     records = []
     name_records = []
+    twins = {}  # trad <-> simp forms from CC-CEDICT, for apply_frequency
     titles = []
     for path in args.input:
         fmt = args.format or detect_format(path, args.lang)
@@ -1247,7 +1296,7 @@ def main():
             part, title = convert_yomitan(path, reading_records=not chinese)
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
-                                         jyutping=jyutping, sentence_pairs=sentence_pairs)
+                                         jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins)
             name_records.extend(names)
             if "canto" in os.path.basename(path).lower():
                 title = "CC-Canto"
@@ -1264,8 +1313,8 @@ def main():
 
     if args.frequency:
         priorities = load_frequency(args.frequency, args.frequency_kind)
-        records = apply_frequency(records, priorities)
-        name_records = apply_frequency(name_records, priorities)
+        records = apply_frequency(records, priorities, twins)
+        name_records = apply_frequency(name_records, priorities, twins)
 
     title = args.title or ""
     if not title and chinese and titles:
@@ -1276,7 +1325,7 @@ def main():
         if args.name != "vocab":
             print("Note: --split-names only applies when writing the vocab slot; names kept in the output.")
         else:
-            write_binary(name_records, args.output_dir, "names", (titles[0] if titles else "CC-CEDICT") + " names")
+            write_binary(name_records, args.output_dir, "names", "CC-CEDICT names")  # only convert_cedict splits names
     if chinese:
         print(f"Install under /dictionaries/{args.lang}/ on the SD card (or /.dictionaries/{args.lang}/).")
 

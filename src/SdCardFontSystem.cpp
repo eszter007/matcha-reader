@@ -661,10 +661,13 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
     if (loadedFamilyCovers(fallbackManager_, fam->name, cjkProbe()) &&
         loadedFamilyCovers(fallbackManager_, fam->name, 'a')) {
       LOG_DBG("SDFS", "Companion fallback font: %s", fam->name.c_str());
-      // With a built-in family selected, nothing else serves the UI rows' own sizes: let the
-      // companion do it (its 12pt cut), so a Chinese title on Home is drawn at the row's size
-      // rather than pulled from the reader-size face through the global fallback.
-      if (manager_.currentFamilyName().empty()) registerUiSizes(fallbackManager_, *fam, renderer);
+      // Asked for by the UI with a built-in family selected: nothing else serves the list rows'
+      // own sizes, so let the companion (loaded at the UI size above). In a book the companion
+      // sits at the reader size and the global fallback serves the few UI glyphs; a second size
+      // table beside it is RAM a page build needs.
+      if (cjkScript_ == CjkScript::None && manager_.currentFamilyName().empty()) {
+        registerUiSizes(fallbackManager_, *fam, renderer);
+      }
       return;
     }
     // Loaded fine but doesn't cover both scripts -- not a useful companion.
@@ -675,7 +678,10 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
           "No companion could be loaded at %u -- a CJK book will fall back to the "
           "selected font and its size",
           pointSize);
-  if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
+  if (!fallbackManager_.currentFamilyName().empty()) {
+    fallbackManager_.unloadAll(renderer);
+    setupUiFallbacks(renderer);  // unloadAll() cleared the selected family's UI registrations too
+  }
 }
 
 void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
