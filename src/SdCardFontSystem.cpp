@@ -97,6 +97,9 @@ constexpr UiFontSize kUiFontSizes[] = {
     {UI_10_FONT_ID, 10},
     {UI_12_FONT_ID, 12},
 };
+// The size a companion is loaded at when only the UI needs it: the largest UI size, and the
+// smallest the CJK cuts ship.
+constexpr uint8_t UI_FALLBACK_POINT_SIZE = 12;
 
 }  // namespace
 
@@ -598,17 +601,21 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
     candidates.push_back(&fam);
   }
 
+  // Asked for by the UI alone (Home, the file browser): only the list rows need it, so load the
+  // family at the UI size instead of the reader's. That is the one size registerUiSizes() wants
+  // anyway, and it keeps a 16pt interval table out of a screen that also holds cover thumbnails.
+  // The next book open asks again at the reader size and the family reloads at it.
+  const uint8_t loadPt = cjkScript_ != CjkScript::None ? pointSize : UI_FALLBACK_POINT_SIZE;
   for (const auto* fam : candidates) {
     // Which size the companion will actually be asked for: findNearestSize() may land below the
     // point size the picker offered, which is the difference between a size change taking effect
     // and silently doing nothing.
-    const auto* want = fam->findNearestSize(pointSize);
-    LOG_DBG("SDFS", "Companion candidate %s: asked %u -> nearest %u", fam->name.c_str(), pointSize,
+    const auto* want = fam->findNearestSize(loadPt);
+    LOG_DBG("SDFS", "Companion candidate %s: asked %u -> nearest %u", fam->name.c_str(), loadPt,
             want ? want->pointSize : 0);
     // Already loaded at the right size? Keep it.
     if (fallbackManager_.currentFamilyName() == fam->name) {
-      const auto* wanted = fam->findNearestSize(pointSize);
-      if (wanted && wanted->pointSize == fallbackManager_.currentPointSize()) return;
+      if (want && want->pointSize == fallbackManager_.currentPointSize()) return;
     }
     // Make room before asking, the same way ensureSelectedLoaded() does for the selected family.
     // The companion's interval table is one contiguous block -- 26 KB for a broad CJK face at a
@@ -623,8 +630,8 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
                 static_cast<unsigned>(ESP.getMaxAllocHeap()));
       }
     }
-    if (!fallbackManager_.loadFamily(*fam, renderer, pointSize)) {
-      LOG_ERR("SDFS", "Companion %s failed to load at %u (free=%u largest=%u)", fam->name.c_str(), pointSize,
+    if (!fallbackManager_.loadFamily(*fam, renderer, loadPt)) {
+      LOG_ERR("SDFS", "Companion %s failed to load at %u (free=%u largest=%u)", fam->name.c_str(), loadPt,
               static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
       continue;
     }

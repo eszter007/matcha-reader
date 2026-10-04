@@ -1,5 +1,6 @@
 #include "WordLookup.h"
 
+#include <algorithm>
 #include <cstddef>
 
 #include "Deinflector.h"
@@ -54,10 +55,11 @@ bool hasNameChar(const std::string& text) {
 }  // namespace
 
 uint8_t WordLookup::lookupAll(const std::string& paragraphText, const size_t byteOffset,
-                              uint8_t priority[MAX_WINDOW_CHARS]) {
+                              uint8_t priority[MAX_WINDOW_CHARS], const int maxChars) {
   uint8_t found = 0;
   if (byteOffset >= paragraphText.size()) return found;
-  for (int windowChars = 1; windowChars <= MAX_WINDOW_CHARS; windowChars++) {
+  const int limit = std::min(maxChars, MAX_WINDOW_CHARS);
+  for (int windowChars = 1; windowChars <= limit; windowChars++) {
     const size_t windowEnd = advanceChars(paragraphText, byteOffset, windowChars);
     if (windowEnd <= byteOffset) break;
     if (windowChars > 1 && windowEnd == advanceChars(paragraphText, byteOffset, windowChars - 1))

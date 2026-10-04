@@ -62,4 +62,9 @@ bool needsVerticalRotation(uint32_t codepoint);
 // upper-right of their cell relative to a centered position.
 bool isSmallKana(uint32_t codepoint);
 
+// Traditional Chinese sets “ ” and ‘ ’ as the vertical corner brackets ﹁ ﹂ and ﹃ ﹄ (CJK
+// Compatibility Forms, drawn upright and full-em). Returns the vertical form for those four
+// while centred punctuation is on, the codepoint itself otherwise.
+uint32_t verticalFormOf(uint32_t codepoint);
+
 }  // namespace Kinsoku

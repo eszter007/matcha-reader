@@ -35,5 +35,6 @@ class WordLookup {
   // instead of taking the longest: bit L-1 of the result is set when the window of L characters
   // is a headword, and priority[L-1] carries that record's priority. No deinflection, no
   // definitions. Up to MAX_WINDOW_CHARS dictionary probes.
-  static uint8_t lookupAll(const std::string& paragraphText, size_t byteOffset, uint8_t priority[MAX_WINDOW_CHARS]);
+  static uint8_t lookupAll(const std::string& paragraphText, size_t byteOffset, uint8_t priority[MAX_WINDOW_CHARS],
+                           int maxChars = MAX_WINDOW_CHARS);
 };

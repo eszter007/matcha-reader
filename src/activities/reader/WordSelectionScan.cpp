@@ -48,6 +48,7 @@ bool WordSelectionScan::isLookupableChar(uint32_t cp) {
   if (cp == 0xFE45 || cp == 0xFE46) return false;
   if (cp == 0x30FC) return false;
   if (cp == 0x30FB) return false;
+  if (cp >= 0xFE30 && cp <= 0xFE4F) return false;  // vertical presentation forms (﹁﹂ etc.)
   if (cp == 0x2026 || cp == 0x2025) return false;
   if (cp >= '0' && cp <= '9') return false;
   if (cp >= 0xFF10 && cp <= 0xFF19) return false;
@@ -1074,7 +1075,7 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
 
   for (size_t p = 0; p < n; p++) {
     std::memset(runPriority_[p], 0, sizeof(runPriority_[p]));
-    runFound_[p] = WordLookup::lookupAll(text, byteAt[p], runPriority_[p]);
+    runFound_[p] = WordLookup::lookupAll(text, byteAt[p], runPriority_[p], kChineseMaxWindow);
   }
 
   // Best split of cells [p, n): the sum of word scores, where a word scores its priority minus a
