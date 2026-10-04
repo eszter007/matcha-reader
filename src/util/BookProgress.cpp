@@ -122,7 +122,6 @@ bool markBookUnread(const std::string& path) {
 }
 
 int loadBookProgress(const std::string& path) {
-  uint8_t data[10]{};
   if (FsHelpers::hasReflowableBookExtension(path)) {
     // From the cache alone, as the Library reads it. Opening the book for this ran once per
     // cover on Home, on the loop task: every open re-reads the metadata cache, and a book whose
@@ -137,6 +136,7 @@ int loadBookProgress(const std::string& path) {
     }
     if (!xtc->load()) return -1;
     HalFile file;
+    uint8_t data[4]{};
     if (!Storage.openFileForRead("HOME", xtc->getCachePath() + "/progress.bin", file) || file.read(data, 4) != 4)
       return -1;
     const uint32_t page = readLe32(data);
