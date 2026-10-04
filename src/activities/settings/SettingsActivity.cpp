@@ -894,10 +894,21 @@ void SettingsActivity::drawFooter() {
   // action that does nothing. Upstream has no such rows and so has no label for them.
   const bool readOnlyRow =
       ring > 0 && (*currentSettings)[ring - 1].valueGetter && !(*currentSettings)[ring - 1].valueSetter;
+  // What Confirm does on this row, as toggleCurrentSetting() decides it: an action row opens a
+  // screen, a choice of more than two opens the picker, anything else changes in place.
+  const auto rowLabel = [](const SettingInfo& setting) {
+    if (setting.type == SettingType::ACTION) return tr(STR_OPEN);
+    if (setting.type == SettingType::ENUM) {
+      const size_t choices = !setting.enumStringValues.empty() ? setting.enumStringValues.size()
+                             : !setting.enumOrder.empty()      ? setting.enumOrder.size()
+                                                               : setting.enumValues.size();
+      if (choices > 2) return tr(STR_SELECT);
+    }
+    return tr(STR_TOGGLE);
+  };
   const auto confirmLabel = (ring == 0)   ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
                             : readOnlyRow ? tr(STR_READ_ONLY)
-                            : ((*currentSettings)[ring - 1].nameId == StrId::STR_TIME_TO_SLEEP) ? tr(STR_SELECT)
-                                                                                                : tr(STR_TOGGLE);
+                                          : rowLabel((*currentSettings)[ring - 1]);
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

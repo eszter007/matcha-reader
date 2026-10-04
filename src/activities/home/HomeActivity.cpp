@@ -316,6 +316,7 @@ void HomeActivity::onEnter() {
   Activity::onEnter();
   coverScanIndex_ = 0;
   recentsLoaded = false;
+  backPressSeen = false;
   coverWorker_.start("HomeCover");
 
   hasOpdsServers = OPDS_STORE.hasServers();
@@ -395,6 +396,7 @@ void HomeActivity::loop() {
   // A real key press must not wait for a conversion; the abandoned job is retried on a later tick
   // and the heights already written to disk are kept.
   if (mappedInput.anyButtonDownRaw()) coverWorker_.requestCancel();
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
   applyCoverResult();
   // Only once a card has measured the slot it draws into: a job at any other height writes a
   // thumb no card ever asks for, and every slot keeps drawing the placeholder.
@@ -472,9 +474,13 @@ void HomeActivity::loop() {
   // Back is otherwise unused on the home menu: open the most recently read
   // book directly (recentBooks is most-recent-first and already pruned of
   // files missing from the SD card).
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && hasContinueReading && !recentBooks.empty()) {
-    onSelectBook(recentBooks[0].path);
-    return;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    const bool pressedHere = backPressSeen;
+    backPressSeen = false;
+    if (pressedHere && hasContinueReading && !recentBooks.empty()) {
+      onSelectBook(recentBooks[0].path);
+      return;
+    }
   }
 
   if (coverGridUi) {
@@ -670,7 +676,10 @@ void HomeActivity::render(RenderLock&&) {
   // Back carries no action on the home menu, so it gets no hint. It used to open
   // the most recent book, which sits under a button the reader otherwise treats
   // as "go back" and was too easy to hit by accident.
-  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  // Back reopens the last book from here (see loop()); say so while there is one to reopen.
+  const bool backResumes = hasContinueReading && !recentBooks.empty();
+  const auto labels =
+      mappedInput.mapLabels(backResumes ? tr(STR_RESUME) : "", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Captured before lastRenderValid is set: it is this fork's firstRenderDone, and the

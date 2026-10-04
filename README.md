@@ -111,6 +111,9 @@ into the bar; **Left/Right** step the tabs at the top and move along the bar, an
 in hands the cursor back to the first tab at the top. A grey outline marks whatever the cursor is on. Details in
 [§3.1.1](USER_GUIDE.md#311-tabs-and-button-navigation-cover-grid-theme).
 
+The other themes have no bottom bar, and there **Left/Right** are the same as **Up/Down** everywhere, as the button
+hints say: on a screen's tabs they move on into its rows, and **Confirm** is what steps to the next tab.
+
 Covers are built in the background, so the grid appears at once with titles standing in for artwork the device has not
 made yet and each cover replaces its own title as it finishes. A button press interrupts the work instead of queueing
 behind it.
