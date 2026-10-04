@@ -10,6 +10,7 @@
 
 #include <algorithm>
 
+#include "activities/home/EpubProgressUtil.h"
 #include "activities/reader/ProgressFile.h"
 
 namespace {
@@ -123,28 +124,10 @@ bool markBookUnread(const std::string& path) {
 int loadBookProgress(const std::string& path) {
   uint8_t data[10]{};
   if (FsHelpers::hasReflowableBookExtension(path)) {
-    // Metadata objects exceed the stack budget; only the featured book is loaded, once per entry.
-    auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");
-    if (!epub) {
-      LOG_ERR("HOME", "OOM: progress metadata");
-      return -1;
-    }
-    if (!epub->load(false, true)) return -1;
-    HalFile file;
-    if (!Storage.openFileForRead("HOME", epub->getCachePath() + "/progress.bin", file)) return -1;
-    const int size = file.read(data, sizeof(data));
-    if (size < 4) return -1;
-    // Byte 8 is the reader's own page-based percent (0xFF = unknown). Records that carry it are
-    // authoritative -- the computation below is the fallback for the older 4/6-byte layout.
-    if (size >= 9 && data[8] <= 100) return data[8];
-    const int spine = data[0] | (data[1] << 8);
-    const int page = data[2] | (data[3] << 8);
-    const int total = size >= 6 ? data[4] | (data[5] << 8) : 0;
-    if (epub->getSpineItemsCount() <= 0 || epub->getBookSize() == 0) return -1;
-    if (spine == epub->getSpineItemsCount()) return 100;
-    if (spine > epub->getSpineItemsCount()) return -1;
-    const float fraction = total > 0 && page != UINT16_MAX ? std::clamp(float(page) / total, 0.0f, 1.0f) : 0;
-    return std::clamp(static_cast<int>(epub->calculateProgress(spine, fraction) * 100 + 0.5f), 0, 100);
+    // From the cache alone, as the Library reads it. Opening the book for this ran once per
+    // cover on Home, on the loop task: every open re-reads the metadata cache, and a book whose
+    // content takes seconds to open stalled the screen for that long on each visit.
+    return EpubProgress::percentFromCache(bookCachePath(path), "HOME");
   }
   if (FsHelpers::hasXtcExtension(path)) {
     auto xtc = makeUniqueNoThrow<Xtc>(path, "/.crosspoint");
