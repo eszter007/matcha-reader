@@ -143,7 +143,15 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
                                bool black) const {
   const int cellPxLocal = drawGlyphs(renderer, page_, fontId, offsetX, offsetY, black);
 
-  const int rubyLineH = (renderer.getLineHeight(rubyFontId) + 1) / 2;
+  // JLREQ 3.3.2: ruby is half the size of its base and set solid, so one ruby character's body is
+  // half an EM. The font's line height is the wrong yardstick: it carries Latin leading (48px
+  // against a 33px em in Noto Serif JP), which stepped the ruby 45% too far apart and ran every
+  // annotation past the foot of its base.
+  const int rubyEmPx = verticalCellPx(renderer, rubyFontId);
+  const int rubyLineH = (rubyEmPx + 1) / 2;
+  // Baseline of a ruby character below the top of its body: the base text's measured figure,
+  // halved with the glyph.
+  const int rubyBaselineInBody = verticalCellBaselineOffset(renderer, rubyFontId, rubyEmPx) / 2;
   const auto rubyStyle = static_cast<EpdFontFamily::Style>(EpdFontFamily::SUP);
 
   int prevRubyBottom = -9999;
@@ -202,11 +210,12 @@ void VerticalTextBlock::render(GfxRenderer& renderer, int fontId, int rubyFontId
 
     // JLREQ 3.3.5 nakatsuki (中付き): the ruby text's vertical centre aligns with the base
     // character's. Ruby is set solid, so its virtual length is N ruby bodies, and the alignment is
-    // on VIRTUAL BODIES rather than ink. The half-ascender term undoes a renderer detail: SUP
-    // scales the glyph to 50% but drawText still offsets by the full ascender.
+    // on VIRTUAL BODIES rather than ink. drawText() takes a top and puts the baseline
+    // textBaselineOffset() below it, so the top that lands the baseline where the body wants it
+    // is the body top plus the difference.
     const int rubyBlockH = static_cast<int>(rubyCharCount) * rubyLineH;
     const int rubyBodyTop = g.y + offsetY + (cellPxLocal - rubyBlockH) / 2;
-    int rubyY = rubyBodyTop - renderer.getFontAscenderSize(rubyFontId) / 2;
+    int rubyY = rubyBodyTop + rubyBaselineInBody - renderer.textBaselineOffset(rubyFontId, rubyText.c_str(), rubyStyle);
 
     // JLREQ 3.3.8: nakatsuki spills half the overhang each way; where a neighbour cannot be hung
     // over, its share moves to the other side.
