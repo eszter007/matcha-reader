@@ -132,3 +132,16 @@ TEST(LanguageChoice, Tags) {
 }
 
 }  // namespace
+
+TEST(CjkScriptTest, ChineseTagWithoutAScriptIsOnlyADefault) {
+  EXPECT_TRUE(cjk::isUnscriptedChinese("zh"));
+  EXPECT_TRUE(cjk::isUnscriptedChinese("ZH"));
+  EXPECT_TRUE(cjk::isUnscriptedChinese("cmn"));
+  EXPECT_FALSE(cjk::isUnscriptedChinese("zh-TW"));
+  EXPECT_FALSE(cjk::isUnscriptedChinese("zh_CN"));
+  EXPECT_FALSE(cjk::isUnscriptedChinese("zh-Hant"));
+  EXPECT_FALSE(cjk::isUnscriptedChinese("cmn-Hans-CN"));
+  EXPECT_FALSE(cjk::isUnscriptedChinese("ja"));
+  EXPECT_FALSE(cjk::isUnscriptedChinese("yue"));
+  EXPECT_FALSE(cjk::isUnscriptedChinese(""));
+}

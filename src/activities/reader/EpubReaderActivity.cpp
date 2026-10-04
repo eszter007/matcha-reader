@@ -1467,7 +1467,11 @@ class SniffSink : public Print {
 
 void EpubReaderActivity::sniffLanguageIfNeeded() {
   if (!epub || languageOverride != cjk::LANG_AUTO || detectedLanguage != 0) return;
-  if (cjk::scriptForLanguage(epub->getLanguage()) != CjkScript::None) return;  // the tag is enough
+  // The tag is enough -- unless it is Chinese without a script, where it is only a default.
+  if (cjk::scriptForLanguage(epub->getLanguage()) != CjkScript::None &&
+      !cjk::isUnscriptedChinese(epub->getLanguage())) {
+    return;
+  }
   const int spineCount = epub->getSpineItemsCount();
   if (currentSpineIndex < 0 || currentSpineIndex >= spineCount) return;
   // The sink is ~50 bytes; the stream reads an item in 1KB chunks and stops after a few hundred
@@ -1519,6 +1523,11 @@ std::string EpubReaderActivity::effectiveLanguage() const {
   if (const char* forced = cjk::languageTagForChoice(languageOverride)) return forced;
   if (!epub) return {};
   const std::string& tag = epub->getLanguage();
+  if (cjk::isUnscriptedChinese(tag)) {
+    // Plain "zh": the text decides between the two scripts; anything else it found (a page of
+    // English front matter) leaves the tag's own default standing.
+    return detectedLanguage == cjk::LANG_ZH_HANT ? cjk::languageTagForChoice(detectedLanguage) : tag;
+  }
   if (cjk::scriptForLanguage(tag) != CjkScript::None) return tag;
   if (const char* sniffed = cjk::languageTagForChoice(detectedLanguage)) return sniffed;
   return tag;

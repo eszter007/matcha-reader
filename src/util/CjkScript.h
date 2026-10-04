@@ -45,6 +45,27 @@ inline CjkScript scriptForLanguage(std::string_view tag) {
   return CjkScript::SimplifiedChinese;
 }
 
+// A Chinese tag that says nothing about its script: "zh", "zho" or "cmn" with no Hans/Hant and
+// no region. scriptForLanguage() reads it as simplified, which is a guess -- Project Gutenberg
+// tags its traditional-character classics plain "zh" -- so the reader lets the text correct it.
+inline bool isUnscriptedChinese(std::string_view tag) {
+  const size_t sep = tag.find_first_of("-_");
+  const std::string_view primary = tag.substr(0, sep);
+  if (!subtagIs(primary, "zh") && !subtagIs(primary, "zho") && !subtagIs(primary, "chi") && !subtagIs(primary, "cmn")) {
+    return false;
+  }
+  std::string_view rest = sep == std::string_view::npos ? std::string_view{} : tag.substr(sep + 1);
+  while (!rest.empty()) {
+    const size_t next = rest.find_first_of("-_");
+    const std::string_view sub = rest.substr(0, next);
+    for (const char* stated : {"hant", "tw", "hk", "mo", "hans", "cn", "sg"}) {
+      if (subtagIs(sub, stated)) return false;
+    }
+    rest = next == std::string_view::npos ? std::string_view{} : rest.substr(next + 1);
+  }
+  return true;
+}
+
 // A Han ideograph: CJK Unified, Extension A, the compatibility block and Extensions B-G (rare
 // hanzi, common in traditional Chinese names). The one definition the scan, the sniff and the
 // font coverage probe share.
