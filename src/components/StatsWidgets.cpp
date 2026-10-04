@@ -95,7 +95,7 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
 
   renderer.drawRoundedRect(x, y, w, streakH, 2, CARD_RADIUS, true);
 
-  char streakBuf[32];
+  char streakBuf[64];
   snprintf(streakBuf, sizeof(streakBuf), tr(STR_STREAK_FORMAT), streak);
   const int streakTextW = renderer.getTextWidth(UI_12_FONT_ID, streakBuf, EpdFontFamily::BOLD);
   const int row1TotalW = iconSize + 8 + streakTextW;
@@ -105,7 +105,7 @@ int drawStreakCard(const GfxRenderer& renderer, const int x, const int y, const 
   renderer.drawText(UI_12_FONT_ID, row1X + iconSize + 8, row1Y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
                     streakBuf, true, EpdFontFamily::BOLD);
 
-  char weekBuf[48];
+  char weekBuf[96];
   snprintf(weekBuf, sizeof(weekBuf), tr(STR_WEEK_MINUTES_READ_FORMAT), weekMinutes,
            weekMinutes == 1 ? tr(STR_MINUTE) : tr(STR_MINUTES));
   const int weekTextW = renderer.getTextWidth(SMALL_FONT_ID, weekBuf);
@@ -174,7 +174,7 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
   renderer.drawRoundedRect(x, y, w, calH, 2, CARD_RADIUS, true);
 
   // Month/year header with chevrons
-  char monthBuf[32];
+  char monthBuf[64];
   snprintf(monthBuf, sizeof(monthBuf), "%s %d", monthName(calMonth), calYear);
   const int monthW = renderer.getTextWidth(UI_12_FONT_ID, monthBuf, EpdFontFamily::BOLD);
   const int monthX = x + (w - monthW) / 2;
@@ -209,7 +209,7 @@ int drawMonthCalendar(const GfxRenderer& renderer, const int x, const int y, con
 
   // Days read count
   const int daysReadMonth = source.daysReadInMonth(source.ctx, calYear, calMonth);
-  char daysReadBuf[32];
+  char daysReadBuf[64];
   snprintf(daysReadBuf, sizeof(daysReadBuf), tr(STR_DAYS_READ_IN_MONTH_FORMAT), daysReadMonth);
   const int drW = renderer.getTextWidth(SMALL_FONT_ID, daysReadBuf);
   renderer.drawText(SMALL_FONT_ID, x + (w - drW) / 2, monthY + calTitleH + 2, daysReadBuf, true);
