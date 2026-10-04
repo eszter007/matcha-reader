@@ -304,9 +304,76 @@ void WordSelectionScan::appendLookupContext(const std::string& utf8, const uint3
   markContextScanned();
 }
 
+namespace {
+// Bytes of the UTF-8 sequence starting at `lead`, clamped to what is left of the word.
+size_t utf8SequenceLength(const unsigned char lead, const size_t remaining) {
+  const size_t length = lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : 4;
+  return std::min(length, remaining);
+}
+}  // namespace
+
+void WordSelectionScan::measurePage(const Page& page, const GfxRenderer& renderer, const int fontId,
+                                    const bool suppressRuby, LineGeometry& out) {
+  out.boxes.reset();
+  out.count = 0;
+  // Count first, so the table is one exact allocation rather than a vector doubling its way up.
+  size_t total = 0;
+  for (const auto& el : page.elements) {
+    if (el->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*el);
+    if (!line.getBlock()) continue;
+    const TextBlock& block = *line.getBlock();
+    for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
+      const char* text = block.wordText(wi);
+      const size_t length = block.wordTextLen(wi);
+      for (size_t b = 0; b < length; b += utf8SequenceLength(static_cast<unsigned char>(text[b]), length - b)) total++;
+    }
+  }
+  if (total == 0) return;
+  auto boxes = makeUniqueNoThrow<GlyphBox[]>(total);
+  if (!boxes) {
+    LOG_ERR("WLS", "OOM: %u glyph boxes; word lookup opens without a page cursor", static_cast<unsigned>(total));
+    return;
+  }
+
+  std::vector<TextBlock::WordPlacement> placements;  // reused line to line
+  size_t at = 0;
+  for (const auto& el : page.elements) {
+    if (el->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*el);
+    if (!line.getBlock()) continue;
+    const TextBlock& block = *line.getBlock();
+    block.wordPlacements(renderer, fontId, line.xPos, line.yPos, suppressRuby, placements);
+    for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
+      const char* text = block.wordText(wi);
+      const size_t length = block.wordTextLen(wi);
+      const bool placed = wi < placements.size();
+      int penX = placed ? placements[wi].x : 0;
+      for (size_t b = 0; b < length;) {
+        const size_t step = utf8SequenceLength(static_cast<unsigned char>(text[b]), length - b);
+        // One glyph at a time, in the font and style the line was laid out with. Kerning is
+        // left out: it only exists between Latin letters, which are never a lookup target here.
+        char utf8[5] = {};
+        memcpy(utf8, text + b, step);
+        const int advance = placed ? renderer.getRenderAdvanceX(placements[wi].fontId, utf8, block.wordStyle(wi)) +
+                                         block.getBlockStyle().letterSpacing
+                                   : 0;
+        boxes[at++] = {static_cast<uint16_t>(std::max(0, penX)),
+                       static_cast<uint16_t>(placed ? std::max<int>(0, placements[wi].y) : 0),
+                       static_cast<uint8_t>(std::clamp(advance, 0, 255))};
+        penX += advance;
+        b += step;
+      }
+    }
+  }
+  out.boxes = std::move(boxes);
+  out.count = total;
+}
+
 void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geometry) {
   reset();
-  std::vector<TextBlock::WordPlacement> placements;  // reused line to line
+  if (geometry && !geometry->valid()) geometry = nullptr;
+  size_t boxAt = 0;  // walks geometry->boxes in step with every codepoint of every word
   uint16_t lineIndex = 0;
   // Horizontal mode: flatten the page's lines into one continuous character
   // stream (single paragraph). Latin words keep their separating spaces; CJK
@@ -332,10 +399,6 @@ void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geome
     }
     const TextBlock& block = *line.getBlock();
     bool lineHadWord = false;
-    if (geometry) {
-      block.wordPlacements(*geometry->renderer, geometry->fontId, line.xPos, line.yPos, geometry->suppressRuby,
-                           placements);
-    }
     const uint16_t column = lineIndex++;
     for (uint16_t wi = 0; wi < block.wordCount(); wi++) {
       if (oom) break;
@@ -354,6 +417,13 @@ void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geome
       // join simply finds nothing, exactly as today, while the right one is the whole feature.
       const bool lineFinal = wi + 1 == block.wordCount();
       const bool joinHyphen = lineFinal && word.size() > 1 && word.back() == '-';
+      const size_t boxAfterWord = boxAt + [&word] {
+        size_t count = 0;
+        for (size_t b = 0; b < word.size();
+             b += utf8SequenceLength(static_cast<unsigned char>(word[b]), word.size() - b))
+          count++;
+        return count;
+      }();
       if (joinHyphen) word.remove_suffix(1);
       // Insert a separating space only between two ASCII-word boundaries -- unless the previous
       // line ended mid-word, where a space is exactly what must not appear.
@@ -365,11 +435,8 @@ void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geome
         }
       }
       joinToPrevious = joinHyphen;
-      const bool placed = geometry && wi < placements.size();
-      int penX = placed ? placements[wi].x : 0;
       size_t b = 0;
       while (b < word.size()) {
-        const size_t glyphStart = b;
         auto c0 = static_cast<unsigned char>(word[b]);
         uint32_t cp;
         if (c0 < 0x80) {
@@ -388,25 +455,21 @@ void WordSelectionScan::initFromPage(const Page& page, const LineGeometry* geome
           b += 4;
         }
         GlyphRef ref{0, 0, column, 0, cp, 0, 0, 0};
-        if (placed) {
-          // One glyph at a time, in the font and style the line was laid out with. Kerning is
-          // left out: it only exists between Latin letters, which are never a lookup target here.
-          char utf8[5] = {};
-          memcpy(utf8, word.data() + glyphStart, std::min<size_t>(b - glyphStart, 4));
-          const int advance = geometry->renderer->getTextAdvanceX(placements[wi].fontId, utf8, block.wordStyle(wi),
-                                                                  block.getBlockStyle().letterSpacing);
-          ref.x = static_cast<uint16_t>(std::max(0, penX));
-          ref.y = static_cast<uint16_t>(std::max<int>(0, placements[wi].y));
-          ref.row = ref.x;
-          ref.width = static_cast<uint8_t>(std::clamp(advance, 0, 255));
-          penX += advance;
+        if (geometry && boxAt < geometry->count) {
+          const GlyphBox& box = geometry->boxes[boxAt];
+          ref.x = box.x;
+          ref.y = box.y;
+          ref.row = box.x;
+          ref.width = box.width;
         }
+        boxAt++;
         if (!pushGlyphSafe(allGlyphs, ref)) {
           oom = true;
           break;
         }
         lastCp = cp;
       }
+      boxAt = boxAfterWord;  // past a stripped hyphen, or the rest of a word a failed push cut short
     }
     // A line that emitted nothing (an empty block) is still a line in between: the pending join
     // cannot reach across it.

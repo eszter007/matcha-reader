@@ -4,6 +4,7 @@
 #include <WordLookup.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,13 +43,24 @@ class WordSelectionScan {
     uint8_t width;
   };
 
-  // What placing a horizontal page's glyphs takes: the renderer and reader font its lines were
-  // laid out with, and whether ruby is hidden (shown ruby pushes the base text down its line).
-  struct LineGeometry {
-    const GfxRenderer* renderer = nullptr;
-    int fontId = 0;
-    bool suppressRuby = true;
+  // Where a horizontal page's characters are drawn, one entry per codepoint of every word in
+  // page order. Measured by the reader while its fonts are still resident (measurePage): the
+  // scan itself is built after they are released, when an advance can only be read back off
+  // the card one glyph at a time.
+  struct GlyphBox {
+    uint16_t x;
+    uint16_t y;
+    uint8_t width;
   };
+  struct LineGeometry {
+    std::unique_ptr<GlyphBox[]> boxes;
+    size_t count = 0;
+    bool valid() const { return boxes != nullptr; }
+  };
+  // suppressRuby: ruby is hidden (shown ruby pushes the base text down its line). Leaves `out`
+  // invalid when the page has no text or the table does not fit in memory.
+  static void measurePage(const Page& page, const GfxRenderer& renderer, int fontId, bool suppressRuby,
+                          LineGeometry& out);
 
   // Populate allGlyphs from a page and reset the state machine. Vertical (tategaki) mode.
   void initFromVerticalPage(const VerticalPage& page);

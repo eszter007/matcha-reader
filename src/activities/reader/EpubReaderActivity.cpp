@@ -4555,13 +4555,16 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
     selectCtx.repaintCtx = this;
     selectCtx.lookupAtX = lookupAtX;
     selectCtx.lookupAtY = lookupAtY;
-    const WordSelectionScan::LineGeometry geometry{&renderer, effectiveReaderFontId(), !useFurigana()};
+    WordSelectionScan::LineGeometry geometry;
     {
       RenderLock lock(*this);
-      // Before the font release below, like the vertical cell.
-      selectCtx.cellPx = renderer.getLineHeight(geometry.fontId);
+      const int fontId = effectiveReaderFontId();
+      selectCtx.cellPx = renderer.getLineHeight(fontId);
       selectCtx.pageOnScreen = pageOnScreen && !renderer.frameBufferContentsStale();
       page = section->loadPage(pageIndex);
+      // Before the font release below, like the vertical cell: the page was just drawn, so every
+      // advance is still in RAM.
+      if (page) WordSelectionScan::measurePage(*page, renderer, fontId, !useFurigana(), geometry);
       if (page && section->isBuilding()) suspendSectionBuild();
       if (page) {
         releaseReloadableMemory();
@@ -4634,7 +4637,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
 
       auto lookup = makeUniqueNoThrow<EpubReaderWordLookupActivity>(
           renderer, mappedInput, *page, scanCachePath, static_cast<uint16_t>(currentSpineIndex),
-          static_cast<uint16_t>(pageIndex), lookupTail, selectCtx, &geometry);
+          static_cast<uint16_t>(pageIndex), lookupTail, geometry.valid() ? selectCtx : WordSelectContext{}, &geometry);
       if (!lookup) {
         LOG_ERR("ERS", "OOM: word lookup panel");
         requestUpdate();  // the build was suspended for the panel; the next render resumes it
