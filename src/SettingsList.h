@@ -379,11 +379,11 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         SettingInfo::Enum(StrId::STR_READER_MENU_STYLE, &CrossPointSettings::readerMenuStyle,
                           {StrId::STR_MENU_STYLE_LIST, StrId::STR_MENU_STYLE_TOOLBAR}, "readerMenuStyle",
                           StrId::STR_CAT_READER),
-        // --- Controls ---
-        // Front buttons first, then the side buttons, then the touch equivalents. The Shortcuts
-        // and Remap rows are actions, inserted ahead of these in SettingsActivity. No Side Button
-        // Layout row: the per-button upper/lowerSideButtonAction settings replaced it, and cover
-        // its Next/Next and Prev/Prev options by setting both buttons to the same action.
+    // --- Controls ---
+    // Front buttons first, then the side buttons, then the touch equivalents. The Shortcuts
+    // and Remap rows are actions, inserted ahead of these in SettingsActivity. No Side Button
+    // Layout row: the per-button upper/lowerSideButtonAction settings replaced it, and cover
+    // its Next/Next and Prev/Prev options by setting both buttons to the same action.
 #if FREEINK_CAP_HAPTIC
         SettingInfo::Enum(StrId::STR_VIBRATION, &CrossPointSettings::vibration,
                           {StrId::STR_VIBRATION_TOUCH, StrId::STR_VIBRATION_TOUCH_PAGE, StrId::STR_STATE_OFF},

@@ -56,10 +56,9 @@ void catalogScreenHeader(UiAppHost::UiScreen& screen, const GfxRenderer& rendere
               fui::Rect{frameRect.x, static_cast<int16_t>(metrics.topPadding), frameRect.width,
                         static_cast<int16_t>(metrics.headerHeight)},
               header);
-  screen.setContentMarginFromScreen(
-      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight +
-                                       (bandBelow ? 0 : metrics.verticalSpacing)),
-                  0, static_cast<int16_t>(bottomInset >= 0 ? bottomInset : metrics.buttonHintsHeight), 0});
+  screen.setContentMarginFromScreen(fui::Insets{
+      static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + (bandBelow ? 0 : metrics.verticalSpacing)), 0,
+      static_cast<int16_t>(bottomInset >= 0 ? bottomInset : metrics.buttonHintsHeight), 0});
 }
 
 void catalogCenteredBlock(UiAppHost::UiScreen& screen, const std::initializer_list<CatalogLine> lines) {

@@ -12,9 +12,9 @@
 
 #include "BookStats.h"
 #include "DictionaryDefinitionActivity.h"
+#include "HapticFeedback.h"
 #include "ReaderUtils.h"
 #include "WordSelectionScan.h"
-#include "HapticFeedback.h"
 #include "components/UITheme.h"
 
 namespace {

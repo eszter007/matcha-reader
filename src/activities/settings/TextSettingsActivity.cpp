@@ -27,9 +27,10 @@ namespace {
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
 // Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
-constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
-    StrId::STR_LINE_SPACING,          StrId::STR_WORD_SPACING, StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
-    StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,    StrId::STR_SCREEN_MARGIN,     StrId::STR_BOOK_CSS_MARGINS};
+constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,          StrId::STR_WORD_SPACING,
+                                         StrId::STR_CHARACTER_SPACING,     StrId::STR_EXTRA_SPACING,
+                                         StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,
+                                         StrId::STR_SCREEN_MARGIN,         StrId::STR_BOOK_CSS_MARGINS};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
                                         StrId::STR_TEXT_AA};
 

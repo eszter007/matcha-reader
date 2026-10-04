@@ -28,9 +28,9 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "XtcProgressUtil.h"
+#include "activities/plugins/PluginCatalogActivity.h"  // anyPluginInstalled()
 #include "components/BookActionsMenu.h"
 #include "components/HomeTabBar.h"
-#include "activities/plugins/PluginCatalogActivity.h"  // anyPluginInstalled()
 #include "components/UITheme.h"
 #include "fontIds.h"
 
