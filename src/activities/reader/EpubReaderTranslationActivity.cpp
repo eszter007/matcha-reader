@@ -51,7 +51,7 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 // conservative empirical floor above the crash point, not a documented ESP-IDF constant.
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
 static std::string apiKeyPath() { return sdsystem::findUserFile("gemini.key"); }
-constexpr const char* GEMINI_MODEL = "gemini-3.6-flash";
+constexpr const char* GEMINI_MODEL = "gemini-3.8-flash";
 // The page behind the panel, kept across the full-screen Wi-Fi list and a silent restart.
 static std::string backgroundPath() { return sdsystem::path("translate_bg.bin"); }
 // A saved network either answers within this or is out of range; the Wi-Fi list takes over then.
@@ -363,6 +363,10 @@ bool EpubReaderTranslationActivity::callGeminiApi(const std::string& apiKey) {
 
   auto config = reqDoc["generationConfig"].to<JsonObject>();
   config["maxOutputTokens"] = 2048;
+  // The model thinks before answering, and those tokens count against maxOutputTokens: at its
+  // default level a long page could use up the budget and return no translation, or outlast the
+  // timeout below. A translation needs little reasoning; "low" is the lowest level 3.8 accepts.
+  config["thinkingConfig"].to<JsonObject>()["thinkingLevel"] = "low";
 
   std::string body;
   serializeJson(reqDoc, body);
