@@ -141,24 +141,61 @@ void HalGPIO::begin() {
 
 void HalGPIO::update() {
   inputMgr.update();
+  // Synthetic press: down for at least one frame, released once its hold time has run.
+  injPressed_ = 0;
+  injReleased_ = 0;
+  if (injDown_) {
+    injHeldMs_ = millis() - injDownSinceMs_;
+    if (injReleaseDue_ || injHoldMs_ == 0) {
+      injReleased_ = injDown_;
+      injDown_ = 0;
+      injReleaseDue_ = false;
+    } else if (injHoldMs_ > 0 && injHeldMs_ >= injHoldMs_) {
+      // A hold stays down for one more update once its time has run, so handlers see a frame
+      // that is both pressed and at the full hold time (wasLongPressed at exactly the threshold).
+      injReleaseDue_ = true;
+    }
+  } else if (injCount_ > 0) {
+    const InjectedPress next = injQueue_[injHead_];
+    injPressed_ = injDown_ = static_cast<uint8_t>(1u << next.button);
+    injDownSinceMs_ = millis();
+    injHoldMs_ = next.holdMs;
+    injHeldMs_ = 0;
+    injReleaseDue_ = false;
+    injHead_ = static_cast<uint8_t>((injHead_ + 1) % INJECT_QUEUE_SIZE);
+    injCount_--;
+  }
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;
 }
 
+bool HalGPIO::injectPress(const uint8_t buttonIndex, const uint16_t holdMs) {
+  if (buttonIndex > BTN_POWER || injCount_ >= INJECT_QUEUE_SIZE) return false;
+  injQueue_[(injHead_ + injCount_) % INJECT_QUEUE_SIZE] = {buttonIndex, holdMs};
+  injCount_++;
+  return true;
+}
+
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
-bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
+bool HalGPIO::isPressed(uint8_t buttonIndex) const {
+  return (injDown_ >> buttonIndex & 1) || inputMgr.isPressed(buttonIndex);
+}
 
-bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
+bool HalGPIO::wasPressed(uint8_t buttonIndex) const {
+  return (injPressed_ >> buttonIndex & 1) || inputMgr.wasPressed(buttonIndex);
+}
 
-bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
+bool HalGPIO::wasAnyPressed() const { return injPressed_ || inputMgr.wasAnyPressed(); }
 
 bool HalGPIO::anyButtonDownRaw() { return inputMgr.getState() != 0; }
 
-bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
+bool HalGPIO::wasReleased(uint8_t buttonIndex) const {
+  return (injReleased_ >> buttonIndex & 1) || inputMgr.wasReleased(buttonIndex);
+}
 
-bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
+bool HalGPIO::wasAnyReleased() const { return injReleased_ || inputMgr.wasAnyReleased(); }
 
 bool HalGPIO::rawInputActive() {
   if (inputMgr.isPowerButtonPhysicallyPressed()) return true;
@@ -169,9 +206,18 @@ bool HalGPIO::rawInputActive() {
   return (g1.raw >= 0 && g1.raw < kIdleRailMin) || (g2.raw >= 0 && g2.raw < kIdleRailMin);
 }
 
-unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
+unsigned long HalGPIO::getHeldTime() const {
+  // An injected press reports its own hold time, not that of the last real press: a tap would
+  // otherwise read as a long press.
+  if (injDown_ || injReleased_) return injHeldMs_;
+  return inputMgr.getHeldTime();
+}
 
-unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }
+unsigned long HalGPIO::getPowerButtonHeldTime() const {
+  // An injected Power press reports its own hold time, as getHeldTime() does.
+  if (((injDown_ | injReleased_) >> BTN_POWER) & 1) return injHeldMs_;
+  return inputMgr.getPowerButtonHeldTime();
+}
 
 bool HalGPIO::hasTouch() const { return inputMgr.hasTouch(); }
 

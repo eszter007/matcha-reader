@@ -208,6 +208,15 @@ bool HalStorage::openFileForWrite(const char* moduleName, const char* path, HalF
   return ok;
 }
 
+bool HalStorage::openFileForAppend(const char* moduleName, const char* path, HalFile& file) {
+  StorageLock lock;  // ensure thread safety for the duration of this function
+  FsFile fsFile = SDCard.open(path, O_WRONLY | O_CREAT | O_APPEND);
+  const bool ok = static_cast<bool>(fsFile);
+  if (!ok) LOG_ERR(moduleName, "Failed to open file for append: %s", path);
+  file = HalFile(std::make_unique<HalFile::Impl>(std::move(fsFile)));
+  return ok;
+}
+
 bool HalStorage::openFileForWrite(const char* moduleName, const std::string& path, HalFile& file) {
   return openFileForWrite(moduleName, path.c_str(), file);
 }

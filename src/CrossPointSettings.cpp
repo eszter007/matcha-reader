@@ -68,7 +68,6 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // the firmware on a fragmented heap, and this runs while the reader is tearing down. The walk
   // covers the rows the menu copy adds as well, so their values are written like any other.
   forEachPersistableSetting([&](const SettingInfo& info) {
-    if (settingHiddenByBoard(info)) return;
     if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
     if (!info.valuePtr && !info.stringOffset) return;
@@ -126,7 +125,6 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // the firmware on a fragmented heap, and this runs while the reader is tearing down. The walk
   // covers the rows the menu copy adds as well, so their values are written like any other.
   forEachPersistableSetting([&](const SettingInfo& info) {
-    if (settingHiddenByBoard(info)) return;
     if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
     if (!info.valuePtr && !info.stringOffset) return;
@@ -186,6 +184,34 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       s.*(info.valuePtr) = v;
     }
   });
+
+  // Older files stored one combined touch mode under "touchReaderControls": 0=off, 1=tap,
+  // 2=swipe, 3=inverted tap, 4=inverted swipe (Matcha-only, for right-to-left vertical text).
+  // Split it into the master toggle plus the per-direction gesture pair (the generic loop above
+  // already folded out-of-range toggle values back to the On default).
+  if (doc["pageTurnGesture"].isNull() && doc["previousPageGesture"].isNull() &&
+      doc["touchReaderControls"].is<uint8_t>()) {
+    const uint8_t mode = doc["touchReaderControls"].as<uint8_t>();
+    if (mode >= LEGACY_TOUCH_TAP && mode <= LEGACY_TOUCH_INVERTED_SWIPE) {
+      touchReaderControls = TOUCH_READER_ON;
+      switch (mode) {
+        case LEGACY_TOUCH_TAP:
+          pageTurnGesture = TAP_ONLY;
+          break;
+        case LEGACY_TOUCH_INVERTED_TAP:
+          pageTurnGesture = INVERTED_TAP;
+          break;
+        case LEGACY_TOUCH_INVERTED_SWIPE:
+          pageTurnGesture = INVERTED_SWIPE;
+          break;
+        default:
+          pageTurnGesture = SWIPE_ONLY;
+          break;
+      }
+      previousPageGesture = pageTurnGesture;
+      needsResave = true;
+    }
+  }
 
   if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
     const uint8_t legacyValue =
@@ -307,6 +333,8 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   ReaderRenderSpec spec;
   spec.fontId = getReaderFontId();
   spec.lineCompression = getReaderLineCompression();
+  spec.characterSpacing = getCharacterSpacing();
+  spec.wordSpacingPercent = wordSpacing;
   spec.extraParagraphSpacing = extraParagraphSpacing != 0;
   spec.paragraphAlignment = paragraphAlignment;
   spec.viewportWidth = viewportWidth;
@@ -320,7 +348,11 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
-  // SD card fonts use same compression as Bookerly (the most neutral values)
+  // SD card and vector fonts get a wider scale than the built-ins: their
+  // faces carry their own (often generous) natural line height, so the old
+  // Bookerly-tuned 1.1/1.2 steps were visually near-indistinguishable. At
+  // 12pt in portrait (~760px viewport) this scale spans ~26/24/19/15 lines
+  // per page — each step reads as a clearly different density.
   if (sdFontFamilyName[0] != '\0') {
     switch (lineSpacing) {
       case TIGHT:
@@ -329,9 +361,9 @@ float CrossPointSettings::getReaderLineCompression() const {
       default:
         return 1.0f;
       case WIDE:
-        return 1.1f;
+        return 1.3f;
       case EXTRA_WIDE:
-        return 1.2f;
+        return 1.6f;
     }
   }
 
@@ -443,21 +475,4 @@ int CrossPointSettings::getReaderFontId() const {
   }
 
   return getBuiltinReaderFontId();
-}
-
-int CrossPointSettings::getRubyFontId() const {
-  if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {
-    // 12pt: the same size as the built-in fallback below, so an SD family and a built-in
-    // family put furigana at the same physical size. (Was the legacy SMALL size enum.)
-    int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, 12);
-    if (id != 0) return id;
-  }
-
-  switch (fontFamily) {
-    case NOTOSANS:
-      return NOTOSANS_12_FONT_ID;
-    case NOTOSERIF:
-    default:
-      return NOTOSERIF_12_FONT_ID;
-  }
 }

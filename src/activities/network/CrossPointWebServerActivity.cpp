@@ -5,6 +5,7 @@
 #include <ESPmDNS.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -18,6 +19,7 @@
 #include "WifiSelectionActivity.h"
 #include "activities/RenderLock.h"
 #include "activities/network/CalibreConnectActivity.h"
+#include "components/HomeTabBar.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
@@ -313,6 +315,18 @@ void CrossPointWebServerActivity::startWebServer() {
     onGoHome();
     return;
   }
+  // An upload holds loop() inside handleClient(), so input is sampled on each received chunk instead. On a slow
+  // link chunks come ~0.5 s apart, so a button found down gets a second sample past the SDK's 5 ms debounce.
+  webServer->setUploadCancelCheck([this] {
+    mappedInput.update(true);
+    if (gpio.rawInputActive()) {
+      delay(6);
+      mappedInput.update(true);
+    }
+    leaveRequested = leaveRequested || mappedInput.isPressed(MappedInputManager::Button::Back) ||
+                     mappedInput.wasPressed(MappedInputManager::Button::Back) || mappedInput.wasHomeGesture();
+    return leaveRequested;
+  });
   webServer->begin();
 
   if (webServer->isRunning()) {
@@ -332,6 +346,10 @@ void CrossPointWebServerActivity::startWebServer() {
 }
 
 void CrossPointWebServerActivity::loop() {
+  if (HomeTabBar::route(mappedInput, renderer, HomeTab::Transfer, tabFocus) != HomeTabBar::Input::None) {
+    requestUpdate();
+    return;
+  }
   // Handle different states
   if (state == WebServerActivityState::SERVER_RUNNING) {
     // Handle DNS requests for captive portal (AP mode only)
@@ -401,6 +419,10 @@ void CrossPointWebServerActivity::loop() {
       constexpr int MAX_ITERATIONS = 500;
       for (int i = 0; i < MAX_ITERATIONS && webServer->isRunning(); i++) {
         webServer->handleClient();
+        if (leaveRequested) {
+          onGoHome();
+          return;
+        }
         // Reset watchdog every 32 iterations
         if ((i & 0x1F) == 0x1F) {
           resetTaskWatchdogIfSubscribed();
@@ -439,7 +461,7 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
     const auto pageHeight = renderer.getScreenHeight();
 
     GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
-                   isApMode ? tr(STR_HOTSPOT_MODE) : tr(STR_FILE_TRANSFER), nullptr);
+                   isApMode ? tr(STR_HOTSPOT_MODE) : tr(STR_FILE_TRANSFER), nullptr, HomeTabBar::showsBackButton(true));
 
     if (state == WebServerActivityState::SERVER_RUNNING) {
       GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
@@ -459,7 +481,7 @@ void CrossPointWebServerActivity::renderServerRunning() const {
   const auto pageWidth = renderer.getScreenWidth();
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
-                 isApMode ? tr(STR_HOTSPOT_MODE) : tr(STR_FILE_TRANSFER), nullptr);
+                 isApMode ? tr(STR_HOTSPOT_MODE) : tr(STR_FILE_TRANSFER), nullptr, HomeTabBar::showsBackButton(true));
   GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
                     connectedSSID.c_str());
 
@@ -529,8 +551,12 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     renderer.drawCenteredText(SMALL_FONT_ID, startY, hostnameUrl.c_str(), true);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (HomeTabBar::enabled()) {
+    HomeTabBar::draw(renderer, HomeTab::Transfer, tabFocus);
+  } else {
+    const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 }
 
 void CrossPointWebServerActivity::renderWifiIndicator(int subHeaderTop) const {

@@ -32,6 +32,11 @@ class ImageBlock final : public Block {
   // drawn (fitted, in the rotated frame) rather than its stored natural size.
   void renderPlaceholderAt(GfxRenderer& renderer, int x, int y, int w, int h) const;
   static void clearRenderFailures();
+  // A PNG whose decoder does not fit the heap is not decoded during a page render: it shows the
+  // placeholder and is left to the reader's warm task, which can lend the decoder the framebuffer.
+  bool needsFramebufferLoanToDecode() const;
+  // Whether a render deferred such a decode since the last call (render task only).
+  static bool consumeDeferredDecode();
 
   // A page render draws its image up to ~13 times (BW double-refresh plus every
   // grayscale band pass), and each draw streams the whole .pxc off SD. The
@@ -56,6 +61,12 @@ class ImageBlock final : public Block {
   // and warmCache() -- one implementation so a background warm computes EXACTLY the dimensions
   // the later render will expect from the pixel cache.
   static void fitWithin(int availW, int availH, int& w, int& h);
+  // Whether an image shown at w x h fills the page: it reaches (nearly) the full width or height.
+  // Only such an image gets a page of its own and is rotated to match the screen; a smaller one
+  // flows inline with the text, upright.
+  static bool fillsPage(int w, int h, int pageW, int pageH) {
+    return w > 0 && h > 0 && (w * 10 >= pageW * 9 || h * 10 >= pageH * 9);
+  }
 
   enum class WarmResult : uint8_t {
     Warmed,         // cache written
@@ -70,7 +81,10 @@ class ImageBlock final : public Block {
   // MUST run on the render task: it writes the same cache path render() reads/writes, and
   // single-task use is what makes the direct write (no tmp+rename) safe. shouldCancel is polled
   // per decode block; on cancellation the converter drops the partial cache file itself.
-  WarmResult warmCache(GfxRenderer& renderer, bool (*shouldCancel)(const void*), const void* cancelCtx) const;
+  // decoderInLentFramebuffer: the caller holds a FrameBufferLoan for this call (see
+  // needsFramebufferLoanToDecode).
+  WarmResult warmCache(GfxRenderer& renderer, bool (*shouldCancel)(const void*), const void* cancelCtx,
+                       bool decoderInLentFramebuffer = false) const;
 
   void render(GfxRenderer& renderer, const int x, const int y);
   bool serialize(HalFile& file);

@@ -36,6 +36,7 @@
 #include "TextSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "components/HomeTabBar.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
@@ -52,6 +53,29 @@ void SettingsActivity::saveSettings() {
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
   }
   SETTINGS.saveToFile();
+}
+
+void SettingsActivity::rebuildLibraryIndex() {
+  // Prevent SD-backed fonts from opening a second reader while EPUB metadata is scanned.
+  // Keep the popup static because an e-ink refresh per folder would dominate the rebuild.
+  RenderLock lock(*this);
+  GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
+
+  library::BuildStats stats;
+  const bool ok = library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0);
+  if (ok) {
+    LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed, %u enriched) in %ums",
+            static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.added),
+            static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
+            static_cast<unsigned>(stats.enriched), static_cast<unsigned>(stats.walkMs));
+    if (stats.dedupDegraded) LOG_ERR("LIB", "rebuild completed without duplicate detection");
+  } else {
+    LOG_ERR("LIB", "index rebuild failed");
+  }
+
+  GUI.drawPopup(renderer, ok ? tr(STR_LIBRARY_REBUILD_DONE) : tr(STR_LIBRARY_REBUILD_FAILED));
+  delay(1200);
+  requestUpdate(true);
 }
 
 void SettingsActivity::rebuildSettingsLists() {
@@ -393,9 +417,9 @@ void SettingsActivity::navigateButtons() {
   // the visible rows (ring positions 1..N) instead of landing on hidden 0.
   const int count = listCount();
   if (count <= 0) return;
-  buttonNavigator.onNextRelease(
+  buttonNavigator.onNextPress(
       [this, count] { moveRingTo(enabledRingFrom(ButtonNavigator::nextIndex(ringPos() - 1, count) + 1, 1)); });
-  buttonNavigator.onPreviousRelease(
+  buttonNavigator.onPreviousPress(
       [this, count] { moveRingTo(enabledRingFrom(ButtonNavigator::previousIndex(ringPos() - 1, count) + 1, -1)); });
   buttonNavigator.onNextContinuous([this, count] {
     moveRingTo(enabledRingFrom(ButtonNavigator::nextPageIndex(ringPos() - 1, count, activeNav().visibleRows) + 1, 1));
@@ -419,9 +443,9 @@ int SettingsActivity::enabledRingFrom(int ring, const int direction) const {
 
 bool SettingsActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // Confirm on the category tabs is TabRing's (handleTabBarInput runs first).
     if (ringPos() == 0) {
-      // Embedded single-category mode (reader menu): the category row is locked.
-      if (!finishOnBack) stepTab(1);
+      return true;
     } else {
       const int row = ringPos() - 1;
       if (row >= 0 && row < static_cast<int>(rowItems_.size()) && !rowItems_[row].enabled) return true;
@@ -629,9 +653,6 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::ClearCache:
         startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
         break;
-      case SettingAction::RebuildLibraryIndex:
-        rebuildLibraryIndex();
-        break;
       case SettingAction::CheckForUpdates:
         startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
         break;
@@ -670,6 +691,9 @@ void SettingsActivity::toggleCurrentSetting() {
         } else {
           LOG_ERR("SETTINGS", "OOM: KeyboardLayoutsActivity");
         }
+        break;
+      case SettingAction::RebuildLibraryIndex:
+        rebuildLibraryIndex();
         break;
       case SettingAction::About:
         if (auto activity = makeUniqueNoThrow<AboutActivity>(renderer, mappedInput)) {
@@ -715,29 +739,6 @@ void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChan
     SETTINGS.quickResumeSleepScreen = CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_NEVER;
     quickResumeTimeoutAutoEnabled = false;
   }
-}
-
-void SettingsActivity::rebuildLibraryIndex() {
-  // Prevent SD-backed fonts from opening a second reader while EPUB metadata is scanned.
-  // Keep the popup static because an e-ink refresh per folder would dominate the rebuild.
-  RenderLock lock(*this);
-  GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
-
-  library::BuildStats stats;
-  const bool ok = library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0);
-  if (ok) {
-    LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed, %u enriched) in %ums",
-            static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.added),
-            static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
-            static_cast<unsigned>(stats.enriched), static_cast<unsigned>(stats.walkMs));
-    if (stats.dedupDegraded) LOG_ERR("LIB", "rebuild completed without duplicate detection");
-  } else {
-    LOG_ERR("LIB", "index rebuild failed");
-  }
-
-  GUI.drawPopup(renderer, ok ? tr(STR_LIBRARY_REBUILD_DONE) : tr(STR_LIBRARY_REBUILD_FAILED));
-  delay(1200);
-  requestUpdate(true);
 }
 
 void SettingsActivity::openSleepTimeoutPicker() {
@@ -818,7 +819,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Content below the GUI.drawHeader band, above the button hints.
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+                                                static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
 
   // Embedded single-category mode (opened from the reader menu) hides the tab bar: the other
   // categories are not reachable there, and the locked ring never lands on position 0.
@@ -864,11 +865,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   thinDisabledRows(renderer, screen, props, listRect, listCount(), activeNav().visibleRows);
 }
 
-void SettingsActivity::render(RenderLock&&) {
-  if (optionPopup.processRender(renderer, mappedInput)) return;
-
-  renderer.clearScreen();
-
+void SettingsActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
@@ -880,10 +877,17 @@ void SettingsActivity::render(RenderLock&&) {
                  isSubmenu()    ? I18N.get(submenuCategory)
                  : finishOnBack ? tr(STR_READER_SETTINGS)
                                 : tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION);
+                 CROSSPOINT_VERSION, HomeTabBar::showsBackButton(!isSubmenu() && !finishOnBack),
+                 // The rule only earns its place once a row has scrolled under it; at the top it
+                 // is a second horizontal line stacked on the tab band.
+                 activeNav().top > 0 ? 1 : 0);
+}
 
-  renderUi();
-
+void SettingsActivity::drawFooter() {
+  if (hasTabBar()) {
+    UiTabListActivity::drawFooter();
+    return;
+  }
   const int ring = ringPos();
   // A row with a getter but no setter is informational (the applied-dictionary rows in reader
   // settings): toggleCurrentSetting() returns early on it, so hinting "Toggle" promises an
@@ -897,7 +901,9 @@ void SettingsActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
 
-  // Always use standard refresh for settings screen
-  renderer.displayBuffer();
+void SettingsActivity::render(RenderLock&& lock) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+  UiListActivity::render(std::move(lock));
 }

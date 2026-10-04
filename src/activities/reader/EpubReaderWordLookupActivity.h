@@ -15,6 +15,7 @@ class Page;
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
+#include "util/SentenceMining.h"
 
 // What the vertical reader hands the panel so the word cursor can be shown ON the page (select
 // mode) instead of opening straight into the definition view.
@@ -70,6 +71,10 @@ class EpubReaderWordLookupActivity final : public Activity {
                                         // See the vertical constructor: start of the next page, so
                                         // a word split across the boundary still resolves.
                                         const std::string& lookupContext = "");
+
+  // What a saved sentence-mining card needs from the reader; see sentencemining::BookContext.
+  using MiningContext = sentencemining::BookContext;
+  void setMiningContext(MiningContext context) { mining_ = std::move(context); }
 
   void onEnter() override;
   void onExit() override;
@@ -245,6 +250,10 @@ class EpubReaderWordLookupActivity final : public Activity {
   std::string resultGrammar;
   int resultMatchLen = 0;
   bool hasGrammar = false;
+  // The grammar entry is the looked-up word itself (a short function word such as こと), so its
+  // page opens before the vocab one.
+  bool grammarFirst = false;
+  int promotedGrammarLen = 0;
   std::string grammarHeadword;
   std::string grammarDefinition;
   // Tategaki shows ONE source per page: the merged definition is split at the separators the
@@ -308,6 +317,18 @@ class EpubReaderWordLookupActivity final : public Activity {
   bool stepScan(uint32_t budgetMs);
   bool scanHealAttempted = false;
   void moveCursor(int delta);
+  // Sentence mining: saves the visible entry with its sentence (Select, or the panel's + button).
+  // The footer shows the outcome until the next move, so no timed repaint is needed.
+  enum class MiningStatus : uint8_t { None, Saved, Failed };
+  MiningContext mining_;
+  MiningStatus miningStatus_ = MiningStatus::None;
+  // Hashes of the headwords shown this session, so browsing back and forth counts each word
+  // once; the total goes to BookStats in one write on exit.
+  static constexpr size_t MAX_COUNTED_LOOKUPS = 256;
+  std::vector<uint32_t> countedLookups_;
+  void countLookup();
+  void saveSentence();
+  std::string miningSentence() const;
   void performLookup();
   void performLookupImpl();
   // True while performLookup() is executing; render() shows "Loading..." instead of

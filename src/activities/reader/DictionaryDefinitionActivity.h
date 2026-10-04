@@ -8,21 +8,29 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "components/PanelTextPages.h"
 #include "util/ButtonNavigator.h"
+#include "util/SentenceMining.h"
 
-// Paged viewer for one dictionary definition. HTML definitions are laid out
-// through the EPUB chapter parser into styled Pages; anything else (plain
-// text, or HTML too damaged to parse) is word-wrapped once on entry and each
-// page renders spans of the original string, so no per-line copies are held.
+// Paged viewer for the definitions of one word, one entry per dictionary that has it, read as a
+// single flow: paging past an entry's last page opens the next. HTML definitions are laid out
+// through the EPUB chapter parser into styled Pages; anything else (plain text, or HTML too
+// damaged to parse) is word-wrapped on entry and each page renders spans of the original string,
+// so no per-line copies are held. Only the entry on screen is laid out.
 class DictionaryDefinitionActivity final : public Activity {
  public:
-  explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
-                                        std::string definition, bool htmlDefinition = false, std::string dictName = "")
-      : Activity("DictionaryDefinition", renderer, mappedInput),
-        headword(std::move(headword)),
-        definition(std::move(definition)),
-        htmlDefinition(htmlDefinition),
-        dictName(std::move(dictName)) {}
+  struct Entry {
+    std::string headword;
+    std::string definition;
+    bool html = false;
+    std::string dictName;  // footer title; empty when the dictionary has none
+    // Enables sentence mining for this entry: Select (and the + button on touch boards) saves it
+    // with this entry as its definition. Invalid = no saving.
+    sentencemining::Draft draft;
+  };
+
+  explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                        std::vector<Entry> entries);
 
   void onEnter() override;
   void onExit() override;
@@ -30,12 +38,15 @@ class DictionaryDefinitionActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  // One wrapped display line: a byte span of `definition`. Wrapping keeps
-  // lines under the screen width, so uint16_t length is ample.
-  struct Line {
-    uint32_t start;
-    uint16_t len;
-  };
+  enum class MiningStatus : uint8_t { None, Saved, Failed };
+  MiningStatus miningStatus_ = MiningStatus::None;
+  void saveSentence();
+  const sentencemining::Draft& miningDraft() const { return entries[currentEntry].draft; }
+
+  // Lays out entries[index] and shows its first page, or its last when stepping back into it.
+  void showEntry(size_t index, bool atLastPage);
+  // One page forward (+1) or back (-1) through the whole flow. False at either end.
+  bool stepPage(int direction);
 
   // Usable body-text area: the panel's inner rectangle.
   struct BodyArea {
@@ -56,23 +67,20 @@ class DictionaryDefinitionActivity final : public Activity {
 
   BodyArea bodyArea() const;
   bool layoutHtmlPages();
-  void wrapText();
-  int measureSpan(int fontId, const char* text, size_t len) const;
   void drawBody(int fontId, int x, int startY) const;
 
-  const std::string headword;
-  // Not const: onEnter() normalizes embedded NULs (StarDict multi-type
-  // separators) to newlines so C-string APIs see the whole text.
+  std::vector<Entry> entries;
+  size_t currentEntry = 0;
+  // The entry on screen, laid out: a copy of its definition, with embedded NULs (StarDict
+  // multi-type separators) normalized to newlines so C-string APIs see the whole text.
   std::string definition;
-  const bool htmlDefinition;
-  // Shown in the panel footer; empty when the caller had no dictionary title.
-  const std::string dictName;
+  // Footer title: the dictionary name, plus the entry's place when there are several.
+  std::string dictLabel;
   // Styled path: reader-identical Pages laid out from the HTML definition.
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
-  std::vector<Line> lines;
+  PanelTextPages textPages;  // plain-text path: wrapped spans of `definition`
   int currentPage = 0;
   int totalPages = 1;
-  int linesPerPage = 1;
   ButtonNavigator buttonNavigator;
 };

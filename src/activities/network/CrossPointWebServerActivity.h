@@ -28,6 +28,9 @@ enum class WebServerActivityState {
  * - Cleans up the server and shuts down WiFi on exit
  */
 class CrossPointWebServerActivity final : public Activity {
+  // Bottom tab bar cursor for button boards; -1 when nothing in the band is focused.
+  int tabFocus = -1;
+
   WebServerActivityState state = WebServerActivityState::MODE_SELECTION;
 
   // Network mode
@@ -43,6 +46,9 @@ class CrossPointWebServerActivity final : public Activity {
 
   // Performance monitoring
   unsigned long lastHandleClientTime = 0;
+
+  // Set when Back or Home is seen while an upload holds handleClient().
+  bool leaveRequested = false;
 
   // Sustained WiFi-loss tracking; abandon only after WIFI_ABANDON_MS.
   int consecutiveDisconnects = 0;

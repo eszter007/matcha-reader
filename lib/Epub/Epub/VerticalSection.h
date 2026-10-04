@@ -29,6 +29,10 @@ class VerticalSection {
 
   // File offset of each serialized page record within the cache file.
   std::vector<uint32_t> pageOffsets_;
+  // File offset of the anchor table (id -> visible text offset), right after the page index.
+  uint32_t anchorTableOffset_ = 0;
+  // Filled by the build's parser, written after the page index, then released.
+  std::vector<std::pair<std::string, uint32_t>> buildAnchors_;
 
   // Single-page read cache backing getPage()'s returned pointer. Mutable because getPage() is
   // const to callers (a read) but faults the page in from SD. The pointer returned by getPage()
@@ -66,6 +70,9 @@ class VerticalSection {
   // cache valid instead of re-stamping: the drop conditions are deterministic per book, so
   // re-stamping meant a full re-index on every open, forever.
   bool rebuildingFromStale_ = false;
+  // Largest block at the start of this build, reported with the stale stamp so a sparse chapter
+  // says how much room it had.
+  uint32_t lastBuildStartMaxAlloc_ = 0;
 
   // See setEarlyRenderHook().
   void (*earlyRenderFn_)(void*, const VerticalPage&, int) = nullptr;
@@ -139,11 +146,17 @@ class VerticalSection {
 
   // furiganaEnabled is part of the cache key: the column gap only has to clear ruby when ruby is
   // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.
+  // retryDegraded: the foreground open may discard a best-effort cache for a rebuild (see
+  // degradedPath()); probes and background warms leave it alone.
   bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
-                       bool furiganaEnabled);
+                       bool furiganaEnabled, bool retryDegraded = false);
   bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
                          bool furiganaEnabled);
   bool clearCache() const;
+  // Sidecar marking the cache as a best-effort low-heap build; holds lastLoadMaxAlloc_ of that open.
+  std::string degradedPath() const { return filePath + ".deg"; }
+  static constexpr uint32_t DEGRADED_RETRY_MARGIN = 16 * 1024;
+  uint32_t lastLoadMaxAlloc_ = 0;  // largest free block when the cache load that preceded a build ran
 
   // Position of a page's first character within the chapter's visible character data, in the
   // same units Section::getVisibleTextOffsetForPage() reports -- which is what makes a reading
@@ -158,7 +171,16 @@ class VerticalSection {
 
   // The page holding `offset`: the last page whose own offset is <= it. nullopt if the chapter
   // has no pages or the records cannot be read.
-  std::optional<int> getPageForVisibleTextOffset(uint32_t offset) const;
+  // preferFirstAtOffset: of several pages starting exactly at `offset` (image pages add no
+  // characters, so they share the start of the text page after them), the first instead.
+  std::optional<int> getPageForVisibleTextOffset(uint32_t offset, bool preferFirstAtOffset = false) const;
+
+  // The page holding the element with this id (a TOC or footnote target), through the anchor table
+  // written after the page index. nullopt if the chapter has no such anchor.
+  std::optional<int> getPageForAnchor(const std::string& anchor) const;
+  // getPageForAnchor() for several ids in one pass over the anchor table: pages[i] is the page of
+  // anchors[i], or -1 if the chapter has no such anchor.
+  void findAnchorPages(const std::vector<std::string>& anchors, std::vector<int>& pages) const;
   const VerticalPage* getPage() const;
   const VerticalPage* getPage(int pageIndex) const;
   // True when the most recent getPage() returned nullptr only because the page's glyph vector

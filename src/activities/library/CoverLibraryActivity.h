@@ -12,15 +12,46 @@
 
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
+#include "components/CoverWorker.h"
+#include "components/OptionPopup.h"
+#include "components/TabRing.h"
 #include "components/UITheme.h"  // TabInfo, Rect
+#include "components/UiTabBand.h"
 #include "util/ButtonNavigator.h"
 
-class CoverLibraryActivity final : public Activity {
+class CoverLibraryActivity final : public Activity, public TabRing::Host {
  private:
   ButtonNavigator buttonNavigator;
+  // The Library's tab band, the same FreeInkUI band the list screens build.
+  UiTabBand::Host tabBand_;
+  // Long-press menu on a cover (stats / read / unread / delete), shared with the Home grid.
+  OptionPopup optionPopup;
+  // Bottom tab bar cursor for button boards; -1 when nothing in the band is focused.
+  int tabFocus = -1;
 
   int selectedTab = 0;
+  // Tab to open on, from the tab band of whichever screen switched here.
+  int requestedTab = 0;
   int contentIndex = 0;
+  // contentIndex and tabFocus when the current Next/Previous press began; the index is -1 once a
+  // hold has restored them.
+  int holdStartContentIndex_ = -1;
+  int holdStartTabFocus_ = -1;
+  // A Confirm release acts on the tab band only when its press began on this screen: the release
+  // of the click that opened the Library must not step a tab.
+  bool confirmPressSeen_ = false;
+
+  // TabRing::Host. The top tabs are the Library's (Books, Shelves, and in Cover Grid OPDS and
+  // Files, which are other screens); an open shelf has no tabs, only its grid and the bar.
+  int ringTopTabCount() const override;
+  int ringActiveTopTab() const override { return selectedTab; }
+  void ringSelectTopTab(int index) override;
+  HomeTab ringBottomTab() const override { return HomeTab::Library; }
+  bool ringHasContent() const override;
+  TabRing::Focus ringFocus() const override;
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
+  int& ringBarSlot() override { return tabFocus; }
+  void ringChanged() override { requestUpdate(); }
   int scrollRow = 0;      // Books tab: first visible grid row
   int shelvesScroll = 0;  // Shelves tab: first visible list row
 
@@ -100,14 +131,15 @@ class CoverLibraryActivity final : public Activity {
   // Clearing the flag is not enough: the frame still showing the selector has to be replaced,
   // and a touch that changes nothing else (a swipe against the end stop, a tap on the current
   // cover, a tap on the active tab) requests no redraw of its own.
+  // The content highlight is drawn only while the content holds the cursor: with it in the
+  // bottom bar, a second highlight on the last cover would read as two selections.
+  bool contentCursorShown() const { return selectorVisible && tabFocus < 0; }
   void hideSelector() {
     if (!selectorVisible) return;
     selectorVisible = false;
     requestUpdate();
   }
-  // One definition of the tab bar, used by both the renderer and the hit test, so the
-  // labels and the touch targets cannot drift apart.
-  [[nodiscard]] std::vector<TabInfo> buildTabs() const;
+  // Where the tab band sits, so a touch on it never falls through to the grid.
   [[nodiscard]] Rect tabBarRect() const;
   // Same idea for the Shelves list, which is rows rather than the cover grid: the renderer and
   // the hit test below share this geometry instead of each deriving its own.
@@ -155,6 +187,7 @@ class CoverLibraryActivity final : public Activity {
     int shelvesScroll = -1;
     int shelfContentIndex = -1;
     int shelfScrollRow = -1;
+    int tabFocus = -1;
   };
   RenderedState lastRendered;
   // The one place that snapshots what the frame on screen shows. Both render paths call it, so a
@@ -169,6 +202,7 @@ class CoverLibraryActivity final : public Activity {
     lastRendered.shelvesScroll = shelvesScroll;
     lastRendered.shelfContentIndex = shelfContentIndex;
     lastRendered.shelfScrollRow = shelfScrollRow;
+    lastRendered.tabFocus = tabFocus;
   }
 
   // Background library scan (stale-while-revalidate): onEnter() shows the persisted book list
@@ -212,73 +246,24 @@ class CoverLibraryActivity final : public Activity {
   std::vector<LibraryIndexEntry> libraryIndex_;
   bool libraryIndexDirty_ = false;
 
-  // One lower-priority cover job at a time. Release/acquire stores on busy publish the job to
-  // the worker and its result back to loop(), so the non-atomic structs are never accessed
-  // concurrently; the loop task is their only writer while busy=false.
-  struct CoverJob {
-    RecentBook book;
-    int gridHeight = 0;
-    // Every thumb height this book still needs, generated in ONE job. Opening the book is what
-    // costs (measured on device: 213ms typical, 2347ms worst, against milliseconds to scale the
-    // cover once it is open), so a job per height paid that price again for each size. Unused
-    // slots are 0. Three: the grid cell, the home cover, and SHELF_THUMB_HEIGHT.
-    static constexpr int MAX_TARGET_HEIGHTS = 3;
-    int targetHeights[MAX_TARGET_HEIGHTS] = {0, 0, 0};
-    uint32_t fileSize = 0;
-    uint32_t modifiedStamp = 0;
+  // Cover conversion off the loop task. The mechanism lives in CoverWorker (shared with Home);
+  // what stays here is the policy -- which book to convert next, the set of heights to ask for,
+  // and recording the outcome in library.idx.
+  CoverWorker coverWorker_;
 
-    void addTargetHeight(const int h) {
-      if (h <= 0) return;
-      for (int& slot : targetHeights) {
-        if (slot == h) return;  // already queued
-        if (slot == 0) {
-          slot = h;
-          return;
-        }
-      }
-    }
-  };
-  struct CoverResult {
-    bool pending = false;
-    bool completed = false;  // false means foreground work cancelled it; retry after idle
-    bool hasGridThumb = false;
-    // The book declares no cover image at all, so no future attempt can succeed. Distinct from
-    // hasGridThumb=false, which usually means the conversion did not fit in the heap this time
-    // and must be retried -- conflating the two costs a cover forever (see Epub::hasCoverImage).
-    bool coverKnownAbsent = false;
-    RecentBook book;
-    uint32_t fileSize = 0;
-    uint32_t modifiedStamp = 0;
-  };
-  TaskHandle_t coverWorkerTask_ = nullptr;
-  std::atomic<bool> coverWorkerExitRequested_{false};
-  std::atomic<bool> coverWorkerExited_{false};
-  std::atomic<bool> coverWorkerBusy_{false};
-  std::atomic<bool> coverWorkerCancelRequested_{false};
-  std::atomic<bool> coverWorkerCancelSeen_{false};
-  CoverJob coverJob_;
-  CoverResult coverResult_;
-
-  static void coverWorkerTrampoline(void* ctx);
-  static bool coverWorkerShouldCancel(void* ctx);
-  void coverWorkerLoop();
-  void runCoverJob();
-  bool postCoverJob(CoverJob&& job);
-  void startCoverWorker();
-  void stopCoverWorker();
+  // Full CPU while a cover conversion runs, the same way EpubReaderActivity keeps a section
+  // build off the low-power clock. The Library sits idle while the worker converts, so the loop
+  // would drop to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz takes ~24s at 10 --
+  // long enough that it used to be cancelled before it could finish. The work is fixed, so
+  // finishing sooner spends less time awake, not more.
+  bool skipLoopDelay() override { return coverWorker_.busy(); }
 
   void loadLibraryIndex();
   void saveLibraryIndex();
   const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
   void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
                         bool hasThumb, bool coverKnownAbsent = false);
-  // Full CPU while a cover conversion runs, the same way EpubReaderActivity keeps a section
-  // build off the low-power clock. The Library sits idle while the worker converts, so the loop
-  // would drop to LOW_POWER_FREQ and a thumbnail that takes ~1.5s at 160MHz takes ~24s at 10 --
-  // long enough that it used to be cancelled before it could finish. The work is fixed, so
-  // finishing sooner spends less time awake, not more.
-  bool skipLoopDelay() override { return coverWorkerBusy_.load(std::memory_order_acquire); }
-
+  void prewarmBookText();
   void startLibraryScan();
   bool stepLibraryScan();  // one slice; returns true when the whole pass is done
   bool applyLibraryScan();
@@ -292,11 +277,11 @@ class CoverLibraryActivity final : public Activity {
   void warmOnePendingProgress();
 
   // Long-press on a book opens its reading stats.
-  void showBookStats(const std::string& path, const std::string& title);
+  void showBookActions(const std::string& path, const std::string& title, int progressPercent);
 
  public:
-  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("RecentBooks", renderer, mappedInput) {}
+  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialTab = 0)
+      : Activity("RecentBooks", renderer, mappedInput), tabBand_(renderer), requestedTab(initialTab) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

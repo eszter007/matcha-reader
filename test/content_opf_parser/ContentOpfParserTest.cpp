@@ -3,6 +3,7 @@
 #include <string>
 
 #include "ContentOpfParser.h"
+#include "Epub/BookMetadataCache.h"
 
 namespace {
 
@@ -52,6 +53,31 @@ Octavia E. Butler
   EXPECT_EQ(parser.author, "Ursula K. Le Guin, Octavia E. Butler");
 }
 
+TEST(ContentOpfParserMetadata, DropsByteOrderMarksFromMetadataText) {
+  const std::string xml =
+      "<package xmlns:dc=\"urn:dc\"><metadata><dc:title>\xEF\xBB\xBFKokoro</dc:title>"
+      "<dc:creator>Natsume\xEF\xBB\xBF Soseki</dc:creator></metadata></package>";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.title, "Kokoro");
+  EXPECT_EQ(parser.author, "Natsume Soseki");
+}
+
+TEST(ContentOpfParserMetadata, ByteOrderMarkLeavesNoSpaceOrSeparatorBehind) {
+  const std::string xml =
+      "<package xmlns:dc=\"urn:dc\"><metadata><dc:title>Title \xEF\xBB\xBF</dc:title>"
+      "<dc:creator>First</dc:creator><dc:creator>\xEF\xBB\xBF</dc:creator><dc:creator>Second</dc:creator>"
+      "</metadata></package>";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.title, "Title");
+  EXPECT_EQ(parser.author, "First, Second");
+}
+
 TEST(ContentOpfParserMetadata, StopsBeforeManifestWithoutOpeningTemporaryStorage) {
   const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
     <dc:title>A Wizard of Earthsea</dc:title>
@@ -81,4 +107,56 @@ TEST(ContentOpfParserMetadata, NeverEntersManifestWhenMetadataElementIsMissing) 
   EXPECT_LT(parser.write(reinterpret_cast<const uint8_t*>(xml.data()), xml.size()), xml.size());
   EXPECT_EQ(Storage.writeOpens, 0);
   EXPECT_EQ(Storage.readOpens, 0);
+}
+
+TEST(ContentOpfParserCover, ResolvesEpub2CoverWithoutReadingCacheStorage) {
+  const std::string xml = R"(<package><metadata><meta name="cover" content="cover-id"/></metadata>
+    <manifest><item id="cover-id" href="cover.jpg" media-type="image/jpeg"/>
+    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+    <spine><itemref idref="chapter"/></spine>
+    <guide><reference type="cover" href="cover.xhtml"/></guide></package>)";
+  const std::string cachePath = "/missing-cache";
+  const std::string basePath = "OPS/";
+  Storage = {};
+  {
+    ContentOpfParser parser(cachePath, basePath, xml.size(), nullptr);
+    parse(parser, xml);
+    EXPECT_EQ(parser.coverItemHref, "OPS/cover.jpg");
+    EXPECT_EQ(parser.guideCoverPageHref, "OPS/cover.xhtml");
+  }
+  EXPECT_EQ(Storage.writeOpens, 0);
+  EXPECT_EQ(Storage.readOpens, 0);
+}
+
+TEST(ContentOpfParserCover, ResolvesEpub3CoverWithoutReadingCacheStorage) {
+  const std::string xml = R"(<package><metadata/>
+    <manifest><item id="cover" href="cover.png" media-type="image/png" properties="cover-image"/></manifest>
+    <spine/></package>)";
+  const std::string cachePath = "/missing-cache";
+  const std::string basePath = "OPS/";
+  Storage = {};
+  {
+    ContentOpfParser parser(cachePath, basePath, xml.size(), nullptr);
+    parse(parser, xml);
+    EXPECT_EQ(parser.coverItemHref, "OPS/cover.png");
+  }
+  EXPECT_EQ(Storage.writeOpens, 0);
+  EXPECT_EQ(Storage.readOpens, 0);
+}
+
+TEST(ContentOpfParserCover, ReadingParserStillOpensManifestCache) {
+  const std::string xml = R"(<package><metadata/>
+    <manifest><item id="cover" href="cover.png" media-type="image/png" properties="cover-image"/></manifest>
+    <spine/></package>)";
+  const std::string cachePath = "/reading-cache";
+  const std::string basePath = "OPS/";
+  BookMetadataCache cache;
+  Storage = {};
+  {
+    ContentOpfParser parser(cachePath, basePath, xml.size(), &cache);
+    parse(parser, xml);
+    EXPECT_EQ(parser.coverItemHref, "OPS/cover.png");
+  }
+  EXPECT_EQ(Storage.writeOpens, 1);
+  EXPECT_EQ(Storage.readOpens, 1);
 }

@@ -28,6 +28,11 @@ class VerticalTextBlock {
   void render(GfxRenderer& renderer, int fontId, int offsetX = 0, int offsetY = 0, bool black = true) const;
   void render(GfxRenderer& renderer, int fontId, int rubyFontId, int offsetX, int offsetY, bool black = true) const;
 
+  // Inline images only, at the positions render() puts them: the grayscale refine of an image on a
+  // text page when its text stays B/W.
+  void renderImages(GfxRenderer& renderer, int offsetX, int offsetY) const;
+  bool hasImages() const;
+
   const VerticalPage& page() const { return page_; }
 
  private:

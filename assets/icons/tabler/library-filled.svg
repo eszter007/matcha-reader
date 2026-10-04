@@ -1,0 +1,13 @@
+<!-- Filled counterpart of library.svg: the same three books, solid, with the outline's own
+     silhouette (fill plus the same 2-unit stroke). The two white seams keep the books apart;
+     filled and touching, they would read as one black slab. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+     fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+  <rect x="3" y="3" width="5" height="18" rx="1" />
+  <rect x="8" y="3" width="5" height="18" rx="1" />
+  <rect x="15" y="3" width="5" height="18" rx="1" transform="rotate(13 17.5 12)" />
+  <g stroke="#ffffff" stroke-width="1.4" fill="none" stroke-linecap="butt">
+    <line x1="8" y1="2.6" x2="8" y2="21.4" />
+    <line x1="17.09" y1="2.3" x2="13.04" y2="20.6" />
+  </g>
+</svg>

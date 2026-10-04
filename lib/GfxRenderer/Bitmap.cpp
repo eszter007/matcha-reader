@@ -88,6 +88,13 @@ const char* Bitmap::errorToString(BmpReaderError err) {
 }
 
 BmpReaderError Bitmap::parseHeaders() {
+  // A Bitmap outlives the file it last read: the home cover cache keeps one instance and reopens
+  // its single HalFile for each cover. Without this, preload() sees a live buffer, hands back the
+  // previous image's pixels with the read position at its end, and every cover after the first
+  // fails at row 0.
+  preloadBuf.reset();
+  preloadPos = 0;
+  prevRowY = -1;
   if (!file) return BmpReaderError::FileInvalid;
   if (!file.seek(0)) return BmpReaderError::SeekStartFailed;
 

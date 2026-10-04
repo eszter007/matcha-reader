@@ -83,12 +83,11 @@ std::string rebase(const std::string& bookPath, const std::string& oldRoot, cons
 
 std::string bookCachePath(const std::string& path) {
   const char* prefix = nullptr;
-  if (FsHelpers::hasEpubExtension(path)) {
+  // TXT and Markdown are read through the EPUB pipeline, so they carry an epub_ cache.
+  if (FsHelpers::hasReflowableBookExtension(path)) {
     prefix = "epub_";
   } else if (FsHelpers::hasXtcExtension(path)) {
     prefix = "xtc_";
-  } else if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
-    prefix = "txt_";
   } else if (manga::MangaBook::isMangaFolder(path)) {
     // A manga book is a folder of page images; its index and progress live under this hash the
     // same way an EPUB's do, so a folder rename has to carry them too.
@@ -114,7 +113,7 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
       allMoved = false;
       return false;
     }
-    const bool isEpub = FsHelpers::hasEpubExtension(bookPath);
+    const bool isEpub = FsHelpers::hasReflowableBookExtension(bookPath);
     if (!moveState(isEpub ? BookmarkUtil::getBookmarkPath(bookPath) : "",
                    isEpub ? BookmarkUtil::getBookmarkPath(newBookPath) : "", marksMoved, logTag)) {
       moveStateBack(newCache, oldCache, logTag);  // this book's cache, before giving up
@@ -128,7 +127,7 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
     forEachBook(oldPath, 0, [&](const std::string& bookPath) {
       const std::string newBookPath = rebase(bookPath, oldPath, newPath);
       moveStateBack(bookCachePath(newBookPath), bookCachePath(bookPath), logTag);
-      if (FsHelpers::hasEpubExtension(bookPath)) {
+      if (FsHelpers::hasReflowableBookExtension(bookPath)) {
         moveStateBack(BookmarkUtil::getBookmarkPath(newBookPath), BookmarkUtil::getBookmarkPath(bookPath), logTag);
       }
       return true;

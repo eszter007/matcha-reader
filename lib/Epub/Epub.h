@@ -49,14 +49,16 @@ class Epub {
                        ZipFile* sharedZip = nullptr);
   bool parseTocNcxFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   bool parseTocNavFile(BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  // Extracted from generateThumbBmp() so the cover can also be rendered straight from a
+  // parsed href. Cancellable like its caller: shouldCancel is polled during extraction and
+  // decode, and partial files are removed on cancel.
+  bool generateThumbBmpForCover(int height, const std::string& coverImageHref,
+                                BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
 
  public:
-  explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
-    // create a cache key based on the filepath
-    cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
-  }
+  explicit Epub(std::string filepath, const std::string& cacheDir);
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false, BmpConvertCancelFn shouldCancel = nullptr,
@@ -87,10 +89,14 @@ class Epub {
   // shouldCancel is polled during cover extraction and decode; on cancel partial files are
   // removed and the call returns false, so a long thumbnail generation can give way to input.
   bool generateThumbBmp(int height, BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  // Locate the cover without building spine, TOC, or reading caches.
+  bool generateThumbBmpFromSource(int height);
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize, bool allowEarlyStop = false,
                                 BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  // Content-access read honouring allowEarlyStop the way the zip path does.
+  bool readProtectedItemToStream(const std::string& path, Print& out, bool allowEarlyStop) const;
   // Extract an item to a file on SD. On failure the partial file is removed.
   bool extractItemToFile(const std::string& itemHref, const std::string& destPath) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
@@ -106,5 +112,8 @@ class Epub {
   size_t getBookSize() const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;
   CssParser* getCssParser() const { return cssParser.get(); }
+  // Whether the parsed-CSS cache exists (always true for TXT/MD, which have none to build);
+  // load() rebuilds it when missing.
+  bool hasCssCache() const;
   int resolveHrefToSpineIndex(const std::string& href) const;
 };

@@ -14,6 +14,7 @@
 #include "activities/ActivityManager.h"
 #include "activities/browser/OpdsBookBrowserActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/LibraryTabs.h"
 #include "components/UITheme.h"
 #include "util/OpdsFilename.h"
 
@@ -57,6 +58,8 @@ OpdsServerListActivity::OpdsServerListActivity(GfxRenderer& renderer, MappedInpu
     : UiListActivity("OpdsServerList", renderer, mappedInput), pickerMode(pickerMode) {}
 
 void OpdsServerListActivity::onEnter() {
+  // Entered as a Library tab: the cursor carries on from the band the previous screen left it on.
+  topBandFocused = isLibraryTab();
   UiListActivity::onEnter();
 
   // Reload from disk in case servers were added/removed by a subactivity or the web UI
@@ -104,11 +107,14 @@ void OpdsServerListActivity::rebuildRowItems() {
 }
 
 bool OpdsServerListActivity::handleCustomInput() {
-  return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
+  return false;
 }
 
 void OpdsServerListActivity::onBackButton() {
-  if (pickerMode) {
+  if (isLibraryTab()) {
+    LibraryTabs::activate(LibraryTabs::Books);
+  } else if (pickerMode) {
     activityManager.goHome(HomeMenuItem::OPDS_BROWSER);
   } else {
     finish();
@@ -202,12 +208,19 @@ void OpdsServerListActivity::buildScreen(UiScreen& screen) {
   // Content below the GUI.drawHeader band, above the button hints; derived
   // from the safe area so board bezel insets apply (same as LanguageSelect).
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  screen.setContentMarginFromScreen(
-      fui::Insets{static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
-                  static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
-                  static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height) + metrics.buttonHintsHeight),
-                  static_cast<int16_t>(safe.x)});
-  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (isLibraryTab()) {
+    // Below the Library band, above the bottom bar that replaces the button hints.
+    screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                                  static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
+    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Opds, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
+  } else {
+    screen.setContentMarginFromScreen(fui::Insets{
+        static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
+        static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
+        static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height) + metrics.buttonHintsHeight),
+        static_cast<int16_t>(safe.x)});
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  }
 
   const int itemCount = getItemCount();
   if (itemCount == 0) {

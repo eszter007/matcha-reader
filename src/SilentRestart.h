@@ -14,6 +14,9 @@
 void silentRestart();            // home screen
 void silentRestartToReader();    // currently-open EPUB (APP_STATE.openEpubPath)
 void silentRestartToSettings();  // settings screen
+// A tab screen of the Cover Grid theme: a bottom-bar tab, or one of the Library's own tabs.
+void silentRestartToHomeTab(int homeTab);        // HomeTab value
+void silentRestartToLibraryTab(int libraryTab);  // LibraryTabs::Tab value
 
 // Straight into the Translation activity, re-reading the page text the activity
 // stashed at TRANSLATE_STASH_PATH before restarting. Used when the TLS/WiFi heap

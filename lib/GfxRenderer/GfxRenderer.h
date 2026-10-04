@@ -13,14 +13,19 @@ enum class BidiBaseDir : signed char { AUTO = -1, LTR = 0, RTL = 1 };
 
 class FontCacheManager;
 class SdCardFont;
+class TtfEpdFont;
 
+#include <array>
 #include <cstring>
-#include <deque>
 #include <map>
 #include <string>
 #include <vector>
 
 #include "Bitmap.h"
+
+namespace glyphBitmap {
+struct Frame;
+}
 
 // Color representation: uint8_t mapped to 4x4 Bayer matrix dithering levels
 // 0 = transparent, 1-16 = gray levels (white to black)
@@ -63,6 +68,9 @@ class GfxRenderer {
   SdCardFont* sdFontForWarmup(int fontId) const;
   SdCardFont* fallbackSdFont_ = nullptr;
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
+  // TTF (vector) fonts: rebuilt per page by ensureSdCardFontReady(). Mutable for
+  // the same reason as sdCardFonts_ (const layout path triggers a rebuild).
+  mutable std::map<int, TtfEpdFont*> ttfFonts_;
 
   // Mutable because drawText() is const but needs to delegate scan-mode
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
@@ -209,6 +217,7 @@ class GfxRenderer {
   // it to price glyphs the selected font lacks WITHOUT loading their bitmaps from SD -- the
   // on-demand glyphMissHandler path made indexing do a seek+read per missing glyph.
   void setFallbackSdFont(SdCardFont* font) { fallbackSdFont_ = font; }
+  SdCardFont* getFallbackSdFont() const { return fallbackSdFont_; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
   void clearSdCardFonts() {
     sdCardFonts_.clear();
@@ -222,16 +231,31 @@ class GfxRenderer {
   }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
+  // TTF (vector) fonts rendered via TtfEpdFont/FreeInkFont. Registered like an
+  // ordinary EpdFontFamily (insertFont), plus tracked here so ensureSdCardFontReady()
+  // rebuilds their per-page glyph set on demand — the eager analogue of the SD
+  // font prewarm. The TtfEpdFont is owned by the caller (SdCardFontSystem).
+  void registerTtfFont(int fontId, TtfEpdFont* font) { ttfFonts_[fontId] = font; }
+  void unregisterTtfFont(int fontId) { ttfFonts_.erase(fontId); }
+  const std::map<int, TtfEpdFont*>& getTtfFonts() const { return ttfFonts_; }
+  // True when this id is backed by a vector (TTF/OTF) face, whose glyphs are rasterized on
+  // demand rather than held in a resident table. Measurement has to resolve those through
+  // getGlyph() or it prices them from whatever fallback is resident instead.
+  bool isVectorFont(const int fontId) const { return ttfFonts_.find(fontId) != ttfFonts_.end(); }
   // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
   void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
+  void clearFallbackFont(int primaryFontId) { fallbackFontMap_.erase(primaryFontId); }
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).
   void ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F) const;
-  void ensureSdCardFontReady(int fontId, const std::deque<std::string>& words, bool includeHyphen,
-                             uint8_t styleMask = 0x0F) const;
+  // Packed variant for the paragraph layout path: each segment holds
+  // consecutive NUL-terminated words (WordStore chunks), so a whole paragraph
+  // is scanned without materializing per-word strings.
+  void ensureSdCardFontReady(int fontId, const char* const* segments, const size_t* segmentLens, size_t segmentCount,
+                             bool includeSpace, bool includeHyphen, uint8_t styleMask = 0x0F) const;
 
   // Orientation control (affects logical width/height and coordinate transforms)
   void setOrientation(const Orientation o) { orientation = o; }
@@ -261,6 +285,12 @@ class GfxRenderer {
   void promoteNextRefresh(const HalDisplay::RefreshMode mode) const {
     promotedRefreshPending_ = true;
     promotedRefresh_ = mode;
+  }
+  // For a caller whose waveform is not a displayBuffer() (a deferred grayscale base): whether a
+  // promotion is waiting, and taking it -- `mode` when none is.
+  [[nodiscard]] bool refreshPromotionPending() const { return promotedRefreshPending_; }
+  HalDisplay::RefreshMode takePromotedRefresh(const HalDisplay::RefreshMode mode) const {
+    return applyPromotedRefresh(mode);
   }
   // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
   // grayscale strip rendering) can overlap the panel's refresh time. The
@@ -312,6 +342,9 @@ class GfxRenderer {
 
   // Drawing
   // UI drawing clip in logical coordinates; independent of panel orientation.
+  std::array<int, 4> getClipRect() const {
+    return {clipLeft_, clipTop_, clipRight_ - clipLeft_, clipBottom_ - clipTop_};
+  }
   void setClipRect(int x, int y, int width, int height) const {
     clipLeft_ = x;
     clipTop_ = y;
@@ -319,6 +352,9 @@ class GfxRenderer {
     clipBottom_ = y + height;
   }
   void drawPixel(int x, int y, bool state = true) const;
+  // Draw glyph ink with clipping and orientation resolved once per glyph.
+  void drawGlyphBitmap(const uint8_t* bitmap, int width, int height, const glyphBitmap::Frame& frame, bool twoBit,
+                       RenderMode mode, bool state) const;
   void drawLine(int x1, int y1, int x2, int y2, bool state = true) const;
   void drawLine(int x1, int y1, int x2, int y2, int lineWidth, bool state) const;
   void drawArc(int maxRadius, int cx, int cy, int xDir, int yDir, int lineWidth, bool state) const;
@@ -362,6 +398,8 @@ class GfxRenderer {
   void writeFramebufferRegion(int x, int y, int w, int h, const uint8_t* src);
 
   // Text
+  // Layout may use advance-only SD font tables; rendered measurement includes kerning and ligatures.
+  enum class TextMeasureMode { Layout, Rendered };
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                    BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int8_t letterSpacing = 0) const;
   int getTextWidthScaled(int fontId, const char* text, uint16_t scale,
@@ -382,9 +420,16 @@ class GfxRenderer {
   /// snapped separately and then added as integers.
   int getSpaceAdvance(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style,
                       int8_t letterSpacing = 0) const;
-  /// Returns the kerning adjustment between two adjacent codepoints.
-  int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
-  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style, int8_t letterSpacing = 0) const;
+  /// Returns the kerning adjustment between two adjacent codepoints, plus optional per-glyph
+  /// tracking. letterSpacing (CSS letter-spacing) and the reader's character-spacing setting are
+  /// the two sources of that delta; callers combine them and pass one value.
+  int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style,
+                 int8_t letterSpacing = 0) const;
+  /// mode Layout measures as line breaking reserves; Rendered resolves glyphs exactly as the draw
+  /// loops do, so a reservation matches drawn ink (see getRenderAdvanceX).
+  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style, int8_t letterSpacing = 0,
+                      BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO,
+                      TextMeasureMode mode = TextMeasureMode::Layout) const;
   // Render-truth advance for SHORT strings: resolves glyphs exactly as the draw loops do
   // (on-demand SD load), so layout reservations match drawn ink. See implementation note.
   int getRenderAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
@@ -483,7 +528,9 @@ class GfxRenderer {
   // Paper Mono: the base activation is deferred so base + gray planes go out
   // as one waveform. Route the base through displayGrayscaleBase() when true.
   bool combinesGrayscaleBase() const;
-  bool storeBwBuffer();  // Returns true if buffer was stored successfully
+  // Returns true if the buffer was stored. `headroom` is free heap that must remain after the copy:
+  // an optional snapshot (the reader toolbar) asks for more, so it never starves the next render.
+  bool storeBwBuffer(size_t headroom = 4096);
   // Restore and free the stored buffer. resyncPanelBaseline rewrites the
   // controller's differential baseline to the restored frame — correct after
   // a grayscale render (the glass matches the stored BW plane), WRONG when
@@ -512,6 +559,8 @@ class GfxRenderer {
   // Whether the framebuffer's CONTENTS can be trusted -- hasFrameBuffer() only answers for the
   // pointer, which comes back intact after a build loan even though the pixels did not.
   bool frameBufferContentsStale() const { return frameBufferContentsStale_; }
+  // The caller put the pre-loan bytes back after a loan (e.g. from an SD copy).
+  void markFrameBufferContentsRestored() { frameBufferContentsStale_ = false; }
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

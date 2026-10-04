@@ -8,7 +8,9 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "BookStats.h"
 #include "CrossPointSettings.h"
+#include "PanelTouch.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
 #include "components/DictionaryPanel.h"
@@ -16,12 +18,9 @@
 #include "fontIds.h"
 #include "util/DictHtmlPages.h"
 #include "util/HtmlToPlainText.h"
+#include "util/SentenceMining.h"
 
 namespace {
-
-// Longest measurable/drawable span. Wrapped lines stay under the screen width
-// (far below this); only pathological unbreakable tokens are split at this cap.
-constexpr size_t MAX_LINE_BYTES = 191;
 
 // Styled-path ceiling: the laid-out Pages keep the whole definition resident
 // (TextBlock arenas ≈ text + ~7 bytes/word plus per-line objects), roughly
@@ -65,17 +64,74 @@ void DictionaryDefinitionActivity::ensureGlyphFallback() const {
   sdFontSystem.ensureWordLookupFallback(renderer, definitionFontId(), definitionPointSize());
 }
 
+DictionaryDefinitionActivity::DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                                           std::vector<Entry> entries)
+    : Activity("DictionaryDefinition", renderer, mappedInput), entries(std::move(entries)) {
+  // The card keeps the definition as it came from the dictionary; the layout frees its copy.
+  for (auto& entry : this->entries) {
+    if (!entry.draft.valid()) continue;
+    entry.draft.card.definition =
+        entry.html ? sentencemining::capHtml(entry.definition) : sentencemining::definitionHtml(entry.definition);
+  }
+}
+
 void DictionaryDefinitionActivity::onEnter() {
   ensureGlyphFallback();
   Activity::onEnter();
-  // Normalize StarDict multi-type separators so the wrap loop and the
-  // C-string font APIs below both see the whole definition.
-  std::replace(definition.begin(), definition.end(), '\0', '\n');
-  if (!(htmlDefinition && definition.size() <= MAX_STYLED_HTML_BYTES && layoutHtmlPages())) {
-    definition = htmlToPlainText(definition);
-    wrapText();
+  if (entries.empty()) {
+    finish();
+    return;
   }
+  showEntry(0, false);
   requestUpdate();
+}
+
+void DictionaryDefinitionActivity::showEntry(const size_t index, const bool atLastPage) {
+  currentEntry = index;
+  const Entry& entry = entries[index];
+  pages.clear();
+  textPages.clear();
+  definition = entry.definition;
+  std::replace(definition.begin(), definition.end(), '\0', '\n');
+  if (!(entry.html && definition.size() <= MAX_STYLED_HTML_BYTES && layoutHtmlPages())) {
+    definition = htmlToPlainText(definition);
+    const BodyArea body = bodyArea();
+    textPages.layout(renderer, definitionFontId(), definition, body.width, body.height);
+    totalPages = textPages.pageCount();
+  }
+  dictLabel = entry.dictName;
+  if (entries.size() > 1) {
+    char place[16];
+    snprintf(place, sizeof(place), " (%u/%u)", static_cast<unsigned>(index + 1), static_cast<unsigned>(entries.size()));
+    dictLabel += place;
+  }
+  currentPage = atLastPage ? totalPages - 1 : 0;
+  miningStatus_ = MiningStatus::None;
+}
+
+bool DictionaryDefinitionActivity::stepPage(const int direction) {
+  if (direction > 0) {
+    if (currentPage + 1 < totalPages) {
+      currentPage++;
+    } else if (currentEntry + 1 < entries.size()) {
+      RenderLock lock;  // the render task draws from the pages this replaces
+      showEntry(currentEntry + 1, false);
+    } else {
+      return false;
+    }
+  } else {
+    if (currentPage > 0) {
+      currentPage--;
+    } else if (currentEntry > 0) {
+      RenderLock lock;
+      showEntry(currentEntry - 1, true);
+    } else {
+      return false;
+    }
+  }
+  miningStatus_ = MiningStatus::None;
+  requestUpdate();
+  return true;
 }
 
 void DictionaryDefinitionActivity::onExit() {
@@ -83,6 +139,7 @@ void DictionaryDefinitionActivity::onExit() {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseAllFontMemory();
   }
+  sdFontSystem.releaseWordLookupFallback(renderer);
 }
 
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
@@ -114,120 +171,13 @@ bool DictionaryDefinitionActivity::layoutHtmlPages() {
   return true;
 }
 
-int DictionaryDefinitionActivity::measureSpan(const int fontId, const char* text, size_t len) const {
-  char buf[MAX_LINE_BYTES + 1];
-  len = std::min(len, MAX_LINE_BYTES);
-  memcpy(buf, text, len);
-  buf[len] = '\0';
-  return renderer.getTextAdvanceX(fontId, buf, EpdFontFamily::REGULAR);
-}
-
-// Greedy word-wrap of `definition` into byte spans. '\n' breaks lines (blank
-// lines survive as paragraph spacing; NULs from multi-type StarDict entries
-// were normalized to newlines in onEnter); '\r' is dropped by treating it as
-// a space at a token edge.
-void DictionaryDefinitionActivity::wrapText() {
-  lines.clear();
-  lines.reserve(definition.size() / 32 + 8);
-
-  const int fontId = definitionFontId();
-  // SD-card fonts: merge every definition codepoint into the persistent
-  // advance table up front. Otherwise each unseen codepoint measured below
-  // falls back to an on-demand glyph load from SD (8-slot overflow ring).
-  renderer.ensureSdCardFontReady(fontId, definition.c_str(), 0x01 /* REGULAR */);
-
-  const BodyArea body = bodyArea();
-  const int maxWidth = body.width;
-  const int spaceWidth = renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR);
-  const int lineHeight = renderer.getLineHeight(fontId);
-  linesPerPage = std::max(1, body.height / lineHeight);
-
-  const char* text = definition.c_str();
-  const uint32_t n = static_cast<uint32_t>(definition.size());
-  uint32_t lineStart = 0;
-  uint32_t lineEnd = 0;  // one past the last token byte on the current line
-  int lineWidth = 0;
-
-  const auto flushLine = [&](uint32_t nextStart) {
-    lines.push_back({lineStart, static_cast<uint16_t>(lineEnd - lineStart)});
-    lineStart = nextStart;
-    lineEnd = nextStart;
-    lineWidth = 0;
-  };
-
-  uint32_t i = 0;
-  while (i < n) {
-    const char c = text[i];
-    if (c == '\n' || c == '\0') {
-      flushLine(i + 1);
-      i++;
-      continue;
-    }
-    if (c == ' ' || c == '\t' || c == '\r') {
-      i++;
-      continue;
-    }
-
-    // Token: run of non-whitespace bytes, capped at the measure buffer.
-    const uint32_t tokenStart = i;
-    while (i < n && text[i] != ' ' && text[i] != '\t' && text[i] != '\r' && text[i] != '\n' && text[i] != '\0' &&
-           i - tokenStart < MAX_LINE_BYTES) {
-      i++;
-    }
-    // If the byte cap cut the token mid-UTF-8-sequence, back off to the last
-    // complete codepoint so measure/draw never see a partial sequence. A
-    // natural stop lands on whitespace or the terminating NUL, never on a
-    // continuation byte, so this is a no-op there.
-    while (i - tokenStart > 1 && (text[i] & 0xC0) == 0x80) i--;
-    const uint32_t tokenLen = i - tokenStart;
-    const int tokenWidth = measureSpan(fontId, text + tokenStart, tokenLen);
-
-    if (lineEnd == lineStart) {
-      lineStart = tokenStart;
-      lineEnd = tokenStart + tokenLen;
-      lineWidth = tokenWidth;
-    } else if (lineWidth + spaceWidth + tokenWidth <= maxWidth &&
-               tokenStart + tokenLen - lineStart <= UINT16_MAX) {  // span len must fit Line::len
-      lineEnd = tokenStart + tokenLen;
-      lineWidth += spaceWidth + tokenWidth;
-    } else {
-      flushLine(tokenStart);
-      lineEnd = tokenStart + tokenLen;
-      lineWidth = tokenWidth;
-    }
-
-    // An unbreakable token wider than the screen is now alone on the line
-    // (any previous content was flushed above): split it at the widest
-    // fitting UTF-8 boundary and carry the remainder forward.
-    while (lineWidth > maxWidth && lineEnd - lineStart > 1) {
-      const uint32_t len = lineEnd - lineStart;
-      uint32_t lastFit = 0;
-      for (uint32_t f = 1; f <= len; f++) {
-        if (f == len || (text[lineStart + f] & 0xC0) != 0x80) {  // codepoint boundary
-          if (measureSpan(fontId, text + lineStart, f) > maxWidth) break;
-          lastFit = f;
-        }
-      }
-      if (lastFit == 0) {
-        // Even a single over-wide glyph must make progress; consume its whole
-        // UTF-8 sequence rather than splitting it into invalid fragments.
-        lastFit = 1;
-        while (lastFit < len && (text[lineStart + lastFit] & 0xC0) == 0x80) lastFit++;
-      }
-      const uint32_t rest = lineStart + lastFit;
-      lineEnd = rest;
-      flushLine(rest);
-      lineEnd = rest + (len - lastFit);
-      lineWidth = measureSpan(fontId, text + lineStart, lineEnd - lineStart);
-    }
-  }
-  if (lineEnd > lineStart) flushLine(n);
-
-  // Trim trailing blank lines so the last page is not empty padding.
-  while (!lines.empty() && lines.back().len == 0) lines.pop_back();
-
-  totalPages = std::max(1, (static_cast<int>(lines.size()) + linesPerPage - 1) / linesPerPage);
-  currentPage = 0;
+void DictionaryDefinitionActivity::saveSentence() {
+  auto& draft = entries[currentEntry].draft;
+  if (!draft.valid()) return;
+  draft.card.date = sentencemining::today();  // the day of the save, not of the lookup
+  miningStatus_ = sentencemining::append(draft.card, draft.language) ? MiningStatus::Saved : MiningStatus::Failed;
+  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(draft.bookPath.c_str(), 0, 1);
+  requestUpdate();
 }
 
 void DictionaryDefinitionActivity::loop() {
@@ -245,63 +195,32 @@ void DictionaryDefinitionActivity::loop() {
     finish();
     return;
   }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    saveSentence();
+    return;
+  }
 
-  // Outside the card is "put it away": the panel floats over the page, so a tap
-  // on the page around it reads as dismissing it rather than as paging a
-  // definition the finger is not even on. Checked before paging so the two
-  // cannot both claim the same contact.
-  int tx = 0;
-  int ty = 0;
-  if (mappedInput.wasScreenTapped(tx, ty)) {
-    const auto box = DictionaryPanel::compute(renderer).box;
-    if (tx < box.x || tx >= box.x + box.width || ty < box.y || ty >= box.y + box.height) {
+  switch (PanelTouch::read(renderer, mappedInput, miningDraft().valid())) {
+    case PanelTouch::Action::Close:
       finish();
       return;
-    }
+    case PanelTouch::Action::AddButton:
+      saveSentence();
+      return;
+    case PanelTouch::Action::Next:
+    case PanelTouch::Action::ScrollDown:
+      stepPage(1);
+      return;
+    case PanelTouch::Action::Previous:
+    case PanelTouch::Action::ScrollUp:
+      stepPage(-1);
+      return;
+    case PanelTouch::Action::None:
+      break;
   }
 
-  // Paging follows whatever the reader is set to, rather than a second scheme
-  // to learn: tap zones, inverted zones, swipes or inverted swipes, and nothing
-  // at all when touch reader controls are off. Same helper the page turns use,
-  // so the definition answers the gesture the reader already taught.
-  // Up/down swipes scroll a long definition whatever the page-turn setting says -- the same
-  // gesture as the Japanese panel, so an entry that does not fit reads the same way everywhere.
-  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
-    if (scroll > 0 && currentPage + 1 < totalPages) {
-      currentPage++;
-      requestUpdate();
-    } else if (scroll < 0 && currentPage > 0) {
-      currentPage--;
-      requestUpdate();
-    }
-    return;
-  }
-
-  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  if (touchTurn.prev || touchTurn.next) {
-    if (touchTurn.prev && currentPage > 0) {
-      currentPage--;
-      requestUpdate();
-    } else if (touchTurn.next && currentPage + 1 < totalPages) {
-      currentPage++;
-      requestUpdate();
-    }
-    return;
-  }
-
-  buttonNavigator.onNext([this] {
-    if (currentPage + 1 < totalPages) {
-      currentPage++;
-      requestUpdate();
-    }
-  });
-
-  buttonNavigator.onPrevious([this] {
-    if (currentPage > 0) {
-      currentPage--;
-      requestUpdate();
-    }
-  });
+  buttonNavigator.onNext([this] { stepPage(1); });
+  buttonNavigator.onPrevious([this] { stepPage(-1); });
 }
 
 // Draws the current page: a styled Page when the HTML layout succeeded,
@@ -313,17 +232,7 @@ void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const
     pages[currentPage]->render(renderer, fontId, x, startY);
     return;
   }
-  const int lineHeight = renderer.getLineHeight(fontId);
-  char buf[MAX_LINE_BYTES + 1];
-  const int firstLine = currentPage * linesPerPage;
-  const int lastLine = std::min(firstLine + linesPerPage, static_cast<int>(lines.size()));
-  for (int i = firstLine; i < lastLine; i++) {
-    if (lines[i].len == 0) continue;
-    const size_t len = std::min(static_cast<size_t>(lines[i].len), MAX_LINE_BYTES);
-    memcpy(buf, definition.c_str() + lines[i].start, len);
-    buf[len] = '\0';
-    renderer.drawText(fontId, x, startY + (i - firstLine) * lineHeight, buf);
-  }
+  textPages.draw(renderer, fontId, x, startY, definition, currentPage);
 }
 
 void DictionaryDefinitionActivity::render(RenderLock&&) {
@@ -333,7 +242,12 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   if (totalPages > 1) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
   }
-  const auto layout = DictionaryPanel::draw(renderer, headword.c_str(), dictName.c_str(), counter);
+  const auto& entry = entries[currentEntry];
+  const bool showStatus = miningStatus_ != MiningStatus::None;
+  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
+  const auto layout =
+      DictionaryPanel::draw(renderer, entry.headword.c_str(), showStatus ? nullptr : dictLabel.c_str(), counter,
+                            showStatus ? statusText : nullptr, miningDraft().valid() && mappedInput.hasTouch());
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
@@ -345,8 +259,10 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   scope.endScanAndPrewarm();
   drawBody(fontId, layout.body.x, layout.body.y);
 
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), "", (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
+  const bool hasPrev = currentPage > 0 || currentEntry > 0;
+  const bool hasNext = currentPage + 1 < totalPages || currentEntry + 1 < entries.size();
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), miningDraft().valid() ? tr(STR_MINING_SAVE) : "",
+                                            hasPrev ? "<" : "", hasNext ? ">" : "");
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();

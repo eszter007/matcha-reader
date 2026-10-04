@@ -8,8 +8,12 @@ It includes all features of upstream CrossPoint and runs on any supported ESP32 
   <img src="docs/images/screenshots/vertical-text.png" width="200" alt="Vertical Japanese text">
   <img src="docs/images/screenshots/word-lookup.png" width="200" alt="Dictionary word lookup panel">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Manga reader, full page">
-  <img src="docs/images/screenshots/language-stats.png" width="200" alt="Reading stats split by language">
+  <img src="docs/images/screenshots/insights.png" width="200" alt="Reading stats, split by language across the tabs">
 </p>
+
+### Now running on:
+- **ESP32C3-based** Xteink X4 and X3.
+- **ESP32S3-based** Xteink X4Pro and X4Classic, Seeed reTerminal Sticky, M5PaperMono
 
 Full instructions live in the [User Guide](USER_GUIDE.md). This page is the short version.
 
@@ -37,9 +41,9 @@ A word broken across a page break still resolves. The lookup reads a few charact
 
 On a touch device, long-pressing a word on the page opens its definition directly — no setting to turn on, and no cursor to move first. A press that lands between words opens ordinary word selection instead. The panel pages by touch however the reader is set to turn pages, and a tap outside it puts it away.
 
-The definition itself opens as a panel floating over the page you were reading: the word sits above a divider at the top, the entry fills the middle, and the dictionary it came from is named along the bottom. In vertical text and in English books the entry is paged a screenful at a time with a page counter in the top right; horizontal Japanese and manga scroll the entry freely and show your position among the page's words instead.
+The definition itself opens as a panel floating over the page you were reading: the word sits above a divider at the top, the entry fills the middle, and along the bottom the entry's type and dictionary (`Vocab | JMdict`) sit on the left with a counter on the right. In vertical text and in English books the entry is paged a screenful at a time and the counter shows the page; horizontal Japanese and manga scroll the entry freely and the counter shows your position among the page's words instead.
 
-Vocabulary, names and grammar each come from their own dictionary. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
+Vocabulary, names and grammar each come from their own dictionary. A word listed in both vocabulary and grammar shows both entries: in vertical text as separate pages (grammar first for short function words like こと), and below each other when you tap a word in manga. If the book itself annotated a reading, the entry opens with "In this book: はやし" and remembers it for the rest of the book. See [Setup](#setup) for the files, and [§6.2](USER_GUIDE.md#62-word-lookup) for how to drive it.
 
 Other languages get the same treatment from their StarDict dictionaries. A word at the start of a sentence keeps its accents and still resolves (`École` finds `école`), and French adds its own rules: `l'eau` looks up `eau`, `journaux` finds `journal`, `heureuse` finds `heureux`, and the regular conjugations resolve to the infinitive (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`). The same coverage extends to `-eindre`/`-aindre`/`-oindre` verbs (`éteignit` finds `éteindre`, `craignait` finds `craindre`), `-aître` verbs (`connaissons` finds `connaître`), `-uire` verbs (`conduisit` finds `conduire`), and adverbs formed from an adjective (`lentement` finds `lent`). English and everything else fall back to plurals and verb endings. Irregular verbs that share no stem with their infinitive — and a verb's irregular passé simple, like `connus` or `naquit` — need a `.syn` file in the dictionary folder — see [docs/dictionary.md](docs/dictionary.md).
 
@@ -47,13 +51,23 @@ In French books, a literary verb-subject inversion like `songeai-je` or `pense-t
 
 Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.
 
-<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page: 漏らした resolved to 漏らす, with its reading, part of speech, definitions and an example sentence"></p>
+#### Sentence mining
+
+Save a looked-up word together with the sentence it came from, ready to import into Anki. With a definition open, press **Select**, or tap the **+** in the panel's top-right corner on a touch device. The footer shows **Saved** until you move on. It works in Japanese and other-language books and in manga.
+
+Each save adds one line to a CSV file per language in the `sentence-mining` folder on the SD card: `sentences-ja.csv`, `sentences-en.csv` and so on. The language is the dictionary's, so a file can be imported into its own deck. Each line holds the word in its dictionary form, its reading (Japanese only), the sentence with the word in bold, the whole dictionary entry, the book, author, date and dictionary, plus tags (`matcha` and the book title).
+
+To import, open the file in Anki with **File → Import**. The first lines of the file tell Anki the layout, so there is nothing to set up. The files only ever grow; import the same file again later and Anki updates the cards it already has instead of adding them twice, because every card carries a stable ID.
+
+A sentence cut off by the end of the page is finished from the next page. The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. On devices without a clock chip (the X4) a restart loses the time, so the date can lag until the next Wi-Fi connection.
+
+<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence, the save button in the top-right corner and Vocab | JMdict | Tatoeba in the footer"></p>
 
 ### Page translation
 
-Translates the current page to English with Gemini. Works in any book, not only Japanese ones. Needs Wi-Fi and your own API key.
+Translates the current page to English with Gemini, in the same floating panel as the dictionary, over the page you are reading. Works in any book, not only Japanese ones. Needs Wi-Fi and your own API key; a saved network is joined from inside the panel.
 
-<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A translated page"></p>
+<p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
 
 ### Manga panel reader
 
@@ -62,6 +76,8 @@ Panels are detected at conversion time, along with their text and translations, 
 **Look up any word right in the picture.** On a touch device, hold a word in a speech bubble and its dictionary entry opens, the same as in a book. With buttons, open Word Lookup and an outline appears around a word on the page; the page-turn keys move it word by word and Confirm looks it up. The outline leaves the word readable, and it works on the full page and on zoomed or rotated panels. Books converted before this feature need converting again to get it; see [§6.4](USER_GUIDE.md#64-reading-manga).
 
 **Rotate Panels** (Settings, on by default) turns a panel whose shape does not match the screen, so a wide panel fills the display and you turn the device to read it. Switch it off to keep every panel upright inside the current orientation. **Panels Only** skips the full page overviews. Both are covered in [§6.4](USER_GUIDE.md#64-reading-manga).
+
+**Refresh Frequency** counts every panel step as a page, so at **1 page** each panel gets a full refresh and no ghost of the previous panel stays behind.
 
 Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or see [Converting manga](#converting-manga).
 
@@ -77,22 +93,58 @@ Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/
 Every book on the card as a cover grid, at any depth. Covers and titles come from the book's own metadata on first
 visit, with progress as a badge. Manga sits beside EPUBs. A **Shelves** tab lists folders that contain books.
 
-<p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side"></p>
+<p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side, under the Library tabs"></p>
 
 CrossPoint's own library screen is still here if you prefer it: an indexed list with title and author search across
 thousands of books, sorted by title, author or when they were added. **Settings → Display → Library** gathers the library
 settings on one screen, starting with the view switch: **Matcha Covers** (the default) or **CrossPoint List**.
 
+### Cover Grid home, with tabs
+
+The **Cover Grid** theme (the default on touch devices; **Settings → Display → UI Theme** elsewhere) puts a tab bar along
+the bottom that stays put as you move between Home, Library, File Transfer, Insights and Settings. The tab you are in is
+drawn filled. Nothing opens "on top" any more, so there is no stack to back out of.
+
+On a button-only device the bar is part of one navigation ring rather than a separate thing to reach: **Up/Down** walk a
+screen's own tabs, then its rows, then the bottom bar; **Confirm** steps the tabs at the top and past the last one drops
+into the bar; **Left/Right** step the tabs at the top and move along the bar, and **Confirm** on the tab you are already
+in hands the cursor back to the first tab at the top. A grey outline marks whatever the cursor is on. Details in
+[§3.1.1](USER_GUIDE.md#311-tabs-and-button-navigation-cover-grid-theme).
+
+Covers are built in the background, so the grid appears at once with titles standing in for artwork the device has not
+made yet and each cover replaces its own title as it finishes. A button press interrupts the work instead of queueing
+behind it.
+
+<p align="center">
+  <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
+  <img src="docs/images/screenshots/library.png" width="150" alt="Library tab, with Books, Shelves, OPDS and Files">
+  <img src="docs/images/screenshots/tab-transfer.png" width="150" alt="File Transfer tab">
+  <img src="docs/images/screenshots/insights.png" width="150" alt="Insights tab, with a tab per language">
+  <img src="docs/images/screenshots/tab-settings.png" width="150" alt="Settings tab">
+</p>
+
+The OPDS catalogs and the SD browser live inside the Library there, as the **OPDS** and **Files** tabs beside
+**Books** and **Shelves**. On the other themes they stay their own entries on the home menu.
+
+Long press a cover, on the home grid, in the Library or inside a shelf, for **View Stats**, **Mark as Read** /
+**Mark as Unread** and **Delete**. On button-only devices, hold **Confirm** on the selected cover. Only the direction that changes something is offered: a finished book has no "Mark as Read". Delete asks
+first, and takes the book's reading cache with it.
+
+Swipe down from the top edge for the control centre: brightness and warmth, then round buttons for dark mode, a screen
+refresh, orientation, touch controls and the light. Each button names what tapping it does rather than reporting a state.
+
 ### Reading stats
 
 Streak, minutes this week, books finished, total time, and a calendar of the days you read. Recorded as you go, every few minutes and again when you close a book, so a flat battery costs you minutes rather than the whole session.
 
-Press **Details** for the same numbers per language, one tab each. Long press a book in the Library for its own sessions, total time, average session and calendar.
+Tabs across the top split the same numbers by language: **All**, then one per language the device has seen. Long press a book in the Library for its own sessions, total time, average session, words looked up, sentences saved and calendar.
+
+Finishing a book opens a celebration screen: which book this is for you overall and in its language ("Your 12th book · 3rd in 日本語"), your reading time, the days it took, your streak, and the words you looked up and sentences you saved in it. Below that, the next books in the same folder and **Go to Home**. Every book type gets it: EPUB, TXT, Markdown, XTC and manga.
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">
-  <img src="docs/images/screenshots/language-stats.png" width="240" alt="Per-language stats with a tab for each language">
   <img src="docs/images/screenshots/book-stats.png" width="240" alt="Per-book stats for one book">
+  <img src="docs/images/screenshots/end-of-book.png" width="240" alt="End-of-book screen with the book's stats and the next books">
 </p>
 
 Manga counts the same as EPUBs. Language comes from the book, so set `--language` when you convert manga. Details and the known limits are in [§7](USER_GUIDE.md#7-reading-stats).
@@ -110,7 +162,7 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 - **Optimize EPUB** on upload: splits single-file Japanese novels into real chapters with a working table of contents, and fits images to the screen as dithered 1-bit BMPs
 - More of the book's own CSS respected: headings sized as headings, line spacing, page breaks, boxed asides, and rules written as `.callout p`
 - Drop caps: a chapter opening styled with `::first-letter { font-size: … }` gets the enlarged initial the book asked for, with the first few lines wrapping around it
-- **Use Book Margins** (Text Settings > Layout, on by default) keeps the indents a book sets for itself, so epigraphs and long quotations stay inset. Turn it off and those blocks sit flush with the body text
+- **Use Book Margins** (Text Settings > Layout, on by default) keeps the indents a book sets for itself, so epigraphs and long quotations stay inset. Turn it off and those blocks sit flush with the body text. Horizontal books only: in vertical text, Layout lists just Line Spacing and Screen Margin
 - Instant image page turns, since the next image decodes in the background
 - Next-book suggestions at the end of EPUB, TXT/Markdown, XTC and manga books
 - A file browser that shows everything on the card, with unsupported files greyed out rather than hidden
@@ -121,6 +173,12 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 ## Setup
 
 > No Python needed. [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) converts dictionaries, fonts and manga in your browser and hands back a zip laid out for the card. Files stay on your machine, except manga OCR, where panels go to Gemini under your own key. ([source](https://github.com/eszter007/matcha-reader-tools))
+
+On devices with external RAM enabled in CrossPoint, copy `.ttf`, `.otf`, or `.ttc` files to the SD card and select them as reader fonts. Put one file in `/fonts/` or `/.fonts/`, or put one family's files in a subfolder. See the [SD card font guide](./docs/sd-card-fonts.md) for the folder layout and styles.
+
+On other devices, convert the font to `.cpfont` first. `.cpfont` files also work on devices with external RAM enabled and have better performance. No firmware reflash is needed to add fonts.
+
+To make `.cpfont` files:
 
 **1. Flash the firmware** with the standard CrossPoint process, see the [upstream docs](https://github.com/crosspoint-reader/crosspoint-reader). Take the build for your device from [this repository's releases](https://github.com/eszter007/matcha-reader/releases) — not upstream's:
 
@@ -150,7 +208,9 @@ dictionaries/
 
 Japanese is the exception: it always uses the converted files in `dictionaries/jp/`, from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other Yomitan dictionary. Every other language uses plain StarDict.
 
-The dictionary you pick in Settings becomes the fallback, used when the book has no language or no folder matches it. Reader Settings shows which dictionary a book actually ended up with.
+You can put several dictionaries in one language, each in its own folder (`en/collins/`, `en/wiktionary/`). A lookup checks all of them, up to four, and shows every entry it finds one after another: page past the end of one dictionary's entry and the next dictionary's follows, with the footer naming the dictionary and its place (`Collins (1/2)`). The dictionary picked in Settings comes first if it is one of them, then the rest by folder name. Saving a sentence records the dictionary whose entry is on screen.
+
+The dictionary you pick in Settings is also the fallback, used when the book has no language or no folder matches it. Reader Settings shows which dictionary a book reads first.
 
 The folder can also be called `.dictionaries/`, which hides it from the file browser. It works exactly the same, including `jp/`.
 

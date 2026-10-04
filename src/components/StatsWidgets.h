@@ -51,8 +51,8 @@ struct Tile {
   bool bigIcon;  // flame is 32px and offset differently from the 24px set
 };
 
-// 2x2 grid. Returns height consumed.
-int drawTileGrid(const GfxRenderer& renderer, int x, int y, int w, const Tile tiles[4]);
+// Two-column grid, `count` tiles filled row by row. Returns height consumed.
+int drawTileGrid(const GfxRenderer& renderer, int x, int y, int w, const Tile* tiles, int count = 4);
 
 // Day data source. Function pointers, not std::function or a virtual: called from render(),
 // and the two stores share no base class.

@@ -7,12 +7,13 @@
 #include "components/UiAppHost.h"
 
 class GfxRenderer;
+struct Rect;
 class MappedInputManager;
 
 // Shared End-of-Book next-book menu for the book readers. Collects up to
 // MAX_SUGGESTIONS sibling books once per reader session, handles the menu input, and
-// draws the end screen. With no suggestions the end screen keeps its historical
-// plain-title look and behavior.
+// draws the end screen: celebration graphic, "You finished" + the title, the
+// suggestions, and a trailing "Go to Home" row (the only row when nothing is nearby).
 class EndOfBookOptions : private UiAppHost {
  public:
   enum class Action { None, Redraw, OpenBook, GoHome, LastPage };
@@ -25,7 +26,8 @@ class EndOfBookOptions : private UiAppHost {
   // the reader's render() (the render task, serialized by RenderLock) — the loaded flag
   // is the release/acquire publication point that lets the main task read the finished
   // list safely.
-  void loadOnce(const std::string& currentBookPath);
+  // Also marks the book finished, so the milestone line counts it. bookLanguage may be null.
+  void loadOnce(const std::string& currentBookPath, const std::string& bookTitle, const char* bookLanguage);
 
   // True when the suggestion menu is showing and should own the reader's input.
   bool menuActive() const;
@@ -38,7 +40,7 @@ class EndOfBookOptions : private UiAppHost {
   // long-press Back to the file browser working).
   Action handleMenuInput(const MappedInputManager& input, std::string* openPath);
 
-  // Draws the full end screen (plain title, or the suggestion menu) onto a cleared buffer.
+  // Draws the full end screen onto a cleared buffer.
   void render(GfxRenderer& renderer, const MappedInputManager& input);
 
  private:
@@ -50,6 +52,24 @@ class EndOfBookOptions : private UiAppHost {
 
   GfxRenderer& renderer;
   std::string folder;
+  std::string title;
+  // Snapshot of the stats shown under the title, taken once in loadOnce(): the per-book history
+  // is loaded, read and dropped there rather than held for the life of the screen.
+  struct Summary {
+    uint32_t minutes = 0;
+    int daySpan = 0;
+    int streak = 0;
+    uint32_t lookups = 0;
+    uint32_t sentences = 0;
+    uint16_t booksFinished = 0;
+    uint16_t languageBooksFinished = 0;
+    std::string languageName;  // empty when the book declares no language
+  };
+  Summary summary;
+  void loadSummary(const std::string& bookPath, const char* bookLanguage);
+  int drawSummary(int y, const Rect& safe) const;
+  // Top of the list band, laid out by render() under the header it draws.
+  int listTop = 0;
   // Written by the render task in loadOnce(), immutable afterwards; the main task only
   // reads it after isLoaded is observed true (acquire), so no further locking is needed.
   std::vector<std::string> names;

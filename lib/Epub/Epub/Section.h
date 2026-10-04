@@ -142,7 +142,9 @@ class Section {
   // its pages instantly and only rebuild in the background. Called by the destructor, so
   // any teardown path (exit, sleep, navigation) keeps the work already done. Keeps a
   // pre-existing partial when it covers more pages than this build reached.
-  void suspendBuild();
+  // True when the section still has pages to serve afterwards (the new partial, or an older one
+  // it kept); false when the commit failed with nothing older to fall back on.
+  bool suspendBuild();
   // True when a partial file was loaded: pageCount is a watermark, not the chapter total.
   bool isPartial() const { return partial_; }
 
@@ -155,6 +157,10 @@ class Section {
   // Resolve an anchor from the in-progress build first, then the on-disk anchor map
   // (covers finalized sections and partials from a previous session).
   std::optional<uint16_t> findAnchor(const std::string& anchor) const;
+
+  // findAnchor() for several ids in one pass over the anchor map: pages[i] is the page of
+  // anchors[i], or -1 if it is not reached yet / not in the chapter.
+  void findAnchorPages(const std::vector<std::string>& anchors, std::vector<int>& pages) const;
 
   // True if this spine's unzipped HTML is already cached, so a build won't pay the (multi-second on a
   // giant spine) zip inflation. Lets the reader skip the indexing popup on a fast reopen/rebuild.

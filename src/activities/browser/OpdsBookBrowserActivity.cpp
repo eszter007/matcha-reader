@@ -6,6 +6,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
 #include <OpdsStream.h>
 #include <WiFi.h>
@@ -15,8 +16,11 @@
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/HomeTabBar.h"
+#include "components/LibraryTabs.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
+#include "components/icons/headerIcons.h"
 #include "components/icons/search32.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
@@ -31,6 +35,8 @@ namespace {
 constexpr fui::ActionId ACTION_ROW = 1;
 constexpr fui::ActionId ACTION_SEARCH = 2;
 constexpr fui::ActionId ACTION_CANCEL = 3;
+constexpr fui::ActionId ACTION_BACK = 4;
+constexpr fui::ActionId ACTION_TAB = 5;  // Library band, value = LibraryTabs tab
 constexpr int DOWNLOAD_PROGRESS_STEP_PERCENT = 5;
 constexpr unsigned long DOWNLOAD_PROGRESS_MIN_UPDATE_MS = 5000;
 
@@ -60,6 +66,8 @@ void OpdsBookBrowserActivity::onEnter() {
   app.on(ACTION_ROW, &OpdsBookBrowserActivity::onRowEvent, this);
   app.on(ACTION_SEARCH, &OpdsBookBrowserActivity::onSearchEvent, this);
   app.on(ACTION_CANCEL, &OpdsBookBrowserActivity::onCancelEvent, this);
+  app.on(ACTION_BACK, &OpdsBookBrowserActivity::onBackEvent, this);
+  app.on(ACTION_TAB, &OpdsBookBrowserActivity::onTabEvent, this);
   app.setScreen(&OpdsBookBrowserActivity::rootScreen, this);
   requestUpdate();
 
@@ -74,7 +82,13 @@ void OpdsBookBrowserActivity::onExit() {
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
+    if (exitTarget >= LIBRARY_TAB_BASE) {
+      silentRestartToLibraryTab(exitTarget - LIBRARY_TAB_BASE);
+    } else if (exitTarget >= 0) {
+      silentRestartToHomeTab(exitTarget);
+    } else {
+      silentRestart();
+    }
   }
 }
 
@@ -102,6 +116,24 @@ void OpdsBookBrowserActivity::onSearchEvent(const fui::ActionEvent&, void* user)
   self->launchSearch();
 }
 
+void OpdsBookBrowserActivity::onBackEvent(const fui::ActionEvent&, void* user) {
+  auto* self = static_cast<OpdsBookBrowserActivity*>(user);
+  if (self->state != BrowserState::BROWSING) return;
+  self->app.clearTapFlash();
+  self->navigateBack();
+}
+
+void OpdsBookBrowserActivity::onTabEvent(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<OpdsBookBrowserActivity*>(user);
+  // A download holds the screen until it finishes or is cancelled; its progress callback routes
+  // touch, so a tab tap can arrive here mid-transfer.
+  if (self->state == BrowserState::DOWNLOADING) return;
+  if (event.value < 0 || event.value >= LibraryTabs::count()) return;
+  self->app.clearTapFlash();
+  // The OPDS tab itself goes back to the server list, one level up from any catalog page.
+  self->goToLibraryTab(event.value);
+}
+
 void OpdsBookBrowserActivity::onCancelEvent(const fui::ActionEvent&, void* user) {
   auto* self = static_cast<OpdsBookBrowserActivity*>(user);
   if (self->state != BrowserState::DOWNLOADING) return;
@@ -113,6 +145,8 @@ void OpdsBookBrowserActivity::loop() {
   if (state == BrowserState::WIFI_SELECTION || state == BrowserState::SEARCH_INPUT) {
     return;
   }
+  // A download holds the screen until it finishes or is cancelled.
+  if (state != BrowserState::DOWNLOADING && handleTabInput()) return;
 
   if (state == BrowserState::ERROR) {
     int tx = 0;
@@ -134,7 +168,7 @@ void OpdsBookBrowserActivity::loop() {
 
   if (state == BrowserState::CHECK_WIFI || state == BrowserState::LOADING) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      state == BrowserState::CHECK_WIFI ? onGoHome() : navigateBack();
+      state == BrowserState::CHECK_WIFI ? leaveBrowser() : navigateBack();
     }
     return;
   }
@@ -142,12 +176,19 @@ void OpdsBookBrowserActivity::loop() {
   if (state == BrowserState::DOWNLOADING) return;
 
   if (state == BrowserState::BROWSING) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::ScreenLeft)) {
+      leftSearchPending = !searchTemplate.empty() && selectorIndex == 0;
+    }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       activateSelected();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       navigateBack();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
-      if (!searchTemplate.empty() && selectorIndex == 0) launchSearch();
+      if (leftSearchPending) {
+        leftSearchPending = false;
+        launchSearch();
+        return;
+      }
     }
 
     // Touch goes through the FreeInkApp: render() registered every tap target
@@ -179,14 +220,28 @@ void OpdsBookBrowserActivity::loop() {
         listNav.follow(static_cast<int>(entries.size()));
         requestUpdate();
       };
-      buttonNavigator.onNextRelease(
-          [this, &moveSelection] { moveSelection(ButtonNavigator::nextIndex(selectorIndex, entries.size())); });
-      buttonNavigator.onPreviousRelease(
-          [this, &moveSelection] { moveSelection(ButtonNavigator::previousIndex(selectorIndex, entries.size())); });
+      buttonNavigator.onNextPress([this, &moveSelection] {
+        // Past the last row the cursor carries on round the ring, as on every tab screen.
+        if (inLibraryTab() && selectorIndex >= static_cast<int>(entries.size()) - 1) {
+          TabRing::leaveContent(*this, 1);
+          return;
+        }
+        moveSelection(ButtonNavigator::nextIndex(selectorIndex, entries.size()));
+      });
+      buttonNavigator.onPreviousPress([this, &moveSelection] {
+        if (leftSearchPending) return;
+        // Above the first row the cursor goes up onto the Library band.
+        if (inLibraryTab() && selectorIndex <= 0) {
+          TabRing::leaveContent(*this, -1);
+          return;
+        }
+        moveSelection(ButtonNavigator::previousIndex(selectorIndex, entries.size()));
+      });
       buttonNavigator.onNextContinuous([this, &moveSelection] {
         moveSelection(ButtonNavigator::nextPageIndex(selectorIndex, entries.size(), listNav.visibleRows));
       });
       buttonNavigator.onPreviousContinuous([this, &moveSelection] {
+        leftSearchPending = false;
         moveSelection(ButtonNavigator::previousPageIndex(selectorIndex, entries.size(), listNav.visibleRows));
       });
     }
@@ -226,25 +281,53 @@ void OpdsBookBrowserActivity::rootScreen(UiScreen& screen, void* user) {
 // Shared chrome for every state: reserve the firmware's button-hint band and
 // draw the themed header (padding, centering, and rule come from the theme).
 void OpdsBookBrowserActivity::screenHeader(UiScreen& screen, const bool withSearch) {
-  screen.takeBottom(static_cast<int16_t>(UITheme::getInstance().getMetrics().buttonHintsHeight));
-  // Same top offset as every GUI.drawHeader caller, so the band lines up with
-  // the rest of the firmware's screens.
-  screen.spacer(static_cast<int16_t>(UITheme::getInstance().getMetrics().topPadding));
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto& theme = screen.theme();
   fui::HeaderProps header;
   header.title = server.name.empty() ? tr(STR_OPDS_BROWSER) : server.name.c_str();
   header.borderEdges = fui::EdgeBottom;
+  // Same battery/clock band as every GUI.drawHeader screen; the header
+  // heights are unified across themes, so the buttons derive from the band.
+  GUI.applyHeaderStatus(renderer, header);
+  // Only the browsing state routes header taps (and only there does back mean
+  // anything); the loading/downloading/status headers stay passive.
+  if (state == BrowserState::BROWSING && mappedInput.hasTouch()) {
+    header.leadingIcon = fui::bitmapFromIcon(icon_header_back_32);
+    header.leadingAction = ACTION_BACK;
+  }
   if (withSearch && !searchTemplate.empty()) {
     header.trailingIcon = fui::bitmapFromIcon(icon_search_32);
     header.trailingAction = ACTION_SEARCH;
-    // Optically align the icon with the title glyphs: text hangs low in its
-    // line cell by the font's internal leading; drop the button to match.
-    const int titleFontId = uiScaleSpec().titleFontId;
-    header.actionOffsetY =
-        static_cast<int16_t>((renderer.getLineHeight(titleFontId) - renderer.getTextHeight(titleFontId)) / 2);
+    // Vertical placement comes from applyHeaderStatus: buttons center on the
+    // unified band.
   }
-  screen.header(header);
-  // Same breathing room between header and content as the legacy screens.
-  screen.spacer(static_cast<int16_t>(UITheme::getInstance().getMetrics().verticalSpacing));
+  header.titleText = theme.titleText;
+  header.titleText.align = theme.headerTitleAlign;
+  header.styles = theme.popup;
+  if (inLibraryTab()) {
+    // The Library band sits right under the header, as on the other Library tabs: no rule between.
+    header.borderEdges = fui::EdgesNone;
+  } else if (header.styles.normal.border.kind == fui::PaintKind::None && theme.headerUnderline > 0) {
+    header.styles.normal.border = fui::Paint::solid(fui::Color::Black);
+    header.styles.normal.borderWidth = theme.headerUnderline;
+  }
+  header.trailingStyles = fui::plainStyles(fui::Paint::solid(fui::Color::Black));
+  header.sidePadding = theme.headerSidePadding;
+  header.minTouchSize = theme.minTouchSize;
+  const auto frameRect = screen.frame().screen();
+  fui::header(screen.frame(),
+              fui::Rect{frameRect.x, static_cast<int16_t>(metrics.topPadding), frameRect.width,
+                        static_cast<int16_t>(metrics.headerHeight)},
+              header);
+  // In the Library the band sits under the header and the bottom bar replaces the button hints.
+  const int bottom = inLibraryTab() ? HomeTabBar::bottomInset() : metrics.buttonHintsHeight;
+  screen.setContentMarginFromScreen(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0, static_cast<int16_t>(bottom), 0});
+  if (inLibraryTab()) {
+    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Opds, bandFocused, mappedInput.hasTouch(), ACTION_TAB);
+  } else {
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  }
 }
 
 void OpdsBookBrowserActivity::buildBrowsingScreen(UiScreen& screen) {
@@ -269,6 +352,7 @@ void OpdsBookBrowserActivity::buildBrowsingScreen(UiScreen& screen) {
   listNav.selected = selectorIndex;
   props.partialTrailingRow = true;
   screen.syncListViewport(listNav, props, static_cast<int>(entries.size()));
+  if (tabFocus >= 0 || bandFocused) props.selectedIndex = -1;  // one cursor on screen
   screen.list(props);
 }
 
@@ -351,9 +435,10 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
       labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
       break;
   }
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (!inLibraryTab()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderUi();
+  if (inLibraryTab()) HomeTabBar::draw(renderer, HomeTab::Library, tabFocus);
   renderer.displayBuffer();
 }
 
@@ -366,7 +451,13 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   }
 
   std::string url = UrlUtils::buildUrl(server.url, path);
-  LOG_DBG("OPDS", "Fetching: %s", url.c_str());
+  // The TLS handshake fails with MEMORY_E once the Wi-Fi stack leaves too little free heap. SD-font
+  // caches filled by the screen we came from (the Library's CJK titles) can hold tens of KB; drop
+  // them only when short, since a CJK catalog would otherwise reload its glyphs on every page.
+  if (ESP.getFreeHeap() < FETCH_FREE_HEAP_FLOOR) {
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
+  LOG_INF("OPDS", "Fetching (%u free, %u max block): %s", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), url.c_str());
   OpdsParser parser;
   {
     OpdsParserStream stream{parser};
@@ -451,9 +542,86 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   fetchFeed(currentPath);
 }
 
+void OpdsBookBrowserActivity::leaveBrowser() {
+  // In the Cover Grid theme the browser is entered from the Library's OPDS tab, so it returns there.
+  if (inLibraryTab()) {
+    goToLibraryTab(LibraryTabs::Opds);
+    return;
+  }
+  onGoHome();
+}
+
+bool OpdsBookBrowserActivity::inLibraryTab() { return HomeTabBar::enabled(); }
+
+void OpdsBookBrowserActivity::goToLibraryTab(const int tab) {
+  exitTarget = LIBRARY_TAB_BASE + tab;
+  LibraryTabs::activate(tab);
+}
+
+void OpdsBookBrowserActivity::goToHomeTab(const int tab) {
+  exitTarget = tab;
+  if (tab == static_cast<int>(HomeTab::Library)) {
+    goToLibraryTab(LibraryTabs::Books);
+    return;
+  }
+  HomeTabBar::activate(static_cast<HomeTab>(tab), HomeTab::Library);
+}
+
+bool OpdsBookBrowserActivity::handleTabInput() {
+  if (!inLibraryTab()) return false;
+
+  // Taps on the Library band are FreeInkUI targets (UiTabBand). BROWSING routes every touch
+  // further down; the other states route here, so the band also works over an error or a load.
+  if (state != BrowserState::BROWSING && routeTouch(mappedInput)) return true;
+  if (TabRing::handleInput(*this, mappedInput, renderer) != TabRing::Result::None) return true;
+
+  using Button = MappedInputManager::Button;
+  if (ringFocus() == TabRing::Focus::Content) {
+    // Nothing to move through (an error, an empty feed): Down/Up go straight round the ring.
+    if (!ringHasContent() && (state == BrowserState::BROWSING || state == BrowserState::ERROR)) {
+      if (mappedInput.wasPressed(Button::NavNext)) {
+        TabRing::leaveContent(*this, 1);
+        return true;
+      }
+      if (mappedInput.wasPressed(Button::NavPrevious)) {
+        TabRing::leaveContent(*this, -1);
+        return true;
+      }
+    }
+    return false;
+  }
+  // Cursor on a band: Down/Up move on round the ring, Back still leaves, and nothing else
+  // reaches the catalog.
+  if (mappedInput.wasPressed(Button::NavNext)) {
+    TabRing::step(*this, 1);
+  } else if (mappedInput.wasPressed(Button::NavPrevious)) {
+    TabRing::step(*this, -1);
+  } else if (mappedInput.wasReleased(Button::Back)) {
+    tabFocus = -1;
+    bandFocused = false;
+    return false;
+  }
+  return true;
+}
+
+TabRing::Focus OpdsBookBrowserActivity::ringFocus() const {
+  if (tabFocus >= 0) return TabRing::Focus::BottomBar;
+  return bandFocused ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
+}
+
+void OpdsBookBrowserActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(HomeTab::Library) : -1;
+  bandFocused = focus == TabRing::Focus::TopTabs;
+  if (focus == TabRing::Focus::Content && !entries.empty()) {
+    selectorIndex = atEnd ? static_cast<int>(entries.size()) - 1 : 0;
+    listNav.selected = selectorIndex;
+    listNav.follow(static_cast<int>(entries.size()));
+  }
+}
+
 void OpdsBookBrowserActivity::navigateBack() {
   if (navigationHistory.empty()) {
-    onGoHome();
+    leaveBrowser();
   } else {
     currentPath = navigationHistory.back();
     navigationHistory.pop_back();
@@ -559,6 +727,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 
   if (result == HttpDownloader::OK) {
     clearBookCache(filename);
+    library::markLibraryIndexDirty();
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
     requestUpdate();

@@ -884,7 +884,11 @@ WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std:
   // fit, drawing text under a heap this starved would abort() inside the renderer anyway --
   // show nothing (header/word still render) rather than crash. -fno-exceptions makes an
   // unguarded reserve() an abort, not an error.
-  if (ESP.getMaxAllocHeap() < LINE_BUF_CAP + 4 * 1024) {
+  //
+  // The headroom is sized against the request, not a flat 4KB: this asks for 512 bytes, and
+  // demanding 4608 contiguous for it left the panel empty at maxAlloc=2548 -- five times what the
+  // buffer needs -- for words the dictionary had found and returned in full.
+  if (ESP.getMaxAllocHeap() < LINE_BUF_CAP * 2) {
     // What starves this is the definition's OWN glyph prewarm: it fills a ~16KB hot group
     // immediately before the draw, and the draw then cannot get the 4.6KB it needs (device:
     // maxAlloc 3700 against 4608, with three hot groups allocated in the preceding 90ms). Those
@@ -892,7 +896,7 @@ WrapResult drawWrapped(const GfxRenderer& renderer, const int fontId, const std:
     // an empty panel for a word the dictionary successfully found -- the reader loses the entry.
     // Reclaim first, and give up only if the line buffer still will not fit.
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
-    if (ESP.getMaxAllocHeap() < LINE_BUF_CAP + 4 * 1024) {
+    if (ESP.getMaxAllocHeap() < LINE_BUF_CAP * 2) {
       LOG_ERR("DEFTXT", "Skipping definition render, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
       return {};
     }

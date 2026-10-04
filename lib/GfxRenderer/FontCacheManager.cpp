@@ -3,6 +3,7 @@
 #include <FontDecompressor.h>
 #include <Logging.h>
 #include <SdCardFont.h>
+#include <TtfEpdFont.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -33,16 +34,50 @@ char* appendUtf8Codepoint(char* output, const uint32_t codepoint) {
 }  // namespace
 
 FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap,
-                                   const std::map<int, SdCardFont*>& sdCardFonts)
-    : fontMap_(fontMap), sdCardFonts_(sdCardFonts) {}
+                                   const std::map<int, SdCardFont*>& sdCardFonts,
+                                   const std::map<int, TtfEpdFont*>& ttfFonts)
+    : fontMap_(fontMap), sdCardFonts_(sdCardFonts), ttfFonts_(ttfFonts) {}
 
 void FontCacheManager::setFontDecompressor(FontDecompressor* d) { fontDecompressor_ = d; }
+
+// The companion fallback font is held apart from sdCardFonts_ (it is not a reader font id), so every
+// release has to reach it separately -- it is what the cover grid loads for CJK titles, and left
+// resident it splits the heap the reader's chapter build needs.
+SdCardFont* FontCacheManager::unregisteredFallback() const {
+  if (!fallbackSdFont_) return nullptr;
+  for (const auto& [id, font] : sdCardFonts_) {
+    if (font == fallbackSdFont_) return nullptr;
+  }
+  return fallbackSdFont_;
+}
 
 void FontCacheManager::clearCache() {
   if (fontDecompressor_) fontDecompressor_->clearCache();
   for (auto& [id, font] : sdCardFonts_) {
     font->clearCache();
   }
+  if (auto* fallback = unregisteredFallback()) fallback->clearCache();
+#if CROSSPOINT_VECTOR_FONTS
+  for (auto& [id, font] : ttfFonts_) {
+    if (font) font->clearCache();
+  }
+#endif
+}
+
+void FontCacheManager::releaseRenderMemory() {
+  if (fontDecompressor_) {
+    fontDecompressor_->clearCache();
+    fontDecompressor_->freeGlyphSlab();
+  }
+  for (auto& [id, font] : sdCardFonts_) {
+    font->releaseRenderCaches();
+  }
+  if (auto* fallback = unregisteredFallback()) fallback->releaseRenderCaches();
+#if CROSSPOINT_VECTOR_FONTS
+  for (auto& [id, font] : ttfFonts_) {
+    if (font) font->clearCache();
+  }
+#endif
 }
 
 void FontCacheManager::releaseAllFontMemory() {
@@ -54,6 +89,14 @@ void FontCacheManager::releaseAllFontMemory() {
   for (auto& [id, font] : sdCardFonts_) {
     font->clearPersistentCache();
   }
+  if (auto* fallback = unregisteredFallback()) fallback->clearPersistentCache();
+#if CROSSPOINT_VECTOR_FONTS
+  // TTF faces too: byte arenas, glyph tables and the lazy bold/italic FreeType faces all
+  // rebuild on demand, so the emergency path surrenders them like the .cpfont caches.
+  for (auto& [id, font] : ttfFonts_) {
+    if (font) font->releaseResidentCaches();
+  }
+#endif
   if (fontDecompressor_) fontDecompressor_->freeGlyphSlab();
 }
 
@@ -78,6 +121,23 @@ void appendUtf8(std::string& out, const uint32_t cp) {
 }  // namespace
 
 void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask, bool accumulate) {
+  // TTF (vector) font prewarm path. This is the single dispatch every draw path
+  // funnels through (reader endScanAndPrewarm, the settings preview, UI text),
+  // so building here covers them all. accumulate=false means "this is the whole
+  // glyph set for this render" → replace; accumulate=true → add incrementally.
+  // styleMask is ignored: a TTF face has no synthesized bold/italic here.
+#if CROSSPOINT_VECTOR_FONTS
+  auto tit = ttfFonts_.find(fontId);
+  if (tit != ttfFonts_.end() && tit->second) {
+    if (accumulate) {
+      tit->second->addCoverage(utf8Text);
+    } else {
+      tit->second->build(utf8Text);
+    }
+    return;
+  }
+#endif
+
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {

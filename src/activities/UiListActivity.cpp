@@ -18,9 +18,12 @@ UiListActivity::UiListActivity(const char* name, GfxRenderer& renderer, MappedIn
 
 void UiListActivity::onEnter() {
   Activity::onEnter();
+  frameValid_ = false;
+  bandStepRequest_ = 0;
   activeNav().reset();
   resetUi();
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
+  app.on(ACTION_TAB, &UiListActivity::tabActionTrampoline, this);
   app.setScreen(&UiListActivity::screenTrampoline, this);
   requestUpdate();
 }
@@ -33,6 +36,17 @@ void UiListActivity::rowActionTrampoline(const fui::ActionEvent& event, void* us
   auto* self = static_cast<UiListActivity*>(user);
   if (event.value < 0 || event.value >= self->listCount()) return;
   self->onRowAction(event);
+}
+
+void UiListActivity::tabActionTrampoline(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<UiListActivity*>(user);
+  if (event.value < 0 || event.value >= self->ringTopTabCount()) return;
+  self->onTabAction(event.value);
+}
+
+void UiListActivity::onTabAction(const int index) {
+  app.clearTapFlash();
+  if (index != ringActiveTopTab()) ringSelectTopTab(index);
 }
 
 void UiListActivity::onRowAction(const fui::ActionEvent& event) {
@@ -106,6 +120,7 @@ void UiListActivity::loop() {
   }
 
   if (handleCustomInput()) return;
+  if (handleTabBarInput()) return;
   if (handleButtons()) return;
   if (routeListTouch()) return;
 
@@ -124,44 +139,123 @@ void UiListActivity::loop() {
   navigateButtons();
 }
 
+TabRing::Focus UiListActivity::ringFocus() const {
+  if (tabFocus >= 0) return TabRing::Focus::BottomBar;
+  return topBandFocused ? TabRing::Focus::TopTabs : TabRing::Focus::Content;
+}
+
+void UiListActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) {
+  tabFocus = focus == TabRing::Focus::BottomBar ? static_cast<int>(tabBarTab()) : -1;
+  topBandFocused = focus == TabRing::Focus::TopTabs;
+  if (focus == TabRing::Focus::Content) {
+    const int count = listCount();
+    moveSelectionTo(atEnd && count > 0 ? count - 1 : 0);
+  }
+}
+
 void UiListActivity::navigateButtons() {
   const int count = listCount();
   auto& n = activeNav();
-  buttonNavigator.onNextRelease(
-      [this, count] { moveSelectionTo(ButtonNavigator::nextIndex(selectionCursor(), count)); });
-  buttonNavigator.onPreviousRelease(
-      [this, count] { moveSelectionTo(ButtonNavigator::previousIndex(selectionCursor(), count)); });
+  buttonNavigator.onNextPress([this, count] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, 1);
+    if (count <= 0 || selectionCursor() >= count - 1) return TabRing::leaveContent(*this, 1);
+    moveSelectionTo(selectionCursor() + 1);
+  });
+  buttonNavigator.onPreviousPress([this, count] {
+    if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, -1);
+    if (selectionCursor() <= 0) return TabRing::leaveContent(*this, -1);
+    moveSelectionTo(selectionCursor() - 1);
+  });
   // Page by the rows the last build actually drew (pageRows), not the
   // fixed-height visibleRows estimate: with wrapped labels the estimate
   // overshoots and rows between pages would never be shown. The measurement
   // can be one build old while a refresh is in flight; the next layout's
   // feedback corrects the viewport.
+  // A hold pages through the rows. If the press that started it carried the cursor onto a band,
+  // there is nothing to page, and moving the hidden row selection would only surprise later.
   buttonNavigator.onNextContinuous([this, count, &n] {
+    if (ringFocus() != TabRing::Focus::Content) return;
     moveSelectionTo(ButtonNavigator::nextPageIndex(selectionCursor(), count, n.inputPageRows()));
   });
   buttonNavigator.onPreviousContinuous([this, count, &n] {
+    if (ringFocus() != TabRing::Focus::Content) return;
     moveSelectionTo(ButtonNavigator::previousPageIndex(selectionCursor(), count, n.inputPageRows()));
   });
 }
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const int selectionOffset) {
   props.partialTrailingRow = true;
-  screen.syncListViewport(activeNav(), props, listCount(), selectionOffset);
+  auto& n = activeNav();
+  const int prevTop = n.top;
+  const bool trusted = n.trusts(listCount());
+  const int drawn = n.drawnRows;
+
+  screen.syncListViewport(n, props, listCount(), selectionOffset);
+
+  // When the selection is already visible in the current viewport (based on
+  // the measured drawnRows rather than the unweighted visibleRows estimate),
+  // keep selection-follow anchored instead of jumping to top. Explicit swipe
+  // scrolling clears followPending and must retain its new viewport.
+  if (n.followPending && trusted && drawn > 0) {
+    const int sel = props.selectedIndex;
+    if (sel >= prevTop && sel < prevTop + drawn) {
+      n.top = prevTop;
+      props.topIndex = static_cast<uint16_t>(prevTop);
+    }
+  }
+  // One cursor on screen: while a band holds it, no row is drawn selected. The row selection
+  // itself is kept, so coming back up out of the bar lands where the ring says.
+  if (ringFocus() != TabRing::Focus::Content) props.selectedIndex = -1;
 }
 
 void UiListActivity::drawChrome() {
   const char* title = headerTitle();
   if (!title) return;
   const auto& metrics = UITheme::getInstance().getMetrics();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, title);
+  // The rule under the title only earns its place once there is content behind it: at the top of
+  // a list it is a second horizontal line stacked on the band below it.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, title, nullptr,
+                 HomeTabBar::showsBackButton(hasTabBar()), activeNav().top > 0 ? 1 : 0);
+}
+
+bool UiListActivity::hasTabBar() const { return tabBarTab() != HomeTab::Count && HomeTabBar::enabled(); }
+
+bool UiListActivity::handleTabBarInput() {
+  const uint32_t before = activityManager.updateRequestCount();
+  const auto result = TabRing::handleInput(*this, mappedInput, renderer);
+  if (result == TabRing::Result::None) return false;
+  onRingInputConsumed();
+  if (result == TabRing::Result::BarStepped) {
+    // A step between bar slots: when it is the only thing pending, render() repaints just the band.
+    const uint32_t lastStep = bandStepRequest_;
+    const bool onlyBandPending = before == lastRenderRequest_ || (lastStep != 0 && before == lastStep);
+    bandStepRequest_ = onlyBandPending ? activityManager.updateRequestCount() : 0;
+  } else {
+    app.clearTapFlash();
+  }
+  return true;
 }
 
 void UiListActivity::drawFooter() {
+  if (hasTabBar()) {
+    HomeTabBar::draw(renderer, tabBarTab(), tabFocus);
+    return;
+  }
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void UiListActivity::render(RenderLock&&) {
+  const uint32_t seen = activityManager.updateRequestCount();
+  const uint32_t step = bandStepRequest_.exchange(0);
+  lastRenderRequest_ = seen;
+  if (step != 0 && step == seen && frameValid_ && renderedTabFocus_ >= 0 && tabFocus >= 0 && hasTabBar()) {
+    HomeTabBar::draw(renderer, tabBarTab(), tabFocus);
+    renderedTabFocus_ = tabFocus;
+    renderer.displayBuffer();
+    return;
+  }
+
   renderer.clearScreen();
   drawChrome();
   renderUi();
@@ -176,5 +270,7 @@ void UiListActivity::render(RenderLock&&) {
     renderUi();
   }
   drawFooter();
+  frameValid_ = true;
+  renderedTabFocus_ = tabFocus;
   renderer.displayBuffer();
 }

@@ -100,6 +100,16 @@ bool growForOnePush(std::vector<T>& vec, const uint32_t (&margins)[N], const siz
   }
   return false;
 }
+
+// Can one more element be appended to a per-run scratch vector without an allocation the heap
+// cannot serve? Small elements and a small step, so the margin is PER_RUN_RESERVE_MARGIN rather
+// than SMALL_ALLOC_MARGIN, which is sized for the multi-KB stream and page buffers.
+template <typename T>
+bool canGrowScratch(std::vector<T>& vec) {
+  static constexpr uint32_t MARGINS[] = {PER_RUN_RESERVE_MARGIN};
+  constexpr size_t LINEAR_GROWTH_STEP = 32;
+  return growForOnePush(vec, MARGINS, LINEAR_GROWTH_STEP);
+}
 }  // namespace
 
 namespace {
@@ -471,7 +481,7 @@ void VerticalParsedText::reserveStreamFor(size_t utf8Bytes) {
   if (needed <= stream_.capacity()) return;
   const size_t requestBytes = needed * sizeof(PendingChar);
   if (!heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
-    LOG_ERR("VPT", "Reserve of %u bytes doesn't fit (free=%u); growing incrementally",
+    LOG_DBG("VPT", "Reserve of %u bytes doesn't fit (free=%u); growing incrementally",
             static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
     return;
   }
@@ -484,10 +494,33 @@ void VerticalParsedText::preallocateStream() {
   if (stream_.capacity() >= STREAM_STABLE_ENTRIES) return;
   if (heapCanAfford(bytes, MIN_FREE_HEAP_FOR_RESERVE)) {
     stream_.reserve(STREAM_STABLE_ENTRIES);
+    // A batch's ruby, pinned with the stream for the same reason (a few bytes per ruby'd char).
+    rubyPool_.reserve(1024);
   } else {
-    LOG_ERR("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
+    LOG_DBG("VPT", "preallocateStream: %u bytes don't fit (maxAlloc=%u); falling back to incremental growth",
             static_cast<unsigned>(bytes), ESP.getMaxAllocHeap());
   }
+}
+
+void VerticalParsedText::setRuby(PendingChar& pc, const char* s, const size_t len) {
+  pc.rubyLen = 0;
+  if (len == 0 || len > UINT16_MAX) return;
+  const size_t need = rubyPool_.size() + len;
+  if (need > rubyPool_.capacity() && !heapCanAfford(std::max(need, rubyPool_.capacity() * 2), SMALL_ALLOC_MARGIN)) {
+    everDroppedForHeap_ = true;
+    return;
+  }
+  pc.rubyOffset = static_cast<uint32_t>(rubyPool_.size());
+  pc.rubyLen = static_cast<uint16_t>(len);
+  rubyPool_.append(s, len);
+}
+
+void VerticalParsedText::pushCarried(PendingChar& c) {
+  if (c.rubyLen) {
+    const uint32_t from = c.rubyOffset;
+    setRuby(c, carriedRubyPool_.data() + from, c.rubyLen);
+  }
+  stream_.push_back(c);
 }
 
 bool VerticalParsedText::canPushStreamChar() {
@@ -495,7 +528,7 @@ bool VerticalParsedText::canPushStreamChar() {
   static constexpr uint32_t MARGINS[] = {SMALL_ALLOC_MARGIN};
   constexpr size_t LINEAR_GROWTH_STEP = 64;  // PendingChar elements; keeps stalled retries cheap
   if (growForOnePush(stream_, MARGINS, LINEAR_GROWTH_STEP)) return true;
-  LOG_ERR("VPT", "Low heap (%u bytes) while building vertical text stream; truncating batch", ESP.getMaxAllocHeap());
+  LOG_DBG("VPT", "Low heap (%u bytes) while building vertical text stream; truncating batch", ESP.getMaxAllocHeap());
   oom_ = true;
   everDroppedForHeap_ = true;
   return false;
@@ -511,9 +544,10 @@ void VerticalParsedText::addParagraph(const std::string& utf8Text) {
     for (auto& carried : carriedRunTail_) {
       if (!canPushStreamChar()) break;
       carried.paragraphIndex = carryIndex;
-      stream_.push_back(std::move(carried));
+      pushCarried(carried);
     }
     carriedRunTail_.clear();
+    carriedRubyPool_.clear();
   }
 
   const uint32_t paragraphIndex = static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size());
@@ -578,9 +612,10 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
     for (auto& carried : carriedRunTail_) {
       if (!canPushStreamChar()) break;
       carried.paragraphIndex = carryIndex;
-      stream_.push_back(std::move(carried));
+      pushCarried(carried);
     }
     carriedRunTail_.clear();
+    carriedRubyPool_.clear();
   }
 
   // A continuation chunk belongs to the paragraph already in flight: no break is recorded and
@@ -634,6 +669,17 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         size_t consumed = 1;
         const uint32_t cp = decodeUtf8At(run.baseText, i, &consumed);
         const uint32_t thisCpIndex = cpIndex++;
+        // The reserves above are skipped when they don't fit, which leaves these vectors growing by
+        // doubling through the THROWING operator new -- it aborts the device under -fno-exceptions
+        // rather than returning null (observed: a furigana-dense chapter entered this function at
+        // maxAlloc=2036 and aborted here). Truncate the run instead, the same degradation
+        // canPushStreamChar already accepts for the stream itself.
+        if (!canGrowScratch(baseOffsets) || !canGrowScratch(baseCps) || !canGrowScratch(baseCpIndex) ||
+            !canGrowScratch(breakBeforeBaseIndex)) {
+          LOG_DBG("VPT", "Low heap (%u bytes) decoding run; truncating", ESP.getMaxAllocHeap());
+          everDroppedForHeap_ = true;
+          break;
+        }
         if ((cp == 0x3099 || cp == 0x309A) && !baseCps.empty()) {
           const uint32_t composed = composeKanaDiacritic(baseCps.back(), cp);
           if (composed != 0) {
@@ -709,8 +755,15 @@ void VerticalParsedText::addAnnotatedParagraph(const std::vector<RubyRun>& runs,
         std::string slice;
         for (size_t r = rubyStart; r < rubyEnd; r++) utf8AppendCodepoint(rubyCps[r], slice);
         if (!canPushStreamChar()) return;
-        stream_.push_back(PendingChar{baseCps[k], paragraphIndex, static_cast<uint32_t>(baseOffsets[k]), run.style,
-                                      run.emphasis, std::move(slice), run.visibleTextOffset + baseCpIndex[k]});
+        PendingChar pc{baseCps[k],
+                       paragraphIndex,
+                       static_cast<uint32_t>(baseOffsets[k]),
+                       run.style,
+                       run.emphasis,
+                       0,
+                       run.visibleTextOffset + baseCpIndex[k]};
+        setRuby(pc, slice.data(), slice.size());
+        stream_.push_back(pc);
       }
     }
 
@@ -781,7 +834,7 @@ struct VerticalParsedText::LayoutCursor {
         return;
       }
     }
-    LOG_ERR("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
+    LOG_DBG("VPT", "Skipping page glyphs reserve (%u bytes doesn't fit, free=%u); growing incrementally",
             static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
   }
 
@@ -815,7 +868,7 @@ struct VerticalParsedText::LayoutCursor {
       glyphs.push_back(g);
       return true;
     }
-    LOG_ERR("VPT", "Low heap (%u bytes); dropping glyph", ESP.getMaxAllocHeap());
+    LOG_DBG("VPT", "Low heap (%u bytes); dropping glyph", ESP.getMaxAllocHeap());
     o.everDroppedForHeap_ = true;
     return false;
   }
@@ -914,7 +967,9 @@ struct VerticalParsedText::LayoutCursor {
       o.renderer_.ensureSdCardFontReady(o.fontId_, nextChar, static_cast<uint8_t>(1u << (next.style & 3)));
       GlyphInk ink;
       if (measureGlyphInk(o.renderer_, o.fontId_, next.codepoint, next.style, &ink) && ink.height > 0) {
-        offset = geom.baselineInCellPx - ink.top;
+        // 。、 are drawn at the head of their cell (rightAlignedInk, HalfEmHead), not on the baseline.
+        offset = Kinsoku::verticalShiftType(next.codepoint) == 1 ? std::max(0, (geom.cellPx / 2 - ink.height) / 2)
+                                                                 : geom.baselineInCellPx - ink.top;
       }
     }
     // A miss is worth caching too -- it is the expensive case, and a glyph the font lacks
@@ -1090,7 +1145,7 @@ struct VerticalParsedText::LayoutCursor {
     g.byteOffset = pc.byteOffset;
     g.style = pc.style;
     g.emphasis = pc.emphasis;
-    pushGlyph(page, g, pc.rubyText);
+    pushGlyph(page, g, o.rubyOf(pc));
     return true;
   }
 
@@ -1201,7 +1256,7 @@ struct VerticalParsedText::LayoutCursor {
       const bool atLineHead = page.glyphs.empty() || page.glyphs.back().column != col;
       const bool flushOpeningBracket = atLineHead && Kinsoku::verticalShiftType(pc.codepoint) == 3;
       if (flushOpeningBracket) g.lineHeadFlush = 1;
-      pushGlyph(page, g, pc.rubyText);
+      pushGlyph(page, g, o.rubyOf(pc));
       if (flushOpeningBracket) {
         // The half em it no longer needs comes off the rest of the column.
         columnYShift += geom.cellPx / 2;
@@ -1224,7 +1279,7 @@ struct VerticalParsedText::LayoutCursor {
         g.y = static_cast<uint16_t>(rowIdx * geom.cellPx);
       }
       g.renderKind = VerticalGlyph::Upright;
-      pushGlyph(page, g, pc.rubyText);
+      pushGlyph(page, g, o.rubyOf(pc));
       return;
     }
 
@@ -1255,7 +1310,7 @@ struct VerticalParsedText::LayoutCursor {
     g.x = static_cast<uint16_t>(gx);
     g.y = static_cast<uint16_t>(gy);
     g.renderKind = VerticalGlyph::Upright;
-    pushGlyph(page, g, pc.rubyText);
+    pushGlyph(page, g, o.rubyOf(pc));
   }
 
   // Place a two-character tate-chu-yoko run (a 2-digit number, or a !?/!! pair) upright in one
@@ -1365,9 +1420,10 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   if (!carriedRunTail_.empty() && stream_.empty()) {
     for (auto& carried : carriedRunTail_) {
       if (!canPushStreamChar()) break;
-      stream_.push_back(std::move(carried));
+      pushCarried(carried);
     }
     carriedRunTail_.clear();
+    carriedRubyPool_.clear();
   }
 
   // Nothing new to lay out AND nothing left over from a previous non-final call to finalize.
@@ -1476,7 +1532,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     if (heapCanAfford(requestBytes, MIN_FREE_HEAP_FOR_RESERVE)) {
       pages.reserve(worstCasePages);
     } else {
-      LOG_ERR("VPT", "Skipping pages reserve (%u bytes doesn't fit, free=%u); growing incrementally",
+      LOG_DBG("VPT", "Skipping pages reserve (%u bytes doesn't fit, free=%u); growing incrementally",
               static_cast<unsigned>(requestBytes), ESP.getMaxAllocHeap());
     }
   }
@@ -1696,6 +1752,42 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     // class benefit too. Only a run of exactly two marks qualifies, and only
     // when no ASCII letter/digit adjoins it -- "Hello!?" stays part of the
     // rotated latin run. Other run lengths keep their existing handling.
+    if (isImageMarker(pc.codepoint)) {
+      const uint32_t id = pc.codepoint - IMAGE_MARKER_BASE;
+      if (id < inlineImages_.size()) {
+        const uint16_t span = std::max<uint16_t>(1, std::min<uint16_t>(inlineImages_[id].columns, columnsPerPage));
+        if (row != 0) {
+          column++;
+          row = 0;
+          cur.finalizePageIfNeeded();
+        }
+        // All of its columns on one page: start the next page when the rest of this one is short.
+        if (column != 0 && column + span > columnsPerPage) {
+          column = columnsPerPage;
+          cur.finalizePageIfNeeded();
+        }
+        VerticalGlyph g;
+        g.codepoint = pc.codepoint;
+        g.column = static_cast<uint16_t>(column + span - 1);  // leftmost column it covers
+        g.row = 0;
+        // Flush with the right edge of its first (rightmost) column, extending left over the rest.
+        const int rightEdge = geom.columnLeftX(static_cast<uint16_t>(column)) + geom.cellPx;
+        g.x = static_cast<uint16_t>(std::max(0, rightEdge - inlineImages_[id].widthPx));
+        g.y = 0;
+        g.paragraphIndex = pc.paragraphIndex;
+        g.byteOffset = pc.byteOffset;
+        g.style = pc.style;
+        g.renderKind = VerticalGlyph::Upright;
+        cur.pushGlyph(page, g, inlineImages_[id].info);
+        column += span;
+        row = 0;
+        cur.finalizePageIfNeeded();
+        row = cur.columnStartRow(true);
+      }
+      idx++;
+      continue;
+    }
+
     if (isBangOrQuestion(pc.codepoint)) {
       const bool prevAlnum = idx > 0 && isAsciiAlnum(stream_[idx - 1].codepoint);
       size_t markEnd = idx;
@@ -1815,6 +1907,14 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
       if (!isFinalFlush && runEnd == stream_.size()) {
         carriedRunTail_.assign(std::make_move_iterator(stream_.begin() + static_cast<long>(idx)),
                                std::make_move_iterator(stream_.end()));
+        // rubyPool_ is cleared with the batch: keep the carried characters' ruby apart.
+        carriedRubyPool_.clear();
+        for (auto& c : carriedRunTail_) {
+          if (!c.rubyLen) continue;
+          const uint32_t at = static_cast<uint32_t>(carriedRubyPool_.size());
+          carriedRubyPool_.append(rubyPool_, c.rubyOffset, c.rubyLen);
+          c.rubyOffset = at;
+        }
         idx = runEnd;
         continue;
       }
@@ -2086,7 +2186,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
           }
           g.paragraphIndex = pc.paragraphIndex;
           g.byteOffset = pc.byteOffset;
-          cur.pushGlyph(prevPage, g, pc.rubyText);
+          cur.pushGlyph(prevPage, g, rubyOf(pc));
           idx++;
           continue;
         }
@@ -2245,3 +2345,19 @@ bool VerticalParsedText::finalizePendingPage(VerticalPage& out) {
   anyPageEverProduced_ = true;  // set, NOT reset -- see the header doc comment
   return true;
 }
+
+void VerticalParsedText::addInlineImage(std::string info, const uint16_t columns, const int widthPx) {
+  if (inlineImages_.size() >= 0x10000 || !canPushStreamChar()) return;
+  const uint32_t id = static_cast<uint32_t>(inlineImages_.size());
+  inlineImages_.push_back({std::move(info), columns, static_cast<int16_t>(widthPx)});
+  // Its own paragraph: text before it ends its column, text after starts a fresh one.
+  const uint32_t paragraphIndex = static_cast<uint32_t>(paragraphBreaksBeforeIndex_.size());
+  paragraphBreaksBeforeIndex_.push_back(stream_.size());
+  PendingChar pc{};
+  pc.codepoint = IMAGE_MARKER_BASE + id;
+  pc.paragraphIndex = paragraphIndex;
+  stream_.push_back(std::move(pc));
+  paragraphBreaksBeforeIndex_.push_back(stream_.size());
+}
+
+int VerticalParsedText::columnAdvancePx() const { return verticalCellPx(renderer_, fontId_) + columnGapPx_; }

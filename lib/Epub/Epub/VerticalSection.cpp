@@ -17,6 +17,7 @@
 #include <string>
 
 #include "Epub/RubyGlossary.h"
+#include "Epub/blocks/ImageBlock.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "GfxRenderer.h"
 #include "VisibleTextUtils.h"
@@ -80,7 +81,21 @@ namespace {
 // elementDepth against an already-decremented one, so a style was never popped and ran to the end
 // of the chapter -- most visibly a <span class="em-sesame"> putting sesame marks on every
 // character after it. Cached pages carry the marks and the pagination they caused.
-constexpr uint8_t VSECTION_FILE_VERSION = 135;
+// v137: an image is rotated only when it fills the page (ImageBlock::fillsPage).
+// v138: an anchor table (element id -> visible text offset) follows the page index, so TOC and
+// footnote jumps land on their page instead of the chapter's first.
+// v139: a rotated run followed by 。、 reserves room for the mark at the head of its cell (117。
+// had the 。 drawn over the 7).
+// v140: TOC targets are recorded whatever their tag and past the cap, and an anchor that sits
+// directly before an image carries ANCHOR_BEFORE_IMAGE, so it resolves to the image's page.
+constexpr uint8_t VSECTION_FILE_VERSION = 140;
+// Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
+// image page adds no visible characters, so it shares its start offset with the text page after
+// it; this is what tells the two apart.
+constexpr uint32_t ANCHOR_BEFORE_IMAGE = 0x80000000u;
+// Same policy as the horizontal parser (ChapterHtmlSlimParser): <span> ids are converter noise
+// (one per Kobo text fragment, thousands per chapter), never link targets; the rest is capped.
+constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 // 4KB, not 1KB: chapter builds are SD-latency-bound -- the inflate staging write, the
 // staging read-back, and the expat feed each touch the card once per chunk, so quadrupling
 // the chunk quarters the transaction count for ~12KB of transient buffers.
@@ -131,7 +146,7 @@ struct TextExtractor {
 
   // Styled-block detection: (selector -> vertical layout params) distilled from the CSS cache.
   // boxOpenedAtDepth is the elementDepth of the styled element while inside one, else -1.
-  const std::vector<std::pair<std::string, CssParser::VerticalBlockStyle>>* blockStyles = nullptr;
+  const std::vector<CssParser::VerticalBlockRule>* blockStyles = nullptr;
   int boxOpenedAtDepth = -1;
 
   // Ruby parsing state
@@ -151,6 +166,15 @@ struct TextExtractor {
   //
   // <rt> text IS counted (rp is the excluded one), matching isNonVisibleElement().
   uint32_t visibleTextOffset = 0;
+  // Element ids met in the chapter, with the visible text offset where each element starts.
+  std::vector<std::pair<std::string, uint32_t>>* anchors = nullptr;
+  // The chapter's TOC targets: recorded whatever their tag and past the cap, as the horizontal
+  // parser does -- they are the anchors a jump actually asks for.
+  const std::vector<std::string>* tocAnchors = nullptr;
+  // Anchors (the last N of `anchors`) recorded since the last character that was laid out. If an
+  // image comes next, they point at it. Counted rather than compared by offset: dropped inter-tag
+  // whitespace advances visibleTextOffset without putting anything on the page.
+  size_t anchorsPending = 0;
   bool insideBody = false;
   // Offset of the first character of currentText / rubyBase, captured when each goes from
   // empty to non-empty. That is what a RubyRun is stamped with.
@@ -264,16 +288,54 @@ struct TextExtractor {
   static constexpr size_t RUBY_RESERVE_HINT = 32;   // bytes
   static constexpr size_t RUNS_RESERVE_HINT = 16;   // elements
 
-  void flushCurrentText() {
-    if (!currentText.empty()) {
-      // COPY, don't move: moving handed currentText's grown buffer to a transient RubyRun and
-      // restarted this one at TEXT_RESERVE_HINT, so every paragraph re-grew it by doubling
-      // (alloc-copy-free per step, hundreds of times per chapter) -- the main planter of the
-      // persistent fragments that shredded maxAlloc on long single-file books. The copy is a
-      // transient that coalesces back; currentText's capacity now lives for the whole build.
-      currentRuns.push_back(RubyRun{currentText, {}, currentStyle(), hasEmphasis(), currentTextOffset});
-      currentText.clear();
+  // Headroom to leave behind a growth here, so serving it never takes the last usable block.
+  static constexpr uint32_t GROWTH_MARGIN = 2048;
+  static bool canAllocate(const size_t bytes) { return ESP.getMaxAllocHeap() >= bytes + GROWTH_MARGIN; }
+
+  // Appends through the same throwing operator new: a string's growth step (it doubles) is refused
+  // up front when the heap cannot hold it. A tight heap drops the text and flags the build as
+  // degraded, so the chapter is retried on a later open instead of the device aborting.
+  bool droppedTextForHeap = false;
+  bool appendChecked(std::string& dst, const char* s, const size_t len) {
+    const size_t need = dst.size() + len;
+    if (need > dst.capacity() && !canAllocate(std::max(need, dst.capacity() * 2))) {
+      droppedTextForHeap = true;
+      return false;
     }
+    dst.append(s, len);
+    return true;
+  }
+
+  // std::vector growth and std::string copies in this layer go through the THROWING operator new,
+  // which aborts the device under -fno-exceptions rather than returning null (observed: a
+  // furigana-dense chapter reached maxAlloc=2548 and aborted inside flushCurrentText's string
+  // copy). Draining to the sink first frees every run's text and needs no allocation, so a tight
+  // heap costs one extra paragraph continuation instead of a reboot.
+  void pushRun(RubyRun&& run) {
+    if (currentRuns.size() == currentRuns.capacity() && !canAllocate(currentRuns.capacity() * 2 * sizeof(RubyRun)) &&
+        sink && !currentRuns.empty()) {
+      sink->onParagraph(currentRuns, midParagraph);
+      currentRuns.clear();
+      midParagraph = true;
+    }
+    currentRuns.push_back(std::move(run));
+  }
+
+  void flushCurrentText() {
+    if (currentText.empty()) return;
+    // COPY, don't move, while the heap allows it: moving handed currentText's grown buffer to a
+    // transient RubyRun and restarted this one at TEXT_RESERVE_HINT, so every paragraph re-grew it
+    // by doubling (alloc-copy-free per step, hundreds of times per chapter) -- the main planter of
+    // the persistent fragments that shredded maxAlloc on long single-file books. The copy is a
+    // transient that coalesces back; currentText's capacity then lives for the whole build. Under
+    // pressure a move is the only safe option: it allocates nothing at all.
+    if (canAllocate(currentText.size() + 1)) {
+      pushRun(RubyRun{currentText, {}, currentStyle(), hasEmphasis(), currentTextOffset});
+      currentText.clear();
+      return;
+    }
+    pushRun(RubyRun{std::move(currentText), {}, currentStyle(), hasEmphasis(), currentTextOffset});
+    currentText.clear();
   }
 
   // Streaming accumulation bounds: hand runs to the sink every ~SOFT_FLUSH_BYTES (or
@@ -360,22 +422,29 @@ struct TextExtractor {
   // match). Returns true if anything matched.
   bool resolveBlockStyle(const char* name, const char** atts, VerticalBlockParams& params) const {
     if (!blockStyles || blockStyles->empty()) return false;
-    bool matched = false;
-    for (const auto& [sel, vs] : *blockStyles) {
-      if (sel.empty()) continue;
-      bool hit = false;
-      if (sel[0] == '.') {
-        hit = hasClass(atts, sel.c_str() + 1);
-      } else {
-        const size_t dot = sel.find('.');
-        if (dot == std::string::npos) {
-          hit = strcasecmp(sel.c_str(), name) == 0;
-        } else {
-          hit =
-              strlen(name) == dot && strncasecmp(sel.c_str(), name, dot) == 0 && hasClass(atts, sel.c_str() + dot + 1);
-        }
+    // The element's tag and class tokens, hashed once; rules match on the same hashes.
+    const uint32_t tagHash = CssParser::blockSelectorHash(name, strlen(name));
+    constexpr int MAX_CLASSES = 16;
+    uint32_t classHashes[MAX_CLASSES];
+    int classCount = 0;
+    for (int i = 0; atts && atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "class") != 0 || !atts[i + 1]) continue;
+      const char* val = atts[i + 1];
+      while (*val && classCount < MAX_CLASSES) {
+        while (*val == ' ') val++;
+        const char* start = val;
+        while (*val && *val != ' ') val++;
+        if (val > start) classHashes[classCount++] = CssParser::blockSelectorHash(start, val - start);
       }
-      if (!hit) continue;
+    }
+    bool matched = false;
+    for (const auto& rule : *blockStyles) {
+      if (rule.tagHash != 0 && rule.tagHash != tagHash) continue;
+      if (rule.classHash != 0 &&
+          std::find(classHashes, classHashes + classCount, rule.classHash) == classHashes + classCount) {
+        continue;
+      }
+      const auto& vs = rule.style;
       matched = true;
       if (vs.startEm > 0) params.startEm = vs.startEm;
       if (vs.beforeEm > 0) params.beforeEm = vs.beforeEm;
@@ -418,6 +487,21 @@ struct TextExtractor {
       return;
     }
     if (strcasecmp(name, "body") == 0) self->insideBody = true;
+    if (self->anchors) {
+      const bool general = strcasecmp(name, "span") != 0 && self->anchors->size() < MAX_ANCHORS_PER_CHAPTER;
+      const bool hasToc = self->tocAnchors && !self->tocAnchors->empty();
+      if (general || hasToc) {
+        for (int i = 0; atts[i]; i += 2) {
+          if (strcmp(atts[i], "id") != 0 || atts[i + 1][0] == '\0') continue;
+          if (general ||
+              std::find(self->tocAnchors->begin(), self->tocAnchors->end(), atts[i + 1]) != self->tocAnchors->end()) {
+            self->anchors->emplace_back(atts[i + 1], self->visibleTextOffset);
+            self->anchorsPending++;
+          }
+          break;
+        }
+      }
+    }
     if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
       if (self->resolveBlockStyle(name, atts, params) &&
@@ -497,6 +581,7 @@ struct TextExtractor {
         // near-empty full image page per gaiji; keep the text flowing with
         // replacement text instead (alt / filename codepoint / geta mark).
         self->beginTextRunIfEmpty();
+        self->anchorsPending = 0;
         self->currentText += gaijiReplacementText(src ? src : "", alt ? alt : "");
       } else if (src && src[0] != '\0') {
         // Complete the paragraph built so far, then emit the image in document order. (For the
@@ -504,11 +589,21 @@ struct TextExtractor {
         // accumulate-then-interleave code placed the image before the whole paragraph; identical
         // for the usual block-level images.)
         self->flushParagraph();
+        if (self->anchors) {
+          // Every anchor recorded since the last laid-out character points at this image. Stamp it
+          // with the image's own offset, which is what its page starts at.
+          const size_t total = self->anchors->size();
+          for (size_t i = total - std::min(self->anchorsPending, total); i < total; i++) {
+            (*self->anchors)[i].second = self->visibleTextOffset | ANCHOR_BEFORE_IMAGE;
+          }
+        }
+        self->anchorsPending = 0;
         if (self->sink) self->sink->onImage(std::string(src), self->visibleTextOffset);
       }
     }
     if (strcasecmp(name, "br") == 0 || strcasecmp(name, "br/") == 0) {
       if (!self->inRuby) {
+        self->anchorsPending = 0;  // a blank line is laid out
         self->beginTextRunIfEmpty();
         self->currentText.push_back('\n');
       }
@@ -548,8 +643,8 @@ struct TextExtractor {
           self->rubyElemRuby += self->rubyAnnotation;
           self->rubyElemRunCount++;
         }
-        self->currentRuns.push_back(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation),
-                                            self->currentStyle(), self->hasEmphasis(), self->rubyBaseOffset});
+        self->pushRun(RubyRun{std::move(self->rubyBase), std::move(self->rubyAnnotation), self->currentStyle(),
+                              self->hasEmphasis(), self->rubyBaseOffset});
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
       }
@@ -560,7 +655,7 @@ struct TextExtractor {
     if (strcasecmp(name, "ruby") == 0) {
       // Flush any remaining base text that had no <rt> (malformed markup).
       if (!self->rubyBase.empty()) {
-        self->currentRuns.push_back(
+        self->pushRun(
             RubyRun{std::move(self->rubyBase), {}, self->currentStyle(), self->hasEmphasis(), self->rubyBaseOffset});
         self->rubyBase.clear();
         self->rubyBase.reserve(RUBY_RESERVE_HINT);
@@ -621,10 +716,12 @@ struct TextExtractor {
     if (self->skipDepth >= 0) return;
     if (self->inRp) return;
     if (self->inRt) {
-      self->rubyAnnotation.append(s, static_cast<size_t>(len));
+      self->anchorsPending = 0;
+      self->appendChecked(self->rubyAnnotation, s, static_cast<size_t>(len));
     } else if (self->inRuby) {
+      self->anchorsPending = 0;
       if (self->rubyBase.empty()) self->rubyBaseOffset = offsetOfThisRun;
-      self->rubyBase.append(s, static_cast<size_t>(len));
+      self->appendChecked(self->rubyBase, s, static_cast<size_t>(len));
     } else {
       // Forced split for markup-less mega-paragraphs; see MAX_PARAGRAPH_BYTES. (Not applied
       // inside <ruby> -- ruby runs are a handful of characters by nature.)
@@ -650,7 +747,12 @@ struct TextExtractor {
         // codepoints later. All of it is ASCII, so bytes and codepoints agree here.
         self->currentTextOffset = offsetOfThisRun + static_cast<uint32_t>(firstInk);
       }
-      self->currentText.append(s, static_cast<size_t>(len));
+      self->anchorsPending = 0;  // text that is laid out
+      if (!self->appendChecked(self->currentText, s, static_cast<size_t>(len))) {
+        // Hand the buffered text on (frees it, allocates nothing) and try once more before dropping.
+        self->emitRuns(false);
+        self->appendChecked(self->currentText, s, static_cast<size_t>(len));
+      }
       // Streaming cadence: hand the buffered text onward as a seamless continuation well
       // before it grows large (see SOFT_FLUSH_BYTES).
       if (self->currentText.size() >= SOFT_FLUSH_BYTES) self->emitRuns(false);
@@ -685,6 +787,7 @@ struct TextExtractor {
       }
 
       if (self->inRp) return;
+      self->anchorsPending = 0;
       if (self->inRt) {
         self->rubyAnnotation.append(resolved);
       } else if (self->inRuby) {
@@ -1127,10 +1230,28 @@ struct LayoutPageSink final : ParagraphSink {
     // pending: the pending page (whose content PRECEDES the image) landed in the cache AFTER
     // the image page, and post-image text silently merged onto it -- confirmed on a real device
     // as dialogue continuing mid-column across a scene-break graphic instead of starting fresh.
+    VerticalPage imagePage = makeImagePage(src);
+    if (failed) return;  // cancelled during the image extraction
+    // An image narrow enough to sit among the columns flows with the text: it takes the columns
+    // its width needs, upright, beside the text around it. A wider one gets its own page.
+    if (imagePage.imageWidth > 0 && imagePage.imageHeight > 0) {
+      int w = imagePage.imageWidth;
+      int h = imagePage.imageHeight;
+      ImageBlock::fitWithin(viewportWidth, viewportHeight, w, h);
+      // Vertical text runs in columns, so "fits in the flow" is about width: a narrow image (a
+      // heading strip, a small figure) sits in a few columns even at full height.
+      if (w * 10 < viewportWidth * 4) {
+        const int advance = std::max(1, layout.columnAdvancePx());
+        const auto columns = static_cast<uint16_t>((w + advance - 1) / advance);
+        char dims[24];
+        snprintf(dims, sizeof(dims), "\t%d\t%d", w, h);
+        layout.addInlineImage(imagePage.imagePath + "\t" + imagePage.imageSrcPath + dims, columns, w);
+        return;
+      }
+    }
     flushText();
     VerticalPage pendingTail;
     if (layout.finalizePendingPage(pendingTail)) writeOne(pendingTail);
-    VerticalPage imagePage = makeImagePage(src);
     imagePage.visibleTextOffset = visibleTextOffset;
     writeOne(imagePage);
   }
@@ -1153,6 +1274,7 @@ struct LayoutPageSink final : ParagraphSink {
     failed = true;
     return true;
   }
+  static bool cancelDuringExtraction(void* self) { return static_cast<LayoutPageSink*>(self)->checkCancelled(); }
 
   void flushText(bool isFinalFlush = false) {
     if (checkCancelled()) return;
@@ -1396,12 +1518,20 @@ struct LayoutPageSink final : ParagraphSink {
           const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
                                      ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
           const size_t chunkSize = useFastChunks ? kFastChunk : 4096;
-          extracted = epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
+          // A speculative build checks its cancel hook during the copy too: a full-page illustration
+          // is often over 1 MB, seconds of SD writes that would otherwise hold a page turn.
+          extracted = cancelFn ? epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize, false,
+                                                               &cancelDuringExtraction, this)
+                               : epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
         }
         cachedFile.flush();
         cachedFile.close();
         if (!extracted) {
-          LOG_ERR("VSC", "Failed to extract image %s; removing partial cache file", resolvedSrc.c_str());
+          if (cancelled) {
+            LOG_DBG("VSC", "Image extraction cancelled; removing partial cache file %s", cachedPath.c_str());
+          } else {
+            LOG_ERR("VSC", "Failed to extract image %s; removing partial cache file", resolvedSrc.c_str());
+          }
           Storage.remove(cachedPath.c_str());
         }
       }
@@ -1418,7 +1548,9 @@ struct LayoutPageSink final : ParagraphSink {
       if (decoder->getDimensions(cachedPath, dims) && dims.width > 0 && dims.height > 0) {
         const bool viewportIsPortrait = (viewportHeight > viewportWidth);
         const bool imageIsLandscape = (dims.width > dims.height);
-        rotated = (viewportIsPortrait == imageIsLandscape);
+        // Rotated only when it fills the page; a smaller image stays upright at its own size.
+        rotated = (viewportIsPortrait == imageIsLandscape) &&
+                  ImageBlock::fillsPage(dims.width, dims.height, viewportWidth, viewportHeight);
         displayW = dims.width;
         displayH = dims.height;
       }
@@ -1462,8 +1594,7 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
 // bytes still available in the largest free block, a miss of barely 4KB.
 constexpr size_t STYLED_BLOCK_TABLE_ENTRIES = 256;  // must match collectVerticalStyles()'s maxOut default
 constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS =
-    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)) +
-    12 * 1024;
+    static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(CssParser::VerticalBlockRule)) + 12 * 1024;
 
 bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
                                            const uint16_t viewportHeight, const uint8_t lineSpacing,
@@ -1480,8 +1611,10 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // this chapter's build even started. free=getFreeHeap() (total) was already logged; maxAlloc=
   // getMaxAllocHeap() (largest contiguous block) is new.
   const uint32_t buildStartMs = millis();
+  // Kept for the stale-retry decision at the end: how much headroom THIS build had to work with.
+  lastBuildStartMaxAlloc_ = ESP.getMaxAllocHeap();
   LOG_INF("VSC", "streamParseAndLayout start spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(),
-          ESP.getMaxAllocHeap());
+          lastBuildStartMaxAlloc_);
   // Vertical placement measures each glyph's real ink extents (burasage, half-em pairing, the 3.8
   // squeeze deficits), and those measurements go through the font decompressor. A heap too tight for a
   // glyph group makes them fall back to nominal metrics silently, and the result is written to the
@@ -1579,7 +1712,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // rule map (heap!). The table lives for the whole build (~10-15KB for a full EBPAJ book),
   // so under heap pressure it is bounded down or skipped entirely: correct TEXT layout beats
   // styling fidelity on a tight (X3) heap, and the release below reclaims font memory first.
-  std::vector<std::pair<std::string, CssParser::VerticalBlockStyle>> blockStyles;
+  std::vector<CssParser::VerticalBlockRule> blockStyles;
   if (epub->getCssParser()) {
     if (ESP.getMaxAllocHeap() < 64 * 1024) {
       if (auto* fcm = renderer.getFontCacheManager()) {
@@ -1595,7 +1728,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
     const uint32_t maxAllocNow = ESP.getMaxAllocHeap();
     LOG_DBG("VSC", "styled-block table needs %u bytes contiguous (%u entries x %u); maxAlloc=%u",
             static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS), static_cast<unsigned>(STYLED_BLOCK_TABLE_ENTRIES),
-            static_cast<unsigned>(sizeof(std::pair<std::string, CssParser::VerticalBlockStyle>)), maxAllocNow);
+            static_cast<unsigned>(sizeof(CssParser::VerticalBlockRule)), maxAllocNow);
     if (maxAllocNow < MIN_MAX_ALLOC_FOR_STYLED_BLOCKS) {
       LOG_ERR("VSC", "Heap too tight for styled blocks (maxAlloc=%u, need %u); building unstyled", maxAllocNow,
               static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));
@@ -1612,6 +1745,19 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   extractor.sink = &sink;
   extractor.rubyHarvest = &sink.rubyHarvest;
   extractor.blockStyles = &blockStyles;
+  buildAnchors_.clear();
+  extractor.anchors = &buildAnchors_;
+  // This spine's TOC targets (a handful: one per TOC entry pointing into the file).
+  std::vector<std::string> tocAnchors;
+  if (const int firstToc = epub->getTocIndexForSpineIndex(spineIndex); firstToc >= 0) {
+    tocAnchors.reserve(8);
+    for (int i = firstToc; i < epub->getTocItemsCount(); i++) {
+      auto entry = epub->getTocItem(i);
+      if (entry.spineIndex != spineIndex) break;
+      if (!entry.anchor.empty()) tocAnchors.push_back(std::move(entry.anchor));
+    }
+  }
+  extractor.tocAnchors = &tocAnchors;
   // Pin every buffer that lives across the whole build to its worst case NOW, while the heap
   // is freshest -- mid-build growth (doubling alloc-copy-free) plants persistent blocks in
   // the region the per-flush transients need, shredding the largest contiguous block over the
@@ -1630,6 +1776,15 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
       ESP.getMaxAllocHeap() >= kInitialOffsetBytes + kOffsetHeadroom &&
       ESP.getFreeHeap() >= kInitialOffsetBytes + kOffsetHeadroom) {
     pageOffsets_.reserve(kInitialOffsetCapacity);
+  }
+  // The anchor list lives across the build too. A typical chapter has a few dozen ids; reserving
+  // for those keeps its doubling growth out of the build's first flushes, and the full 1024-entry
+  // cap (~28KB of pairs) is too much to pin up front.
+  constexpr size_t kInitialAnchorCapacity = 64;
+  constexpr size_t kInitialAnchorBytes = kInitialAnchorCapacity * sizeof(std::pair<std::string, uint32_t>);
+  if (ESP.getMaxAllocHeap() >= kInitialAnchorBytes + kOffsetHeadroom &&
+      ESP.getFreeHeap() >= kInitialAnchorBytes + kOffsetHeadroom) {
+    buildAnchors_.reserve(kInitialAnchorCapacity);
   }
 
   XML_Parser parser = XML_ParserCreate(nullptr);
@@ -1700,7 +1855,9 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   // Emergency page splits count as heap degradation too: no content is lost, but pages end at
   // arbitrary fill levels, so the same usable-now/rebuild-next-open path applies (and the same
   // rebuildingFromStale_ guard breaks the loop when a retry degrades again).
-  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap();
+  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap() ||
+                             extractor.droppedTextForHeap;
+  if (extractor.droppedTextForHeap) LOG_ERR("VSC", "Text dropped on low heap; chapter is incomplete");
   if (auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) {
       const uint32_t starved = fd->getStarvedGlyphCount() - starvedGlyphsAtStart;
@@ -1760,6 +1917,14 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   for (const uint32_t off : pageOffsets_) {
     serialization::writePod(file, off);
   }
+  anchorTableOffset_ = static_cast<uint32_t>(file.position());
+  const auto anchorCount = static_cast<uint16_t>(buildAnchors_.size());
+  serialization::writePod(file, anchorCount);
+  for (const auto& [id, offset] : buildAnchors_) {
+    serialization::writeString(file, id);
+    serialization::writePod(file, offset);
+  }
+  std::vector<std::pair<std::string, uint32_t>>().swap(buildAnchors_);
 
   pageCount = static_cast<uint16_t>(pageOffsets_.size());
   if (!file.seek(HEADER_PAGECOUNT_OFFSET)) {
@@ -1784,34 +1949,61 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   // open hits the version-mismatch path in loadSectionFile and rebuilds the chapter -- with,
   // ideally, a healthier heap -- instead of the truncation being persisted as a valid cache.
   if (lastBuildDroppedForHeap_ && !rebuildingFromStale_) {
-    LOG_ERR("VSC", "Build dropped glyphs on low heap; marking section stale for rebuild on next open");
+    LOG_ERR("VSC", "Build dropped glyphs on low heap (maxAlloc=%u at start); marking section stale for rebuild",
+            lastBuildStartMaxAlloc_);
     if (file.seek(0)) {
       const uint8_t staleVersion = 0;
       serialization::writePod(file, staleVersion);
     }
   } else if (lastBuildDroppedForHeap_) {
-    // The retry ALSO dropped: conditions are deterministic, another rebuild would too. Keep the
-    // best-effort cache valid -- a few missing glyphs on the densest pages beat re-indexing the
-    // whole chapter on every single open.
+    // Kept best-effort, but not for good: record the headroom this attempt had, measured where
+    // the next open measures it (the cache load that precedes a build), and retry once an open
+    // finds clearly more. A retry that degrades again records its own, higher, figure.
+    HalFile deg;
+    const uint32_t headroom = lastLoadMaxAlloc_ ? lastLoadMaxAlloc_ : lastBuildStartMaxAlloc_;
+    if (Storage.openFileForWrite("VSC", degradedPath(), deg)) serialization::writePod(deg, headroom);
+    // The retry ALSO dropped. Comparing the retry's headroom against the failed build's was tried
+    // and reverted: on a repeatable path (open book, switch to vertical) the heap is IDENTICAL each
+    // time, so "did the heap improve" answered no forever and every open rebuilt the chapter --
+    // 9.8s before the reader would even respond. Keep the best-effort cache: a few missing glyphs
+    // on the densest pages beat re-indexing on every single open.
     LOG_ERR("VSC", "Stale-rebuild dropped glyphs again; keeping best-effort cache to break the rebuild loop");
   }
   file.close();
+  if (!lastBuildDroppedForHeap_ && Storage.exists(degradedPath().c_str())) Storage.remove(degradedPath().c_str());
 
   // Last page's source position. The horizontal build logs the same number ("SCT: chapter
   // spans"), and the two counters are supposed to agree character for character -- if these
   // diverge by more than roughly one page's worth of text, the two parsers have drifted and
   // cross-mode position restore is silently landing on the wrong page.
   const auto lastStart = getVisibleTextOffsetForPage(static_cast<int>(pageCount) - 1);
-  LOG_DBG("VSC", "Cached %u vertical pages (streamed); chapter spans %u chars", pageCount, lastStart.value_or(0));
+  LOG_DBG("VSC", "Cached %u vertical pages (streamed); chapter spans %u chars, %u anchors", pageCount,
+          lastStart.value_or(0), anchorCount);
   return true;
 }
 
 bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                      const uint8_t lineSpacing, const bool furiganaEnabled) {
+                                      const uint8_t lineSpacing, const bool furiganaEnabled, const bool retryDegraded) {
   // A missing cache file is the NORMAL case here, not an error: the book-progress counter probes
   // every spine's section on each page turn, and unbuilt chapters simply don't have one yet.
   // openFileForRead would print "File does not exist" per spine per probe -- pure log spam.
+  lastLoadMaxAlloc_ = ESP.getMaxAllocHeap();
   if (!Storage.exists(filePath.c_str())) return false;
+  // A best-effort cache from a low-heap build: rebuild once this open has clearly more room than
+  // the build that produced it had at the same point.
+  if (retryDegraded && Storage.exists(degradedPath().c_str())) {
+    uint32_t degradedAt = 0;
+    {
+      HalFile deg;
+      if (Storage.openFileForRead("VSC", degradedPath(), deg)) serialization::readPod(deg, degradedAt);
+    }
+    if (lastLoadMaxAlloc_ >= degradedAt + DEGRADED_RETRY_MARGIN) {
+      LOG_INF("VSC", "Best-effort cache built at maxAlloc=%u; now %u, rebuilding", degradedAt, lastLoadMaxAlloc_);
+      rebuildingFromStale_ = true;  // a retry that degrades again is kept, with its own figure
+      clearCache();
+      return false;
+    }
+  }
   HalFile file;
   if (!Storage.openFileForRead("VSC", filePath, file)) {
     return false;
@@ -1878,12 +2070,14 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
 
   file.close();
   pageCount = cachedPageCount;
+  anchorTableOffset_ = indexOffset + static_cast<uint32_t>(cachedPageCount) * sizeof(uint32_t);
   LOG_DBG("VSC", "Opened cache: %u vertical pages (index only, %u bytes resident)", pageCount,
           static_cast<unsigned>(pageOffsets_.size() * sizeof(uint32_t)));
   return true;
 }
 
 bool VerticalSection::clearCache() const {
+  if (Storage.exists(degradedPath().c_str())) Storage.remove(degradedPath().c_str());
   if (!Storage.exists(filePath.c_str())) {
     return true;
   }
@@ -1910,7 +2104,57 @@ std::optional<uint32_t> VerticalSection::getVisibleTextOffsetForPage(const int p
   return offset;
 }
 
-std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t offset) const {
+std::optional<int> VerticalSection::getPageForAnchor(const std::string& anchor) const {
+  if (anchor.empty() || anchorTableOffset_ == 0 || pageCount == 0) return std::nullopt;
+  HalFile file;
+  if (!Storage.openFileForRead("VSC", filePath, file) || !file.seek(anchorTableOffset_)) return std::nullopt;
+  // A short read is a truncated cache: fail rather than resolve the anchor to offset 0.
+  uint16_t count = 0;
+  if (!serialization::readPod(file, count)) return std::nullopt;
+  std::string id;
+  for (uint16_t i = 0; i < count; i++) {
+    uint32_t offset = 0;
+    if (!serialization::readString(file, id) || !serialization::readPod(file, offset)) return std::nullopt;
+    if (id == anchor) {
+      return getPageForVisibleTextOffset(offset & ~ANCHOR_BEFORE_IMAGE, (offset & ANCHOR_BEFORE_IMAGE) != 0);
+    }
+  }
+  return std::nullopt;
+}
+
+void VerticalSection::findAnchorPages(const std::vector<std::string>& anchors, std::vector<int>& pages) const {
+  pages.assign(anchors.size(), -1);
+  if (anchors.empty() || anchorTableOffset_ == 0 || pageCount == 0) return;
+  // Offsets first, pages after: getPageForVisibleTextOffset() reads the file too.
+  std::vector<uint32_t> offsets(anchors.size(), UINT32_MAX);
+  {
+    HalFile file;
+    if (!Storage.openFileForRead("VSC", filePath, file) || !file.seek(anchorTableOffset_)) return;
+    uint16_t count = 0;
+    if (!serialization::readPod(file, count)) return;
+    std::string id;
+    size_t unresolved = anchors.size();
+    for (uint16_t n = 0; n < count && unresolved > 0; n++) {
+      uint32_t offset = 0;
+      if (!serialization::readString(file, id) || !serialization::readPod(file, offset)) break;
+      for (size_t i = 0; i < anchors.size(); i++) {
+        if (offsets[i] == UINT32_MAX && id == anchors[i]) {
+          offsets[i] = offset;
+          unresolved--;
+        }
+      }
+    }
+  }
+  for (size_t i = 0; i < anchors.size(); i++) {
+    if (offsets[i] == UINT32_MAX) continue;
+    const auto page =
+        getPageForVisibleTextOffset(offsets[i] & ~ANCHOR_BEFORE_IMAGE, (offsets[i] & ANCHOR_BEFORE_IMAGE) != 0);
+    if (page) pages[i] = *page;
+  }
+}
+
+std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t offset,
+                                                                const bool preferFirstAtOffset) const {
   if (pageOffsets_.empty()) return std::nullopt;
   HalFile file;
   if (!Storage.openFileForRead("VSC", filePath, file)) return std::nullopt;
@@ -1936,6 +2180,16 @@ std::optional<int> VerticalSection::getPageForVisibleTextOffset(const uint32_t o
       lo = mid + 1;
     } else {
       hi = mid - 1;
+    }
+  }
+  if (preferFirstAtOffset) {
+    // Pages sharing this exact start: image pages, then the text page after them. Take the first.
+    while (best > 0) {
+      const auto here = pageStart(best);
+      const auto before = pageStart(best - 1);
+      if (!here || !before) return std::nullopt;
+      if (*here != offset || *before != offset) break;
+      best--;
     }
   }
   return best;

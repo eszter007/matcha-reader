@@ -360,3 +360,69 @@ TEST_F(StatsTest, MonthViewMarksOnlyDaysRead) {
   EXPECT_EQ(b.getDaysReadInMonth(Y, M), 2);
   EXPECT_EQ(b.getDaysReadInMonth(Y, 7), 0);
 }
+
+TEST_F(StatsTest, DictionaryCountersPersistAlongsideHistory) {
+  const char* path = "/Japanese/count.epub";
+  ASSERT_TRUE(BookStats::recordOpen(path));
+  ASSERT_TRUE(BookStats::addCounts(path, 12, 0));
+  ASSERT_TRUE(BookStats::addCounts(path, 0, 1));
+  ASSERT_TRUE(BookStats::addCounts(path, 3, 2));
+  EXPECT_FALSE(BookStats::addCounts(path, 0, 0)) << "nothing to add, nothing written";
+
+  BookStats b;
+  ASSERT_TRUE(b.load(path));
+  EXPECT_EQ(b.getLookups(), 15u);
+  EXPECT_EQ(b.getSentencesSaved(), 3u);
+  EXPECT_EQ(b.getSessions(), 1u) << "adding counts must not disturb the sessions";
+
+  b.recordMinutes(Y, M, 8, 5);
+  ASSERT_TRUE(b.save());
+  ASSERT_TRUE(b.load(path));
+  EXPECT_EQ(b.getLookups(), 15u) << "a minutes save keeps the counters";
+  EXPECT_EQ(b.getTotalMinutes(), 5u);
+}
+
+// v2 files predate the counters: they keep their history and start the counters at zero.
+TEST_F(StatsTest, Version2FileLoadsWithZeroCounters) {
+  const char* path = "/Japanese/v2.epub";
+  const std::string file = testRoot() + BookStats::filePathFor(path);
+  const std::string stored(path);
+  std::string bytes = "BKST";
+  bytes += static_cast<char>(2);
+  const uint32_t sessions = 4, dayCount = 1;
+  const auto pathLen = static_cast<uint16_t>(stored.size());
+  bytes.append(reinterpret_cast<const char*>(&sessions), 4);
+  bytes.append(reinterpret_cast<const char*>(&dayCount), 4);
+  bytes.append(reinterpret_cast<const char*>(&pathLen), 2);
+  bytes += stored;
+  const uint16_t year = Y, minutes = 20;
+  bytes.append(reinterpret_cast<const char*>(&year), 2);
+  bytes += static_cast<char>(M);
+  bytes += static_cast<char>(8);
+  bytes.append(reinterpret_cast<const char*>(&minutes), 2);
+
+  BookStats::recordOpen("/Japanese/mkdir.epub");  // creates the stats folder
+  FILE* fp = fopen(file.c_str(), "wb");
+  ASSERT_NE(fp, nullptr);
+  ASSERT_EQ(fwrite(bytes.data(), 1, bytes.size(), fp), bytes.size());
+  fclose(fp);
+
+  BookStats b;
+  ASSERT_TRUE(b.load(path));
+  EXPECT_EQ(b.getSessions(), 4u);
+  EXPECT_EQ(b.getTotalMinutes(), 20u);
+  EXPECT_EQ(b.getLookups(), 0u);
+  EXPECT_EQ(b.getSentencesSaved(), 0u);
+}
+
+TEST_F(StatsTest, DaySpanCountsCalendarDaysFirstToLast) {
+  BookStats b;
+  ASSERT_TRUE(b.load("/Japanese/span.epub"));
+  EXPECT_EQ(b.getDaySpan(), 0);
+  b.recordMinutes(2026, 2, 27, 5);
+  EXPECT_EQ(b.getDaySpan(), 1) << "one reading day is a one-day read";
+  b.recordMinutes(2026, 3, 2, 5);
+  EXPECT_EQ(b.getDaySpan(), 4) << "Feb 27 to Mar 2, across a non-leap February";
+  b.recordMinutes(2027, 3, 2, 5);
+  EXPECT_EQ(b.getDaySpan(), 369);
+}

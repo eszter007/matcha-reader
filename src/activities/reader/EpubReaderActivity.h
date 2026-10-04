@@ -4,6 +4,7 @@
 #include <Epub/PageLink.h>
 #include <Epub/Section.h>
 #include <Epub/VerticalSection.h>
+#include <Epub/blocks/ImageBlock.h>
 
 #include <atomic>
 #include <memory>
@@ -237,11 +238,51 @@ class EpubReaderActivity final : public ReaderActivity {
   //      when no new button press is involved.
   std::atomic<uint32_t> imageWarmInputStamp_{0};
   uint32_t imageWarmStampSnapshot_ = 0;  // render task only: stamp value at warm start
-  std::string imageWarmFailedPath_;      // render task only: give-up-once decode-failure target
+  // The chapter whose every image cache the idle warm has already visited, so later render tails
+  // only check the pages around the reader. Render task only.
+  struct ImageWarmScope {
+    int spine = -1;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    int fontId = 0;     // font size moves CSS-em image sizes, and with them the cache dimensions
+    int pageCount = 0;  // a rebuilt layout (other settings) changes it
+    bool vertical = false;
+    bool operator==(const ImageWarmScope& o) const {
+      return spine == o.spine && width == o.width && height == o.height && fontId == o.fontId &&
+             pageCount == o.pageCount && vertical == o.vertical;
+    }
+    bool operator!=(const ImageWarmScope& o) const { return !(*this == o); }
+  };
+  ImageWarmScope imageWarmChapterDone_;
+  std::string imageWarmFailedPath_;  // render task only: give-up-once decode-failure target
+  struct DeferredRedrawKey {
+    int spine = -1;
+    int page = -1;
+    bool vertical = false;
+    bool operator==(const DeferredRedrawKey& o) const {
+      return spine == o.spine && page == o.page && vertical == o.vertical;
+    }
+  };
+  DeferredRedrawKey lastDeferredRedraw_;  // render task only
   static constexpr uint32_t NO_IMAGE_REFINE = UINT32_MAX;
-  std::atomic<uint32_t> pendingHorizontalImageRefine_{NO_IMAGE_REFINE};
-  std::atomic<uint32_t> requestedHorizontalImageRefine_{NO_IMAGE_REFINE};
+  std::atomic<uint32_t> pendingImageRefine_{NO_IMAGE_REFINE};
+  std::atomic<uint32_t> requestedImageRefine_{NO_IMAGE_REFINE};
+  // A grayscale refine is waiting for the render task: the chapter-wide image warm yields to it.
+  bool imageRefinePending() const {
+    return pendingImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE ||
+           requestedImageRefine_.load(std::memory_order_relaxed) != NO_IMAGE_REFINE;
+  }
   void warmNextPageImageCache(uint16_t viewportWidth, uint16_t viewportHeight);
+  // Everything after a page reached the panel, vertical or horizontal: sync-error notice, panel
+  // hand-off, screenshot, popups, image warm, and the toolbar redrawn over the new page.
+  void finishPageRender(uint16_t viewportWidth, uint16_t viewportHeight);
+  // Background next-chapter build: the two layouts differ only in these two steps.
+  enum class SilentBuildResult : uint8_t { Built, Cancelled, Failed };
+  int builtChapterPageCount(int spineIndex, uint16_t viewportWidth, uint16_t viewportHeight) const;  // -1: unbuilt
+  SilentBuildResult buildChapterSilently(int spineIndex, uint16_t viewportWidth, uint16_t viewportHeight);
+  // Cache-only decode of a PNG whose decoder does not fit the heap, inside a framebuffer loan.
+  ImageBlock::WarmResult warmImageWithFramebufferLoan(const ImageBlock& block);
+  bool imageWarmHeapOk() const;
   static bool imageWarmShouldCancel(const void* ctx);
   // True when the next turn has already been requested: a button is physically down, or a render
   // is queued on this task. Call from the render task only.
@@ -293,7 +334,63 @@ class EpubReaderActivity final : public ReaderActivity {
   // Draws one vertical TEXT page into the framebuffer; shared by the normal render path and
   // the early-first-render hook. Does not touch the display. glyphsAlreadyWarm skips the
   // prewarm when the page's glyphs were pre-loaded during idle (see prewarmedVPage_).
-  void renderVerticalPageBody(const VerticalPage& vpage, bool glyphsAlreadyWarm = false);
+  // imagesOnly: just the page's inline images, for their grayscale refine while the text stays B/W.
+  void renderVerticalPageBody(const VerticalPage& vpage, bool glyphsAlreadyWarm = false, bool imagesOnly = false);
+  // Gray planes of the vertical text page over its B/W base, then the gray waveform: the text when
+  // anti-aliasing is on, the inline images always. Reads the page afresh (the post-render tail's
+  // warm reuses the single-page cache). Cancelled by input; controller RAM is re-synced either way.
+  void renderVerticalGrayPlanes(bool withText, bool withImages);
+
+  // One grayscale pass over the B/W page already on the glass: both planes drawn by `draw` and shown
+  // with one gray waveform. Strip panels upload band by band from a small scratch; panels without
+  // strip uploads (UC8279: X4 Pro, X4C) take whole frames with the B/W page parked meanwhile.
+  // `cancel` is polled between bands and planes; a cancelled pass shows nothing. Either way the
+  // controller is re-synced from the B/W framebuffer for the next differential turn.
+  struct GrayPassSpec {
+    // Band uploads, or whole frames with the B/W page parked. Taken from the capabilities of the
+    // grayscale mode in use (an absolute mode can lack strips where the overlay mode has them).
+    bool strips = true;
+    int stripRows = 80;            // preferred band height; falls back to 80 when the scratch won't fit
+    uint8_t clear = 0x00;          // plane background: 0x00 overlay masks, 0xFF absolute planes
+    bool absolute = false;         // an absolute base already started: abort it if no plane is drawn
+    bool resyncIfSkipped = false;  // re-sync the controller even when no plane could be drawn
+  };
+  enum class GrayPassResult : uint8_t { Shown, Cancelled, Skipped };
+
+  // A page with images, horizontal or vertical: B/W at once, grays once the reader rests on the
+  // page (readerLoop's idle refine), or -- with an absolute waveform -- right behind its base.
+  struct ImagePageSpec {
+    int page = 0;
+    bool refineOnly = false;  // this render IS the idle refine: the B/W page is already on the glass
+    bool absolute = false;    // UC8279 absolute quality waveform: base and planes in one go
+    // Start the B/W refresh and return; the caller waits for it (waitRefreshComplete) after the work
+    // it overlaps. Only valid where an async refresh can be the later gray pass's base (asyncBase).
+    bool asyncBw = false;
+    GrayPassSpec gray;
+  };
+  // drawPage puts the B/W page (status bar included) into the framebuffer; drawPlanes draws one
+  // gray plane. Both run on the refine too: the B/W page is the baseline the re-sync reads from.
+  // wantsGray says whether anything on the page has gray tones (see imageWantsGrayPass). It is asked
+  // after drawPage: a first view extracts its images while drawing, and only then can they be probed.
+  template <typename DrawPage, typename DrawPlanes, typename WantsGray>
+  void presentImagePage(const ImagePageSpec& spec, DrawPage&& drawPage, DrawPlanes&& drawPlanes, WantsGray&& wantsGray);
+  uint32_t imageRefineKey(int page) const {
+    return (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(page);
+  }
+  // Whether this render is the idle refine readerLoop requested for `page` (consumes the request).
+  bool takeRequestedImageRefine(int page) {
+    return requestedImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) == imageRefineKey(page);
+  }
+  // A 1-bit BMP has no gray tones for the planes to lift, and the BMP decoder writes no pixel
+  // cache, so a gray pass would re-decode it from SD for no visible change.
+  // Async B/W for a vertical page with images: the panel must accept an async refresh as the base of
+  // the gray pass that follows, unless none follows.
+  bool canShowImagePageAsync() const {
+    return renderer.supportsAsyncRefresh() && renderer.grayscaleCapabilities().asyncBase;
+  }
+  static bool imageWantsGrayPass(const std::string& imagePath);
+  template <typename Draw, typename Cancel>
+  GrayPassResult runGrayPass(const GrayPassSpec& spec, Draw&& draw, Cancel&& cancel);
   // Page index whose glyphs currently sit in the SD-font mini cache from the idle next-page
   // warm; -1 = cache cold/unknown. Kindle-class turns: the NEXT page's glyphs are loaded
   // while the reader looks at the current one, so a forward turn renders warm (~200ms)
@@ -372,14 +469,41 @@ class EpubReaderActivity final : public ReaderActivity {
   // any single allocation can actually have it. 16 KB also keeps the advance-table
   // batch path (16 KB scratch) viable during builds.
   static constexpr size_t BACKGROUND_BUILD_MIN_MAX_ALLOC = 16 * 1024;
+  // Requires the render lock; heap admission is checked separately by the build tick.
+  bool backgroundBuildWanted() const;
   // Gate for a background build tick: true when the heap can take parse allocations.
   // Updates buildHeapPaused as a side effect.
   bool buildTickHeapGate();
+  // Frees what reloads on demand (font caches, so the prewarmed-page claims go too). The one way
+  // the reader trades caches for heap, in either layout.
+  void releaseReloadableMemory();
+  // Frees only what a render claims (font page slots, the glyph slab), even with plenty of total
+  // free heap, keeping the SD fonts' advance tables: a build in progress measures with them, and rebuilding their 16KB
+  // under build pressure fails (buildAdvanceTable OOM, dropped glyphs). For heap handed back to a live build.
+  void releaseRenderFontMemory();
+  // Every build of `section` starts here: Section::startBuild() empties the font caches, so the
+  // prewarmed-page claims go with them.
+  bool startSectionBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);
+  // Suspends `section`'s build and starts a new pause generation. When the commit failed and no
+  // pages are left, drops the section so render() lays the chapter out again rather than showing
+  // it empty. Returns whether `section` is still there.
+  bool suspendSectionBuild();
   // True while the background build is gated on the heap floors. Lets skipLoopDelay()
   // return the loop to normal delay/power-saving during the pause: isBuilding() stays
   // true the whole time, and without this the loop would spin at full CPU speed doing
   // no build work — indefinitely, if the build context itself keeps the heap low.
   bool buildHeapPaused = false;
+  // When the current pause began (0: not paused), and whether it has already released the caches.
+  uint32_t buildHeapPausedSinceMs_ = 0;
+  bool buildHeapPauseReleased_ = false;
+  // Which build the pause belongs to. Bumped for every Section created and every build suspended
+  // (both under the render lock) -- the only two ways a new build can begin -- so a build never
+  // inherits an earlier one's timer or release.
+  uint32_t buildGeneration_ = 0;
+  uint32_t buildHeapPauseGeneration_ = 0;
+  // A pause this long, caches already released, means the build's own context holds the heap below
+  // the floors and no tick will ever run: suspend it (the partial stays) instead of holding it.
+  static constexpr uint32_t BACKGROUND_BUILD_STALL_MS = 3000;
   // Heap floor for optional render-adjacent work (idle prewarm). Page
   // deserialization (TextBlock word vectors/strings) and glyph caching allocate
   // through throwing paths that abort() on OOM; skip deferrable work below it.
@@ -443,6 +567,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void handleOverlayInput();
   void renderOverlay();
   std::string currentChapterTitle() const;
+  int currentTocIndex() const;
   // Text panel rows (font, size, line spacing, alignment, focus reading, and for
   // Japanese content this fork's vertical text / furigana toggles).
   int textRowCount() const;
@@ -461,6 +586,8 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string moreRowName(int row) const;
   std::string moreRowValue(int row) const;
   void activateMoreRow(int row);
+  void openFootnoteSelect(bool reopenMenuOnCancel);
+  void openDictionaryWordSelect();
   unsigned long confirmLongPressThreshold() const;
   // pageOnScreen: the framebuffer still holds the reader page, so the vertical word-lookup panel
   // can draw its cursor straight onto it instead of paying for a page repaint first. False when
@@ -482,6 +609,14 @@ class EpubReaderActivity final : public ReaderActivity {
   void navigateToHref(const std::string& href, bool savePosition = false);
   void openFootnotesPanel();
   void openWordLookupPanel(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
+  // Footnotes and translation float over the page. Picked from the reader menu, the framebuffer
+  // still holds the menu, so they wait for render() to put the page back first: render() sets
+  // panelPageReady once the page is drawn, and the next readerLoop() opens the panel.
+  enum class PanelAfterRender : uint8_t { None, Footnotes, Translation };
+  std::atomic<PanelAfterRender> panelAfterRender{PanelAfterRender::None};
+  std::atomic<bool> panelPageReady{false};
+  void openPanelAfterRender(PanelAfterRender panel);
+  void openTranslationPanel();
   // Repaints the current vertical page (body + status bar) for the word-lookup panel's select
   // view, which owns no page of its own -- a VerticalPage copy would cost ~15KB, the same
   // headroom the scan and the dictionary caches need. Called from the panel's render(), i.e.

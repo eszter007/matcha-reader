@@ -214,3 +214,25 @@ TEST(SdCardFontTest, BitmapAllocationRetriesAfterEvictingRebuildableAdvances) {
     EXPECT_EQ(32 << 4, font.getAdvance(cp, 0));
   }
 }
+
+TEST(SdCardFontTest, ReleaseRenderCachesFreesRetainedGlyphsButKeepsTheFontUsable) {
+  makeFont();
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  const auto text = page(FIRST, 100);
+  ASSERT_EQ(0, font.prewarm(text.c_str(), 1, false, false, false));
+  font.buildAdvanceTable(text.c_str(), 1);
+  ASSERT_TRUE(font.hasAdvanceTable());
+  // Plenty of free heap: a plain clear keeps the page resident.
+  font.clearCache();
+  ASSERT_EQ(101U, residentCount(font));
+
+  font.releaseRenderCaches();
+  EXPECT_EQ(0U, residentCount(font));
+  EXPECT_TRUE(font.hasAdvanceTable());  // a build in progress measures with it
+
+  sdFontTestReads = 0;
+  ASSERT_EQ(0, font.prewarm(text.c_str(), 1, false, false, false));
+  EXPECT_GT(sdFontTestReads, 0U);
+  expectPageBitmaps(font, FIRST, 100);
+}

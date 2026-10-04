@@ -7,19 +7,28 @@
 
 class FontDecompressor;
 class SdCardFont;
+class TtfEpdFont;
 
 class FontCacheManager {
  public:
-  FontCacheManager(const std::map<int, EpdFontFamily>& fontMap, const std::map<int, SdCardFont*>& sdCardFonts);
+  FontCacheManager(const std::map<int, EpdFontFamily>& fontMap, const std::map<int, SdCardFont*>& sdCardFonts,
+                   const std::map<int, TtfEpdFont*>& ttfFonts);
 
   void setFontDecompressor(FontDecompressor* d);
 
   void clearCache();
-  // clearCache() plus the FontDecompressor's persistent glyph slab (~24KB). For memory-critical
-  // moments (chapter builds, image extraction, TLS setup) where contiguous heap matters more
-  // than warm glyphs; the slab re-fills lazily afterwards. Ordinary per-render cache hygiene
-  // should keep calling clearCache() so non-Latin UI navigation stays fast.
+  // Release every rebuildable font cache while keeping the fonts loaded:
+  //   * SD (.cpfont): mini glyph/kern arenas, kern/lig class tables, overflow
+  //     rings, advance tables (SdCardFont::releaseResidentCaches).
+  //   * TTF (vector): byte arenas, glyph tables, and the lazy bold/italic
+  //     FreeType faces (TtfEpdFont::releaseResidentCaches).
+  // Everything faults back in on demand. For heap-critical transitions (e.g.
+  // web-server + WiFi startup, image decode, dictionary, sleep).
   void releaseAllFontMemory();
+  // Release what rendering holds -- SD mini arenas (forced, see SdCardFont::releaseRenderCaches),
+  // per-scope TTF caches, the decompressor's cache and glyph slab -- but keep every measurement
+  // cache, so a section build in progress can keep laying out without rebuilding them.
+  void releaseRenderMemory();
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F, bool accumulate = true);
   // True if fontId is backed by an SD-card font (SdCardFont::prewarm(), one-open bulk-load path)
   // rather than a built-in compressed font (FontDecompressor's own group-cache prewarm, which has
@@ -31,6 +40,7 @@ class FontCacheManager {
   // codepoints the requested font can't cover, so rendering fallback glyphs doesn't hit the
   // per-glyph on-demand SD loader on every page turn.
   void setFallbackSdFont(SdCardFont* font) { fallbackSdFont_ = font; }
+  SdCardFont* getFallbackSdFont() const { return fallbackSdFont_; }
   void logStats(const char* label = "render");
   void resetStats();
 
@@ -73,8 +83,12 @@ class FontCacheManager {
 
  private:
   SdCardFont* fallbackSdFont_ = nullptr;
+  // fallbackSdFont_ when it is not also one of sdCardFonts_ (so a release does not run twice).
+  SdCardFont* unregisteredFallback() const;
   const std::map<int, EpdFontFamily>& fontMap_;
   const std::map<int, SdCardFont*>& sdCardFonts_;
+  // Read only when CROSSPOINT_VECTOR_FONTS is on (PSRAM boards).
+  [[maybe_unused]] const std::map<int, TtfEpdFont*>& ttfFonts_;
   FontDecompressor* fontDecompressor_ = nullptr;
 
   enum class ScanMode : uint8_t { None, Scanning };

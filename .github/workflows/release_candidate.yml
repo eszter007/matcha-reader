@@ -2,6 +2,11 @@ name: Compile Release Candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      rc_label:
+        description: 'Shown in the version after the base version, e.g. rc-3 -> 1.6.5-rc-3+<sha>'
+        required: false
+        default: 'rc'
 
 jobs:
   build-release-candidate:
@@ -56,6 +61,17 @@ jobs:
           key: pio6119s481-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio6119s481-${{ runner.os }}-
 
+      - name: Validate RC label
+        env:
+          RC_LABEL: ${{ inputs.rc_label || 'rc' }}
+        run: |
+          # OTA treats a build as an RC only if its version contains "-rc"
+          # (OtaUpdater::isUpdateNewer); anything else never offers the final release.
+          if ! [[ "$RC_LABEL" =~ ^rc(-[0-9A-Za-z]+)?$ ]]; then
+            echo "rc_label must be rc or rc-<n> (letters/digits), got: $RC_LABEL" >&2
+            exit 1
+          fi
+
       - name: Extract env
         run: |
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
@@ -79,6 +95,7 @@ jobs:
 
       - name: Build CrossPoint Release Candidate
         env:
+          CROSSPOINT_RC_LABEL: ${{ inputs.rc_label || 'rc' }}
           CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
         run: pio run -e ${{ matrix.pio_env }} -j1
 

@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <MemoryManager.h>
 #include <Utf8.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
@@ -482,6 +483,8 @@ static bool findFrenchInversionSplit(const char* word, const int wordLen, int& v
 
 // flush the contents of partWordBuffer to currentTextBlock
 void ChapterHtmlSlimParser::flushPartWordBuffer() {
+  // Block creation failed (OOM): drop the buffered text; parseStep() is about
+  // to fail the build via layoutOom.
   if (!currentTextBlock) {
     partWordBufferIndex = 0;
     nextWordContinues = false;
@@ -888,7 +891,18 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
-  currentTextBlock.reset(new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
+  currentTextBlock =
+      makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle);
+  if (!currentTextBlock) {
+    // Evict rebuildable caches and retry once before failing the build.
+    freeink::MemoryManager::instance().ensureFree(4 * 1024);
+    currentTextBlock =
+        makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle);
+  }
+  if (!currentTextBlock) {
+    LOG_ERR("EHP", "OOM: ParsedText");
+    layoutOom = true;  // parseStep() turns this into ParseStatus::Error
+  }
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
   updateEffectiveInlineStyle();
@@ -1061,6 +1075,13 @@ void ChapterHtmlSlimParser::closeTableCell() {
     return;
   }
 
+  // Latch before the cell leaves currentTextBlock: parseStep()'s dropped-word
+  // check only inspects currentTextBlock, so a cell parsed and moved (or reset
+  // while empty) within one XML buffer would otherwise lose its OOM flag.
+  if (currentTextBlock->hadDroppedWords()) {
+    layoutOom = true;
+  }
+
   if (!tableRowStacked &&
       (tableRowCells.size() >= MAX_GRID_TABLE_COLUMNS || currentTextBlock->size() > MAX_GRID_TABLE_CELL_WORDS)) {
     fallbackTableRowToStacked();
@@ -1150,8 +1171,13 @@ void ChapterHtmlSlimParser::finishTableRow() {
           }
           tableLineVisibleOffsets[lineIndex] = std::min(tableLineVisibleOffsets[lineIndex], offset);
         },
-        true, lineCompression);
+        true, lineCompression, characterSpacing, wordSpacingPercent);
     maxLineCount = std::max(maxLineCount, lines.size());
+  }
+  // Cell layout itself can drop lines (TextBlock arena OOM in extractLine);
+  // latch that before the cells are destroyed.
+  for (const auto& cell : tableRowCells) {
+    if (cell && cell->hadDroppedWords()) layoutOom = true;
   }
   tableRowCells.clear();
   const auto clearLayoutLines = [this]() {
@@ -1778,6 +1804,72 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
 
                 (void)imageMarginBottom;
+
+                // An image that does not fill the page flows with the text: placed at the current
+                // position at its layout size, upright, and followed by more text on the same page.
+                // Only one that fills the page in either dimension gets a page of its own below.
+                // Never enlarged past its own pixels, as on its own page: a stylesheet's width:100%
+                // would otherwise make every small figure "fill" the page.
+                if (dims.width > 0 && dims.height > 0 && displayWidth > dims.width) {
+                  displayHeight = static_cast<int>(static_cast<int64_t>(displayHeight) * dims.width / displayWidth);
+                  displayWidth = dims.width;
+                }
+                if (dims.width > 0 && dims.height > 0 && displayWidth > 0 && displayHeight > 0 &&
+                    !ImageBlock::fillsPage(displayWidth, displayHeight, self->viewportWidth, self->viewportHeight)) {
+                  if (!self->currentPage) {
+                    self->currentPage.reset(new (std::nothrow) Page());
+                    if (!self->currentPage) {
+                      LOG_ERR("EHP", "Failed to create page for inline image");
+                      return;
+                    }
+                    self->currentPageNextY = 0;
+                  }
+                  // Does not fit under what is already on the page: carry it to the next one.
+                  if (self->currentPageNextY + imageMarginTop + displayHeight > self->viewportHeight &&
+                      !self->currentPage->elements.empty()) {
+                    self->maybeEmitOpenBoxForPageBreak();
+                    self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
+                                         self->xpathListItemIndex, self->currentPageVisibleOffset);
+                    self->completedPageCount++;
+                    self->currentPage.reset(new (std::nothrow) Page());
+                    if (!self->currentPage) {
+                      LOG_ERR("EHP", "Failed to create page for inline image");
+                      return;
+                    }
+                    self->currentPageNextY = 0;
+                    self->currentPageVisibleOffsetSet = false;
+                    imageMarginTop = 0;
+                  }
+                  self->currentPageNextY += imageMarginTop;
+                  auto inlineBlock =
+                      makeUniqueNoThrow<ImageBlock>(cachedImagePath, resolvedPath, static_cast<int16_t>(displayWidth),
+                                                    static_cast<int16_t>(displayHeight));
+                  if (!inlineBlock) {
+                    LOG_ERR("EHP", "Failed to create inline ImageBlock");
+                    return;
+                  }
+                  const int inlineX = std::max(0, (self->viewportWidth - displayWidth) / 2);
+                  auto inlineImage = makeUniqueNoThrow<PageImage>(std::move(inlineBlock), static_cast<int16_t>(inlineX),
+                                                                  static_cast<int16_t>(self->currentPageNextY));
+                  if (!inlineImage) {
+                    LOG_ERR("EHP", "Failed to create inline PageImage");
+                    return;
+                  }
+                  self->currentPage->elements.push_back(std::move(inlineImage));
+                  self->setCurrentPageVisibleOffset(self->visibleTextOffset);
+                  // The container's bottom margin is applied when it closes -- after a caption, which
+                  // must sit right under the image.
+                  self->currentPageNextY += displayHeight;
+                  if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
+                    BlockStyle resetStyle;
+                    resetStyle.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                                               ? CssTextAlign::Justify
+                                               : static_cast<CssTextAlign>(self->paragraphAlignment);
+                    self->currentTextBlock->setBlockStyle(resetStyle);
+                  }
+                  self->depth += 1;
+                  return;
+                }
 
                 // Images get their own dedicated page. Complete the current page
                 // if it already has content, then start a fresh page for the image.
@@ -2570,6 +2662,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     self->partWordBuffer[self->partWordBufferIndex++] = s[i];
   }
 
+  // Block creation failed (OOM): nothing to soft-flush.
+  if (!self->currentTextBlock) {
+    return;
+  }
+
   // Keep token growth bounded: CSS-heavy spans can fragment text into many tiny
   // words, so flush earlier when embedded CSS is active. We still keep the
   // "exclude last line" behavior to preserve paragraph flow across chunks.
@@ -2587,7 +2684,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
         [self](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
           self->addLineToPage(std::move(textBlock), offset);
         },
-        false, self->lineCompression);
+        false, self->lineCompression, self->characterSpacing, self->wordSpacingPercent);
   }
 }
 
@@ -2945,6 +3042,13 @@ bool ChapterHtmlSlimParser::beginParse() {
 }
 
 ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
+  // Layout OOM latched during the previous buffer's callbacks: fail the build
+  // instead of emitting pages with silently missing text.
+  if (layoutOom || (currentTextBlock && currentTextBlock->hadDroppedWords())) {
+    LOG_ERR("EHP", "Text layout dropped content (OOM); failing section build");
+    return ParseStatus::Error;
+  }
+
   void* const buf = XML_GetBuffer(xmlParser_, PARSE_BUFFER_SIZE);
   if (!buf) {
     LOG_ERR("EHP", "Couldn't allocate memory for buffer");
@@ -2985,6 +3089,13 @@ void ChapterHtmlSlimParser::abortParse() {
 }
 
 bool ChapterHtmlSlimParser::finishParse() {
+  // Same check as parseStep(): drops in the final buffer would otherwise slip
+  // through because Done is returned before the next step's check runs.
+  if (layoutOom || (currentTextBlock && currentTextBlock->hadDroppedWords())) {
+    LOG_ERR("EHP", "Text layout dropped content (OOM); failing section build");
+    return false;
+  }
+
   if (xmlParser_) {
     LOG_DBG("EHP", "Time to parse and build pages: %lu ms", millis() - parseStartTime_);
     destroyXmlParser(xmlParser_);
@@ -2995,6 +3106,12 @@ bool ChapterHtmlSlimParser::finishParse() {
   // Process last page if there is still text
   if (currentTextBlock) {
     makePages();
+    // Re-check: makePages() latches layoutOom for lines dropped DURING this
+    // final layout, which the entry check above cannot have seen.
+    if (layoutOom) {
+      LOG_ERR("EHP", "Text layout dropped content (OOM); failing section build");
+      return false;
+    }
     if (!pendingAnchorId.empty()) {
       anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
       pendingAnchorId.clear();
@@ -3180,12 +3297,11 @@ void ChapterHtmlSlimParser::makePages() {
     return;
   }
 
-  // A pending `page-break-before/after: always` lands here, ahead of the block's own top spacing
-  // (a block that starts a page has no margin above it). It waits for a block with actual content
-  // so the break cannot be spent on an empty wrapper and leave the real content mid-page.
-  if (pendingForcedBreak && !currentTextBlock->isEmpty()) {
-    pendingForcedBreak = false;
-    breakPage();
+  // Latch before layout: startNewTextBlock() replaces the block right after
+  // this returns, which would otherwise lose its dropped-words flag before
+  // parseStep()/finishParse() get to check it.
+  if (currentTextBlock->hadDroppedWords()) {
+    layoutOom = true;
   }
 
   if (!currentPage) {
@@ -3227,7 +3343,7 @@ void ChapterHtmlSlimParser::makePages() {
       [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
         addLineToPage(std::move(textBlock), offset);
       },
-      true, lineCompression);
+      true, lineCompression, characterSpacing, wordSpacingPercent);
 
   // Before the panel stitching below: the buffered lines are only placed now, and it is their
   // placement that sets lastPanelBox.

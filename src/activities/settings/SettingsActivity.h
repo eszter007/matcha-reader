@@ -290,6 +290,8 @@ class SettingsActivity final : public UiTabListActivity {
   // --- UiTabListActivity contract ---
   int listCount() const override { return settingsCount; }
   int tabCount() const override { return isSubmenu() ? 1 : categoryCount; }
+  // Embedded in the reader the category band is hidden and locked: no top tabs on the ring.
+  int ringTopTabCount() const override { return finishOnBack ? 0 : tabCount(); }
   int activeTab() const override { return isSubmenu() ? 0 : selectedCategoryIndex; }
   const char* tabLabel(int index) const override {
     return I18N.get(isSubmenu() ? submenuCategory : categoryNames[index]);
@@ -326,6 +328,10 @@ class SettingsActivity final : public UiTabListActivity {
   void saveSettings();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
+  void drawChrome() override;
+  void drawFooter() override;
+  HomeTab tabBarTab() const override { return HomeTab::Settings; }
+
  public:
   // initialCategory: category tab to open on (0=Display, 1=Reader, 2=Controls, 3=System).
   // finishOnBack: pop back to the pushing activity (e.g. the reader menu's "Reader Settings")
@@ -352,5 +358,5 @@ class SettingsActivity final : public UiTabListActivity {
         hideMangaOnlySettings(hideMangaOnlySettings) {}
   void onEnter() override;
   void onExit() override;
-  void render(RenderLock&&) override;
+  void render(RenderLock&& lock) override;
 };

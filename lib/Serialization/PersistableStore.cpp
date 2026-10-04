@@ -8,6 +8,14 @@
 #include <limits>
 
 bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& doc) {
+  // ArduinoJson does not fail when its pool runs out of heap: it sets overflowed() and silently
+  // drops every key that did not fit. Writing that document replaces a complete file with a
+  // truncated one, and each missing key then loads back as its default -- a setting that "reverts"
+  // with nothing in the log. Keep the previous file instead; a later save can retry.
+  if (doc.overflowed()) {
+    LOG_ERR("PERSIST", "Document for %s overflowed on low heap; keeping the previous file", path);
+    return false;
+  }
   Storage.mkdir("/.crosspoint");
   String json;
   serializeJson(doc, json);

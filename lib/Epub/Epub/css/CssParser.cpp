@@ -1573,7 +1573,11 @@ constexpr char rulesCache[] = "/css_rules.cache";
 // book permanently unstyled until some later open happened to complete a full parse.
 constexpr char rulesCacheTmp[] = "/css_rules.cache.tmp";
 
-bool CssParser::hasCache() const { return Storage.exists((cachePath + rulesCache).c_str()); }
+bool CssParser::hasCache() const { return hasCacheAt(cachePath); }
+
+bool CssParser::hasCacheAt(const std::string& bookCachePath) {
+  return Storage.exists((bookCachePath + rulesCache).c_str());
+}
 
 void CssParser::deleteCache() const {
   if (hasCache()) Storage.remove((cachePath + rulesCache).c_str());
@@ -1760,8 +1764,16 @@ bool CssParser::validateCache() const {
 // with vertical-relevant properties. Unscoped rules and the EBPAJ "v|" scope both apply (the
 // "v|" record's fields override the unscoped ones per property); "h|"-scoped rules are the
 // horizontal engine's business (resolveStyle). No rule map is materialized.
-size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, VerticalBlockStyle>>& out,
-                                        const size_t maxOut) const {
+uint32_t CssParser::blockSelectorHash(const char* s, const size_t len) {
+  uint32_t h = 2166136261u;
+  for (size_t i = 0; i < len; i++) {
+    h ^= static_cast<uint8_t>(std::tolower(static_cast<unsigned char>(s[i])));
+    h *= 16777619u;
+  }
+  return h == 0 ? 1 : h;  // 0 is the "any tag" / "no class" marker
+}
+
+size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, const size_t maxOut) const {
   out.clear();
   if (cachePath.empty()) return 0;
 
@@ -1859,10 +1871,23 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
     if (definedBits & (1u << 18)) vs.borderEdges = CssStyle::edgeMaskOf(borderVal);
     if (!vs.any()) continue;
 
+    VerticalBlockRule rule;
+    rule.style = vs;
+    if (selector[0] == '.') {
+      rule.classHash = blockSelectorHash(selector.c_str() + 1, selector.size() - 1);
+    } else {
+      const size_t dot = selector.find('.');
+      rule.tagHash = blockSelectorHash(selector.c_str(), dot == std::string::npos ? selector.size() : dot);
+      if (dot != std::string::npos) {
+        rule.classHash = blockSelectorHash(selector.c_str() + dot + 1, selector.size() - dot - 1);
+      }
+    }
+
     // Merge with an existing entry for the same selector (later record overrides per property).
     bool merged = false;
-    for (auto& [sel, existing] : out) {
-      if (sel == selector) {
+    for (auto& entry : out) {
+      if (entry.tagHash == rule.tagHash && entry.classHash == rule.classHash) {
+        auto& existing = entry.style;
         if (vs.startEm > 0) existing.startEm = vs.startEm;
         if (vs.beforeEm > 0) existing.beforeEm = vs.beforeEm;
         if (vs.afterEm > 0) existing.afterEm = vs.afterEm;
@@ -1873,7 +1898,7 @@ size_t CssParser::collectVerticalStyles(std::vector<std::pair<std::string, Verti
         break;
       }
     }
-    if (!merged) out.emplace_back(selector, vs);
+    if (!merged) out.push_back(rule);
   }
   if (out.size() >= maxOut) {
     LOG_ERR("CSS", "collectVerticalStyles hit the %u-entry cap; later rules (e.g. borders) may be dropped",

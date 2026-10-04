@@ -5,7 +5,6 @@
 #include <freertos/semphr.h>
 
 #include <cstdint>
-#include <deque>
 #include <string>
 #include <vector>
 
@@ -83,8 +82,11 @@ class SdCardFont {
   // (e.g. shaped Arabic presentation forms the measurement path will look up).
   // Returns number of codepoints not found in font coverage.
   int buildAdvanceTable(const char* utf8Text, uint8_t styleMask = 0x0F, const char* extraText = nullptr);
-  int buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask = 0x0F,
-                        const char* extraText = nullptr);
+  // Packed variant: each segment holds consecutive NUL-terminated words
+  // (paragraph word-arena chunks), scanned without per-word string objects.
+  int buildAdvanceTablePacked(const char* const* segments, const size_t* segmentLens, size_t segmentCount,
+                              bool includeSpace, bool includeHyphen, uint8_t styleMask = 0x0F,
+                              const char* extraText = nullptr);
 
   // Look up advanceX for a codepoint from the advance table.
   // Returns the 12.4 fixed-point advance, or 0 if not found.
@@ -97,6 +99,11 @@ class SdCardFont {
   // Preserves the persistent advance cache so repeated layout passes can reuse
   // previously fetched metrics.
   void clearCache();
+
+  // clearCache() without the retention bet: the mini arenas go even with plenty of total free
+  // heap, for a caller short on CONTIGUOUS heap. The advance tables and kern/ligature class maps
+  // stay, so a layout in progress keeps measuring without reloading them.
+  void releaseRenderCaches();
 
   // Drop the persistent advance cache. Call when unloading the SD font or
   // when font/size/family/glyph-table state changes, or to recover a failed bitmap allocation.
@@ -318,14 +325,29 @@ class SdCardFont {
   //
   // Set from what the measurement justified, not from what the slots could hold. The thrash this
   // ring fixes was a Latin working set of ~48 glyphs totalling roughly 3KB, so 4KB keeps the
-  // whole win while capping growth over the old 8-slot ring at about 3KB per loaded font. A
-  // larger budget bought nothing measurable and cost headroom that an OOM abort was already
-  // using up elsewhere (freeink-sdk Credential.cpp allocates with bare `new`).
+  // whole win while capping growth over the old 8-slot ring at about 3KB per loaded font.
+  //
+  // 12KB was tried, to let the 48 slots bind first for a CJK working set, and reverted: during a
+  // vertical section build the ring holds its bytes while the layout is competing for the same
+  // heap, and the extra 8KB pushed maxAlloc down to ~3KB mid-build, which brought back the
+  // emergency page splits (70 of them, pages ending at ~100 of 207 glyphs). A full ring wipe and
+  // some repeated SD reads cost time; sparse pages cost the reader's text.
   static constexpr uint32_t OVERFLOW_BYTE_BUDGET = 4 * 1024;
   OverflowEntry overflow_[OVERFLOW_CAPACITY] = {};
   uint32_t overflowCount_ = 0;
   uint32_t overflowNext_ = 0;
   uint32_t overflowBytes_ = 0;  // sum of dataLength over the occupied slots
+  // Lifetime count of on-demand loads, for the periodic line in the miss path. Never reset: a
+  // count that climbs steeply while one page renders is what a thrashing ring looks like.
+  uint32_t overflowLoads_ = 0;
+  // Codepoints already reported as absent from this font, to keep the miss path from logging the
+  // same character once per measure and once per draw for every occurrence on the page. A set, not
+  // one slot: a miss is retried as U+FFFD, so the calls ALTERNATE and a single-entry memo matched
+  // nothing (104 lines for two codepoints).
+  static constexpr uint32_t MISSING_REPORTED_SLOTS = 8;
+  uint32_t missingReported_[MISSING_REPORTED_SLOTS] = {};
+  uint32_t missingReportedNext_ = 0;
+  bool noteMissingCodepoint(uint32_t codepoint);
 
   // Compact advance-only table for layout measurement (per-style).
   // Built by buildAdvanceTable(), queried by getAdvance().
@@ -379,9 +401,6 @@ class SdCardFont {
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
   int fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask);
-  template <typename Iter>
-  int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
-                             const char* extraText = nullptr);
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig,
                    bool accumulate);
 

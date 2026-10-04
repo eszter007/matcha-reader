@@ -21,9 +21,8 @@ class UiTabListActivity : public UiListActivity {
   void onEnter() override;
 
  protected:
-  // Tab-bar action; subclass actions start at ACTION_TAB_USER.
-  static constexpr freeink::ui::ActionId ACTION_TAB = ACTION_USER;
-  static constexpr freeink::ui::ActionId ACTION_TAB_USER = ACTION_USER + 1;
+  // Subclass actions start here (the base owns ACTION_ROW and ACTION_TAB).
+  static constexpr freeink::ui::ActionId ACTION_TAB_USER = ACTION_USER;
 
   UiTabListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                     bool wantsTouchLongPress = false);
@@ -34,7 +33,7 @@ class UiTabListActivity : public UiListActivity {
   virtual const char* tabLabel(int index) const = 0;
   virtual freeink::ui::TabIndicator tabIndicator(int) const { return freeink::ui::TabIndicator::None; }
   // Touch tap on a tab pill (bounds already checked).
-  virtual void onTabAction(int index) = 0;
+  void onTabAction(int index) override = 0;
   // Advance the active tab by direction (continuous-hold navigation; also what
   // Confirm on the tab bar should do). Subclass owns wrap and any per-switch
   // state reset, and requests the update.
@@ -56,8 +55,18 @@ class UiTabListActivity : public UiListActivity {
   void moveRingTo(int ringIndex);
 
   // --- screen helpers --------------------------------------------------------
-  // The shared tab band: theme-driven pill treatment (label-hugging Lyra vs
-  // full-slot RoundedRaff), Lyra focused band wash, always-on divider.
+  // The shared tab band (UiTabBand) for this screen's tabs.
+  // TabRing::Host: the tab band is ring position 0 here, the rows 1..N.
+  int ringTopTabCount() const override { return tabCount(); }
+  int ringActiveTopTab() const override { return activeTab(); }
+  void ringSelectTopTab(int index) override;
+  // A hold that follows must not restore the snapshot of some earlier press.
+  void onRingInputConsumed() override {
+    holdStart_.pending = false;
+    navigationStartedOnTabs = false;
+  }
+  TabRing::Focus ringFocus() const override;
+  void ringSetFocus(TabRing::Focus focus, bool atEnd) override;
   void buildTabBar(UiScreen& screen);
   // Ring-aware counterpart of syncListViewport: measures rows, applies the
   // one-shot follow to the remembered row, clamps, and writes
@@ -67,6 +76,9 @@ class UiTabListActivity : public UiListActivity {
   // Per-tab selection/viewport state, sized in onEnter. Protected so subclass
   // tab-switch code can seed the target tab's ring/viewport.
   std::vector<freeink::ui::ListNav> tabNavs;
+  // Set on each Next/Previous press: whether the cursor was on the tab band when it began. A
+  // subclass that treats the band specially while a key is held (the Library) reads it.
+  bool navigationStartedOnTabs = false;
 
   // When > 0, each tab pill is capped at its label width plus this padding
   // per side, centered in its unchanged equal-width slot. With few tabs the
@@ -75,5 +87,13 @@ class UiTabListActivity : public UiListActivity {
   int16_t tabPillMaxPad = 0;
 
  private:
-  static void tabActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
+  // Where a press found the cursor. A press steps the ring at once, but a hold steps the TAB, so
+  // by the time the hold is recognised the press has already moved one step: the first repeat
+  // puts the cursor back here before stepping the tab. `pending` is cleared once restored.
+  struct HoldStart {
+    int selected = 0;
+    int tabFocus = -1;
+    bool pending = false;
+  } holdStart_;
+  void restoreHoldStart();
 };

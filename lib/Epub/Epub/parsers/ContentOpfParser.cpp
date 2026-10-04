@@ -48,6 +48,14 @@ void appendMetadataText(std::string& out, const XML_Char* text, const int len, b
       spacePending = true;
       continue;
     }
+    // A byte-order mark (U+FEFF, EF BB BF) is not text: no font has a glyph for it, so a title
+    // that starts with one logged a missing glyph wherever it was drawn. Skipped before the pending
+    // space or separator is written, so the mark leaves nothing behind. Expat hands over whole
+    // UTF-8 characters, so the three bytes always arrive in one call.
+    if (c == '\xEF' && i + 2 < len && text[i + 1] == '\xBB' && text[i + 2] == '\xBF') {
+      i += 2;
+      continue;
+    }
 
     if (out.size() >= MAX_METADATA_TEXT) {
       LOG_DBG("COF", "Metadata text exceeds %u bytes; truncating", static_cast<unsigned>(MAX_METADATA_TEXT));
@@ -81,7 +89,7 @@ bool ContentOpfParser::setup() {
 
 ContentOpfParser::~ContentOpfParser() {
   destroyXmlParser(parser);
-  if (metadataOnly) {
+  if (metadataOnly || !cache) {
     return;
   }
   if (tempItemStore) {
@@ -180,7 +188,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && xmlLocalNameEquals(name, "manifest")) {
     self->state = IN_MANIFEST;
-    if (!Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
+    if (self->cache && !Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for writing. This is probably going to be a fatal error.");
     }
     return;
@@ -188,7 +196,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && xmlLocalNameEquals(name, "spine")) {
     self->state = IN_SPINE;
-    if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
+    if (self->cache && !Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
 
@@ -209,7 +217,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     self->state = IN_GUIDE;
     // TODO Remove print
     LOG_DBG("COF", "Entering guide state.");
-    if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
+    if (self->cache && !Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
     return;
@@ -260,9 +268,10 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       self->itemIndex.push_back(entry);
     }
 
-    // Write items down to SD card
-    serialization::writeString(self->tempItemStore, itemId);
-    serialization::writeString(self->tempItemStore, href);
+    if (self->tempItemStore) {
+      serialization::writeString(self->tempItemStore, itemId);
+      serialization::writeString(self->tempItemStore, href);
+    }
 
     if (itemId == self->coverItemId) {
       // Some EPUBs set meta name="cover" to an XHTML wrapper item.
@@ -424,19 +433,19 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
 
   if (self->state == IN_SPINE && xmlLocalNameEquals(name, "spine")) {
     self->state = IN_PACKAGE;
-    self->tempItemStore.close();
+    if (self->tempItemStore) self->tempItemStore.close();
     return;
   }
 
   if (self->state == IN_GUIDE && xmlLocalNameEquals(name, "guide")) {
     self->state = IN_PACKAGE;
-    self->tempItemStore.close();
+    if (self->tempItemStore) self->tempItemStore.close();
     return;
   }
 
   if (self->state == IN_MANIFEST && xmlLocalNameEquals(name, "manifest")) {
     self->state = IN_PACKAGE;
-    self->tempItemStore.close();
+    if (self->tempItemStore) self->tempItemStore.close();
     return;
   }
 

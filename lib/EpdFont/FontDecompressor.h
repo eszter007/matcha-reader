@@ -7,7 +7,10 @@
 class FontDecompressor {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
-  static constexpr uint8_t MAX_PAGE_SLOTS = 4;  // One per font style (R/B/I/BI)
+  // One per font+style a page prewarms. Four (R/B/I/BI of one font) was not enough: a page with
+  // three body styles plus a heading and the status bar font asks for five or six, the slots go
+  // to the LAST fonts scanned first, and the one refused was the body's regular style.
+  static constexpr uint8_t MAX_PAGE_SLOTS = 8;
 
   FontDecompressor() = default;
   ~FontDecompressor();
@@ -71,7 +74,7 @@ class FontDecompressor {
   InflateReader inflateReader;
 
   // Page buffer slots: each style gets its own flat glyph buffer with sorted lookup.
-  // Up to MAX_PAGE_SLOTS (4) styles can be prewarmed simultaneously.
+  // Up to MAX_PAGE_SLOTS font styles can be prewarmed simultaneously.
   struct PageGlyphEntry {
     uint32_t glyphIndex;
     uint32_t bufferOffset;
@@ -101,6 +104,11 @@ class FontDecompressor {
   // cycle on every glyph lookup that lands in a different group.
   uint8_t* hotGroup = nullptr;  // owned; freed in freeHotGroup()/dtor
   uint32_t hotGroupCapacity = 0;
+  // How much of the cached group was actually decompressed. Normally the whole group, but when the
+  // heap cannot hold it the inflate is stopped at the end of the requested glyph (see getBitmap):
+  // a glyph early in a 16KB group then needs a fraction of it. A later glyph whose data ends past
+  // this mark is not in the buffer, so the cache hit has to be refused and the group re-read.
+  uint32_t hotGroupValidBytes = 0;
 
   // Scratch buffer for compacting a single glyph from the hot group.
   // Valid until the next getBitmap() call. Same ownership/OOM contract as hotGroup.

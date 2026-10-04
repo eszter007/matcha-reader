@@ -281,6 +281,7 @@ class VerticalParsedText {
         boxStartCarry_ || (!boxStartsBeforeIndex_.empty() && boxStartsBeforeIndex_.back() == stream_.size());
     boxEndCarry_ = boxEndCarry_ || (!boxEndsBeforeIndex_.empty() && boxEndsBeforeIndex_.back() == stream_.size());
     stream_.clear();
+    rubyPool_.clear();
     paragraphBreaksBeforeIndex_.clear();
     boxStartsBeforeIndex_.clear();
     boxEndsBeforeIndex_.clear();
@@ -318,6 +319,15 @@ class VerticalParsedText {
   // to flush layoutPages()+reset() periodically so stream_ stays O(batch) instead of O(chapter)
   // -- a whole chapter's worth of PendingChars (32 bytes each) cannot fit in RAM on-device.
   size_t pendingCount() const { return stream_.size(); }
+
+  // Inline images: an image placed in the text flow, taking `columns` whole columns (on one page)
+  // at the position it appears. The image is a glyph whose codepoint is IMAGE_MARKER_BASE + id and
+  // whose text is "path\tsrc\twidth\theight"; VerticalTextBlock draws it across those columns.
+  static constexpr uint32_t IMAGE_MARKER_BASE = 0xF0000;
+  static bool isImageMarker(uint32_t cp) { return cp >= IMAGE_MARKER_BASE && cp < IMAGE_MARKER_BASE + 0x10000; }
+  void addInlineImage(std::string info, uint16_t columns, int widthPx);
+  // Horizontal distance between two column origins, for sizing an inline image in columns.
+  int columnAdvancePx() const;
   void setColumnGapPx(int gapPx) { columnGapPx_ = gapPx; }
   // Extra right-side padding (in pixels) reserved for vertical ruby so it
   // doesn't clip against the right edge.
@@ -337,18 +347,44 @@ class VerticalParsedText {
     uint32_t byteOffset;
     uint8_t style;
     bool emphasis;
-    std::string rubyText;
+    // This character's share of its ruby, as a span of rubyPool_ (0 = none). A span rather than a
+    // std::string keeps the entry at 24 bytes instead of 44: stream_ reserves 512 of them for the
+    // whole build.
+    uint16_t rubyLen = 0;
     // See RubyRun::visibleTextOffset. Carried per character so the page that a character
     // opens can be stamped with it; NOT carried on VerticalGlyph, which is deliberately a
     // fixed-size POD (4 bytes x ~500 glyphs/page is a page buffer this device cannot spare).
     uint32_t visibleTextOffset = 0;
+    uint32_t rubyOffset = 0;
   };
+  static_assert(sizeof(PendingChar) == 24, "stream_ reserves 512 of these for the whole build");
+  // Ruby text of the characters in stream_; cleared with it. carriedRubyPool_ holds the ruby of
+  // carriedRunTail_ across the reset between batches.
+  std::string rubyPool_;
+  std::string carriedRubyPool_;
+  std::string rubyOf(const PendingChar& pc) const {
+    return pc.rubyLen ? rubyPool_.substr(pc.rubyOffset, pc.rubyLen) : std::string();
+  }
+  // Appends a ruby slice for `pc` when the pool can grow without exhausting the heap; a slice that
+  // does not fit is dropped and the build flagged as degraded.
+  void setRuby(PendingChar& pc, const char* s, size_t len);
+  // Moves a carried character back into stream_ with its ruby re-pooled.
+  void pushCarried(PendingChar& c);
 
   // Flattened, paragraph-tagged codepoint stream built up by addParagraph()
   // and consumed by layoutPages(). Paragraph boundaries are recorded as a
   // forced column break (a new paragraph always starts at the top of a
   // fresh column, matching how horizontal layout starts a new line).
   std::vector<PendingChar> stream_;
+  // Queued inline images, indexed by marker codepoint - IMAGE_MARKER_BASE: the glyph text and the
+  // columns each spans. Kept across batches (a marker may be laid out in a later batch); cleared
+  // with the chapter.
+  struct InlineImage {
+    std::string info;
+    uint16_t columns;
+    int16_t widthPx;
+  };
+  std::vector<InlineImage> inlineImages_;
   std::vector<size_t> paragraphBreaksBeforeIndex_;
 
   // Set once free heap drops critically low; remaining characters/paragraphs for this chapter

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EpdFontFamily.h>
+#include <Utf8.h>
 
 #include <deque>
 #include <string>
@@ -61,10 +62,19 @@ class GfxRenderer {
     }
     return width;
   }
-  int getKerning(int, uint32_t, uint32_t, EpdFontFamily::Style) const { return 0; }
+  // The delta the real renderer reports between two glyphs. The stub has no kerning pairs, so
+  // tracking (CSS letter-spacing plus the reader's character-spacing setting, which callers
+  // combine into this one value) is the whole of it -- returning 0 regardless left every
+  // spacing test measuring untracked text.
+  int getKerning(int, uint32_t, uint32_t, EpdFontFamily::Style, const int8_t letterSpacing = 0) const {
+    return letterSpacing;
+  }
   int getSpaceAdvance(int, uint32_t, uint32_t, EpdFontFamily::Style, int8_t = 0) const { return 4; }
   bool isSdCardFont(int) const { return false; }
-  void ensureSdCardFontReady(int, const std::deque<std::string>&, bool, uint8_t) const {}
+  void ensureSdCardFontReady(int, const char*, uint8_t = 0x0F) const {}
+  // Packed variant: ParsedText hands the layout path whole WordStore chunks rather than
+  // per-word strings, so the stub has to accept that shape too.
+  void ensureSdCardFontReady(int, const char* const*, const size_t*, size_t, bool, bool, uint8_t = 0x0F) const {}
   // Square 8x8 ink box with a 1px left bearing, sitting on the baseline. Matches the 8px
   // advance getTextAdvanceX reports per character, so a drop cap's reserved column and the
   // words measured beside it stay consistent in the tests.

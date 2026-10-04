@@ -1,11 +1,14 @@
 #include "SdCardFontManager.h"
 
 #include <EpdFontFamily.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <SdCardFont.h>
 #include <SdCardFontRegistry.h>
 #include <esp_heap_caps.h>
+
+#include <algorithm>
 
 SdCardFontManager::~SdCardFontManager() {
   for (auto& lf : loaded_) {
@@ -103,6 +106,27 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
   return loadFile(*file, family.name.c_str(), renderer);
 }
 
+bool SdCardFontManager::hasSize(const uint8_t pointSize) const {
+  return std::any_of(loaded_.begin(), loaded_.end(),
+                     [pointSize](const LoadedFont& lf) { return lf.size == pointSize; });
+}
+
+void SdCardFontManager::unloadExtra(const int fontId, GfxRenderer& renderer) {
+  for (size_t i = 1; i < loaded_.size(); i++) {
+    if (loaded_[i].fontId != fontId) continue;
+    SdCardFont* font = loaded_[i].font;
+    renderer.removeFont(fontId);
+    // Same care as unloadAll(): nothing may keep pointing at a deleted font.
+    if (renderer.getFallbackSdFont() == font) renderer.setFallbackSdFont(nullptr);
+    if (auto* fcm = renderer.getFontCacheManager(); fcm && fcm->getFallbackSdFont() == font) {
+      fcm->setFallbackSdFont(nullptr);
+    }
+    delete font;
+    loaded_.erase(loaded_.begin() + static_cast<std::ptrdiff_t>(i));
+    return;
+  }
+}
+
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
   // Remove ONLY this manager's fonts. Two managers share the renderer (the
   // selected reader font and the JP companion, see SdCardFontSystem); the
@@ -116,6 +140,12 @@ void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
   renderer.clearFallbackFonts();
   for (auto& lf : loaded_) {
     renderer.removeFont(lf.fontId);
+    // The companion slot (renderer and font cache) is re-pointed only by the caller's next
+    // updateGlobalFallback(); until then a release pass would walk a deleted font.
+    if (renderer.getFallbackSdFont() == lf.font) renderer.setFallbackSdFont(nullptr);
+    if (auto* fcm = renderer.getFontCacheManager(); fcm && fcm->getFallbackSdFont() == lf.font) {
+      fcm->setFallbackSdFont(nullptr);
+    }
     delete lf.font;
   }
   loaded_.clear();

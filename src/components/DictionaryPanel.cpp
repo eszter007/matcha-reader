@@ -3,9 +3,11 @@
 #include <GfxRenderer.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include "components/UITheme.h"
+#include "components/icons/dictionaryIcons.h"
 #include "fontIds.h"
 
 namespace {
@@ -37,24 +39,32 @@ constexpr int MIN_RADIUS = 6;
 // definition uses. A CJK headword is routed to a CJK face by the renderer's own font resolution.
 constexpr int HEADWORD_FONT_ID = NOTOSERIF_12_FONT_ID;
 
+// The save-sentence button: the icon's size, and the extra reach around it a finger gets.
+constexpr int ADD_ICON_SIZE = 24;
+constexpr int ADD_TAP_SLOP = 12;
+// Space kept between the headword and the button, and between the footer label and the counter.
+constexpr int TITLE_GAP = 8;
+constexpr int FOOTER_GAP = 16;
+
 int panelRadius(const ThemeMetrics& metrics) { return std::max(metrics.popupCornerRadius, MIN_RADIUS); }
 
 // Copy `text` into `out`, trimmed to maxWidth with a trailing ellipsis when it does not fit.
 // Cuts on UTF-8 codepoint boundaries so a multi-byte character is never split.
-void ellipsize(const GfxRenderer& renderer, const char* text, const int maxWidth, char* out, const size_t outSize) {
+void ellipsize(const GfxRenderer& renderer, const int fontId, const char* text, const int maxWidth, char* out,
+               const size_t outSize, const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
   const size_t len = strlen(text);
-  if (len < outSize && renderer.getTextWidth(SMALL_FONT_ID, text) <= maxWidth) {
+  if (len < outSize && renderer.getTextWidth(fontId, text, style) <= maxWidth) {
     memcpy(out, text, len + 1);
     return;
   }
   static constexpr char ELLIPSIS[] = "\xe2\x80\xa6";  // U+2026
-  const int ellipsisWidth = renderer.getTextWidth(SMALL_FONT_ID, ELLIPSIS);
+  const int ellipsisWidth = renderer.getTextWidth(fontId, ELLIPSIS, style);
   size_t cut = std::min(len, outSize - sizeof(ELLIPSIS));
   while (cut > 0) {
     while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) cut--;  // codepoint boundary
     memcpy(out, text, cut);
     out[cut] = '\0';
-    if (renderer.getTextWidth(SMALL_FONT_ID, out) + ellipsisWidth <= maxWidth) break;
+    if (renderer.getTextWidth(fontId, out, style) + ellipsisWidth <= maxWidth) break;
     cut--;
   }
   memcpy(out + cut, ELLIPSIS, sizeof(ELLIPSIS));
@@ -88,6 +98,16 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.body.width = std::max(0, layout.box.width - 2 * PADDING);
   layout.body.y = bodyTop;
   layout.body.height = std::max(0, bodyBottom - bodyTop);
+
+  // Top-right corner, centred on the headword line. The tap target reaches past the icon so a
+  // finger does not have to land on 24 pixels, but stays inside the frame.
+  const int iconX = layout.box.x + layout.box.width - PADDING - ADD_ICON_SIZE;
+  const int iconY = layout.box.y + PADDING + (headwordHeight - ADD_ICON_SIZE) / 2;
+  const int tapLeft = iconX - ADD_TAP_SLOP;
+  const int tapTop = std::max(layout.box.y, iconY - ADD_TAP_SLOP);
+  const int tapRight = std::min(layout.box.x + layout.box.width, iconX + ADD_ICON_SIZE + ADD_TAP_SLOP);
+  const int tapBottom = iconY + ADD_ICON_SIZE + ADD_TAP_SLOP;
+  layout.addButton = Rect{tapLeft, tapTop, tapRight - tapLeft, tapBottom - tapTop};
   return layout;
 }
 
@@ -100,7 +120,7 @@ void DictionaryPanel::clearButtonHints(const GfxRenderer& renderer) {
 }
 
 DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const char* headword, const char* dictName,
-                                              const char* counter, const char* footerRight) {
+                                              const char* counter, const char* kind, const bool addButton) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Layout layout = compute(renderer);
   const int radius = panelRadius(metrics);
@@ -111,15 +131,18 @@ DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const
 
   const int textX = layout.box.x + PADDING;
   const int headwordY = layout.box.y + PADDING;
-  if (headword && headword[0] != '\0') {
-    renderer.drawText(HEADWORD_FONT_ID, textX, headwordY, headword, true, EpdFontFamily::BOLD);
-  }
   const int rightEdge = layout.box.x + layout.box.width - PADDING;
-  if (counter && counter[0] != '\0') {
-    // Baseline-aligned with the headword but a size down: the counter is a reference, not a label.
-    const int counterWidth = renderer.getTextWidth(SMALL_FONT_ID, counter);
-    const int counterY = headwordY + renderer.getLineHeight(HEADWORD_FONT_ID) - renderer.getLineHeight(SMALL_FONT_ID);
-    renderer.drawText(SMALL_FONT_ID, rightEdge - counterWidth, counterY, counter);
+  // The headword stops short of the save button rather than running under it.
+  const int headwordRight = addButton ? rightEdge - ADD_ICON_SIZE - TITLE_GAP : rightEdge;
+  if (headword && headword[0] != '\0') {
+    char buf[128];
+    ellipsize(renderer, HEADWORD_FONT_ID, headword, headwordRight - textX, buf, sizeof(buf), EpdFontFamily::BOLD);
+    renderer.drawText(HEADWORD_FONT_ID, textX, headwordY, buf, true, EpdFontFamily::BOLD);
+  }
+  if (addButton) {
+    const int iconX = rightEdge - ADD_ICON_SIZE;
+    const int iconY = headwordY + (renderer.getLineHeight(HEADWORD_FONT_ID) - ADD_ICON_SIZE) / 2;
+    renderer.drawIcon(DictAddCardIcon, iconX, iconY, ADD_ICON_SIZE);
   }
 
   const int dividerY = headwordY + renderer.getLineHeight(HEADWORD_FONT_ID) + HEADWORD_GAP + PADDING / 2;
@@ -127,17 +150,24 @@ DictionaryPanel::Layout DictionaryPanel::draw(const GfxRenderer& renderer, const
 
   const int footerY = layout.box.y + layout.box.height - PADDING - renderer.getLineHeight(SMALL_FONT_ID);
   renderer.drawLine(textX, footerY - PADDING / 2, rightEdge, footerY - PADDING / 2, DIVIDER_STROKE, true);
-  int nameWidth = layout.box.width - 2 * PADDING;
-  if (footerRight && footerRight[0] != '\0') {
-    const int kindWidth = renderer.getTextWidth(SMALL_FONT_ID, footerRight);
-    renderer.drawText(SMALL_FONT_ID, rightEdge - kindWidth, footerY, footerRight);
-    nameWidth -= kindWidth + PADDING;  // the title clips before it can reach the kind
+  int labelWidth = rightEdge - textX;
+  if (counter && counter[0] != '\0') {
+    const int counterWidth = renderer.getTextWidth(SMALL_FONT_ID, counter);
+    renderer.drawText(SMALL_FONT_ID, rightEdge - counterWidth, footerY, counter);
+    labelWidth -= counterWidth + FOOTER_GAP;  // the label clips before it can reach the counter
   }
-  if (dictName && dictName[0] != '\0' && nameWidth > 0) {
-    // Dictionary titles run long ("English-Deutsch FreeDict+WikDict dictionary (en-de)"); clip to
-    // the panel with an ellipsis rather than letting the text run under the frame.
-    char buf[96];
-    ellipsize(renderer, dictName, nameWidth, buf, sizeof(buf));
+  // "Vocab | JMdict | Tatoeba [1][2]": which index answered, then the dictionary. Dictionary
+  // titles run long ("English-Deutsch FreeDict+WikDict dictionary (en-de)"), so the whole label
+  // is clipped with an ellipsis rather than running into the counter.
+  char label[160];
+  label[0] = '\0';
+  const bool hasKind = kind && kind[0] != '\0';
+  const bool hasName = dictName && dictName[0] != '\0';
+  snprintf(label, sizeof(label), "%s%s%s", hasKind ? kind : "", hasKind && hasName ? " | " : "",
+           hasName ? dictName : "");
+  if (label[0] != '\0' && labelWidth > 0) {
+    char buf[160];
+    ellipsize(renderer, SMALL_FONT_ID, label, labelWidth, buf, sizeof(buf));
     renderer.drawText(SMALL_FONT_ID, textX, footerY, buf);
   }
   return layout;

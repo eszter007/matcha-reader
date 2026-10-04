@@ -26,8 +26,10 @@ namespace {
 // Tab labels for Font | Size | Layout | Style.
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
-constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING, StrId::STR_ALIGNMENT,
-                                         StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS};
+// Indexed by LayoutRow / StyleRow; rebuildRowItems() asserts the lengths match.
+constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
+    StrId::STR_LINE_SPACING, StrId::STR_WORD_SPACING,  StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
+    StrId::STR_ALIGNMENT,    StrId::STR_SCREEN_MARGIN, StrId::STR_BOOK_CSS_MARGINS};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
                                         StrId::STR_TEXT_AA};
 
@@ -52,11 +54,22 @@ int findCurrentFontIndex(const std::vector<TextSettingsActivity::FontEntry>& fon
 }
 
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};
+constexpr StrId WORD_SPACING_IDS[] = {StrId::STR_SPACING_50_PERCENT,  StrId::STR_SPACING_75_PERCENT,
+                                      StrId::STR_SPACING_100_PERCENT, StrId::STR_SPACING_125_PERCENT,
+                                      StrId::STR_SPACING_150_PERCENT, StrId::STR_SPACING_175_PERCENT,
+                                      StrId::STR_SPACING_200_PERCENT};
+constexpr StrId CHARACTER_SPACING_IDS[] = {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1,
+                                           StrId::STR_SPACING_ZERO, StrId::STR_SPACING_PLUS_1,
+                                           StrId::STR_SPACING_PLUS_2};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                    StrId::STR_BOOK_S_STYLE};
 constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
 constexpr int MARGIN_MAX = CrossPointSettings::SCREEN_MARGIN_MAX;
 constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
+constexpr int WORD_SPACING_MIN = CrossPointSettings::WORD_SPACING_MIN;
+constexpr int WORD_SPACING_MAX = CrossPointSettings::WORD_SPACING_MAX;
+constexpr int WORD_SPACING_STEP = CrossPointSettings::WORD_SPACING_STEP;
+static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MIN) / WORD_SPACING_STEP + 1);
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -126,6 +139,10 @@ void TextSettingsActivity::rebuildFamilyList() {
 // call only when tab_ or its backing data (fonts_/sizes_) changes, never from
 // buildScreen(), which just refreshes rowValues_/rowItems_[].value in place.
 void TextSettingsActivity::rebuildRowItems() {
+  static_assert(std::size(LAYOUT_ROW_NAME_IDS) == static_cast<size_t>(LayoutRow::Count),
+                "LAYOUT_ROW_NAME_IDS must have one label per LayoutRow");
+  static_assert(std::size(STYLE_ROW_NAME_IDS) == static_cast<size_t>(StyleRow::Count),
+                "STYLE_ROW_NAME_IDS must have one label per StyleRow");
   const int count = listCount();
   rowValues_.assign(count, std::string());
   rowItems_.clear();
@@ -140,8 +157,8 @@ void TextSettingsActivity::rebuildRowItems() {
         item.label = sizes_[i].name.c_str();
         break;
       case Tab::Layout:
-        // Visible position -> LayoutRow: a Japanese book hides ParaSpacing, Alignment and
-        // BookSideMargins, so `i` is not the enum value (see layoutRowAt()).
+        // Visible position -> LayoutRow: not every row is shown for every book, so `i` is not
+        // the enum value (see visibleLayoutRows()).
         item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i))]);
         break;
       case Tab::Style:
@@ -218,11 +235,8 @@ bool TextSettingsActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (ringPos() == 0) {
-      switchTab();
-    } else {
-      activateRow(ringPos() - 1);
-    }
+    // Confirm on the tab band is TabRing's (handleTabBarInput runs first).
+    if (ringPos() != 0) activateRow(ringPos() - 1);
     return true;
   }
 
@@ -257,8 +271,7 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
         rowValues_[i] = (i == currentSizeIndex_) ? tr(STR_SELECTED) : "";
         break;
       case Tab::Layout: {
-        // Visible position -> LayoutRow, as the labels do: a Japanese book hides three of the
-        // rows, so `i` is not the enum value (see layoutRowAt()).
+        // Visible position -> LayoutRow, as the labels do (see visibleLayoutRows()).
         const int layoutRow = static_cast<int>(layoutRowAt(i));
         rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
         if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
@@ -309,11 +322,7 @@ const char* TextSettingsActivity::confirmLabelText() const {
   }
 }
 
-void TextSettingsActivity::render(RenderLock&&) {
-  if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
-
-  renderer.clearScreen();
-
+void TextSettingsActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
 
   GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
@@ -331,10 +340,11 @@ void TextSettingsActivity::render(RenderLock&&) {
   const bool japaneseFace = japaneseBook_ || verticalText_;
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
                               previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(japaneseFace));
+}
 
-  // Tab bar + active tab's list draw inside the screen builder.
-  renderUi();
-
+// Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer
+// separately, so the hints repaint without redrawing the preview.
+void TextSettingsActivity::drawFooter() {
   if (focusedRowHasNoPreview()) {
     const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
     const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
@@ -343,8 +353,11 @@ void TextSettingsActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabelText(), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
 
-  renderer.displayBuffer();
+void TextSettingsActivity::render(RenderLock&& lock) {
+  if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
+  UiListActivity::render(std::move(lock));
 }
 
 // Font switching runs on the main task from loop(), which deliberately holds no
@@ -445,6 +458,25 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         [](int idx) { SETTINGS.paragraphAlignment = static_cast<uint8_t>(idx); });
       requestUpdate();
       break;
+    case LayoutRow::WordSpacing: {
+      const int cur = (std::clamp<int>(SETTINGS.wordSpacing, WORD_SPACING_MIN, WORD_SPACING_MAX) - WORD_SPACING_MIN) /
+                      WORD_SPACING_STEP;
+      optionPopup_.show(StrId::STR_WORD_SPACING, WORD_SPACING_IDS, static_cast<int>(std::size(WORD_SPACING_IDS)), cur,
+                        [](int idx) {
+                          SETTINGS.wordSpacing = static_cast<uint8_t>(WORD_SPACING_MIN + idx * WORD_SPACING_STEP);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
+    }
+    case LayoutRow::CharacterSpacing:
+      optionPopup_.show(StrId::STR_CHARACTER_SPACING, CHARACTER_SPACING_IDS,
+                        static_cast<int>(std::size(CHARACTER_SPACING_IDS)), SETTINGS.characterSpacing, [](int idx) {
+                          SETTINGS.characterSpacing = static_cast<uint8_t>(idx);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
     case LayoutRow::ScreenMargin: {
       std::vector<std::string> options;
       options.reserve((MARGIN_MAX - MARGIN_MIN) / MARGIN_STEP + 1);
@@ -503,6 +535,13 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       const uint8_t v = SETTINGS.paragraphAlignment;
       return v < std::size(ALIGNMENT_IDS) ? I18N.get(ALIGNMENT_IDS[v]) : I18N.get(StrId::STR_JUSTIFY);
     }
+    case LayoutRow::WordSpacing:
+      return std::to_string(SETTINGS.wordSpacing) + "%";
+    case LayoutRow::CharacterSpacing: {
+      const uint8_t v = SETTINGS.characterSpacing;
+      return v < std::size(CHARACTER_SPACING_IDS) ? I18N.get(CHARACTER_SPACING_IDS[v])
+                                                  : I18N.get(StrId::STR_SPACING_ZERO);
+    }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
 
@@ -559,11 +598,10 @@ int TextSettingsActivity::listCount() const {
     case Tab::Size:
       return static_cast<int>(sizes_.size());
     case Tab::Layout:
-      // Japanese books hide ParaSpacing, Alignment and BookSideMargins: all three are horizontal
-      // layout inputs the vertical engine does not read.
-      return static_cast<int>(LayoutRow::Count) - (japaneseBook_ ? 3 : 0);
+      return visibleLayoutRows(nullptr);
     case Tab::Style:
-      return japaneseBook_ ? (verticalText_ ? 1 : 2) : static_cast<int>(StyleRow::Count);
+      // Japanese books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
+      return japaneseBook_ ? 2 : static_cast<int>(StyleRow::Count);
     default:
       return 0;
   }
@@ -571,9 +609,22 @@ int TextSettingsActivity::listCount() const {
 
 int TextSettingsActivity::tabCount() const { return static_cast<int>(Tab::Count); }
 
+// Only the rows the book's layout engine reads, so a hidden row never keeps changing the page.
+// Vertical text uses line spacing and the screen margin alone; horizontal text -- Japanese
+// included -- applies every row.
+int TextSettingsActivity::visibleLayoutRows(LayoutRow* out) const {
+  static constexpr LayoutRow VERTICAL[] = {LayoutRow::LineSpacing, LayoutRow::ScreenMargin};
+  const int count = verticalText_ ? static_cast<int>(std::size(VERTICAL)) : static_cast<int>(LayoutRow::Count);
+  if (out) {
+    for (int i = 0; i < count; i++) out[i] = verticalText_ ? VERTICAL[i] : static_cast<LayoutRow>(i);
+  }
+  return count;
+}
+
 TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {
-  if (japaneseBook_ && visibleIndex > 0) return LayoutRow::ScreenMargin;
-  return static_cast<LayoutRow>(visibleIndex);
+  LayoutRow rows[static_cast<int>(LayoutRow::Count)];
+  const int count = visibleLayoutRows(rows);
+  return visibleIndex >= 0 && visibleIndex < count ? rows[visibleIndex] : LayoutRow::Count;
 }
 
 TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int visibleIndex) const {

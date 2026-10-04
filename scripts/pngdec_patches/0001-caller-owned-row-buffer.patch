@@ -1,0 +1,106 @@
+Subject: [PATCH] PNGdec: caller-owned scanline buffer
+
+PNGIMAGE embedded the scanline buffer as a fixed PNG_MAX_BUFFERED_PIXELS
+array (16416 bytes in CrossPoint's build), making the decoder one ~59 KB
+allocation. On the ESP32-C3 a heavy book leaves less than that in one
+block, so every PNG failed.
+
+ucPixels becomes a pointer the caller sets after open() with
+PNG::setRowBuffer(), sized to the image (two scanlines plus filter bytes
+and alignment). DecodePNG returns PNG_NO_BUFFER when it is missing or too
+small. The decoder object shrinks by the old array, and small enough to
+fit in the lent framebuffer (see PngToFramebufferConverter).
+
+Two fixes ride along. The row-buffer guard returns PNG_NO_BUFFER rather
+than 0, which decode() would hand back as PNG_SUCCESS (finalizing a cache
+of blank rows). And the IDAT loop fails the decode on a read that returns
+no bytes: iLen never shrank, so a dead SD read spun the render task.
+
+---
+--- a/src/PNGdec.h
++++ b/src/PNGdec.h
+@@ -158,7 +158,10 @@
+     PNGFILE PNGFile;
+     uint8_t ucZLIB[32768 + sizeof(struct inflate_state)]; // put this here to avoid needing malloc/free
+     uint8_t ucPalette[1024];
+-    uint8_t ucPixels[PNG_MAX_BUFFERED_PIXELS];
++    // CrossPoint: caller-owned row buffer (two scanlines + filter bytes + alignment), set with
++    // setRowBuffer() after open(), so the decoder object itself stays small enough to borrow.
++    uint8_t *ucPixels;
++    int iPixelsSize;
+     uint8_t ucFileBuf[PNG_FILE_BUF_SIZE]; // holds temp file data
+ } PNGIMAGE;
+ 
+@@ -187,6 +190,7 @@
+     int getBufferSize();
+     uint8_t *getBuffer();
+     void setBuffer(uint8_t *pBuffer);
++    void setRowBuffer(uint8_t *pBuffer, int iSize);
+     uint8_t getAlphaMask(PNGDRAW *pDraw, uint8_t *pMask, uint8_t ucThreshold);
+     void getLineAsRGB565(PNGDRAW *pDraw, uint16_t *pPixels, int iEndianness, uint32_t u32Bkgd);
+ 
+--- a/src/PNGdec.cpp
++++ b/src/PNGdec.cpp
+@@ -162,6 +162,14 @@
+ //
+ // Returns the size in bytes of the buffer needed to hold the uncompressed image
+ //
++void PNG::setRowBuffer(uint8_t *pBuffer, int iSize)
++{
++    _png.ucPixels = pBuffer;
++    _png.iPixelsSize = iSize;
++} /* setRowBuffer() */
++//
++// Returns the size of the buffer needed to hold the decoded image
++//
+ int PNG::getBufferSize()
+ {
+     return _png.iHeight * _png.iPitch;
+--- a/src/png.inl
++++ b/src/png.inl
+@@ -772,6 +772,12 @@
+         pPage->iError = PNG_NO_BUFFER;
+         return 0;
+     }
++    // The row buffer is caller-owned (setRowBuffer); refuse to decode into one too small for two
++    // aligned scanlines (plus the RGB565 palette tail when PNG_FAST_PALETTE asks for it).
++    if (pPage->ucPixels == NULL || pPage->iPixelsSize < (pPage->iPitch + 1) * 2 + 32 + ((iOptions & PNG_FAST_PALETTE) ? 512 : 0)) {
++        pPage->iError = PNG_NO_BUFFER;
++        return PNG_NO_BUFFER; // not 0: decode() hands this back, and 0 is PNG_SUCCESS
++    }
+     // Use internal buffer to maintain the current and previous lines
+     y = (int)(intptr_t)&pPage->ucPixels[0];
+     y &= 15; // make sure we're 16-byte aligned, -1 for filter byte
+@@ -852,7 +858,7 @@
+                     int i, iColors = 1 << pPage->ucBpp;
+                     uint16_t usPixel, *d;
+                     uint8_t *s = pPage->ucPalette;
+-                    d = (uint16_t *)&pPage->ucPixels[sizeof(pPage->ucPixels)-512];
++                    d = (uint16_t *)&pPage->ucPixels[pPage->iPixelsSize-512];
+                     for (i=0; i<iColors; i++) {
+                     usPixel = (s[2] >> 3); // blue
+                     usPixel |= ((s[1] >> 2) << 5); // green
+@@ -886,6 +892,14 @@
+                     if (iOffset >= iBytesRead) {
+                         // we ran out of data; get some more
+                         iBytesRead = (*pPage->pfnRead)(&pPage->PNGFile, pPage->ucFileBuf, (iLen > PNG_FILE_BUF_SIZE) ? PNG_FILE_BUF_SIZE : iLen);
++                        if (iBytesRead <= 0) {
++                            // A dead read never shrinks iLen: without this the loop spins forever.
++                            pPage->iError = PNG_DECODE_ERROR;
++                            iBytesRead = 0;
++                            iLen = 0;
++                            bDone = TRUE;
++                            break;
++                        }
+                         iFileOffset += iBytesRead;
+                         iOffset = 0;
+                     } else {
+@@ -925,7 +939,7 @@
+                                 pngd.iPitch = pPage->iPitch;
+                                 pngd.iWidth = pPage->iWidth;
+                                 pngd.pPalette = pPage->ucPalette;
+-                                pngd.pFastPalette = (iOptions & PNG_FAST_PALETTE) ? (uint16_t *)&pPage->ucPixels[sizeof(pPage->ucPixels)-512] : NULL;
++                                pngd.pFastPalette = (iOptions & PNG_FAST_PALETTE) ? (uint16_t *)&pPage->ucPixels[pPage->iPixelsSize-512] : NULL;
+                                 pngd.pPixels = pCurr+1;
+                                 pngd.iPixelType = pPage->ucPixelType;
+                                 pngd.iHasAlpha = pPage->iHasAlpha;

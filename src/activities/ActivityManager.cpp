@@ -5,6 +5,7 @@
 #include <HalDisplay.h>
 #include <HalPowerManager.h>
 #include <Memory.h>
+#include <VectorFontSupport.h>
 
 #include <algorithm>
 
@@ -13,6 +14,7 @@
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "components/HeaderBackTapTarget.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
@@ -37,11 +39,21 @@ void ActivityManager::begin() {
 #else
   constexpr BaseType_t renderTaskCore = 0;
 #endif
+#if CROSSPOINT_VECTOR_FONTS
+  // FreeType rasterization runs on this task, and the deepest observed chain
+  // is a glyph fault DURING LAYOUT: expat + parser + line-layout frames
+  // (~3.5KB on Xtensa) with the scan converter's FT_RENDER_POOL_SIZE (4KB)
+  // stack-resident band pool on top — a measured ~8KB peak that trips the
+  // canary on an 8KB stack. Vector-font boards all have PSRAM-class RAM.
+  constexpr uint32_t renderTaskStackBytes = 16384;
+#else
+  constexpr uint32_t renderTaskStackBytes = 8192;
+#endif
   xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender",
-                          8192,               // Stack size
-                          this,               // Parameters
-                          1,                  // Priority
-                          &renderTaskHandle,  // Task handle
+                          renderTaskStackBytes,  // Stack size
+                          this,                  // Parameters
+                          1,                     // Priority
+                          &renderTaskHandle,     // Task handle
                           renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
@@ -110,7 +122,8 @@ void ActivityManager::loop() {
          currentActivity->name == "Settings" || currentActivity->name == "NetworkModeSelection")) {
       int tx = 0;
       int ty = 0;
-      statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44;
+      // The header back button shares this band; its taps stay Back.
+      statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44 && !HeaderBackTapTarget::contains(tx, ty);
     }
     if (statusBarTap || mappedInput.wasLightPanelGesture()) {
       if (currentActivity->name == "FrontlightPanel") {
@@ -199,6 +212,13 @@ void ActivityManager::loop() {
           stackActivities.back()->onExit();
           stackActivities.pop_back();
         }
+      } else if (pendingAction == PendingAction::Push) {
+        // Move current activity to stack
+        stackActivities.push_back(std::move(currentActivity));
+        // The parent's header back rect must not route taps on the pushed
+        // screen (which may draw no header of its own).
+        HeaderBackTapTarget::clear();
+        LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
       }
       pendingAction = PendingAction::None;
       currentActivity = std::move(pendingActivity);
@@ -226,6 +246,9 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
     currentActivity->onExit();
     currentActivity.reset();
   }
+  // The outgoing screen's header back button must not eat taps on the next
+  // screen; the next header draw re-records it.
+  HeaderBackTapTarget::clear();
 }
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
@@ -275,12 +298,13 @@ void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
 }
 
-void ActivityManager::goToLibrary() {
+void ActivityManager::goToLibrary(const int initialTab) {
   // Two screens behind one entry (SETTINGS.libraryView): this fork's cover grid, or upstream's
   // indexed list. Built through separate makeUniqueNoThrow calls rather than one unique_ptr<Activity>
   // so each keeps its own concrete type at the allocation, and a null is reported before
   // replaceActivity() sees it.
   if (SETTINGS.libraryView == CrossPointSettings::LIBRARY_VIEW_LIST) {
+    (void)initialTab;  // the indexed list has its own tab set
     auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput);
     if (!activity) {
       LOG_ERR("ACT", "OOM: library list activity");
@@ -289,7 +313,7 @@ void ActivityManager::goToLibrary() {
     replaceActivity(std::move(activity));
     return;
   }
-  auto activity = makeUniqueNoThrow<CoverLibraryActivity>(renderer, mappedInput);
+  auto activity = makeUniqueNoThrow<CoverLibraryActivity>(renderer, mappedInput, initialTab);
   if (!activity) {
     LOG_ERR("ACT", "OOM: cover library activity");
     return;
@@ -305,6 +329,15 @@ void ActivityManager::goToBrowser() {
   } else {
     replaceActivity(std::make_unique<OpdsServerListActivity>(renderer, mappedInput, true));
   }
+}
+
+void ActivityManager::goToOpdsServers() {
+  auto activity = makeUniqueNoThrow<OpdsServerListActivity>(renderer, mappedInput, true);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: OPDS server list activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
 }
 
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
@@ -404,6 +437,7 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
 }
 
 void ActivityManager::requestUpdate(bool immediate) {
+  updateRequests.fetch_add(1, std::memory_order_relaxed);
   if (immediate) {
     if (renderTaskHandle) {
       xTaskNotify(renderTaskHandle, 1, eIncrement);
@@ -418,6 +452,7 @@ void ActivityManager::requestUpdateAndWait() {
   if (!renderTaskHandle) {
     return;
   }
+  updateRequests.fetch_add(1, std::memory_order_relaxed);
 
   // Atomic section to perform checks
   taskENTER_CRITICAL(&activityManagerSpinlock);

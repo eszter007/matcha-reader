@@ -33,12 +33,10 @@ constexpr size_t NAME_BUFFER_SIZE = 500;
 
 std::string getBookCachePath(const std::string& path) {
   const char* prefix = nullptr;
-  if (FsHelpers::hasEpubExtension(path)) {
+  if (FsHelpers::hasReflowableBookExtension(path)) {
     prefix = "epub_";
   } else if (FsHelpers::hasXtcExtension(path)) {
     prefix = "xtc_";
-  } else if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
-    prefix = "txt_";
   } else {
     return "";
   }
@@ -253,6 +251,9 @@ void FileBrowserActivity::prewarmRowGlyphs(const int start) {
 }
 
 void FileBrowserActivity::onEnter() {
+  // Entered as the Library's Files tab: the cursor carries on from the band the previous screen
+  // left it on, so Confirm keeps stepping the same ring instead of opening the first row.
+  topBandFocused = showsLibraryTabs();
   UiListActivity::onEnter();
 
   fileNameBuffer = makeUniqueNoThrow<char[]>(NAME_BUFFER_SIZE);
@@ -585,8 +586,11 @@ bool FileBrowserActivity::handleCustomInput() {
 
 bool FileBrowserActivity::handleButtons() {
   if (mode == Mode::Books && mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS)) {
-    app.clearTapFlash();
-    showEntryActions();
+    // The entry actions belong to the row under the cursor; on a band there is none.
+    if (ringFocus() == TabRing::Focus::Content) {
+      app.clearTapFlash();
+      showEntryActions();
+    }
     return true;
   }
 
@@ -623,6 +627,9 @@ bool FileBrowserActivity::handleButtons() {
         res.isCancelled = true;
         setResult(std::move(res));
         finish();
+      } else if (showsLibraryTabs()) {
+        // This view is the Library's Files tab, so its root belongs to the Library, not Home.
+        LibraryTabs::activate(LibraryTabs::Books);
       } else {
         onGoHome();
       }
@@ -648,10 +655,17 @@ std::string getFileExtension(const std::string& filename) {
 
 void FileBrowserActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Content below the GUI.drawHeader band, above the button hints.
+  // Content below the GUI.drawHeader band, above the button hints -- or above the tab bar that
+  // replaces them in the Cover Grid theme, so the last row clears it instead of hiding behind it.
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
-  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+                                                static_cast<int16_t>(HomeTabBar::bottomInset()), 0});
+  // The Library's own band, with Files marked: this screen is that tab, so leaving it for Books
+  // or Shelves is a tab switch rather than a trip back through Home.
+  if (showsLibraryTabs()) {
+    LibraryTabs::buildBand(screen, renderer, LibraryTabs::Files, topBandFocused, mappedInput.hasTouch(), ACTION_TAB);
+  } else {
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  }
 
   // Full path band at the bottom: separator on top, left-truncated so the
   // deepest directory stays visible.
@@ -725,10 +739,16 @@ void FileBrowserActivity::drawChrome() {
                                                     : utf8ComposeNfc(basepath.substr(basepath.rfind('/') + 1)));
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
+  // Back still means "up a folder" below the root; at the root the tab bar covers it.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str(), nullptr,
+                 HomeTabBar::showsBackButton(hasTabBar() && basepath == "/"));
 }
 
 void FileBrowserActivity::drawFooter() {
+  if (hasTabBar()) {
+    UiListActivity::drawFooter();
+    return;
+  }
   const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
   // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.

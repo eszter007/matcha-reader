@@ -44,6 +44,8 @@ uint8_t* claim(const size_t minLen, size_t* lenOut) {
   return block;
 }
 
+bool available(const size_t minLen) { return block && blockLen >= minLen && !claimed.load(); }
+
 void release(const uint8_t* p) {
   if (p && p == block) claimed.store(false);
 }

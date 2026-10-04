@@ -1,5 +1,6 @@
 #include "ReaderActivity.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <MangaPanel.h>
@@ -13,7 +14,6 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "TxtReaderActivity.h"
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 
@@ -40,20 +40,29 @@ std::unique_ptr<Activity> ReaderActivity::create(GfxRenderer& renderer, MappedIn
     return makeUniqueNoThrow<XtcReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   }
 
-  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
-    return makeUniqueNoThrow<TxtReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
-  }
-
+  // EPUB, and TXT/Markdown too: those are converted to HTML and read through the EPUB pipeline.
   return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
 }
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+
+  // Heap ledger for field crash reports: free vs largest block distinguishes a
+  // leak (free falls) from fragmentation (free stable, largest collapses).
+  LOG_INF("MEM", "reader enter: free=%u max_block=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+
   if (!Storage.exists(bookPath.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", bookPath.c_str());
     finish();
     return;
   }
+
+  // Clear remembered book after opening it
+  if (!APP_STATE.openEpubPath.empty()) {
+    APP_STATE.openEpubPath.clear();
+    APP_STATE.saveToFile();
+  }
+
   sdFontSystem.ensureLoaded(renderer);
   if (!loadBook()) {
     finish();
@@ -62,11 +71,18 @@ void ReaderActivity::onEnter() {
 
   readingSessionStartMs = millis();
   onReaderEnter();
+  BookStats::recordOpen(bookPath.c_str());
+  requestUpdate();
+}
+
+// The book is only remembered once a page has actually reached the panel. Recording it in
+// onEnter() meant a book that cannot be rendered was reopened on every wake (upstream #3724).
+void ReaderActivity::rememberBookOnceRendered() {
+  if (bookRemembered || !pageRendered.load(std::memory_order_acquire)) return;
+  bookRemembered = true;
   APP_STATE.openEpubPath = bookPath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
-  BookStats::recordOpen(bookPath.c_str());
-  requestUpdate();
 }
 
 void ReaderActivity::onExit() {
@@ -74,6 +90,13 @@ void ReaderActivity::onExit() {
   ReaderUtils::flushReadingStats(readingSessionStartMs, true, hasBook() ? bookPath.c_str() : nullptr,
                                  hasBook() ? getBookLanguage() : nullptr);
   onReaderExit();
+
+  // Keep rebuildable font buffers from pinning the heap between reading sessions.
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->releaseAllFontMemory();
+  }
+
+  LOG_INF("MEM", "reader exit: free=%u max_block=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   APP_STATE.readerActivityLoadCount = 0;
@@ -88,6 +111,9 @@ void ReaderActivity::loop() {
     return;
   }
   ReaderUtils::flushReadingStats(readingSessionStartMs, false, bookPath.c_str(), getBookLanguage());
+  // Here rather than in each format's readerLoop(): every reader routes through this, and the
+  // write it defers (APP_STATE + Recent Books) belongs on the loop task, not the render task.
+  rememberBookOnceRendered();
   readerLoop();
 }
 
@@ -152,7 +178,7 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
   }
   renderer.clearScreen();
   if (endOfBookOptions) {
-    endOfBookOptions->loadOnce(bookPath);
+    endOfBookOptions->loadOnce(bookPath, getBookTitle(), getBookLanguage());
     // Release-publish AFTER loadOnce() so the main task's acquire load can't
     // observe an object whose names/selector are still being populated.
     endOfBookOptionsReady.store(true, std::memory_order_release);

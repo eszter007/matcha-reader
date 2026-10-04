@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "MappedInputManager.h"
@@ -20,6 +21,7 @@
 #include "components/DictionaryPanel.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/SentenceMining.h"
 
 MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  const std::string& panelText, std::string scanCachePath,
@@ -133,10 +135,61 @@ void MangaWordLookupActivity::onExit() {
   }
   // Return the dictionary cache memory (~30KB) to the pool -- see EpubReaderWordLookupActivity.
   DictIndex::releaseCaches();
+  {
+    RenderLock lock;
+    sdFontSystem.releaseWordLookupFallback(renderer);
+  }
+  BookStats::addCounts(mining_.bookPath.c_str(), static_cast<uint32_t>(countedLookups_.size()), 0);
   Activity::onExit();
 }
 
+std::string MangaWordLookupActivity::miningSentence() const {
+  if (cursorIndex < 0 || static_cast<size_t>(cursorIndex) >= scan.selectToAllIdx.size()) return {};
+  const size_t start = scan.selectToAllIdx[static_cast<size_t>(cursorIndex)];
+  const auto& glyphs = scan.allGlyphs;
+  if (start >= glyphs.size()) return {};
+  // One speech bubble is one paragraph of the OCR text: the sentence stays inside it.
+  const uint32_t paragraph = glyphs[start].paragraphIndex;
+  const size_t cap = sentencemining::MAX_SENTENCE_CODEPOINTS;
+  size_t from = start;
+  while (from > 0 && start - from < cap && glyphs[from - 1].paragraphIndex == paragraph) --from;
+  std::string before;
+  for (size_t i = from; i < start; ++i) WordSelectionScan::encodeUtf8(glyphs[i].codepoint, before);
+  const size_t wordEnd = std::min(glyphs.size(), start + static_cast<size_t>(std::max(1, resultMatchLen)));
+  std::string word;
+  for (size_t i = start; i < wordEnd; ++i) WordSelectionScan::encodeUtf8(glyphs[i].codepoint, word);
+  std::string after;
+  for (size_t i = wordEnd; i < glyphs.size() && i - wordEnd < cap && glyphs[i].paragraphIndex == paragraph; ++i) {
+    WordSelectionScan::encodeUtf8(glyphs[i].codepoint, after);
+  }
+  return sentencemining::sentenceHtml(before, word, after);
+}
+
+void MangaWordLookupActivity::saveSentence() {
+  if (!hasResult) return;
+  sentencemining::Card card;
+  card.word = resultHeadword;
+  card.reading = resultReading;
+  card.sentence = miningSentence();
+  std::string definition = resultGrammar.empty() ? std::string() : resultGrammar + "\n";
+  definition += sentencemining::capUtf8(resultDefinition, sentencemining::MAX_DEFINITION_BYTES);
+  card.definition = sentencemining::definitionHtml(definition);
+  card.book = mining_.bookTitle;
+  card.author = mining_.bookAuthor;
+  card.date = sentencemining::today();
+  const std::string_view label = dictionaryLabel() ? dictionaryLabel() : "";
+  card.dictionary = std::string(label.substr(0, label.find(" | ")));
+  // Filed under the comic's language. Folders converted before the tool recorded one are
+  // Japanese manga, which is what they were made for.
+  std::string language = sentencemining::languageForDictionary("", mining_.bookLanguage);
+  if (language.empty()) language = sentencemining::JAPANESE;
+  miningStatus_ = sentencemining::append(card, language) ? MiningStatus::Saved : MiningStatus::Failed;
+  if (miningStatus_ == MiningStatus::Saved) BookStats::addCounts(mining_.bookPath.c_str(), 0, 1);
+  requestUpdate();
+}
+
 void MangaWordLookupActivity::moveCursor(int delta) {
+  miningStatus_ = MiningStatus::None;
   // Moving past the last already-discovered word while the background scan is still running:
   // scan forward just enough to reveal the next one (see EpubReaderWordLookupActivity).
   if (delta > 0 && !scan.isDone() && cursorIndex + delta >= static_cast<int>(scan.selectableGlyphs.size())) {
@@ -181,6 +234,7 @@ std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
 }
 
 void MangaWordLookupActivity::performLookup() {
+  miningStatus_ = MiningStatus::None;
   // Serialize against the render task, which reads the result strings concurrently -- see
   // EpubReaderWordLookupActivity::performLookup() for the confirmed tear/abort.
   RenderLock lock;
@@ -197,10 +251,18 @@ void MangaWordLookupActivity::performLookup() {
   // Render shows "Loading..." instead of "No match found" while this runs (fast navigation).
   lookupInFlight = true;
   performLookupImpl();
+  countLookup();
   lookupInFlight = false;
 }
 
 void MangaWordLookupActivity::performLookupImpl() {
+  // A tapped word shows both its vocab and grammar entries; stepping through the panel word by
+  // word keeps one entry each.
+  const bool tapLookup = targetGlyph >= 0;
+  // The grammar entry shown after the main result: the word's own, or a longer pattern found
+  // around the cursor, which wins.
+  int bestGramLen = 0;
+  std::string bestGramHw, bestGramDef;
   hasResult = false;
   resultHeadword.clear();
   resultSource = nullptr;
@@ -295,8 +357,15 @@ void MangaWordLookupActivity::performLookupImpl() {
       }
       if (allHiragana) {
         DictEntry gramEntry;
-        if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
-                                    gramEntry)) {
+        if (tapLookup && DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
+                                                 DictIndex::grammarDatPath(), gramEntry)) {
+          // Opened on a tapped word: show its grammar entry after the vocab one, not instead of it.
+          bestGramLen = chars;
+          bestGramHw = std::move(gramEntry.headword);
+          bestGramDef = std::move(gramEntry.definition);
+        } else if (!tapLookup && DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
+                                                         DictIndex::grammarDatPath(), gramEntry)) {
+          // Stepping through every word of the panel: one entry per word keeps that quick.
           resultDefinition = std::move(gramEntry.definition);
           DefinitionText::EntryMetadata grammarMetadata;
           DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, grammarMetadata);
@@ -317,8 +386,6 @@ void MangaWordLookupActivity::performLookupImpl() {
   } else if (Storage.exists(DictIndex::grammarIdxPath()) &&
              cursorIndex < static_cast<int>(scan.selectToAllIdx.size())) {
     const size_t allStart = scan.selectToAllIdx[cursorIndex];
-    int bestGramLen = 0;
-    std::string bestGramHw, bestGramDef;
 
     for (int backoff = 3; backoff >= 0; backoff--) {
       size_t scanStart = allStart;
@@ -350,7 +417,8 @@ void MangaWordLookupActivity::performLookupImpl() {
         DictEntry gramEntry;
         if (DictIndex::lookupInFile(window.c_str(), DictIndex::grammarIdxPath(), DictIndex::grammarDatPath(),
                                     gramEntry)) {
-          if (gramEntry.headword != resultHeadword && wLen > bestGramLen) {
+          const bool sameWord = !tapLookup && gramEntry.headword == resultHeadword;
+          if (!sameWord && wLen > bestGramLen) {
             bestGramLen = wLen;
             bestGramHw = std::move(gramEntry.headword);
             bestGramDef = std::move(gramEntry.definition);
@@ -359,19 +427,19 @@ void MangaWordLookupActivity::performLookupImpl() {
         }
       }
     }
+  }
 
-    if (bestGramLen > 0) {
-      // Guarded reserve + appends instead of a temporary chain -- see the EPUB activity.
-      const size_t mergedLen = resultDefinition.size() + bestGramHw.size() + bestGramDef.size() + 32;
-      if (ESP.getMaxAllocHeap() > mergedLen + 8 * 1024) {
-        resultDefinition.reserve(mergedLen);
-        resultDefinition += "\n\n— Grammar: ";
-        resultDefinition += bestGramHw;
-        resultDefinition += " —\n";
-        resultDefinition += bestGramDef;
-      } else {
-        LOG_ERR("MWLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
-      }
+  if (bestGramLen > 0) {
+    // Guarded reserve + appends instead of a temporary chain -- see the EPUB activity.
+    const size_t mergedLen = resultDefinition.size() + bestGramHw.size() + bestGramDef.size() + 32;
+    if (ESP.getMaxAllocHeap() > mergedLen + 8 * 1024) {
+      resultDefinition.reserve(mergedLen);
+      resultDefinition += "\n\n— Grammar: ";
+      resultDefinition += bestGramHw;
+      resultDefinition += " —\n";
+      resultDefinition += bestGramDef;
+    } else {
+      LOG_ERR("MWLA", "Skipping grammar merge, heap too low (maxAlloc=%u)", ESP.getMaxAllocHeap());
     }
   }
 
@@ -390,8 +458,13 @@ void MangaWordLookupActivity::loop() {
     return;
   }
 
+  // With a definition showing, Select saves it for sentence mining; before that it looks up.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    performLookup();
+    if (hasResult) {
+      saveSentence();
+    } else {
+      performLookup();
+    }
     return;
   }
 
@@ -449,6 +522,11 @@ void MangaWordLookupActivity::loop() {
       finish();
       return;
     }
+    const auto add = DictionaryPanel::compute(renderer).addButton;
+    if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+      saveSentence();
+      return;
+    }
   }
 
   // Tap zones, inverted zones, swipes or inverted swipes -- whatever the reader is set to, through
@@ -467,6 +545,7 @@ void MangaWordLookupActivity::loop() {
     const int target = std::clamp(scrollOffset + scroll * visibleCapacity, 0, maxScroll);
     if (hasResult && target != scrollOffset) {
       scrollOffset = target;
+      miningStatus_ = MiningStatus::None;
       requestUpdate();
     }
     return;
@@ -581,14 +660,20 @@ void MangaWordLookupActivity::render(RenderLock&&) {
                          : I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
                                     : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
                                                                             : StrId::STR_DICT_KIND_VOCAB);
-  const auto layout = DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", dictionaryLabel(),
-                                            counterText.empty() ? nullptr : counterText.c_str(), kind);
+  // A save's outcome takes the footer's label until the next move, in place of "kind | dictionary".
+  const bool showStatus = miningStatus_ != MiningStatus::None;
+  const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
+  const auto layout =
+      DictionaryPanel::draw(renderer, hasResult ? resultHeadword.c_str() : "", showStatus ? nullptr : dictionaryLabel(),
+                            counterText.empty() ? nullptr : counterText.c_str(), showStatus ? statusText : kind,
+                            hasResult && mappedInput.hasTouch());
   renderContentArea(layout.body);
 
   // Directional labels for the same reason as the EPUB lookup panel: the hint must name the
   // direction on the rotated screen, which a fixed left/right pair cannot do.
-  const auto labels = mappedInput.mapDirectionalLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT),
-                                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapDirectionalLabels(tr(STR_BACK), hasResult ? tr(STR_MINING_SAVE) : tr(STR_SELECT), tr(STR_DIR_LEFT),
+                                       tr(STR_DIR_RIGHT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
@@ -597,4 +682,12 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   // from that plane: a black flash, then the image in a different tone. A FAST wave drives only the
   // pixels that change, the panel's, and leaves the page around it as it was.
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+void MangaWordLookupActivity::countLookup() {
+  if (!hasResult || resultHeadword.empty() || countedLookups_.size() >= MAX_COUNTED_LOOKUPS) return;
+  const auto hash = static_cast<uint32_t>(std::hash<std::string>{}(resultHeadword));
+  if (std::find(countedLookups_.begin(), countedLookups_.end(), hash) != countedLookups_.end()) return;
+  if (countedLookups_.empty()) countedLookups_.reserve(32);
+  countedLookups_.push_back(hash);
 }

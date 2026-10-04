@@ -1,0 +1,32 @@
+# Manifest for src/components/icons/tabBarIcons.h — regenerate with:
+#   python3 scripts/convert_icon.py --manifest src/components/icons/tabBarIcons.manifest \
+#     --svgdir assets/icons/tabler --size 32 --out src/components/icons/tabBarIcons.h
+# then ./bin/clang-format-fix -g. Needs cairosvg and Pillow.
+#
+# convert_icon.py, not the SDK's gen_icons.py: these arrays go to GfxRenderer::drawIcon, which
+# expects the 90°-CCW packing convert_icon.py applies. gen_icons.py packs for FreeInkUI's
+# freeink::Icon instead, and its output comes out rotated on screen.
+#
+# Tabler icons (MIT), vendored in assets/icons/tabler/ from
+# https://github.com/tabler/tabler-icons — outline as <name>.svg, the filled
+# variant as <name>-filled.svg. The bottom tab bar draws the outline normally
+# and the filled one for the tab you are in, so every entry needs both.
+# The house has no door path (see home.svg), so its outline is closed and the filled variant is
+# just that silhouette solidified.
+HomeIcon = home
+HomeFilledIcon = home + fill
+FilesIcon = folder
+FilesFilledIcon = folder-filled
+# The shelf glyph this fork has always used, redrawn as shapes (library.svg) so the filled state
+# is really filled: the original is stroke art whose books and the gaps between them are both
+# enclosed, so no automatic fill can tell them apart.
+LibraryTabIcon = library
+LibraryTabFilledIcon = library-filled
+TransferTabIcon = send
+TransferTabFilledIcon = send-filled
+# chart-area-line, not chart-bar: Tabler ships no filled chart-bar, and a hand-drawn one cannot
+# match the outline's geometry closely enough -- the glyph visibly changed shape when selected.
+StatsIcon = chart-area-line
+StatsFilledIcon = chart-area-line-filled
+SettingsTabIcon = adjustments-horizontal
+SettingsTabFilledIcon = adjustments-horizontal-filled

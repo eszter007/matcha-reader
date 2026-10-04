@@ -8,6 +8,7 @@
 
 #include "activities/Activity.h"
 #include "util/Dictionary.h"
+#include "util/SentenceMining.h"
 
 // Word selection over the current reader page: Left/Right step through words
 // in reading order, Up/Down jump rows, Confirm looks the word up and opens
@@ -17,7 +18,7 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        std::string folderName, std::string language, int baseFontId,
+                                        std::vector<std::string> folderNames, std::string language, int baseFontId,
                                         int lookupAtX = -1, int lookupAtY = -1)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         lookupAtX(lookupAtX),
@@ -26,14 +27,24 @@ class DictionaryWordSelectActivity final : public Activity {
         marginLeft(marginLeft),
         marginTop(marginTop),
         fontId(baseFontId),
-        folderName(std::move(folderName)),
-        language(std::move(language)) {}
+        language(std::move(language)) {
+    for (auto& folder : folderNames) {
+      if (dictCount >= MAX_DICTIONARIES) break;
+      dicts[dictCount++].folder = std::move(folder);
+    }
+  }
+
+  // Dictionaries a word is looked up in together (see DictionaryRegistry::foldersForLanguage).
+  static constexpr size_t MAX_DICTIONARIES = 4;
 
   // Screen point to open on: the word under it is selected and looked up
   // immediately, so a long press on the page goes straight to the definition
   // instead of dropping the reader into word selection. -1 = normal entry.
   int lookupAtX = -1;
   int lookupAtY = -1;
+
+  // The book and the next page's text, so a looked-up word can be saved for sentence mining.
+  void setMiningContext(sentencemining::BookContext context) { mining_ = std::move(context); }
 
   void onEnter() override;
   void loop() override;
@@ -92,18 +103,32 @@ class DictionaryWordSelectActivity final : public Activity {
 
   std::vector<WordBox> words;
   int selected = 0;
+  sentencemining::BookContext mining_;
+  // A paragraph's drop cap is drawn outside the text flow, so its letter is in no word: the
+  // first word of that line reads "T" for "IT". Kept here (one per page is the norm) so the
+  // saved sentence gets the letter back. -1 when the page has none.
+  int16_t dropCapWord_ = -1;
+  uint32_t dropCapCp_ = 0;
+  uint32_t dropCapPrefixCp_ = 0;
+  // The sentence around the selected word (and its hyphen-split half, if any), as card HTML.
+  std::string miningSentence(std::string_view surface) const;
   uint16_t rowCount = 0;
   bool confirmPressSeen = false;
   unsigned long lastHorizontalMoveTime = 0;
 
-  Dictionary dict;
-  bool dictOpenAttempted = false;
-  bool dictOpenOk = false;
-  std::string folderName;
+  // One dictionary of the lookup, opened (and its index built) the first time a word is looked up.
+  struct DictSlot {
+    Dictionary dict;
+    std::string folder;
+    bool openAttempted = false;
+    bool openOk = false;
+    bool needsIndex = false;
+  };
+  DictSlot dicts[MAX_DICTIONARIES];
+  size_t dictCount = 0;
   // The book's EPUB language tag, selecting the dictionary's inflection rules.
   // Empty for an untagged book, which leaves the folder to decide.
   std::string language;
-  bool dictNeedsIndex = false;
 
   Popup popup = Popup::None;
   StrId popupMsg = StrId::STR_DICT_NOT_FOUND;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ArduinoJson.h>
+#include <BoardConfig.h>
 #include <Epub/ReaderRenderSpec.h>
 #include <PersistableStore.h>
 
@@ -164,7 +165,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     REFRESH_FREQUENCY_COUNT
   };
 
-  // Short power button press actions
+  // Short power button press actions. PWR_CONFIRM is only offered on touch
+  // boards (see SettingsList.h).
   enum SHORT_PWRBTN {
     IGNORE = 0,
     SLEEP = 1,
@@ -207,7 +209,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   // UI Theme
-  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2, ROUNDEDRAFF = 3 };
+  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2, ROUNDEDRAFF = 3, COVER_GRID = 4 };
 
   // Image rendering in EPUB reader
   enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
@@ -219,16 +221,34 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 
   enum TILT_PAGE_TURN { TILT_OFF = 0, TILT_NORMAL = 1, TILT_NVERTED = 2, TILT_PAGE_TURN_COUNT };
 
-  enum TOUCH_READER_CONTROLS {
-    TOUCH_READER_OFF = 0,
-    TOUCH_READER_ON = 1,
-    TOUCH_READER_SWIPE = 2,
-    TOUCH_READER_INVERTED_TAP = 3,
-    // Swipe with the page-turn directions reversed, as INVERTED_TAP is to ON. Vertical Japanese
-    // text reads right-to-left, so the gesture that advances a page runs the other way.
-    // Appended, not inserted: the value is persisted by index.
-    TOUCH_READER_INVERTED_SWIPE = 4,
-    TOUCH_READER_CONTROLS_COUNT
+  enum TOUCH_READER_CONTROLS { TOUCH_READER_OFF = 0, TOUCH_READER_ON = 1, TOUCH_READER_CONTROLS_COUNT };
+
+  // Pre-merge values of the single Matcha touch-controls enum, kept only so fromJson() can
+  // migrate a stored value into touchReaderControls plus the per-direction gestures below.
+  // Not offered anywhere in the UI.
+  enum LEGACY_TOUCH_READER_CONTROLS {
+    LEGACY_TOUCH_OFF = 0,
+    LEGACY_TOUCH_TAP = 1,
+    LEGACY_TOUCH_SWIPE = 2,
+    LEGACY_TOUCH_INVERTED_TAP = 3,
+    LEGACY_TOUCH_INVERTED_SWIPE = 4,
+    LEGACY_TOUCH_READER_CONTROLS_COUNT
+  };
+
+  // Per-direction reader page-turn gestures. INVERTED_TAP is tap-only; either direction set to
+  // it swaps both directions' shared tap zones (see ReaderUtils::detectTouchPageTurn).
+  // INVERTED_SWIPE is the swipe equivalent: vertical Japanese text reads right-to-left, so the
+  // gesture that advances a page runs the other way. Persisted by index: append only, which is
+  // why INVERTED_SWIPE sits after DISABLED rather than beside INVERTED_TAP. SettingsList
+  // presents them in reading order via withEnumOrder().
+  enum PAGE_TURN_GESTURE {
+    TAP_AND_SWIPE = 0,
+    TAP_ONLY = 1,
+    SWIPE_ONLY = 2,
+    INVERTED_TAP = 3,
+    PAGE_TURN_GESTURE_DISABLED = 4,
+    INVERTED_SWIPE = 5,
+    PAGE_TURN_GESTURE_COUNT
   };
 
   // How the reader menu opens on touch boards. Persisted under the legacy
@@ -283,6 +303,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t clockHasBeenSynced = 0;
   // Text rendering settings
   uint8_t extraParagraphSpacing = 1;
+  static constexpr uint8_t WORD_SPACING_MIN = 50;
+  static constexpr uint8_t WORD_SPACING_MAX = 200;
+  static constexpr uint8_t WORD_SPACING_STEP = 25;
+  uint8_t wordSpacing = 100;                              // percent of the font's space advance
+  static constexpr uint8_t CHARACTER_SPACING_OFFSET = 2;  // stored 0..4 maps to -2..+2 px
+  uint8_t characterSpacing = CHARACTER_SPACING_OFFSET;
+  int8_t getCharacterSpacing() const { return static_cast<int8_t>(characterSpacing - CHARACTER_SPACING_OFFSET); }
   uint8_t textAntiAliasing = 1;
   // Short power button click behaviour
   uint8_t shortPwrBtn = IGNORE;
@@ -366,8 +393,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Long-press Confirm function in EPUB reader (cycles through LONG_PRESS_MENU_FUNCTION values).
   // Defaults to Disabled so shortcut-based bookmark toggling remains opt-in.
   uint8_t longPressMenuFunction = LP_MENU_DISABLED;
-  // UI Theme
-  uint8_t uiTheme = LYRA;
+  // UI Theme. Touch boards start on the cover grid: it is a tap-driven home (covers, a bottom
+  // tab bar) and there is nothing to drive it with on a board that has only buttons, where Lyra
+  // stays the default. Only the default -- a saved choice is never overridden.
+  uint8_t uiTheme = BoardConfig::hasTouch() ? COVER_GRID : LYRA;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled). Read by
@@ -400,8 +429,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t imageRendering = IMAGES_DISPLAY;
   // Tilt-based page turning (X3 only — requires QMI8658 IMU)
   uint8_t tiltPageTurn = TILT_OFF;
-  // Touch screen reader zones/gestures on boards with a touch controller.
-  uint8_t touchReaderControls = TOUCH_READER_SWIPE;
+  // Master reader-touch toggle on boards with a touch controller.
+  uint8_t touchReaderControls = TOUCH_READER_ON;
+  // Which gestures turn the page in each direction (PAGE_TURN_GESTURE). Matcha's pre-merge
+  // default was swipe, so both keep SWIPE_ONLY rather than upstream's tap-and-swipe.
+  uint8_t pageTurnGesture = SWIPE_ONLY;
+  uint8_t previousPageGesture = SWIPE_ONLY;
   // Swap Word Lookup navigation to side buttons and scrolling to front buttons.
   uint8_t wordLookupSideButtons = 0;
   // Word Lookup definition font: 8/12/14/16pt (Tiny/Small/Medium/Large; Small is the default).
@@ -457,7 +490,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   /// current size. Used as the Latin fallback when the selected SD family has no
   /// Latin glyphs and the book is not Japanese.
   int getBuiltinReaderFontId() const;
-  int getRubyFontId() const;
 
   // Drop the SD font selection and fall back to the built-in family, persisting the change.
   // The reader point size is deliberately left alone: which sizes a built-in row offers depends

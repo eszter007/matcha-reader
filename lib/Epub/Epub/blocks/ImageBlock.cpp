@@ -1,6 +1,7 @@
 #include "ImageBlock.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,7 @@
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PngToFramebufferConverter.h"
 
 // Cache file format:
 // - uint16_t width
@@ -81,6 +83,8 @@ bool imageFailedThisRender(const std::string& path) {
   }
   return false;
 }
+
+bool deferredDecode = false;
 
 void rememberImageFailure(const std::string& path) {
   if (failedImageCount == MAX_RENDER_IMAGE_FAILURES || imageFailedThisRender(path)) return;
@@ -191,6 +195,30 @@ int loadPxcSlot(uint64_t cacheHash, HalFile& cacheFile, uint16_t cachedWidth, ui
   return rows;
 }
 
+// Draws columns [colStart, colEnd) of one 2bpp cache row. A packed byte holds four pixels; one
+// that draws nothing in this pass is skipped whole instead of unpacked pixel by pixel: all white
+// (level 3) writes nothing in BW or on an overlay gray plane, and all black (level 0) writes
+// nothing on an overlay gray plane. Most of a typical illustration is one or the other.
+void drawPxcRow(DirectPixelWriter& pw, const uint8_t* rowBuffer, const int x, const int colStart, const int colEnd) {
+  const bool overlay = !pw.absolute;
+  const bool grayPass = pw.mode == GfxRenderer::GRAYSCALE_MSB || pw.mode == GfxRenderer::GRAYSCALE_LSB;
+  const bool skipWhite = overlay && (pw.mode == GfxRenderer::BW || grayPass);
+  const bool skipBlack = overlay && grayPass;
+  int col = colStart;
+  while (col < colEnd) {
+    if ((col & 3) == 0 && col + 4 <= colEnd) {
+      const uint8_t packed = rowBuffer[col >> 2];
+      if ((skipWhite && packed == 0xFF) || (skipBlack && packed == 0x00)) {
+        col += 4;
+        continue;
+      }
+    }
+    const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
+    pw.writePixel(x + col, (rowBuffer[col >> 2] >> bitShift) & 0x03);
+    col++;
+  }
+}
+
 void renderRowsFromPxcSlot(GfxRenderer& renderer, int x, int y) {
   const int bytesPerRow = (pxcSlotWidth + 3) / 4;
   uint8_t tempRow[PXC_MAX_BYTES_PER_ROW];
@@ -203,12 +231,7 @@ void renderRowsFromPxcSlot(GfxRenderer& renderer, int x, int y) {
     pw.beginRow(y + row);
     int colStart, colEnd;
     pw.bandColRange(x, pxcSlotWidth, colStart, colEnd);
-    for (int col = colStart; col < colEnd; col++) {
-      const int byteIdx = col >> 2;            // col / 4
-      const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
-      const uint8_t pixelValue = (rowBuffer[byteIdx] >> bitShift) & 0x03;
-      pw.writePixel(x + col, pixelValue);
-    }
+    drawPxcRow(pw, rowBuffer, x, colStart, colEnd);
   }
 }
 
@@ -314,13 +337,7 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     // the active band; skip the rest instead of unpacking+clipping every pixel.
     int colStart, colEnd;
     pw.bandColRange(x, cachedWidth, colStart, colEnd);
-    for (int col = colStart; col < colEnd; col++) {
-      const int byteIdx = col >> 2;            // col / 4
-      const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
-      uint8_t pixelValue = (rowBuffer[byteIdx] >> bitShift) & 0x03;
-
-      pw.writePixel(x + col, pixelValue);
-    }
+    drawPxcRow(pw, rowBuffer, x, colStart, colEnd);
   }
 
   free(readBuffer);
@@ -344,6 +361,16 @@ bool ImageBlock::hasValidCache() const {
 bool ImageBlock::needsDecode() const { return !imageFailedThisRender(imagePath) && !hasValidCache(); }
 
 void ImageBlock::clearRenderFailures() { failedImageCount = 0; }
+
+bool ImageBlock::needsFramebufferLoanToDecode() const {
+  return FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap() && !hasValidCache();
+}
+
+bool ImageBlock::consumeDeferredDecode() {
+  const bool deferred = deferredDecode;
+  deferredDecode = false;
+  return deferred;
+}
 
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
 
@@ -439,6 +466,18 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     // the block rect would counter-invert the wrong pixels (see the rotated-fit branch above).
     renderer.preserveImagePolarity(drawX, drawY, drawW, drawH);
     return;  // Successfully rendered from cache
+  }
+
+  // Before the extraction below: it needs the same scarce contiguous heap (a 32KB inflate window),
+  // and the warm task extracts too, inside the framebuffer loan where the window can use the lent
+  // bytes. Deferring after a failed extraction left an unextracted PNG as a placeholder for good.
+  if (FsHelpers::hasPngExtension(imagePath) && !PngToFramebufferConverter::decoderFitsHeap()) {
+    LOG_INF("IMG", "Deferring PNG decode to the warm task (largest=%u): %s", (unsigned)ESP.getMaxAllocHeap(),
+            imagePath.c_str());
+    deferredDecode = true;
+    rememberImageFailure(imagePath);
+    renderPlaceholderAt(renderer, drawX, drawY, drawW, drawH);
+    return;
   }
 
   // The build only header-probed the image for dimensions; pull the actual
@@ -562,7 +601,7 @@ void ImageBlock::fitWithin(const int availW, const int availH, int& w, int& h) {
 }
 
 ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shouldCancel)(const void*),
-                                             const void* cancelCtx) const {
+                                             const void* cancelCtx, const bool decoderInLentFramebuffer) const {
   // BMP never streams a pixel cache (the BMP converter rejects cacheOnly) and renders fast
   // without one -- nothing to warm.
   const size_t dotPos = imagePath.rfind('.');
@@ -628,6 +667,7 @@ ImageBlock::WarmResult ImageBlock::warmCache(GfxRenderer& renderer, bool (*shoul
   config.performanceMode = false;
   config.useExactDimensions = true;
   config.cacheOnly = true;  // stream only the .2bp cache; never touch the framebuffer
+  config.decoderMayUseLentFramebuffer = decoderInLentFramebuffer;
   config.cachePath = cachePath;
   config.shouldCancel = shouldCancel;
   config.cancelCtx = cancelCtx;
