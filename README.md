@@ -28,7 +28,7 @@ Full instructions live in the [User Guide](USER_GUIDE.md). This page is the shor
 | Dictionary | Jitendex / JMdict, names, grammar | CC-CEDICT | CC-CEDICT + MoE 重編國語辭典 | CC-Canto + CC-CEDICT | Any StarDict |
 | Dictionary folder | `dictionaries/jp/` | `dictionaries/zh/` | `dictionaries/zh/` | `dictionaries/yue/` | `dictionaries/<lang>/<name>/` |
 | Text layout | Vertical by default | Horizontal | Vertical when the book is right-to-left | As traditional | Horizontal |
-| Readings above the text | Furigana from the book | Pinyin added with a script | Pinyin or zhuyin added with a script | — | — |
+| Readings above the text | Furigana from the book, or added with a script | Pinyin added with a script | Pinyin or zhuyin added with a script | — | — |
 | Font | Built in; SD font optional | SD font required (Noto Sans SC) | SD font required (Noto Sans TC) | SD font required (Noto Sans TC) | Built in |
 | Comics | Manga, lookup in the bubbles | Manhua, same | Manhua, same | Manhua, same | Comics, same |
 | Saved sentences | `sentences-ja.csv` | `sentences-zh.csv` | `sentences-zh.csv` | `sentences-yue.csv` | `sentences-<lang>.csv` |
@@ -89,6 +89,8 @@ Translates the current page to English with Gemini, in the same floating panel a
 
 **A word broken across a page break still resolves.** The lookup reads a few characters past the end of the page, so the half you can see finds the whole word; the highlight stays on the page and covers only the characters that are there.
 
+**Furigana for books that have none.** The device shows the furigana a book carries; it does not work readings out itself. `tools/furigana_ruby/add_furigana_ruby.py --ai` adds them to an EPUB on your computer, reading each word in context with Gemini under your own key, and keeps any furigana the book already has. See [Setup](#setup).
+
 **A font is built in.** The built-in Noto covers the common Japanese characters; an SD font (Noto Sans or Serif JP) looks better and fills in rare kanji.
 
 ### For Chinese learners
@@ -106,10 +108,10 @@ Common to all three:
 - **Both scripts are indexed**, so a traditional dictionary serves a simplified book and the other way round, and the entry shows the other form (`說話 / 说话`).
 - **The common sense comes first**: entries are ranked by a frequency list. Proper nouns can go to their own names dictionary and a grammar list to the grammar slot, exactly as for Japanese. Example sentences with translations come from Tatoeba.
 - **A wrong or missing language tag is caught.** A book is recognised from its text the first time it opens, and **Reader Settings → Book Language** re-tags any book by hand (Auto, Japanese, Chinese (Simplified), Chinese (Traditional), Cantonese), so a Chinese EPUB labelled `en` still gets its dictionary, font and layout.
-- **Pinyin above the text** works the way furigana does: the book carries it. The device does not work pinyin out itself, so the EPUB is prepared once on your computer: `tools/pinyin_ruby/add_pinyin_ruby.py` adds pinyin (or zhuyin) ruby to every word, optionally skipping the commonest words, and the Furigana toggle shows or hides it on the device.
+- **Pinyin above the text** works the way furigana does: the book carries it. The device does not work pinyin out itself, so the EPUB is prepared once on your computer: `tools/pinyin_ruby/add_pinyin_ruby.py` adds pinyin (or zhuyin) ruby to every word, optionally skipping the commonest words, and the Furigana toggle shows or hides it on the device. With `--ai` the reading of a character that has several (石 *shí* or *dàn*, 說 *shuō* or *shuì*) is chosen in context by Gemini rather than taken from the first dictionary entry.
 
-<p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character, added by the pinyin script"></p>
-<p align="center"><em>紅樓夢 after the pinyin script, Furigana switched on</em></p>
+<p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character, added by the pinyin script with --ai"></p>
+<p align="center"><em>紅樓夢 after the pinyin script with <code>--ai</code>, Furigana switched on</em></p>
 
 - **Vertical Text** in Reader Settings overrides the layout either way, per book.
 - **An SD font is required.** The built-in CJK glyphs are the common Japanese set, so a Chinese book without one shows empty boxes for everyday characters such as 这, 说 or 們.
@@ -285,6 +287,12 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dictionaries/jp/    # add --name names / --name grammar for the others
 ```
 
+To add furigana to a Japanese book that has none, annotate the EPUB once before copying it to the card. Readings depend on context, so this always goes through Gemini (the book's text is sent to it under your own key):
+
+```bash
+python3 tools/furigana_ruby/add_furigana_ruby.py --ai --gemini-key-file gemini.key book.epub book-furigana.epub
+```
+
 ##### Chinese: Mandarin, simplified or traditional
 
 Ready-made packs come from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh): unzip the **simplified** or the **traditional** one onto the card so that it holds `dictionaries/zh/`. Install one, not both: they share the folder. Either pack serves books in both scripts, because every entry is indexed under both forms; they differ in what the entry shows.
@@ -323,6 +331,8 @@ Optional extras, for either set:
   python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.txt \
     --frequency dict.txt --skip-top 1500 book.epub book-pinyin.epub   # --zhuyin for bopomofo
   ```
+
+  Add `--ai --gemini-key-file gemini.key` to have each character's reading picked in context. The book's text is sent to Gemini under your own key, sentence by sentence; a reading is used only when CC-CEDICT lists it for that character, and the dictionary's is kept otherwise.
 
 ##### Chinese: Cantonese
 
