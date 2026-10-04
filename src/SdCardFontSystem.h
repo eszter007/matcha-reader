@@ -55,6 +55,18 @@ class SdCardFontSystem {
   /// companion's UI sizes then serve the list rows. Cleared by the next setCjkFallbackNeeded():
   /// once a book is open, the book decides. None releases a companion only the UI wanted.
   void setUiCjkNeeded(GfxRenderer& renderer, CjkScript script);
+  /// setUiCjkNeeded() for a list screen: the first listed title the built-in subset cannot draw
+  /// decides, a Latin-only list releases a companion only the UI wanted. titleOf(item) gives the
+  /// UTF-8 text of one item.
+  template <typename Range, typename TitleOf>
+  void setUiCjkNeededForTitles(GfxRenderer& renderer, const Range& items, TitleOf titleOf) {
+    CjkScript script = CjkScript::None;
+    for (const auto& item : items) {
+      script = uiCjkScriptFor(titleOf(item));
+      if (script != CjkScript::None) break;
+    }
+    setUiCjkNeeded(renderer, script);
+  }
 
   /// True when the built-in CJK subset (the floor every UI string falls back to) has the glyph.
   bool builtinCjkCovers(uint32_t cp) const;

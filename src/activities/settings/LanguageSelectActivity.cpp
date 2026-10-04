@@ -48,11 +48,7 @@ void LanguageSelectActivity::onEnter() {
 
   // The Chinese entries name themselves in characters the built-in CJK subset lacks (简, 體):
   // bring the SD companion in for this list, as Home does for a Chinese title.
-  CjkScript uiScript = CjkScript::None;
-  for (int i = 0; i < totalItems && uiScript == CjkScript::None; ++i) {
-    uiScript = sdFontSystem.uiCjkScriptFor(rowItems[i].label);
-  }
-  sdFontSystem.setUiCjkNeeded(renderer, uiScript);
+  sdFontSystem.setUiCjkNeededForTitles(renderer, rowItems, [](const fui::ListItem& item) { return item.label; });
 }
 
 const char* LanguageSelectActivity::headerTitle() const { return tr(STR_LANGUAGE); }

@@ -12,6 +12,7 @@
 
 #include "Epub/Kinsoku.h"
 #include "Epub/Page.h"
+#include "util/CjkScript.h"
 
 namespace {
 // Bare vector growth (reserve()/push_back() past capacity) calls operator new, which aborts the
@@ -52,12 +53,9 @@ bool WordSelectionScan::isLookupableChar(uint32_t cp) {
   if (cp == 0x2026 || cp == 0x2025) return false;
   if (cp >= '0' && cp <= '9') return false;
   if (cp >= 0xFF10 && cp <= 0xFF19) return false;
-  if (cp >= 0x3040 && cp <= 0x309F) return true;    // Hiragana
-  if (cp >= 0x30A0 && cp <= 0x30FF) return true;    // Katakana
-  if (cp >= 0x4E00 && cp <= 0x9FFF) return true;    // CJK Unified
-  if (cp >= 0x3400 && cp <= 0x4DBF) return true;    // CJK Ext A
-  if (cp >= 0xF900 && cp <= 0xFAFF) return true;    // CJK Compat
-  if (cp >= 0x20000 && cp <= 0x3134F) return true;  // CJK Ext B-G
+  if (cp >= 0x3040 && cp <= 0x309F) return true;  // Hiragana
+  if (cp >= 0x30A0 && cp <= 0x30FF) return true;  // Katakana
+  if (cjk::isHan(cp)) return true;
   return cp >= 0x80;
 }
 
@@ -69,10 +67,7 @@ bool WordSelectionScan::isHiragana(uint32_t cp) {
   return (cp >= 0x3040 && cp <= 0x309F) || (Kinsoku::isSmallKana(cp) && cp < 0x30A0);
 }
 
-bool WordSelectionScan::isCJK(uint32_t cp) {
-  return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF) ||
-         (cp >= 0x20000 && cp <= 0x3134F);  // Ext B-G: rare hanzi, common in traditional Chinese names
-}
+bool WordSelectionScan::isCJK(uint32_t cp) { return cjk::isHan(cp); }
 
 bool WordSelectionScan::isDigitCp(uint32_t cp) { return (cp >= '0' && cp <= '9') || (cp >= 0xFF10 && cp <= 0xFF19); }
 

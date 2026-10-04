@@ -521,12 +521,7 @@ void OpdsBookBrowserActivity::rebuildRowItems() {
   }
   // A Chinese catalogue lists titles the built-in CJK subset cannot draw: ask for the SD companion
   // the way Home does, before the rows are painted.
-  CjkScript uiScript = CjkScript::None;
-  for (const auto& entry : entries) {
-    uiScript = sdFontSystem.uiCjkScriptFor(entry.title.c_str());
-    if (uiScript != CjkScript::None) break;
-  }
-  sdFontSystem.setUiCjkNeeded(renderer, uiScript);
+  sdFontSystem.setUiCjkNeededForTitles(renderer, entries, [](const OpdsEntry& entry) { return entry.title.c_str(); });
 }
 
 void OpdsBookBrowserActivity::releaseEntries() {

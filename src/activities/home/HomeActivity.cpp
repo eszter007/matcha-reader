@@ -335,14 +335,7 @@ void HomeActivity::onEnter() {
   }
   // A Chinese title (or one with a rare kanji) needs glyphs the built-in CJK subset lacks: bring
   // the SD companion in for the UI before anything is drawn. A Latin-only shelf pays nothing.
-  {
-    CjkScript uiScript = CjkScript::None;
-    for (const auto& book : recentBooks) {
-      uiScript = sdFontSystem.uiCjkScriptFor(book.title.c_str());
-      if (uiScript != CjkScript::None) break;
-    }
-    sdFontSystem.setUiCjkNeeded(renderer, uiScript);
-  }
+  sdFontSystem.setUiCjkNeededForTitles(renderer, recentBooks, [](const auto& book) { return book.title.c_str(); });
   if (coverGridUi) coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
 
   const auto base = static_cast<int>(recentBooks.size());

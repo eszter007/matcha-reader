@@ -438,21 +438,7 @@ void EpubReaderActivity::onReaderEnter() {
   // dictionary, font and layout; Reader Settings' Book Language overrides either.
   loadLanguageChoice();
   sniffLanguageIfNeeded();
-  refreshBookScript();
-  if (verticalOverride == 1 && !isCjkBook()) {
-    LOG_INF("ERS", "Clearing forced-vertical flag on a non-CJK book");
-    verticalOverride = -1;
-  }
-
-  // CJK books (or forced vertical text) need the proper-size companion font; plain
-  // Latin books must not pay its SD load / RAM (user-reported).
-  sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
-  // Word lookup reads the converted dictionary of the book's language, and traditional Chinese
-  // sets its vertical punctuation differently from Japanese. Both are process-wide and decided
-  // once per book here, before any layout or lookup runs.
-  const char* dictFolder = cjk::dictIndexFolderForLanguage(effectiveLanguage());
-  DictIndex::setLanguageFolder(dictFolder ? dictFolder : cjk::dictIndexFolder(fontScript()));
-  Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
+  applyLanguageState();
 
   loadCachedBookmarks();
 }
@@ -1432,19 +1418,30 @@ void EpubReaderActivity::applyLanguageOverride(const int8_t choice) {
   if (choice < 0 || choice >= cjk::LANGUAGE_CHOICE_COUNT || choice == static_cast<int8_t>(languageOverride)) return;
   languageOverride = static_cast<uint8_t>(choice);
   saveLanguageChoice();
-  refreshBookScript();
   // The language decides direction, line breaking, dictionary folder and font, so the layout is
-  // rebuilt; a forced-vertical flag left over from a different language no longer applies.
-  if (verticalOverride == 1 && !isCjkBook()) verticalOverride = -1;
+  // rebuilt. Cached vertical layouts bake the punctuation mode and quote forms in and are keyed by
+  // font and viewport only, so a Japanese cache would serve the book now read as Chinese.
   dropSectionsKeepingPosition();
-  // Cached vertical layouts bake the punctuation mode and quote forms in and are keyed by font and
-  // viewport only, so a Japanese cache would serve the book now read as Chinese, or the reverse.
   Storage.removeDir((epub->getCachePath() + "/vsections").c_str());
-  sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
-  const char* dictFolder = cjk::dictIndexFolderForLanguage(effectiveLanguage());
-  DictIndex::setLanguageFolder(dictFolder ? dictFolder : cjk::dictIndexFolder(fontScript()));
-  Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
+  applyLanguageState();
   LOG_INF("ERS", "Book language override: %u -> %s", languageOverride, effectiveLanguage().c_str());
+}
+
+void EpubReaderActivity::applyLanguageState() {
+  refreshBookScript();
+  // A forced-vertical flag left over from a different language no longer applies.
+  if (verticalOverride == 1 && !isCjkBook()) {
+    LOG_INF("ERS", "Clearing forced-vertical flag on a non-CJK book");
+    verticalOverride = -1;
+  }
+  // CJK books (or forced vertical text) need the proper-size companion font; plain Latin books
+  // must not pay its SD load / RAM (user-reported).
+  sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+  // Word lookup reads the converted dictionary of the book's language, and traditional Chinese
+  // sets its vertical punctuation differently from Japanese. Both are process-wide and decided
+  // here, before any layout or lookup runs.
+  DictIndex::setLanguageFolder(cjk::dictFolderFor(effectiveLanguage(), fontScript()));
+  Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
 }
 
 namespace {

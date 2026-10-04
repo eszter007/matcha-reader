@@ -752,9 +752,7 @@ CjkScript SdCardFontSystem::uiCjkScriptFor(const char* utf8) const {
   const auto* p = reinterpret_cast<const unsigned char*>(utf8);
   while (*p) {
     const uint32_t cp = utf8NextCodepoint(&p);
-    const bool han = (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
-                     (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0x20000 && cp <= 0x3134F);
-    if (han && !builtinCjkCovers(cp)) return CjkScript::SimplifiedChinese;
+    if (cjk::isHan(cp) && !builtinCjkCovers(cp)) return CjkScript::SimplifiedChinese;
   }
   return CjkScript::None;
 }

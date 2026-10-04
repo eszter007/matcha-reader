@@ -1137,15 +1137,10 @@ std::string EpubReaderWordLookupActivity::buildLookupText() const {
   if (allStart >= scan.allGlyphs.size()) return text;
   const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
   int charCount = 0;
-  // Chinese: the scan weighed the whole run, so the word it chose may be shorter than the
-  // longest match from this cell (和 before 尚未, not 和尚). Look up exactly that word -- except
-  // one cut at the page edge, whose span is only the on-page part of a longer match.
-  int limit = WordSelectionScan::kMaxLookupChars;
-  if (scan.usesRunSegmentation() && provisionalGlyph >= scan.onPageGlyphCount() && cursorIndex >= 0 &&
-      static_cast<size_t>(cursorIndex) < scan.selectableGlyphs.size()) {
-    const uint8_t span = scan.selectableGlyphs[static_cast<size_t>(cursorIndex)].matchLen;
-    if (span > 0 && allStart + span < scan.contextStart) limit = std::min<int>(limit, span);
-  }
+  // A provisional (not yet scanned) glyph has no word of its own: full window, longest match.
+  const int limit = provisionalGlyph < scan.onPageGlyphCount() || cursorIndex < 0
+                        ? WordSelectionScan::kMaxLookupChars
+                        : scan.lookupCharLimit(static_cast<size_t>(cursorIndex));
 
   for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < limit; i++) {
     const auto& g = scan.allGlyphs[i];

@@ -129,6 +129,18 @@ class WordSelectionScan {
   // Whether the scan segments by weighed whole-run splits (Chinese). The runtime lookup then
   // takes the scan's word length instead of the longest match from the cursor.
   bool usesRunSegmentation() const { return chineseMode_; }
+  // Characters the runtime lookup may take from selectable word `selectableIdx`: in Chinese mode
+  // exactly the word the run segmentation chose (和 before 尚未, not 和尚), unless that word was
+  // cut at the page edge and its span is only the on-page part of a longer match; otherwise the
+  // full window, for the longest-match path.
+  int lookupCharLimit(size_t selectableIdx) const {
+    if (!chineseMode_ || selectableIdx >= selectableGlyphs.size() || selectableIdx >= selectToAllIdx.size()) {
+      return kMaxLookupChars;
+    }
+    const uint8_t span = selectableGlyphs[selectableIdx].matchLen;
+    if (span == 0 || selectToAllIdx[selectableIdx] + span >= contextStart) return kMaxLookupChars;
+    return span < kMaxLookupChars ? span : kMaxLookupChars;
+  }
 
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;

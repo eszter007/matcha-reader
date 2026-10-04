@@ -767,14 +767,7 @@ void CoverLibraryActivity::onEnter() {
   loadRecentBooks();
   // A title beyond the built-in CJK subset (Chinese, a rare kanji) needs the SD companion for the
   // grid and shelf labels. This list is the whole last card scan, so one pass covers both tabs.
-  {
-    CjkScript uiScript = CjkScript::None;
-    for (const auto& book : recentBooks) {
-      uiScript = sdFontSystem.uiCjkScriptFor(book.title.c_str());
-      if (uiScript != CjkScript::None) break;
-    }
-    sdFontSystem.setUiCjkNeeded(renderer, uiScript);
-  }
+  sdFontSystem.setUiCjkNeededForTitles(renderer, recentBooks, [](const auto& book) { return book.title.c_str(); });
   loadBookProgress();
   shelvesLoaded = false;
   coverWorker_.start("LibraryCover");

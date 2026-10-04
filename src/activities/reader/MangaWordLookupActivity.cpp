@@ -227,12 +227,7 @@ std::string MangaWordLookupActivity::buildLookupText(size_t startIdx) const {
 
   const size_t allStart = scan.selectToAllIdx[startIdx];
   int charCount = 0;
-  // Chinese: the scan chose this word's length by weighing the whole run; look up exactly it.
-  int limit = WordSelectionScan::kMaxLookupChars;
-  if (scan.usesRunSegmentation() && startIdx < scan.selectableGlyphs.size() &&
-      scan.selectableGlyphs[startIdx].matchLen > 0) {
-    limit = std::min<int>(limit, scan.selectableGlyphs[startIdx].matchLen);
-  }
+  const int limit = scan.lookupCharLimit(startIdx);
   for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < limit; i++) {
     WordSelectionScan::encodeUtf8(scan.allGlyphs[i].codepoint, text);
     charCount++;

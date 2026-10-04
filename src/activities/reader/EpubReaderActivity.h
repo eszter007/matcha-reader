@@ -706,6 +706,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // Recomputed where the language settles (after the open-time sniff, and on an override):
   // bookScript() sits on the render path and must not build the language tag each call.
   void refreshBookScript();
+  // Everything that follows from the book's language: its script, the companion font, the
+  // dictionary folder and the vertical punctuation mode. Run at open and on an override.
+  void applyLanguageState();
   CjkScript bookScript_ = CjkScript::None;
   // What the page is set in: the book's script, or Japanese when vertical text is forced on a
   // book with no CJK tag (the same signal useVerticalText() reads).

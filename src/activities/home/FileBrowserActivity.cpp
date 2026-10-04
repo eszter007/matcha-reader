@@ -193,12 +193,7 @@ void FileBrowserActivity::loadFiles() {
   std::move(otherFiles.begin(), otherFiles.end(), std::back_inserter(files));
   // A listed name with a character the built-in CJK subset lacks (a Chinese title) wants the SD
   // companion for the UI, as Home does; a Latin folder pays nothing.
-  CjkScript uiScript = CjkScript::None;
-  for (const auto& name : files) {
-    uiScript = sdFontSystem.uiCjkScriptFor(name.c_str());
-    if (uiScript != CjkScript::None) break;
-  }
-  sdFontSystem.setUiCjkNeeded(renderer, uiScript);
+  sdFontSystem.setUiCjkNeededForTitles(renderer, files, [](const std::string& name) { return name.c_str(); });
 }
 
 // fui::ListProps::rowProvider — formats row `index` from files[index] into the

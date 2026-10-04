@@ -45,6 +45,14 @@ inline CjkScript scriptForLanguage(std::string_view tag) {
   return CjkScript::SimplifiedChinese;
 }
 
+// A Han ideograph: CJK Unified, Extension A, the compatibility block and Extensions B-G (rare
+// hanzi, common in traditional Chinese names). The one definition the scan, the sniff and the
+// font coverage probe share.
+inline bool isHan(const uint32_t cp) {
+  return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+         (cp >= 0x20000 && cp <= 0x3134F);
+}
+
 inline bool isChinese(const CjkScript s) {
   return s == CjkScript::SimplifiedChinese || s == CjkScript::TraditionalChinese;
 }
@@ -63,6 +71,13 @@ inline const char* dictIndexFolderForLanguage(std::string_view tag) {
   const std::string_view primary = tag.substr(0, tag.find_first_of("-_"));
   if (subtagIs(primary, "yue")) return "yue";
   return dictIndexFolder(scriptForLanguage(tag));
+}
+
+// The folder a book reads: its language tag's, else the one for the script the reader settled on
+// (a forced-vertical Latin book reads the Japanese folder; manga without a tag likewise).
+inline const char* dictFolderFor(std::string_view tag, const CjkScript fallbackScript) {
+  const char* folder = dictIndexFolderForLanguage(tag);
+  return folder ? folder : dictIndexFolder(fallbackScript);
 }
 
 // A codepoint every usable font for the script must carry, for coverage probes: あ for
@@ -208,7 +223,7 @@ struct ScriptSniff {
       latin++;
     } else if ((cp >= 0x3040 && cp <= 0x30FF)) {
       kana++;
-    } else if ((cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x20000 && cp <= 0x3134F)) {
+    } else if (isHan(cp)) {
       han++;
       if (isSimplifiedOnly(cp)) simplifiedOnly++;
       if (isTraditionalOnly(cp)) traditionalOnly++;
