@@ -473,14 +473,6 @@ void HomeActivity::loop() {
     return;
   }
 
-  // Back is otherwise unused on the home menu: open the most recently read
-  // book directly (recentBooks is most-recent-first and already pruned of
-  // files missing from the SD card).
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && hasContinueReading && !recentBooks.empty()) {
-    onSelectBook(recentBooks[0].path);
-    return;
-  }
-
   if (coverGridUi) {
     // Long press on a cover opens that book's stats -- the Library grid's gesture, same screen.
     if (showBookOptions(coverGridUi->takeLongPressedBook())) return;
