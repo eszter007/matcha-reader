@@ -7,7 +7,10 @@
 class FontDecompressor {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
-  static constexpr uint8_t MAX_PAGE_SLOTS = 4;  // One per font style (R/B/I/BI)
+  // One per font+style a page prewarms. Four (R/B/I/BI of one font) was not enough: a page with
+  // three body styles plus a heading and the status bar font asks for five or six, the slots go
+  // to the LAST fonts scanned first, and the one refused was the body's regular style.
+  static constexpr uint8_t MAX_PAGE_SLOTS = 8;
 
   FontDecompressor() = default;
   ~FontDecompressor();
@@ -71,7 +74,7 @@ class FontDecompressor {
   InflateReader inflateReader;
 
   // Page buffer slots: each style gets its own flat glyph buffer with sorted lookup.
-  // Up to MAX_PAGE_SLOTS (4) styles can be prewarmed simultaneously.
+  // Up to MAX_PAGE_SLOTS font styles can be prewarmed simultaneously.
   struct PageGlyphEntry {
     uint32_t glyphIndex;
     uint32_t bufferOffset;

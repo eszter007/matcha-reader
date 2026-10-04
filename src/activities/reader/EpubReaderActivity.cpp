@@ -3758,9 +3758,31 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   // modes use entirely different section files.
   if (spanModeChanged) spinePagesReal.assign(spineCount, 0);
 
-  // Collect real page counts: the live section plus a cheap header-only cache peek for every
-  // spine not seen yet this session (a missing cache is a fast failed open).
+  // Collect real page counts: the live section plus a header-only cache peek for every spine not
+  // seen yet this session. Which spines HAVE a cache file comes from one directory listing: a
+  // failed open per missing file is a path lookup each, ~5 ms on SD, and a book of 1191 spines
+  // (a Bible, one file per chapter) spent 5.6 s of its first page turn on them.
   const int fontId = effectiveReaderFontId();
+  // One bit per spine, built only when something is left to probe.
+  std::vector<bool> hasCacheFile;
+  const auto cacheFilePresent = [&](const int spine) {
+    if (hasCacheFile.empty()) {
+      hasCacheFile.assign(spineCount, false);
+      const std::string dirPath = epub->getCachePath() + (vertical ? "/vsections" : "/sections");
+      HalFile dir = Storage.open(dirPath.c_str());
+      if (dir && dir.isDirectory()) {
+        char name[24];
+        for (auto entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
+          entry.getName(name, sizeof(name));
+          // "<spine>.bin"; anything else (a build's temporary file) is not a finished cache.
+          char* end = nullptr;
+          const long index = strtol(name, &end, 10);
+          if (end != name && strcmp(end, ".bin") == 0 && index >= 0 && index < spineCount) hasCacheFile[index] = true;
+        }
+      }
+    }
+    return static_cast<bool>(hasCacheFile[spine]);
+  };
   size_t knownBytes = 0;
   uint32_t knownPages = 0;
   for (int i = 0; i < spineCount; i++) {
@@ -3773,7 +3795,9 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
       // Skipped entirely while a build holds the card; those spines fall to the byte estimate
       // and are probed for real once the build finishes.
       bool probed = false;
-      if (vertical) {
+      if (!cacheFilePresent(i)) {
+        // No file: nothing to open.
+      } else if (vertical) {
         VerticalSection sibling(epub, i, renderer);
         if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana())) {
           spinePagesReal[i] = sibling.pageCount;
@@ -3895,9 +3919,9 @@ bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
   // Three constraints, each one a page-blanking bug if broken:
   //
   //   clearCache() first is REQUIRED. FontDecompressor::prewarmCache() claims one of only
-  //   MAX_PAGE_SLOTS (4) page-buffer slots per call and never self-evicts ("the caller must call
+  //   MAX_PAGE_SLOTS page-buffer slots per call and never self-evicts ("the caller must call
   //   freePageBuffer/clearCache to reset", FontDecompressor.h). Without it every page turn claims
-  //   another slot until all 4 are stuck and no glyph resolves.
+  //   another slot until all are stuck and no glyph resolves.
   //
   //   styleMask must list only the styles PRESENT on this page. FontCacheManager::prewarmCache()
   //   claims a slot per requested style plus one per style for the family's fallback font -- a
