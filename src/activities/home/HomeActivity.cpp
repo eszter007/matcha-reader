@@ -317,7 +317,6 @@ void HomeActivity::onEnter() {
   Activity::onEnter();
   coverScanIndex_ = 0;
   recentsLoaded = false;
-  backPressSeen = false;
   coverWorker_.start("HomeCover");
 
   hasOpdsServers = OPDS_STORE.hasServers();
@@ -400,7 +399,6 @@ void HomeActivity::loop() {
   // A real key press must not wait for a conversion; the abandoned job is retried on a later tick
   // and the heights already written to disk are kept.
   if (mappedInput.anyButtonDownRaw()) coverWorker_.requestCancel();
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
   applyCoverResult();
   // Only once a card has measured the slot it draws into: a job at any other height writes a
   // thumb no card ever asks for, and every slot keeps drawing the placeholder.
@@ -473,18 +471,6 @@ void HomeActivity::loop() {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
     requestUpdate();
     return;
-  }
-
-  // Back is otherwise unused on the home menu: open the most recently read
-  // book directly (recentBooks is most-recent-first and already pruned of
-  // files missing from the SD card).
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    const bool pressedHere = backPressSeen;
-    backPressSeen = false;
-    if (pressedHere && hasContinueReading && !recentBooks.empty()) {
-      onSelectBook(recentBooks[0].path);
-      return;
-    }
   }
 
   if (coverGridUi) {
