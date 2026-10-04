@@ -1116,7 +1116,7 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
   while (p < n) {
     const size_t cell = from + p;
     const uint8_t len = runBestLen_[p];
-    const size_t step = std::max<size_t>(len, 1);
+    const size_t advance = std::max<size_t>(len, 1);
     if (len > 0 && cell >= recordFrom && cell < contextStart) {
       GlyphRef entry = allGlyphs[cell];
       size_t span = len;
@@ -1129,8 +1129,8 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
       }
       selectToAllIdx.push_back(cell);
     }
-    covered = std::max(covered, p + step);
-    p += step;
+    covered = std::max(covered, p + advance);
+    p += advance;
   }
   for (size_t k = 0; k < covered && from + k < allGlyphs.size(); k++) {
     if (from + k >= recordFrom) markScanned(from + k);

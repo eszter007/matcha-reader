@@ -212,10 +212,10 @@ class WordSelectionScan {
   static constexpr int kChineseMaxWindow = 6;
   // Per-cell candidate priorities for the run being segmented (index: cell, window length - 1)
   // and the dynamic-programming tables. Members, not locals: ~250 bytes is past the stack budget.
-  uint8_t runPriority_[kRunMax][kMaxLookupChars];
-  uint8_t runFound_[kRunMax];
-  int16_t runBest_[kRunMax + 1];
-  uint8_t runBestLen_[kRunMax + 1];
+  uint8_t runPriority_[kRunMax][kMaxLookupChars] = {};
+  uint8_t runFound_[kRunMax] = {};
+  int16_t runBest_[kRunMax + 1] = {};
+  uint8_t runBestLen_[kRunMax + 1] = {};
   // The display filter (bare particles, conjugation fragments), applied to a matched position
   // before it is added to selectableGlyphs.
   bool passesDisplayFilter(size_t allIdx, int matchChars, const std::string& lookupText, size_t matchBytes) const;
