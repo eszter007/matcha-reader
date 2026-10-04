@@ -1145,9 +1145,26 @@ Lookup works as in 6.1. What is particular to Chinese:
 
 #### Pinyin Above the Text
 
-Pinyin (or zhuyin) above the characters comes from the book, like furigana. Run
-`tools/pinyin_ruby/add_pinyin_ruby.py` over an EPUB on your computer (README Setup step 2) and the **Furigana**
-toggle in the reader menu shows or hides it.
+Pinyin (or zhuyin) above the characters comes from the book, like furigana. **The device does not generate it**:
+an ordinary Chinese EPUB opens without pinyin, and there is no setting that adds it. The book has to be
+pre-processed once on a computer, before it is copied to the card:
+
+```bash
+python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.txt book.epub book-pinyin.epub
+```
+
+- `--zhuyin` writes zhuyin (bopomofo) instead of pinyin.
+- `--frequency dict.txt --skip-top 1500` leaves the 1,500 commonest words bare, so only the words you are likely
+  to need carry a reading.
+
+The script needs Python and the CC-CEDICT file (README Setup step 2). Copy the resulting EPUB to the card and open
+it; the **Furigana** toggle in the reader menu shows or hides the pinyin, and is remembered per book.
+
+The readings come from the dictionary, word by word. A character with several readings takes the one its word is
+listed under, and a character standing alone takes its first dictionary reading, which is occasionally not the one
+meant (石 as *dàn* rather than *shí*).
+
+<p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 with pinyin above every character"></p>
 
 #### Vertical Text
 
