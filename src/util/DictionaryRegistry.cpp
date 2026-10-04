@@ -17,7 +17,7 @@ namespace {
 // see FileBrowserActivity's showHiddenFiles check).
 constexpr const char* DICT_ROOTS[] = {"/dictionaries", "/.dictionaries"};
 
-// /dictionaries/jp and /dictionaries/zh belong to DictIndex (the scan-based lookup path), not to
+// /dictionaries/jp, /zh and /yue belong to DictIndex (the scan-based lookup path), not to
 // StarDict: each holds vocab, names and grammar .idx+.dat side by side, at the fixed leaf names
 // DictIndex.h declares.
 // Three stems in one folder is exactly what findStem() calls ambiguous, so probing it logged a
@@ -29,7 +29,7 @@ constexpr const char* DICT_ROOTS[] = {"/dictionaries", "/.dictionaries"};
 // (/dictionaries/jp/<name>/) are still discovered, and folderForLanguage() resolves "ja" to
 // exactly that "jp/" prefix.
 bool isDictIndexFolder(const char* folderName) {
-  return strcmp(folderName, "jp") == 0 || strcmp(folderName, "zh") == 0;
+  return strcmp(folderName, "jp") == 0 || strcmp(folderName, "zh") == 0 || strcmp(folderName, "yue") == 0;
 }
 
 std::string languageFolder(const std::string& language) {

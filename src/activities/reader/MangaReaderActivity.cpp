@@ -113,7 +113,8 @@ void MangaReaderActivity::onEnter() {
     }
     // The converted dictionary lives in a per-language folder; pick the comic's before the first
     // DictIndex::isAvailable() decides whether Word Lookup is offered.
-    DictIndex::setLanguageFolder(cjk::dictIndexFolder(mangaScript(book.get())));
+    const char* dictFolder = cjk::dictIndexFolderForLanguage(book->getLanguage());
+    DictIndex::setLanguageFolder(dictFolder ? dictFolder : cjk::dictIndexFolder(mangaScript(book.get())));
   }
 
   // Which layout this book's panel crops use. Newer conversions put them in a subfolder so the

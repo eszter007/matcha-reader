@@ -53,7 +53,7 @@ Pinyin above the running text works the way furigana does: the book carries it. 
 
 A Chinese book opens the way its publisher set it: one whose EPUB declares right-to-left page progression (Taiwanese novels, as a rule) is set in vertical columns, with the punctuation centred in its square as Taiwanese books print it; everything else opens horizontally. **Vertical Text** in Reader Settings overrides either, per book. Saved sentences go to `sentences-zh.csv` with the pinyin in the reading column.
 
-The dictionary comes from [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), optionally merged with the Ministry of Education's 重編國語辭典 for a monolingual entry under the bilingual one, and ranked by a frequency list so the common sense comes first. Cantonese readers can add jyutping from CC-Canto. See [Setup](#setup) for the files and the Noto Sans SC / TC font.
+The dictionary comes from [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), optionally merged with the Ministry of Education's 重編國語辭典 for a monolingual entry under the bilingual one, and ranked by a frequency list so the common sense comes first. Cantonese books (`yue`) get their own dictionary folder built from CC-Canto. See [Setup](#setup) for the files and the Noto Sans SC / TC font.
 
 Other languages get the same treatment from their StarDict dictionaries. A word at the start of a sentence keeps its accents and still resolves (`École` finds `école`), and French adds its own rules: `l'eau` looks up `eau`, `journaux` finds `journal`, `heureuse` finds `heureux`, and the regular conjugations resolve to the infinitive (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`). The same coverage extends to `-eindre`/`-aindre`/`-oindre` verbs (`éteignit` finds `éteindre`, `craignait` finds `craindre`), `-aître` verbs (`connaissons` finds `connaître`), `-uire` verbs (`conduisit` finds `conduire`), and adverbs formed from an adjective (`lentement` finds `lent`). English and everything else fall back to plurals and verb endings. Irregular verbs that share no stem with their infinitive — and a verb's irregular passé simple, like `connus` or `naquit` — need a `.syn` file in the dictionary folder — see [docs/dictionary.md](docs/dictionary.md).
 
@@ -250,7 +250,13 @@ python3 tools/dict_convert/convert_jmdict.py --lang zh --zhuyin --split-names \
   --output-dir /path/to/sd/dictionaries/zh/
 ```
 
-For Cantonese, add `--jyutping cccedict-canto-readings.txt` (from [CC-Canto](https://cantonese.org/download.html)) to put the jyutping after the pinyin, or convert CC-Canto's own file as the dictionary. A grammar reference goes in the grammar slot from any two-column file, pattern and explanation, with `--format tsv --name grammar`; the [Chinese Grammar Wiki](https://resources.allsetlearning.com/chinese/grammar/) is CC BY-NC-SA, so that one is for your own card only.
+Cantonese is its own language with its own words, so a `yue` book reads `dictionaries/yue/` instead. Build it from [CC-Canto](https://cantonese.org/download.html), which holds the Cantonese-only vocabulary with jyutping, merged with CC-CEDICT for everything the two languages share, and the readings file so the shared words carry jyutping too:
+
+```bash
+python3 tools/dict_convert/convert_jmdict.py --lang yue \
+  --input cccanto-webdist.txt --input cedict_1_0_ts_utf-8_mdbg.txt \
+  --jyutping cccedict-canto-readings.txt --output-dir /path/to/sd/dictionaries/yue/
+``` A grammar reference goes in the grammar slot from any two-column file, pattern and explanation, with `--format tsv --name grammar`; the [Chinese Grammar Wiki](https://resources.allsetlearning.com/chinese/grammar/) is CC BY-NC-SA, so that one is for your own card only.
 
 Then run `python3 scripts/gen_dict_spx.py /path/to/sd/dictionaries/zh/` to build the `.spx` sparse index that makes lookups fast, as for Japanese. CC-CEDICT is CC BY-SA; the MoE dictionary is CC BY-ND and is converted without changing its text.
 

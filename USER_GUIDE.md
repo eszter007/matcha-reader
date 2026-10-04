@@ -1186,7 +1186,9 @@ in the dictionary folder instead. Many dictionaries ship one; see [docs/dictiona
 ### 6.6 Chinese Books
 
 A book tagged `zh` in any form (`zh-CN`, `zh-Hans`, `zh-TW`, `zh-Hant`, `zh-HK`, `cmn`) is read with the same
-tools as a Japanese one, once `dictionaries/zh/` holds a converted dictionary (§6.5):
+tools as a Japanese one, once `dictionaries/zh/` holds a converted dictionary (§6.5). A Cantonese book (`yue`)
+is set like a traditional-Chinese one but reads `dictionaries/yue/`, built from CC-Canto and CC-CEDICT together,
+because Cantonese has words of its own that a Mandarin dictionary does not list:
 
 - **Word Lookup** splits each run of characters into dictionary words and lands only on words with an entry,
   exactly as in §6.2. The split weighs the whole run by word frequency when the dictionary was converted with a

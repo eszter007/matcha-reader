@@ -1023,9 +1023,10 @@ def main():
     parser.add_argument(
         "--lang",
         default="ja",
-        choices=["ja", "zh"],
-        help="Language of the dictionary: ja (default) or zh. Chinese skips the reading records "
-        "(pinyin never appears in page text) and names the dictionary for the lookup footer.",
+        choices=["ja", "zh", "yue"],
+        help="Language of the dictionary: ja (default), zh, or yue for a Cantonese set (CC-Canto "
+        "merged with CC-CEDICT, installed under /dictionaries/yue/). Chinese and Cantonese skip the "
+        "reading records (pinyin never appears in page text) and name the dictionary for the footer.",
     )
     parser.add_argument(
         "--name",
@@ -1088,8 +1089,9 @@ def main():
     )
     args = parser.parse_args()
 
+    chinese = args.lang in ("zh", "yue")
     if not args.input:
-        if args.lang == "zh":
+        if chinese:
             print("Error: --lang zh needs --input (a CC-CEDICT file, MoE JSON, Yomitan zip or .mdx).",
                   file=sys.stderr)
             sys.exit(1)
@@ -1117,7 +1119,7 @@ def main():
             part = convert_mdict(path)
             title = os.path.splitext(os.path.basename(path))[0]
         elif fmt == "yomitan":
-            part, title = convert_yomitan(path, reading_records=args.lang == "ja")
+            part, title = convert_yomitan(path, reading_records=not chinese)
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
                                          jyutping=jyutping)
@@ -1141,7 +1143,7 @@ def main():
         name_records = apply_frequency(name_records, priorities)
 
     title = args.title or ""
-    if not title and args.lang == "zh" and titles:
+    if not title and chinese and titles:
         joined = " + ".join(dict.fromkeys(titles))
         title = joined if len(joined.encode("utf-8")) <= 36 else titles[0]
     write_binary(records, args.output_dir, args.name, title)
@@ -1150,8 +1152,8 @@ def main():
             print("Note: --split-names only applies when writing the vocab slot; names kept in the output.")
         else:
             write_binary(name_records, args.output_dir, "names", (titles[0] if titles else "CC-CEDICT") + " names")
-    if args.lang == "zh":
-        print("Install under /dictionaries/zh/ on the SD card (or /.dictionaries/zh/).")
+    if chinese:
+        print(f"Install under /dictionaries/{args.lang}/ on the SD card (or /.dictionaries/{args.lang}/).")
 
 
 if __name__ == "__main__":

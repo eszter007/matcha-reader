@@ -29,8 +29,7 @@ inline CjkScript scriptForLanguage(std::string_view tag) {
   if (subtagIs(primary, "ja") || subtagIs(primary, "jpn")) return CjkScript::Japanese;
   // yue (Cantonese) is written in traditional characters in practice.
   if (subtagIs(primary, "yue")) return CjkScript::TraditionalChinese;
-  if (!subtagIs(primary, "zh") && !subtagIs(primary, "zho") && !subtagIs(primary, "chi") &&
-      !subtagIs(primary, "cmn")) {
+  if (!subtagIs(primary, "zh") && !subtagIs(primary, "zho") && !subtagIs(primary, "chi") && !subtagIs(primary, "cmn")) {
     return CjkScript::None;
   }
   std::string_view rest = sep == std::string_view::npos ? std::string_view{} : tag.substr(sep + 1);
@@ -55,6 +54,15 @@ inline const char* dictIndexFolder(const CjkScript s) {
   if (s == CjkScript::Japanese) return "jp";
   if (isChinese(s)) return "zh";
   return nullptr;
+}
+
+// The folder for a book's language tag. Cantonese is written in traditional characters but is
+// its own language with its own words (唔, 嘅, 佢哋), so a yue book reads /dictionaries/yue, where
+// CC-Canto sits beside CC-CEDICT; every other tag follows its script.
+inline const char* dictIndexFolderForLanguage(std::string_view tag) {
+  const std::string_view primary = tag.substr(0, tag.find_first_of("-_"));
+  if (subtagIs(primary, "yue")) return "yue";
+  return dictIndexFolder(scriptForLanguage(tag));
 }
 
 // A codepoint every usable font for the script must carry, for coverage probes: あ for

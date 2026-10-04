@@ -55,6 +55,11 @@ TEST(CjkScript, Helpers) {
   EXPECT_STREQ(cjk::dictIndexFolder(CjkScript::SimplifiedChinese), "zh");
   EXPECT_STREQ(cjk::dictIndexFolder(CjkScript::TraditionalChinese), "zh");
   EXPECT_EQ(cjk::dictIndexFolder(CjkScript::None), nullptr);
+  EXPECT_STREQ(cjk::dictIndexFolderForLanguage("zh-TW"), "zh");
+  EXPECT_STREQ(cjk::dictIndexFolderForLanguage("yue"), "yue");
+  EXPECT_STREQ(cjk::dictIndexFolderForLanguage("yue-Hant-HK"), "yue");
+  EXPECT_STREQ(cjk::dictIndexFolderForLanguage("ja"), "jp");
+  EXPECT_EQ(cjk::dictIndexFolderForLanguage("en"), nullptr);
   EXPECT_EQ(cjk::probeCodepoint(CjkScript::Japanese), 0x3042u);
   EXPECT_EQ(cjk::probeCodepoint(CjkScript::TraditionalChinese), 0x7684u);
 }

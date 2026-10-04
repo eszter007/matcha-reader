@@ -442,7 +442,8 @@ void EpubReaderActivity::onReaderEnter() {
   // Word lookup reads the converted dictionary of the book's language, and traditional Chinese
   // sets its vertical punctuation differently from Japanese. Both are process-wide and decided
   // once per book here, before any layout or lookup runs.
-  DictIndex::setLanguageFolder(cjk::dictIndexFolder(fontScript()));
+  const char* dictFolder = epub ? cjk::dictIndexFolderForLanguage(epub->getLanguage()) : nullptr;
+  DictIndex::setLanguageFolder(dictFolder ? dictFolder : cjk::dictIndexFolder(fontScript()));
   Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
 
   loadCachedBookmarks();
