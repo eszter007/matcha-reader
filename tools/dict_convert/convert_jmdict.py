@@ -944,7 +944,8 @@ def is_proper_noun_pinyin(pinyin: str, glosses: list = None) -> bool:
     syllables = [p for p in pinyin.split(" ") if p and p[0].isalpha()]
     if not syllables or not syllables[0][0].isupper():
         return False
-    first = (glosses or [""])[0]
+    # "People's Republic of China" in a place's gloss is not the common noun "people".
+    first = re.sub(r"people['\u2019]s", "", (glosses or [""])[0], flags=re.IGNORECASE)
     return not _COMMON_NOUN_GLOSS_RE.search(first)
 
 
@@ -960,6 +961,26 @@ def load_canto_readings(path: str) -> dict:
                 out[(m.group(1), m.group(2), m.group(3))] = m.group(4).strip()
     print(f"Jyutping readings {path}: {len(out):,} entries")
     return out
+
+
+def split_cedict_glosses(body: str) -> list:
+    """Split an entry's "/gloss/gloss/" body into glosses. A slash inside parentheses belongs to
+    the gloss: CC-Canto writes "(phrase / adverb / noun) no, not." as one."""
+    glosses = []
+    depth = 0
+    current = []
+    for ch in body:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth > 0:
+            depth -= 1
+        if ch == "/" and depth == 0:
+            glosses.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    glosses.append("".join(current).strip())
+    return glosses
 
 
 def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, levels: dict = None,
@@ -987,7 +1008,7 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
                 continue
             trad, simp, pinyin, canto, body = m.groups()
             idx = len(parsed)
-            parsed.append((trad, simp, pinyin, canto, [g.strip() for g in body.split("/")]))
+            parsed.append((trad, simp, pinyin, canto, split_cedict_glosses(body)))
             # Examples go to the everyday entry of a form: 周 the week over the surname, and among
             # lowercase readings the one with more senses (東西 "thing" over "east and west").
             glosses = parsed[idx][4]
@@ -1118,7 +1139,8 @@ def format_definitions_moedict(entry: dict) -> list:
     out = []
     for heteronym in entry.get("heteronyms", [])[:3]:
         parts = []
-        reading = " · ".join(x for x in (_moe_text(heteronym.get("bopomofo")), _moe_text(heteronym.get("pinyin"))) if x)
+        # Pinyin first, then zhuyin: the order a CC-CEDICT entry built with --zhuyin uses.
+        reading = " ".join(x for x in (_moe_text(heteronym.get("pinyin")), _moe_text(heteronym.get("bopomofo"))) if x)
         if reading:
             parts.append("【" + reading + "】")
         definitions = heteronym.get("definitions", [])[:6]
@@ -1170,6 +1192,23 @@ def convert_moedict(path: str) -> list:
     print(f"Processed {len(records)} MoE entries ({skipped} skipped)")
     return records
 
+def keep_names_together(records: list, name_records: list, bilingual_headwords: set) -> tuple:
+    """With --split-names, CC-CEDICT's 中國 "China" goes to the names slot while the monolingual
+    entry for 中國 from a second dictionary stays in the vocabulary -- and the device asks the
+    vocabulary first, so the reader would get the Chinese definition and never the English one.
+    A headword that CC-CEDICT holds only as a name takes its other entries along to the names
+    slot. bilingual_headwords: every headword CC-CEDICT left in the vocabulary."""
+    name_headwords = {r[0] for r in name_records}
+    kept = []
+    moved = list(name_records)
+    for record in records:
+        if record[0] in name_headwords and record[0] not in bilingual_headwords:
+            moved.append(record)
+        else:
+            kept.append(record)
+    return kept, moved
+
+
 # ── Format detection & main ─────────────────────────────────────
 
 
@@ -1193,7 +1232,7 @@ def detect_format(path: str, lang: str = "ja") -> str:
     return "jmdict"
 
 
-DEFAULT_TITLES = {"cedict": "CC-CEDICT", "moedict": "MoE 國語辭典", "jmdict": "", "tsv": ""}
+DEFAULT_TITLES = {"cedict": "CC-CEDICT", "moedict": "國語辭典", "jmdict": "", "tsv": ""}
 
 
 def main():
@@ -1237,7 +1276,7 @@ def main():
     parser.add_argument(
         "--title",
         help="Dictionary name shown in the lookup panel footer (written to <name>.title). "
-        "Defaults to the Yomitan title, CC-CEDICT, or MoE 國語辭典 for Chinese inputs.",
+        "Defaults to the Yomitan title, CC-CEDICT, or 國語辭典 for Chinese inputs.",
     )
     parser.add_argument(
         "--zhuyin",
@@ -1315,6 +1354,7 @@ def main():
     records = []
     name_records = []
     twins = {}  # trad <-> simp forms from CC-CEDICT, for apply_frequency
+    bilingual_headwords = set()  # what CC-CEDICT left in the vocabulary; see keep_names_together
     titles = []
     for path in args.input:
         fmt = args.format or detect_format(path, args.lang)
@@ -1330,6 +1370,7 @@ def main():
                                          jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins,
                                          examples_script=args.examples_script)
             name_records.extend(names)
+            bilingual_headwords.update(r[0] for r in part)
             if "canto" in os.path.basename(path).lower():
                 title = "CC-Canto"
         elif fmt == "moedict":
@@ -1342,6 +1383,9 @@ def main():
         records.extend(part)
         if title:
             titles.append(title)
+
+    if name_records:
+        records, name_records = keep_names_together(records, name_records, bilingual_headwords)
 
     if args.frequency:
         priorities = load_frequency(args.frequency, args.frequency_kind)

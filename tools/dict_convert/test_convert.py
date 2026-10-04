@@ -182,6 +182,24 @@ class ThirdPass(unittest.TestCase):
         self.assertFalse(conv.is_proper_noun_pinyin("Yi1 yue4", ["January"]))
         self.assertFalse(conv.is_proper_noun_pinyin("Mei3 guo2 ren2", ["American person"]))
         self.assertTrue(conv.is_proper_noun_pinyin("Bei3 jing1", ["Beijing, capital of China"]))
+        self.assertTrue(conv.is_proper_noun_pinyin(
+            "Bei3 jing1", ["Beijing municipality, capital of the People's Republic of China (short name 京[Jing1])"]))
+        self.assertFalse(conv.is_proper_noun_pinyin("Zang4 zu2", ["Tibetan people"]))
+
+    def test_monolingual_entry_follows_its_name(self):
+        china = ("中國".encode(), b"China", 100, 0)
+        china_moe = ("中國".encode(), "上古時代".encode(), 90, 0)
+        good = ("好".encode(), b"good", 100, 0)
+        good_moe = ("好".encode(), "美".encode(), 90, 0)
+        kept, names = conv.keep_names_together([good, good_moe, china_moe], [china], {good[0]})
+        self.assertEqual(kept, [good, good_moe])
+        self.assertEqual(names, [china, china_moe])
+
+    def test_gloss_split_keeps_slashes_inside_parentheses(self):
+        self.assertEqual(conv.split_cedict_glosses("to speak/to say"), ["to speak", "to say"])
+        self.assertEqual(conv.split_cedict_glosses("(phrase / adverb / noun) no, not."),
+                         ["(phrase / adverb / noun) no, not."])
+        self.assertEqual(conv.split_cedict_glosses("a) stray/next"), ["a) stray", "next"])
 
     def test_unrenderable_examples_are_dropped(self):
         import tempfile, os
@@ -197,7 +215,7 @@ class ThirdPass(unittest.TestCase):
             {"bopomofo": "ㄏㄠˋ", "pinyin": "hào", "definitions": [{"type": "動", "def": "愛、喜愛。"}]}]}
         texts = conv.format_definitions_moedict(entry)
         self.assertEqual(len(texts), 2)
-        self.assertTrue(texts[1].startswith("【ㄏㄠˋ · hào】"))
+        self.assertTrue(texts[1].startswith("【hào ㄏㄠˋ】"))
 
 
 if __name__ == "__main__":
