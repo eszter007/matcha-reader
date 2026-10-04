@@ -491,7 +491,7 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
-### Version 140
+### Version 141
 
 The page index (`pageCount` × `u32` file offsets) is followed by the **anchor table**, which lets
 TOC and footnote jumps land on their page:
@@ -516,6 +516,10 @@ The table holds every `id` that is not on a `<span>`, up to 1,024 per chapter, p
 TOC targets regardless of tag and cap. A short read anywhere in the table fails the lookup.
 
 v139 caches have no flag and may lack TOC targets, so they are rebuilt once on first open.
+
+v141 adds a signed byte to the header, after the furigana flag: the Character Spacing setting in
+px (−2…+2), added to the one-em step between characters down a column. It is part of cache
+validation, so changing the setting rebuilds the chapter. v140 caches are rebuilt once.
 
 ## `ruby.bin`
 

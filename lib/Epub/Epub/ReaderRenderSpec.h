@@ -13,6 +13,9 @@
 struct ReaderRenderSpec {
   int fontId = 0;
   float lineCompression = 1.0f;
+  // The Line Spacing setting itself (0 tight .. 2 wide). Vertical text sets its column gap in
+  // quarter ems from this step; lineCompression above is the same setting as horizontal reads it.
+  uint8_t lineSpacingLevel = 1;
   bool extraParagraphSpacing = false;
   uint8_t paragraphIndentSpaces = 2;
   int8_t characterSpacing = 0;
@@ -37,4 +40,6 @@ struct ReaderRenderSpec {
   // taking it from the store. Layout and drawing must agree on it: TextBlock::render shifts
   // words down by exactly the reserve this adds.
   bool furiganaEnabled = true;
+
+  bool operator==(const ReaderRenderSpec&) const = default;
 };

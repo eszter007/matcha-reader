@@ -372,7 +372,7 @@ open a list when selected.
 
 - **Reader Screen Margin**: Controls the screen margins in Reading Mode between 5 and 40 pixels in 5-pixel increments.
 
-- **Vertical text**: while a book is shown vertically, Text Settings > Layout lists only **Line Spacing** and **Screen Margin**, the two settings vertical layout uses. Horizontal books, Japanese ones included, show every Layout setting.
+- **Vertical text**: while a book is shown vertically, Text Settings > Layout lists only **Line Spacing**, **Character spacing** and **Screen Margin**, the settings vertical layout uses. Character spacing (−2 px to +2 px) changes the step between characters down a column, so a tighter setting fits more characters per column. Horizontal books, Japanese ones included, show every Layout setting.
 
 - **Use Book Margins**: Whether to keep the side margins a book sets for itself. Many books indent epigraphs, letters and long quotations; with this ON those blocks stay indented, and with it OFF they are set flush with the body text and only the Reader Screen Margin applies. Default is ON. Found under Text Settings > Layout.
 
