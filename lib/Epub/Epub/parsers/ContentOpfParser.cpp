@@ -62,6 +62,11 @@ void appendMetadataText(std::string& out, const XML_Char* text, const int len, b
     }
     spacePending = false;
     out.push_back(c);
+    // A byte-order mark (U+FEFF, EF BB BF) inside the element is not text: no font has a glyph for
+    // it, so a title that starts with one logged a missing glyph wherever it was drawn. Checked
+    // on the accumulated string, so a mark split across two character-data calls is caught too.
+    const size_t n = out.size();
+    if (n >= 3 && c == '\xBF' && out[n - 2] == '\xBB' && out[n - 3] == '\xEF') out.resize(n - 3);
   }
 }
 }  // namespace
