@@ -252,10 +252,12 @@ void SettingsActivity::rebuildSettingsLists() {
                             SettingInfo::DynamicToggle(
                                 StrId::STR_VERTICAL_TEXT_LABEL, [this] { return verticalTextState; },
                                 [this](const bool v) { verticalTextState = v; }, StrId::STR_CAT_READER));
-      readerSettings.insert(readerSettings.begin() + 2,
-                            SettingInfo::DynamicToggle(
-                                StrId::STR_FURIGANA_LABEL, [this] { return furiganaState; },
-                                [this](const bool v) { furiganaState = v; }, StrId::STR_CAT_READER));
+      // The ruby toggle is named for what a Chinese book carries (pinyin or zhuyin), furigana otherwise.
+      readerSettings.insert(
+          readerSettings.begin() + 2,
+          SettingInfo::DynamicToggle(
+              cjk::isChinese(bookScript) ? StrId::STR_PINYIN_LABEL : StrId::STR_FURIGANA_LABEL,
+              [this] { return furiganaState; }, [this](const bool v) { furiganaState = v; }, StrId::STR_CAT_READER));
     }
     // Book Language: for any text book, since its point is a book whose tag is wrong or missing
     // (a Chinese EPUB tagged en gets no lookup, no CJK font and no vertical text until re-tagged).

@@ -4983,7 +4983,10 @@ int EpubReaderActivity::textRowAt(const int visibleIndex) const {
 
 std::string EpubReaderActivity::textRowName(int row) const {
   if (row < 0 || row >= textRowCount()) return "";
-  return I18N.get(kTextRowNames[textRowAt(row)]);
+  const StrId name = kTextRowNames[textRowAt(row)];
+  // A Chinese book's ruby is pinyin or zhuyin, not furigana.
+  if (name == StrId::STR_FURIGANA_LABEL && isChineseBook()) return I18N.get(StrId::STR_PINYIN_LABEL);
+  return I18N.get(name);
 }
 
 std::string EpubReaderActivity::textRowValue(int row) const {

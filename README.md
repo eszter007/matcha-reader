@@ -108,10 +108,10 @@ Common to all three:
 - **Both scripts are indexed**, so a traditional dictionary serves a simplified book and the other way round, and the entry shows the other form (`說話 / 说话`).
 - **The common sense comes first**: entries are ranked by a frequency list. Proper nouns can go to their own names dictionary and a grammar list to the grammar slot, exactly as for Japanese. Example sentences with translations come from Tatoeba.
 - **A wrong or missing language tag is caught.** A book is recognised from its text the first time it opens, and **Reader Settings → Book Language** re-tags any book by hand (Auto, Japanese, Chinese (Simplified), Chinese (Traditional), Cantonese), so a Chinese EPUB labelled `en` still gets its dictionary, font and layout.
-- **Pinyin above the text** works the way furigana does: the book carries it. The device does not work pinyin out itself, so the EPUB is prepared once on your computer: `tools/pinyin_ruby/add_pinyin_ruby.py` adds pinyin (or zhuyin) ruby to every word, optionally skipping the commonest words, and the Furigana toggle shows or hides it on the device. With `--ai` the reading of a character that has several (石 *shí* or *dàn*, 說 *shuō* or *shuì*) is chosen in context by Gemini rather than taken from the first dictionary entry.
+- **Pinyin above the text** works the way furigana does: the book carries it. The device does not work pinyin out itself, so the EPUB is prepared once on your computer: `tools/pinyin_ruby/add_pinyin_ruby.py` adds pinyin (or zhuyin) ruby to every word, optionally skipping the commonest words, and the **Pinyin / Zhuyin** toggle in Reader Settings (called **Furigana** for a Japanese book) shows or hides it on the device. With `--ai` the reading of a character that has several (石 *shí* or *dàn*, 說 *shuō* or *shuì*) is chosen in context by Gemini rather than taken from the first dictionary entry.
 
 <p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character, added by the pinyin script with --ai"></p>
-<p align="center"><em>紅樓夢 after the pinyin script with <code>--ai</code>, Furigana switched on</em></p>
+<p align="center"><em>紅樓夢 after the pinyin script with <code>--ai</code>, Pinyin / Zhuyin switched on</em></p>
 
 - **Vertical Text** in Reader Settings overrides the layout either way, per book.
 - **An SD font is required.** The built-in CJK glyphs are the common Japanese set, so a Chinese book without one shows empty boxes for everyday characters such as 这, 说 or 們.
