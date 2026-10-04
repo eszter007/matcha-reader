@@ -752,7 +752,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
         // CRC32 to match. HAVE_MAX_FRAGMENT's 2KB TLS records already remove
         // most of the second TLS session's heap cost, so the C3 doesn't need
         // the HTTP downgrade to stay out of MEMORY_E territory here.
-        &cancelRequested_, "", "", /*downgradeRedirectsToHttp=*/false);
+        &cancelRequested_, "", "", /*headers=*/{}, /*downgradeRedirectsToHttp=*/false);
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(str(family.name));
@@ -1100,7 +1100,6 @@ void FontDownloadActivity::render(RenderLock&&) {
                  headerSubtitle);
 
   const auto lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  const auto contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const auto centerY = (pageHeight - lineHeight) / 2;
 
   if (state_ == LOADING_MANIFEST) {

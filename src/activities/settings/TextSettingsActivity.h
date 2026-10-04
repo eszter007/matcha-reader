@@ -45,6 +45,7 @@ class TextSettingsActivity final : public UiTabListActivity {
     WordSpacing,
     CharacterSpacing,
     ParaSpacing,
+    ParaIndentation,
     Alignment,
     ScreenMargin,
     BookSideMargins,

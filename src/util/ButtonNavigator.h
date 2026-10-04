@@ -36,7 +36,6 @@ class ButtonNavigator final {
   void onPress(const Buttons& buttons, const Callback& callback);
   void onPress(MappedInputManager::Button button, const Callback& callback);
 
-  void onNextRelease(const Callback& callback);
   void onPreviousRelease(const Callback& callback);
   void onRelease(const Buttons& buttons, const Callback& callback);
 

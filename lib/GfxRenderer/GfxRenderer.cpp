@@ -245,6 +245,7 @@ void GfxRenderer::releaseFrameBufferForBuild() {
   uint8_t* scratch = display.lendFrameBufferStorage(&size);
   frameBuffer = nullptr;
   frameBufferContentsStale_ = true;  // the borrower writes over these bytes
+  frameBufferLoans++;
   if (scratch) {
     buildscratch::lend(scratch, size);
   }
@@ -1332,9 +1333,7 @@ void GfxRenderer::drawArc(const int maxRadius, const int cx, const int cy, const
     const int width = std::abs(x1 - x0) + 1;
     const int py = cy + yDir * dy;
 
-    if (width > 0) {
-      fillRect(left, py, width, 1, state);
-    }
+    fillRect(left, py, width, 1, state);
   }
 };
 

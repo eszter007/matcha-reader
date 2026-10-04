@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ContentAccess.h>
+#include <ContentProtection.h>
 #include <JpegToBmpConverter.h>  // BmpConvertCancelFn
 #include <Print.h>
 
@@ -31,11 +31,11 @@ class Epub {
   std::unique_ptr<CssParser> cssParser;
   // CSS files
   std::vector<std::string> cssFiles;
-  // Optional alternative item source, set in load(). Null unless a build
-  // provides one, in which case every item is read from the ZIP.
-  contentaccess::HandlePtr itemSource;
-  // User-presentable reason load() refused the book (empty otherwise).
-  std::string accessError;
+  // Optional encrypted-entry accessor. Entries are decoded in memory and stay
+  // encrypted at rest. Null when the accessor is not needed or unavailable.
+  std::unique_ptr<freeink::content::ContentDecryptor> decryptor;
+  // User-presentable reason the encrypted-entry accessor could not be opened.
+  std::string protectionError;
   // Set by generateThumbBmp() via the converter's outUnsupported flag; see coverUnsupported().
   mutable bool coverUnsupported_ = false;
 
@@ -54,6 +54,7 @@ class Epub {
   // decode, and partial files are removed on cancel.
   bool generateThumbBmpForCover(int height, const std::string& coverImageHref,
                                 BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
+  bool openProtection();
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
 
@@ -68,8 +69,8 @@ class Epub {
   void setupCacheDir() const;
   const std::string& getCachePath() const;
   const std::string& getPath() const;
-  // Empty unless load() refused the book because its content is not readable here.
-  const std::string& getAccessError() const { return accessError; }
+  // Empty unless the encrypted-entry accessor failed to open.
+  const std::string& getProtectionError() const { return protectionError; }
   // True when the last generateThumbBmp() failed because the cover image itself can never be
   // converted by this build (currently: beyond the JPEG decoder's dimension limits) -- as
   // opposed to a low-heap moment, a cancellation, or a decode error, which are all retryable.
@@ -101,7 +102,8 @@ class Epub {
   // Content-access read honouring allowEarlyStop the way the zip path does.
   bool readProtectedItemToStream(const std::string& path, Print& out, bool allowEarlyStop) const;
   // Extract an item to a file on SD. On failure the partial file is removed.
-  bool extractItemToFile(const std::string& itemHref, const std::string& destPath) const;
+  bool extractItemToFile(const std::string& itemHref, const std::string& destPath,
+                         BmpConvertCancelFn shouldCancel = nullptr, void* cancelCtx = nullptr) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;

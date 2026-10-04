@@ -1,8 +1,11 @@
 #pragma once
 #include <HalStorage.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
+#include <vector>
 
 /**
  * HTTP client utility for fetching content and downloading files. Built on
@@ -21,10 +24,11 @@ class HttpDownloader {
     HTTP_ERROR,
     FILE_ERROR,
     ABORTED,
+    UNAUTHORIZED,  // 401/403: callers holding a refreshable credential can retry
   };
 
   // Pre-flight floor for starting a TLS transfer. Below this the session or
-  // its ~17KB record buffer fails mid-stream (wolfSSL MEMORY_E) — or an
+  // its ~17KB record buffer fails mid-stream (wolfSSL MEMORY_E) -- or an
   // interior allocation abort()s the device. Callers should check before
   // downloadToFile() and fail into their error UI instead.
   static constexpr uint32_t MIN_TLS_FREE_HEAP = 40000;
@@ -33,9 +37,6 @@ class HttpDownloader {
   /**
    * Fetch text content from a URL with optional credentials.
    */
-  static bool fetchUrl(const std::string& url, std::string& outContent, const std::string& username = "",
-                       const std::string& password = "");
-
   static bool fetchUrl(const std::string& url, Stream& stream, const std::string& username = "",
                        const std::string& password = "");
 
@@ -45,8 +46,12 @@ class HttpDownloader {
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
                        const std::string& password = "");
 
+  using Header = std::pair<std::string, std::string>;
+
   /**
-   * Download a file to the SD card with optional credentials.
+   * Download a file to the SD card with optional credentials. `headers` are
+   * added to the request (e.g. a Bearer Authorization), alongside any Basic
+   * auth derived from username/password.
    *
    * downgradeRedirectsToHttp rewrites followed redirect targets from https to
    * http so the bulk transfer skips a second TLS session (and its ~17KB record
@@ -55,7 +60,7 @@ class HttpDownloader {
    * the downgraded hop.
    */
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
-                                      ProgressCallback progress = nullptr, bool* cancelFlag = nullptr,
+                                      ProgressCallback progress = nullptr, const bool* cancelFlag = nullptr,
                                       const std::string& username = "", const std::string& password = "",
-                                      bool downgradeRedirectsToHttp = false);
+                                      const std::vector<Header>& headers = {}, bool downgradeRedirectsToHttp = false);
 };

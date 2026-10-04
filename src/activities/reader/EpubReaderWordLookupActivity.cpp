@@ -23,6 +23,7 @@
 #include "DefinitionTextRenderer.h"
 #include "DictSourceNames.h"
 #include "Epub/Page.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
@@ -852,6 +853,7 @@ bool EpubReaderWordLookupActivity::handleSelectInput() {
       provisionalGlyph = SIZE_MAX;
       cursorIndex = hit;
       refreshCursorBoxes();
+      haptic_feedback::touchAction();
       enterDefinition();
       return false;
     }
@@ -1611,6 +1613,7 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
     const auto box = DictionaryPanel::compute(renderer).box;
     if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+      haptic_feedback::touchAction();
       ActivityResult result;
       result.isCancelled = true;
       setResult(std::move(result));
@@ -1619,6 +1622,7 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     }
     const auto add = DictionaryPanel::compute(renderer).addButton;
     if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+      haptic_feedback::touchAction();
       saveSentence();
       return false;
     }

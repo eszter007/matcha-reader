@@ -52,7 +52,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [Chapter Navigation](#chapter-navigation)
     - [Auto Page Turn](#auto-page-turn)
     - [Tilt Page Turn (X3 only)](#tilt-page-turn-x3-only)
-    - [Footnote Navigation](#footnote-navigation)
+    - [Links and footnotes](#links-and-footnotes)
     - [Dictionary Lookup](#dictionary-lookup)
     - [System Navigation](#system-navigation)
     - [Supported Languages](#supported-languages)
@@ -458,7 +458,7 @@ open a list when selected.
   - "Sleep" - A short press puts the device into sleep mode
   - "Next Page" - A short press in reading mode turns to the next page; a long press turns the device off
   - "Previous Page" - A short press in reading mode turns back one page
-  - "Footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
+  - "Links and footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
   - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
   - "Confirm" - A short press acts as the Confirm button. It earns its place on touch devices, which have no front Confirm key.
@@ -473,7 +473,7 @@ open a list when selected.
 
 - **Tap For Reader Menu**: Opens the reader menu when you tap the centre of the screen. Only offered on devices with a Home key, where the menu stays reachable through the key's long-press function if you turn this off.
 
-- **Quick-return from footnotes**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
+- **Quick return from links**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
 
 #### 3.6.4 System
 
@@ -828,11 +828,11 @@ so it fills the screen, and you tilt the device to look at it. A smaller image s
 upright and at no more than its own size: a figure between paragraphs, with its caption, or a narrow heading strip
 or diagram among the columns of vertical text.
 
-### Footnote Navigation
+### Links and footnotes
 
-When reading an EPUB that contains footnotes, you can navigate to the footnote text by selecting the footnote reference in the book. From the footnote, you can return to your original reading position.
+Internal EPUB links include chapter links, cross-references, and footnotes. Tap a link on a touchscreen device, or choose "Links and footnotes" from the Reader Menu to select a link. Press Back to return to the previous location.
 
-If the device goes to sleep or you close the book while viewing a footnote, the book reopens to your original reading position, not the footnote.
+If the device sleeps or you close the book after following a link, the book reopens on the page you were viewing. Back still returns you to where you followed the link. The reader keeps the three most recent return positions.
 
 To read the notes without leaving the page, choose **Footnotes** in the reader menu (or set the power button or a
 side button to it). The page's notes open in the same floating panel as the dictionary: the footer names the note's
@@ -878,7 +878,7 @@ Press **Confirm** while reading to open the Reader Menu. From here you can acces
 Available options include:
 
 - **Select Chapter** – Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
-- **Footnotes** – Navigate to the footnotes for the current section *(only shown in books that contain footnotes)*.
+- **Links and footnotes** – Select an internal link on the current page. This option appears when the page contains links.
 - **Look Up** – Select a word on the current page and show its dictionary definition (see [docs/dictionary.md](docs/dictionary.md)). Requires a dictionary to be selected in **Settings → Reader → Dictionary**.
 - **Reading Orientation** – Cycle through screen orientations without leaving the reader.
 - **Auto Turn (Pages Per Minute)** – Cycle through automatic page turn speed options for hands-free reading.

@@ -154,14 +154,15 @@ void UiListActivity::ringSetFocus(const TabRing::Focus focus, const bool atEnd) 
 }
 
 void UiListActivity::navigateButtons() {
-  const int count = listCount();
-  auto& n = activeNav();
-  buttonNavigator.onNextPress([this, count] {
+  // Captures stay at `this` alone, so each handler fits std::function's inline storage and
+  // registering them allocates nothing.
+  buttonNavigator.onNextPress([this] {
     if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, 1);
+    const int count = listCount();
     if (count <= 0 || selectionCursor() >= count - 1) return TabRing::leaveContent(*this, 1);
     moveSelectionTo(selectionCursor() + 1);
   });
-  buttonNavigator.onPreviousPress([this, count] {
+  buttonNavigator.onPreviousPress([this] {
     if (ringFocus() != TabRing::Focus::Content) return TabRing::step(*this, -1);
     if (selectionCursor() <= 0) return TabRing::leaveContent(*this, -1);
     moveSelectionTo(selectionCursor() - 1);
@@ -173,13 +174,13 @@ void UiListActivity::navigateButtons() {
   // feedback corrects the viewport.
   // A hold pages through the rows. If the press that started it carried the cursor onto a band,
   // there is nothing to page, and moving the hidden row selection would only surprise later.
-  buttonNavigator.onNextContinuous([this, count, &n] {
+  buttonNavigator.onNextContinuous([this] {
     if (ringFocus() != TabRing::Focus::Content) return;
-    moveSelectionTo(ButtonNavigator::nextPageIndex(selectionCursor(), count, n.inputPageRows()));
+    moveSelectionTo(ButtonNavigator::nextPageIndex(selectionCursor(), listCount(), activeNav().inputPageRows()));
   });
-  buttonNavigator.onPreviousContinuous([this, count, &n] {
+  buttonNavigator.onPreviousContinuous([this] {
     if (ringFocus() != TabRing::Focus::Content) return;
-    moveSelectionTo(ButtonNavigator::previousPageIndex(selectionCursor(), count, n.inputPageRows()));
+    moveSelectionTo(ButtonNavigator::previousPageIndex(selectionCursor(), listCount(), activeNav().inputPageRows()));
   });
 }
 

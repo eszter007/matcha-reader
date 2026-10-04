@@ -119,7 +119,7 @@ void CoverWorker::runJob() {
       LOG_ERR("RBA", "Cover unconvertible for %s; recording as coverless", result.book.path.c_str());
       result.coverKnownAbsent = true;
     }
-    // Deliberately NOT extended to a book that failed to OPEN. contentaccess::open() reports a
+    // Deliberately NOT extended to a book that failed to OPEN. Epub::openProtection() reports a
     // missing credential and an OOM through the same channel as a bad container, and the index
     // entry is keyed on size+stamp -- so recording "no cover" would outlive the credential being
     // added and the cover would never come back. It stays retryable; what it must not do is
@@ -144,7 +144,7 @@ void CoverWorker::runJob() {
   // "Completed" must mean the job ran its course, not that nobody touched a button while it did.
   // cancelSeen_ is the honest signal: shouldCancel() sets it only when the job actually consulted
   // it and bailed. cancelRequested_ alone is just "a key went down", and including it stalled the
-  // cursor on any job that never consults shouldCancel -- notably a contentaccess::open()
+  // cursor on any job that never consults shouldCancel -- notably an Epub::openProtection()
   // failure, which gives up in ~380ms without asking. That book was then retried forever and
   // every book behind it stayed coverless (device log: the same unopenable EPUB reloaded at
   // [177406], [182039], [563346]).

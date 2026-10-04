@@ -14,6 +14,7 @@
 #include "DictionaryDefinitionActivity.h"
 #include "ReaderUtils.h"
 #include "WordSelectionScan.h"
+#include "HapticFeedback.h"
 #include "components/UITheme.h"
 
 namespace {
@@ -487,6 +488,7 @@ void DictionaryWordSelectActivity::loop() {
   if (mappedInput.wasScreenTapped(tx, ty)) {
     const int hit = wordAt(tx, ty);
     if (hit >= 0) {
+      haptic_feedback::touchAction();
       selected = hit;
       performLookup();
     }

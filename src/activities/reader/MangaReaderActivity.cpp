@@ -24,6 +24,7 @@
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderTranslationActivity.h"
+#include "HapticFeedback.h"
 #include "MangaBookmarksActivity.h"
 #include "MangaChapterSelectionActivity.h"
 #include "MangaWordLookupActivity.h"
@@ -610,6 +611,7 @@ void MangaReaderActivity::loop() {
   }
 
   if (holdGlyph >= 0) {
+    haptic_feedback::touchAction(/*longPress=*/true);
     launchWordLookupAt(std::move(holdText), holdGlyph);
     return;
   }
@@ -693,6 +695,7 @@ void MangaReaderActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
+    if (touchMenu) haptic_feedback::touchAction();
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else if (viewMode == ViewMode::PanelZoom || viewMode == ViewMode::FullPage) {
@@ -745,6 +748,7 @@ void MangaReaderActivity::loop() {
   }
 
   if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
+  if (touch.prev || touch.next) haptic_feedback::touchAction();
 
   if (viewMode == ViewMode::PanelZoom) {
     if (nextTriggered) nextPanel();

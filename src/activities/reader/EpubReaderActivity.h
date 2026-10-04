@@ -123,6 +123,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // most one turn — mashing collapses to the latest direction — and is
   // executed by loop() once the render task is idle again.
   int8_t pendingManualTurn = 0;
+  bool pendingManualTurnTouch = false;
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;
@@ -199,6 +200,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // overlay, letting panel->toolbar steps restore the page without a full
   // re-render. Discarded on close / whenever the page under the overlay changes.
   bool overlayPageStored = false;
+  // A background build step lent the framebuffer: it came back white while the panel still shows the
+  // page. Until renderBook() redraws, nothing may be painted straight onto it. Set by the loop task,
+  // cleared by the render task.
+  std::atomic<bool> pageBufferStale{false};
   // True while a deferred overlay chrome refresh (pushOverlayRefresh) may still
   // be running on the panel. settleOverlayRefresh() must run before the
   // framebuffer is touched or another differential refresh is pushed.
@@ -231,6 +236,10 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr int MAX_FOOTNOTE_DEPTH = 3;
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
+  // The back-stack outlives the reader (sleep, home) in links.bin so Back
+  // still returns to where a followed link was tapped.
+  void saveLinkStack() const;
+  void loadLinkStack();
 
   // --- Background image-cache warm (render-task tail) ---
   // After a page is fully displayed, the render task warms the NEXT page's image .pxc pixel
@@ -612,7 +621,8 @@ class EpubReaderActivity final : public ReaderActivity {
   bool launchKOReaderSync();
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
-  void pageTurn(bool isForwardTurn);
+  // True when the reader moved (or, mid-build, when the page was requested).
+  bool pageTurn(bool isForwardTurn);
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
@@ -748,6 +758,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // saves (seconds to tens of seconds on a long chapter).
   static constexpr uint32_t kOrientationSettleMs = 400;
 
+  // Modal shown when a protected book refuses to open (loan expired /
+  // date unverified); OK exits, "Sync time" (when offered) verifies the
+  // clock over Wi-Fi and reopens the book.
+  OptionPopup loadFailurePopup;
+  // Protection error captured by loadBook() for handleLoadFailure(); the
+  // failed Epub itself does not outlive loadBook().
+  std::string loadProtectionError;
+
   bool loadBook() override;
   bool hasBook() const override { return epub != nullptr; }
   std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }
@@ -764,6 +782,12 @@ class EpubReaderActivity final : public ReaderActivity {
   void readerLoop() override;
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
+  bool handleLoadFailure() override;
+  bool handleLoadFailureInput() override;
+  // Wi-Fi join + SNTP for a loan whose date could not be verified, then a
+  // clean re-open of the book.
+  void beginLoanTimeSync();
+  int getProgressBasisPoints() const override;
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,

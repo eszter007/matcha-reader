@@ -22,6 +22,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubProgressUtil.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
@@ -29,6 +30,7 @@
 #include "XtcProgressUtil.h"
 #include "components/BookActionsMenu.h"
 #include "components/HomeTabBar.h"
+#include "activities/plugins/PluginCatalogActivity.h"  // anyPluginInstalled()
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -45,7 +47,7 @@ int HomeActivity::getMenuItemCount() const {
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
-  if (hasOpdsServers && !coverGridUi) {
+  if (hasLibrarySlot() && !coverGridUi) {
     count++;
   }
   return count;
@@ -320,6 +322,7 @@ void HomeActivity::onEnter() {
   coverWorker_.start("HomeCover");
 
   hasOpdsServers = OPDS_STORE.hasServers();
+  hasPlugins = anyPluginInstalled();
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   if (UITheme::getInstance().hasCoverGridHome()) {
@@ -342,7 +345,7 @@ void HomeActivity::onEnter() {
   selectorIndex =
       initialMenuItem == HomeMenuItem::NONE
           ? 0
-          : base + (coverGridUi ? tabIndexFor(initialMenuItem) : menuItemToIndex(initialMenuItem, hasOpdsServers));
+          : base + (coverGridUi ? tabIndexFor(initialMenuItem) : menuItemToIndex(initialMenuItem, hasLibrarySlot()));
 
   // Trigger first update
   requestUpdate();
@@ -423,15 +426,15 @@ void HomeActivity::loop() {
       }
       return;
     }
-    switch (indexToMenuItem(menuIndex, hasOpdsServers)) {
+    switch (indexToMenuItem(menuIndex, hasLibrarySlot())) {
       case HomeMenuItem::FILE_BROWSER:
         onFileBrowserOpen();
         break;
       case HomeMenuItem::LIBRARY:
         onLibraryOpen();
         break;
-      case HomeMenuItem::OPDS_BROWSER:
-        onOpdsBrowserOpen();
+      case HomeMenuItem::OPDS_BROWSER:  // the library slot
+        hasPlugins ? onPluginsOpen() : onOpdsBrowserOpen();
         break;
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
@@ -531,6 +534,7 @@ void HomeActivity::loop() {
       }
     } else {
       selectorIndex = touchedBook;
+      haptic_feedback::touchAction();
       activateSelection();
     }
   }
@@ -554,6 +558,7 @@ void HomeActivity::loop() {
       }
     } else {
       selectorIndex = touchedIndex;
+      haptic_feedback::touchAction();
       activateSelection();
     }
     return;
@@ -589,9 +594,11 @@ void HomeActivity::render(RenderLock&&) {
                                         tr(STR_STATS), tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Library, Folder, Transfer, Stats, Settings};
 
-  if (hasOpdsServers) {
-    menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
-    menuIcons.insert(menuIcons.begin() + 2, Library);
+  // One slot for network catalogs: the plugin list when any plugin is installed (it lists the
+  // OPDS servers too), the OPDS browser alone otherwise.
+  if (hasLibrarySlot()) {
+    menuItems.insert(menuItems.begin() + 2, hasPlugins ? tr(STR_PLUGINS) : tr(STR_OPDS_BROWSER));
+    menuIcons.insert(menuIcons.begin() + 2, hasPlugins ? Plugins : Library);
   }
 
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
@@ -700,3 +707,5 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 void HomeActivity::onStatsOpen() { activityManager.goToReadingStats(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
+
+void HomeActivity::onPluginsOpen() { activityManager.goToPlugins(hasOpdsServers); }

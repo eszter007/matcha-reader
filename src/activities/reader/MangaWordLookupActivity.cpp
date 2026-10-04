@@ -17,6 +17,7 @@
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "DictSourceNames.h"
+#include "HapticFeedback.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "components/DictionaryPanel.h"
@@ -518,6 +519,7 @@ void MangaWordLookupActivity::loop() {
   if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
     const auto box = DictionaryPanel::compute(renderer).box;
     if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+      haptic_feedback::touchAction();
       ActivityResult result;
       result.isCancelled = true;
       setResult(std::move(result));
@@ -526,6 +528,7 @@ void MangaWordLookupActivity::loop() {
     }
     const auto add = DictionaryPanel::compute(renderer).addButton;
     if (hasResult && tapX >= add.x && tapX < add.x + add.width && tapY >= add.y && tapY < add.y + add.height) {
+      haptic_feedback::touchAction();
       saveSentence();
       return;
     }

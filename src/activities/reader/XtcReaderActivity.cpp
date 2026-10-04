@@ -88,11 +88,12 @@ void XtcReaderActivity::readerLoop() {
 
   // Open the reader menu on Confirm (swallow the release that opened the book from the library),
   // or on the touch menu gesture.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-      ReaderUtils::isTouchMenuGesture(renderer, mappedInput)) {
+  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || touchMenu) {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else {
+      if (touchMenu) haptic_feedback::touchAction();
       launchMenu();
     }
     return;
