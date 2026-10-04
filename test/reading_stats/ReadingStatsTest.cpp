@@ -246,7 +246,11 @@ TEST_F(StatsTest, LanguageNameIgnoresRegionSubtagAndCase) {
   EXPECT_STREQ(I18n::languageNameForCode("JA"), I18n::languageNameForCode("ja"));
   EXPECT_STREQ(I18n::languageNameForCode("pt_BR"), I18n::languageNameForCode("pt"));
   // A language with no shipped UI must report a miss, not fall back to English.
-  EXPECT_EQ(I18n::languageNameForCode("zh"), nullptr);
+  EXPECT_EQ(I18n::languageNameForCode("xx"), nullptr);
+  // Chinese has two script UIs but one stats bucket: a shared endonym rather than a miss.
+  EXPECT_STREQ(I18n::languageNameForCode("zh-Hant"), I18n::languageNameForCode("zh"));
+  EXPECT_STRNE(I18n::languageNameForCode("zh"), nullptr);
+  EXPECT_STRNE(I18n::languageNameForCode("yue"), nullptr);
   EXPECT_EQ(I18n::languageNameForCode(""), nullptr);
 }
 

@@ -215,7 +215,9 @@ void WordSelectionScan::reset() {
   allGlyphs.clear();
   selectableGlyphs.clear();
   selectToAllIdx.clear();
-  chineseMode_ = std::strcmp(DictIndex::languageFolder(), "zh") == 0;
+  // Chinese and Cantonese both segment whole runs; Japanese keeps the deinflecting greedy scan.
+  chineseMode_ =
+      std::strcmp(DictIndex::languageFolder(), "zh") == 0 || std::strcmp(DictIndex::languageFolder(), "yue") == 0;
   phase = Phase::Scan;
   scanPos = 0;
   recordFrom = 0;
