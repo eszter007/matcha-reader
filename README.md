@@ -65,7 +65,7 @@ Each save adds one line to a CSV file per language in the `sentence-mining` fold
 
 To import, open the file in Anki with **File → Import**. The first lines of the file tell Anki the layout, so there is nothing to set up. The files only ever grow; import the same file again later and Anki updates the cards it already has instead of adding them twice, because every card carries a stable ID.
 
-A sentence cut off by the end of the page is finished from the next page. The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. On devices without a clock chip (the X4) a restart loses the time, so the date can lag until the next Wi-Fi connection.
+A sentence cut off by the end of the page is finished from the next page. The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. On devices without a clock chip (the X4) a restart loses the time, so the date can lag until the next Wi-Fi connection. Press Power + Side Up on any screen to sync the clock right away.
 
 #### Page translation
 

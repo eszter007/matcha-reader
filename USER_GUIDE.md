@@ -13,6 +13,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
   - [1. Hardware Overview](#1-hardware-overview)
     - [Button Layout](#button-layout)
     - [Taking a Screenshot](#taking-a-screenshot)
+    - [Syncing the Clock](#syncing-the-clock)
     - [Frontlight (X4 Pro only)](#frontlight-x4-pro-only)
   - [2. Power \& Startup](#2-power--startup)
     - [Power On / Off](#power-on--off)
@@ -92,6 +93,12 @@ Button layout can be customized in the **[Controls Settings](#363-controls)**.
 When the Power button and the lower side button (Side Down) are pressed at the same time, it will take a screenshot and save it in the folder `screenshots/`.
 
 Alternatively, while reading a book, press the **Confirm** button to open the reader menu and select **Take screenshot**.
+
+### Syncing the Clock
+
+Press the Power button and the upper side button (Side Up) at the same time to set the clock from the internet, on any screen. If Wi-Fi is not connected yet, the network list opens first. Press **Back** when the new time is shown; from a book you return to the book.
+
+Devices without a clock chip (the X4) drift while asleep and lose the time on a restart, which skews the reading stats; a sync puts it right. The same action is in the clock settings.
 
 ### Frontlight (X4 Pro only)
 
@@ -1051,7 +1058,8 @@ A sentence cut off by the bottom of the page is finished from the start of the n
 comes from the speech bubble the word is in.
 
 The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. Devices without a
-clock chip (the X4) lose the time on a restart, so until the next Wi-Fi connection the date can lag behind.
+clock chip (the X4) lose the time on a restart, so until the next Wi-Fi connection the date can lag behind. Power +
+Side Up syncs it at any time: see [Syncing the Clock](#syncing-the-clock).
 
 ### 6.2 Page Translation
 

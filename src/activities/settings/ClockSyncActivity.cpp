@@ -1,5 +1,6 @@
 #include "ClockSyncActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
@@ -26,6 +27,11 @@ void ClockSyncActivity::onEnter() {
   }
 
   shouldTearDownWifiOnExit = true;
+  if (returnToReader) {
+    // The book underneath stays loaded; its glyph caches are the largest thing Wi-Fi can have
+    // back. The restart on the way out rebuilds them.
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  }
   launchWifiSelection();
 }
 
@@ -35,7 +41,11 @@ void ClockSyncActivity::onExit() {
   if (shouldTearDownWifiOnExit && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
+    if (returnToReader) {
+      silentRestartToReader();
+    } else {
+      silentRestart();
+    }
   }
 }
 

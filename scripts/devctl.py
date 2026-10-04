@@ -10,6 +10,7 @@ reboots. To drive the device, append lines to <outdir>/cmd.txt; each is sent as 
     HOLD:<button>:<ms>                              keep the button down for <ms> (1..10000)
     OPEN:/path/to/book.epub                         open a book in the reader
     HOME                                            go to Home
+    CLOCKSYNC                                       the Power + Up action (sync the clock)
     MEM                                             log the heap now (free, min, largest block)
     RMDIR:/.crosspoint/epub_<hash>                  drop one book cache
     SCREENSHOT                                      saved to <outdir>/shot.png (portrait)
