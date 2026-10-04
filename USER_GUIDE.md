@@ -1211,8 +1211,9 @@ because Cantonese has words of its own that a Mandarin dictionary does not list:
 - **Fonts.** The built-in CJK glyphs cover the common Japanese characters only, so install a Noto Sans SC or TC
   font from **Settings → Manage Fonts** (or convert one, README Setup step 3). The font is picked by the book's
   tag: SC for simplified, TC for traditional. With only a Japanese font on the card, Chinese renders in Japanese
-  glyph shapes, which is readable but not what a Chinese book looks like in print. Without any SD font, everyday
-  simplified characters show as empty boxes, and so do Chinese titles on the Home screen.
+  glyph shapes, which is readable but not what a Chinese book looks like in print. The Home screen loads the same
+  font for its own text whenever a title on it needs a character the built-in set lacks, so Chinese titles read
+  correctly there too. Without any SD font, everyday simplified characters show as empty boxes.
 
 ## 7. Reading Stats
 

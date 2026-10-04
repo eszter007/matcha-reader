@@ -50,6 +50,20 @@ class SdCardFontSystem {
   /// RAM. Applies immediately (loads/unloads the fallback and recomputes the global fallback).
   void setCjkFallbackNeeded(GfxRenderer& renderer, CjkScript script);
 
+  /// Home and the library lists: load the CJK companion for the UI alone, because a title on
+  /// screen uses characters the built-in CJK subset lacks (Chinese titles, rare kanji). The
+  /// companion's UI sizes then serve the list rows. Cleared by the next setCjkFallbackNeeded():
+  /// once a book is open, the book decides. None releases a companion only the UI wanted.
+  void setUiCjkNeeded(GfxRenderer& renderer, CjkScript script);
+
+  /// True when the built-in CJK subset (the floor every UI string falls back to) has the glyph.
+  bool builtinCjkCovers(uint32_t cp) const;
+
+  /// Scan a UTF-8 string for a CJK character the built-in subset cannot draw. The script
+  /// returned is the companion to ask for (simplified Chinese: its cut carries every hanzi, and
+  /// the chooser falls back to any CJK cut on the card), or None when every character renders.
+  CjkScript uiCjkScriptFor(const char* utf8) const;
+
   /// Release every resident SD font -- the selected family, its companion fallback, their
   /// size-matched UI fallback registrations, and the glyph slabs FontCacheManager holds for
   /// them. For any screen that needs a large allocation and does not render book text: manga
@@ -167,14 +181,21 @@ class SdCardFontSystem {
   void ensureCjkFallback(GfxRenderer& renderer, uint8_t pointSize);
   void updateGlobalFallback(GfxRenderer& renderer);
   bool loadedFamilyCovers(const SdCardFontManager& mgr, const std::string& name, uint32_t cp) const;
-  // The codepoint a face must carry to count as covering the current book's script.
-  uint32_t cjkProbe() const { return cjk::probeCodepoint(cjkScript_); }
-  bool cjkFallbackNeeded() const { return cjkScript_ != CjkScript::None; }
+  // The script the companion is wanted for: the open book's, else the UI's.
+  CjkScript activeCjkScript() const { return cjkScript_ != CjkScript::None ? cjkScript_ : uiCjkScript_; }
+  // The codepoint a face must carry to count as covering that script.
+  uint32_t cjkProbe() const { return cjk::probeCodepoint(activeCjkScript()); }
+  bool cjkFallbackNeeded() const { return activeCjkScript() != CjkScript::None; }
+  // Register a loaded family's UI point sizes as the size-matched fallback of each built-in UI
+  // font, so list rows draw its glyphs at their own size rather than at the reader's.
+  void registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family, GfxRenderer& renderer);
 
   SdCardFontManager fallbackManager_;
   const EpdFontFamily* defaultGlobalFallback_ = nullptr;
   // Script of the open book (None = a Latin book: no companion wanted).
   CjkScript cjkScript_ = CjkScript::None;
+  // Script the UI asked a companion for while no book is open (see setUiCjkNeeded).
+  CjkScript uiCjkScript_ = CjkScript::None;
   // Load the active SD family at the built-in UI point sizes and register each
   // as a size-matched script fallback for the corresponding UI font, so book
   // titles/list rows in scripts the built-ins lack (CJK, Greek, Cyrillic, ...)

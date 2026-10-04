@@ -25,6 +25,7 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "XtcProgressUtil.h"
 #include "components/BookActionsMenu.h"
 #include "components/HomeTabBar.h"
@@ -331,8 +332,18 @@ void HomeActivity::onEnter() {
   if (coverGridUi) {
     fillCoverGridFromLibrary();
     resolveGridCoverPaths();
-    coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
   }
+  // A Chinese title (or one with a rare kanji) needs glyphs the built-in CJK subset lacks: bring
+  // the SD companion in for the UI before anything is drawn. A Latin-only shelf pays nothing.
+  {
+    CjkScript uiScript = CjkScript::None;
+    for (const auto& book : recentBooks) {
+      uiScript = sdFontSystem.uiCjkScriptFor(book.title.c_str());
+      if (uiScript != CjkScript::None) break;
+    }
+    sdFontSystem.setUiCjkNeeded(renderer, uiScript);
+  }
+  if (coverGridUi) coverGridUi->begin(recentBooks, hasOpdsServers, hasContinueReading);
 
   const auto base = static_cast<int>(recentBooks.size());
   selectorIndex =

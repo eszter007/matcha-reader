@@ -9,6 +9,7 @@
 #include <Memory.h>
 #include <SdCardFont.h>
 #include <TtfEpdFont.h>
+#include <Utf8.h>
 #include <esp_heap_caps.h>
 
 #include <algorithm>
@@ -302,8 +303,13 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
     return;
   }
 
+  registerUiSizes(manager_, *family, renderer);
+}
+
+void SdCardFontSystem::registerUiSizes(SdCardFontManager& mgr, const SdCardFontFamilyInfo& family,
+                                       GfxRenderer& renderer) {
   for (const auto& ui : kUiFontSizes) {
-    const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, ui.pointSize);
+    const int sdFontId = mgr.loadFamilyExtraSize(family, renderer, ui.pointSize);
     if (sdFontId != 0) {
       renderer.setFallbackFont(ui.fontId, sdFontId);
       // ...and give that SD font the built-in family of the SAME size as its own next stop.
@@ -318,7 +324,7 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
         renderer.setFamilyFallback(sdFontId, &builtinIt->second);
       }
     } else {
-      LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, familyName.c_str());
+      LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, family.name.c_str());
     }
   }
 }
@@ -558,7 +564,12 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
   // (no CJK in the selected font, or no Latin for embedded English).
   const bool needsCompanion = cjkFallbackNeeded() && (!selectedHasCjk || !selectedHasLatin);
   if (!needsCompanion) {
-    if (!fallbackManager_.currentFamilyName().empty()) fallbackManager_.unloadAll(renderer);
+    if (!fallbackManager_.currentFamilyName().empty()) {
+      // Unloading clears every UI fallback registration, the selected family's included; put
+      // those back so list rows keep its glyphs after a companion comes and goes.
+      fallbackManager_.unloadAll(renderer);
+      setupUiFallbacks(renderer);
+    }
     return;
   }
 
@@ -567,7 +578,7 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
   // in the other style, then any other CJK cut (a JP font still carries every common hanzi, in
   // Japanese glyph forms), then anything else on the card.
   const bool preferSans = selected.empty() && SETTINGS.fontFamily == CrossPointSettings::NOTOSANS;
-  const CjkScript wantScript = cjkScript_;
+  const CjkScript wantScript = activeCjkScript();
   auto extensionRank = [preferSans, wantScript](const std::string& name) {
     const bool styleMatch = (normalizedFamilyKey(name).rfind("notosans", 0) == 0) == preferSans;
     const bool scriptMatch = extensionScript(name) == wantScript;
@@ -620,6 +631,10 @@ void SdCardFontSystem::ensureCjkFallback(GfxRenderer& renderer, const uint8_t po
     if (loadedFamilyCovers(fallbackManager_, fam->name, cjkProbe()) &&
         loadedFamilyCovers(fallbackManager_, fam->name, 'a')) {
       LOG_DBG("SDFS", "Companion fallback font: %s", fam->name.c_str());
+      // With a built-in family selected, nothing else serves the UI rows' own sizes: let the
+      // companion do it (its 12pt cut), so a Chinese title on Home is drawn at the row's size
+      // rather than pulled from the reader-size face through the global fallback.
+      if (manager_.currentFamilyName().empty()) registerUiSizes(fallbackManager_, *fam, renderer);
       return;
     }
     // Loaded fine but doesn't cover both scripts -- not a useful companion.
@@ -657,15 +672,42 @@ void SdCardFontSystem::updateGlobalFallback(GfxRenderer& renderer) {
 }
 
 void SdCardFontSystem::setCjkFallbackNeeded(GfxRenderer& renderer, const CjkScript script) {
-  if (cjkScript_ == script) return;
+  // A book decides from here on; the UI's own request is over until Home asks again.
+  if (cjkScript_ == script && uiCjkScript_ == CjkScript::None) return;
   LOG_DBG("SDFS", "CJK fallback script: %d", static_cast<int>(script));
   cjkScript_ = script;
+  uiCjkScript_ = CjkScript::None;
   // resolveSelectedFamily() reads this flag: a collapsed entry is the base plus a CJK companion
   // for a CJK book and the wider variant for any other, so the selection is re-resolved
   // here rather than only at book open. Called at book/activity boundaries, never mid-render.
   ensureSelectedLoaded(renderer);
   ensureCjkFallback(renderer, SETTINGS.fontPointSize);
   updateGlobalFallback(renderer);
+}
+
+void SdCardFontSystem::setUiCjkNeeded(GfxRenderer& renderer, const CjkScript script) {
+  if (uiCjkScript_ == script) return;
+  LOG_DBG("SDFS", "UI CJK script: %d", static_cast<int>(script));
+  uiCjkScript_ = script;
+  ensureSelectedLoaded(renderer);
+  ensureCjkFallback(renderer, SETTINGS.fontPointSize);
+  updateGlobalFallback(renderer);
+}
+
+bool SdCardFontSystem::builtinCjkCovers(const uint32_t cp) const {
+  return defaultGlobalFallback_ != nullptr && defaultGlobalFallback_->hasCodepoint(cp);
+}
+
+CjkScript SdCardFontSystem::uiCjkScriptFor(const char* utf8) const {
+  if (!utf8) return CjkScript::None;
+  const auto* p = reinterpret_cast<const unsigned char*>(utf8);
+  while (*p) {
+    const uint32_t cp = utf8NextCodepoint(&p);
+    const bool han = (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+                     (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0x20000 && cp <= 0x3134F);
+    if (han && !builtinCjkCovers(cp)) return CjkScript::SimplifiedChinese;
+  }
+  return CjkScript::None;
 }
 
 void SdCardFontSystem::releaseAllResidentFonts(GfxRenderer& renderer) {

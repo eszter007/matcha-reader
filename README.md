@@ -168,7 +168,7 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 ### Also in this fork
 
 - Per-book reader settings: font, size, spacing, margins and orientation are remembered per book
-- A built-in CJK fallback font, so the odd kanji in a non-Japanese book still renders (common Japanese characters only: a Chinese book needs the SD font from Setup)
+- A built-in CJK fallback font, so the odd kanji in a non-Japanese book still renders (common Japanese characters only: a Chinese book needs the SD font from Setup, which Home also picks up for Chinese titles)
 - **Optimize EPUB** on upload: splits single-file Japanese novels into real chapters with a working table of contents, and fits images to the screen as dithered 1-bit BMPs
 - More of the book's own CSS respected: headings sized as headings, line spacing, page breaks, boxed asides, and rules written as `.callout p`
 - Drop caps: a chapter opening styled with `::first-letter { font-size: … }` gets the enlarged initial the book asked for, with the first few lines wrapping around it
