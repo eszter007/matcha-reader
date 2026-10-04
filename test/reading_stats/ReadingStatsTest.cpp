@@ -106,6 +106,20 @@ TEST_F(StatsTest, WeekMinutesSaturateInsteadOfWrapping) {
   EXPECT_EQ(s.getMinutesThisWeek(Y, M, 8), UINT16_MAX);
 }
 
+// The week runs Monday to today. 2026-10-04 is a Sunday, so all seven days count; the weekday
+// was once computed a day late, which made Sunday a Monday and the week a single day.
+TEST_F(StatsTest, WeekMinutesCoverMondayThroughToday) {
+  auto& s = READING_STATS_STORE;
+  s.addMinutes(2026, 9, 27, 100);  // the Sunday before: last week
+  for (uint8_t d = 28; d <= 30; d++) s.addMinutes(2026, 9, d, 10);
+  for (uint8_t d = 1; d <= 4; d++) s.addMinutes(2026, 10, d, 10);
+  EXPECT_EQ(s.getMinutesThisWeek(2026, 10, 4), 70);
+  EXPECT_EQ(s.getMinutesThisWeek(2026, 9, 28), 10);  // a Monday: itself only
+  s.addLanguageMinutes("zh", 5, 2026, 9, 28);
+  s.addLanguageMinutes("zh", 5, 2026, 10, 4);
+  EXPECT_EQ(s.getMinutesThisWeek("zh", 2026, 10, 4), 10);
+}
+
 // The history used to be a 365-entry ring, which silently forgot the year before last.
 TEST_F(StatsTest, HistoryBeyond365DaysSurvivesAndRoundTrips) {
   auto& s = READING_STATS_STORE;
