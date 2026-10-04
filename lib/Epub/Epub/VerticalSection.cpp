@@ -19,6 +19,7 @@
 #include "Epub/RubyGlossary.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/parsers/XhtmlDoctype.h"
 #include "GfxRenderer.h"
 #include "VisibleTextUtils.h"
 
@@ -1808,6 +1809,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   }
 
   bool parseOk = true;
+  bool firstChunk = true;  // the prolog is inspected once; see XhtmlDoctype.h
   int done;
   do {
     void* const buf = XML_GetBuffer(parser, PARSE_BUFFER_SIZE);
@@ -1823,6 +1825,22 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
       break;
     }
     done = htmlFile.available() == 0;
+    if (firstChunk) {
+      firstChunk = false;
+      const auto patch = xhtml::findDoctypePatch(static_cast<const char*>(buf), len);
+      if (patch.inject) {
+        // The buffer's tail is dropped with this call; the file resumes after the old DOCTYPE.
+        if (XML_ParseBuffer(parser, static_cast<int>(patch.keep), 0) == XML_STATUS_ERROR ||
+            XML_Parse(parser, xhtml::kExternalDoctype, sizeof(xhtml::kExternalDoctype) - 1, 0) == XML_STATUS_ERROR ||
+            !htmlFile.seek(patch.keep + patch.skip)) {
+          LOG_ERR("VSC", "XML parse error in prolog: %s", XML_ErrorString(XML_GetErrorCode(parser)));
+          parseOk = false;
+          break;
+        }
+        done = 0;
+        continue;
+      }
+    }
     if (XML_ParseBuffer(parser, static_cast<int>(len), done) == XML_STATUS_ERROR) {
       LOG_ERR("VSC", "XML parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));

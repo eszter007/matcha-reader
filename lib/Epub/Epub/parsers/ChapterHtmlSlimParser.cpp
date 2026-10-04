@@ -29,6 +29,7 @@
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
+#include "XhtmlDoctype.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
@@ -3022,6 +3023,7 @@ bool ChapterHtmlSlimParser::beginParse() {
   // Using DefaultHandlerExpand preserves normal entity expansion from DOCTYPE
   XML_SetDefaultHandlerExpand(xmlParser_, defaultHandlerExpand);
 
+  firstParseChunk_ = true;
   if (!Storage.openFileForRead("EHP", filepath, parseFile_)) {
     destroyXmlParser(xmlParser_);
     xmlParser_ = nullptr;
@@ -3060,6 +3062,21 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
   if (len == 0 && parseFile_.available() > 0) {
     LOG_ERR("EHP", "File read error");
     return ParseStatus::Error;
+  }
+
+  if (firstParseChunk_) {
+    firstParseChunk_ = false;
+    const auto patch = xhtml::findDoctypePatch(static_cast<const char*>(buf), len);
+    if (patch.inject) {
+      // The buffer's tail is dropped with this call; the file resumes after the old DOCTYPE.
+      if (XML_ParseBuffer(xmlParser_, static_cast<int>(patch.keep), 0) == XML_STATUS_ERROR ||
+          XML_Parse(xmlParser_, xhtml::kExternalDoctype, sizeof(xhtml::kExternalDoctype) - 1, 0) == XML_STATUS_ERROR ||
+          !parseFile_.seek(patch.keep + patch.skip)) {
+        LOG_ERR("EHP", "Parse error in prolog: %s", XML_ErrorString(XML_GetErrorCode(xmlParser_)));
+        return ParseStatus::Error;
+      }
+      return ParseStatus::More;
+    }
   }
 
   const int done = parseFile_.available() == 0;
