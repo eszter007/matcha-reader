@@ -126,6 +126,10 @@ class SdCardFontSystem {
 
   /// Lazily load the selected family's exact CJK fallback size for a native Word Lookup font.
   void ensureWordLookupFallback(GfxRenderer& renderer, int primaryFontId, uint8_t pointSize);
+  /// Unload what ensureWordLookupFallback() loaded, when the lookup session ends. A font loaded
+  /// mid-session lands at the top of a busy heap; left resident it caps the largest free block
+  /// for the rest of the reading session (measured: 51 KB -> 31 KB after one lookup).
+  void releaseWordLookupFallback(GfxRenderer& renderer);
 
   /// Non-const access to the registry (for FontInstaller).
   SdCardFontRegistry& registry() { return registry_; }
@@ -230,6 +234,13 @@ class SdCardFontSystem {
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
+  // Fonts ensureWordLookupFallback() itself loaded (not ones it found resident), with the
+  // built-in font each stands in for. Two: the definition body and the panel header.
+  struct LookupExtra {
+    int primaryFontId = 0;
+    int sdFontId = 0;
+  };
+  LookupExtra lookupExtras_[2];
   std::atomic<bool> registryDirty_{false};
 
 #if CROSSPOINT_VECTOR_FONTS
