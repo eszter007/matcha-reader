@@ -1118,7 +1118,9 @@ dictionaries/
     names.idx    names.dat    names.spx      # names (recommended)
     grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
   zh/                          # Chinese, converted CC-CEDICT (simplified and traditional)
-    vocab.idx    vocab.dat    vocab.spx    vocab.title
+    vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
+    names.idx    names.dat    names.spx    names.title    # proper nouns (optional)
+    grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
 ```
 
 Japanese and Chinese work differently from the rest. They always use the converted files in `dictionaries/jp/`
@@ -1186,15 +1188,22 @@ in the dictionary folder instead. Many dictionaries ship one; see [docs/dictiona
 A book tagged `zh` in any form (`zh-CN`, `zh-Hans`, `zh-TW`, `zh-Hant`, `zh-HK`, `cmn`) is read with the same
 tools as a Japanese one, once `dictionaries/zh/` holds a converted dictionary (§6.5):
 
-- **Word Lookup** scans the page into dictionary words by longest match and lands only on words with an entry,
-  exactly as in §6.2. There is nothing to deinflect, so every form on the page is looked up as written. The entry
-  opens with the pinyin above the glosses (and zhuyin after it, when the dictionary was converted with `--zhuyin`),
-  then the other script's form of the word when it differs (`說話 / 说话`), then the definitions. A word in both
-  CC-CEDICT and the MoE dictionary shows the MoE entry under the English one.
-- **Vertical Text** is offered in Reader Settings for every Chinese book and starts off. Turn it on for a Taiwanese
-  novel and the page is set in right-to-left columns; a traditional-Chinese book centres 。，、 in their square,
-  as Taiwanese print does, while a simplified one keeps the Japanese upper-right placement. The choice is
-  remembered per book, like the Japanese toggle.
+- **Word Lookup** splits each run of characters into dictionary words and lands only on words with an entry,
+  exactly as in §6.2. The split weighs the whole run by word frequency when the dictionary was converted with a
+  `--frequency` list, so a crossing ambiguity goes to the common reading; without one it takes the fewest, longest
+  words. There is nothing to deinflect, so every form on the page is looked up as written. The entry opens with the
+  pinyin above the glosses (zhuyin or jyutping after it, when the dictionary was converted with them), then the
+  word's HSK or TOCFL level when a graded list was given, then the other script's form of the word when it differs
+  (`說話 / 说话`), then the definitions. A word in both CC-CEDICT and the MoE dictionary shows the MoE entry under
+  the English one. Proper nouns converted with `--split-names` show as **Name** entries, and a grammar list in the
+  grammar slot is searched around the cursor the way the Japanese one is.
+- **Pinyin above the text** comes from the book, like furigana. Run `tools/pinyin_ruby/add_pinyin_ruby.py` over an
+  EPUB on your computer (README Setup step 2) and the Furigana toggle shows or hides it.
+- **Vertical Text** follows the publisher: a book whose EPUB spine declares `page-progression-direction="rtl"`
+  (the norm for Taiwanese novels) opens in right-to-left columns, any other Chinese book opens horizontally, and
+  the toggle in Reader Settings overrides either. A traditional-Chinese book centres 。，、 in their square, as
+  Taiwanese print does, while a simplified one keeps the Japanese upper-right placement. The choice is remembered
+  per book, like the Japanese toggle.
 - **Manhua** converted with `--language zh` get the same in-bubble lookup as manga (§6.4).
 - **Sentence mining** files Chinese cards in `sentences-zh.csv`, with the pinyin in the reading column.
 - **Fonts.** The built-in CJK glyphs cover the common Japanese characters only, so install a Noto Sans SC or TC

@@ -21,6 +21,7 @@
 #include "BookStats.h"
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
+#include "DictSourceNames.h"
 #include "Epub/Page.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
@@ -28,16 +29,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/SentenceMining.h"
-
-namespace {
-// Footer name of the vocabulary dictionary: the converter's title file when it wrote one, else
-// the historical default for the Japanese folder, else a generic word for any other language.
-const char* vocabSourceName() {
-  const char* title = DictIndex::vocabTitle();
-  if (title && title[0] != '\0') return title;
-  return strcmp(DictIndex::languageFolder(), "jp") == 0 ? "JMdict" : tr(STR_DICTIONARY);
-}
-}  // namespace
 
 EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                            const VerticalPage& page, std::string scanCachePath,
@@ -1141,8 +1132,17 @@ std::string EpubReaderWordLookupActivity::buildLookupText() const {
   if (allStart >= scan.allGlyphs.size()) return text;
   const uint32_t paraIdx = scan.allGlyphs[allStart].paragraphIndex;
   int charCount = 0;
+  // Chinese: the scan weighed the whole run, so the word it chose may be shorter than the
+  // longest match from this cell (和 before 尚未, not 和尚). Look up exactly that word -- except
+  // one cut at the page edge, whose span is only the on-page part of a longer match.
+  int limit = WordSelectionScan::kMaxLookupChars;
+  if (scan.usesRunSegmentation() && provisionalGlyph >= scan.onPageGlyphCount() && cursorIndex >= 0 &&
+      static_cast<size_t>(cursorIndex) < scan.selectableGlyphs.size()) {
+    const uint8_t span = scan.selectableGlyphs[static_cast<size_t>(cursorIndex)].matchLen;
+    if (span > 0 && allStart + span < scan.contextStart) limit = std::min<int>(limit, span);
+  }
 
-  for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < WordSelectionScan::kMaxLookupChars; i++) {
+  for (size_t i = allStart; i < scan.allGlyphs.size() && charCount < limit; i++) {
     const auto& g = scan.allGlyphs[i];
     if (g.paragraphIndex != paraIdx) break;
     WordSelectionScan::encodeUtf8(g.codepoint, text);
@@ -1235,6 +1235,7 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
   resultReading.clear();
   resultGrammar.clear();
   resultSource = nullptr;
+  resultDict = 0;
   resultDictionaryLabel.clear();
   sectionText.clear();
   sectionLabel.clear();
@@ -1317,7 +1318,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
       hasResult = true;
       resultHeadword = digitPrefix + text.substr(0, nb);
       resultDefinition = tr(STR_LOOKUP_NAME);  // no dictionary entry -- label it as a name
-      resultSource = "JMnedict";
+      resultDict = DictIndex::DICT_NAMES;
+      resultSource = dictsource::name(resultDict);
       resultMatchLen = static_cast<int>(nameRun);
       // Names are the glossary's prime case: the book's own furigana is often the ONLY
       // source for a name's reading.
@@ -1338,9 +1340,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
     resultReading = std::move(metadata.reading);
     resultGrammar = std::move(metadata.grammar);
-    resultSource = result.entry.sourceDict == DictIndex::DICT_NAMES     ? "JMnedict"
-                   : result.entry.sourceDict == DictIndex::DICT_GRAMMAR ? "Grammar"
-                                                                        : vocabSourceName();
+    resultDict = result.entry.sourceDict;
+    resultSource = dictsource::name(resultDict);
     resultDictionaryLabel = std::move(metadata.source);
     prependBookReading(text.substr(0, std::min(result.matchLength, text.size())));
     int chars = 0;
@@ -1395,7 +1396,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
           resultReading = std::move(grammarMetadata.reading);
           resultGrammar = std::move(grammarMetadata.grammar);
           resultDictionaryLabel = std::move(grammarMetadata.source);
-          resultSource = "Grammar";
+          resultDict = DictIndex::DICT_GRAMMAR;
+          resultSource = dictsource::name(resultDict);
         } else if (DictIndex::lookupInFile(resultHeadword.c_str(), DictIndex::grammarIdxPath(),
                                            DictIndex::grammarDatPath(), gramEntry)) {
           // Paged: the grammar entry gets its own page beside the vocab one, and opens first.
@@ -1502,9 +1504,8 @@ void EpubReaderWordLookupActivity::performLookupImpl() {
     if (grammar != sectionKind.end()) currentSection = static_cast<int>(grammar - sectionKind.begin());
   }
   if (sectionText.empty())
-    DefinitionText::formatEntryBody(resultDefinition, resultSource != nullptr && strcmp(resultSource, "Grammar") == 0
-                                                          ? resultHeadword
-                                                          : std::string());
+    DefinitionText::formatEntryBody(resultDefinition,
+                                    resultDict == DictIndex::DICT_GRAMMAR ? resultHeadword : std::string());
   requestUpdate();
 }
 
@@ -1780,8 +1781,7 @@ void EpubReaderWordLookupActivity::splitDefinitionIntoSections() {
 
   // Vocab until the grammar separator is crossed; a name lookup has no separators at all, so its
   // single piece takes the kind the lookup itself resolved.
-  StrId kind = resultSource != nullptr && strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
-                                                                                : StrId::STR_DICT_KIND_VOCAB;
+  StrId kind = resultDict == DictIndex::DICT_NAMES ? StrId::STR_DICT_KIND_NAME : StrId::STR_DICT_KIND_VOCAB;
   std::string grammarHead;  // the pattern named by the grammar heading, once it is seen
   // Cut at whichever separator comes first, repeatedly.
   size_t pos = 0;
@@ -1913,9 +1913,7 @@ const char* EpubReaderWordLookupActivity::visibleKind() const {
   if (!sectionKind.empty() && currentSection < static_cast<int>(sectionKind.size()))
     return I18N.get(sectionKind[currentSection]);
   if (resultSource == nullptr) return nullptr;
-  return I18N.get(strcmp(resultSource, "Grammar") == 0    ? StrId::STR_DICT_KIND_GRAMMAR
-                  : strcmp(resultSource, "JMnedict") == 0 ? StrId::STR_DICT_KIND_NAME
-                                                          : StrId::STR_DICT_KIND_VOCAB);
+  return I18N.get(dictsource::kind(resultDict));
 }
 
 const char* EpubReaderWordLookupActivity::visibleReading() const {

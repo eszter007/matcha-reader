@@ -47,11 +47,13 @@ Vocabulary, names and grammar each come from their own dictionary. A word listed
 
 ### Chinese
 
-Chinese books, simplified and traditional, get the same scan-based lookup as Japanese: the page is segmented into dictionary words by longest match, the cursor lands only on words with an entry, and the entry opens with its pinyin (and zhuyin, if you converted the dictionary with it) above the glosses. There is no conjugation to undo, so a word like 說話 or 中国 resolves as soon as it is on the page. Tap a word in a manhua the same way as in manga. Both forms of a word are indexed, so a traditional dictionary serves a simplified book and the other way round, and the entry shows the other form (`說話 / 说话`).
+Chinese books, simplified and traditional, get the same scan-based lookup as Japanese: each run of characters is split into dictionary words, the cursor lands only on words with an entry, and the entry opens with its pinyin (and zhuyin or jyutping, if you converted the dictionary with them) above the glosses, with the word's HSK or TOCFL level when you gave the converter a graded list. The split weighs the whole run by word frequency rather than grabbing the longest match at each step, so 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚. There is no conjugation to undo, so a word like 說話 or 中国 resolves as soon as it is on the page. Tap a word in a manhua the same way as in manga. Both forms of a word are indexed, so a traditional dictionary serves a simplified book and the other way round, and the entry shows the other form (`說話 / 说话`). Proper nouns can go to their own names dictionary, and a grammar list to the grammar slot, exactly as for Japanese.
 
-A book tagged `zh-TW`, `zh-Hant` or `zh-HK` can be read vertically: turn **Vertical Text** on in Reader Settings and it is set in right-to-left columns with the punctuation centred in its square, as Taiwanese books print it. Chinese books open horizontally until you do, since most of them are set that way. Saved sentences go to `sentences-zh.csv` with the pinyin in the reading column.
+Pinyin above the running text works the way furigana does: the book carries it. `tools/pinyin_ruby/add_pinyin_ruby.py` adds pinyin (or zhuyin) ruby to every word of an EPUB on your computer, optionally skipping the commonest words, and the Furigana toggle shows or hides it on the device.
 
-The dictionary comes from [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), optionally merged with the Ministry of Education's 重編國語辭典 for a monolingual entry under the bilingual one, and ranked by a frequency list so the common sense comes first. See [Setup](#setup) for the files and the Noto Sans SC / TC font.
+A Chinese book opens the way its publisher set it: one whose EPUB declares right-to-left page progression (Taiwanese novels, as a rule) is set in vertical columns, with the punctuation centred in its square as Taiwanese books print it; everything else opens horizontally. **Vertical Text** in Reader Settings overrides either, per book. Saved sentences go to `sentences-zh.csv` with the pinyin in the reading column.
+
+The dictionary comes from [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), optionally merged with the Ministry of Education's 重編國語辭典 for a monolingual entry under the bilingual one, and ranked by a frequency list so the common sense comes first. Cantonese readers can add jyutping from CC-Canto. See [Setup](#setup) for the files and the Noto Sans SC / TC font.
 
 Other languages get the same treatment from their StarDict dictionaries. A word at the start of a sentence keeps its accents and still resolves (`École` finds `école`), and French adds its own rules: `l'eau` looks up `eau`, `journaux` finds `journal`, `heureuse` finds `heureux`, and the regular conjugations resolve to the infinitive (`parlaient` → `parler`, `mangeons` → `manger`, `finissent` → `finir`). The same coverage extends to `-eindre`/`-aindre`/`-oindre` verbs (`éteignit` finds `éteindre`, `craignait` finds `craindre`), `-aître` verbs (`connaissons` finds `connaître`), `-uire` verbs (`conduisit` finds `conduire`), and adverbs formed from an adjective (`lentement` finds `lent`). English and everything else fall back to plurals and verb endings. Irregular verbs that share no stem with their infinitive — and a verb's irregular passé simple, like `connus` or `naquit` — need a `.syn` file in the dictionary folder — see [docs/dictionary.md](docs/dictionary.md).
 
@@ -213,7 +215,9 @@ dictionaries/
     names.idx    names.dat    names.spx      # names (recommended)
     grammar.idx  grammar.dat  grammar.spx    # grammar reference (optional)
   zh/                          # Chinese, CC-CEDICT converted for the device
-    vocab.idx    vocab.dat    vocab.spx    vocab.title
+    vocab.idx    vocab.dat    vocab.spx    vocab.title    # vocabulary (required)
+    names.idx    names.dat    names.spx    names.title    # proper nouns (--split-names, optional)
+    grammar.idx  grammar.dat  grammar.spx  grammar.title  # grammar patterns (optional)
 ```
 
 Japanese and Chinese are the exceptions: they always use the converted files in `dictionaries/jp/` and `dictionaries/zh/`. Japanese converts from [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other Yomitan dictionary. Chinese converts from the raw [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict) file (both simplified and traditional, with pinyin), from the Taiwan Ministry of Education's 重編國語辭典 as the [g0v `dict-revised.json`](https://github.com/g0v/moedict-data), or from a Yomitan build such as [CC-CEDICT for Yomitan](https://github.com/MarvNC/cc-cedict-yomitan); one `zh/` folder serves simplified and traditional books alike. Every other language uses plain StarDict.
@@ -232,19 +236,30 @@ python3 tools/dict_convert/convert_jmdict.py \
   --output-dir /path/to/sd/dictionaries/jp/    # add --name names / --name grammar for the others
 ```
 
-Chinese uses the same script with `--lang zh`. The first command below is the simplified-Chinese set: CC-CEDICT ranked by the [jieba](https://github.com/fxsjy/jieba) word list (MIT), so the common sense of a word is shown first. The second is the Taiwanese set: zhuyin beside the pinyin, the MoE dictionary merged in under the English entry, and the [TOCFL](https://github.com/ivankra/tocfl) word list as the ranking. Any list with one word per row works for `--frequency`, [HSK 3.0](https://github.com/ivankra/hsk30) included.
+Chinese uses the same script with `--lang zh`. The first command below is the simplified-Chinese set: CC-CEDICT ranked by the [jieba](https://github.com/fxsjy/jieba) word list (MIT), so the common sense of a word is shown first and the page segments by frequency, with proper nouns split off into the names dictionary and each word tagged with its [HSK 3.0](https://github.com/ivankra/hsk30) level. The second is the Taiwanese set: zhuyin beside the pinyin, the MoE dictionary merged in under the English entry, and the [TOCFL](https://github.com/ivankra/tocfl) list as both ranking and level tags. Any list with one word per row works for `--frequency`.
 
 ```bash
 python3 tools/dict_convert/convert_jmdict.py --lang zh \
-  --input cedict_1_0_ts_utf-8_mdbg.txt --frequency dict.txt \
+  --input cedict_1_0_ts_utf-8_mdbg.txt --frequency dict.txt --split-names \
+  --levels hsk30.csv --level-name HSK \
   --output-dir /path/to/sd/dictionaries/zh/
 
-python3 tools/dict_convert/convert_jmdict.py --lang zh --zhuyin \
-  --input cedict_1_0_ts_utf-8_mdbg.txt --input dict-revised.json.xz --frequency tocfl-202307.csv \
+python3 tools/dict_convert/convert_jmdict.py --lang zh --zhuyin --split-names \
+  --input cedict_1_0_ts_utf-8_mdbg.txt --input dict-revised.json.xz \
+  --frequency tocfl-202307.csv --levels tocfl-202307.csv --level-name TOCFL \
   --output-dir /path/to/sd/dictionaries/zh/
 ```
 
+For Cantonese, add `--jyutping cccedict-canto-readings.txt` (from [CC-Canto](https://cantonese.org/download.html)) to put the jyutping after the pinyin, or convert CC-Canto's own file as the dictionary. A grammar reference goes in the grammar slot from any two-column file, pattern and explanation, with `--format tsv --name grammar`; the [Chinese Grammar Wiki](https://resources.allsetlearning.com/chinese/grammar/) is CC BY-NC-SA, so that one is for your own card only.
+
 Then run `python3 scripts/gen_dict_spx.py /path/to/sd/dictionaries/zh/` to build the `.spx` sparse index that makes lookups fast, as for Japanese. CC-CEDICT is CC BY-SA; the MoE dictionary is CC BY-ND and is converted without changing its text.
+
+To put pinyin above the text itself, annotate the EPUB once before copying it to the card:
+
+```bash
+python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.txt \
+  --frequency dict.txt --skip-top 1500 book.epub book-pinyin.epub   # --zhuyin for bopomofo
+```
 
 **3. Install a Japanese or Chinese font.** The built-in Noto handles Japanese, but a dedicated font looks better. Chinese needs one: the built-in CJK glyphs are the common Japanese set, so a Chinese book without an SD font shows empty boxes for everyday characters such as 这, 说 or 們. Convert any TTF or OTF with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/<Family>_<size>.cpfont` — one file per point size, and the size in the filename is the size offered in Text Settings. **Settings → Manage Fonts** downloads ready-made ones, Noto Sans and Serif in JP, SC and TC cuts among them. An SD card CJK font also fills in rare characters elsewhere, such as dictionary entries and book titles.
 

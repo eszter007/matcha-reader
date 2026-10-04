@@ -30,4 +30,10 @@ class WordLookup {
 
   // Maximum number of characters to consider in the scanning window.
   static constexpr int MAX_WINDOW_CHARS = 8;
+
+  // Every exact-match window length at byteOffset, for a segmenter that weighs alternatives
+  // instead of taking the longest: bit L-1 of the result is set when the window of L characters
+  // is a headword, and priority[L-1] carries that record's priority. No deinflection, no
+  // definitions. Up to MAX_WINDOW_CHARS dictionary probes.
+  static uint8_t lookupAll(const std::string& paragraphText, size_t byteOffset, uint8_t priority[MAX_WINDOW_CHARS]);
 };

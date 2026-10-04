@@ -6,10 +6,14 @@ All POD fields are written in the ESP32 little-endian representation used by
 
 ## `book.bin`
 
-### Version 10
+### Version 11
 
 `book.bin` stores EPUB metadata plus lookup tables for spine and TOC entries.
 The current firmware writes this version from `BookMetadataCache`.
+
+Version 11 appends one byte to the metadata block: `pageProgressionRtl`, 1 when
+the OPF spine declares `page-progression-direction="rtl"`. The reader opens a
+Chinese book vertically when it is set; Japanese books are vertical regardless.
 
 ImHex pattern:
 
@@ -18,7 +22,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 10
+#define EXPECTED_VERSION 11
 #define MAX_STRING_LENGTH 65535
 
 struct String {
@@ -39,6 +43,7 @@ struct Metadata {
     String language [[comment("Book language code")]];
     String coverItemHref [[comment("Path to cover image")]];
     String textReferenceHref [[comment("Path to guided first text reference")]];
+    u8 pageProgressionRtl [[comment("1 when the spine is page-progression-direction=\"rtl\"")]];
 };
 
 struct SpineEntry {

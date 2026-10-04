@@ -135,3 +135,22 @@ TEST(ContentOpfParserCover, ReadingParserStillOpensManifestCache) {
   EXPECT_EQ(Storage.writeOpens, 1);
   EXPECT_EQ(Storage.readOpens, 1);
 }
+
+TEST(ContentOpfParserMetadata, ReadsSpinePageProgressionDirection) {
+  const std::string rtl = R"(<package xmlns:dc="urn:dc"><metadata><dc:language>zh-TW</dc:language></metadata>
+    <manifest/><spine toc="ncx" page-progression-direction="rtl"></spine></package>)";
+  ContentOpfParser rtlParser("", "", rtl.size(), nullptr);
+  parse(rtlParser, rtl);
+  EXPECT_TRUE(rtlParser.pageProgressionRtl);
+
+  const std::string ltr = R"(<package xmlns:dc="urn:dc"><metadata><dc:language>zh-CN</dc:language></metadata>
+    <manifest/><spine page-progression-direction="ltr"></spine></package>)";
+  ContentOpfParser ltrParser("", "", ltr.size(), nullptr);
+  parse(ltrParser, ltr);
+  EXPECT_FALSE(ltrParser.pageProgressionRtl);
+
+  const std::string none = R"(<package xmlns:dc="urn:dc"><metadata/><manifest/><spine/></package>)";
+  ContentOpfParser noneParser("", "", none.size(), nullptr);
+  parse(noneParser, none);
+  EXPECT_FALSE(noneParser.pageProgressionRtl);
+}

@@ -214,6 +214,7 @@ void WordSelectionScan::reset() {
   allGlyphs.clear();
   selectableGlyphs.clear();
   selectToAllIdx.clear();
+  chineseMode_ = std::strcmp(DictIndex::languageFolder(), "zh") == 0;
   phase = Phase::Scan;
   scanPos = 0;
   recordFrom = 0;
@@ -773,6 +774,8 @@ void WordSelectionScan::scanOnePosition() {
   const auto& g = allGlyphs[i];
   if (i < skipUntil) return;
 
+  if (chineseMode_ && isCJK(g.codepoint) && scanChineseRun(i)) return;
+
   const uint32_t paraIdx = g.paragraphIndex;
 
   // Skip leading digits — a number is looked up together with the counter
@@ -1045,6 +1048,93 @@ void WordSelectionScan::scanOnePosition() {
     }
     selectToAllIdx.push_back(i);
   }
+}
+
+bool WordSelectionScan::scanChineseRun(const size_t from) {
+  const uint32_t paraIdx = allGlyphs[from].paragraphIndex;
+  // The run: consecutive hanzi of one paragraph. Punctuation, digits, Latin and tate-chu-yoko
+  // runs end it, and so does the page's context boundary extended by one lookup window.
+  size_t n = 0;
+  while (from + n < allGlyphs.size() && n < kRunMax && allGlyphs[from + n].paragraphIndex == paraIdx &&
+         isCJK(allGlyphs[from + n].codepoint)) {
+    n++;
+  }
+  if (n == 0) return false;
+
+  // Lookup text: the run plus whatever hanzi follow it, so a word that begins near the end of a
+  // run cut at kRunMax still sees its full window. Byte offsets per run cell for the probes.
+  std::string text;
+  uint16_t byteAt[kRunMax + 1];
+  for (size_t j = 0; j < n + static_cast<size_t>(kMaxLookupChars) - 1; j++) {
+    const size_t idx = from + j;
+    if (j <= n) byteAt[j] = static_cast<uint16_t>(text.size());
+    if (idx >= allGlyphs.size() || allGlyphs[idx].paragraphIndex != paraIdx || !isCJK(allGlyphs[idx].codepoint)) break;
+    encodeUtf8(allGlyphs[idx].codepoint, text);
+  }
+
+  for (size_t p = 0; p < n; p++) {
+    std::memset(runPriority_[p], 0, sizeof(runPriority_[p]));
+    runFound_[p] = WordLookup::lookupAll(text, byteAt[p], runPriority_[p]);
+  }
+
+  // Best split of cells [p, n): the sum of word scores, where a word scores its priority minus a
+  // constant so that every word costs something and a split into fewer, commoner words wins.
+  // Priorities are the converter's log-scaled frequency rank (255 = commonest, 60 = unranked), so
+  // with no frequency data every word costs the same and this reduces to the fewest words --
+  // longest match. A cell no entry covers stands alone at a heavy cost, never swallowed.
+  constexpr int16_t kWordCost = -256;
+  constexpr int16_t kUnknownCost = -400;
+  runBest_[n] = 0;
+  for (size_t p = n; p-- > 0;) {
+    int16_t best = INT16_MIN;
+    uint8_t bestLen = 1;
+    for (int len = 1; len <= kMaxLookupChars; len++) {
+      if (!(runFound_[p] & (1u << (len - 1)))) continue;
+      // A word may run past the run's end (into the tail or the next call's cells): it ends the
+      // run and is scored as one word.
+      const size_t next = std::min(n, p + static_cast<size_t>(len));
+      const int16_t score = static_cast<int16_t>(runBest_[next] + kWordCost + runPriority_[p][len - 1]);
+      if (score > best || (score == best && len > bestLen)) {
+        best = score;
+        bestLen = static_cast<uint8_t>(len);
+      }
+    }
+    if (best == INT16_MIN) {
+      best = static_cast<int16_t>(runBest_[p + 1] + kUnknownCost);
+      bestLen = 0;  // no entry: the cell is passed over, not selectable
+    }
+    runBest_[p] = best;
+    runBestLen_[p] = bestLen;
+  }
+
+  // Record the chosen words. Cells before recordFrom are context only (see aimAtGlyph).
+  size_t p = 0;
+  size_t covered = n;  // cells the chosen words span; the last one may overrun the run
+  while (p < n) {
+    const size_t cell = from + p;
+    const uint8_t len = runBestLen_[p];
+    const size_t step = std::max<size_t>(len, 1);
+    if (len > 0 && cell >= recordFrom && cell < contextStart) {
+      GlyphRef entry = allGlyphs[cell];
+      size_t span = len;
+      if (cell + span > contextStart) span = contextStart - cell;
+      entry.matchLen = static_cast<uint8_t>(std::min<size_t>(span, 255));
+      if (!pushGlyphSafe(selectableGlyphs, entry)) {
+        scanPos = allGlyphs.size();
+        scanTruncated = true;
+        return true;
+      }
+      selectToAllIdx.push_back(cell);
+    }
+    covered = std::max(covered, p + step);
+    p += step;
+  }
+  for (size_t k = 0; k < covered && from + k < allGlyphs.size(); k++) {
+    if (from + k >= recordFrom) markScanned(from + k);
+  }
+  // The cells the words cover are done, including a last word that ran past the run.
+  skipUntil = std::max(skipUntil, from + covered);
+  return true;
 }
 
 namespace {

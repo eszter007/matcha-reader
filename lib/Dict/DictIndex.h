@@ -55,9 +55,10 @@ class DictIndex {
   static void setLanguageFolder(const char* folder);
   static const char* languageFolder();
 
-  // Display name of the vocabulary dictionary, from <folder>/vocab.title when the converter
-  // wrote one. Empty otherwise; the caller then falls back to a name of its own.
-  static const char* vocabTitle();
+  // Display name of a dictionary slot (DICT_JMDICT, DICT_NAMES or DICT_GRAMMAR), from the
+  // <folder>/vocab.title, names.title or grammar.title the converter wrote. Empty when absent;
+  // the caller then falls back to a name of its own.
+  static const char* slotTitle(uint8_t dict);
 
   // Preferred filenames. The vocab/names dictionaries also accept the pre-rename legacy
   // filenames (jmdict/jmnedict) -- resolved at runtime by the accessors below, so existing SD

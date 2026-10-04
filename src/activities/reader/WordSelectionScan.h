@@ -126,6 +126,10 @@ class WordSelectionScan {
     return (scannedBits[glyphIndex >> 3] >> (glyphIndex & 7)) & 1;
   }
 
+  // Whether the scan segments by weighed whole-run splits (Chinese). The runtime lookup then
+  // takes the scan's word length instead of the longest match from the cursor.
+  bool usesRunSegmentation() const { return chineseMode_; }
+
   // Shared helpers, also used by EpubReaderWordLookupActivity's runtime lookups.
   static constexpr int kMaxLookupChars = 8;
   // The context is exactly one lookup window: a word beginning on the last on-page character
@@ -190,6 +194,24 @@ class WordSelectionScan {
   void reset();
   uint32_t glyphContentHash() const;
   void scanOnePosition();
+  // Chinese: segment the run of hanzi starting at allGlyphs[from] as a whole, choosing the
+  // split with the best total word priority (the dictionary's frequency rank) rather than the
+  // longest match at each step, and record every word in it. Returns false when the cell does not
+  // start a hanzi run, so the caller falls through to the per-position path.
+  bool scanChineseRun(size_t from);
+  // True while the dictionary folder is Chinese: text with no conjugation, where the kana
+  // heuristics of scanOnePosition() never fire and a crossing ambiguity (结婚的/和尚/未) is best
+  // settled by comparing whole-run splits.
+  bool chineseMode_ = false;
+  // Longest hanzi run the segmenter weighs at once. Chinese clauses rarely run longer between
+  // punctuation marks, and the run can always continue with the next call.
+  static constexpr size_t kRunMax = 24;
+  // Per-cell candidate priorities for the run being segmented (index: cell, window length - 1)
+  // and the dynamic-programming tables. Members, not locals: ~250 bytes is past the stack budget.
+  uint8_t runPriority_[kRunMax][kMaxLookupChars];
+  uint8_t runFound_[kRunMax];
+  int16_t runBest_[kRunMax + 1];
+  uint8_t runBestLen_[kRunMax + 1];
   // The display filter (bare particles, conjugation fragments), applied to a matched position
   // before it is added to selectableGlyphs.
   bool passesDisplayFilter(size_t allIdx, int matchChars, const std::string& lookupText, size_t matchBytes) const;

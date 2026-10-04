@@ -208,10 +208,11 @@ std::string underRoot(const char* path) {
   return std::string(dictRoot()) + (leaf ? leaf : "/");
 }
 
-// The dictionary's display name, from an optional <root>/vocab.title written by the converter.
-// Empty when absent. Probed once per lookup session (releaseCaches() clears it).
-char g_vocabTitle[40] = "";
-bool g_vocabTitleProbed = false;
+// Display names from the optional <root>/<slot>.title files the converter writes. Empty when
+// absent. Probed once per lookup session (releaseCaches() clears them). Index: 0 vocab, 1 grammar,
+// 2 names (the DICT_* bit position).
+char g_slotTitle[3][40] = {"", "", ""};
+bool g_slotTitleProbed[3] = {false, false, false};
 
 // Storage.exists() on the path as it will actually be opened -- under the resolved root.
 bool existsUnderRoot(const char* path, std::string& out) {
@@ -537,34 +538,38 @@ void DictIndex::setLanguageFolder(const char* folder) {
 
 const char* DictIndex::languageFolder() { return g_languageFolder; }
 
-const char* DictIndex::vocabTitle() {
-  if (g_vocabTitleProbed) return g_vocabTitle;
-  g_vocabTitleProbed = true;
-  g_vocabTitle[0] = '\0';
-  const std::string path = std::string(dictRoot()) + "/vocab.title";
+const char* DictIndex::slotTitle(const uint8_t dict) {
+  const int slot = dict == DICT_GRAMMAR ? 1 : dict == DICT_NAMES ? 2 : 0;
+  char* title = g_slotTitle[slot];
+  if (g_slotTitleProbed[slot]) return title;
+  g_slotTitleProbed[slot] = true;
+  title[0] = '\0';
+  static constexpr const char* kLeaf[3] = {"/vocab.title", "/grammar.title", "/names.title"};
+  const std::string path = std::string(dictRoot()) + kLeaf[slot];
   HalFile f;
-  if (!Storage.openFileForRead("DICT", path.c_str(), f)) return g_vocabTitle;
-  const int n = f.read(reinterpret_cast<uint8_t*>(g_vocabTitle), sizeof(g_vocabTitle) - 1);
-  if (n <= 0) return g_vocabTitle;
-  g_vocabTitle[n] = '\0';
-  // First line only, trimmed; a cut inside a multi-byte sequence is dropped with its lead byte.
+  if (!Storage.openFileForRead("DICT", path.c_str(), f)) return title;
+  constexpr size_t kCap = sizeof(g_slotTitle[0]);
+  const int n = f.read(reinterpret_cast<uint8_t*>(title), kCap - 1);
+  if (n <= 0) return title;
+  title[n] = '\0';
+  // First line only.
   for (int i = 0; i < n; i++) {
-    if (g_vocabTitle[i] == '\r' || g_vocabTitle[i] == '\n') {
-      g_vocabTitle[i] = '\0';
+    if (title[i] == '\r' || title[i] == '\n') {
+      title[i] = '\0';
       break;
     }
   }
   // Drop a trailing UTF-8 sequence the fixed-size read cut short.
-  const int len = static_cast<int>(std::strlen(g_vocabTitle));
+  const int len = static_cast<int>(std::strlen(title));
   int start = len;
-  while (start > 0 && (static_cast<unsigned char>(g_vocabTitle[start - 1]) & 0xC0) == 0x80) start--;
+  while (start > 0 && (static_cast<unsigned char>(title[start - 1]) & 0xC0) == 0x80) start--;
   if (start > 0) {
     start--;
-    const auto lead = static_cast<unsigned char>(g_vocabTitle[start]);
+    const auto lead = static_cast<unsigned char>(title[start]);
     const int need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
-    if (len - start < need) g_vocabTitle[start] = '\0';
+    if (len - start < need) title[start] = '\0';
   }
-  return g_vocabTitle;
+  return title;
 }
 
 bool DictIndex::lookupInFile(const char* headword, const char* idxPath, const char* datPath, DictEntry& out,
@@ -878,7 +883,7 @@ bool DictIndex::consumeHeapLimited() {
 
 void DictIndex::releaseCaches() {
   g_rootResolved.clear();  // re-probe /.dictionaries vs /dictionaries next session
-  g_vocabTitleProbed = false;
+  for (bool& probed : g_slotTitleProbed) probed = false;
   g_missMemo.reset();
   g_vocabHandles.release();
   g_grammarHandles.release();

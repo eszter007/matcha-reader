@@ -85,3 +85,36 @@ class Cedict(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CedictExtras(unittest.TestCase):
+    def test_proper_noun_detection(self):
+        self.assertTrue(conv.is_proper_noun_pinyin("Zhong1 guo2"))
+        self.assertTrue(conv.is_proper_noun_pinyin("Bei3 jing1"))
+        self.assertFalse(conv.is_proper_noun_pinyin("ni3 hao3"))
+        self.assertFalse(conv.is_proper_noun_pinyin("xx5"))
+
+    def test_canto_line_and_level_tag(self):
+        m = conv._CEDICT_LINE_RE.match("你好 你好 [ni3 hao3] {nei5 hou2} /hello/")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(4), "nei5 hou2")
+        text = conv.format_definition_cedict("你好", "你好", "ni3 hao3", ["hello"], False, "nei5 hou2", "HSK 1")
+        self.assertEqual(text, "【nǐ hǎo · nei5 hou2】\n[HSK 1]\nhello")
+
+    def test_levels_and_tsv(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            hsk = os.path.join(d, "hsk30.csv")
+            with open(hsk, "w", encoding="utf-8") as f:
+                f.write("ID,Simplified,Traditional,Pinyin,POS,Level\n1,这,這,zhè,r,1\n2,说话,說話,shuō huà,v,7-9\n")
+            levels = conv.load_levels(hsk, "HSK")
+            self.assertEqual(levels["这"], "HSK 1")
+            self.assertEqual(levels["這"], "HSK 1")
+            self.assertEqual(levels["說話"], "HSK 7-9")
+            tsv = os.path.join(d, "grammar.tsv")
+            with open(tsv, "w", encoding="utf-8") as f:
+                f.write("# comment\n把\tdisposal construction\\nS + 把 + O + V\tHSK 3\n\n")
+            records = conv.convert_tsv(tsv)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0][0], "把".encode("utf-8"))
+            self.assertEqual(records[0][1].decode("utf-8"), "disposal construction\nS + 把 + O + V\nHSK 3")
