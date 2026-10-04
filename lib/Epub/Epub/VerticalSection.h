@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "Epub.h"
+#include "ReaderRenderSpec.h"
 #include "VerticalParsedText.h"
 
 class GfxRenderer;
@@ -53,8 +54,7 @@ class VerticalSection {
   // a valid cache. See lastReadHeapRefused().
   mutable bool lastReadHeapRefused_ = false;
 
-  bool streamParseAndLayout(HalFile& out, int fontId, uint16_t viewportWidth, uint16_t viewportHeight,
-                            uint8_t lineSpacing, bool furiganaEnabled);
+  bool streamParseAndLayout(HalFile& out, const ReaderRenderSpec& spec);
 
   // Set by streamParseAndLayout when the layout dropped chars/glyphs on low heap. The pages that
   // made it to disk are readable (this session keeps working), but createSectionFile stamps the
@@ -148,10 +148,10 @@ class VerticalSection {
   // drawn, so turning furigana off tightens the columns and the chapter must be re-laid out.
   // retryDegraded: the foreground open may discard a best-effort cache for a rebuild (see
   // degradedPath()); probes and background warms leave it alone.
-  bool loadSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
-                       bool furiganaEnabled, bool retryDegraded = false);
-  bool createSectionFile(int fontId, uint16_t viewportWidth, uint16_t viewportHeight, uint8_t lineSpacing,
-                         bool furiganaEnabled);
+  // The same spec the horizontal Section takes. Vertical reads fontId, the viewport,
+  // lineSpacingLevel, furiganaEnabled and characterSpacing from it; all five are the cache key.
+  bool loadSectionFile(const ReaderRenderSpec& spec, bool retryDegraded = false);
+  bool createSectionFile(const ReaderRenderSpec& spec);
   bool clearCache() const;
   // Sidecar marking the cache as a best-effort low-heap build; holds lastLoadMaxAlloc_ of that open.
   std::string degradedPath() const { return filePath + ".deg"; }

@@ -50,34 +50,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // moves the draw origin but the cached line layout keeps the old width, so text
   // overflows one side until the book is reopened. render() compares this against
   // the current settings and reflows in place on a mismatch.
-  struct LayoutSig {
-    int fontId = -1;
-    uint16_t viewportWidth = 0;
-    uint16_t viewportHeight = 0;
-    float lineCompression = 0.0f;
-    uint8_t paragraphAlignment = 0;
-    bool extraParagraphSpacing = false;
-    bool hyphenationEnabled = false;
-    bool embeddedStyle = false;
-    uint8_t imageRendering = 0;
-    bool focusReadingEnabled = false;
-    bool bookCssMargins = false;
-    // Vertical-only inputs. These key the vertical cache FILE, so they must be here too -- otherwise a
-    // resident section built with the old values keeps being served and a mid-book line-spacing change
-    // does not take effect until the book is reopened.
-    uint8_t lineSpacing = 0;
-    bool furigana = false;
-    bool operator==(const LayoutSig& o) const {
-      return fontId == o.fontId && viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight &&
-             lineCompression == o.lineCompression && paragraphAlignment == o.paragraphAlignment &&
-             extraParagraphSpacing == o.extraParagraphSpacing && hyphenationEnabled == o.hyphenationEnabled &&
-             embeddedStyle == o.embeddedStyle && imageRendering == o.imageRendering &&
-             focusReadingEnabled == o.focusReadingEnabled && bookCssMargins == o.bookCssMargins &&
-             lineSpacing == o.lineSpacing && furigana == o.furigana;
-    }
-    bool operator!=(const LayoutSig& o) const { return !(*this == o); }
-  };
-  LayoutSig sectionLayoutSig;
+  // The spec the resident section was laid out with: the same struct the section caches key on,
+  // so a setting that invalidates the cache file also reflows the page in place.
+  ReaderRenderSpec sectionLayoutSpec;
 
   // Per-book reader preferences. The global settings page (opened from home)
   // holds the DEFAULTS: a book with no prefs file opens with them. Once a book

@@ -89,7 +89,9 @@ namespace {
 // had the 。 drawn over the 7).
 // v140: TOC targets are recorded whatever their tag and past the cap, and an anchor that sits
 // directly before an image carries ANCHOR_BEFORE_IMAGE, so it resolves to the image's page.
-constexpr uint8_t VSECTION_FILE_VERSION = 140;
+// v141: the header gains the signed character spacing (px added to the step between characters
+// down a column), part of cache validation.
+constexpr uint8_t VSECTION_FILE_VERSION = 141;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -809,7 +811,8 @@ namespace {
 // ---- Page (de)serialization (cache format v37) -----------------------------------------------
 // File layout:
 //   header: u8 version, i32 fontId, u16 viewportWidth, u16 viewportHeight, u8 lineSpacing,
-//           u16 pageCount, u32 indexOffset          (pageCount/indexOffset patched post-stream)
+//           u8 furigana, i8 characterSpacing, u16 pageCount, u32 indexOffset          (pageCount/indexOffset patched
+//           post-stream)
 //   page records (variable length, written as pages are laid out)
 //   footer at indexOffset: pageCount x u32 file offset of each page record
 // The footer lets loadSectionFile() open a chapter by reading only the header + 4 bytes/page,
@@ -1579,7 +1582,8 @@ constexpr size_t HEADER_PAGECOUNT_OFFSET = sizeof(uint8_t)     // version
                                            + sizeof(uint16_t)  // viewportWidth
                                            + sizeof(uint16_t)  // viewportHeight
                                            + sizeof(uint8_t)   // lineSpacing
-                                           + sizeof(uint8_t);  // furiganaFlag
+                                           + sizeof(uint8_t)   // furiganaFlag
+                                           + sizeof(int8_t);   // characterSpacing
 
 }  // namespace
 
@@ -1597,9 +1601,12 @@ constexpr size_t STYLED_BLOCK_TABLE_ENTRIES = 256;  // must match collectVertica
 constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS =
     static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(CssParser::VerticalBlockRule)) + 12 * 1024;
 
-bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const uint16_t viewportWidth,
-                                           const uint16_t viewportHeight, const uint8_t lineSpacing,
-                                           const bool furiganaEnabled) {
+bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec& spec) {
+  const int fontId = spec.fontId;
+  const uint16_t viewportWidth = spec.viewportWidth;
+  const uint16_t viewportHeight = spec.viewportHeight;
+  const uint8_t lineSpacing = spec.lineSpacingLevel;
+  const bool furiganaEnabled = spec.furiganaEnabled;
   lastBuildDroppedForHeap_ = false;
   lastBuildUnstyledForHeap_ = false;
   // Same reason as Section::buildSomeMore: a chapter layout outlasts IDLE_POWER_SAVING_MS, and
@@ -1693,6 +1700,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   const int gapQuarterEms =
       furiganaEnabled ? kGapQuarterEmsWithRuby[clampedLineSpacing] : kGapQuarterEmsPlain[clampedLineSpacing];
   layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
+  layout.setCharacterSpacingPx(spec.characterSpacing);
 
   LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
                       viewportHeight);
@@ -1894,8 +1902,12 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const int fontId, const
   return true;
 }
 
-bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                        const uint8_t lineSpacing, const bool furiganaEnabled) {
+bool VerticalSection::createSectionFile(const ReaderRenderSpec& spec) {
+  const int fontId = spec.fontId;
+  const uint16_t viewportWidth = spec.viewportWidth;
+  const uint16_t viewportHeight = spec.viewportHeight;
+  const uint8_t lineSpacing = spec.lineSpacingLevel;
+  const bool furiganaEnabled = spec.furiganaEnabled;
   const auto vsectionsDir = epub->getCachePath() + "/vsections";
   Storage.mkdir(vsectionsDir.c_str());
 
@@ -1919,12 +1931,13 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   serialization::writePod(file, lineSpacing);
   const uint8_t furiganaFlag = furiganaEnabled ? 1 : 0;
   serialization::writePod(file, furiganaFlag);
+  serialization::writePod(file, spec.characterSpacing);
   const uint16_t pageCountPlaceholder = 0;
   const uint32_t indexOffsetPlaceholder = 0;
   serialization::writePod(file, pageCountPlaceholder);
   serialization::writePod(file, indexOffsetPlaceholder);
 
-  if (!streamParseAndLayout(file, fontId, viewportWidth, viewportHeight, lineSpacing, furiganaEnabled)) {
+  if (!streamParseAndLayout(file, spec)) {
     file.close();
     Storage.remove(filePath.c_str());
     pageOffsets_.clear();
@@ -2000,8 +2013,12 @@ bool VerticalSection::createSectionFile(const int fontId, const uint16_t viewpor
   return true;
 }
 
-bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                                      const uint8_t lineSpacing, const bool furiganaEnabled, const bool retryDegraded) {
+bool VerticalSection::loadSectionFile(const ReaderRenderSpec& spec, const bool retryDegraded) {
+  const int fontId = spec.fontId;
+  const uint16_t viewportWidth = spec.viewportWidth;
+  const uint16_t viewportHeight = spec.viewportHeight;
+  const uint8_t lineSpacing = spec.lineSpacingLevel;
+  const bool furiganaEnabled = spec.furiganaEnabled;
   // A missing cache file is the NORMAL case here, not an error: the book-progress counter probes
   // every spine's section on each page turn, and unbuilt chapters simply don't have one yet.
   // openFileForRead would print "File does not exist" per spine per probe -- pure log spam.
@@ -2050,9 +2067,12 @@ bool VerticalSection::loadSectionFile(const int fontId, const uint16_t viewportW
   serialization::readPod(file, cachedHeight);
   serialization::readPod(file, cachedLineSpacing);
   serialization::readPod(file, cachedFurigana);
+  int8_t cachedCharacterSpacing;
+  serialization::readPod(file, cachedCharacterSpacing);
 
   if (cachedFontId != fontId || cachedWidth != viewportWidth || cachedHeight != viewportHeight ||
-      cachedLineSpacing != lineSpacing || cachedFurigana != (furiganaEnabled ? 1 : 0)) {
+      cachedLineSpacing != lineSpacing || cachedFurigana != (furiganaEnabled ? 1 : 0) ||
+      cachedCharacterSpacing != spec.characterSpacing) {
     file.close();
     LOG_DBG("VSC", "Parameter mismatch, clearing cache");
     clearCache();

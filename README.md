@@ -230,7 +230,7 @@ A wallpaper laid over the page you were reading, so the book shows through inste
 - **Optimize EPUB** on upload: splits single-file Japanese novels into real chapters with a working table of contents, and fits images to the screen as dithered 1-bit BMPs
 - More of the book's own CSS respected: headings sized as headings, line spacing, page breaks, boxed asides, and rules written as `.callout p`
 - Drop caps: a chapter opening styled with `::first-letter { font-size: … }` gets the enlarged initial the book asked for, with the first few lines wrapping around it
-- **Use Book Margins** (Text Settings > Layout, on by default) keeps the indents a book sets for itself, so epigraphs and long quotations stay inset. Turn it off and those blocks sit flush with the body text. Horizontal books only: in vertical text, Layout lists just Line Spacing and Screen Margin
+- **Use Book Margins** (Text Settings > Layout, on by default) keeps the indents a book sets for itself, so epigraphs and long quotations stay inset. Turn it off and those blocks sit flush with the body text. Horizontal books only: in vertical text, Layout lists just Line Spacing, Character spacing and Screen Margin
 - Instant image page turns, since the next image decodes in the background
 - From upstream, and working in vertical and horizontal books alike: SD-card plugins (**Settings → Plugins**, see [docs/sd-plugins.md](docs/sd-plugins.md)), a haptic tap on touch devices with a motor (**Settings → Controls → Haptic Feedback**), and a **Paragraph Indentation** setting (Text Settings > Layout; horizontal text)
 - Next-book suggestions at the end of EPUB, TXT/Markdown, XTC and manga books

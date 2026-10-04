@@ -2265,20 +2265,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // preserving the reading position the same way applyOrientation() does. This runs
   // in the render task, which already holds the render lock, so no RenderLock here.
   {
-    const LayoutSig currentSig{effectiveReaderFontId(),
-                               viewportWidth,
-                               viewportHeight,
-                               SETTINGS.getReaderLineCompression(),
-                               SETTINGS.paragraphAlignment,
-                               static_cast<bool>(SETTINGS.extraParagraphSpacing),
-                               static_cast<bool>(SETTINGS.hyphenationEnabled),
-                               static_cast<bool>(SETTINGS.embeddedStyle),
-                               SETTINGS.imageRendering,
-                               static_cast<bool>(SETTINGS.focusReadingEnabled),
-                               static_cast<bool>(SETTINGS.bookCssMargins),
-                               SETTINGS.lineSpacing,
-                               useFurigana()};
-    if ((section || verticalSection) && currentSig != sectionLayoutSig) {
+    if ((section || verticalSection) && renderSpec != sectionLayoutSpec) {
       LOG_DBG("ERS", "Layout params changed; reflowing section in place");
       // Anchor the position by content before the sections go: a reflow re-paginates, so the
       // page number about to be recorded below is only the fallback. Vertical can answer this
@@ -2301,7 +2288,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       // after a cache-version bump relaid the book out). Force the absolute HALF pass.
       pagesUntilFullRefresh = 1;
     }
-    sectionLayoutSig = currentSig;
+    sectionLayoutSpec = renderSpec;
   }
 
   // Low-heap floor for the resume-into-book path. A sleep wake reboots straight into the reader
@@ -2380,8 +2367,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       sectionFootnotes.clear();  // vertical sections don't collect footnotes
 
       const int fontId = effectiveReaderFontId();
-      if (!verticalSection->loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana(),
-                                            /*retryDegraded=*/true)) {
+      if (!verticalSection->loadSectionFile(readerSpec(viewportWidth, viewportHeight), /*retryDegraded=*/true)) {
         LOG_DBG("ERS", "Vertical cache not found, building...");
         GUI.drawPopup(renderer, tr(STR_INDEXING));
         // Same force every horizontal Indexing-popup site applies: the popup paints FAST, and a
@@ -2421,8 +2407,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         earlyPageActuallyDisplayed_ = false;
         earlyDisplayedPage_.store(earlyTarget, std::memory_order_relaxed);
         verticalBuildInProgress_.store(true, std::memory_order_relaxed);
-        const bool built = verticalSection->createSectionFile(fontId, viewportWidth, viewportHeight,
-                                                              SETTINGS.lineSpacing, useFurigana());
+        const bool built = verticalSection->createSectionFile(readerSpec(viewportWidth, viewportHeight));
         verticalBuildInProgress_.store(false, std::memory_order_relaxed);
         if (!built) {
           LOG_ERR("ERS", "Failed to build vertical section");
@@ -3213,10 +3198,7 @@ int EpubReaderActivity::builtChapterPageCount(const int spineIndex, const uint16
                                               const uint16_t viewportHeight) const {
   if (useVerticalText()) {
     VerticalSection built(epub, spineIndex, renderer);
-    return built.loadSectionFile(effectiveReaderFontId(), viewportWidth, viewportHeight, SETTINGS.lineSpacing,
-                                 useFurigana())
-               ? built.pageCount
-               : -1;
+    return built.loadSectionFile(readerSpec(viewportWidth, viewportHeight)) ? built.pageCount : -1;
   }
   // A partial file counts as unbuilt: its page count is only a watermark.
   Section built(epub, spineIndex, renderer);
@@ -3229,8 +3211,7 @@ EpubReaderActivity::SilentBuildResult EpubReaderActivity::buildChapterSilently(c
   if (useVerticalText()) {
     VerticalSection next(epub, spineIndex, renderer);
     next.setBuildCancelHook(this, &EpubReaderActivity::imageWarmShouldCancel);
-    if (next.createSectionFile(effectiveReaderFontId(), viewportWidth, viewportHeight, SETTINGS.lineSpacing,
-                               useFurigana())) {
+    if (next.createSectionFile(readerSpec(viewportWidth, viewportHeight))) {
       return SilentBuildResult::Built;
     }
     // A cancelled vertical build persists nothing: the next attempt starts clean.
@@ -3634,8 +3615,7 @@ void EpubReaderActivity::warmNextPageImageCache(const uint16_t viewportWidth, co
     int visited = 0;
     if (vertical) {
       VerticalSection adjacent(epub, spine, renderer);
-      if (!adjacent.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana()) ||
-          adjacent.pageCount == 0) {
+      if (!adjacent.loadSectionFile(readerSpec(viewportWidth, viewportHeight)) || adjacent.pageCount == 0) {
         // Kept: the neighbouring chapter has no section file, i.e. the silent index did not build
         // it and the reader is one turn from a multi-second foreground build.
         LOG_DBG("IWARM", "boundary peek failed: spine %d section not loadable", spine);
@@ -4089,7 +4069,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
         // No file: nothing to open.
       } else if (vertical) {
         VerticalSection sibling(epub, i, renderer);
-        if (sibling.loadSectionFile(fontId, viewportWidth, viewportHeight, SETTINGS.lineSpacing, useFurigana())) {
+        if (sibling.loadSectionFile(readerSpec(viewportWidth, viewportHeight))) {
           spinePagesReal[i] = sibling.pageCount;
           probed = true;
         }
