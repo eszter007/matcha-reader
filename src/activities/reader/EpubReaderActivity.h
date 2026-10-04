@@ -710,6 +710,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // dictionary folder and the vertical punctuation mode. Run at open and on an override.
   void applyLanguageState();
   CjkScript bookScript_ = CjkScript::None;
+  std::string effectiveLanguage_;
   // What the page is set in: the book's script, or Japanese when vertical text is forced on a
   // book with no CJK tag (the same signal useVerticalText() reads).
   CjkScript fontScript() const;
@@ -748,7 +749,12 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }
   std::string getBookAuthor() const override { return epub ? epub->getAuthor() : ""; }
   std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : ""; }
-  const char* getBookLanguage() const override { return epub ? epub->getLanguage().c_str() : nullptr; }
+  // The language the book is read as (override, tag or sniff), so stats and sentence mining file
+  // a sniffed Chinese book under zh, not under its wrong tag.
+  const char* getBookLanguage() const override {
+    if (!epub) return nullptr;
+    return effectiveLanguage_.empty() ? epub->getLanguage().c_str() : effectiveLanguage_.c_str();
+  }
   void onReaderEnter() override;
   void onReaderExit() override;
   void readerLoop() override;

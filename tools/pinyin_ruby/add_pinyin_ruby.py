@@ -81,6 +81,7 @@ def segment(text: str, words: dict):
 def ruby_for(chunk: str, syllables: list, zhuyin: bool) -> str:
     parts = []
     for ch, syl in zip(chunk, syllables):
+        syl = syl.lower()  # CC-CEDICT capitalises proper nouns; ruby does not
         reading = conv.pinyin_syllable_to_zhuyin(syl) if zhuyin else conv.pinyin_syllable_to_marks(syl)
         parts.append(f"<ruby>{html.escape(ch)}<rt>{html.escape(reading)}</rt></ruby>")
     return "".join(parts)
@@ -94,7 +95,7 @@ TAG_OR_TEXT = re.compile(r"(<[^>]*>)")
 def annotate_xhtml(doc: str, words: dict, skip: set, zhuyin: bool) -> str:
     out = []
     for block in SKIP_BLOCK.split(doc):
-        if block is None or block in ("ruby", "rt", "rp", "script", "style", "head", "title"):
+        if block is None or block.lower() in ("ruby", "rt", "rp", "script", "style", "head", "title"):
             continue
         if SKIP_BLOCK.fullmatch(block):
             out.append(block)

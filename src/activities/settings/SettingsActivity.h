@@ -246,6 +246,10 @@ class SettingsActivity final : public UiTabListActivity {
   bool showReaderToggles = false;
   bool verticalTextState = false;
   bool furiganaState = false;
+  // What the toggles showed on entry: a toggle left as it was is reported as untouched (-1), so
+  // a Book Language change in the same visit is not undone by the direction it started with.
+  bool initialVerticalTextState = false;
+  bool initialFuriganaState = false;
   // Book Language: the per-book override (cjk::LanguageChoice) that re-tags a mis-tagged EPUB.
   // Shown for every text book pushed from the reader; -1 when the caller offers no such row.
   int8_t languageState = -1;
@@ -359,6 +363,8 @@ class SettingsActivity final : public UiTabListActivity {
         showReaderToggles(showReaderToggles),
         verticalTextState(verticalTextEnabled),
         furiganaState(furiganaEnabled),
+        initialVerticalTextState(verticalTextEnabled),
+        initialFuriganaState(furiganaEnabled),
         languageState(languageChoice),
         mangaMode(mangaMode),
         submenuCategory(submenuCategory),

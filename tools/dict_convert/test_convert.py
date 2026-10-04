@@ -176,5 +176,29 @@ class ListParsing(unittest.TestCase):
         self.assertEqual([p for _, _, p, _ in out], [219, 219, 150])
 
 
+class ThirdPass(unittest.TestCase):
+    def test_common_nouns_stay_vocabulary(self):
+        self.assertFalse(conv.is_proper_noun_pinyin("Xing1 qi1 liu4", ["Saturday"]))
+        self.assertFalse(conv.is_proper_noun_pinyin("Yi1 yue4", ["January"]))
+        self.assertFalse(conv.is_proper_noun_pinyin("Mei3 guo2 ren2", ["American person"]))
+        self.assertTrue(conv.is_proper_noun_pinyin("Bei3 jing1", ["Beijing, capital of China"]))
+
+    def test_unrenderable_examples_are_dropped(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pairs.tsv")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("我喜欢Tatoeba。\tI like Tatoeba.\n我喜欢你。\tI like you.\n3. 我来了。\tI came.\n")
+            self.assertEqual(conv.load_sentence_pairs(path), [("我喜欢你。", "I like you.")])
+
+    def test_moe_heteronyms_become_separate_records(self):
+        entry = {"title": "好", "heteronyms": [
+            {"bopomofo": "ㄏㄠˇ", "pinyin": "hǎo", "definitions": [{"type": "形", "def": "美、善。"}]},
+            {"bopomofo": "ㄏㄠˋ", "pinyin": "hào", "definitions": [{"type": "動", "def": "愛、喜愛。"}]}]}
+        texts = conv.format_definitions_moedict(entry)
+        self.assertEqual(len(texts), 2)
+        self.assertTrue(texts[1].startswith("【ㄏㄠˋ · hào】"))
+
+
 if __name__ == "__main__":
     unittest.main()

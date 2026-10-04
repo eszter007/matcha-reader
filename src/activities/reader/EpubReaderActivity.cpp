@@ -1416,6 +1416,9 @@ void EpubReaderActivity::dropSectionsKeepingPosition() {
 
 void EpubReaderActivity::applyLanguageOverride(const int8_t choice) {
   if (choice < 0 || choice >= cjk::LANGUAGE_CHOICE_COUNT || choice == static_cast<int8_t>(languageOverride)) return;
+  // Held across the section drop and the process-wide switches below (punctuation mode,
+  // dictionary folder), so no render builds the new section with the old mode in between.
+  RenderLock lock(*this);
   languageOverride = static_cast<uint8_t>(choice);
   saveLanguageChoice();
   // The language decides direction, line breaking, dictionary folder and font, so the layout is
@@ -1449,10 +1452,14 @@ namespace {
 class SniffSink : public Print {
  public:
   cjk::ScriptSniff sniff;
+  size_t fed = 0;
+  // A Latin chapter never reaches enough(): cap what one item costs instead of inflating it whole.
+  static constexpr size_t kMaxBytesPerItem = 24 * 1024;
   size_t write(const uint8_t b) override { return write(&b, 1); }
   size_t write(const uint8_t* buffer, const size_t size) override {
-    if (sniff.enough()) return 0;  // a short write ends the stream (allowEarlyStop)
+    if (sniff.enough() || fed >= kMaxBytesPerItem) return 0;  // a short write ends the stream (allowEarlyStop)
     sniff.feed(buffer, size);
+    fed += size;
     return size;
   }
 };
@@ -1463,23 +1470,32 @@ void EpubReaderActivity::sniffLanguageIfNeeded() {
   if (cjk::scriptForLanguage(epub->getLanguage()) != CjkScript::None) return;  // the tag is enough
   const int spineCount = epub->getSpineItemsCount();
   if (currentSpineIndex < 0 || currentSpineIndex >= spineCount) return;
-  // The sink is ~40 bytes; the stream reads the chapter in 1KB chunks and stops after a few
-  // hundred CJK characters, so a tagless Latin book pays one short read, once. A chapter that
-  // holds almost no text (a cover page, a title page) decides nothing, so the next ones are
-  // read too, up to three, and the counts accumulate across them.
+  // The sink is ~50 bytes; the stream reads an item in 1KB chunks and stops after a few hundred
+  // CJK characters or 24 KB. Up to three items are read, each judged on its own: an English
+  // copyright page ahead of the first chapter must not outvote the chapter, and a cover page
+  // with no text decides nothing. The first CJK verdict wins; Latin is settled only when every
+  // item that held text was Latin and at least one did. Nothing is written down otherwise (a
+  // failed read, a book of images), so the next open looks again.
   auto sink = makeUniqueNoThrow<SniffSink>();
   if (!sink) return;
   constexpr uint32_t kTextEnoughToJudge = 300;  // letters and CJK characters
+  CjkScript found = CjkScript::None;
+  int itemsWithText = 0;
+  int latinItems = 0;
   for (int spine = currentSpineIndex; spine < spineCount && spine < currentSpineIndex + 3; spine++) {
+    sink->sniff = cjk::ScriptSniff{};
+    sink->fed = 0;
     epub->readItemContentsToStream(epub->getSpineItem(spine).href, *sink, 1024, /*allowEarlyStop=*/true);
     const cjk::ScriptSniff& sn = sink->sniff;
-    if (sn.enough() || sn.han + sn.kana + sn.latin >= kTextEnoughToJudge) break;
+    found = sn.verdict();
+    if (found != CjkScript::None) break;
+    if (sn.han + sn.kana + sn.latin >= kTextEnoughToJudge) {
+      itemsWithText++;
+      latinItems++;
+    }
   }
   const cjk::ScriptSniff& sn = sink->sniff;
-  // A sample that holds no text (a read that failed, a book of images) decides nothing lasting:
-  // the verdict serves this session, but is not written down, so the next open looks again.
-  const bool judged = sn.enough() || sn.han + sn.kana + sn.latin >= kTextEnoughToJudge;
-  const CjkScript found = sn.verdict();
+  const bool judged = found != CjkScript::None || (latinItems > 0 && latinItems == itemsWithText);
   switch (found) {
     case CjkScript::Japanese:
       detectedLanguage = cjk::LANG_JA;
@@ -5779,7 +5795,10 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
 
 CjkScript EpubReaderActivity::bookScript() const { return bookScript_; }
 
-void EpubReaderActivity::refreshBookScript() { bookScript_ = cjk::scriptForLanguage(effectiveLanguage()); }
+void EpubReaderActivity::refreshBookScript() {
+  effectiveLanguage_ = effectiveLanguage();
+  bookScript_ = cjk::scriptForLanguage(effectiveLanguage_);
+}
 
 CjkScript EpubReaderActivity::fontScript() const {
   const CjkScript script = bookScript();

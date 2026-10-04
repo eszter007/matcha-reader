@@ -780,7 +780,8 @@ To install one:
 3. Put the card back and pick the language in **Settings → System → Language**.
 
 The two Chinese packs are `ZHS.cplang` (简体中文) and `ZHT.cplang` (繁體中文). With either selected the reader keeps a
-Chinese SD font loaded for the interface, so install one first (**Settings → Manage Fonts**, Noto Sans SC or TC).
+Chinese SD font loaded for the interface, so install one first (Noto Sans SC or TC, converted with the browser tool
+or from Manage Fonts once the next font release carries them).
 
 A pack is tied to the firmware it was built with. After a firmware update, download the packs from the new release as
 well: a mismatched pack is refused and the language stays on English rather than showing wrong text.
@@ -1195,7 +1196,7 @@ tools as a Japanese one, once `dictionaries/zh/` holds a converted dictionary (�
 one tagged with a non-CJK language, is checked against its own text the first time it opens: kana make it
 Japanese, a page that is mostly hanzi makes it Chinese, simplified or traditional by the characters it uses.
 When that guess is wrong, or a tag is, **Reader Settings → Book Language** re-tags the book (Auto, Japanese,
-Chinese simplified or traditional, Cantonese); the choice is remembered per book and takes effect at once. A Cantonese book (`yue`)
+Chinese (Simplified), Chinese (Traditional), Cantonese); the choice is remembered per book and takes effect at once. A Cantonese book (`yue`)
 is set like a traditional-Chinese one but reads `dictionaries/yue/`, built from CC-Canto and CC-CEDICT together,
 because Cantonese has words of its own that a Mandarin dictionary does not list:
 
@@ -1217,13 +1218,15 @@ because Cantonese has words of its own that a Mandarin dictionary does not list:
   Taiwanese print does, while a simplified one keeps the Japanese upper-right placement. The choice is remembered
   per book, like the Japanese toggle.
 - **Manhua** converted with `--language zh` get the same in-bubble lookup as manga (§6.4).
-- **Sentence mining** files Chinese cards in `sentences-zh.csv`, with the pinyin in the reading column.
+- **Sentence mining** files Chinese cards in `sentences-zh.csv` (Cantonese books: `sentences-yue.csv`), with the
+  dictionary's reading line, pinyin plus zhuyin or jyutping when converted with them, in the reading column.
 - **Fonts.** The built-in CJK glyphs cover the common Japanese characters only, so install a Noto Sans SC or TC
-  font from **Settings → Manage Fonts** (or convert one, README Setup step 3). The font is picked by the book's
+  font (convert one with the browser tool, README Setup step 3; **Reader Settings → Text Settings → Manage Fonts**
+  offers them once the next font release is published). The font is picked by the book's
   tag: SC for simplified, TC for traditional. With only a Japanese font on the card, Chinese renders in Japanese
-  glyph shapes, which is readable but not what a Chinese book looks like in print. The Home screen and the file
-  browser load the same font for their own text whenever a name on them needs a character the built-in set
-  lacks, so Chinese titles read correctly there too. Without any SD font, everyday simplified characters show as empty boxes.
+  glyph shapes, which is readable but not what a Chinese book looks like in print. Home, the Library, the file browser, the
+  OPDS browser and the language list load the same font for their own text whenever a name on them needs a
+  character the built-in set lacks, so Chinese titles read correctly there too. Without any SD font, everyday simplified characters show as empty boxes.
 
 ## 7. Reading Stats
 

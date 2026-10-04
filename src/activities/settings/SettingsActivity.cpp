@@ -484,11 +484,13 @@ bool SettingsActivity::handleButtons() {
       // (action=-1, but orientation/pageTurnOption default to 0 already -- see ActivityResult.h)
       // -- spelled out here so a value doesn't get silently relied on either way.
       if (showReaderToggles || languageState >= 0) {
-        // Toggles this screen never showed stay -1 (untouched): a 0 would switch a book that the
-        // language row just made Japanese back to horizontal, and turn its furigana off.
-        setResult(MenuResult{-1, 0, 0, showReaderToggles ? static_cast<int8_t>(verticalTextState ? 1 : 0) : int8_t{-1},
-                             showReaderToggles ? static_cast<int8_t>(furiganaState ? 1 : 0) : int8_t{-1},
-                             languageState});
+        // Only a toggle the user flipped is reported; one never shown or left alone stays -1, or a
+        // Book Language change in this visit would be undone by the direction the book had before.
+        const auto toggle = [this](const bool shown, const bool now, const bool initial) {
+          return shown && now != initial ? static_cast<int8_t>(now ? 1 : 0) : int8_t{-1};
+        };
+        setResult(MenuResult{-1, 0, 0, toggle(showReaderToggles, verticalTextState, initialVerticalTextState),
+                             toggle(showReaderToggles, furiganaState, initialFuriganaState), languageState});
       }
       finish();
       return true;

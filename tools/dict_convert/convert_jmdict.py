@@ -867,6 +867,9 @@ def sentence_script(sentence: str) -> str:
     return "any"
 
 
+_UNRENDERABLE_EXAMPLE_RE = re.compile(r"Tatoeba|JMdict|JMnedict|【|^\d+\. ")
+
+
 def load_sentence_pairs(path: str, script: str = "any") -> list:
     """Tatoeba 'sentence pairs' export (id, sentence, id, translation) or a plain two-column
     sentence<TAB>translation file. Returns [(sentence, translation)] with long sentences dropped:
@@ -886,6 +889,10 @@ def load_sentence_pairs(path: str, script: str = "any") -> list:
                 continue
             if script != "any" and sentence_script(sentence) not in ("any", script):
                 continue
+            # The device's entry renderer treats a line that mentions a source, holds a 【, or
+            # starts like "3. " as chrome or a sense number, so such a pair would come out mangled.
+            if any(_UNRENDERABLE_EXAMPLE_RE.search(t) for t in (sentence, translation)):
+                continue
             pairs.append((sentence, translation))
     pairs.sort(key=lambda p: len(p[0]))  # shortest first, so the cap keeps the clearest ones
     print(f"Sentence pairs {path}: {len(pairs):,} usable")
@@ -898,7 +905,7 @@ def attach_examples(pairs: list, forms: dict, entry_count: int) -> list:
     forms maps each headword form to its entry index. Single-character words get none: the
     particles would collect thousands and no reader needs an example of 的."""
     examples = [[] for _ in range(entry_count)]
-    if not pairs:
+    if not pairs or not forms:
         return examples
     max_len = max(len(w) for w in forms)
     for sentence, translation in pairs:
@@ -923,8 +930,11 @@ def attach_examples(pairs: list, forms: dict, entry_count: int) -> list:
 # Capitalised in CC-CEDICT but everyday vocabulary, not names: languages, nationalities, days,
 # festivals, religions and institutions a learner meets in any text.
 _COMMON_NOUN_GLOSS_RE = re.compile(
-    r"\b(language|people|person|ethnic|nationality|citizen|day|week|month|festival|holiday|new year|"
-    r"religion|church|bible|god|party|army|navy|games|cup|era|calendar|zodiac)\b|ism\b|ist\b",
+    r"\b(language|people|person|ethnic|nationality|citizen|day|\w+day|week|month|festival|holiday|new year|"
+    r"religion|church|bible|god|party|army|navy|games|cup|era|calendar|zodiac|internet|christianity|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"american|british|chinese|japanese|korean|english|french|german|russian|spanish|italian|indian|"
+    r"asian|european|african|western)\b|ism\b|ist\b",
     re.IGNORECASE)
 
 
@@ -953,7 +963,8 @@ def load_canto_readings(path: str) -> dict:
 
 
 def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, levels: dict = None,
-                   jyutping: dict = None, sentence_pairs: list = None, twins: dict = None) -> tuple:
+                   jyutping: dict = None, sentence_pairs: list = None, twins: dict = None,
+                   examples_script: str = "any") -> tuple:
     """Convert a raw CC-CEDICT (or CC-Canto) file to index records, one per traditional and
     simplified form. Returns (vocab_records, name_records); the second list is empty unless
     split_names routes proper nouns (capitalised pinyin) into the names slot. twins, when given,
@@ -977,15 +988,31 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
             trad, simp, pinyin, canto, body = m.groups()
             idx = len(parsed)
             parsed.append((trad, simp, pinyin, canto, [g.strip() for g in body.split("/")]))
-            # Examples go to the everyday entry of a form: 東西 "thing" over "east and west",
-            # 周 the week over the surname, so a capitalised entry yields to a later lowercase one.
+            # Examples go to the everyday entry of a form: 周 the week over the surname, and among
+            # lowercase readings the one with more senses (東西 "thing" over "east and west").
+            glosses = parsed[idx][4]
+            proper = is_proper_noun_pinyin(pinyin, glosses)
             for form in (trad, simp):
                 held = forms.get(form)
-                if held is None or (not is_proper_noun_pinyin(pinyin) and is_proper_noun_pinyin(parsed[held][2])):
+                if held is None:
+                    forms[form] = idx
+                    continue
+                heldProper = is_proper_noun_pinyin(parsed[held][2], parsed[held][4])
+                if not proper and (heldProper or len(glosses) > len(parsed[held][4])):
                     forms[form] = idx
             if twins is not None and trad != simp:
                 twins.setdefault(trad, simp)
                 twins.setdefault(simp, trad)
+    if sentence_pairs and examples_script in ("simplified", "traditional"):
+        # The characters CC-CEDICT itself uses in only one script decide a sentence's script far
+        # more reliably than the short list the firmware's book sniff uses: a 10-character
+        # sentence often holds none of those, and a fifth of Tatoeba is the other script.
+        tradChars = {ch for t, sm, *_ in parsed if t != sm for ch in t}
+        simpChars = {ch for t, sm, *_ in parsed if t != sm for ch in sm}
+        foreign = (tradChars - simpChars) if examples_script == "simplified" else (simpChars - tradChars)
+        before = len(sentence_pairs)
+        sentence_pairs = [pair for pair in sentence_pairs if not any(ch in foreign for ch in pair[0])]
+        print(f"Example sentences: {before - len(sentence_pairs):,} in the other script dropped, {len(sentence_pairs):,} kept")
     examples = attach_examples(sentence_pairs or [], forms, len(parsed)) if sentence_pairs else None
 
     records = []
@@ -1085,9 +1112,12 @@ def _moe_text(value) -> str:
     return _MOE_GLYPH_REF_RE.sub("□", text).strip()
 
 
-def format_definition_moedict(entry: dict) -> str:
-    parts = []
+def format_definitions_moedict(entry: dict) -> list:
+    """One definition text per heteronym (reading): the device shows one 【reading】 per record, so
+    好 hǎo and 好 hào become two records rather than one whose second reading would vanish."""
+    out = []
     for heteronym in entry.get("heteronyms", [])[:3]:
+        parts = []
         reading = " · ".join(x for x in (_moe_text(heteronym.get("bopomofo")), _moe_text(heteronym.get("pinyin"))) if x)
         if reading:
             parts.append("【" + reading + "】")
@@ -1104,7 +1134,10 @@ def format_definition_moedict(entry: dict) -> str:
             # makes the full dictionary 50 MB and a learner rarely reads them on a 6-inch screen.
             for example in (d.get("example") or [])[:1]:
                 parts.append(_moe_text(example))
-    return "\n".join(p for p in parts if p.strip())
+        text = "\n".join(p for p in parts if p.strip())
+        if "•" in text:
+            out.append(text)
+    return out
 
 
 def convert_moedict(path: str) -> list:
@@ -1126,16 +1159,14 @@ def convert_moedict(path: str) -> list:
         if not title or not all(_HAN_RE.match(ch) or ch == "〇" for ch in title):
             skipped += 1
             continue
-        definition = format_definition_moedict(entry)
-        if not definition:
-            skipped += 1
-            continue
+        definitions = format_definitions_moedict(entry)
         hw_bytes = title.encode("utf-8")
-        if len(hw_bytes) >= HEADWORD_SIZE:
+        if not definitions or len(hw_bytes) >= HEADWORD_SIZE:
             skipped += 1
             continue
         # Below CC-CEDICT's default so a merged file shows the bilingual entry first.
-        records.append((hw_bytes, definition.encode("utf-8"), 90, POS_OTHER))
+        for definition in definitions:
+            records.append((hw_bytes, definition.encode("utf-8"), 90, POS_OTHER))
     print(f"Processed {len(records)} MoE entries ({skipped} skipped)")
     return records
 
@@ -1296,7 +1327,8 @@ def main():
             part, title = convert_yomitan(path, reading_records=not chinese)
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
-                                         jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins)
+                                         jyutping=jyutping, sentence_pairs=sentence_pairs, twins=twins,
+                                         examples_script=args.examples_script)
             name_records.extend(names)
             if "canto" in os.path.basename(path).lower():
                 title = "CC-Canto"

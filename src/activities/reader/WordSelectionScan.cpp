@@ -1134,8 +1134,11 @@ bool WordSelectionScan::scanChineseRun(const size_t from) {
   for (size_t k = 0; k < covered && from + k < allGlyphs.size(); k++) {
     if (from + k >= recordFrom) markScanned(from + k);
   }
-  // The cells the words cover are done, including a last word that ran past the run.
+  // The cells the words cover are done, including a last word that ran past the run. The walk
+  // continues at the next word boundary: left on a cell this run marked, step() would take it
+  // for another pass's work and re-aim eight cells back, segmenting every run twice.
   skipUntil = std::max(skipUntil, from + covered);
+  scanPos = std::max(scanPos, std::min(from + covered, allGlyphs.size()));
   return true;
 }
 

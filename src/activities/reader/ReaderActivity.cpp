@@ -89,14 +89,14 @@ void ReaderActivity::onExit() {
   Activity::onExit();
   ReaderUtils::flushReadingStats(readingSessionStartMs, true, hasBook() ? bookPath.c_str() : nullptr,
                                  hasBook() ? getBookLanguage() : nullptr);
-  onReaderExit();
   // The book's CJK companion policy ends with the book: Home asks again, at the UI size, if a
-  // title on screen needs one. Otherwise the reader-size face would stay resident on a screen
-  // that also holds cover thumbnails.
+  // title on screen needs one. Cleared before onReaderExit(), whose font restore would otherwise
+  // reload the companion at the reader size only for it to be dropped here.
   {
     RenderLock lock;
     sdFontSystem.setCjkFallbackNeeded(renderer, CjkScript::None);
   }
+  onReaderExit();
 
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
   if (auto* fontCache = renderer.getFontCacheManager()) {

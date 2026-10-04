@@ -115,6 +115,9 @@ TEST(ScriptSniff, HeadStylesheetAndEntitiesAreNotText) {
   // A chapter that is only its head decides nothing.
   const cjk::ScriptSniff headOnly = sniff(css + "</body></html>");
   EXPECT_EQ(headOnly.han + headOnly.kana + headOnly.latin, 0u);
+  // A self-closing <script/> in the body (EPUB 3 XHTML) opens no block to skip.
+  EXPECT_EQ(sniff(css + "<script src=\"../js/x.js\"/>" + repeat("<p>這是一個說話的時候。</p>", 10)).verdict(),
+            CjkScript::TraditionalChinese);
 }
 
 TEST(ScriptSniff, EnoughStopsEarly) {

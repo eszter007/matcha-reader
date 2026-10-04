@@ -84,7 +84,7 @@ inline const char* dictFolderFor(std::string_view tag, const CjkScript fallbackS
 // Japanese, 的 for Chinese (the most frequent character, present in every Han font).
 inline uint32_t probeCodepoint(const CjkScript s) { return s == CjkScript::Japanese ? 0x3042 : 0x7684; }
 
-// Per-book language choice, stored in progress.bin and offered in Reader Settings: 0 follows the
+// Per-book language choice, stored in the book cache (language.bin) and offered in Reader Settings: 0 follows the
 // book's tag (or the content sniff below), the rest force a language on a mis-tagged book.
 enum LanguageChoice : uint8_t { LANG_AUTO = 0, LANG_JA = 1, LANG_ZH_HANS = 2, LANG_ZH_HANT = 3, LANG_YUE = 4 };
 constexpr uint8_t LANGUAGE_CHOICE_COUNT = 5;
@@ -127,6 +127,7 @@ struct ScriptSniff {
   char tagName[8] = {};
   uint8_t tagLen = 0;
   bool tagNameDone = false;
+  uint32_t prevInTag = 0;  // the character before '>': a '/' makes the tag self-closing
 
   static constexpr uint32_t ENOUGH_CJK = 400;  // characters: a paragraph or two settles it
   bool enough() const { return han + kana >= ENOUGH_CJK; }
@@ -188,7 +189,9 @@ struct ScriptSniff {
       if (cp == '>') {
         inTag = false;
         tagName[tagLen] = '\0';
-        if (tagIs(tagName, "head") || tagIs(tagName, "style") || tagIs(tagName, "script") || tagIs(tagName, "title")) {
+        const bool selfClosing = prevInTag == '/';  // <script src="x.js"/> opens nothing
+        if (!selfClosing && (tagIs(tagName, "head") || tagIs(tagName, "style") || tagIs(tagName, "script") ||
+                             tagIs(tagName, "title"))) {
           skipping = true;
         } else if (tagIs(tagName, "/head") || tagIs(tagName, "/style") || tagIs(tagName, "/script") ||
                    tagIs(tagName, "/title") || tagIs(tagName, "body")) {
@@ -200,12 +203,14 @@ struct ScriptSniff {
       } else {
         tagNameDone = true;
       }
+      prevInTag = cp;
       return;
     }
     if (cp == '<') {
       inTag = true;
       tagLen = 0;
       tagNameDone = false;
+      prevInTag = 0;
       return;
     }
     // &nbsp; and friends: four Latin letters per indent in many Chinese EPUBs.
