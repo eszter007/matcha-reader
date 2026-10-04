@@ -250,13 +250,20 @@ class SdCardFontSystem {
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
-  // Fonts ensureWordLookupFallback() itself loaded (not ones it found resident), with the
-  // built-in font each stands in for. Two: the definition body and the panel header.
+  // What ensureWordLookupFallback() mapped for the session, with the built-in font each stands
+  // in for. Two: the definition body and the panel header.
   struct LookupExtra {
     int primaryFontId = 0;
     int sdFontId = 0;
-    bool companion = false;  // loaded by fallbackManager_ rather than manager_
+    bool companion = false;  // fallbackManager_'s font rather than manager_'s
+    bool loaded = false;     // loaded for the session, to unload at its end; else only mapped
   };
+  void rememberLookupMapping(int primaryFontId, int sdFontId, bool companion, bool loaded);
+  void lendUiFontsForLookup(GfxRenderer& renderer, int sdFontId, uint8_t pointSize, uint8_t latinPointSize);
+  void borrowFamilyFallbackForLookup(GfxRenderer& renderer, int sdFontId, const EpdFontFamily* builtin);
+  // Point size of the built-in the resident companion takes its Latin from during a lookup
+  // session; 0 outside one.
+  uint8_t lookupLatinPointSize_ = 0;
   LookupExtra lookupExtras_[2];
   // What each companion font the lookup session borrowed fell back to before, per font.
   struct LookupFallbackSaved {
@@ -271,6 +278,7 @@ class SdCardFontSystem {
   struct UiMapping {
     int fontId = 0;
     uint16_t scale = 256;
+    uint16_t nonCjkScale = 256;
   };
   UiMapping lookupUiPrevious_[3];
   std::atomic<bool> registryDirty_{false};

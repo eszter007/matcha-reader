@@ -343,8 +343,46 @@ void SdCardFontSystem::lendCompanionToUiFonts(GfxRenderer& renderer, const int s
   // RAM, and one size across the string.
   if (sdFontId == 0 || pointSize == 0) return;
   for (const auto& ui : kUiFontSizes) {
-    renderer.setFallbackFont(ui.fontId, sdFontId, static_cast<uint16_t>(ui.pointSize * 256u / pointSize));
+    const auto scale = static_cast<uint16_t>(ui.pointSize * 256u / pointSize);
+    renderer.setFallbackFont(ui.fontId, sdFontId, scale, scale);
   }
+}
+
+void SdCardFontSystem::rememberLookupMapping(const int primaryFontId, const int sdFontId, const bool companion,
+                                             const bool loaded) {
+  const auto slot = std::find_if(std::begin(lookupExtras_), std::end(lookupExtras_), [primaryFontId](const auto& e) {
+    return e.primaryFontId == primaryFontId || e.primaryFontId == 0;
+  });
+  if (slot != std::end(lookupExtras_)) *slot = {primaryFontId, sdFontId, companion, loaded};
+}
+
+void SdCardFontSystem::lendUiFontsForLookup(GfxRenderer& renderer, const int sdFontId, const uint8_t pointSize,
+                                            const uint8_t latinPointSize) {
+  if (lookupUiLent_) return;
+  for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
+    const auto& ui = kUiFontSizes[i];
+    const auto previous = renderer.fallbackScaleFor(ui.fontId);
+    lookupUiPrevious_[i] = {renderer.fallbackFontFor(ui.fontId), previous.cjk, previous.nonCjk};
+    renderer.setFallbackFont(ui.fontId, sdFontId, static_cast<uint16_t>(ui.pointSize * 256u / pointSize),
+                             static_cast<uint16_t>(ui.pointSize * 256u / latinPointSize));
+  }
+  lookupUiLent_ = true;
+}
+
+void SdCardFontSystem::borrowFamilyFallbackForLookup(GfxRenderer& renderer, const int sdFontId,
+                                                     const EpdFontFamily* builtin) {
+  // The companion has Latin of its own, in another face and without italics. Keep the
+  // built-in's: a line sent here for one hanzi must not change typeface around it. The font is
+  // shared (the UI's 12 pt, the reader's own size), so what it pointed at before is put back
+  // when the session ends.
+  const auto sdIt = renderer.getFontMap().find(sdFontId);
+  for (auto& saved : lookupFallbackSaved_) {
+    if (saved.sdFontId == sdFontId) break;
+    if (saved.sdFontId != 0 || sdIt == renderer.getFontMap().end()) continue;
+    saved = {sdFontId, sdIt->second.getFallback(), sdIt->second.fallbackIsFirstForNonCjk()};
+    break;
+  }
+  renderer.setFamilyFallback(sdFontId, builtin, /*nonCjkFirst=*/true);
 }
 
 void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int primaryFontId,
@@ -363,58 +401,60 @@ void SdCardFontSystem::ensureWordLookupFallback(GfxRenderer& renderer, const int
   const auto* family = registry_.findFamily(mgr.currentFamilyName());
   if (!family) return;
 
+  const auto builtinIt = renderer.getFontMap().find(primaryFontId);
+  const EpdFontFamily* builtin = builtinIt != renderer.getFontMap().end() ? &builtinIt->second : nullptr;
+
+  if (useCompanion) {
+    // The companion is already resident at the reader's size. Draw it scaled to the panel's
+    // rather than loading a second table beside it: with the selected family, its panel-size
+    // cut and the companion all in RAM, that fourth font leaves an X4 too little heap to load
+    // the entry's glyphs, and the panel opens blank.
+    const int residentId = fallbackManager_.getFontId(family->name);
+    const uint8_t residentPt = fallbackManager_.currentPointSize();
+    if (residentId != 0 && residentPt != 0 && builtin != nullptr) {
+      // One built-in supplies the Latin for every font mapped here (the first to ask, the
+      // definition body); the others take it scaled from that size.
+      if (lookupLatinPointSize_ == 0) {
+        borrowFamilyFallbackForLookup(renderer, residentId, builtin);
+        lookupLatinPointSize_ = pointSize;
+      }
+      renderer.setFallbackFont(primaryFontId, residentId, static_cast<uint16_t>(pointSize * 256u / residentPt),
+                               static_cast<uint16_t>(pointSize * 256u / lookupLatinPointSize_));
+      rememberLookupMapping(primaryFontId, residentId, /*companion=*/true, /*loaded=*/false);
+      lendUiFontsForLookup(renderer, residentId, residentPt, lookupLatinPointSize_);
+      return;
+    }
+  }
+
   const bool wasResident = mgr.hasSize(pointSize);
   const int sdFontId = mgr.loadFamilyExtraSize(*family, renderer, pointSize);
   if (sdFontId == 0) return;
   renderer.setFallbackFont(primaryFontId, sdFontId);
-  const auto builtinIt = renderer.getFontMap().find(primaryFontId);
-  if (builtinIt != renderer.getFontMap().end()) {
+  if (builtin != nullptr) {
     if (useCompanion) {
-      // The companion has Latin of its own, in another face and without italics. Keep the
-      // built-in's: a line sent here for one hanzi must not change typeface around it. The
-      // font may be shared (the UI's 12 pt, the reader's own size), so what it pointed at before
-      // is put back when the session ends.
-      const auto sdIt = renderer.getFontMap().find(sdFontId);
-      for (auto& saved : lookupFallbackSaved_) {
-        if (saved.sdFontId == sdFontId) break;
-        if (saved.sdFontId != 0 || sdIt == renderer.getFontMap().end()) continue;
-        saved = {sdFontId, sdIt->second.getFallback(), sdIt->second.fallbackIsFirstForNonCjk()};
-        break;
-      }
+      borrowFamilyFallbackForLookup(renderer, sdFontId, builtin);
+    } else {
+      renderer.setFamilyFallback(sdFontId, builtin);
     }
-    renderer.setFamilyFallback(sdFontId, &builtinIt->second, /*nonCjkFirst=*/useCompanion);
   }
   // Remember it for releaseWordLookupFallback(): the font when this call loaded it, and in any
   // case the mapping, which must not outlive a font another primary's release unloads.
-  const bool ownedAlready = std::any_of(std::begin(lookupExtras_), std::end(lookupExtras_),
-                                        [sdFontId](const LookupExtra& e) { return e.sdFontId == sdFontId; });
-  if (!wasResident || ownedAlready) {
-    for (auto& extra : lookupExtras_) {
-      if (extra.primaryFontId == primaryFontId || extra.primaryFontId == 0) {
-        extra = {primaryFontId, sdFontId, useCompanion};
-        break;
-      }
-    }
-  }
+  const bool ownedAlready =
+      std::any_of(std::begin(lookupExtras_), std::end(lookupExtras_),
+                  [sdFontId](const LookupExtra& e) { return e.loaded && e.sdFontId == sdFontId; });
+  if (!wasResident || ownedAlready) rememberLookupMapping(primaryFontId, sdFontId, useCompanion, /*loaded=*/true);
   // The panel's footer, reading and tag lines are set in the UI fonts, which in a book borrow
   // the companion at the reader's size (see ensureCjkFallback). Lend them this one for the
   // session instead: it is the panel's own size, and it is already paid for.
-  if (useCompanion && !lookupUiLent_) {
-    for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
-      lookupUiPrevious_[i] = {renderer.fallbackFontFor(kUiFontSizes[i].fontId),
-                              renderer.fallbackScaleFor(kUiFontSizes[i].fontId)};
-      renderer.setFallbackFont(kUiFontSizes[i].fontId, sdFontId,
-                               static_cast<uint16_t>(kUiFontSizes[i].pointSize * 256u / pointSize));
-    }
-    lookupUiLent_ = true;
-  }
+  if (useCompanion) lendUiFontsForLookup(renderer, sdFontId, pointSize, pointSize);
 }
 
 void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
   if (lookupUiLent_) {
     for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
       if (lookupUiPrevious_[i].fontId != 0) {
-        renderer.setFallbackFont(kUiFontSizes[i].fontId, lookupUiPrevious_[i].fontId, lookupUiPrevious_[i].scale);
+        renderer.setFallbackFont(kUiFontSizes[i].fontId, lookupUiPrevious_[i].fontId, lookupUiPrevious_[i].scale,
+                                 lookupUiPrevious_[i].nonCjkScale);
       } else {
         renderer.clearFallbackFont(kUiFontSizes[i].fontId);
       }
@@ -426,11 +466,12 @@ void SdCardFontSystem::releaseWordLookupFallback(GfxRenderer& renderer) {
     if (saved.sdFontId != 0) renderer.setFamilyFallback(saved.sdFontId, saved.fallback, saved.nonCjkFirst);
     saved = {};
   }
+  lookupLatinPointSize_ = 0;
   for (auto& extra : lookupExtras_) {
-    if (extra.sdFontId == 0) continue;
+    if (extra.primaryFontId == 0) continue;
     renderer.clearFallbackFont(extra.primaryFontId);
     // a no-op the second time for a shared font
-    (extra.companion ? fallbackManager_ : manager_).unloadExtra(extra.sdFontId, renderer);
+    if (extra.loaded) (extra.companion ? fallbackManager_ : manager_).unloadExtra(extra.sdFontId, renderer);
     extra = {};
   }
 }

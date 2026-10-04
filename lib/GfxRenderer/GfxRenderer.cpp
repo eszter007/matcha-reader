@@ -967,13 +967,16 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   // Redirected SD fallback: batch-load before either advance-based or bounds-based measurement.
   if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
 
-  const uint16_t redirected = redirectScale(fontId, resolvedFontId);
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
+    return layoutTextScaled(resolvedFontId, 0, 0, renderedText, redirected.cjk, redirected.nonCjk, /*draw=*/false, true,
+                            style, letterSpacing);
+  }
   if (fontIt->second.getFallback() || letterSpacing != 0) {
-    return scalePositive(getTextAdvanceX(fontId, renderedText, style, letterSpacing), redirected);
+    return getTextAdvanceX(fontId, renderedText, style, letterSpacing);
   }
   int w = 0, h = 0;
   fontIt->second.getTextDimensions(renderedText, &w, &h, style);
-  return scalePositive(w, redirected);
+  return w;
 }
 
 int GfxRenderer::getTextWidthScaled(const int fontId, const char* text, const uint16_t scale,
@@ -1000,11 +1003,13 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   // Route CJK-bearing strings to the fallback font when the requested font
   // lacks the glyphs (e.g. Chinese book titles drawn with a Latin UI font).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
-  if (const uint16_t redirected = redirectScale(fontId, resolvedFontId); redirected != 256) {
+  if (const FallbackScale redirected = redirectScale(fontId, resolvedFontId); !redirected.identity()) {
     // A fallback of another size, drawn at the requested font's: its scaled line box centred in
     // the one the caller laid out for.
-    const int top = y + (getLineHeight(fontId) - scalePositive(getLineHeight(resolvedFontId), redirected)) / 2;
-    drawTextScaled(resolvedFontId, x, top, text, redirected, black, style, baseDir, letterSpacing);
+    const int top = y + (getLineHeight(fontId) - scalePositive(getLineHeight(resolvedFontId), redirected.cjk)) / 2;
+    std::string visual;
+    layoutTextScaled(resolvedFontId, x, top, resolveVisualText(text, visual, baseDir), redirected.cjk,
+                     redirected.nonCjk, /*draw=*/true, black, style, letterSpacing);
     return;
   }
 
@@ -1111,67 +1116,72 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
   if (text == nullptr || *text == '\0') return;
 
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
-  if (const uint16_t redirected = redirectScale(fontId, resolvedFontId); redirected != 256) {
-    // Both scales apply: the caller's, and the one that brings the fallback to this font's size.
-    drawTextScaled(resolvedFontId, x, y, text, static_cast<uint16_t>((static_cast<uint32_t>(scale) * redirected) >> 8),
-                   black, style, baseDir, letterSpacing);
-    return;
-  }
+  // Both scales apply: the caller's, and the one that brings a fallback to this font's size.
+  const FallbackScale redirected = redirectScale(fontId, resolvedFontId);
+  const auto compose = [scale](const uint16_t other) {
+    return static_cast<uint16_t>((static_cast<uint32_t>(scale) * other) >> 8);
+  };
   std::string visual;
-  const char* renderedText = resolveVisualText(text, visual, baseDir);
+  layoutTextScaled(resolvedFontId, x, y, resolveVisualText(text, visual, baseDir), compose(redirected.cjk),
+                   compose(redirected.nonCjk), /*draw=*/true, black, style, letterSpacing);
+}
+
+int GfxRenderer::layoutTextScaled(const int resolvedFontId, const int x, const int y, const char* renderedText,
+                                  const uint16_t scale, const uint16_t nonCjkScale, const bool draw, const bool black,
+                                  const EpdFontFamily::Style style, const int8_t letterSpacing) const {
+  if (draw && fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(renderedText, resolvedFontId, style);
+    return 0;
+  }
+
+  // An SD font keeps only what the page needed in RAM: batch-load this string's glyphs, as
+  // drawText() does for a redirected string, or the loop below reads bitmaps that are not there.
+  if (sdCardFonts_.find(resolvedFontId) != sdCardFonts_.end()) {
+    ensureSdGlyphsResident(resolvedFontId, renderedText, style, !draw);
+  }
+
+  const auto fontIt = fontMap.find(resolvedFontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
+    return 0;
+  }
+  const auto& font = fontIt->second;
   const int yPos = y + scaleSigned(getFontAscenderSize(resolvedFontId), scale);
   int lastBaseX = x;
   int lastBaseLeft = 0;
   int lastBaseWidth = 0;
   int lastBaseTop = 0;
   int32_t prevAdvanceFP = 0;
-  // Advance is accumulated UNSCALED and the running total scaled once per glyph, so the pen ends
-  // at exactly x + scalePositive(total) -- the value getTextWidthScaled reports. Scaling each
-  // delta instead rounds every glyph independently, and those errors accumulate: a long word
-  // drawn that way is several pixels wider than it was measured, which is fine for a standalone
-  // string but silently overlaps the next word once scaled text goes through paragraph layout.
-  int unscaledAdvance = 0;
-
-  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
-    fontCacheManager_->recordText(renderedText, resolvedFontId, style);
-    return;
-  }
-
-  // An SD font keeps only what the page needed in RAM: batch-load this string's glyphs, as
-  // drawText() does for a redirected string, or the loop below reads bitmaps that are not there.
-  if (sdCardFonts_.find(resolvedFontId) != sdCardFonts_.end()) {
-    ensureSdGlyphsResident(resolvedFontId, renderedText, style, false);
-  }
-
-  const auto fontIt = fontMap.find(resolvedFontId);
-  if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
-    return;
-  }
-  const auto& font = fontIt->second;
+  uint16_t prevScale = scale;
+  // The pen is kept in 1/256 px and each advance enters it at its own glyph's scale, so it ends
+  // at exactly the value this same walk reports as the width. Rounding each glyph's advance to a
+  // pixel instead lets the errors add up: a long word drawn that way is several pixels wider than
+  // it was measured, and overlaps the next word once scaled text goes through paragraph layout.
+  int32_t pen256 = 0;
   const char* textCursor = renderedText;
   uint32_t cp;
   uint32_t prevCp = 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&textCursor)))) {
     if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      if (!draw) continue;
       const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
       if (!combiningGlyph) continue;
       const auto anchor = combiningMark::anchorFor(cp);
       const int raiseBy =
           combiningMark::raiseAboveBase(anchor, combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::anchorOver(
-          anchor, lastBaseX, scaleSigned(lastBaseLeft, scale), scaleSigned(lastBaseWidth, scale),
-          scaleSigned(combiningGlyph->left, scale), scaleSigned(combiningGlyph->width, scale));
-      renderCharAtScale(*this, renderMode, font, cp, combiningX, yPos - scaleSigned(raiseBy, scale), black, style,
-                        scale);
+          anchor, lastBaseX, scaleSigned(lastBaseLeft, prevScale), scaleSigned(lastBaseWidth, prevScale),
+          scaleSigned(combiningGlyph->left, prevScale), scaleSigned(combiningGlyph->width, prevScale));
+      renderCharAtScale(*this, renderMode, font, cp, combiningX, yPos - scaleSigned(raiseBy, prevScale), black, style,
+                        prevScale);
       continue;
     }
 
     cp = font.applyLigatures(cp, textCursor, style);
     if (prevCp != 0) {
       const auto kernFP = font.getKerning(prevCp, cp, style);
-      unscaledAdvance += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing);
-      lastBaseX = x + scalePositive(unscaledAdvance, scale);
+      pen256 += textAdvance::withLetterSpacing(fp4::toPixel(prevAdvanceFP + kernFP), 1, letterSpacing) * prevScale;
+      lastBaseX = x + static_cast<int>((pen256 + 128) / 256);
     }
 
     const EpdGlyph* glyph = font.getGlyph(cp, style);
@@ -1181,9 +1191,14 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
     if (isSupSub) prevAdvanceFP = (prevAdvanceFP + 1) / 2;
-    renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, scale);
+    // What the font borrows from its fallback family (a companion's built-in Latin) is that
+    // family's size, not the font's: it takes its own scale.
+    prevScale = nonCjkScale != scale && font.drawsFromFallback(cp, style) ? nonCjkScale : scale;
+    if (draw) renderCharAtScale(*this, renderMode, font, cp, lastBaseX, yPos, black, style, prevScale);
     prevCp = cp;
   }
+  pen256 += fp4::toPixel(prevAdvanceFP) * prevScale;  // final glyph's advance
+  return std::max(0, static_cast<int>((pen256 + 128) / 256));
 }
 
 namespace {
@@ -2880,7 +2895,7 @@ int GfxRenderer::getLineHeight(const int fontId, const float compression) const 
 int GfxRenderer::textBaselineOffset(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   // Mirrors drawText()'s own yPos derivation; keep the two in step.
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
-  const uint16_t redirected = redirectScale(fontId, resolvedFontId);
+  const uint16_t redirected = redirectScale(fontId, resolvedFontId).cjk;
   int offset = scalePositive(getFontAscenderSize(resolvedFontId), redirected);
   if (resolvedFontId != fontId) {
     offset += (getLineHeight(fontId) - scalePositive(getLineHeight(resolvedFontId), redirected)) / 2;

@@ -33,6 +33,13 @@ enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 
 
 class GfxRenderer {
  public:
+  // The scales (8.8 fixed point, 256 = as is) a fallback font is drawn at in place of a primary
+  // of another size: its own glyphs, and those it takes from its own fallback family.
+  struct FallbackScale {
+    uint16_t cjk = 256;
+    uint16_t nonCjk = 256;
+    bool identity() const { return cjk == 256 && nonCjk == 256; }
+  };
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
   // Logical screen orientation from the perspective of callers
@@ -129,17 +136,22 @@ class GfxRenderer {
   // appears at the same point size as the surrounding UI text. Populated by the
   // app-level SD font setup when an SD family is loaded. See resolveTextFontId().
   std::map<int, int> fallbackFontMap_;
-  std::map<int, uint16_t> fallbackScaleMap_;  // primary font id -> scale its fallback draws at
+  std::map<int, FallbackScale> fallbackScaleMap_;  // primary font id -> scales its fallback draws at
 
   // If `text` contains a CJK codepoint that `fontId` cannot render and `fontId`
   // has a registered fallback, returns the fallback id; otherwise returns
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
-  // The scale a string redirected from fontId to resolvedFontId is drawn and measured at.
-  uint16_t redirectScale(int fontId, int resolvedFontId) const {
-    return resolvedFontId == fontId ? 256 : fallbackScaleFor(fontId);
+  // The scales a string redirected from fontId to resolvedFontId is drawn and measured at.
+  FallbackScale redirectScale(int fontId, int resolvedFontId) const {
+    return resolvedFontId == fontId ? FallbackScale{} : fallbackScaleFor(fontId);
   }
+  // One walk for scaled text, drawing it or only measuring it, so the two cannot disagree.
+  // scale applies to the font's own glyphs, nonCjkScale to those it takes from its fallback
+  // family. Returns the pen advance in pixels.
+  int layoutTextScaled(int resolvedFontId, int x, int y, const char* renderedText, uint16_t scale, uint16_t nonCjkScale,
+                       bool draw, bool black, EpdFontFamily::Style style, int8_t letterSpacing) const;
 
   // Batch-load `text`'s glyphs into an SD-card font's resident mini tables
   // before a per-glyph measure/draw loop runs. Called when resolveTextFontId
@@ -251,12 +263,14 @@ class GfxRenderer {
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
   // scale (8.8 fixed point, 256 = as is): draw the fallback's glyphs that much smaller or larger,
   // for a fallback that is not the primary's size -- the CJK cuts start at 12 pt, the UI fonts at 8.
-  void setFallbackFont(int primaryFontId, int fallbackFontId, uint16_t scale = 256) {
+  // nonCjkScale: the same for what the fallback itself takes from ITS fallback family (the
+  // built-in Latin of a CJK companion, see EpdFontFamily::setFallback), which has its own size.
+  void setFallbackFont(int primaryFontId, int fallbackFontId, uint16_t scale = 256, uint16_t nonCjkScale = 256) {
     fallbackFontMap_[primaryFontId] = fallbackFontId;
-    if (scale == 256) {
+    if (scale == 256 && nonCjkScale == 256) {
       fallbackScaleMap_.erase(primaryFontId);
     } else {
-      fallbackScaleMap_[primaryFontId] = scale;
+      fallbackScaleMap_[primaryFontId] = {scale, nonCjkScale};
     }
   }
   void clearFallbackFonts() {
@@ -267,9 +281,9 @@ class GfxRenderer {
     fallbackFontMap_.erase(primaryFontId);
     fallbackScaleMap_.erase(primaryFontId);
   }
-  uint16_t fallbackScaleFor(int primaryFontId) const {
+  FallbackScale fallbackScaleFor(int primaryFontId) const {
     const auto it = fallbackScaleMap_.find(primaryFontId);
-    return it == fallbackScaleMap_.end() ? 256 : it->second;
+    return it == fallbackScaleMap_.end() ? FallbackScale{} : it->second;
   }
   // The fallback font id registered for a primary, 0 when none.
   int fallbackFontFor(int primaryFontId) const {

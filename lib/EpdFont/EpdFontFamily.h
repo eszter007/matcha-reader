@@ -51,6 +51,8 @@ class EpdFontFamily {
   }
   const EpdFontFamily* getFallback() const { return fallbackFamily; }
   bool fallbackIsFirstForNonCjk() const { return fallbackFirstForNonCjk; }
+  // True when cp is drawn from the fallback family rather than this one (see setFallback).
+  bool drawsFromFallback(uint32_t cp, Style style = REGULAR) const { return nonCjkFallbackFont(cp, style) != nullptr; }
 
   static void setGlobalFallback(const EpdFontFamily* fb) { globalFallback_ = fb; }
   static const EpdFontFamily* getGlobalFallback() { return globalFallback_; }
