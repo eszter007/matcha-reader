@@ -96,7 +96,7 @@ Alternatively, while reading a book, press the **Confirm** button to open the re
 
 ### Syncing the Clock
 
-Press the Power button and the upper side button (Side Up) at the same time to set the clock from the internet, on any screen. If Wi-Fi is not connected yet, the network list opens first. Press **Back** when the new time is shown; from a book you return to the book.
+Switch on **Power + Up Syncs Clock** under Settings → Controls → Shortcuts (off by default). Then pressing the Power button and the upper side button (Side Up) at the same time sets the clock from the internet, on any screen. If Wi-Fi is not connected yet, the network list opens first. Press **Back** when the new time is shown; from a book you return to the book.
 
 Devices without a clock chip (the X4) drift while asleep and lose the time on a restart, which skews the reading stats; a sync puts it right. The same action is in the clock settings.
 
@@ -409,7 +409,7 @@ open a list when selected.
 #### 3.6.3 Controls
 
 - **Shortcuts**: Opens the button-shortcut settings, gathered on one screen: **Long-Press Button Behavior**,
-  **Long-press Menu**, **Short Power Button Click** and **Quick-return from footnotes**, plus **Upper Side Button
+  **Long-press Menu**, **Power + Up Syncs Clock**, **Short Power Button Click** and **Quick-return from footnotes**, plus **Upper Side Button
   in Reader** and **Lower Side Button in Reader** on the X3/X4, **Double-Click Power for Light** on the X4 Pro and
   **Tilt Page Turn** on the X3, with **Short Back to File Browser** last. Each is described
   below; the remaining entries in this section stay in the Controls list itself.
@@ -469,6 +469,8 @@ open a list when selected.
   - "KOSync" - Hold Confirm (~1 second) to launch KOReader sync directly.
   - "Dictionary" - Hold Confirm (~0.4 second) to start dictionary word selection on the current page (see [docs/dictionary.md](docs/dictionary.md)).
   - "Disabled" - Long-press is ignored; only short-press opens the reader menu.
+
+- **Power + Up Syncs Clock** (off by default): Pressing Power and Side Up together opens Sync Clock from any screen. See [Syncing the Clock](#syncing-the-clock).
 
 - **Short Power Button Click**: Controls the effect of a short click of the power button:
   
@@ -1058,8 +1060,8 @@ A sentence cut off by the bottom of the page is finished from the start of the n
 comes from the speech bubble the word is in.
 
 The date comes from the device clock, which sets itself whenever the device connects to Wi-Fi. Devices without a
-clock chip (the X4) lose the time on a restart, so until the next Wi-Fi connection the date can lag behind. Power +
-Side Up syncs it at any time: see [Syncing the Clock](#syncing-the-clock).
+clock chip (the X4) lose the time on a restart, so until the next Wi-Fi connection the date can lag behind. With the
+shortcut switched on, Power + Side Up syncs it at any time: see [Syncing the Clock](#syncing-the-clock).
 
 ### 6.2 Page Translation
 

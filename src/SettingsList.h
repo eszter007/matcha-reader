@@ -431,6 +431,8 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                           "longPressButtonBehavior", StrId::STR_CAT_SHORTCUTS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
                           buildLongPressMenuValues(), "longPressMenuFunction", StrId::STR_CAT_SHORTCUTS),
+        SettingInfo::Toggle(StrId::STR_POWER_UP_CLOCK_SYNC, &CrossPointSettings::powerUpClockSync, "powerUpClockSync",
+                            StrId::STR_CAT_SHORTCUTS),
         // Erased below unless the board is an X4 Pro.
         SettingInfo::Toggle(StrId::STR_DBL_CLICK_PWR_LIGHT, &CrossPointSettings::doubleClickPwrLight,
                             "doubleClickPwrLight", StrId::STR_CAT_SHORTCUTS),

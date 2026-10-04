@@ -1006,8 +1006,8 @@ void loop() {
     return;
   }
 
-  // Power + Down: screenshot. Power + Up: sync the clock (devices without a clock chip drift
-  // while asleep, which skews the reading stats).
+  // Power + Down: screenshot. Power + Up, when switched on in Shortcuts: sync the clock (devices
+  // without a clock chip drift while asleep, which skews the reading stats).
   static PowerCombo screenshotCombo;
   static PowerCombo clockSyncCombo;
   if (pollPowerCombo(screenshotCombo, HalGPIO::BTN_DOWN, [] {
@@ -1016,7 +1016,7 @@ void loop() {
       })) {
     return;
   }
-  if (pollPowerCombo(clockSyncCombo, HalGPIO::BTN_UP, startClockSyncFromCombo)) return;
+  if (SETTINGS.powerUpClockSync && pollPowerCombo(clockSyncCombo, HalGPIO::BTN_UP, startClockSyncFromCombo)) return;
 
   // Consume the second X4 Pro power-button release so it does not also run a
   // configured short-power action after toggling the frontlight.
@@ -1081,7 +1081,7 @@ void loop() {
   if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If a power-button combination is potentially being pressed, don't sleep
-    if (gpio.isPressed(HalGPIO::BTN_DOWN) || gpio.isPressed(HalGPIO::BTN_UP)) {
+    if (gpio.isPressed(HalGPIO::BTN_DOWN) || (SETTINGS.powerUpClockSync && gpio.isPressed(HalGPIO::BTN_UP))) {
       return;
     }
     LOG_DBG("MAIN", "Power button held %lums, sleeping", gpio.getPowerButtonHeldTime());
