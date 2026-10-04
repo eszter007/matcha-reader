@@ -350,11 +350,11 @@ void WordSelectionScan::measurePage(const Page& page, const GfxRenderer& rendere
       const bool placed = wi < placements.size();
       int penX = placed ? placements[wi].x : 0;
       for (size_t b = 0; b < length;) {
-        const size_t step = utf8SequenceLength(static_cast<unsigned char>(text[b]), length - b);
+        const size_t seqLen = utf8SequenceLength(static_cast<unsigned char>(text[b]), length - b);
         // One glyph at a time, in the font and style the line was laid out with. Kerning is
         // left out: it only exists between Latin letters, which are never a lookup target here.
         char utf8[5] = {};
-        memcpy(utf8, text + b, step);
+        memcpy(utf8, text + b, seqLen);
         const int advance = placed ? renderer.getRenderAdvanceX(placements[wi].fontId, utf8, block.wordStyle(wi)) +
                                          block.getBlockStyle().letterSpacing
                                    : 0;
@@ -362,7 +362,7 @@ void WordSelectionScan::measurePage(const Page& page, const GfxRenderer& rendere
                        static_cast<uint16_t>(placed ? std::max<int>(0, placements[wi].y) : 0),
                        static_cast<uint8_t>(std::clamp(advance, 0, 255))};
         penX += advance;
-        b += step;
+        b += seqLen;
       }
     }
   }

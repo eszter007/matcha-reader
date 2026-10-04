@@ -34,8 +34,14 @@ bool isDictIndexFolder(const char* folderName) {
 
 std::string languageFolder(const std::string& language) {
   if (language.size() < 2) return {};
-  std::string out = language.substr(0, 2);
+  // Two letters, so "eng" and "en-GB" both find en/. Cantonese has no two-letter code and its
+  // folder is yue/: cut to "yu" it matched nothing, and a StarDict dictionary there was never found.
+  const bool threeLetterPrimary =
+      language.size() == 3 || (language.size() > 3 && (language[3] == '-' || language[3] == '_'));
+  std::string out = language.substr(0, threeLetterPrimary ? 3 : 2);
   std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
+  if (out == "yue") return out;
+  out.resize(2);
   return out == "ja" ? "jp" : out;
 }
 

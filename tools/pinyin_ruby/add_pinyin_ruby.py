@@ -89,7 +89,8 @@ def ruby_for(chunk: str, syllables: list, zhuyin: bool) -> str:
 
 # Text that must not be touched: tags, existing ruby, scripts/styles, and the <head>.
 SKIP_BLOCK = re.compile(r"(<(ruby|rt|rp|script|style|head|title)\b.*?</\2\s*>)", re.S | re.I)
-TAG_OR_TEXT = re.compile(r"(<[^>]*>)")
+# A tag ends at the first ">" outside a quoted attribute value: title="甲 > 乙" is one tag.
+TAG_OR_TEXT = re.compile(r"""(<(?:[^>"']|"[^"]*"|'[^']*')*>)""")
 
 
 def annotate_xhtml(doc: str, words: dict, skip: set, zhuyin: bool) -> str:

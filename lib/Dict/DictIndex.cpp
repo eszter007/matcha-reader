@@ -222,13 +222,27 @@ bool existsUnderRoot(const char* path, std::string& out) {
 
 // Interned copy of a resolved path, so the pointer handed out stays valid for the process
 // lifetime. De-duplicated: books alternate between language folders, and each switch re-resolves.
+// A fixed table, not a vector: growing one allocates, and with -fno-exceptions a failed growth
+// aborts instead of returning. The set is bounded -- three slots of index, data and sparse-index
+// paths for each language folder, in the plain and the hidden root.
 const char* internPath(std::string&& v) {
-  static std::vector<std::unique_ptr<std::string>> interned;
-  for (const auto& held : interned) {
-    if (held && *held == v) return held->c_str();
+  static constexpr size_t MAX_INTERNED = 64;
+  static std::unique_ptr<std::string> interned[MAX_INTERNED];
+  static size_t internedCount = 0;
+  for (size_t i = 0; i < internedCount; i++) {
+    if (*interned[i] == v) return interned[i]->c_str();
   }
-  interned.push_back(std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v))));
-  return interned.back() ? interned.back()->c_str() : nullptr;
+  if (internedCount == MAX_INTERNED) {
+    LOG_ERR("DICT", "Path table full; %s not interned", v.c_str());
+    return nullptr;
+  }
+  auto held = std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v)));
+  if (!held) {
+    LOG_ERR("DICT", "OOM: dictionary path");
+    return nullptr;
+  }
+  interned[internedCount] = std::move(held);
+  return interned[internedCount++]->c_str();
 }
 
 const char* resolveIdxPath(const char*& cache, const char* preferred, const char* jpLegacy, const char* old,

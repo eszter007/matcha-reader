@@ -1001,6 +1001,14 @@ TEST(XhtmlDoctypeTest, FeedsADoctypeWhereTheChapterNamesNoDtd) {
   EXPECT_EQ(p.keep, 22u);
   EXPECT_EQ(p.skip, 0u);
 
+  // UTF-16, with a BOM or without: an ASCII DOCTYPE would corrupt it, so it is left alone.
+  const char utf16le[] = "\xFF\xFE<\0h\0t\0m\0l\0>\0";
+  EXPECT_FALSE(xhtml::findDoctypePatch(utf16le, sizeof(utf16le) - 1).inject);
+  const char utf16be[] = "\xFE\xFF\0<\0h\0t\0m\0l\0>";
+  EXPECT_FALSE(xhtml::findDoctypePatch(utf16be, sizeof(utf16be) - 1).inject);
+  const char utf16NoBom[] = "<\0h\0t\0m\0l\0>\0";
+  EXPECT_FALSE(xhtml::findDoctypePatch(utf16NoBom, sizeof(utf16NoBom) - 1).inject);
+
   // HTML5's bare DOCTYPE is replaced.
   p = patch("<!DOCTYPE html><html/>");
   EXPECT_TRUE(p.inject);

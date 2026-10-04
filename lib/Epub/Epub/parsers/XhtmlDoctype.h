@@ -40,6 +40,15 @@ inline DoctypePatch findDoctypePatch(const char* data, const size_t len) {
     return len;
   };
 
+  // UTF-16 is left alone: the scan below reads bytes, and an ASCII DOCTYPE fed into a document
+  // the parser has detected as UTF-16 makes it unparseable. A BOM, or the NUL that pads every
+  // ASCII character of a BOM-less one, gives it away within the first few bytes.
+  if (len >= 2) {
+    const auto b0 = static_cast<unsigned char>(data[0]);
+    const auto b1 = static_cast<unsigned char>(data[1]);
+    if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF) || b0 == 0 || b1 == 0) return {};
+  }
+
   size_t i = 0;
   while (i < len) {
     if (data[i] != '<') {
