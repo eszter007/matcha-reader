@@ -255,6 +255,19 @@ void SettingsActivity::rebuildSettingsLists() {
                                 StrId::STR_FURIGANA_LABEL, [this] { return furiganaState; },
                                 [this](const bool v) { furiganaState = v; }, StrId::STR_CAT_READER));
     }
+    // Book Language: for any text book, since its point is a book whose tag is wrong or missing
+    // (a Chinese EPUB tagged en gets no lookup, no CJK font and no vertical text until re-tagged).
+    if (!mangaMode && finishOnBack && languageState >= 0) {
+      readerSettings.insert(
+          readerSettings.begin() + 1,
+          SettingInfo::DynamicEnum(
+              StrId::STR_BOOK_LANGUAGE,
+              {StrId::STR_BOOK_LANG_AUTO, StrId::STR_BOOK_LANG_JA, StrId::STR_BOOK_LANG_ZH_HANS,
+               StrId::STR_BOOK_LANG_ZH_HANT, StrId::STR_BOOK_LANG_YUE},
+              [this] { return static_cast<uint8_t>(languageState); },
+              [this](const uint8_t v) { languageState = static_cast<int8_t>(v % cjk::LANGUAGE_CHOICE_COUNT); }, nullptr,
+              StrId::STR_CAT_READER));
+    }
     // No STR_MANAGE_FONTS entry here: it lives at the bottom of the font list inside Text
     // Settings, where the pre-1.5.0 picker had it. Upstream moved it up when it replaced
     // FontSelectionActivity; that costs the "this font is missing -> install it" shortcut.
@@ -470,9 +483,9 @@ bool SettingsActivity::handleButtons() {
       // explicitly -1/0/0 (unused by that handler) rather than MenuResult's own defaults
       // (action=-1, but orientation/pageTurnOption default to 0 already -- see ActivityResult.h)
       // -- spelled out here so a value doesn't get silently relied on either way.
-      if (showReaderToggles) {
-        setResult(MenuResult{-1, 0, 0, static_cast<int8_t>(verticalTextState ? 1 : 0),
-                             static_cast<int8_t>(furiganaState ? 1 : 0)});
+      if (showReaderToggles || languageState >= 0) {
+        setResult(MenuResult{-1, 0, 0, static_cast<int8_t>(showReaderToggles && verticalTextState ? 1 : 0),
+                             static_cast<int8_t>(showReaderToggles && furiganaState ? 1 : 0), languageState});
       }
       finish();
       return true;

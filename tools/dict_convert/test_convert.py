@@ -118,3 +118,24 @@ class CedictExtras(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0][0], "把".encode("utf-8"))
             self.assertEqual(records[0][1].decode("utf-8"), "disposal construction\nS + 把 + O + V\nHSK 3")
+
+
+class Examples(unittest.TestCase):
+    def test_pairs_attach_to_multi_character_words(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            pairs = os.path.join(d, "pairs.tsv")
+            with open(pairs, "w", encoding="utf-8") as f:
+                f.write("1\t我在中国说话。\t2\tI speak in China.\n")
+                f.write("3\t" + "很" * 50 + "\t4\ttoo long\n")
+                f.write("5\t你好。\t6\tHello.\n")
+            loaded = conv.load_sentence_pairs(pairs)
+            self.assertEqual(len(loaded), 2)
+            forms = {"中国": 0, "中國": 0, "说话": 1, "說話": 1, "的": 2, "你好": 3}
+            ex = conv.attach_examples(loaded, forms, 4)
+            self.assertEqual(ex[0], [("我在中国说话。", "I speak in China.")])
+            self.assertEqual(ex[1], [("我在中国说话。", "I speak in China.")])
+            self.assertEqual(ex[2], [])  # single characters get none
+            self.assertEqual(ex[3], [("你好。", "Hello.")])
+            text = conv.format_definition_cedict("中國", "中国", "Zhong1 guo2", ["China"], False, examples=ex[0])
+            self.assertTrue(text.endswith("China\n  我在中国说话。\n  I speak in China."))

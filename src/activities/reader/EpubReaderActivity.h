@@ -158,6 +158,13 @@ class EpubReaderActivity final : public ReaderActivity {
   int8_t verticalOverride = -1;
   // Per-book furigana override: -1 = auto (on by default), 0 = off, 1 = on
   int8_t furiganaOverride = -1;
+  // Per-book language (cjk::LanguageChoice): LANG_AUTO follows the tag, else the user's pick for a
+  // mis-tagged book. Kept with the sniff result in the book's language.bin.
+  uint8_t languageOverride = 0;
+  // What the content sniff found when the tag named no CJK language: 0 = not yet sniffed,
+  // a LanguageChoice, or LANGUAGE_SNIFFED_NONE for a Latin book (so it is not sniffed again).
+  uint8_t detectedLanguage = 0;
+  static constexpr uint8_t LANGUAGE_SNIFFED_NONE = 0xFF;
   unsigned long bookmarkMessageTime = 0UL;
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
@@ -702,6 +709,18 @@ class EpubReaderActivity final : public ReaderActivity {
   bool showVerticalToggle() const;
   bool hideGenericLookup() const;
   void applyVerticalFuriganaOverride(int8_t verticalOverrideIn, int8_t furiganaOverrideIn);
+  // The language the book is read as: the override, else the EPUB tag when it names a CJK
+  // language, else what the content sniff found, else the tag as written (possibly empty).
+  std::string effectiveLanguage() const;
+  // Book Language from Reader Settings: re-tags the book and rebuilds the layout for it.
+  void applyLanguageOverride(int8_t choice);
+  // Decide a tagless or mis-tagged book's language from its text, once per book.
+  void sniffLanguageIfNeeded();
+  void loadLanguageChoice();
+  void saveLanguageChoice() const;
+  // Drop the laid-out sections, keeping the reading position for the rebuild (a layout-affecting
+  // per-book setting changed).
+  void dropSectionsKeepingPosition();
 
   // The orientation the current layout was built for. The control center's
   // orientation tile can move SETTINGS.orientation while this reader sits on

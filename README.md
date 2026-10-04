@@ -49,6 +49,8 @@ Vocabulary, names and grammar each come from their own dictionary. A word listed
 
 Chinese books, simplified and traditional, get the same scan-based lookup as Japanese: each run of characters is split into dictionary words, the cursor lands only on words with an entry, and the entry opens with its pinyin (and zhuyin or jyutping, if you converted the dictionary with them) above the glosses, with the word's HSK or TOCFL level when you gave the converter a graded list. The split weighs the whole run by word frequency rather than grabbing the longest match at each step, so 结婚的和尚未结婚的 reads 和 + 尚未, not 和尚. There is no conjugation to undo, so a word like 說話 or 中国 resolves as soon as it is on the page. Tap a word in a manhua the same way as in manga. Both forms of a word are indexed, so a traditional dictionary serves a simplified book and the other way round, and the entry shows the other form (`說話 / 说话`). Proper nouns can go to their own names dictionary, and a grammar list to the grammar slot, exactly as for Japanese.
 
+A book whose EPUB tag is missing or wrong is recognised from its text the first time it opens, and **Reader Settings → Book Language** re-tags any book by hand, so a Chinese EPUB labelled `en` still gets its dictionary, font and layout.
+
 Pinyin above the running text works the way furigana does: the book carries it. `tools/pinyin_ruby/add_pinyin_ruby.py` adds pinyin (or zhuyin) ruby to every word of an EPUB on your computer, optionally skipping the commonest words, and the Furigana toggle shows or hides it on the device.
 
 A Chinese book opens the way its publisher set it: one whose EPUB declares right-to-left page progression (Taiwanese novels, as a rule) is set in vertical columns, with the punctuation centred in its square as Taiwanese books print it; everything else opens horizontally. **Vertical Text** in Reader Settings overrides either, per book. Saved sentences go to `sentences-zh.csv` with the pinyin in the reading column.
@@ -258,7 +260,9 @@ python3 tools/dict_convert/convert_jmdict.py --lang yue \
   --jyutping cccedict-canto-readings.txt --output-dir /path/to/sd/dictionaries/yue/
 ``` A grammar reference goes in the grammar slot from any two-column file, pattern and explanation, with `--format tsv --name grammar`; the [Chinese Grammar Wiki](https://resources.allsetlearning.com/chinese/grammar/) is CC BY-NC-SA, so that one is for your own card only.
 
-Then run `python3 scripts/gen_dict_spx.py /path/to/sd/dictionaries/zh/` to build the `.spx` sparse index that makes lookups fast, as for Japanese. CC-CEDICT is CC BY-SA; the MoE dictionary is CC BY-ND and is converted without changing its text.
+Example sentences come from [Tatoeba](https://tatoeba.org/en/downloads): download the Chinese–English sentence pairs and add `--examples Sentence pairs in Mandarin Chinese-English.tsv`, and every entry of two or more characters shows up to two short sentences with their translations.
+
+Then run `python3 scripts/gen_dict_spx.py /path/to/sd/dictionaries/zh/` to build the `.spx` sparse index that makes lookups fast, as for Japanese. CC-CEDICT is CC BY-SA; the MoE dictionary is CC BY-ND and is converted without changing its text; Tatoeba sentences are CC BY.
 
 To put pinyin above the text itself, annotate the EPUB once before copying it to the card:
 

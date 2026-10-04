@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 
 #include "util/CjkScript.h"
@@ -62,6 +63,57 @@ TEST(CjkScript, Helpers) {
   EXPECT_EQ(cjk::dictIndexFolderForLanguage("en"), nullptr);
   EXPECT_EQ(cjk::probeCodepoint(CjkScript::Japanese), 0x3042u);
   EXPECT_EQ(cjk::probeCodepoint(CjkScript::TraditionalChinese), 0x7684u);
+}
+
+}  // namespace
+
+namespace {
+
+cjk::ScriptSniff sniff(const std::string& text) {
+  cjk::ScriptSniff s;
+  // Feed in odd-sized chunks so a multi-byte character is split across calls.
+  for (size_t i = 0; i < text.size(); i += 5) {
+    s.feed(reinterpret_cast<const uint8_t*>(text.data()) + i, std::min<size_t>(5, text.size() - i));
+  }
+  return s;
+}
+
+std::string repeat(const std::string& s, int n) {
+  std::string out;
+  for (int i = 0; i < n; i++) out += s;
+  return out;
+}
+
+TEST(ScriptSniff, DetectsJapaneseByKana) {
+  EXPECT_EQ(sniff(repeat("私は学生です。", 10)).verdict(), CjkScript::Japanese);
+}
+
+TEST(ScriptSniff, DetectsSimplifiedAndTraditionalChinese) {
+  EXPECT_EQ(sniff(repeat("<p>这是一个说话的时候。</p>", 10)).verdict(), CjkScript::SimplifiedChinese);
+  EXPECT_EQ(sniff(repeat("<p>這是一個說話的時候。</p>", 10)).verdict(), CjkScript::TraditionalChinese);
+  // No distinguishing characters at all: simplified, the mainland default.
+  EXPECT_EQ(sniff(repeat("人山人海，天上人间。", 10)).verdict(), CjkScript::SimplifiedChinese);
+}
+
+TEST(ScriptSniff, LatinBooksStayLatin) {
+  EXPECT_EQ(sniff(repeat("The quick brown fox jumps over the lazy dog. ", 20)).verdict(), CjkScript::None);
+  EXPECT_EQ(sniff(repeat("He wrote 中国 once in a long English paragraph about travel. ", 20)).verdict(),
+            CjkScript::None);
+  EXPECT_EQ(sniff("短").verdict(), CjkScript::None);  // too little to judge
+  // Markup does not count as Latin text.
+  EXPECT_EQ(sniff(repeat("<p class=\"calibre1\"><span>这是说话</span></p>", 10)).verdict(),
+            CjkScript::SimplifiedChinese);
+}
+
+TEST(ScriptSniff, EnoughStopsEarly) {
+  cjk::ScriptSniff s = sniff(repeat("中国", 250));
+  EXPECT_TRUE(s.enough());
+}
+
+TEST(LanguageChoice, Tags) {
+  EXPECT_EQ(cjk::languageTagForChoice(cjk::LANG_AUTO), nullptr);
+  EXPECT_STREQ(cjk::languageTagForChoice(cjk::LANG_ZH_HANT), "zh-Hant");
+  EXPECT_EQ(cjk::scriptForLanguage(cjk::languageTagForChoice(cjk::LANG_YUE)), CjkScript::TraditionalChinese);
 }
 
 }  // namespace

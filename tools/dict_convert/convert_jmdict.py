@@ -781,7 +781,7 @@ _CANTO_READING_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[([^\]]*)\]\s+\{([^}]*)\}")
 
 
 def format_definition_cedict(trad: str, simp: str, pinyin: str, glosses: list, zhuyin: bool,
-                             jyutping: str = "", level: str = "") -> str:
+                             jyutping: str = "", level: str = "", examples: list = None) -> str:
     reading = pinyin_to_marks(pinyin)
     if zhuyin:
         reading += " " + pinyin_to_zhuyin(pinyin)
@@ -797,7 +797,68 @@ def format_definition_cedict(trad: str, simp: str, pinyin: str, glosses: list, z
         parts.append(glosses[0])
     else:
         parts.extend(f"{i + 1}. {g}" for i, g in enumerate(glosses))
+    # Example sentences, each with its translation on the next line, indented like Jitendex's.
+    for sentence, translation in (examples or []):
+        parts.append("  " + sentence)
+        if translation:
+            parts.append("  " + translation)
     return "\n".join(parts)
+
+
+# ── Example sentences(Tatoeba) ─────────────────────────────────
+
+EXAMPLES_PER_ENTRY = 2
+EXAMPLE_MAX_CHARS = 40
+
+
+def load_sentence_pairs(path: str) -> list:
+    """Tatoeba 'sentence pairs' export (id, sentence, id, translation) or a plain two-column
+    sentence<TAB>translation file. Returns [(sentence, translation)] with long sentences dropped:
+    a short example shows the word in use; a long one only costs space on the card."""
+    pairs = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) >= 4:
+                sentence, translation = fields[1].strip(), fields[3].strip()
+            elif len(fields) >= 2:
+                sentence, translation = fields[0].strip(), fields[1].strip()
+            else:
+                continue
+            if not sentence or len(sentence) > EXAMPLE_MAX_CHARS or not _HAN_RE.search(sentence):
+                continue
+            pairs.append((sentence, translation))
+    pairs.sort(key=lambda p: len(p[0]))  # shortest first, so the cap keeps the clearest ones
+    print(f"Sentence pairs {path}: {len(pairs):,} usable")
+    return pairs
+
+
+def attach_examples(pairs: list, forms: dict, entry_count: int) -> list:
+    """Segment every sentence against the dictionary's headwords (longest match, like the device
+    does) and hand it to the entries of the words it contains, up to EXAMPLES_PER_ENTRY each.
+    forms maps each headword form to its entry index. Single-character words get none: the
+    particles would collect thousands and no reader needs an example of 的."""
+    examples = [[] for _ in range(entry_count)]
+    if not pairs:
+        return examples
+    max_len = max(len(w) for w in forms)
+    for sentence, translation in pairs:
+        i = 0
+        n = len(sentence)
+        seen = set()
+        while i < n:
+            matched = 0
+            for length in range(min(max_len, n - i), 1, -1):
+                idx = forms.get(sentence[i:i + length])
+                if idx is not None:
+                    matched = length
+                    if idx not in seen and len(examples[idx]) < EXAMPLES_PER_ENTRY:
+                        examples[idx].append((sentence, translation))
+                        seen.add(idx)
+                    break
+            i += matched or 1
+    print(f"Examples attached to {sum(1 for e in examples if e):,} entries")
+    return examples
 
 
 def is_proper_noun_pinyin(pinyin: str) -> bool:
@@ -821,17 +882,16 @@ def load_canto_readings(path: str) -> dict:
 
 
 def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, levels: dict = None,
-                   jyutping: dict = None) -> tuple:
+                   jyutping: dict = None, sentence_pairs: list = None) -> tuple:
     """Convert a raw CC-CEDICT (or CC-Canto) file to index records, one per traditional and
     simplified form. Returns (vocab_records, name_records); the second list is empty unless
     split_names routes proper nouns (capitalised pinyin) into the names slot."""
     print(f"Loading {path}...")
-    records = []
-    names = []
-    entries = 0
-    skipped = 0
     levels = levels or {}
     jyutping = jyutping or {}
+    parsed = []  # (trad, simp, pinyin, canto, glosses)
+    forms = {}
+    skipped = 0
     opener = __import__("gzip").open if path.endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -842,20 +902,28 @@ def convert_cedict(path: str, zhuyin: bool = False, split_names: bool = False, l
                 skipped += 1
                 continue
             trad, simp, pinyin, canto, body = m.groups()
-            glosses = [g.strip() for g in body.split("/")]
-            level = levels.get(simp) or levels.get(trad) or ""
-            reading_canto = canto or jyutping.get((trad, simp, pinyin), "")
-            definition = format_definition_cedict(trad, simp, pinyin, glosses, zhuyin, reading_canto, level)
-            def_bytes = definition.encode("utf-8")
-            entries += 1
-            target = names if split_names and is_proper_noun_pinyin(pinyin) else records
-            for hw in dict.fromkeys((trad, simp)):  # both forms, once each
-                hw_bytes = hw.encode("utf-8")
-                if len(hw_bytes) >= HEADWORD_SIZE:
-                    skipped += 1
-                    continue
-                target.append((hw_bytes, def_bytes, 100, POS_OTHER))
-    print(f"Processed {entries} CC-CEDICT entries ({skipped} skipped) → {len(records)} vocab records"
+            idx = len(parsed)
+            parsed.append((trad, simp, pinyin, canto, [g.strip() for g in body.split("/")]))
+            forms.setdefault(trad, idx)
+            forms.setdefault(simp, idx)
+    examples = attach_examples(sentence_pairs or [], forms, len(parsed)) if sentence_pairs else None
+
+    records = []
+    names = []
+    for idx, (trad, simp, pinyin, canto, glosses) in enumerate(parsed):
+        level = levels.get(simp) or levels.get(trad) or ""
+        reading_canto = canto or jyutping.get((trad, simp, pinyin), "")
+        definition = format_definition_cedict(trad, simp, pinyin, glosses, zhuyin, reading_canto, level,
+                                              examples[idx] if examples else None)
+        def_bytes = definition.encode("utf-8")
+        target = names if split_names and is_proper_noun_pinyin(pinyin) else records
+        for hw in dict.fromkeys((trad, simp)):  # both forms, once each
+            hw_bytes = hw.encode("utf-8")
+            if len(hw_bytes) >= HEADWORD_SIZE:
+                skipped += 1
+                continue
+            target.append((hw_bytes, def_bytes, 100, POS_OTHER))
+    print(f"Processed {len(parsed)} CC-CEDICT entries ({skipped} skipped) → {len(records)} vocab records"
           + (f", {len(names)} name records" if split_names else ""))
     return records, names
 
@@ -1082,6 +1150,12 @@ def main():
         "CC-CEDICT entry it covers (CC-Canto's own .u8 as --input carries jyutping already).",
     )
     parser.add_argument(
+        "--examples",
+        help="Tatoeba sentence pairs export (Chinese to English) or a sentence<TAB>translation "
+        "file: each CC-CEDICT entry of two or more characters gets up to two short example "
+        "sentences, shown under its glosses.",
+    )
+    parser.add_argument(
         "--frequency-kind",
         default="auto",
         choices=["auto", "count", "rank"],
@@ -1108,6 +1182,7 @@ def main():
 
     levels = load_levels(args.levels, args.level_name) if args.levels else {}
     jyutping = load_canto_readings(args.jyutping) if args.jyutping else {}
+    sentence_pairs = load_sentence_pairs(args.examples) if args.examples else None
     records = []
     name_records = []
     titles = []
@@ -1122,7 +1197,7 @@ def main():
             part, title = convert_yomitan(path, reading_records=not chinese)
         elif fmt == "cedict":
             part, names = convert_cedict(path, zhuyin=args.zhuyin, split_names=args.split_names, levels=levels,
-                                         jyutping=jyutping)
+                                         jyutping=jyutping, sentence_pairs=sentence_pairs)
             name_records.extend(names)
             if "canto" in os.path.basename(path).lower():
                 title = "CC-Canto"

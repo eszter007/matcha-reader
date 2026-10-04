@@ -1186,7 +1186,11 @@ in the dictionary folder instead. Many dictionaries ship one; see [docs/dictiona
 ### 6.6 Chinese Books
 
 A book tagged `zh` in any form (`zh-CN`, `zh-Hans`, `zh-TW`, `zh-Hant`, `zh-HK`, `cmn`) is read with the same
-tools as a Japanese one, once `dictionaries/zh/` holds a converted dictionary (§6.5). A Cantonese book (`yue`)
+tools as a Japanese one, once `dictionaries/zh/` holds a converted dictionary (§6.5). A book with no tag, or
+one tagged with a non-CJK language, is checked against its own text the first time it opens: kana make it
+Japanese, a page that is mostly hanzi makes it Chinese, simplified or traditional by the characters it uses.
+When that guess is wrong, or a tag is, **Reader Settings → Book Language** re-tags the book (Auto, Japanese,
+Chinese simplified or traditional, Cantonese); the choice is remembered per book and takes effect at once. A Cantonese book (`yue`)
 is set like a traditional-Chinese one but reads `dictionaries/yue/`, built from CC-Canto and CC-CEDICT together,
 because Cantonese has words of its own that a Mandarin dictionary does not list:
 
@@ -1196,8 +1200,9 @@ because Cantonese has words of its own that a Mandarin dictionary does not list:
   words. There is nothing to deinflect, so every form on the page is looked up as written. The entry opens with the
   pinyin above the glosses (zhuyin or jyutping after it, when the dictionary was converted with them), then the
   word's HSK or TOCFL level when a graded list was given, then the other script's form of the word when it differs
-  (`說話 / 说话`), then the definitions. A word in both CC-CEDICT and the MoE dictionary shows the MoE entry under
-  the English one. Proper nouns converted with `--split-names` show as **Name** entries, and a grammar list in the
+  (`說話 / 说话`), then the definitions, then up to two example sentences with their translations when the
+  dictionary was converted with `--examples`. A word in both CC-CEDICT and the MoE dictionary shows the MoE entry
+  under the English one. Proper nouns converted with `--split-names` show as **Name** entries, and a grammar list in the
   grammar slot is searched around the cursor the way the Japanese one is.
 - **Pinyin above the text** comes from the book, like furigana. Run `tools/pinyin_ruby/add_pinyin_ruby.py` over an
   EPUB on your computer (README Setup step 2) and the Furigana toggle shows or hides it.
@@ -1211,9 +1216,9 @@ because Cantonese has words of its own that a Mandarin dictionary does not list:
 - **Fonts.** The built-in CJK glyphs cover the common Japanese characters only, so install a Noto Sans SC or TC
   font from **Settings → Manage Fonts** (or convert one, README Setup step 3). The font is picked by the book's
   tag: SC for simplified, TC for traditional. With only a Japanese font on the card, Chinese renders in Japanese
-  glyph shapes, which is readable but not what a Chinese book looks like in print. The Home screen loads the same
-  font for its own text whenever a title on it needs a character the built-in set lacks, so Chinese titles read
-  correctly there too. Without any SD font, everyday simplified characters show as empty boxes.
+  glyph shapes, which is readable but not what a Chinese book looks like in print. The Home screen and the file
+  browser load the same font for their own text whenever a name on them needs a character the built-in set
+  lacks, so Chinese titles read correctly there too. Without any SD font, everyday simplified characters show as empty boxes.
 
 ## 7. Reading Stats
 

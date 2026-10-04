@@ -413,10 +413,7 @@ void EpubReaderActivity::onReaderEnter() {
       // later corrected). useVerticalText() already ignores it; clearing it here
       // keeps the stored state honest, so the reader menu shows what is in effect.
       // Rewritten to progress.bin by the next save.
-      if (verticalOverride == 1 && !isCjkBook()) {
-        LOG_INF("ERS", "Clearing forced-vertical flag on a non-CJK book");
-        verticalOverride = -1;
-      }
+      // Checked again below once the book's language (override, tag or sniff) is settled.
       if (dataSize >= 13) {
         cachedVisibleTextOffset = static_cast<uint32_t>(data[9]) | (static_cast<uint32_t>(data[10]) << 8) |
                                   (static_cast<uint32_t>(data[11]) << 16) | (static_cast<uint32_t>(data[12]) << 24);
@@ -436,13 +433,23 @@ void EpubReaderActivity::onReaderEnter() {
     }
   }
 
+  // The book's language decides everything below. A tag that names no CJK language is checked
+  // against the text once, so a Chinese EPUB tagged "en" (common in the wild) still gets its
+  // dictionary, font and layout; Reader Settings' Book Language overrides either.
+  loadLanguageChoice();
+  sniffLanguageIfNeeded();
+  if (verticalOverride == 1 && !isCjkBook()) {
+    LOG_INF("ERS", "Clearing forced-vertical flag on a non-CJK book");
+    verticalOverride = -1;
+  }
+
   // CJK books (or forced vertical text) need the proper-size companion font; plain
   // Latin books must not pay its SD load / RAM (user-reported).
   sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
   // Word lookup reads the converted dictionary of the book's language, and traditional Chinese
   // sets its vertical punctuation differently from Japanese. Both are process-wide and decided
   // once per book here, before any layout or lookup runs.
-  const char* dictFolder = epub ? cjk::dictIndexFolderForLanguage(epub->getLanguage()) : nullptr;
+  const char* dictFolder = cjk::dictIndexFolderForLanguage(effectiveLanguage());
   DictIndex::setLanguageFolder(dictFolder ? dictFolder : cjk::dictIndexFolder(fontScript()));
   Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
 
@@ -599,7 +606,7 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
     return;
   }
   std::vector<std::string> dictionaryFolders;
-  const std::string bookLanguage = epub ? epub->getLanguage() : std::string{};
+  const std::string bookLanguage = effectiveLanguage();
   DictionaryRegistry::foldersForLanguage(bookLanguage, SETTINGS.dictionaryName,
                                          DictionaryWordSelectActivity::MAX_DICTIONARIES, dictionaryFolders);
   if (dictionaryFolders.empty()) {
@@ -1360,6 +1367,7 @@ void EpubReaderActivity::openReaderMenu() {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
         toggleAutoPageTurn(menu.pageTurnOption);
+        applyLanguageOverride(menu.languageOverride);
         applyVerticalFuriganaOverride(menu.verticalOverride, menu.furiganaOverride);
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
@@ -1378,36 +1386,7 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
                                                        const int8_t furiganaOverrideIn) {
   if (verticalOverrideIn >= 0 && verticalOverrideIn != (useVerticalText() ? 1 : 0)) {
     verticalOverride = verticalOverrideIn;
-    {
-      // Every other section reset in this file takes the render lock: the render task can
-      // still be inside its (multi-second, section-touching) warm tail when this result
-      // lands, and freeing the section under it is a use-after-free.
-      RenderLock lock(*this);
-      // Carry the reading position across the mode change; the rebuild on the other side has
-      // nothing else to resume from. A page NUMBER does not survive: the two modes paginate the
-      // same chapter differently. Two things that do are recorded here, in order of preference:
-      //   - the content offset, an exact anchor, since both layouts count source positions
-      //     identically (VerticalPage::visibleTextOffset);
-      //   - page + chapter total, whose ratio the rebuild remaps proportionally when no offset
-      //     can be read (vertical: the cachedChapterTotalPageCount block in render();
-      //     horizontal: applyDeferredReposition()).
-      cachedVisibleTextOffset.reset();
-      if (verticalSection) {
-        cachedSpineIndex = currentSpineIndex;
-        nextPageNumber = verticalSection->currentPage;
-        cachedChapterTotalPageCount = verticalSection->pageCount;
-        cachedVisibleTextOffset = verticalSection->getVisibleTextOffsetForPage(verticalSection->currentPage);
-      } else if (section) {
-        cachedSpineIndex = currentSpineIndex;
-        nextPageNumber = section->currentPage;
-        // estimatedTotalPages(), not pageCount: mid-build the watermark sits barely ahead of
-        // currentPage, so the ratio would be ~1.0 and land the reader at the chapter's end.
-        cachedChapterTotalPageCount = section->estimatedTotalPages();
-        cachedVisibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
-      }
-      section.reset();
-      verticalSection.reset();
-    }
+    dropSectionsKeepingPosition();
     // Forcing vertical text on a non-CJK book is the same signal the book's script covers at
     // open: the companion font follows it.
     sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
@@ -1415,6 +1394,130 @@ void EpubReaderActivity::applyVerticalFuriganaOverride(const int8_t verticalOver
   if (furiganaOverrideIn >= 0 && furiganaOverrideIn != (useFurigana() ? 1 : 0)) {
     furiganaOverride = furiganaOverrideIn;
   }
+}
+
+void EpubReaderActivity::dropSectionsKeepingPosition() {
+  // Every other section reset in this file takes the render lock: the render task can
+  // still be inside its (multi-second, section-touching) warm tail when this result
+  // lands, and freeing the section under it is a use-after-free.
+  RenderLock lock(*this);
+  // Carry the reading position across the mode change; the rebuild on the other side has
+  // nothing else to resume from. A page NUMBER does not survive: the two modes paginate the
+  // same chapter differently. Two things that do are recorded here, in order of preference:
+  //   - the content offset, an exact anchor, since both layouts count source positions
+  //     identically (VerticalPage::visibleTextOffset);
+  //   - page + chapter total, whose ratio the rebuild remaps proportionally when no offset
+  //     can be read (vertical: the cachedChapterTotalPageCount block in render();
+  //     horizontal: applyDeferredReposition()).
+  cachedVisibleTextOffset.reset();
+  if (verticalSection) {
+    cachedSpineIndex = currentSpineIndex;
+    nextPageNumber = verticalSection->currentPage;
+    cachedChapterTotalPageCount = verticalSection->pageCount;
+    cachedVisibleTextOffset = verticalSection->getVisibleTextOffsetForPage(verticalSection->currentPage);
+  } else if (section) {
+    cachedSpineIndex = currentSpineIndex;
+    nextPageNumber = section->currentPage;
+    // estimatedTotalPages(), not pageCount: mid-build the watermark sits barely ahead of
+    // currentPage, so the ratio would be ~1.0 and land the reader at the chapter's end.
+    cachedChapterTotalPageCount = section->estimatedTotalPages();
+    cachedVisibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
+  }
+  section.reset();
+  verticalSection.reset();
+}
+
+void EpubReaderActivity::applyLanguageOverride(const int8_t choice) {
+  if (choice < 0 || choice >= cjk::LANGUAGE_CHOICE_COUNT || choice == static_cast<int8_t>(languageOverride)) return;
+  languageOverride = static_cast<uint8_t>(choice);
+  saveLanguageChoice();
+  // The language decides direction, line breaking, dictionary folder and font, so the layout is
+  // rebuilt; a forced-vertical flag left over from a different language no longer applies.
+  if (verticalOverride == 1 && !isCjkBook()) verticalOverride = -1;
+  dropSectionsKeepingPosition();
+  sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+  const char* dictFolder = cjk::dictIndexFolderForLanguage(effectiveLanguage());
+  DictIndex::setLanguageFolder(dictFolder ? dictFolder : cjk::dictIndexFolder(fontScript()));
+  Kinsoku::setCentredPunctuation(bookScript() == CjkScript::TraditionalChinese);
+  LOG_INF("ERS", "Book language override: %u -> %s", languageOverride, effectiveLanguage().c_str());
+}
+
+namespace {
+// Print sink for the language sniff: feeds the sample and stops the stream once it has enough.
+class SniffSink : public Print {
+ public:
+  cjk::ScriptSniff sniff;
+  size_t write(const uint8_t b) override { return write(&b, 1); }
+  size_t write(const uint8_t* buffer, const size_t size) override {
+    if (sniff.enough()) return 0;  // a short write ends the stream (allowEarlyStop)
+    sniff.feed(buffer, size);
+    return size;
+  }
+};
+}  // namespace
+
+void EpubReaderActivity::sniffLanguageIfNeeded() {
+  if (!epub || languageOverride != cjk::LANG_AUTO || detectedLanguage != 0) return;
+  if (cjk::scriptForLanguage(epub->getLanguage()) != CjkScript::None) return;  // the tag is enough
+  const int spine = currentSpineIndex;
+  if (spine < 0 || spine >= epub->getSpineItemsCount()) return;
+  // The sink is ~40 bytes; the stream reads the chapter in 1KB chunks and stops after a few
+  // hundred CJK characters, so a tagless Latin book pays one short read, once.
+  auto sink = makeUniqueNoThrow<SniffSink>();
+  if (!sink) return;
+  epub->readItemContentsToStream(epub->getSpineItem(spine).href, *sink, 1024, /*allowEarlyStop=*/true);
+  const CjkScript found = sink->sniff.verdict();
+  switch (found) {
+    case CjkScript::Japanese:
+      detectedLanguage = cjk::LANG_JA;
+      break;
+    case CjkScript::SimplifiedChinese:
+      detectedLanguage = cjk::LANG_ZH_HANS;
+      break;
+    case CjkScript::TraditionalChinese:
+      detectedLanguage = cjk::LANG_ZH_HANT;
+      break;
+    default:
+      detectedLanguage = LANGUAGE_SNIFFED_NONE;
+      break;
+  }
+  LOG_INF("ERS", "Language sniff: tag '%s' -> %u (han %u kana %u latin %u)", epub->getLanguage().c_str(),
+          detectedLanguage, sink->sniff.han, sink->sniff.kana, sink->sniff.latin);
+  saveLanguageChoice();
+}
+
+std::string EpubReaderActivity::effectiveLanguage() const {
+  if (const char* forced = cjk::languageTagForChoice(languageOverride)) return forced;
+  if (!epub) return {};
+  const std::string& tag = epub->getLanguage();
+  if (cjk::scriptForLanguage(tag) != CjkScript::None) return tag;
+  if (const char* sniffed = cjk::languageTagForChoice(detectedLanguage)) return sniffed;
+  return tag;
+}
+
+// language.bin beside progress.bin: [0] the user's Book Language choice, [1] the sniff result.
+// Separate from progress.bin, whose layout other readers of it depend on.
+void EpubReaderActivity::loadLanguageChoice() {
+  languageOverride = cjk::LANG_AUTO;
+  detectedLanguage = 0;
+  if (!epub) return;
+  HalFile f;
+  if (!Storage.openFileForRead("ERS", (epub->getCachePath() + "/language.bin").c_str(), f)) return;
+  uint8_t data[2] = {0, 0};
+  if (f.read(data, sizeof(data)) < 1) return;
+  if (data[0] < cjk::LANGUAGE_CHOICE_COUNT) languageOverride = data[0];
+  if (data[1] < cjk::LANGUAGE_CHOICE_COUNT || data[1] == LANGUAGE_SNIFFED_NONE) detectedLanguage = data[1];
+}
+
+void EpubReaderActivity::saveLanguageChoice() const {
+  if (!epub) return;
+  HalFile f;
+  if (!Storage.openFileForWrite("ERS", (epub->getCachePath() + "/language.bin").c_str(), f)) {
+    LOG_ERR("ERS", "Cannot save language choice");
+    return;
+  }
+  const uint8_t data[2] = {languageOverride, detectedLanguage};
+  f.write(data, sizeof(data));
 }
 
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
@@ -1498,26 +1601,28 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // EpubReaderMenuActivity::buildMenuItems) come back the same way the quick menu used to
       // carry them: a MenuResult, read via get_if since SettingsActivity only sets one when
       // showVerticalToggle() was true here, so std::monostate elsewhere is expected.
-      startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                                /*finishOnBack=*/true, bookScript(),
-                                                                epub ? epub->getLanguage() : std::string{},
-                                                                showVerticalToggle(), useVerticalText(), useFurigana(),
-                                                                /*mangaMode=*/false,
-                                                                /*hideMangaOnlySettings=*/true),
-                             [this](const ActivityResult& result) {
-                               if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
-                                 applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
-                               }
-                               sdFontSystem.ensureLoaded(renderer);
-                               sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
-                               // Reading Orientation now only changes via this screen (removed from the reader's
-                               // own quick menu, which used to apply it straight from the popup via
-                               // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
-                               // does, or it would silently wait for the book's next full open to take effect.
-                               ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-                               // Return to the reader MENU (where the user came from), not the page.
-                               openReaderMenu();
-                             });
+      startActivityForResult(
+          std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                             /*finishOnBack=*/true, bookScript(), effectiveLanguage(),
+                                             showVerticalToggle(), useVerticalText(), useFurigana(),
+                                             /*mangaMode=*/false,
+                                             /*hideMangaOnlySettings=*/true, StrId::STR_NONE_OPT,
+                                             static_cast<int8_t>(languageOverride)),
+          [this](const ActivityResult& result) {
+            if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
+              applyLanguageOverride(menu->languageOverride);
+              applyVerticalFuriganaOverride(menu->verticalOverride, menu->furiganaOverride);
+            }
+            sdFontSystem.ensureLoaded(renderer);
+            sdFontSystem.setCjkFallbackNeeded(renderer, fontScript());
+            // Reading Orientation now only changes via this screen (removed from the reader's
+            // own quick menu, which used to apply it straight from the popup via
+            // applyOrientation(menu.orientation)): pick up a change the same way onEnter()
+            // does, or it would silently wait for the book's next full open to take effect.
+            ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+            // Return to the reader MENU (where the user came from), not the page.
+            openReaderMenu();
+          });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
@@ -4353,7 +4458,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
           LOG_ERR("ERS", "OOM: word lookup panel");
         } else {
           lookup->setMiningContext(
-              {getBookTitle(), getBookAuthor(), std::move(miningTail), epub->getLanguage(), bookPath});
+              {getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
           panel = std::move(lookup);
         }
       }
@@ -4450,7 +4555,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         requestUpdate();  // the build was suspended for the panel; the next render resumes it
         return;
       }
-      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), epub->getLanguage(), bookPath});
+      lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
       startActivityForResult(std::move(lookup), [this](const ActivityResult&) { requestUpdate(); });
     }
   }
@@ -5626,9 +5731,7 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   return localPos;
 }
 
-CjkScript EpubReaderActivity::bookScript() const {
-  return epub ? cjk::scriptForLanguage(epub->getLanguage()) : CjkScript::None;
-}
+CjkScript EpubReaderActivity::bookScript() const { return cjk::scriptForLanguage(effectiveLanguage()); }
 
 CjkScript EpubReaderActivity::fontScript() const {
   const CjkScript script = bookScript();
