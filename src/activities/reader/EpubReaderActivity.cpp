@@ -3763,14 +3763,22 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
   // failed open per missing file is a path lookup each, ~5 ms on SD, and a book of 1191 spines
   // (a Bible, one file per chapter) spent 5.6 s of its first page turn on them.
   const int fontId = effectiveReaderFontId();
-  // One bit per spine, built only when something is left to probe.
+  // One bit per spine, built only when something is left to probe. A folder that is not there is
+  // an answer (no chapter is cached); one that exists but could not be listed is not, and must not
+  // be remembered as "no caches" -- those spines stay unprobed and the next refresh tries again.
   std::vector<bool> hasCacheFile;
+  bool listingFailed = false;
   const auto cacheFilePresent = [&](const int spine) {
     if (hasCacheFile.empty()) {
       hasCacheFile.assign(spineCount, false);
       const std::string dirPath = epub->getCachePath() + (vertical ? "/vsections" : "/sections");
-      HalFile dir = Storage.open(dirPath.c_str());
-      if (dir && dir.isDirectory()) {
+      HalFile dir;
+      if (Storage.exists(dirPath.c_str())) {
+        dir = Storage.open(dirPath.c_str());
+        listingFailed = !dir || !dir.isDirectory();
+        if (listingFailed) LOG_ERR("ERS", "Could not list %s; page counts stay estimated", dirPath.c_str());
+      }
+      if (dir && !listingFailed) {
         char name[24];
         for (auto entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
           entry.getName(name, sizeof(name));
@@ -3810,7 +3818,7 @@ void EpubReaderActivity::updateChapterPageSpan(const uint16_t viewportWidth, con
           probed = true;
         }
       }
-      if (!probed) spinePagesReal[i] = kSpineProbeFailed;
+      if (!probed && !listingFailed) spinePagesReal[i] = kSpineProbeFailed;
     }
     if (spinePagesReal[i] > 0 && spinePagesReal[i] != kSpineProbeFailed) {
       knownPages += spinePagesReal[i];
@@ -3925,7 +3933,8 @@ bool EpubReaderActivity::prewarmVerticalPageGlyphs(const VerticalPage& vpage) {
   //
   //   styleMask must list only the styles PRESENT on this page. FontCacheManager::prewarmCache()
   //   claims a slot per requested style plus one per style for the family's fallback font -- a
-  //   blanket "all 4" asks for up to 8 slots against the 4 that exist.
+  //   blanket "all 4" asks for up to 8 slots, the whole MAX_PAGE_SLOTS pool, and leaves none for
+  //   any other font on the page.
   //
   //   The heap floor differs by caller. The page-text string and slot claims are bare allocations,
   //   and this also runs mid-build, where an OOM aborts under -fno-exceptions. Keep 20K there: at
