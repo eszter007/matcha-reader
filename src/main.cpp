@@ -818,6 +818,10 @@ void loop() {
       } else if (cmd == "HOME") {
         LOG_INF("CMD", "home");
         activityManager.goHome();
+      } else if (cmd == "MEM") {
+        // The heap now, rather than at the next ten-second tick: for measuring one screen.
+        const auto heap = HalMemory::getInternalHeap();
+        LOG_INF("CMD", "mem free=%zu min=%zu maxAlloc=%zu", heap.freeBytes, heap.minFreeBytes, heap.largestBlockBytes);
       } else if (cmd.startsWith("PRESS:") || cmd.startsWith("HOLD:")) {
         // PRESS:<BTN> is a tap; HOLD:<BTN>:<ms> keeps the button down that long (long presses,
         // key repeat). Hardware button index, not the logical (remappable) one.

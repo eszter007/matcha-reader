@@ -444,6 +444,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // would misread every press as "past the last page" and jump to the next spine (observed:
   // a press during the build teleported the reader to the end of the book).
   std::atomic<bool> verticalBuildInProgress_{false};
+  // Totals the early-rendered page's status bar showed; see refreshEarlyPageStatusBar().
+  int earlyShownChapterPages_ = 0;
+  int earlyShownBookPages_ = 0;
+  void refreshEarlyPageStatusBar();
   // True when the page currently on the panel drew images. Overlays opened on top
   // of it need a HALF pass to scrub the charge a FAST diff leaves behind.
   bool shownPageHasImages_ = false;

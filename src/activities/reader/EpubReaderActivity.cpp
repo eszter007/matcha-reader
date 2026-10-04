@@ -2380,6 +2380,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       saveProgress(currentSpineIndex, verticalSection->currentPage, verticalSection->pageCount, verticalOverride,
                    furiganaOverride);
       LOG_DBG("ERS", "Keeping early-rendered page %d; skipping duplicate refresh", verticalSection->currentPage);
+      refreshEarlyPageStatusBar();
       showPendingSyncSaveError();
       return;
     }
@@ -4340,12 +4341,29 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   // "~". Without it the bar is absent for a vertical chapter's first pages, until the build ends and
   // ordinary renders take over (horizontal has no early-render path).
   renderStatusBar();
+  earlyShownChapterPages_ = chapterPagesTotal;
+  earlyShownBookPages_ = bookPagesTotal;
   renderer.displayBuffer();
   earlyPageActuallyDisplayed_ = true;
   // The build resumes the moment this returns and needs its headroom back: the prewarm above
   // re-claimed font page slots and the glyph slab that the build path released before starting.
   releaseRenderFontMemory();
   LOG_DBG("ERS", "Early first render of page %d in %dms", pageIndex, millis() - start);
+}
+
+void EpubReaderActivity::refreshEarlyPageStatusBar() {
+  // The early page drew its status bar while the chapter had no page count yet ("1/1 0%"), and
+  // the page is kept on screen when the build ends. Redraw the same page with the real numbers:
+  // the body comes out pixel-identical, so the fast refresh only changes the bar.
+  if (UITheme::getInstance().getStatusBarHeight() == 0 || !renderer.hasFrameBuffer()) return;
+  updateChapterPageSpan(lastViewportWidth, lastViewportHeight);
+  if (chapterPagesTotal == earlyShownChapterPages_ && bookPagesTotal == earlyShownBookPages_) return;
+  const VerticalPage* page = verticalSection ? verticalSection->getPage() : nullptr;
+  if (!page) return;  // not now: the next page turn draws the bar anyway
+  renderer.clearScreen();
+  renderVerticalPageBody(*page);
+  renderStatusBar();
+  renderer.displayBuffer();
 }
 
 void EpubReaderActivity::renderStatusBar() const {
