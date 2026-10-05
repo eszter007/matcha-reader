@@ -118,9 +118,9 @@ bool OtaUpdater::isUpdateNewer() const {
   if (latestPatch != currentPatch) return latestPatch > currentPatch;
 
   // If we reach here, it means all segments are equal.
-  // One final check, if we're on an RC build (contains "-rc"), we should consider the latest version as newer even if
-  // the segments are equal, since RC builds are pre-release versions.
-  if (strstr(currentVersion, "-rc") != nullptr) {
+  // One final check: on a pre-release build (a release candidate or a nightly) the released version with the same
+  // three segments is newer, so 1.7.0-nightly-1 and 1.7.0-rc-2 are both offered 1.7.0.
+  if (strstr(currentVersion, "-rc") != nullptr || strstr(currentVersion, "-nightly") != nullptr) {
     return true;
   }
 

@@ -97,7 +97,7 @@ jobs:
 
       - name: Build CrossPoint Release Candidate
         env:
-          CROSSPOINT_RC_LABEL: ${{ inputs.rc_label || 'rc' }}
+          CROSSPOINT_RC_LABEL: -${{ inputs.rc_label || 'rc' }}
           CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
         run: pio run -e ${{ matrix.pio_env }} -j1
 

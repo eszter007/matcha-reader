@@ -88,6 +88,8 @@ jobs:
           done
           ls -la *.zip
 
+      # --latest=false on both: the firmware updater and the README's download links read
+      # releases/latest, which must stay a firmware release.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -102,11 +104,11 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dictionaries-zh-*.zip --clobber  # a second run the same day
           else
-            gh release create "$TAG" dictionaries-zh-*.zip --title "Chinese dictionaries ($TAG)" --notes "$NOTES"
+            gh release create "$TAG" dictionaries-zh-*.zip --latest=false --title "Chinese dictionaries ($TAG)" --notes "$NOTES"
           fi
           gh release delete dictionaries-zh --yes 2>/dev/null || true
           git push --delete origin dictionaries-zh 2>/dev/null || true
-          gh release create dictionaries-zh dictionaries-zh-*.zip --title "Chinese dictionaries (latest)" \
+          gh release create dictionaries-zh dictionaries-zh-*.zip --latest=false --title "Chinese dictionaries (latest)" \
             --notes "Latest build; see $TAG for the dated copy.
 
           $NOTES"
