@@ -14,9 +14,11 @@ from convert_manga import (
     build_panel_ocr_prompt,
     expand_panels_over_text,
     mokuro_text_blocks,
+    fill_uncovered_art,
     sort_panels_reading_order,
     split_frames_over_subpanels,
     text_pad_px,
+    yonkoma_reading_order,
 )
 
 
@@ -383,6 +385,74 @@ def test_block_outside_every_panel_goes_to_the_nearest():
     panels = [[0, 0, 100, 100], [400, 400, 500, 500]]
     stray = {"box": [380, 380, 390, 390]}
     assert assign_blocks_to_panels([stray], panels) == [[], [stray]]
+# A 4-koma page as the detector returns it: two strips of four, 300 wide, on a 760 page.
+_RIGHT = [[420, 170 + 235 * i, 710, 390 + 235 * i] for i in range(4)]
+_LEFT = [[100, 170 + 235 * i, 390, 390 + 235 * i] for i in range(4)]
+
+
+def test_yonkoma_page_is_read_down_each_strip():
+    shuffled = [b for pair in zip(_RIGHT, _LEFT) for b in pair]  # row-major, as detected
+    assert yonkoma_reading_order(shuffled, 760) == _RIGHT + _LEFT
+    assert yonkoma_reading_order(shuffled, 760, rtl=False) == _LEFT + _RIGHT
+
+
+def test_yonkoma_fragments_merge_back_into_their_panel():
+    """One strip panel cut in two by the detector comes back whole, in place."""
+    cut = [_LEFT[2][:2] + [240, _LEFT[2][3]], [200, _LEFT[2][1]] + _LEFT[2][2:]]
+    panels = _RIGHT + _LEFT[:2] + cut + _LEFT[3:]
+    assert yonkoma_reading_order(panels, 760) == _RIGHT + _LEFT
+
+
+def test_yonkoma_title_panel_beside_the_strips():
+    title = [720, 170, 760, 1090]
+    narrow_r = [[400, b[1], 690, b[3]] for b in _RIGHT]
+    narrow_l = [[60, b[1], 350, b[3]] for b in _LEFT]
+    assert yonkoma_reading_order(narrow_l + [title] + narrow_r, 760) == [title] + narrow_r + narrow_l
+
+
+def test_ordinary_pages_are_not_yonkoma():
+    # Rows of differing heights: a regular page that happens to line its columns up.
+    rows = [(0, 100), (110, 500), (510, 600)]
+    grid = [[x1, y1, x2, y2] for y1, y2 in rows for x1, x2 in ((0, 370), (390, 760))]
+    assert yonkoma_reading_order(grid, 760) is None
+    # A full-width panel crossing both columns.
+    assert yonkoma_reading_order(_RIGHT + _LEFT + [[0, 1100, 760, 1200]], 760) is None
+    # Two loose panels stacked beside the strips: not a title panel.
+    extra = [[0, 100, 60, 500], [0, 600, 60, 1000]]
+    assert yonkoma_reading_order(_RIGHT + _LEFT + extra, 760) is None
+    # Wide strips: a stack of full-width rows is an ordinary page.
+    assert yonkoma_reading_order([[0, y, 760, y + 200] for y in (0, 250, 500, 750)], 760) is None
+
+
+def _page_with_art(*boxes):
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (760, 1200), "white")
+    draw = ImageDraw.Draw(img)
+    for b in boxes:
+        draw.rectangle(b, fill="black")
+    return img
+
+
+def test_uncovered_art_becomes_a_panel():
+    kept, missed = [40, 40, 720, 500], [40, 560, 720, 1160]
+    out = fill_uncovered_art([kept], [], _page_with_art(kept, missed))
+    assert len(out) == 2 and out[0] == kept
+    assert _panel_cover_frac([out[1]], 760, 1200) > 0.9 * _panel_cover_frac([missed], 760, 1200)
+
+
+def test_a_weak_proposal_is_preferred_over_the_ink_outline():
+    kept, missed = [40, 40, 720, 500], [40, 560, 720, 1160]
+    proposal = [30, 550, 730, 1170]
+    out = fill_uncovered_art([kept], [(proposal, 0.3)], _page_with_art(kept, missed))
+    assert out == [kept, proposal]
+
+
+def test_small_or_stray_ink_is_not_a_panel():
+    kept = [40, 40, 720, 1100]
+    page_number = [360, 1150, 400, 1180]
+    bleed = [0, 1110, 760, 1150]  # art running past the frame's bottom edge: a strip
+    assert fill_uncovered_art([kept], [], _page_with_art(kept, page_number, bleed)) == [kept]
 
 
 if __name__ == "__main__":

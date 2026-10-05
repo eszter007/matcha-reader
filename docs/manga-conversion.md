@@ -37,6 +37,7 @@ Set `--language` on every book. It splits your reading time by language, and it 
 | `--trim-margins` | Crop the blank paper border and page number off scanned pages. |
 | `--webtoon` | Vertical-scroll manhwa or webcomic. Re-cuts the strip into screen-shaped pages. |
 | `--yonkoma` | 4-koma strips: read each column top to bottom, then the column to its left. |
+| `--no-yonkoma-detect` | Don't recognize 4-koma pages on their own (see below). |
 | `--max-pages N` | Convert the first N pages as a cheap test. |
 | `--title` / `--author` | Override metadata. |
 | `--language` | Book language tag. See above. |
@@ -61,7 +62,7 @@ Western comics work too. Pass `--ltr` so panels within a row are walked left-to-
 
 OCR follows `--language`, so it works on any of them. The prompt names the language it should expect, which is what stops the model hallucinating Japanese out of a German speech bubble, and a book already in English gets transcription without a pointless English-to-English translation. Set the tag even if you don't care about reading stats.
 
-Yonkoma (4-koma) needs `--yonkoma`. A 4-koma page is columns of four panels, read down one column and then down the next, where ordinary manga reads across the page. Without the flag the two strips are interleaved: panel 1, the top panel of the *other* strip, panel 2, and so on. The flag swaps the axes of the ordering rule (a tier becomes a column) so a title page whose left half is one full-height illustration beside a strip of four still comes out right, the illustration being a column of its own. Columns run right to left, or left to right with `--ltr`.
+Yonkoma (4-koma) pages are recognized one by one: a page whose panels form two or more side-by-side strips (three or more equal-height panels sharing their left and right edges) is read strip by strip, so the 4-koma extras bound into an ordinary volume come out right without any flag. A strip panel the detector cut in two is merged back. For a whole book of strips that detection misses, use `--yonkoma`. A 4-koma page is columns of four panels, read down one column and then down the next, where ordinary manga reads across the page. Without the flag the two strips are interleaved: panel 1, the top panel of the *other* strip, panel 2, and so on. The flag swaps the axes of the ordering rule (a tier becomes a column) so a title page whose left half is one full-height illustration beside a strip of four still comes out right, the illustration being a column of its own. Columns run right to left, or left to right with `--ltr`.
 
 Manhwa and other vertical-scroll webcomics need `--webtoon`. A webtoon is one continuous strip, and distributors ship it pre-sliced into fixed-height tiles whose cuts land wherever the slicer's counter reached, often through a face. This reassembles the strip and re-cuts it at the artwork's own gutters into pages shaped to your screen, so no page opens or closes mid-panel. Panels are then the art blocks between gutters, read top to bottom, and the manga panel detector is skipped: it looks for bordered rectangles in a grid and there are none. A 48-tile chapter came out as 42 pages filling 90% of the screen on average.
 

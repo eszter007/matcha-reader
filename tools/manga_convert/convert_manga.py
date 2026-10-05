@@ -1035,8 +1035,120 @@ def _panel_cover_frac(boxes: list[list[int]], width: int, height: int) -> float:
     return sum(_box_area(b) for b in boxes) / max(1, width * height)
 
 
-def _detect_panels_yolo_at(model, img, conf: float, imgsz: int) -> tuple[list[list[int]], list[list[int]], float]:
-    """One pass of the model at one input size. Returns (frames, text boxes, page coverage).
+# Art the confident panels leave uncovered is recovered as extra panels. The model misses whole
+# panels on some pages -- a splash under a chapter title, a large panel beside a column of small
+# ones -- while still proposing them below the confidence bar. Ink is measured on a coarse grid of
+# cells about this fraction of the page's short side; a cell counts as ink when this fraction of
+# its pixels is darker than INK_LEVEL.
+GAP_CELL_FRAC = 0.016
+GAP_CELL_INK_FRAC = 0.04
+INK_LEVEL = 200
+# A gap is only worth filling when it holds at least this much inked area (in cells, as a
+# fraction of the page). Page numbers, a caption in the margin, a bubble over a gutter never do.
+GAP_MIN_INK_FRAC = 0.04
+# A new panel may overlap the existing ones by at most this fraction of its own area, and be at
+# most this elongated.
+GAP_MAX_OVERLAP_FRAC = 0.25
+GAP_MAX_ASPECT = 4.0
+# A cluster of uncovered ink becomes a panel of its own (when no weak proposal covers it) only if
+# its bounding box is at least this fraction of the page and at least this densely inked: large
+# sound effects drawn across the gutters are sparse, art is not.
+GAP_MIN_REGION_FRAC = 0.06
+GAP_MIN_REGION_DENSITY = 0.35
+
+
+def _ink_grid(img):
+    """Coarse ink map of the page: (grid as a list of rows of bools, cell size in pixels)."""
+    from PIL import Image
+
+    gray = img.convert("L")
+    cell = max(4, round(min(img.width, img.height) * GAP_CELL_FRAC))
+    cols, rows = max(1, img.width // cell), max(1, img.height // cell)
+    # Fraction of dark pixels per cell: threshold first, then box-average down to the grid.
+    dark = gray.point(lambda v: 255 if v < INK_LEVEL else 0)
+    small = dark.resize((cols, rows), Image.BOX)
+    level = 255 * GAP_CELL_INK_FRAC
+    px = small.load()
+    return [[px[x, y] >= level for x in range(cols)] for y in range(rows)], cell
+
+
+def _cells_in(box: list[int], cell: int, rows: int, cols: int) -> tuple[int, int, int, int]:
+    """Grid cell range [c1, c2) x [r1, r2) a pixel box covers (any cell it touches)."""
+    return (max(0, box[0] // cell), max(0, box[1] // cell),
+            min(cols, -(-box[2] // cell)), min(rows, -(-box[3] // cell)))
+
+
+def fill_uncovered_art(frames: list[list[int]], candidates: list[tuple[list[int], float]],
+                       img) -> list[list[int]]:
+    """Add panels over inked areas that no frame covers.
+
+    First choice is a weak proposal from the model itself: the strongest one that adds enough
+    uncovered ink while barely overlapping the frames already kept. What no proposal accounts
+    for is clustered on the ink grid, and a large, dense cluster becomes a panel on its own.
+    """
+    grid, cell = _ink_grid(img)
+    rows, cols = len(grid), len(grid[0])
+    pad = text_pad_px(img.width, img.height)
+    covered = [[False] * cols for _ in range(rows)]
+
+    def cover(box):
+        c1, r1, c2, r2 = _cells_in([box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad],
+                                   cell, rows, cols)
+        for r in range(r1, r2):
+            covered[r][c1:c2] = [True] * (c2 - c1)
+
+    def new_ink(box) -> int:
+        c1, r1, c2, r2 = _cells_in(box, cell, rows, cols)
+        return sum(1 for r in range(r1, r2) for c in range(c1, c2) if grid[r][c] and not covered[r][c])
+
+    def unfit(box, kept) -> bool:
+        w, h = max(1, box[2] - box[0]), max(1, box[3] - box[1])
+        if max(w / h, h / w) > GAP_MAX_ASPECT:  # a strip of art bleeding past a frame's edge
+            return True
+        return sum(_overlap_area(box, k) for k in kept) > GAP_MAX_OVERLAP_FRAC * _box_area(box)
+
+    for f in frames:
+        cover(f)
+    min_ink = GAP_MIN_INK_FRAC * rows * cols
+    out = [list(f) for f in frames]
+    for box, _conf in sorted(candidates, key=lambda bc: -bc[1]):
+        if new_ink(box) >= min_ink and not unfit(box, out):
+            out.append(list(box))
+            cover(box)
+
+    seen = [[False] * cols for _ in range(rows)]
+    for r0 in range(rows):
+        for c0 in range(cols):
+            if seen[r0][c0] or covered[r0][c0] or not grid[r0][c0]:
+                continue
+            stack, cells = [(r0, c0)], []
+            seen[r0][c0] = True
+            while stack:
+                r, c = stack.pop()
+                cells.append((r, c))
+                for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                    if (0 <= nr < rows and 0 <= nc < cols and not seen[nr][nc]
+                            and grid[nr][nc] and not covered[nr][nc]):
+                        seen[nr][nc] = True
+                        stack.append((nr, nc))
+            if len(cells) < min_ink:
+                continue
+            rs, cs = [r for r, _ in cells], [c for _, c in cells]
+            box = [min(cs) * cell, min(rs) * cell,
+                   min(img.width, (max(cs) + 1) * cell), min(img.height, (max(rs) + 1) * cell)]
+            box_cells = (max(rs) - min(rs) + 1) * (max(cs) - min(cs) + 1)
+            if (box_cells < GAP_MIN_REGION_FRAC * rows * cols
+                    or len(cells) < GAP_MIN_REGION_DENSITY * box_cells or unfit(box, out)):
+                continue
+            out.append(box)
+            cover(box)
+    return out
+
+
+def _detect_panels_yolo_at(model, img, conf: float, imgsz: int) -> tuple[list[list[int]], list[list[int]], float,
+                                                                         list[tuple[list[int], float]]]:
+    """One pass of the model at one input size. Returns (frames, text boxes, page coverage,
+    weak proposals with their confidence).
 
     Coverage is measured on the CONFIDENT boxes, not on the full-page frame the empty case
     falls back to: that frame covers the page by construction and would mask a failed pass.
@@ -1044,6 +1156,7 @@ def _detect_panels_yolo_at(model, img, conf: float, imgsz: int) -> tuple[list[li
     results = model.predict(img, conf=PANEL_WEAK_CONF, iou=0.5, imgsz=imgsz, verbose=False)
     boxes_with_conf = []
     candidates = []
+    weak = []
     text_boxes = []
     for box in results[0].boxes:
         cls = int(box.cls)  # 0=panel, 1=text
@@ -1061,12 +1174,14 @@ def _detect_panels_yolo_at(model, img, conf: float, imgsz: int) -> tuple[list[li
         candidates.append(xy_box)
         if confidence >= conf:
             boxes_with_conf.append((xy_box, confidence))
+        else:
+            weak.append((xy_box, confidence))
 
     boxes = _dedupe_boxes(boxes_with_conf)
     cover = _panel_cover_frac(boxes, img.width, img.height)
     if not boxes:
-        return [[0, 0, img.width, img.height]], text_boxes, cover
-    return split_frames_over_subpanels(boxes, candidates), text_boxes, cover
+        return [[0, 0, img.width, img.height]], text_boxes, cover, weak
+    return split_frames_over_subpanels(boxes, candidates), text_boxes, cover, weak
 
 
 def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[list[int]]] | None:
@@ -1078,20 +1193,23 @@ def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[l
     panel on its own -- it is only kept as corroboration that a confident frame
     is really several panels; see split_frames_over_subpanels().
 
-    A pass that leaves most of the page uncovered is retried at a larger input, and whichever
-    pass saw more of the page wins; see PANEL_RETRY_IMGSZ.
+    A pass that leaves most of the page uncovered is retried at a larger input; the retry wins
+    only if it sees the page well, since a retry that also fails tends to see it in scattered
+    fragments. See PANEL_RETRY_IMGSZ. Art still left outside every frame is then recovered by
+    fill_uncovered_art().
     """
     model = _load_yolo_model()
     if model is None:
         return None
 
-    frames, texts, cover = _detect_panels_yolo_at(model, img, conf, PANEL_IMGSZ)
-    if cover >= PANEL_RETRY_COVER_FRAC:
+    frames, texts, cover, weak = _detect_panels_yolo_at(model, img, conf, PANEL_IMGSZ)
+    if cover < PANEL_RETRY_COVER_FRAC:
+        retry = _detect_panels_yolo_at(model, img, conf, PANEL_RETRY_IMGSZ)
+        if retry[2] >= PANEL_RETRY_COVER_FRAC:
+            frames, texts, cover, weak = retry
+    if cover == 0:  # nothing confident: the page-sized fallback frame already covers it all
         return frames, texts
-    retry_frames, retry_texts, retry_cover = _detect_panels_yolo_at(model, img, conf, PANEL_RETRY_IMGSZ)
-    if retry_cover > cover:
-        return retry_frames, retry_texts
-    return frames, texts
+    return fill_uncovered_art(frames, weak, img), texts
 
 
 def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
@@ -1198,11 +1316,22 @@ def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
     two apart matters: a bubble pulling a panel's box sideways across a gutter
     would otherwise move its centre and could retier the page. The grid
     heuristic has no text detection, so it returns no text boxes.
+
+    A page the manga-trained model doesn't recognize as panelled art at all -- a prose novel
+    page, most often -- comes back as a single frame covering the page: real content, but
+    nothing to zoom into. The grid heuristic still applies there, and finds real gutters where
+    one exists (the whitespace between a novel's text columns behaves exactly like the
+    whitespace between panels), so it gets a try whenever YOLO gives up.
     """
     detected = _detect_panels_yolo(img)
-    if detected is not None:
-        return detected
-    return _detect_panels_grid(img), []
+    if detected is None:
+        return _detect_panels_grid(img), []
+    frames, texts = detected
+    if len(frames) == 1 and is_full_page_panel(frames[0], img.width, img.height):
+        grid = _detect_panels_grid(img)
+        if len(grid) > 1:
+            return grid, []
+    return frames, texts
 
 
 def _y_overlap_frac(a: list[int], b: list[int]) -> float:
@@ -1222,6 +1351,107 @@ def _x_overlap_frac(a: list[int], b: list[int]) -> float:
     overlap = min(a[2], b[2]) - max(a[0], b[0])
     min_w = min(a[2] - a[0], b[2] - b[0])
     return max(0.0, overlap) / max(1, min_w)
+
+
+# A 4-koma strip is a column of equally sized panels with the same left and right edges.
+# Edges count as "the same" within this fraction of the page width.
+YONKOMA_EDGE_TOL_FRAC = 0.04
+# A column is a strip only with this many panels or more; at least two strips side by side
+# are needed before the page is read column by column. One stacked column reads the same
+# either way, and an ordinary page rarely lines three panels up exactly in two columns.
+YONKOMA_MIN_STRIP_PANELS = 3
+YONKOMA_MIN_STRIPS = 2
+# No strip is wider than this fraction of the page, and its panels' heights differ by at most
+# this ratio -- an ordinary page's rows vary far more.
+YONKOMA_MAX_STRIP_WIDTH_FRAC = 0.55
+YONKOMA_MAX_HEIGHT_RATIO = 1.6
+
+
+def yonkoma_reading_order(panels: list[list[int]], page_w: int,
+                          rtl: bool = True) -> list[list[int]] | None:
+    """The panels in 4-koma reading order if the page is laid out as side-by-side strips,
+    else None.
+
+    Strip collections are often bound into an ordinary volume as extras (a 4-koma page between
+    two chapters), so the layout has to be recognized per page rather than set for the whole
+    book. A page qualifies when at least two columns are strips -- three or more stacked panels
+    of similar height sharing their left and right edges, each column narrower than the page's
+    half-and-a-bit -- and nothing else on the page lines up into a column of its own. A single
+    panel down the side (a strip page's title panel) is allowed alongside them.
+
+    The detector sometimes cuts one strip panel in two where a sound effect or a figure breaks
+    its art. Such a fragment lies within a strip's edges without matching them; it is merged
+    back into the strip panel it overlaps, or with the other fragments of the same row. A strip
+    panel always spans the strip, so a cut is never a real panel boundary there.
+
+    The strips are then read top to bottom, right to left (left to right when rtl=False).
+    """
+    if len(panels) < YONKOMA_MIN_STRIPS * YONKOMA_MIN_STRIP_PANELS:
+        return None
+    tol = page_w * YONKOMA_EDGE_TOL_FRAC
+    columns: list[list[list[int]]] = []
+    for p in panels:
+        for col in columns:
+            ref = col[0]
+            if abs(p[0] - ref[0]) <= tol and abs(p[2] - ref[2]) <= tol:
+                col.append(list(p))
+                break
+        else:
+            columns.append([list(p)])
+
+    strips: list[list[list[int]]] = []
+    rest: list[list[int]] = []
+    for col in columns:
+        if len(col) < YONKOMA_MIN_STRIP_PANELS:
+            rest.extend(col)
+            continue
+        width = max(p[2] for p in col) - min(p[0] for p in col)
+        heights = [p[3] - p[1] for p in col]
+        ordered = sorted(col, key=lambda p: p[1])
+        if (width > page_w * YONKOMA_MAX_STRIP_WIDTH_FRAC
+                or max(heights) > YONKOMA_MAX_HEIGHT_RATIO * max(1, min(heights))
+                or any(_y_overlap_frac(a, b) > 0.3 for a, b in zip(ordered, ordered[1:]))):
+            return None
+        strips.append(ordered)
+    if len(strips) < YONKOMA_MIN_STRIPS:
+        return None
+
+    spans = [(min(p[0] for p in s), max(p[2] for p in s)) for s in strips]
+    for i, a in enumerate(spans):  # strips never share horizontal space
+        for b in spans[i + 1:]:
+            if min(a[1], b[1]) - max(a[0], b[0]) > tol:
+                return None
+
+    lone: list[list[int]] = []
+    for p in rest:
+        home = next((i for i, (x1, x2) in enumerate(spans)
+                     if p[0] >= x1 - tol and p[2] <= x2 + tol), None)
+        if home is None:
+            if any(min(p[2], x2) - max(p[0], x1) > tol for x1, x2 in spans):
+                return None  # straddles a strip: not a strip page
+            lone.append(p)
+            continue
+        strip = strips[home]
+        owner = max(strip, key=lambda s: _y_overlap_frac(s, p))
+        if _y_overlap_frac(owner, p) > 0.5:
+            owner[:] = _union_box(owner, p)
+        else:
+            strip.append(p)
+            strip.sort(key=lambda s: s[1])
+    for s in strips:  # fragments of a row with no full panel: merge them with each other
+        i = 0
+        while i < len(s) - 1:
+            if _y_overlap_frac(s[i], s[i + 1]) > 0.5:
+                s[i] = _union_box(s[i], s.pop(i + 1))
+            else:
+                i += 1
+    for i, a in enumerate(lone):  # two loose panels lined up: an ordinary page after all
+        if any(_x_overlap_frac(a, b) > 0.3 for b in lone[i + 1:]):
+            return None
+
+    units = strips + [[p] for p in lone]
+    units.sort(key=lambda u: (u[0][0] + u[0][2]) / 2, reverse=rtl)
+    return [p for u in units for p in u]
 
 
 def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True,
@@ -1993,7 +2223,14 @@ def main():
         action="store_true",
         help="4-koma layout: read each column top to bottom, then the next column to the left "
              "(to the right with --ltr). Without it a strip page is read across the columns, "
-             "interleaving the two strips.",
+             "interleaving the two strips. Without it, pages laid out as 4-koma strips are "
+             "still recognized one by one and read this way (see --no-yonkoma-detect).",
+    )
+    parser.add_argument(
+        "--no-yonkoma-detect",
+        action="store_true",
+        help="Don't recognize 4-koma pages on their own; read every page row by row unless "
+             "--yonkoma is given.",
     )
     parser.add_argument(
         "--ltr",
@@ -2246,7 +2483,12 @@ def main():
                 # Order on the frames as drawn, then grow the crops over the
                 # bubbles -- expand_panels_over_text() is index-preserving, so
                 # the reading order established here survives the expansion.
-                frames = sort_panels_reading_order(frames, rtl=not args.ltr, column_major=args.yonkoma)
+                strip_order = (None if args.no_yonkoma_detect
+                               else yonkoma_reading_order(frames, img_w, rtl=not args.ltr))
+                if strip_order is not None:
+                    frames = strip_order
+                else:
+                    frames = sort_panels_reading_order(frames, rtl=not args.ltr, column_major=args.yonkoma)
                 boxes = expand_panels_over_text(frames, text_boxes, img_w, img_h)
 
             # Crop and save every panel first (fast, local) before dispatching
