@@ -79,6 +79,7 @@ class ParsedText {
   bool dropCapLinesEmitted = false;
   // True once any word was dropped because the text arena could not allocate.
   bool droppedWords = false;
+  bool firstLineConsumed = false;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<int32_t> reorderedFontsScratch;

@@ -95,6 +95,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 98 (fork numbering)
+
+Absorbs upstream's version 51. The layout is unchanged: a long paragraph laid out in several
+chunks no longer repeats its first-line indent and top spacing mid-paragraph, so lines move and
+older sections are rebuilt.
+
 ### Version 97 (fork numbering)
 
 Absorbs upstream's version 50. The header adds `paragraphIndentSpaces` after

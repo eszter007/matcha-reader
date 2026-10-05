@@ -263,7 +263,10 @@ namespace {
 // v97: upstream merge (their v49 and v50). The header gains paragraphIndentSpaces after
 //      extraParagraphSpacing, part of cache validation, and a paragraph's first-line indent is
 //      that many spaces wide rather than fixed. The header grew, so a v96 cache does not parse.
-constexpr uint8_t SECTION_FILE_VERSION = 97;
+// v98: upstream merge (their v51). A long paragraph that is laid out in several chunks keeps
+//      its first-line indent and its top spacing to the first chunk, instead of repeating them
+//      mid-paragraph. Lines move on any page holding such a paragraph. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 98;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
