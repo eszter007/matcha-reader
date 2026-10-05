@@ -4,7 +4,14 @@ Matcha reads comics that have been converted once on a computer: panels are foun
 read and translated, and the result is a folder the Library picks up. How to read them on the
 device is in the [User Guide §6.6](../USER_GUIDE.md#66-manga-manhua-and-comics).
 
-The [browser tool](https://eszter007.github.io/matcha-reader-tools/) needs no local setup. As a script:
+## In the browser (recommended)
+
+Open [**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/), drop in the book (CBZ, ZIP or PDF), and copy the folder it gives
+you anywhere on the SD card. Nothing to install. The OCR step sends panels to Gemini under your own key.
+
+## As a script
+
+For batch jobs, or the options below:
 
 ```bash
 pip install ultralytics huggingface_hub Pillow
