@@ -358,8 +358,10 @@ bool EpubReaderActivity::loadBook() {
 
   bool loaded;
   {
-    std::optional<GfxRenderer::FrameBufferLoan> loan;
-    if (uncached || cssUncached) loan.emplace(renderer);
+    // Always lent, not only for a first index: a protected book reads its encryption manifest and
+    // sets up decryption on every open, each through a 32KB inflate window, and after a long
+    // session the heap rarely has a free block that size. Nothing is drawn until the page renders.
+    GfxRenderer::FrameBufferLoan loan(renderer);
     loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
   }
   if (loaded) return true;
@@ -2097,6 +2099,12 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
   return moved;
 }
 
+namespace {
+// Below this largest free block a failed protected open is treated as memory, not the book. The
+// same figure loadBook() uses to decide the heap needs clearing before a book loads.
+constexpr uint32_t LOW_HEAP_REOPEN_BYTES = 64 * 1024;
+}  // namespace
+
 // Failed protected open: show the standard option dialog (wrapped message)
 // instead of silently falling back to the previous screen. Exact error
 // strings are set by openProtectedBook (ContentProtection.cpp).
@@ -2107,6 +2115,18 @@ bool EpubReaderActivity::handleLoadFailure() {
   // CJK interface the dialog below needs the companion for its own text.
   sdFontSystem.ensureLoaded(renderer);
   const std::string& perr = loadProtectionError;
+  // Most failures to open a protected book on this device are a fragmented heap, not the book: the
+  // decryption needs blocks a long session no longer has. Reopen it on a fresh heap instead of
+  // calling it unreadable. After the restart the heap is whole, so a book that still fails gets
+  // the dialog below and this cannot loop. Touch boards do not restart and fall through.
+  const bool expiry = perr == "access expired" || perr == "loan date unverified";
+  if (!expiry && ESP.getMaxAllocHeap() < LOW_HEAP_REOPEN_BYTES) {
+    LOG_INF("ERS", "Protected open failed on a low heap (maxAlloc=%u); reopening after a restart",
+            ESP.getMaxAllocHeap());
+    APP_STATE.openEpubPath = bookPath;
+    APP_STATE.saveToFile();
+    silentRestartToReader();
+  }
   StrId msg = StrId::STR_DRM_PROTECTED_FILE;
   bool offerSync = false;
   if (perr == "access expired") {

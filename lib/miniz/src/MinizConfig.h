@@ -28,6 +28,23 @@
 #define mz_adler32 crosspoint_mz_adler32
 #define mz_free crosspoint_mz_free
 
+// miniz's own allocations (mz_inflateInit2's ~41KB inflate state, used by the protected-content
+// reader) take the lent framebuffer when one is lent, as InflateStream does: on a fragmented heap
+// there is rarely a free block that size. See MinizAlloc.cpp.
+#include <stddef.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+void* crosspoint_mz_malloc(size_t bytes);
+void crosspoint_mz_release(void* p);
+void* crosspoint_mz_realloc(void* p, size_t bytes);
+#ifdef __cplusplus
+}
+#endif
+#define MZ_MALLOC(x) crosspoint_mz_malloc(x)
+#define MZ_FREE(x) crosspoint_mz_release(x)
+#define MZ_REALLOC(p, x) crosspoint_mz_realloc(p, x)
+
 // Include the vendored miniz by relative path: ESP-IDF ships a ROM miniz.h
 // with the SAME include guard but a different (TINFL_LESS_MEMORY) struct
 // layout -- resolving <miniz.h> through the platform include path would
