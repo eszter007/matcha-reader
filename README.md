@@ -81,7 +81,9 @@ Any StarDict dictionary works, picked by the book's language, with no conversion
 
 ### Manga, manhua and comics
 
-Panels, their text and translations are found when you convert the book, so lookup works offline. Read panel by panel, each scaled to fill the screen, and look up any word right in the speech bubble. See [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics) and [converting](docs/manga-conversion.md).
+Read panel by panel, each scaled to fill the screen, and look up any word right in the speech bubble. Lookup works offline.
+
+**To convert a book, open [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) in your browser**, drop in the CBZ, ZIP or PDF and copy the folder it gives you to the card. Nothing to install. See [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics).
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Full page view">
