@@ -1,11 +1,17 @@
 name: Build & Publish Chinese Dictionary Packs
 
-# Ready-made /dictionaries/zh folders, so a Chinese reader unzips one onto the card instead of
-# running the converter. Two packs, both from CC-CEDICT with both scripts indexed, differing in
-# what a mainland and a Taiwanese learner want beside it. Run manually; the sources change
-# slowly. Publishes to this repository's releases under a dated tag plus a stable one.
+# Ready-made /dictionaries/zh and /dictionaries/yue folders, so a Chinese reader unzips one onto
+# the card instead of running the converter. Two Mandarin packs, both from CC-CEDICT with both
+# scripts indexed, differing in what a mainland and a Taiwanese learner want beside it, and a
+# Cantonese one. Run manually; the sources change slowly. Publishes to this repository's
+# releases under a dated tag plus a stable one, or into an existing release when one is named.
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release to put the packs on (replacing same-named assets); empty publishes dictionaries-zh releases"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -35,10 +41,18 @@ jobs:
           curl -fsSL --retry 3 -o cmn_sentences.tsv.bz2 https://downloads.tatoeba.org/exports/per_language/cmn/cmn_sentences.tsv.bz2
           curl -fsSL --retry 3 -o eng_sentences.tsv.bz2 https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2
           curl -fsSL --retry 3 -o cmn-eng_links.tsv.bz2 https://downloads.tatoeba.org/exports/per_language/cmn/cmn-eng_links.tsv.bz2
+          curl -fsSL --retry 3 -o yue_sentences.tsv.bz2 https://downloads.tatoeba.org/exports/per_language/yue/yue_sentences.tsv.bz2
+          curl -fsSL --retry 3 -o yue-eng_links.tsv.bz2 https://downloads.tatoeba.org/exports/per_language/yue/yue-eng_links.tsv.bz2
+          curl -fsSL --retry 3 -o cccanto.zip https://cantonese.org/cccanto-170202.zip
+          curl -fsSL --retry 3 -o canto-readings.zip https://cantonese.org/cccedict-canto-readings-150923.zip
+          unzip -o cccanto.zip && unzip -o canto-readings.zip
+          mv cccedict-canto-readings-*.txt canto-readings.txt
           ls -la
 
       - name: Build Tatoeba sentence pairs
-        run: python3 tools/dict_convert/tatoeba_pairs.py src/cmn_sentences.tsv.bz2 src/eng_sentences.tsv.bz2 src/cmn-eng_links.tsv.bz2 src/pairs.tsv
+        run: |
+          python3 tools/dict_convert/tatoeba_pairs.py src/cmn_sentences.tsv.bz2 src/eng_sentences.tsv.bz2 src/cmn-eng_links.tsv.bz2 src/pairs.tsv
+          python3 tools/dict_convert/tatoeba_pairs.py src/yue_sentences.tsv.bz2 src/eng_sentences.tsv.bz2 src/yue-eng_links.tsv.bz2 src/pairs-yue.tsv
 
       - name: Build simplified pack
         run: |
@@ -54,6 +68,13 @@ jobs:
             --frequency src/jieba-dict-big.txt --levels src/tocfl.csv --level-name TOCFL \
             --examples src/pairs.tsv --examples-script traditional \
             --output-dir packs/traditional/dictionaries/zh
+
+      - name: Build Cantonese pack
+        run: |
+          python3 tools/dict_convert/convert_jmdict.py --lang yue --split-names \
+            --input src/cccanto-webdist.txt --input src/cedict.txt.gz --jyutping src/canto-readings.txt \
+            --examples src/pairs-yue.tsv --examples-script traditional \
+            --output-dir packs/cantonese/dictionaries/yue
 
       - name: Write attributions and zip
         run: |
@@ -86,11 +107,31 @@ jobs:
             fi
             (cd "packs/$pack" && zip -qr "../../dictionaries-zh-$pack-$DATE.zip" .)
           done
+          cat > packs/cantonese/README.txt <<NOTE
+          Matcha Reader Cantonese dictionary pack, built $DATE.
+
+          Copy the "dictionaries" folder to the root of the SD card (or rename it ".dictionaries").
+          A book tagged yue reads dictionaries/yue.
+
+          Sources and licences:
+            CC-Canto and the CC-CEDICT Cantonese readings (Pleco), CC BY-SA 3.0 - https://cantonese.org/download.html
+            CC-CEDICT (MDBG), CC BY-SA 4.0 - https://www.mdbg.net/chinese/dictionary?page=cc-cedict
+            Tatoeba example sentences, CC BY 2.0 FR - https://tatoeba.org
+          NOTE
+          (cd packs/cantonese && zip -qr "../../dictionaries-yue-$DATE.zip" .)
           ls -la *.zip
 
       # --latest=false on both: the firmware updater and the README's download links read
       # releases/latest, which must stay a firmware release.
+      - name: Add to an existing release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" dictionaries-*.zip --clobber
+
       - name: Publish release
+        if: inputs.release_tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -99,16 +140,17 @@ jobs:
 
           - **simplified**: CC-CEDICT ranked by jieba word frequency, HSK 3.0 level tags, proper nouns in the names dictionary, Tatoeba examples.
           - **traditional**: the same with zhuyin beside the pinyin, the MoE 重編國語辭典 merged in, ranked by jieba's dict.txt.big, with TOCFL levels.
+          - **yue** (Cantonese, unzips to \`dictionaries/yue/\`): CC-Canto and CC-CEDICT with jyutping, proper nouns in the names dictionary, Tatoeba examples.
 
           See the README inside each zip for sources and licences."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dictionaries-zh-*.zip --clobber  # a second run the same day
+            gh release upload "$TAG" dictionaries-*.zip --clobber  # a second run the same day
           else
-            gh release create "$TAG" dictionaries-zh-*.zip --latest=false --title "Chinese dictionaries ($TAG)" --notes "$NOTES"
+            gh release create "$TAG" dictionaries-*.zip --latest=false --title "Chinese dictionaries ($TAG)" --notes "$NOTES"
           fi
           gh release delete dictionaries-zh --yes 2>/dev/null || true
           git push --delete origin dictionaries-zh 2>/dev/null || true
-          gh release create dictionaries-zh dictionaries-zh-*.zip --latest=false --title "Chinese dictionaries (latest)" \
+          gh release create dictionaries-zh dictionaries-*.zip --latest=false --title "Chinese dictionaries (latest)" \
             --notes "Latest build; see $TAG for the dated copy.
 
           $NOTES"
