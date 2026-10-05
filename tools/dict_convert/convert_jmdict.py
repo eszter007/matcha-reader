@@ -824,8 +824,9 @@ def apply_frequency(records: list, priorities: dict, twins: dict = None) -> list
 
 # ── CC - CEDICT(.u8 / .txt) ────────────────────────────────────
 
-# CC-CEDICT, and CC-Canto's extension of it with a {jyutping} field after the pinyin.
-_CEDICT_LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[([^\]]*)\](?:\s+\{([^}]*)\})?\s+/(.*)/\s*$")
+# CC-CEDICT, and CC-Canto's extension of it with a {jyutping} field after the pinyin. CC-Canto
+# ends a third of its lines with a comment ("/.../ # adapted from cc-cedict").
+_CEDICT_LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[([^\]]*)\](?:\s+\{([^}]*)\})?\s+/(.*)/\s*(?:#.*)?$")
 # cccedict-canto-readings: "繁 简 [pin1 yin1] {jyut6 ping3}" with no glosses.
 _CANTO_READING_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[([^\]]*)\]\s+\{([^}]*)\}")
 
