@@ -138,6 +138,12 @@ INTERVAL_PRESETS = {
                     (0xFB00, 0xFB06)],
 }
 
+# Chinese: cjk-ext plus CJK Extension A as ONE interval. Written Cantonese uses it daily
+# (㗎 㩒 㖭), and CC-CEDICT and the MoE dictionary cite a few hundred of its characters; the
+# Japanese cuts leave it out because JIS does not encode it. Extension B stays out: its 42,000
+# characters would double the file for a handful of dictionary headwords.
+INTERVAL_PRESETS["cjk-zh"] = INTERVAL_PRESETS["cjk-ext"] + [(0x3400, 0x4DBF)]
+
 # Regex for parsing unnamed hex range intervals: (0xSTART-0xEND)
 _HEX_RANGE_PATTERN = re.compile(r'^\(0x([0-9a-fA-F]+)-0x([0-9a-fA-F]+)\)$')
 

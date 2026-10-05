@@ -312,7 +312,7 @@ families:
   - name: NotoSansSC
     description: "Simplified Chinese sans-serif (CJK, Latin)"
     scripts: [cjk, latin]
-    intervals: latin-ext,cjk-ext
+    intervals: latin-ext,cjk-zh
     sizes: [12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"}
@@ -321,7 +321,7 @@ families:
   - name: NotoSerifSC
     description: "Simplified Chinese serif (CJK, Latin)"
     scripts: [cjk, latin]
-    intervals: latin-ext,cjk-ext
+    intervals: latin-ext,cjk-zh
     sizes: [12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf"}
@@ -330,7 +330,7 @@ families:
   - name: NotoSansTC
     description: "Traditional Chinese sans-serif (CJK, Latin)"
     scripts: [cjk, latin]
-    intervals: latin-ext,cjk-ext
+    intervals: latin-ext,cjk-zh
     sizes: [12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"}
@@ -339,7 +339,7 @@ families:
   - name: NotoSerifTC
     description: "Traditional Chinese serif (CJK, Latin)"
     scripts: [cjk, latin]
-    intervals: latin-ext,cjk-ext
+    intervals: latin-ext,cjk-zh
     sizes: [12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Regular.otf"}
