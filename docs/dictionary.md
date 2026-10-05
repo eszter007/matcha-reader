@@ -5,7 +5,7 @@ Look up words while reading an EPUB using an offline StarDict dictionary stored 
 Japanese and Chinese books do not use StarDict: they read converted files from `/dictionaries/jp/` (Japanese),
 `/dictionaries/zh/` (Mandarin, simplified and traditional) and `/dictionaries/yue/` (Cantonese), because their text
 has no word spaces and the lookup segments the page by dictionary word.
-See the README's Setup section for the converter commands; everything below is about the other languages.
+See [dictionary-setup.md](dictionary-setup.md) for the files and converter commands; everything below is about the other languages.
 
 ## Supported Format
 
