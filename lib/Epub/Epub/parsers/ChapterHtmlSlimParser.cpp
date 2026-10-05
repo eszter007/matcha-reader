@@ -2684,16 +2684,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   if (blockWordCount > softFlushThreshold && !self->inRuby) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
-          self->addLineToPage(std::move(textBlock), offset);
-        },
-        false, self->lineCompression, self->characterSpacing, self->wordSpacingPercent);
+    self->makePages(/*includeLastLine=*/false);
   }
 }
 
@@ -3316,7 +3307,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   if (boxDepth >= 0) boxLastLineBottomY = currentPageNextY;
 }
 
-void ChapterHtmlSlimParser::makePages() {
+void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
     return;
@@ -3335,17 +3326,23 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageVisibleOffsetSet = false;
   }
 
-  // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
   // Paragraph spacing follows the block's own font AND its own line-height, like its line
   // height does: a heading led at 0.83 gets a proportionally tighter half-line after it.
   const int lineHeight = applyCssLineHeight(renderer.getLineHeight(blockStyle.resolveFontId(fontId), lineCompression),
                                             blockStyle.lineHeightPct);
-  if (blockStyle.marginTop > 0) {
-    currentPageNextY += blockStyle.marginTop;
-  }
-  if (blockStyle.paddingTop > 0) {
-    currentPageNextY += blockStyle.paddingTop;
+  // A long paragraph reaches here several times: once per soft flush (includeLastLine false) and
+  // once when it closes. Only the first call opens the block, and only the last one closes it.
+  const bool opensBlock = wordsExtractedInBlock == 0;
+  // Apply top spacing before the paragraph (stored in pixels). Ahead of the layout rather than on
+  // its first line, because the panel padding below reads the advanced position.
+  if (opensBlock) {
+    if (blockStyle.marginTop > 0) {
+      currentPageNextY += blockStyle.marginTop;
+    }
+    if (blockStyle.paddingTop > 0) {
+      currentPageNextY += blockStyle.paddingTop;
+    }
   }
 
   // Calculate effective width accounting for horizontal margins/padding
@@ -3356,28 +3353,32 @@ void ChapterHtmlSlimParser::makePages() {
   // Hand the block's top padding to its first panel line: currentPageNextY has already advanced
   // past it, so without this the panel would start below the padding it is meant to fill.
   if (blockStyle.isInverted()) {
-    pendingPanelTopPad = std::max<int16_t>(0, blockStyle.paddingTop);
+    if (opensBlock) pendingPanelTopPad = std::max<int16_t>(0, blockStyle.paddingTop);
+    // Every call: a box placed by an earlier chunk may sit on a page that has since been written.
     lastPanelBox = nullptr;
   }
 
   // page-break-inside/after: avoid -- buffer the lines, then decide (see beginKeepTogether).
-  beginKeepTogether(blockStyle);
+  // Only for a block laid out in one go: one long enough to be soft-flushed cannot be kept on a
+  // page anyway, and its chunks must not each be treated as a block of their own.
+  const bool keepTogether = opensBlock && includeLastLine;
+  if (keepTogether) beginKeepTogether(blockStyle);
 
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
       [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
         addLineToPage(std::move(textBlock), offset);
       },
-      true, lineCompression, characterSpacing, wordSpacingPercent);
+      includeLastLine, lineCompression, characterSpacing, wordSpacingPercent);
 
   // Before the panel stitching below: the buffered lines are only placed now, and it is their
   // placement that sets lastPanelBox.
-  finishKeepTogether();
+  if (keepTogether) finishKeepTogether();
 
   // ... and its bottom padding to the last one, which is only identifiable now the block is laid
   // out. The last line always sits on the still-open page (a page is completed on the NEXT line
   // that does not fit), so the box is still both alive and unwritten.
-  if (blockStyle.isInverted()) {
+  if (blockStyle.isInverted() && includeLastLine) {
     if (lastPanelBox && blockStyle.paddingBottom > 0) {
       lastPanelBox->extendHeight(std::min<int16_t>(
           blockStyle.paddingBottom, static_cast<int16_t>(std::max(0, viewportHeight - currentPageNextY))));
@@ -3386,29 +3387,32 @@ void ChapterHtmlSlimParser::makePages() {
     lastPanelBox = nullptr;
   }
 
-  // Fallback: transfer any remaining pending footnotes to current page.
-  // Normally addLineToPage handles this via word-index tracking, but this catches
-  // edge cases where a footnote's word index equals the exact block size.
-  if (!pendingFootnotes.empty() && currentPage) {
-    for (const auto& [idx, fn] : pendingFootnotes) {
-      currentPage->addFootnote(fn.number, fn.href.c_str());
-      if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
-        sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), fn});
+  // Trailing spacing and footnotes only apply when the block is finalized
+  if (includeLastLine) {
+    // Fallback: transfer any remaining pending footnotes to current page.
+    // Normally addLineToPage handles this via word-index tracking, but this catches
+    // edge cases where a footnote's word index equals the exact block size.
+    if (!pendingFootnotes.empty() && currentPage) {
+      for (const auto& [idx, fn] : pendingFootnotes) {
+        currentPage->addFootnote(fn.number, fn.href.c_str());
+        if (sectionFootnoteData.size() < MAX_SECTION_FOOTNOTES) {
+          sectionFootnoteData.push_back({static_cast<uint16_t>(completedPageCount), fn});
+        }
       }
+      pendingFootnotes.clear();
     }
-    pendingFootnotes.clear();
-  }
 
-  // Apply bottom spacing after the paragraph (stored in pixels)
-  if (blockStyle.marginBottom > 0) {
-    currentPageNextY += blockStyle.marginBottom;
-  }
-  if (blockStyle.paddingBottom > 0) {
-    currentPageNextY += blockStyle.paddingBottom;
-  }
+    // Apply bottom spacing after the paragraph (stored in pixels)
+    if (blockStyle.marginBottom > 0) {
+      currentPageNextY += blockStyle.marginBottom;
+    }
+    if (blockStyle.paddingBottom > 0) {
+      currentPageNextY += blockStyle.paddingBottom;
+    }
 
-  // Extra paragraph spacing if enabled (default behavior)
-  if (extraParagraphSpacing) {
-    currentPageNextY += lineHeight / 2;
+    // Extra paragraph spacing if enabled (default behavior)
+    if (extraParagraphSpacing) {
+      currentPageNextY += lineHeight / 2;
+    }
   }
 }
