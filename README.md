@@ -161,7 +161,7 @@ Some units bought from third-party stores are USB-locked and must be unlocked fi
 
 | Language | What to do |
 | --- | --- |
-| Japanese | Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest) and unzip it so the card holds `dictionaries/jp/` |
+| Japanese | Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest) and copy the `dict` folder inside it to the root of the card |
 | Mandarin | Download the simplified or the traditional pack from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh) and unzip it so the card holds `dictionaries/zh/`. Install one, not both |
 | Cantonese | Convert CC-Canto and CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) into `dictionaries/yue/` |
 | Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
@@ -172,7 +172,7 @@ To convert your own, use the [browser tool](https://eszter007.github.io/matcha-r
 
 | You read | Font |
 | --- | --- |
-| Japanese | `japanese-fonts.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest), unzipped so the card holds `.fonts/` |
+| Japanese | `japanese-fonts.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest), with the `fonts` folder inside it copied to the root of the card |
 | Mandarin, simplified | Noto Sans SC |
 | Mandarin, traditional, and Cantonese | Noto Sans TC |
 
