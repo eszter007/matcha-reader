@@ -518,7 +518,7 @@ open a list when selected.
 - **Plugins**: Lists the plugins installed on the SD card that have a screen on the device. A plugin is a folder
   on the card; adding or updating one needs no firmware update. See [docs/sd-plugins.md](docs/sd-plugins.md).
 
-- **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi.
+- **Check for updates**: Check for firmware updates over Wi-Fi. It reads this fork's releases and downloads the build for your device, so an update keeps the Matcha features. Pre-releases (nightlies) are never offered here; install those by flashing.
 
 - **SD Card Firmware Update**: Install firmware without a USB connection by placing a `firmware.bin` file on the SD card.
 
@@ -1143,8 +1143,8 @@ are three kinds, told apart by the book's tag:
 A plain `zh` or `cmn` tag says nothing about the script, so such a book is taken as simplified or traditional by
 the characters it uses.
 
-The reading and level rows describe the ready-made simplified and traditional packs and the commands in the
-README. A dictionary you convert yourself shows whatever you converted it with: zhuyin with `--zhuyin`, a level
+The reading and level rows describe the ready-made simplified and traditional packs and the commands in
+[docs/dictionary-setup.md](docs/dictionary-setup.md). A dictionary you convert yourself shows whatever you converted it with: zhuyin with `--zhuyin`, a level
 with `--levels`, example sentences with `--examples`.
 
 One `zh/` folder serves both scripts, because every entry is indexed under its traditional and its simplified
@@ -1194,7 +1194,7 @@ python3 tools/pinyin_ruby/add_pinyin_ruby.py --cedict cedict_1_0_ts_utf-8_mdbg.t
 - `--frequency dict.txt --skip-top 1500` leaves the 1,500 commonest words bare, so only the words you are likely
   to need carry a reading.
 
-The script needs Python and the CC-CEDICT file (README Setup step 2). Copy the resulting EPUB to the card and open
+The script needs Python and the CC-CEDICT file ([docs/dictionary-setup.md](docs/dictionary-setup.md)). Copy the resulting EPUB to the card and open
 it; the **Pinyin / Zhuyin** toggle in the reader menu shows or hides the readings, and is remembered per book.
 It is the same switch Japanese books call **Furigana**, named for what each book carries.
 
@@ -1252,6 +1252,8 @@ French then gets its own rules:
 | `heureuse`, `chanteuse`, `nouvelle`, `première` | `heureux`, `chanteur`, `nouveau`, `premier` |
 | `parlaient`, `parlé`, `mangeons`, `commençait` | `parler`, `manger`, `commencer` |
 | `finissent`, `choisirait`, `vendu`, `attendait` | `finir`, `choisir`, `vendre`, `attendre` |
+| `éteignit`, `connaissons`, `conduisit`, `lentement` | `éteindre`, `connaître`, `conduire`, `lent` |
+| `songeai-je`, `pense-t-il` | two selectable words, `songeai` / `je`; a real compound like `rendez-vous` stays one |
 
 English, and any language without rules of its own, falls back to plurals, possessives and verb endings (`dogs` →
 `dog`, `stories` → `story`, `running` → `run`).
@@ -1350,13 +1352,13 @@ drive. Japanese splits into vocabulary, names and grammar: convert them from
 [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other
 Yomitan dictionary with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/), which also
 handles jmdict-simplified JSON and MDict `.mdx` input. Chinese converts with the script in `tools/dict_convert/`
-and `--lang zh`, from the raw CC-CEDICT text file, the MoE 重編國語辭典 JSON, a Yomitan zip or an `.mdx`; the
-README's Setup section has the commands. One `zh/` folder serves both scripts: every entry is indexed under its
+and `--lang zh`, from the raw CC-CEDICT text file, the MoE 重編國語辭典 JSON, a Yomitan zip or an `.mdx`;
+[docs/dictionary-setup.md](docs/dictionary-setup.md) has the commands. One `zh/` folder serves both scripts: every entry is indexed under its
 traditional and its simplified form, and the panel shows the other one under the reading. `vocab.title` names the
 dictionary in the panel footer. Every other language uses ordinary StarDict, one folder per dictionary, with no
 conversion needed.
 
-Ready-made Chinese packs, one simplified and one traditional, are linked from the README's Setup section; install
+Ready-made Chinese packs, one simplified and one traditional, are linked from [docs/dictionary-setup.md](docs/dictionary-setup.md); install
 one of the two, since they share the `zh/` folder. Cantonese (`yue`) is built with `--lang yue`.
 
 **Several dictionaries in one language.** Give each its own folder, such as `en/collins/` and `en/wiktionary/`. A
