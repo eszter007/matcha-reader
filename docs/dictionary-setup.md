@@ -10,9 +10,9 @@ files are in [dictionary.md](dictionary.md).
 
 **Japanese.** Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest), unzip it, and copy it to the card so that the card holds `dictionaries/jp/vocab.idx` and the files beside it. Nothing to convert.
 
-**Mandarin.** Download the [CC-CEDICT file](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), run the one command under [Chinese](#chinese-mandarin-simplified-or-traditional) below, and the result lands in `dictionaries/zh/`. It needs Python 3.
+**Mandarin.** Download the simplified or the traditional pack from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh) and unzip it so that the card holds `dictionaries/zh/`. Install one, not both. To build your own, convert CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) or the command under [Chinese](#chinese-mandarin-simplified-or-traditional) below.
 
-**Cantonese.** As Mandarin, with the command under [Cantonese](#chinese-cantonese); the result lands in `dictionaries/yue/`.
+**Cantonese.** Convert CC-Canto and CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the command under [Cantonese](#chinese-cantonese) below, into `dictionaries/yue/`.
 
 **French, English, German and others.** Find a StarDict dictionary (three files: `.ifo`, `.idx`, `.dict` or `.dict.dz`) and copy them into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/`. Nothing to convert.
 
@@ -58,7 +58,7 @@ python3 tools/furigana_ruby/add_furigana_ruby.py --ai --gemini-key-file gemini.k
 
 ## Chinese: Mandarin, simplified or traditional
 
-Ready-made packs, when one has been published, come from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh): unzip the **simplified** or the **traditional** one onto the card so that it holds `dictionaries/zh/`. Install one, not both: they share the folder. Either pack serves books in both scripts, because every entry is indexed under both forms; they differ in what the entry shows.
+Ready-made packs come from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh): unzip the **simplified** or the **traditional** one onto the card so that it holds `dictionaries/zh/`. Install one, not both: they share the folder. Either pack serves books in both scripts, because every entry is indexed under both forms; they differ in what the entry shows.
 
 | | Simplified pack | Traditional (Taiwanese) pack |
 | --- | --- | --- |

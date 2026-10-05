@@ -162,11 +162,11 @@ Some units bought from third-party stores are USB-locked and must be unlocked fi
 | Language | What to do |
 | --- | --- |
 | Japanese | Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest) and unzip it so the card holds `dictionaries/jp/` |
-| Mandarin | Build `dictionaries/zh/` from CC-CEDICT with one command (simplified or traditional) |
-| Cantonese | Build `dictionaries/yue/` from CC-Canto and CC-CEDICT with one command |
+| Mandarin | Download the simplified or the traditional pack from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh) and unzip it so the card holds `dictionaries/zh/`. Install one, not both |
+| Cantonese | Convert CC-Canto and CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) into `dictionaries/yue/` |
 | Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
 
-Step by step, with the commands: [docs/dictionary-setup.md](docs/dictionary-setup.md).
+To convert your own, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Step by step: [docs/dictionary-setup.md](docs/dictionary-setup.md).
 
 **3. Install a font** (Chinese needs one; Japanese is optional).
 

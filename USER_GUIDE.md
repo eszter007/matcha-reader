@@ -345,7 +345,7 @@ open a list when selected.
   - "Lyra" - The new theme for Crosspoint featuring rounded elements and menu icons
   - "Lyra Extended" - Lyra, but displays 3 books instead of 1 on the **[Home Screen](#31-home-screen)**
   - "RoundedRaff" - A rounded theme with additional visual styling
-  - "Cover Grid" - Home as a grid of covers, with a tab bar along the bottom (see [3.1.1](#311-tabs-and-button-navigation-cover-grid-theme)). The default on touch devices; the others start on Lyra
+  - "Cover Grid" - Home as a grid of covers, with a tab bar along the bottom (see [3.1.1](#311-tabs-and-button-navigation-cover-grid-theme)). Available on every device, buttons or touch; it is the default on touch devices, and the others start on Lyra
 
 - **Sunlight Fading Fix** (off by default): A software fix for white X4 models that fade in direct sunlight.
 
@@ -1352,7 +1352,7 @@ Japanese and Chinese work differently from the rest. They always use the convert
 drive. Japanese splits into vocabulary, names and grammar: convert them from
 [Jitendex](https://github.com/stephenmk/Jitendex), [JMnedict](https://github.com/JMdictProject) or any other
 Yomitan dictionary with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/), which also
-handles jmdict-simplified JSON and MDict `.mdx` input. Chinese converts with the script in `tools/dict_convert/`
+handles jmdict-simplified JSON and MDict `.mdx` input. Chinese converts in the same browser tool, or with the script in `tools/dict_convert/`
 and `--lang zh`, from the raw CC-CEDICT text file, the MoE 重編國語辭典 JSON, a Yomitan zip or an `.mdx`;
 [docs/dictionary-setup.md](docs/dictionary-setup.md) has the commands. One `zh/` folder serves both scripts: every entry is indexed under its
 traditional and its simplified form, and the panel shows the other one under the reading. `vocab.title` names the
