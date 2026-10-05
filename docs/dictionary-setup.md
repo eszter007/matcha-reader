@@ -8,7 +8,7 @@ files are in [dictionary.md](dictionary.md).
 
 ## Quick start
 
-**Japanese.** Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest), unzip it, and copy it to the card so that the card holds `dictionaries/jp/vocab.idx` and the files beside it. Nothing to convert.
+**Japanese.** Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest). It holds a `dict` folder: put its files in `dictionaries/jp/` on the card. Copying `dict/` to the root as it is works too. Nothing to convert.
 
 **Mandarin.** Download the simplified or the traditional pack from the [`dictionaries-zh` release](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh) and unzip it so that the card holds `dictionaries/zh/`. Install one, not both. To build your own, convert CC-CEDICT with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) or the command under [Chinese](#chinese-mandarin-simplified-or-traditional) below.
 
