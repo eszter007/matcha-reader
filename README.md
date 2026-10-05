@@ -170,15 +170,15 @@ Some units bought from third-party stores are USB-locked and must be unlocked fi
 
 To convert your own, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Step by step: [docs/dictionary-setup.md](docs/dictionary-setup.md).
 
-**3. Install a font** (required for Chinese, optional for Japanese).
+**3. Install a font** (required for Chinese, optional for Japanese). Download the zip for your language from the [releases](https://github.com/eszter007/matcha-reader/releases) and copy the `fonts` folder inside it to the root of the card.
 
-| You read | Font |
-| --- | --- |
-| Japanese | `japanese-fonts.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest), with the `fonts` folder inside it copied to the root of the card |
-| Mandarin, simplified | Noto Sans SC |
-| Mandarin, traditional, and Cantonese | Noto Sans TC |
+| You read | Zip | Fonts |
+| --- | --- | --- |
+| Japanese | `japanese-fonts.zip` | Noto Sans JP, Noto Serif JP |
+| Mandarin, simplified | `chinese-fonts-simplified.zip` | Noto Sans SC, Noto Serif SC |
+| Mandarin, traditional, and Cantonese | `chinese-fonts-traditional.zip` | Noto Sans TC, Noto Serif TC |
 
-For Chinese, convert the font with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/<Family>_<size>.cpfont`, for example `.fonts/NotoSansSC/NotoSansSC_16.cpfont`. More in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
+The Chinese zips are attached from 1.7.0-nightly-1 on. To convert another font, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/); details in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
 
 **4. Copy your books** anywhere on the card and open them from the Library. Manga and comics are converted first, with the browser tool or as in [docs/manga-conversion.md](docs/manga-conversion.md).
 
