@@ -99,6 +99,8 @@ class CedictExtras(unittest.TestCase):
         m = conv._CEDICT_LINE_RE.match("你好 你好 [ni3 hao3] {nei5 hou2} /hello/")
         self.assertIsNotNone(m)
         self.assertEqual(m.group(4), "nei5 hou2")
+        m = conv._CEDICT_LINE_RE.match("三 三 [san1] {saam1} /three/love affair/ # adapted from cc-cedict")
+        self.assertEqual((m.group(4), m.group(5)), ("saam1", "three/love affair"))
         text = conv.format_definition_cedict("你好", "你好", "ni3 hao3", ["hello"], False, "nei5 hou2", "HSK 1")
         self.assertEqual(text, "【nǐ hǎo · nei5 hou2】\n[HSK 1]\n• hello\n")
 
