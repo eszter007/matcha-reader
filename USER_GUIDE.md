@@ -327,16 +327,9 @@ open a list when selected.
 
 - **Quick Resume on Timeout**: Whether to enable the "Quick Resume" sleep screen when the device goes to sleep due to inactivity (Time to Sleep, below). This is useful for quickly resuming reading without waiting for the device to fully wake up and load the book. This overwrites the Sleep Screen Cover Mode when enabled.
 
-- **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep; options are 1, 3, 5, 10 (default), 15 or 30 minutes.
+- **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep; from 1 to 30 minutes, or Never.
 
-- **Status Bar**: Configure the status bar displayed while reading:
-  
-  - "None" - No status bar
-  - "No Progress" - Show status bar without reading progress
-  - "Full w/ Percentage" - Show status bar with book progress (as percentage)
-  - "Full w/ Book Bar" - Show status bar with book progress (as bar)
-  - "Book Bar Only" - Show book progress (as bar)
-  - "Full w/ Chapter Bar" - Show status bar with chapter progress (as bar)
+- **Status Bar**: Set up under **Reader Settings → Customise Status Bar**, piece by piece: the chapter page count, the book progress percentage, a progress bar (for the book, for the chapter, or hidden) and its thickness, the title, and the battery.
 
 - **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
   
@@ -344,7 +337,7 @@ open a list when selected.
   - "In Reader" - Show battery percentage everywhere except in reading mode
   - "Always" - Always hide battery percentage
 
-- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages. In manga each panel step counts as a page.
+- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages, or Never. In manga each panel step counts as a page.
 
 - **UI Theme**: Set which UI theme to use:
   
@@ -352,11 +345,13 @@ open a list when selected.
   - "Lyra" - The new theme for Crosspoint featuring rounded elements and menu icons
   - "Lyra Extended" - Lyra, but displays 3 books instead of 1 on the **[Home Screen](#31-home-screen)**
   - "RoundedRaff" - A rounded theme with additional visual styling
+  - "Cover Grid" - Home as a grid of covers, with a tab bar along the bottom (see [3.1.1](#311-tabs-and-button-navigation-cover-grid-theme)). The default on touch devices; the others start on Lyra
 
-- **Sunlight Fading Fix**: Configure whether to enable a software-fix for the issue where white X4 models may fade when used in direct sunlight:
-  
-  - "OFF" (default) - Disable the fix
-  - "ON" - Enable the fix
+- **Sunlight Fading Fix** (off by default): A software fix for white X4 models that fade in direct sunlight.
+
+- **Night Mode** (off by default): Inverts the whole display, white text on black, on every screen.
+
+- **Show Hidden Files** (off by default): Lists files and folders whose names start with `.` in the file browser.
 
 #### 3.6.2 Reader
 
@@ -368,7 +363,7 @@ open a list when selected.
 
 - **Reader Font Size**: Choose a point size. Built-in and direct TTF/OTF/TTC fonts offer 12, 14, 16, and 18 pt. A `.cpfont` family offers the sizes installed for that family.
 
-- **Reader Line Spacing**: Adjust the spacing between lines; options are "Tight", "Normal" (default), or "Wide".
+- **Reader Line Spacing**: Adjust the spacing between lines; options are "Tight", "Normal" (default), "Wide", or "Extra Wide".
 
 - **Reader Screen Margin**: Controls the screen margins in Reading Mode between 5 and 40 pixels in 5-pixel increments.
 
@@ -376,7 +371,7 @@ open a list when selected.
 
 - **Use Book Margins**: Whether to keep the side margins a book sets for itself. Many books indent epigraphs, letters and long quotations; with this ON those blocks stay indented, and with it OFF they are set flush with the body text and only the Reader Screen Margin applies. Default is ON. Found under Text Settings > Layout.
 
-- **Reader Paragraph Alignment**: Set the alignment of paragraphs; options are "Justified" (default), "Left", "Center", or "Right".
+- **Reader Paragraph Alignment**: Set the alignment of paragraphs; options are "Justified" (default), "Left", "Center", "Right", or "Book's Style", which follows the alignment the book sets.
 
 - **Embedded Style**: Whether to use the EPUB file's embedded HTML and CSS stylisation and formatting; options are "ON" or "OFF".
 
@@ -418,7 +413,7 @@ open a list when selected.
 
 - **Front Buttons Follow Orientation** (on by default): Directional buttons act on the direction you *see*, not the direction they point on the case. Rotate to landscape and the pair that used to move left/right moves up/down instead, with the on-screen hints relabelled to match — so page turns, list scrolling, the keyboard and the word lookup all keep working the way the screen is facing. Rotating swaps which axis each pair of buttons serves, so in landscape the front buttons take the up/down axis and the side buttons take left/right. Switch it off to keep every button fixed to its portrait meaning however the screen is turned. Devices with a touchscreen always follow the orientation and ignore this setting.
 
-- **Navigate with Side Buttons in Word Lookup** (on by default): Lets the side buttons step between words during
+- **Navigate with Side Buttons in Word Lookup** (off by default): Lets the side buttons step between words during
   Word Lookup. See [Word Lookup](#61-word-lookup).
 
 - **Haptic Feedback** (devices with a vibration motor only): A short tap when the device accepts a touch.
@@ -764,7 +759,7 @@ Transparent overlay files are intentionally separate from normal sleep images. R
 **Transparent** does not replace the page, it draws over it. White pixels in the image let the page through, black
 ones paint on top, so you get the wallpaper and the paragraph you stopped at in the same picture.
 
-It uses the same images as **Custom**: put 480x800 BMPs (X4) or 528x792 (X3) in `.sleep/transparent` on the card. Images with a lot of white space work best, since anything solid hides the text under it.
+Put 480x800 images (X4) or 528x792 (X3) in `.sleep-overlay` on the card, as described above. Images with a lot of white space work best, since anything solid hides the text under it. The older `.sleep/transparent` folder is still read when `.sleep-overlay` has nothing to show.
 Artwork along one edge, as below, keeps most of the page readable.
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper drawn over the page, with the text still readable behind it"></p>
@@ -776,11 +771,12 @@ Artwork along one edge, as below, keeps most of the page readable.
 CrossPoint loads additional fonts from the SD card. Custom fonts can add Chinese, Japanese, Korean, and other scripts that the built-in reader fonts lack. If your device have external RAM, you can copy `.ttf`, `.otf`, and `.ttc` files directly. Otherwise, use `.cpfont` files made from those fonts. 
 
 Convert any TTF or OTF with [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/) and put the
-result in `.fonts/<Family>/regular.cpfont`.
+result in `.fonts/<Family>/<Family>_<size>.cpfont`, one file per point size (for example
+`.fonts/NotoSansSC/NotoSansSC_16.cpfont`).
 
 There are three ways to install fonts:
 
-1. **Download from device (recommended):** Go to **Settings -> System -> Manage Fonts**, browse the available font families, and select one to download over Wi-Fi.
+1. **Download from device (recommended):** Go to **Reader Settings → Text Settings**, choose **Manage Fonts** at the bottom of the font list, browse the available font families, and select one to download over Wi-Fi.
 2. **Upload via web interface:** While in **File Transfer** mode, open the web UI and use the **Fonts** tab to upload `.cpfont` files. The Fonts tab does not accept TTF/OTF/TTC files.
 3. **Manual SD card copy:** Copy `.cpfont` families from the [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts) to `/.fonts/` or `/fonts/`. If your device have external RAM, you can also copy TTF/OTF/TTC files there without conversion.
 
@@ -912,6 +908,10 @@ Available options include:
 - **Sync Progress** – Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)).
 - **Delete Book Cache** – Clear the cached layout data for the current book, forcing a re-index on next open.
 
+Matcha adds **Word Lookup**, **Translate Page**, **Reader Settings**, **Toggle Bookmark** and **Night Mode** to the menu; see [§6](#6-language-learning-features).
+
+**Reader Settings → Reader Menu Style** switches between this list (the default) and **Toolbar**: a strip at the bottom of the page with three tools, the table of contents, a quick text panel (font, size, line spacing, and Vertical Text and Furigana for Japanese and Chinese books), and **More**, which holds everything else in the list above.
+
 Press **Back** at any time to close the menu and return to your current page.
 
 ### 5.1 Chapter Selection
@@ -937,8 +937,9 @@ Bookmarks are stored in the `.crosspoint/bookmarks` folder in the JSON format.
 ## 6. Language Learning Features
 
 These are specific to the Matcha Reader fork. They are set up first for **Japanese** and **Chinese** (Mandarin in
-simplified or traditional characters, and Cantonese), and most of them work for a book in any language. See the
-[README](README.md#setup) for how to install the dictionaries, fonts and API key they need.
+simplified or traditional characters, and Cantonese), and most of them work for a book in any language. They need files on the SD card first: the
+[README's Setup](README.md#setup) lists the steps, and [docs/dictionary-setup.md](docs/dictionary-setup.md) covers
+the dictionaries language by language.
 
 | If you read | Start with | Then |
 | --- | --- | --- |
@@ -1457,8 +1458,6 @@ Please note that this firmware is currently in active development. The following
 
 * **Cover Images:** Large cover images embedded into EPUB require several seconds (~10s for ~2000 pixel tall image) to convert for sleep screen and home screen thumbnail. Consider optimizing the EPUB with e.g. https://github.com/bigbag/epub-to-xtc-converter to speed this up.
 * **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs are not supported and fall back to an `[Image]` placeholder. Progressive JPEGs do render, but only their DC coefficients are decoded — a preview at one-eighth resolution, scaled back up, so fine detail is lost. The one variant that is refused outright is a progressive JPEG that both splits its DC coefficients across one scan per component *and* uses chroma subsampling; re-encode those as baseline (`jpegtran -copy none -optimize`, or run the page through the manga converter).
-* 
-* **Dictionary Lookup:** Inline word lookup is not yet implemented.
 
 ---
 

@@ -138,38 +138,52 @@ A wallpaper laid over the page you were reading, so the book shows through. → 
 
 ## Setup
 
-[**Matcha Reader Tools**](https://eszter007.github.io/matcha-reader-tools/) converts dictionaries, fonts and manga in your browser, with no Python. Files stay on your machine, except manga OCR, where panels go to Gemini under your own key.
+You need a computer, a USB-C cable and the device's SD card. Files go onto the card either with a card reader or over Wi-Fi from the device's **File Transfer** screen.
 
-**1. Flash the firmware** the standard CrossPoint way ([upstream docs](https://github.com/crosspoint-reader/crosspoint-reader)), with the build for your device from [this repository's releases](https://github.com/eszter007/matcha-reader/releases):
+**1. Flash the firmware.**
 
-| Device | Asset |
+1. Download the file for your device from [this repository's latest release](https://github.com/eszter007/matcha-reader/releases/latest):
+
+   | Device | File |
+   | --- | --- |
+   | X3, and X4 (old) | `x4old-x3-firmware.bin` |
+   | X4C (new) | `x4c-firmware.bin` |
+   | X4 Pro | `x4pro-firmware.bin` |
+   | Sticky | `sticky-firmware.bin` |
+   | Papermono | `papermono-firmware.bin` |
+
+2. Connect the device by USB-C and wake it.
+3. Open the [CrossPoint flash tool](https://crosspointreader.com/#flash-tools), select your device, click **Custom .bin** and choose the file.
+
+Some units bought from third-party stores are USB-locked and must be unlocked first; see [USB-locked devices](https://github.com/crosspoint-reader/crosspoint-reader#usb-locked-devices-xteink-unlocker) upstream. After the first flash, **Settings → System → Check for updates** installs new Matcha releases over Wi-Fi.
+
+**2. Install a dictionary** for each language you read. The book's language picks the folder by itself.
+
+| Language | What to do |
 | --- | --- |
-| X3, and X4 (old) | `x4old-x3-firmware.bin` |
-| X4C (new) | `x4c-firmware.bin` |
-| X4 Pro | `x4pro-firmware.bin` |
-| Sticky | `sticky-firmware.bin` |
-| Papermono | `papermono-firmware.bin` |
+| Japanese | Download `japanese-dictionaries.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest) and unzip it so the card holds `dictionaries/jp/` |
+| Mandarin | Build `dictionaries/zh/` from CC-CEDICT with one command (simplified or traditional) |
+| Cantonese | Build `dictionaries/yue/` from CC-Canto and CC-CEDICT with one command |
+| Any other | Copy a StarDict dictionary into `dictionaries/<lang>/<name>/`, for example `dictionaries/fr/larousse/` |
 
-After that, **Settings → Update** installs new releases from this repository.
+Step by step, with the commands: [docs/dictionary-setup.md](docs/dictionary-setup.md).
 
-**2. Install dictionaries**, one folder per language on the SD card. The book's language picks the folder.
+**3. Install a font** (Chinese needs one; Japanese is optional).
 
-| Language | Folder | Get it from |
-| --- | --- | --- |
-| Japanese | `dictionaries/jp/` | Convert Jitendex or JMdict with the browser tool |
-| Mandarin | `dictionaries/zh/` | Ready-made [simplified or traditional pack](https://github.com/eszter007/matcha-reader/releases/tag/dictionaries-zh) (install one) |
-| Cantonese | `dictionaries/yue/` | Build from CC-Canto and CC-CEDICT |
-| Others | `dictionaries/<lang>/<name>/` | Any StarDict dictionary, copied as is |
+| You read | Font |
+| --- | --- |
+| Japanese | `japanese-fonts.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest), unzipped so the card holds `.fonts/` |
+| Mandarin, simplified | Noto Sans SC |
+| Mandarin, traditional; Cantonese | Noto Sans TC |
 
-Details, commands and the pinyin and furigana scripts: [docs/dictionary-setup.md](docs/dictionary-setup.md).
+For Chinese, convert the font with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/<Family>_<size>.cpfont`, for example `.fonts/NotoSansSC/NotoSansSC_16.cpfont`. More in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
 
-**3. Install a font for Chinese** (optional for Japanese). Use Noto Sans SC for simplified, Noto Sans TC for traditional and Cantonese, Noto Sans JP for Japanese. Download one under **Text Settings → Manage Fonts**, or convert a TTF/OTF with the browser tool into `.fonts/<Family>/<Family>_<size>.cpfont`. → [docs/sd-card-fonts.md](docs/sd-card-fonts.md)
+**4. Copy your books** anywhere on the card and open them from the Library. Manga and comics are converted first, with the browser tool or as in [docs/manga-conversion.md](docs/manga-conversion.md).
 
-**4. Switch the interface language** (optional) under **Settings → System → Language**. The Chinese ones are language packs: put the pack in `/.crosspoint/lang/` and install the font first.
+**5. Optional extras.**
 
-**5. Set up translation** (optional). Save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/system/gemini.key` on the card.
-
-**6. Convert manga** (optional) with the browser tool, or see [docs/manga-conversion.md](docs/manga-conversion.md).
+- **Interface language:** Settings → System → Language. Languages marked *Needs pack* need `language-packs.zip` from the release; see [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
+- **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/system/gemini.key` on the card.
 
 ## Building from source
 
