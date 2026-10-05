@@ -109,9 +109,9 @@ The X4 Pro has a built-in frontlight with adjustable brightness and warmth. It i
 * **Quick toggle:** Double-click the **Power** button to turn the frontlight on or off instantly, without opening the panel.
 
 > [!NOTE]
-> Frontlight brightness and warmth are intentionally not listed in **[Display Settings](#361-display)** — the swipe panel is the only place to adjust them. The on/off state can also be toggled with the Power-button double-click above.
+> Frontlight brightness and warmth are intentionally not listed in **[Display Settings](#361-display)**: the swipe panel is the only place to adjust them. The on/off state can also be toggled with the Power-button double-click above.
 
-If the frontlight doesn't come back on after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Display → Sleep** (on by default). Turning it off is intentional if you'd rather have the light stay off on wake and switch it on yourself each time — but it's easy to forget you changed it.
+If the frontlight doesn't come back on after the device wakes from sleep, check **Restore Light on Wake** in **Settings → Display → Sleep** (on by default). Turning it off is intentional if you'd rather have the light stay off on wake and switch it on yourself each time, but it's easy to forget you changed it.
 
 ---
 
@@ -141,9 +141,8 @@ The Home screen is the main entry point to the firmware. From here you can navig
 
 In the **Cover Grid** theme the Home screen is a grid of covers instead of a menu: the book you are reading fills a card
 across the top and the rest follow below it. Covers are made in the background the first time the device sees a book, so
-the grid appears straight away with titles in place of the artwork it has not built yet, and each cover replaces its own
-title as it finishes. Nothing blocks while this happens, and a button press stops the conversion rather than waiting for
-it. A cover that could not be built is retried the next time you visit Home.
+the grid appears at once with titles in place of covers that are not ready, and each cover replaces its title as it
+finishes. A button press interrupts the work. A cover that could not be built is retried the next time you visit Home.
 
 Long press a cover, here, in the Library or inside a shelf, for **View Stats**, **Mark as Read** / **Mark as Unread**
 and **Delete**. Without a touch panel, select the cover and hold **Confirm** for a second; letting go leaves the menu
@@ -154,16 +153,15 @@ takes the book's reading cache with it.
 #### 3.1.1 Tabs and Button Navigation (Cover Grid theme)
 
 The Cover Grid theme carries a tab bar along the bottom of Home, Library, File Transfer, Insights and Settings. It stays
-put as you move between them, and the tab you are in is drawn filled. Nothing opens on top of anything else, so there is
-no stack to back out of.
+put as you move between them, and the tab you are in is drawn filled.
 
 On a touch device, tap a tab. On a button-only device the bar is part of one navigation ring, so every control on the
 screen is reachable without leaving it:
 
 - **Up / Side Up** and **Down / Side Down** walk the ring: the screen's own tabs at the top (where it has them), then its
   rows or covers, then the bottom bar, and round again.
-- **Confirm** on a screen's own tabs steps to the next one — **Books**, **Shelves**, **OPDS**, **Files** in the Library, the
-  categories in Settings, the languages in Insights — and past the last one it moves the cursor into the bottom bar.
+- **Confirm** on a screen's own tabs steps to the next one (**Books**, **Shelves**, **OPDS**, **Files** in the Library, the
+  categories in Settings, the languages in Insights) and past the last one it moves the cursor into the bottom bar.
 - **Left** and **Right** on a screen's own tabs step to the previous or next one. Once the cursor is in the bottom bar
   they move between Home, Library, File Transfer, Insights and Settings. **Confirm** goes to the highlighted tab;
   **Confirm** on the tab you are already in hands the cursor back to the first tab at the top of the screen, closing
@@ -178,7 +176,7 @@ See [Reading Mode](#4-reading-mode) below for more information.
 
 ### 3.3 Browse Files Screen
 
-The Browse Files screen acts as a file and folder browser. The full path to the current directory is shown at the top of the screen. File extensions are displayed alongside each filename, and directories are shown with brackets (e.g. `[folder-name]`). Hidden entries — those beginning with `.` — appear only when **Settings → Display → Show Hidden Files** is enabled. Turning it on is also what makes the folders macOS leaves behind on a card (`.Spotlight-V100`, `.Trashes`) selectable, so they can be deleted. `System Volume Information` stays hidden either way.
+The Browse Files screen acts as a file and folder browser. The full path to the current directory is shown at the top of the screen. File extensions are displayed alongside each filename, and directories are shown with brackets (e.g. `[folder-name]`). Hidden entries (those beginning with `.`) appear only when **Settings → Display → Show Hidden Files** is enabled. Turning it on is also what makes the folders macOS leaves behind on a card (`.Spotlight-V100`, `.Trashes`) selectable, so they can be deleted. `System Volume Information` stays hidden either way.
 
 * **Navigate List:** Use **Left** (or **Side Up**), or **Right** (or **Side Down**) to move the selection cursor up and down through folders and books. You can also long-press these buttons to scroll a full page up or down.
 * **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
@@ -278,15 +276,15 @@ Books cannot be removed from your device through Calibre. Use the web interface 
 
 The Settings screen allows you to configure the device's behavior. There are a few settings you can adjust:
 
-Settings that are simply on or off show a switch on the right of their row instead of the words "ON" and "OFF" —
-selecting the row flips it in place. Settings with more than two choices still show their current value as text and
+Settings that are on or off show a switch on the right of their row instead of the words "ON" and "OFF".
+Selecting the row flips it in place. Settings with more than two choices still show their current value as text and
 open a list when selected.
 
 #### 3.6.1 Display
 
 - **Library**: Opens the library settings, gathered on one screen:
   
-  - **Library View**: Which screen the Library entry opens — "Matcha Covers" (default), the cover grid, or
+  - **Library View**: Which screen the Library entry opens: "Matcha Covers" (default), the cover grid, or
     "CrossPoint List", the indexed title/author list described in [Library Screen](#34-library-screen)
   - **Rebuild library index**: Re-scan the card to pick up file changes and updated metadata
   - **Clear Read Books from Recent List**: Drop a book from the Recent tab once you finish it
@@ -393,7 +391,7 @@ open a list when selected.
   five spaces; two by default. It applies to horizontal text, and takes the place of an indent the book sets for
   itself (a hanging indent, where the book pulls the first line *out*, is kept). Vertical text is not affected.
 
-- **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` or `/.dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
+- **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` or `/.dictionaries/` on the SD card, see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
 
 - **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode, horizontal and vertical (Japanese) text alike, furigana included. Note this slows down page turns slightly: the grey edges follow the black-and-white page about half a second later, and a page turn before then skips them. Images inside vertical text turn grayscale once you stay on the page, whether or not this is on.
 
@@ -411,7 +409,7 @@ open a list when selected.
 
 - **Remap Front Buttons**: A menu for customising the function of each bottom edge button.
 
-- **Front Buttons Follow Orientation** (on by default): Directional buttons act on the direction you *see*, not the direction they point on the case. Rotate to landscape and the pair that used to move left/right moves up/down instead, with the on-screen hints relabelled to match — so page turns, list scrolling, the keyboard and the word lookup all keep working the way the screen is facing. Rotating swaps which axis each pair of buttons serves, so in landscape the front buttons take the up/down axis and the side buttons take left/right. Switch it off to keep every button fixed to its portrait meaning however the screen is turned. Devices with a touchscreen always follow the orientation and ignore this setting.
+- **Front Buttons Follow Orientation** (on by default): Directional buttons act on the direction you see on screen, with the button hints relabelled to match. In landscape the front buttons take the up/down axis and the side buttons left/right. Switch it off to keep every button fixed to its portrait meaning. Touch devices always follow the orientation.
 
 - **Navigate with Side Buttons in Word Lookup** (off by default): Lets the side buttons step between words during
   Word Lookup. See [Word Lookup](#61-word-lookup).
@@ -426,40 +424,27 @@ open a list when selected.
 - **Reversed page turn (Vertical & Manga)** (off by default): Flips which button turns the page forward, for the two things that are read right-to-left.
 
   - In a **vertical (tategaki) Japanese book**, the button that normally goes back turns forward instead.
-  - In **manga**, the left button advances — into the page's panels and on through the pages — and the right button goes back.
+  - In **manga**, the left button advances (into the page's panels and on through the pages) and the right button goes back.
   - A horizontal book in any language is **not** affected, even if you leave the toggle on after reading a Japanese one.
 
-  This affects **page turning only**. Menus, the reader menu and Word Lookup keep their normal directions. It applies to the front buttons and the side buttons together. Unlike the per-book text settings this one is global: it lives in the Controls screen, so it is the same for every book. Touch page turns have their own setting — see **Touch Reader Controls**, which offers inverted tap and swipe modes for the same reason.
+  It affects page turning only, on the front and side buttons together, and it is one setting for every book. Menus and Word Lookup keep their normal directions. Touch page turns have their own inverted modes under **Touch Reader Controls**.
 
-- **Upper / Lower Side Button in Reader** (X3/X4 only, in Shortcuts): Rebinds what the upper (Side Up) or
-  lower (Side Down) button does while reading. Each offers Default (previous page on Upper, next page on Lower),
-  Sleep, Previous Page, Next Page, Refresh Screen, Footnotes, Word Lookup and Off — so swapping the page-turn order
-  is Upper = Next Page plus Lower = Previous Page, and Off on both is the old "Side Button Layout = Disabled".
-  A device upgrading from an earlier version carries its old Side Button Layout over automatically.
+- **Upper / Lower Side Button in Reader** (X3/X4 only, in Shortcuts): What the upper (Side Up) or lower (Side Down)
+  button does while reading: Default (previous page on Upper, next page on Lower), Sleep, Previous Page, Next Page,
+  Refresh Screen, Footnotes, Word Lookup or Off.
 
-  A button with a custom action does that action and nothing else: it no longer turns pages or steps lists under
-  the shared roles, so it cannot fire two things at once. Outside the reader both buttons keep their ordinary
-  navigation role. Inside Word Lookup the page bindings move the cursor — Previous Page steps back, Next Page
-  steps forward, in the word list and through a definition's entries alike. A button bound to Word Lookup walks
-  the same path as the power-button shortcut: the first click opens word selection, the second looks the
-  highlighted word up, and a click in the definition view closes the dictionary — two clicks in, one click out,
-  without moving your reading hand. The **Short Power Button Click** page bindings work inside Word Lookup too,
-  so Power set to "Previous Page" steps back there as well.
-
-  **Reversed Page Turn does not apply to a remapped button.** A button you set to "Next Page" advances in a
-  vertical or manga book exactly as it does in a horizontal one — you named the direction yourself, so nothing
-  flips it behind your back. The same holds for the Power button's page bindings. Reversed Page Turn keeps
-  reversing the buttons still doing their *shared* page-turn job, which is what it is for.
-
-  Only **Navigate with Side Buttons in Word Lookup** is hidden, and only once *both* side buttons are remapped —
-  it is the one setting that merely arranges the shared side-button roles. **Reversed Page Turn** and
-  **Long-Press Button Behavior** stay visible, since they also govern the front buttons, touch and tilt.
+  - A button with a custom action does only that action. Outside the reader both buttons keep their normal role.
+  - Inside Word Lookup, a button set to Previous or Next Page moves the cursor back or forward.
+  - A button set to Word Lookup opens word selection on the first click, looks the word up on the second, and closes
+    the definition on the next.
+  - **Reversed page turn** does not apply to a button you remapped: "Next Page" always goes forward.
+  - **Navigate with Side Buttons in Word Lookup** is hidden once both side buttons are remapped.
 
 - **Long-Press Button Behavior**: Set whether long-pressing page turn buttons skips to the next/previous chapter:
   
   - "Chapter Skip" (default) - Long-pressing skips to next/previous chapter
   - "Page Scroll" - Long-pressing scrolls a page up/down
-- **Long-press Menu**: Selects the function bound to holding the menu button (Confirm) while reading an EPUB. **Cycles through the available functions** each time the setting is selected — additional functions may be added in future releases, so this is not a binary on/off toggle. A short press of Confirm always opens the reader menu as normal:
+- **Long-press Menu**: What holding Confirm does while reading an EPUB. A short press always opens the reader menu:
   - "Bookmark" (default) - Hold Confirm (~0.4 second) to drop a bookmark at the current page.
   - "KOSync" - Hold Confirm (~1 second) to launch KOReader sync directly.
   - "Dictionary" - Hold Confirm (~0.4 second) to start dictionary word selection on the current page (see [docs/dictionary.md](docs/dictionary.md)).
@@ -475,8 +460,8 @@ open a list when selected.
   - "Previous Page" - A short press in reading mode turns back one page
   - "Links and footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
-  - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
-  - "Confirm" - A short press acts as the Confirm button. It earns its place on touch devices, which have no front Confirm key.
+  - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page.
+  - "Confirm" - A short press acts as the Confirm button. Useful on touch devices, which have no front Confirm key.
 
 - **Touch Reader Controls**: How the touchscreen turns pages while reading (touch devices only):
   
@@ -502,9 +487,9 @@ open a list when selected.
 - **Clear Reading Cache**: Clear the internal SD card cache.
 
 - **Language**: Set the UI language. English, Japanese, Spanish, French and German are built into the firmware. The
-  rest — Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish,
+  rest (Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish,
   Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew, Simplified and
-  Traditional Chinese and more — are listed too, but marked **Needs pack** until you install a language pack. See
+  Traditional Chinese and more) are listed too, but marked **Needs pack** until you install a language pack. See
   [Language Packs (SD Card)](#39-language-packs-sd-card). A Chinese interface also needs a Chinese SD font (see
   [§6.4](#64-chinese-books)): the built-in CJK glyphs are the Japanese set, so menus would show boxes without one.
 
@@ -782,7 +767,7 @@ There are three ways to install fonts:
 
 Once installed, custom fonts appear in **Settings → Reader → Font Family** alongside the built-in fonts.
 
-A font that only widens another one's character coverage does not get its own row. `NotoSerifExtended` is Noto Serif plus Greek, Cyrillic and phonetic characters, so it is folded into the **Noto Serif** entry rather than listed beside it; the same applies to any `…Extended` or `…IPA` font whose base font is present. Selecting the single row gives you the widest version installed, except in a Japanese book, where the base font is paired with the Japanese font instead — only one SD font is ever held in memory at a time. A variant whose base font is *not* installed keeps its own row, so its characters are always reachable.
+A font that only widens another one's character coverage does not get its own row. `NotoSerifExtended` is Noto Serif plus Greek, Cyrillic and phonetic characters, so it is folded into the **Noto Serif** entry rather than listed beside it; the same applies to any `…Extended` or `…IPA` font whose base font is present. Selecting the single row gives you the widest version installed, except in a Japanese book, where the base font is paired with the Japanese font instead, only one SD font is ever held in memory at a time. A variant whose base font is *not* installed keeps its own row, so its characters are always reachable.
 
 See [docs/sd-card-fonts.md](./docs/sd-card-fonts.md) for full installation details and SD card folder structure.
 
@@ -796,7 +781,7 @@ of them. All languages still appear in **Settings → System → Language**; the
 To install one:
 
 1. Download `language-packs.zip` from the [release you are running](https://github.com/eszter007/matcha-reader/releases).
-2. Unzip it and copy the `.cplang` file for your language — for example `RU.cplang` — into `/.crosspoint/lang/` on the
+2. Unzip it and copy the `.cplang` file for your language (for example `RU.cplang`) into `/.crosspoint/lang/` on the
    SD card, creating the folder if it is not there. You can copy them all; only the selected one is ever loaded.
 3. Put the card back and pick the language in **Settings → System → Language**.
 
@@ -874,7 +859,7 @@ See [docs/dictionary.md](docs/dictionary.md) for supported formats, setup, and w
 * **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
 * **Return to Browse Files:** Press and hold the **Back** button to close the book and return to the **[Browse Files](#33-browse-files-screen)** screen.
 * **Reader Menu:** Press **Confirm** to open the **[Reader Menu](#5-reader-menu)**, which includes chapter navigation, reading options, and more.
-* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#363-controls)** — "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Disabled" does nothing. A short press always opens the Reader Menu.
+* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#363-controls)**: "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Disabled" does nothing. A short press always opens the Reader Menu.
 
 ### Supported Languages
 
@@ -884,7 +869,7 @@ CrossPoint renders text using the following Unicode character blocks, enabling s
 * **Cyrillic Script (Standard and Extended):** Covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian, Kazakh, Kyrgyz, Mongolian, and others.
 * **Vietnamese:** Supported via extended Latin glyph coverage in the built-in reader fonts.
 
-The UI includes Arabic and Hebrew (menus use built-in fonts with presentation-form coverage). Built-in **reader** fonts do not cover Chinese, Japanese, Korean, Arabic, Greek, Hebrew, or Farsi for book text. **CJK, Hebrew, Arabic, Greek, and other extended scripts can be enabled for reading by installing custom SD card fonts** — see [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
+The UI includes Arabic and Hebrew (menus use built-in fonts with presentation-form coverage). Built-in **reader** fonts do not cover Chinese, Japanese, Korean, Arabic, Greek, Hebrew, or Farsi for book text. **CJK, Hebrew, Arabic, Greek, and other extended scripts can be enabled for reading by installing custom SD card fonts**, see [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
 
 ---
 
@@ -896,17 +881,17 @@ Press **Confirm** while reading to open the Reader Menu. From here you can acces
 
 Available options include:
 
-- **Select Chapter** – Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
-- **Links and footnotes** – Select an internal link on the current page. This option appears when the page contains links.
-- **Look Up** – Select a word on the current page and show its dictionary definition (see [docs/dictionary.md](docs/dictionary.md)). Requires a dictionary to be selected in **Settings → Reader → Dictionary**.
-- **Reading Orientation** – Cycle through screen orientations without leaving the reader.
-- **Auto Turn (Pages Per Minute)** – Cycle through automatic page turn speed options for hands-free reading.
-- **Go to %** – Jump to a specific position in the book by percentage.
-- **Take screenshot** – Save a screenshot of the current page to the `screenshots/` folder.
-- **Show page as QR** – Display a QR code encoding the current reading position.
-- **Go Home** – Close the book and return to the Home screen.
-- **Sync Progress** – Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)).
-- **Delete Book Cache** – Clear the cached layout data for the current book, forcing a re-index on next open.
+- **Select Chapter**: Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
+- **Links and footnotes**: Select an internal link on the current page. This option appears when the page contains links.
+- **Look Up**: Select a word on the current page and show its dictionary definition (see [docs/dictionary.md](docs/dictionary.md)). Requires a dictionary to be selected in **Settings → Reader → Dictionary**.
+- **Reading Orientation**: Cycle through screen orientations without leaving the reader.
+- **Auto Turn (Pages Per Minute)**: Cycle through automatic page turn speed options for hands-free reading.
+- **Go to %**: Jump to a specific position in the book by percentage.
+- **Take screenshot**: Save a screenshot of the current page to the `screenshots/` folder.
+- **Show page as QR**: Display a QR code encoding the current reading position.
+- **Go Home**: Close the book and return to the Home screen.
+- **Sync Progress**: Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)).
+- **Delete Book Cache**: Clear the cached layout data for the current book, forcing a re-index on next open.
 
 Matcha adds **Word Lookup**, **Translate Page**, **Reader Settings**, **Toggle Bookmark** and **Night Mode** to the menu; see [§6](#6-language-learning-features).
 
@@ -971,16 +956,16 @@ highlighted in place. The buttons follow the text: you step along it one way and
 | Back | Return to reading |
 | Power (short click) | Leave lookup, when **Short power button click** is set to **Word Lookup** |
 
-From the definition, **Back** returns to the highlighted page rather than to the book, so looking up several
-words on one page costs a couple of presses each, and **Select** saves the word for sentence mining (see below).
+From the definition, **Back** returns to the highlighted page, so the next word on the same page is a few presses
+away, and **Select** saves the word for sentence mining (see below).
 
 The cursor opens on the middle of the page, so any word is at most half a page of presses away, and the page is
-mapped starting from there — the half you are looking at is ready first. Mapping continues in the background
+mapped starting from there, so the half you are looking at is ready first. Mapping continues in the background
 while you choose: words it has not reached yet can still be selected, and the highlight moves as soon as it
 arrives. A page you have looked at before is mapped instantly from its cache, and the cursor returns to the
 word you left it on.
 
-On a touch device, tap a word on the page to open it, or simply hold a word while reading.
+On a touch device, tap a word on the page to open it, or hold a word while reading.
 
 No button labels are shown in this view: the text runs to the bottom of the screen, and a label bar there
 would cover its last line. The buttons are the ones in the tables above.
@@ -999,8 +984,8 @@ The counter in the bottom-right corner shows your position (e.g. 10/35), next to
 (e.g. `Vocab | JMdict`, `Vocab | CC-CEDICT`) on the left. The page is pre-scanned, so you only ever land on a word the
 dictionary actually has.
 
-A word with more than one entry — a Japanese word in both the vocabulary and the grammar dictionary, a Chinese
-word with several readings, a word found in several dictionaries — gets a page per entry in a book; step between
+A word with more than one entry (a Japanese word in both the vocabulary and the grammar dictionary, a Chinese
+word with several readings, a word found in several dictionaries) gets a page per entry in a book; step between
 them the way you page through a long entry. Tapping a word in manga shows the entries below each other. Manga
 lookups where you step from word to word keep one entry per word so stepping stays quick: a short Japanese
 function word shows its grammar entry there, anything else its vocabulary entry.
@@ -1011,11 +996,9 @@ have custom actions, since there is then no shared side-button role left to arra
 
 In Reader Settings, **Word Lookup Font Size** offers Tiny, Small (default), Medium, and Large definition text.
 
-For one-press access, set **Settings → Controls → Short power button click** to **Word Lookup**. It then opens
-straight from the page, in both EPUBs and manga — and closes it again: the same click steps back out of a
-definition and out of word selection, so a whole lookup happens under the index finger of the hand already
-holding the device. Back still works as before, and the click only does this while the setting is **Word
-Lookup** (the other settings keep the click for sleep, page turns, refresh or footnotes).
+For one-press access, set **Settings → Controls → Short power button click** to **Word Lookup**. A click then opens
+lookup from the page, in EPUBs and manga, and the same click steps back out of a definition and out of word
+selection. Back still works as before.
 
 #### Sentence mining
 
@@ -1055,7 +1038,7 @@ its own deck. Each line holds:
 **Importing into Anki:** copy the file to your computer and open it with **File → Import**. The first lines of the
 file describe its layout, so Anki sets the columns, HTML and tags up by itself. The files only ever grow: import
 the same file again later and Anki updates the cards it already has rather than duplicating them, because every
-card carries a stable ID. Saving the same word from the same sentence twice is harmless for the same reason.
+card carries a stable ID. Saving the same word from the same sentence twice does not duplicate it either.
 
 A sentence cut off by the bottom of the page is finished from the start of the next page. In manga the sentence
 comes from the speech bubble the word is in.
@@ -1070,7 +1053,7 @@ shortcut switched on, Power + Side Up syncs it at any time: see [Syncing the Clo
 Reader menu → **Translate Page**. The translation opens in the floating panel over the page, like a dictionary
 entry: a long one is paged, with Left/Right, the page buttons or your touch page-turn gesture, and Back or a tap
 outside the panel returns to the page. The connection and "Translating…" show in the panel too. The last Wi-Fi
-network you used is joined straight away; only when there is none, or it does not answer, does the Wi-Fi list open,
+network you used is joined first. If there is none, or it does not answer, the Wi-Fi list opens,
 and the panel comes back over the page once you have picked a network. Needs a Gemini API key in
 `/system/gemini.key`. The folder can also be called `/.system/`, which hides it from the file
 browser; when both exist, `/.system/` is used.
@@ -1080,7 +1063,7 @@ browser; when both exist, `/.system/` is used.
 ### 6.3 Japanese Books
 
 Copy a Japanese EPUB to the SD card and open it from the Library. Vertical text activates on its own when the
-book declares `<dc:language>ja</dc:language>`, with no setting to find. A book with no tag, or the wrong one, is
+book declares `<dc:language>ja</dc:language>`. A book with no tag, or the wrong one, is
 recognised by the kana in its text the first time it opens.
 
 The device shows the furigana a book carries; **it does not generate furigana**. A book that ships without any
@@ -1092,8 +1075,8 @@ python3 tools/furigana_ruby/add_furigana_ruby.py --ai --gemini-key-file gemini.k
 
 A kanji's reading depends on the word and sentence it is in, so the script reads the text in context with Gemini:
 the book's text is sent to it, sentence by sentence, under your own API key (the same key Page Translation uses).
-Furigana the book already has is kept. A reading is added only when it fits the word as written — 食べる read
-たべる puts た over 食 and leaves べる alone — and a word whose reading does not fit is left bare.
+Furigana the book already has is kept. A reading is added only when it fits the word as written (食べる read
+たべる puts た over 食 and leaves べる alone) and a word whose reading does not fit is left bare.
 
 The reader menu (**Confirm**) gains **Vertical Text** and **Furigana** switches for Japanese books. Both
 toggle in place without leaving the menu, and both are remembered per book.
@@ -1104,7 +1087,7 @@ toggle in place without leaving the menu, and both are remembered per book.
 </p>
 <p align="center"><em>The toggles, and furigana set beside the kanji where the book provides it</em></p>
 
-What Word Lookup (6.1) does for Japanese in particular:
+What Word Lookup (6.1) does for Japanese:
 
 - **Conjugations are undone.** 読んで finds 読む and 食べませんでした finds 食べる; the entry is the dictionary form.
 - **Vocabulary, names and grammar** are three dictionaries. A word listed in both the vocabulary and the grammar
@@ -1135,7 +1118,7 @@ are three kinds, told apart by the book's tag:
 | Dictionary folder | `dictionaries/zh/` | `dictionaries/zh/` | `dictionaries/yue/` |
 | Dictionary | CC-CEDICT | CC-CEDICT, with the MoE 重編國語辭典 entry under it | CC-Canto and CC-CEDICT together |
 | Reading in the entry | Pinyin | Pinyin and zhuyin | Pinyin and jyutping |
-| Level in the entry | HSK | TOCFL | — |
+| Level in the entry | HSK | TOCFL | none |
 | Font | Noto Sans SC | Noto Sans TC | Noto Sans TC |
 | Opens | Horizontally | In vertical columns when the book is right-to-left, else horizontally | As traditional |
 | Punctuation in vertical text | 。，、 in the upper right of their square | 。，、 centred in their square | As traditional |
@@ -1248,7 +1231,7 @@ French then gets its own rules:
 
 | On the page | Looks up |
 | --- | --- |
-| `l'eau`, `qu'il`, `jusqu'ici` | `eau`, `il`, `ici` — the elided article or pronoun is dropped |
+| `l'eau`, `qu'il`, `jusqu'ici` | `eau`, `il`, `ici` (the elided article or pronoun is dropped) |
 | `journaux`, `bijoux`, `livres` | `journal`, `bijou`, `livre` |
 | `heureuse`, `chanteuse`, `nouvelle`, `première` | `heureux`, `chanteur`, `nouveau`, `premier` |
 | `parlaient`, `parlé`, `mangeons`, `commençait` | `parler`, `manger`, `commencer` |
@@ -1259,8 +1242,8 @@ French then gets its own rules:
 English, and any language without rules of its own, falls back to plurals, possessives and verb endings (`dogs` →
 `dog`, `stories` → `story`, `running` → `run`).
 
-The rules cover regular word forms. French verbs that share no stem with their infinitive — `est` and `fut` for
-*être*, `ont` and `eut` for *avoir*, `vais` for *aller* — cannot be reached by any rule, and need a `.syn` file
+The rules cover regular word forms. French verbs that share no stem with their infinitive (`est` and `fut` for
+*être*, `ont` and `eut` for *avoir*, `vais` for *aller*) cannot be reached by any rule, and need a `.syn` file
 in the dictionary folder instead. Many dictionaries ship one; see [docs/dictionary.md](docs/dictionary.md).
 
 ### 6.6 Manga, Manhua and Comics
@@ -1377,7 +1360,7 @@ builds its index on its first lookup, so that one lookup is slower.
 
 The dictionary you choose in **Settings → Reader → Dictionary** is also the fallback. It is used when the book
 carries no language, or when nothing under `dictionaries/` matches the one it carries. Reader Settings shows the
-dictionary a book reads first, which is the quickest way to check a tag is being read.
+dictionary a book reads first, which shows whether its tag is being read.
 
 The folder can also be called `.dictionaries/`, which keeps it out of the file browser. Everything above works the
 same there, including `jp/`. When both exist, StarDict dictionaries are picked up from either folder, while Japanese
@@ -1398,11 +1381,11 @@ streak, and a calendar of the days you read.
 
 A row of tabs across the top splits the same figures by the language of what you read. **All** is everything
 together; after it comes one tab per language the device has seen. Each tab keeps its own streak, calendar and
-totals, so a Japanese streak survives an evening spent with an English book.
+totals, so reading an English book does not break a Japanese streak.
 
 Tabs are named where the firmware has a translation for the language, so `ja` shows as 日本語. A language it has
 no translation for keeps its tag, `ZH` for instance, rather than being given the wrong name. Books that declare no
-language at all — TXT, XTC and manga converted without `--language` — collect in an **Unknown** tab.
+language at all (TXT, XTC and manga converted without `--language`) collect in an **Unknown** tab.
 
 | Button | Action |
 | --- | --- |
@@ -1428,7 +1411,7 @@ one. Waking the device back into a book does count as a new session, so an eveni
 several.
 
 This history starts when you install the version that added it. A book you read before that says "No reading
-recorded yet" until you next open it. Your overall Insights numbers go back as far as they always did.
+recorded yet" until you next open it. Your overall Insights numbers are not affected.
 
 <p align="center"><img src="docs/images/screenshots/book-stats.png" width="260" alt="Per-book stats for one book"></p>
 
@@ -1443,21 +1426,19 @@ Below are up to three books from the same folder and **Go to Home**. A short pre
 
 ### 7.3 What the Numbers Do Not Cover
 
-Worth knowing before you read too much into them.
-
 - Reading time counts whole minutes, so a short sitting adds nothing and the average session runs slightly short.
 - Books finished per language can undercount. A book's language is kept in a list of the 150 most recently read
   books, and a book finished long before that has lost its tag.
 - Days recorded before per-language tracking existed carry no language and cannot be assigned one now.
 - The device keeps roughly a decade of overall history and a few years of per-language history in memory. Older
-  days drop off the end. This is a limit of a device with 380KB of RAM, not a choice about what is interesting.
+  days drop off the end. The device has 380KB of RAM.
 
 ## 8. Current Limitations & Roadmap
 
 Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
 
 * **Cover Images:** Large cover images embedded into EPUB require several seconds (~10s for ~2000 pixel tall image) to convert for sleep screen and home screen thumbnail. Consider optimizing the EPUB with e.g. https://github.com/bigbag/epub-to-xtc-converter to speed this up.
-* **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs are not supported and fall back to an `[Image]` placeholder. Progressive JPEGs do render, but only their DC coefficients are decoded — a preview at one-eighth resolution, scaled back up, so fine detail is lost. The one variant that is refused outright is a progressive JPEG that both splits its DC coefficients across one scan per component *and* uses chroma subsampling; re-encode those as baseline (`jpegtran -copy none -optimize`, or run the page through the manga converter).
+* **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs are not supported and fall back to an `[Image]` placeholder. Progressive JPEGs do render, but only their DC coefficients are decoded: a preview at one-eighth resolution, scaled back up, so fine detail is lost. The one variant that is refused outright is a progressive JPEG that both splits its DC coefficients across one scan per component *and* uses chroma subsampling; re-encode those as baseline (`jpegtran -copy none -optimize`, or run the page through the manga converter).
 
 ---
 
@@ -1485,8 +1466,8 @@ python3 scripts/debugging_monitor.py COM7                # Windows
 
 - Color-coded log output by category (errors, memory, display, EPUB parsing, etc.)
 - Live memory usage graph (free RAM, total RAM, max contiguous allocation) updated every second
-- Interactive command prompt — type a command and press Enter to send it to the device
-- Screenshot capture — saves the current display to `screenshot.bmp` when triggered by the device
+- Interactive command prompt: type a command and press Enter to send it to the device
+- Screenshot capture: saves the current display to `screenshot.bmp` when triggered by the device
 
 **Options:**
 

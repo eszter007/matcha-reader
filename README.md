@@ -20,10 +20,10 @@ This page is the short version. How to use everything is in the [User Guide](USE
 | | Japanese | Mandarin, simplified | Mandarin, traditional | Cantonese | Other languages |
 | --- | --- | --- | --- | --- | --- |
 | Word lookup | Page split into words, conjugations undone | Page split into words | Same | Same | Word by word, with word-form rules |
-| Reading shown | Kana | Pinyin, HSK level | Pinyin, zhuyin, TOCFL level | Pinyin, jyutping | — |
+| Reading shown | Kana | Pinyin, HSK level | Pinyin, zhuyin, TOCFL level | Pinyin, jyutping | none |
 | Dictionary | Jitendex / JMdict, names, grammar | CC-CEDICT | CC-CEDICT + MoE 重編國語辭典 | CC-Canto + CC-CEDICT | Any StarDict |
 | Text layout | Vertical by default | Horizontal | Vertical for right-to-left books | As traditional | Horizontal |
-| Readings above the text | Furigana | Pinyin | Pinyin or zhuyin | — | — |
+| Readings above the text | Furigana | Pinyin | Pinyin or zhuyin | none | none |
 | Font | Built in | SD font required | SD font required | SD font required | Built in |
 
 Comics, sentence mining and page translation work in every column.
@@ -32,7 +32,7 @@ Comics, sentence mining and page translation work in every column.
 
 ### Word lookup
 
-Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is scanned first, so the cursor only lands on words that have an entry. The definition opens in a panel floating over the page. On a touch device, long-press a word to open it directly. → [Guide §6.1](USER_GUIDE.md#61-word-lookup)
+Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is scanned first, so the cursor only lands on words that have an entry. The definition opens in a panel floating over the page. On a touch device, long-press a word to open it directly. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
 
 <p align="center">
   <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">
@@ -40,9 +40,9 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
   <img src="docs/images/screenshots/word-lookup-chinese.png" width="260" alt="Word lookup panel over a page of 紅樓夢: 繁華 with pinyin and zhuyin, both scripts and two senses">
 </p>
 
-**Sentence mining.** Save a looked-up word with its sentence, ready for Anki. Each save adds a line to a CSV per language (`sentences-ja.csv`, `sentences-zh.csv`, …) that Anki imports as is. → [Guide §6.1](USER_GUIDE.md#sentence-mining)
+**Sentence mining.** Save a looked-up word with its sentence, ready for Anki. Each save adds a line to a CSV per language (`sentences-ja.csv`, `sentences-zh.csv`, …) that Anki imports as is. See [Guide §6.1](USER_GUIDE.md#sentence-mining).
 
-**Page translation.** Translates the current page to English with Gemini, in the same panel. Needs Wi-Fi and your own API key. → [Guide §6.2](USER_GUIDE.md#62-page-translation)
+**Page translation.** Translates the current page to English with Gemini, in the same panel. Needs Wi-Fi and your own API key. See [Guide §6.2](USER_GUIDE.md#62-page-translation).
 
 <p align="center"><img src="docs/images/screenshots/translate-page.png" width="260" alt="A page translation in the floating panel"></p>
 
@@ -52,7 +52,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 - **Conjugations resolve to the dictionary form**: 読んで becomes 読む, 食べませんでした becomes 食べる.
 - **Vocabulary, names and grammar** each come from their own dictionary.
 - **Furigana for books that have none**: a script adds it to the EPUB on your computer.
-- **A font is built in**; an SD font looks better and adds rare kanji.
+- **A font is built in.** An SD font looks better and adds rare kanji.
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="260" alt="Vertical Japanese text">
@@ -60,7 +60,7 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 </p>
 <p align="center"><em>The same passage, Vertical Text on and off</em></p>
 
-→ [Guide §6.3](USER_GUIDE.md#63-japanese-books)
+See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 
 ### For Chinese learners
 
@@ -73,15 +73,15 @@ Look up any word on the page, in vertical or horizontal text. In Japanese and Ch
 
 <p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character"></p>
 
-→ [Guide §6.4](USER_GUIDE.md#64-chinese-books)
+See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
 
 ### For learners of other languages
 
-Any StarDict dictionary works, picked by the book's language, with no conversion. A lookup that misses is retried with word-form rules: fullest for French (`l'eau` → `eau`, `journaux` → `journal`, `parlaient` → `parler`), plurals and verb endings elsewhere. → [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages)
+Any StarDict dictionary works, picked by the book's language, with no conversion. A lookup that misses is retried with word-form rules: fullest for French (`l'eau` → `eau`, `journaux` → `journal`, `parlaient` → `parler`), plurals and verb endings elsewhere. See [Guide §6.5](USER_GUIDE.md#65-books-in-other-languages).
 
 ### Manga, manhua and comics
 
-Panels, their text and translations are found when you convert the book, so lookup works offline. Read panel by panel, each scaled to fill the screen, and look up any word right in the speech bubble. → [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics), [converting](docs/manga-conversion.md)
+Panels, their text and translations are found when you convert the book, so lookup works offline. Read panel by panel, each scaled to fill the screen, and look up any word right in the speech bubble. See [Guide §6.6](USER_GUIDE.md#66-manga-manhua-and-comics) and [converting](docs/manga-conversion.md).
 
 <p align="center">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Full page view">
@@ -99,7 +99,7 @@ Panels, their text and translations are found when you convert the book, so look
 
 ### Library and home
 
-Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** tab for folders. The **Cover Grid** theme adds a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for stats, Mark as Read and Delete. CrossPoint's own list view is still there. → [Guide §3.1](USER_GUIDE.md#31-home-screen), [§3.4](USER_GUIDE.md#34-library-screen)
+Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** tab for folders. The **Cover Grid** theme adds a tab bar for Home, Library, File Transfer, Insights and Settings. Long-press a cover for stats, Mark as Read and Delete. CrossPoint's own list view is still there. See [Guide §3.1](USER_GUIDE.md#31-home-screen) and [§3.4](USER_GUIDE.md#34-library-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/tab-home.png" width="150" alt="Home tab: the cover grid">
@@ -111,7 +111,7 @@ Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** t
 
 ### Reading stats
 
-Streak, minutes this week, books finished and a calendar, split by language. Each book has its own stats, and finishing one opens a summary with the next books in its folder. → [Guide §7](USER_GUIDE.md#7-reading-stats)
+Streak, minutes this week, books finished and a calendar, split by language. Each book has its own stats, and finishing one opens a summary with the next books in its folder. See [Guide §7](USER_GUIDE.md#7-reading-stats).
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">
@@ -121,7 +121,7 @@ Streak, minutes this week, books finished and a calendar, split by language. Eac
 
 ### Transparent sleep screen
 
-A wallpaper laid over the page you were reading, so the book shows through. → [Guide §3.7](USER_GUIDE.md#37-sleep-screen)
+A wallpaper laid over the page you were reading, so the book shows through. See [Guide §3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center"><img src="docs/images/screenshots/sleep-screen-transparent.png" width="260" alt="Sleep wallpaper over the page text, which stays readable behind it"></p>
 
@@ -155,7 +155,7 @@ You need a computer, a USB-C cable and the device's SD card. Files go onto the c
 2. Connect the device by USB-C and wake it.
 3. Open the [CrossPoint flash tool](https://crosspointreader.com/#flash-tools), select your device, click **Custom .bin** and choose the file.
 
-Some units bought from third-party stores are USB-locked and must be unlocked first; see [USB-locked devices](https://github.com/crosspoint-reader/crosspoint-reader#usb-locked-devices-xteink-unlocker) upstream. After the first flash, **Settings → System → Check for updates** installs new Matcha releases over Wi-Fi.
+Some units bought from third-party stores are USB-locked and must be unlocked first. See [USB-locked devices](https://github.com/crosspoint-reader/crosspoint-reader#usb-locked-devices-xteink-unlocker) upstream. After the first flash, **Settings → System → Check for updates** installs new Matcha releases over Wi-Fi.
 
 **2. Install a dictionary** for each language you read. The book's language picks the folder by itself.
 
@@ -168,13 +168,13 @@ Some units bought from third-party stores are USB-locked and must be unlocked fi
 
 To convert your own, use the [browser tool](https://eszter007.github.io/matcha-reader-tools/). Step by step: [docs/dictionary-setup.md](docs/dictionary-setup.md).
 
-**3. Install a font** (Chinese needs one; Japanese is optional).
+**3. Install a font** (required for Chinese, optional for Japanese).
 
 | You read | Font |
 | --- | --- |
 | Japanese | `japanese-fonts.zip` from the [latest release](https://github.com/eszter007/matcha-reader/releases/latest), unzipped so the card holds `.fonts/` |
 | Mandarin, simplified | Noto Sans SC |
-| Mandarin, traditional; Cantonese | Noto Sans TC |
+| Mandarin, traditional, and Cantonese | Noto Sans TC |
 
 For Chinese, convert the font with the [browser tool](https://eszter007.github.io/matcha-reader-tools/) and put the result in `.fonts/<Family>/<Family>_<size>.cpfont`, for example `.fonts/NotoSansSC/NotoSansSC_16.cpfont`. More in [docs/sd-card-fonts.md](docs/sd-card-fonts.md).
 
@@ -182,7 +182,7 @@ For Chinese, convert the font with the [browser tool](https://eszter007.github.i
 
 **5. Optional extras.**
 
-- **Interface language:** Settings → System → Language. Languages marked *Needs pack* need `language-packs.zip` from the release; see [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
+- **Interface language:** Settings → System → Language. Languages marked *Needs pack* need `language-packs.zip` from the release. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
 - **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/system/gemini.key` on the card.
 
 ## Building from source
