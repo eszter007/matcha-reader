@@ -518,9 +518,11 @@ void BaseTheme::applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::Head
 
   // Header clock, opposite the battery, on every screen that draws this band
   // (SETTINGS.clockShowInHeader). Themes whose title layout has no room for
-  // the clock's left reserve opt out via headerShowsClock.
+  // the clock's left reserve opt out via headerShowsClock. Boards without a clock chip (X4) show
+  // the system clock too, even when it is only the time restored at boot: a visibly wrong time is
+  // what tells the reader to sync it.
   static char clockText[10];
-  if (metrics.headerShowsClock && SETTINGS.clockShowInHeader && halClock.isAvailable() &&
+  if (metrics.headerShowsClock && SETTINGS.clockShowInHeader && halClock.hasTime() &&
       halClock.formatTime(clockText, sizeof(clockText), SETTINGS.clockFormat == 1)) {
     status.clockText = clockText;
   }

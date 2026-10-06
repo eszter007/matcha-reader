@@ -280,7 +280,8 @@ class BaseTheme {
                         const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
                         const std::function<bool(int index)>& rowDimmed = nullptr, bool showScrollbar = true) const;
   // Also draws the wall clock opposite the battery when the user enabled
-  // SETTINGS.clockShowInHeader and an RTC is present. On touch boards a
+  // SETTINGS.clockShowInHeader and the device has a time (from its clock chip, or the system clock
+  // on boards without one). On touch boards a
   // tappable back button leads the band (see HeaderBackTapTarget); root
   // screens that own their stack bottom pass backButton = false.
   // underline: -1 leaves it to the theme (the Cover Grid theme draws no rule under any header),

@@ -100,6 +100,8 @@ Switch on **Power + Up Syncs Clock** under Settings → Controls → Shortcuts (
 
 Devices without a clock chip (the X4) drift while asleep and lose the time on a restart, which skews the reading stats; a sync puts it right. The same action is in the clock settings.
 
+**Settings → System → Clock → Show in Header** shows the time at the top left of every menu screen, opposite the battery. It updates whenever the screen redraws. On the X4 it shows the device's own time even when that has drifted, so a wrong time there is the cue to sync.
+
 ### Frontlight (X4 Pro only)
 
 The X4 Pro has a built-in frontlight with adjustable brightness and warmth. It is controlled from a swipe panel rather than the Settings menu:
