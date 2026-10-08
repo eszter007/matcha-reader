@@ -7,6 +7,7 @@ input order and asserts the sequence the reader should walk them in.
 """
 
 from convert_manga import (
+    drop_blank_panels,
     PANEL_RETRY_COVER_FRAC,
     _panel_cover_frac,
     _webtoon_cut_points,
@@ -477,6 +478,25 @@ def test_small_or_stray_ink_is_not_a_panel():
     page_number = [360, 1150, 400, 1180]
     bleed = [0, 1110, 760, 1150]  # art running past the frame's bottom edge: a strip
     assert fill_uncovered_art([kept], [], _page_with_art(kept, page_number, bleed)) == [kept]
+
+
+def test_blank_and_margin_panels_are_dropped():
+    art, blank = [40, 40, 720, 600], [40, 640, 720, 900]
+    page_number = [500, 1120, 760, 1200]  # thin strip at the bottom edge, a few marks of ink
+    img = _page_with_art(art, [700, 1150, 730, 1180])
+    kept, _ = drop_blank_panels([art, blank, page_number], [], img)
+    assert kept == [art]
+
+
+def test_a_text_only_panel_is_kept():
+    bubble = [40, 640, 720, 900]  # all white, but the model found text in it
+    kept, _ = drop_blank_panels([bubble], [[300, 700, 400, 850]], _page_with_art())
+    assert kept == [bubble]
+
+
+def test_a_page_of_blank_panels_keeps_its_frames():
+    frames = [[0, 0, 380, 600], [380, 0, 760, 600]]
+    assert drop_blank_panels(frames, [], _page_with_art())[0] == frames
 
 
 if __name__ == "__main__":

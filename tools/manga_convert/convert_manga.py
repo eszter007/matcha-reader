@@ -1307,6 +1307,43 @@ def _detect_panels_grid(img) -> list[list[int]]:
     return panels
 
 
+# A panel holding no detected text and next to no ink is page furniture the model boxed: the
+# margin around a page number, the tail of a bubble crossing the page edge, a blank gap. Each
+# would be a zoom step showing nothing. Real art is far darker, and a text-only panel (a
+# narration box, a lone bubble) keeps its text box. Thin strips along the top or bottom edge --
+# the footer and page-number band -- go at a higher ink level, since a bubble edge or a stray
+# line puts some ink there.
+BLANK_PANEL_MAX_INK = 0.035
+EDGE_STRIP_MAX_INK = 0.08
+EDGE_STRIP_MAX_HEIGHT_FRAC = 0.1
+EDGE_STRIP_MARGIN_FRAC = 0.02
+
+
+def _ink_frac(img, box: list[int]) -> float:
+    hist = img.crop(box).convert("L").histogram()
+    return sum(hist[:INK_LEVEL]) / max(1, sum(hist))
+
+
+def drop_blank_panels(frames: list[list[int]], texts: list[list[int]],
+                      img) -> tuple[list[list[int]], list[list[int]]]:
+    """Remove panels that show nothing: no text inside and almost no ink. A page whose every
+    panel is blank keeps its frames, so a page always has at least one."""
+    def blank(box):
+        if is_full_page_panel(box, img.width, img.height):
+            return False
+        if any(_overlap_area(t, box) >= 0.5 * max(1, _box_area(t)) for t in texts):
+            return False
+        ink = _ink_frac(img, box)
+        if ink < BLANK_PANEL_MAX_INK:
+            return True
+        margin = img.height * EDGE_STRIP_MARGIN_FRAC
+        at_edge = box[1] <= margin or box[3] >= img.height - margin
+        return at_edge and box[3] - box[1] < EDGE_STRIP_MAX_HEIGHT_FRAC * img.height and ink < EDGE_STRIP_MAX_INK
+
+    kept = [f for f in frames if not blank(f)]
+    return (kept or frames), texts
+
+
 # The grid replaces a page-sized frame only when it finds a few real cells. A title line, a
 # credits list or a page of sketches cuts into dozens of strips, each a pointless zoom step,
 # and a nearly blank page (a disclaimer, a colophon) into empty cells. Every cell must cover
@@ -1346,7 +1383,7 @@ def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
     detected = _detect_panels_yolo(img)
     if detected is None:
         return _detect_panels_grid(img), []
-    frames, texts = detected
+    frames, texts = drop_blank_panels(*detected, img)
     if len(frames) == 1 and is_full_page_panel(frames[0], img.width, img.height):
         grid = _detect_panels_grid(img)
         page_area = img.width * img.height
