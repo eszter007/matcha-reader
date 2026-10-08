@@ -1307,6 +1307,25 @@ def _detect_panels_grid(img) -> list[list[int]]:
     return panels
 
 
+# The grid replaces a page-sized frame only when it finds a few real cells. A title line, a
+# credits list or a page of sketches cuts into dozens of strips, each a pointless zoom step,
+# and a nearly blank page (a disclaimer, a colophon) into empty cells. Every cell must cover
+# this fraction of the page, span this fraction of its width and height, and hold this much ink.
+GRID_FALLBACK_MAX_CELLS = 8
+GRID_FALLBACK_MIN_CELL_FRAC = 0.06
+GRID_FALLBACK_MIN_SIDE_FRAC = 0.12
+GRID_FALLBACK_MIN_INK_FRAC = 0.03
+
+
+def _grid_cell_is_panel(img, cell: list[int]) -> bool:
+    w, h = cell[2] - cell[0], cell[3] - cell[1]
+    if (w * h < GRID_FALLBACK_MIN_CELL_FRAC * img.width * img.height
+            or w < GRID_FALLBACK_MIN_SIDE_FRAC * img.width or h < GRID_FALLBACK_MIN_SIDE_FRAC * img.height):
+        return False
+    hist = img.crop(cell).convert("L").histogram()
+    return sum(hist[:INK_LEVEL]) >= GRID_FALLBACK_MIN_INK_FRAC * w * h
+
+
 def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
     """Detect panel rectangles -- YOLO model if available, else grid heuristic.
 
@@ -1321,7 +1340,8 @@ def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
     page, most often -- comes back as a single frame covering the page: real content, but
     nothing to zoom into. The grid heuristic still applies there, and finds real gutters where
     one exists (the whitespace between a novel's text columns behaves exactly like the
-    whitespace between panels), so it gets a try whenever YOLO gives up.
+    whitespace between panels), so it gets a try whenever YOLO gives up -- kept only when it
+    yields a few panel-sized cells.
     """
     detected = _detect_panels_yolo(img)
     if detected is None:
@@ -1329,7 +1349,9 @@ def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
     frames, texts = detected
     if len(frames) == 1 and is_full_page_panel(frames[0], img.width, img.height):
         grid = _detect_panels_grid(img)
-        if len(grid) > 1:
+        page_area = img.width * img.height
+        if (1 < len(grid) <= GRID_FALLBACK_MAX_CELLS
+                and all(_grid_cell_is_panel(img, c) for c in grid)):
             return grid, []
     return frames, texts
 
