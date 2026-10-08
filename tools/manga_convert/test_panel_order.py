@@ -385,6 +385,30 @@ def test_block_outside_every_panel_goes_to_the_nearest():
     panels = [[0, 0, 100, 100], [400, 400, 500, 500]]
     stray = {"box": [380, 380, 390, 390]}
     assert assign_blocks_to_panels([stray], panels) == [[], [stray]]
+def test_tall_panel_between_two_columns():
+    """Vol 3 p38 of The Promised Neverland: under a full-width strip, a right column of two,
+    a tall panel, then a left column of two. Pairwise rules alone form a cycle here."""
+    named = {
+        "strip": [27, 413, 695, 656],
+        "right_top": [483, 673, 762, 892], "right_bottom": [484, 911, 763, 1111],
+        "tall": [352, 668, 474, 1198],
+        "left_top": [26, 674, 347, 878], "left_bottom": [26, 894, 347, 1110],
+    }
+    assert order(list(named.values()), named) == [
+        "strip", "right_top", "right_bottom", "tall", "left_top", "left_bottom"]
+
+
+def test_slanted_middle_panel_overlapping_both_columns():
+    """Vol 3 p22: the tall middle panel's box overlaps both columns by ~50px (slanted borders)."""
+    named = {
+        "right_1": [476, 713, 764, 831], "right_2": [488, 849, 764, 980], "right_3": [503, 997, 763, 1110],
+        "middle": [254, 713, 527, 1199],
+        "left_1": [26, 714, 301, 884], "left_2": [25, 901, 288, 1200],
+    }
+    assert order(list(named.values()), named) == [
+        "right_1", "right_2", "right_3", "middle", "left_1", "left_2"]
+
+
 # A 4-koma page as the detector returns it: two strips of four, 300 wide, on a 760 page.
 _RIGHT = [[420, 170 + 235 * i, 710, 390 + 235 * i] for i in range(4)]
 _LEFT = [[100, 170 + 235 * i, 390, 390 + 235 * i] for i in range(4)]

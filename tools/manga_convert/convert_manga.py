@@ -1454,8 +1454,64 @@ def yonkoma_reading_order(panels: list[list[int]], page_w: int,
     return [p for u in units for p in u]
 
 
+# Panels may overlap across a gutter and still be cut apart there: a slanted border pushes a
+# detected box past the gutter. The overlap allowed is this fraction of the group's extent, or
+# of the smaller of the two panels meeting at the gutter, whichever is larger.
+GUTTER_CUT_TOL_FRAC = 0.03
+GUTTER_CUT_PANEL_FRAC = 0.25
+
+
+def _gutter_groups(panels: list[list[int]], axis: int) -> list[list[list[int]]]:
+    """Split panels at every gutter running the full extent of the group along `axis`
+    (0 = vertical gutters, splitting columns; 1 = horizontal gutters, splitting rows).
+    Groups come back in increasing coordinate order; a single group means no such gutter."""
+    lo, hi = axis, axis + 2
+    ordered = sorted(panels, key=lambda p: (p[lo], p[hi]))
+    extent = max(p[hi] for p in panels) - min(p[lo] for p in panels)
+    tol = extent * GUTTER_CUT_TOL_FRAC
+    groups = [[ordered[0]]]
+    reacher = ordered[0]  # the panel reaching furthest so far
+    for p in ordered[1:]:
+        smaller = min(p[hi] - p[lo], reacher[hi] - reacher[lo])
+        if p[lo] >= reacher[hi] - max(tol, smaller * GUTTER_CUT_PANEL_FRAC):
+            groups.append([p])
+        else:
+            groups[-1].append(p)
+        if p[hi] > reacher[hi]:
+            reacher = p
+    return groups
+
+
 def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True,
                               column_major: bool = False) -> list[list[int]]:
+    """Sort panel boxes in reading order by cutting the page along its gutters.
+
+    A gutter running the whole width splits the page into rows, read top to bottom; a gutter
+    running the whole height of a row splits it into columns, read right to left (left to right
+    when rtl=False); each piece is cut again the same way. This is how a page is read, and it
+    handles layouts the pairwise rule cannot order at all -- a tall panel between two stacked
+    columns reads after the right column and before the left one, which no comparison of two
+    panels alone can establish.
+
+    column_major=True is yonkoma order: columns first, each read top to bottom.
+
+    A group with no full-length gutter -- slanted borders, overlapping boxes -- falls back to
+    the pairwise reads-before graph in _sort_panels_graph().
+    """
+    if len(panels) <= 1:
+        return list(panels)
+    axes = (0, 1) if column_major else (1, 0)
+    for axis in axes:
+        groups = _gutter_groups(panels, axis)
+        if len(groups) > 1:
+            if axis == 0 and rtl:
+                groups.reverse()
+            return [p for g in groups for p in sort_panels_reading_order(g, rtl, column_major)]
+    return _sort_panels_graph(panels, rtl, column_major)
+
+
+def _sort_panels_graph(panels: list[list[int]], rtl: bool = True,
+                       column_major: bool = False) -> list[list[int]]:
     """Sort panel boxes in reading order via a "reads-before" graph, then a
     topological sort -- robust to mixed-size grids (e.g. one tall panel
     beside two stacked shorter ones), which simple row-clustering by
@@ -1529,9 +1585,9 @@ def sort_panels_reading_order(panels: list[list[int]], rtl: bool = True,
                 available.append(j)
 
     if len(result) != n:
-        # Inconsistent/cyclic constraints (shouldn't happen with these two
-        # simple rules, but don't silently drop panels if it does).
-        return panels
+        # The pairwise rules contradict each other (a cycle): read the rest by position.
+        done = set(result)
+        result += sorted((i for i in range(n) if i not in done), key=tie_break_key)
 
     return [panels[i] for i in result]
 
