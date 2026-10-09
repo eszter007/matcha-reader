@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Epub/Page.h>
+#include <Epub/VerticalParsedText.h>
 
 #include <array>
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "VerticalClipCells.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
 #include "components/themes/BaseTheme.h"
@@ -19,6 +21,19 @@ class ClipSelectionActivity final : public Activity {
   ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                         std::vector<std::unique_ptr<Page>> pages, int marginLeft, int marginTop, int initialX = -1,
                         int initialY = -1, int fontId = -1);
+  // A vertical page: the same selection over character cells (a rotated Latin run is one cell).
+  // Rows are columns, so "along the text" is down a column and "across" is between columns.
+  // The page is taken by value: the VerticalSection's single page slot is re-faulted by the
+  // reader's render task while a child activity runs, so a reference into it goes stale.
+  ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, VerticalPage page, bool furigana,
+                        int marginLeft, int marginTop, int fontId, int initialX = -1, int initialY = -1);
+
+  // Vertical pages are repainted by the reader (the same body draw and glyph prewarm it uses for
+  // its own page and for the word-lookup panel), so the selection never drifts from the page.
+  void setRepaintPage(void* ctx, bool (*fn)(void*)) {
+    repaintCtx = ctx;
+    repaintPage = fn;
+  }
 
   void onEnter() override;
   void loop() override;
@@ -48,6 +63,13 @@ class ClipSelectionActivity final : public Activity {
   static constexpr size_t MAX_SELECTABLE_WORDS = 240;
 
   bool extractWords();
+  bool extractVerticalCells();
+  void prewarmVerticalPage();
+  bool vertical() const { return verticalPage != nullptr; }
+  size_t pageCount() const { return vertical() ? 1 : pages.size(); }
+  // Vertical cells are highlighted by inversion (their glyphs cannot be redrawn word by word).
+  void invertWord(const WordBox& word, int offsetX, int offset) const;
+  void drawPage(int offsetX, int offsetY);
   int closestInRow(uint16_t row, int centerX) const;
   int wordAt(int x, int y) const;
   int dragWordAt(int x, int y) const;
@@ -76,6 +98,13 @@ class ClipSelectionActivity final : public Activity {
   void prewarmWord(int index) const;
 
   std::vector<std::unique_ptr<Page>> pages;
+  void* repaintCtx = nullptr;
+  bool (*repaintPage)(void*) = nullptr;
+  VerticalPage ownedVerticalPage;
+  const VerticalPage* verticalPage = nullptr;  // &ownedVerticalPage on a vertical page
+  const bool furigana = false;
+  // NUL-terminated UTF-8 of each single-character vertical cell; WordBox::text points in here.
+  std::unique_ptr<char[]> verticalTextPool;
   const int marginLeft;
   const int marginTop;
   const int initialX;

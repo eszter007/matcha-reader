@@ -64,7 +64,6 @@
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "VerticalClipCells.h"
-#include "VerticalClipSelectionActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/settings/SettingsActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
@@ -1206,8 +1205,13 @@ void EpubReaderActivity::readerLoop() {
         }
       }
       if (verticalSection && CLIPPINGS.hasClippings()) {
-        const VerticalPage* vpage = verticalSection->getPage();
-        if (vpage && verticalClippingAtPoint(*vpage, pressX, pressY) >= 0) {
+        bool onClipping = false;
+        {
+          RenderLock lock(*this);
+          const VerticalPage* vpage = verticalSection->getPage();
+          onClipping = vpage && verticalClippingAtPoint(*vpage, pressX, pressY) >= 0;
+        }
+        if (onClipping) {
           startClipSelection(pressX, pressY);
           return;
         }
@@ -4918,43 +4922,68 @@ void EpubReaderActivity::drawVerticalClippingHighlights(const VerticalPage& vpag
 
 void EpubReaderActivity::startVerticalClipSelection(const int initialX, const int initialY) {
   if (!verticalSection || !epub) return;
-  // The selection keeps a reference to the loaded page; a running build could replace it.
+  // The page is copied below; a running build could still replace the section underneath.
   if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
     LOG_ERR("CLIP", "Vertical chapter still building; clipping selection refused");
     requestUpdate();
     return;
   }
-  const VerticalPage* vpage = verticalSection->getPage();
-  if (!vpage || vpage->isImagePage()) {
-    requestUpdate();
-    return;
-  }
-  if (initialX >= 0 && CLIPPINGS.hasClippings()) {
-    const int clippingIndex = verticalClippingAtPoint(*vpage, initialX, initialY);
-    if (clippingIndex >= 0) {
-      const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
-      if (!removed) LOG_ERR("CLIP", "Failed to delete highlighted clipping %d", clippingIndex);
-      clippingMessage = removed ? StrId::STR_CLIPPING_REMOVED : StrId::STR_CLIPPING_DELETE_FAILED;
-      showClippingMessage = true;
-      clippingMessageTime = millis();
+  // Everything that reads the section's page slot happens under the render lock: the render
+  // task's warm tail re-faults that slot for the next page, which is why the activity gets a COPY
+  // of the page. startActivityForResult() only queues, so it is called after the lock is released.
+  std::unique_ptr<ClipSelectionActivity> activity;
+  uint16_t pageNumber = 0;
+  uint16_t pageCount = 0;
+  {
+    RenderLock lock(*this);
+    const VerticalPage* vpage = verticalSection->getPage();
+    if (!vpage || vpage->isImagePage()) {
       requestUpdate();
       return;
     }
+    if (initialX >= 0 && CLIPPINGS.hasClippings()) {
+      const int clippingIndex = verticalClippingAtPoint(*vpage, initialX, initialY);
+      if (clippingIndex >= 0) {
+        const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
+        if (!removed) LOG_ERR("CLIP", "Failed to delete highlighted clipping %d", clippingIndex);
+        clippingMessage = removed ? StrId::STR_CLIPPING_REMOVED : StrId::STR_CLIPPING_DELETE_FAILED;
+        showClippingMessage = true;
+        clippingMessageTime = millis();
+        requestUpdate();
+        return;
+      }
+    }
+    // The copy is the page's glyph vector plus its text pool; refuse rather than abort on a heap
+    // that cannot hold it (vector copies are not nothrow).
+    const size_t copyBytes = vpage->glyphs.size() * sizeof(VerticalGlyph) + 4 * 1024;
+    if (ESP.getMaxAllocHeap() < copyBytes + 8 * 1024) {
+      LOG_ERR("CLIP", "Not enough heap to copy the vertical page (%u bytes)", static_cast<unsigned>(copyBytes));
+      requestUpdate();
+      return;
+    }
+    pageNumber = static_cast<uint16_t>(verticalSection->currentPage);
+    pageCount = verticalSection->pageCount;
+    int marginTop, marginRight, marginBottom, marginLeft;
+    renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
+    marginTop += SETTINGS.screenMargin;
+    marginLeft += SETTINGS.screenMargin;
+    activity =
+        makeUniqueNoThrow<ClipSelectionActivity>(renderer, mappedInput, VerticalPage(*vpage), useFurigana(), marginLeft,
+                                                 marginTop, effectiveReaderFontId(), initialX, initialY);
   }
+  if (!activity) {
+    LOG_ERR("CLIP", "OOM: vertical clipping selection");
+    requestUpdate();
+    return;
+  }
+  activity->setRepaintPage(this, &repaintPageForPanelThunk);
   if (buildViewportWidth == 0 || buildViewportHeight == 0) {
     LOG_ERR("CLIP", "Cannot anchor clipping before the reader viewport is initialized");
     requestUpdate();
     return;
   }
   const uint32_t layoutSignature = readerRenderSpecSignature(readerSpec(buildViewportWidth, buildViewportHeight));
-  const uint16_t pageNumber = static_cast<uint16_t>(verticalSection->currentPage);
-  const uint16_t pageCount = verticalSection->pageCount;
   const uint16_t spineIndex = static_cast<uint16_t>(currentSpineIndex);
-
-  int marginTop, marginRight, marginBottom, marginLeft;
-  renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
-  marginTop += SETTINGS.screenMargin;
-  marginLeft += SETTINGS.screenMargin;
 
   std::string chapterTitle;
   const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
@@ -4962,13 +4991,6 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
   std::string bookTitle = epub->getTitle();
   std::string author = epub->getAuthor();
 
-  auto activity = makeUniqueNoThrow<VerticalClipSelectionActivity>(
-      renderer, mappedInput, *vpage, effectiveReaderFontId(), useFurigana(), marginLeft, marginTop, initialX, initialY);
-  if (!activity) {
-    LOG_ERR("CLIP", "OOM: vertical clipping selection");
-    requestUpdate();
-    return;
-  }
   startActivityForResult(std::move(activity), [this, spineIndex, pageNumber, pageCount, layoutSignature,
                                                bookTitle = std::move(bookTitle), author = std::move(author),
                                                chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
@@ -4982,6 +5004,10 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
       showBookmarkMessage = true;
       bookmarkMessageTime = millis();
       requestUpdate();
+      return;
+    }
+    if (clipping.action == ClippingResult::Action::Lookup) {
+      openDictionaryWordSelect(/*pageOnScreen=*/true, -1, -1, clipping.text);
       return;
     }
     const auto addResult =

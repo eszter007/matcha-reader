@@ -958,11 +958,10 @@ book carries its clippings along; deleting the book deletes them, while the text
 With a CrossPoint Sync server, **Sync Clippings** in the KOReader Sync settings uploads and downloads them with
 **Sync Progress**. Leave it off for an ordinary KOSync server.
 
-**Vertical text.** The same entry points work on a vertical page; the unit is the character (a run of Latin text
-or digits counts as one). The side buttons step along the column, Left and Right jump between columns (Left runs
-forward, with the text), and the page buttons step too. **Confirm** sets the start, and **Confirm** on the last
-character opens **Clip** or **Bookmark**. On touch, tap the first character, tap the last one, then tap it again for
-the same choice; a tap off the text leaves. A vertical selection stays within one page.
+**Vertical text.** The same selection works on a vertical page; the unit is the character (a run of Latin text
+or digits counts as one). The side buttons step down the column and Left / Right jump between columns (Left runs
+forward, with the text); on touch, the handles sit above and below the selection. A vertical selection stays
+within one page.
 
 ## 6. Language Learning Features
 

@@ -1,16 +1,20 @@
 #include "ClipSelectionActivity.h"
 
 #include <Arduino.h>
+#include <Epub/PageTextExtractor.h>
+#include <Epub/blocks/VerticalTextBlock.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalMemory.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
+#include <numeric>
 
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
@@ -57,6 +61,19 @@ ClipSelectionActivity::ClipSelectionActivity(GfxRenderer& renderer, MappedInputM
       initialY(initialY),
       fontId(readerFontId) {}
 
+ClipSelectionActivity::ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, VerticalPage page,
+                                             const bool furigana, const int marginLeft, const int marginTop,
+                                             const int readerFontId, const int initialX, const int initialY)
+    : Activity("ClipSelection", renderer, mappedInput),
+      marginLeft(marginLeft),
+      marginTop(marginTop),
+      initialX(initialX),
+      initialY(initialY),
+      ownedVerticalPage(std::move(page)),
+      verticalPage(&ownedVerticalPage),
+      furigana(furigana),
+      fontId(readerFontId) {}
+
 void ClipSelectionActivity::onEnter() {
   Activity::onEnter();
   if (fontId < 0) fontId = SETTINGS.getReaderFontId();
@@ -72,7 +89,8 @@ void ClipSelectionActivity::onEnter() {
     if (word.pageOffset != 0) break;
     firstPageRows = std::max<uint16_t>(firstPageRows, static_cast<uint16_t>(word.row + 1));
   }
-  const int middle = closestInRow(firstPageRows / 2, renderer.getScreenWidth() / 2);
+  const int middle =
+      closestInRow(firstPageRows / 2, vertical() ? renderer.getScreenHeight() / 2 : renderer.getScreenWidth() / 2);
   if (middle >= 0) selected = middle;
   if (initialX >= 0) {
     const int hit = wordAt(initialX, initialY);
@@ -87,6 +105,7 @@ void ClipSelectionActivity::onEnter() {
 }
 
 bool ClipSelectionActivity::extractWords() {
+  if (vertical()) return extractVerticalCells();
   wordCount = 0;
   words = makeUniqueNoThrow<WordBox[]>(MAX_SELECTABLE_WORDS);
   if (!words) {
@@ -191,12 +210,84 @@ bool ClipSelectionActivity::extractWords() {
   return true;
 }
 
-int ClipSelectionActivity::closestInRow(const uint16_t row, const int centerX) const {
+// Bulk-loads the page's glyphs the way the reader does before it draws (prewarmVerticalPageGlyphs);
+// otherwise every glyph of the page resolves one at a time through the SD miss path. Runs before
+// anything measures text in this font, and again before a redraw. It claims page slots, so it
+// needs heap room.
+void ClipSelectionActivity::prewarmVerticalPage() {
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm || ESP.getMaxAllocHeap() < 12 * 1024) return;
+  fcm->clearCache();
+  uint8_t styleMask = std::accumulate(
+      verticalPage->glyphs.begin(), verticalPage->glyphs.end(), uint8_t{0},
+      [](const uint8_t m, const VerticalGlyph& g) { return static_cast<uint8_t>(m | (1u << (g.style & 0x03))); });
+  if (styleMask == 0) styleMask = 1 << EpdFontFamily::REGULAR;
+  const std::string pageText = PageTextExtractor::fromVerticalPage(*verticalPage);
+  fcm->prewarmCache(fontId, pageText.c_str(), styleMask);
+}
+
+bool ClipSelectionActivity::extractVerticalCells() {
+  wordCount = 0;
+  rowCount = 0;
+  prewarmVerticalPage();
+  words = makeUniqueNoThrow<WordBox[]>(MAX_SELECTABLE_WORDS);
+  // Five bytes per cell is the most a single codepoint and its NUL can take.
+  verticalTextPool = makeUniqueNoThrow<char[]>(MAX_SELECTABLE_WORDS * 5);
+  if (!words || !verticalTextPool) {
+    LOG_ERR("CLIP", "OOM: vertical selection cells");
+    return false;
+  }
+  struct Ctx {
+    ClipSelectionActivity* self;
+    size_t poolUsed = 0;
+  } ctx{this};
+  forEachVerticalClipCell(
+      renderer, *verticalPage, fontId, marginLeft, marginTop, &ctx, [](void* raw, const VerticalClipCell& cell) {
+        auto& ctx = *static_cast<Ctx*>(raw);
+        auto& self = *ctx.self;
+        if (self.wordCount == MAX_SELECTABLE_WORDS) {
+          LOG_ERR("CLIP", "Selectable cell cap hit (%u); page truncated", static_cast<unsigned>(MAX_SELECTABLE_WORDS));
+          return false;
+        }
+        const VerticalGlyph& g = self.verticalPage->glyphs[cell.glyphIndex];
+        WordBox& word = self.words[self.wordCount];
+        word.x = cell.x;
+        word.y = cell.y;
+        word.width = cell.width;
+        word.height = cell.height;
+        word.row = cell.column;
+        word.pageOffset = 0;
+        word.pageWordIndex = static_cast<uint16_t>(self.wordCount);
+        word.startOffset = cell.startOffset;
+        word.endOffset = cell.endOffset;
+        if (g.renderKind == VerticalGlyph::RotatedRun || g.renderKind == VerticalGlyph::UprightRun) {
+          word.text = self.verticalPage->glyphText(g);  // the page's text pool outlives this activity
+        } else {
+          char* out = self.verticalTextPool.get() + ctx.poolUsed;
+          const int len = utf8EncodeCodepoint(g.codepoint, out);
+          out[len] = '\0';
+          ctx.poolUsed += static_cast<size_t>(len) + 1;
+          word.text = out;
+        }
+        word.style = static_cast<EpdFontFamily::Style>(g.style);
+        word.characterSpacing = 0;
+        word.paragraphStart = cell.paragraphStart;
+        word.isRtl = false;
+        word.discretionaryHyphen = false;
+        self.wordCount++;
+        self.rowCount = std::max<uint16_t>(self.rowCount, static_cast<uint16_t>(cell.column + 1));
+        return true;
+      });
+  return true;
+}
+
+int ClipSelectionActivity::closestInRow(const uint16_t row, const int center) const {
   int best = -1;
   int bestDistance = INT_MAX;
   for (int i = 0; i < static_cast<int>(wordCount); ++i) {
     if (words[i].row != row) continue;
-    const int distance = std::abs(words[i].x + words[i].width / 2 - centerX);
+    const int distance = vertical() ? std::abs(words[i].y + words[i].height / 2 - center)
+                                    : std::abs(words[i].x + words[i].width / 2 - center);
     if (distance < bestDistance) {
       bestDistance = distance;
       best = i;
@@ -225,8 +316,11 @@ int ClipSelectionActivity::dragWordAt(const int x, int y) const {
   for (int i = 0; i < static_cast<int>(wordCount); ++i) {
     const WordBox& word = words[i];
     if (word.pageOffset != currentPageOffset) continue;
-    const Rect candidate{word.x, word.y, word.width, word.height};
-    if (best < 0 || selectionGeometry::nearerWord(candidate, nearest, x, y)) {
+    // nearerWord ranks by row distance first; a vertical page's rows are columns, so transpose.
+    const Rect candidate =
+        vertical() ? Rect{word.y, word.x, word.height, word.width} : Rect{word.x, word.y, word.width, word.height};
+    if (best < 0 || (vertical() ? selectionGeometry::nearerWord(candidate, nearest, y, x)
+                                : selectionGeometry::nearerWord(candidate, nearest, x, y))) {
       nearest = candidate;
       best = i;
     }
@@ -240,6 +334,17 @@ bool ClipSelectionActivity::selectionContains(const int x, const int y) const {
   for (int i = std::min(rangeStart, selected); i <= std::max(rangeStart, selected); ++i) {
     const WordBox& word = words[i];
     if (word.pageOffset != currentPageOffset) continue;
+    if (vertical()) {
+      int top = word.y;
+      int bottom = word.y + word.height;
+      if (previous && previous->row == word.row) {
+        top = std::min(top, static_cast<int>(previous->y));
+        bottom = std::max(bottom, previous->y + previous->height);
+      }
+      if (selectionGeometry::contains(Rect{word.x, top + offset, word.width, bottom - top}, x, y)) return true;
+      previous = &word;
+      continue;
+    }
     int left = word.x;
     int right = word.x + word.width;
     if (previous && previous->row == word.row) {
@@ -277,7 +382,9 @@ bool ClipSelectionActivity::isWithinCurrentPageEndDwellSlop(const int x, const i
 void ClipSelectionActivity::moveVertical(const int direction) {
   const int targetRow = static_cast<int>(words[selected].row) + direction;
   if (targetRow < 0 || targetRow >= rowCount) return;
-  const int next = closestInRow(static_cast<uint16_t>(targetRow), words[selected].x + words[selected].width / 2);
+  const WordBox& cursor = words[selected];
+  const int next = closestInRow(static_cast<uint16_t>(targetRow),
+                                vertical() ? cursor.y + cursor.height / 2 : cursor.x + cursor.width / 2);
   if (next >= 0 && next != selected) {
     selectIndex(next);
   }
@@ -291,7 +398,7 @@ void ClipSelectionActivity::selectIndex(const int index) {
 }
 
 void ClipSelectionActivity::moveToPage(const int pageOffset) {
-  if (pageOffset < 0 || pageOffset >= static_cast<int>(pages.size()) || pageOffset == currentPageOffset) return;
+  if (pageOffset < 0 || pageOffset >= static_cast<int>(pageCount()) || pageOffset == currentPageOffset) return;
   for (int i = 0; i < static_cast<int>(wordCount); ++i) {
     if (words[i].pageOffset == pageOffset) {
       selectIndex(i);
@@ -574,14 +681,20 @@ bool ClipSelectionActivity::handleButtons(const uint8_t buttons) {
     return true;
   }
 
-  const int next =
-      selectionGeometry::horizontalIndex(selected, static_cast<int>(wordCount), buttons & Input::INPUT_LEFT,
-                                         buttons & Input::INPUT_RIGHT, words[selected].isRtl);
+  // Stepping follows the text and the other pair changes row: along the line with Left/Right and
+  // between lines with Up/Down, or, on a vertical page, down the column with Up/Down and between
+  // columns with Left/Right (Left runs forward, with the text).
+  const bool stepBack = vertical() ? (buttons & Input::INPUT_UP) : (buttons & Input::INPUT_LEFT);
+  const bool stepForward = vertical() ? (buttons & Input::INPUT_DOWN) : (buttons & Input::INPUT_RIGHT);
+  const bool rowBack = vertical() ? (buttons & Input::INPUT_RIGHT) : (buttons & Input::INPUT_UP);
+  const bool rowForward = vertical() ? (buttons & Input::INPUT_LEFT) : (buttons & Input::INPUT_DOWN);
+  const int next = selectionGeometry::horizontalIndex(selected, static_cast<int>(wordCount), stepBack, stepForward,
+                                                      words[selected].isRtl);
   if (next != selected) {
     selectIndex(next);
-  } else if (buttons & Input::INPUT_UP) {
+  } else if (rowBack) {
     moveVertical(-1);
-  } else if (buttons & Input::INPUT_DOWN) {
+  } else if (rowForward) {
     moveVertical(1);
   }
   return false;
@@ -591,6 +704,12 @@ Rect ClipSelectionActivity::handleRect(const int index, const bool start) const 
   const WordBox& word = words[index];
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const int size = std::max(24, UITheme::getInstance().getMetrics().verticalSpacing * 2);
+  if (vertical()) {
+    // The start handle sits above the first cell, the end handle below the last.
+    const int edge = start ? word.y - size : word.y + word.height;
+    return Rect{std::clamp(word.x + word.width / 2 - size / 2, safe.x, safe.x + safe.width - size),
+                std::clamp(edge + textOffset(), safe.y, safe.y + safe.height - size), size, size};
+  }
   const bool left = start != word.isRtl;
   const int edge = left ? word.x : word.x + word.width;
   return Rect{std::clamp(edge - (left ? size : 0), safe.x, safe.x + safe.width - size),
@@ -634,6 +753,8 @@ Rect ClipSelectionActivity::actionRect() const {
 }
 
 int ClipSelectionActivity::textOffset() const {
+  // A vertical page is full-bleed and drawn by the reader at its own origin; every cell is on screen.
+  if (vertical()) return 0;
   if (!mappedInput.hasTouch() && wordCount) {
     const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
     const WordBox& cursor = words[selected];
@@ -643,13 +764,14 @@ int ClipSelectionActivity::textOffset() const {
 }
 
 int ClipSelectionActivity::textXOffset() const {
-  if (mappedInput.hasTouch() || !wordCount) return 0;
+  if (vertical() || mappedInput.hasTouch() || !wordCount) return 0;
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const WordBox& cursor = words[selected];
   return selectionGeometry::keepVisible(cursor.x, cursor.width, safe.x, safe.width);
 }
 
 void ClipSelectionActivity::prewarmWord(const int index) const {
+  if (vertical()) return;
   if (index >= 0 && index < static_cast<int>(wordCount) && words[index].text) {
     renderer.getFontCacheManager()->prewarmCache(
         fontId, words[index].text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[index].style) & 0x03)));
@@ -658,7 +780,7 @@ void ClipSelectionActivity::prewarmWord(const int index) const {
 
 void ClipSelectionActivity::ditherGapBetween(const WordBox& a, const WordBox& b, const int offsetX,
                                              const int offset) const {
-  if (a.row != b.row || a.pageOffset != b.pageOffset) return;
+  if (vertical() || a.row != b.row || a.pageOffset != b.pageOffset) return;
   const int leftRight = std::min(a.x + a.width, b.x + b.width);
   const int rightLeft = std::max(a.x, b.x);
   if (leftRight < rightLeft) {
@@ -668,7 +790,7 @@ void ClipSelectionActivity::ditherGapBetween(const WordBox& a, const WordBox& b,
 
 void ClipSelectionActivity::clearGapBetween(const WordBox& a, const WordBox& b, const int offsetX,
                                             const int offset) const {
-  if (a.row != b.row || a.pageOffset != b.pageOffset) return;
+  if (vertical() || a.row != b.row || a.pageOffset != b.pageOffset) return;
   const int leftRight = std::min(a.x + a.width, b.x + b.width);
   const int rightLeft = std::max(a.x, b.x);
   if (leftRight < rightLeft) {
@@ -680,6 +802,10 @@ void ClipSelectionActivity::drawWordClean(const int index, const int offsetX, co
   if (index < 0 || index >= static_cast<int>(wordCount)) return;
   const WordBox& word = words[index];
   if (word.pageOffset != currentPageOffset) return;
+  if (vertical()) {
+    invertWord(word, offsetX, offset);  // undoes the highlight's inversion
+    return;
+  }
 
   prewarmWord(index);
 
@@ -701,6 +827,10 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
   if (index < 0 || index >= static_cast<int>(wordCount)) return;
   const WordBox& word = words[index];
   if (word.pageOffset != currentPageOffset) return;
+  if (vertical()) {
+    invertWord(word, offsetX, offset);
+    return;
+  }
 
   prewarmWord(index);
 
@@ -731,11 +861,13 @@ bool ClipSelectionActivity::renderIncremental() {
 
     drawWordClean(lastRenderedSelected, offsetX, offset);
     drawWordHighlight(selected, selected, selected, offsetX, offset);
-    const WordBox& cursor = words[selected];
-    renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
+    if (!vertical()) {
+      const WordBox& cursor = words[selected];
+      renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
+    }
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
     lastRenderedSelected = selected;
@@ -745,7 +877,7 @@ bool ClipSelectionActivity::renderIncremental() {
   // Case 2: Transition from rangeStart < 0 to rangeStart >= 0 (user just confirmed rangeStart)
   if (rangeStart >= 0 && lastRenderedRangeStart < 0 && rangeStart == selected && selected == lastRenderedSelected) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
     lastRenderedRangeStart = rangeStart;
@@ -782,11 +914,13 @@ bool ClipSelectionActivity::renderIncremental() {
       drawWordHighlight(lastRenderedSelected, firstNew, lastNew, offsetX, offset);
     }
 
-    const WordBox& cursor = words[selected];
-    renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
+    if (!vertical()) {
+      const WordBox& cursor = words[selected];
+      renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
+    }
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
     lastRenderedSelected = selected;
@@ -805,6 +939,10 @@ void ClipSelectionActivity::drawSelection() const {
   for (int i = first; i <= last; ++i) {
     const WordBox& word = words[i];
     if (word.pageOffset != currentPageOffset) continue;
+    if (vertical()) {
+      invertWord(word, offsetX, offset);
+      continue;
+    }
     if (previous) ditherGapBetween(*previous, word, offsetX, offset);
     renderer.fillRectDither(word.x + offsetX, word.y + offset, word.width, word.height, Color::LightGray);
     renderer.drawText(fontId, word.x + offsetX, word.y + offset, word.text, true, word.style,
@@ -817,10 +955,33 @@ void ClipSelectionActivity::drawSelection() const {
     if (words[last].pageOffset == currentPageOffset)
       GUI.drawSelectionHandle(renderer, handleRect(last, false), words[last].isRtl);
     if (!touchDragSelecting) GUI.drawSelectionActions(renderer, actionRect());
-  } else {
+  } else if (!vertical()) {
     const WordBox& cursor = words[selected];
     renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
   }
+}
+
+void ClipSelectionActivity::invertWord(const WordBox& word, const int offsetX, const int offset) const {
+  renderer.invertRect(word.x + offsetX, word.y + offset, word.width, word.height);
+}
+
+void ClipSelectionActivity::drawPage(const int offsetX, const int offsetY) {
+  if (vertical()) {
+    if (repaintPage && repaintPage(repaintCtx)) return;
+    prewarmVerticalPage();
+    VerticalTextBlock block(*verticalPage);
+    if (furigana) {
+      block.render(renderer, fontId, fontId, marginLeft + offsetX, marginTop + offsetY, true);
+    } else {
+      block.render(renderer, fontId, marginLeft + offsetX, marginTop + offsetY, true);
+    }
+    return;
+  }
+  auto* fcm = renderer.getFontCacheManager();
+  auto scope = fcm->createPrewarmScope();
+  pages[currentPageOffset]->render(renderer, fontId, marginLeft + offsetX, marginTop + offsetY);
+  scope.endScanAndPrewarm();
+  pages[currentPageOffset]->render(renderer, fontId, marginLeft + offsetX, marginTop + offsetY);
 }
 
 void ClipSelectionActivity::render(RenderLock&&) {
@@ -838,18 +999,18 @@ void ClipSelectionActivity::render(RenderLock&&) {
   renderer.clearScreen();
   const auto clip = renderer.getClipRect();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  renderer.setClipRect(safe.x, safe.y, safe.width, safe.height);
-  auto* fcm = renderer.getFontCacheManager();
-  auto scope = fcm->createPrewarmScope();
-  pages[currentPageOffset]->render(renderer, fontId, marginLeft + offsetX, marginTop + offset);
-  scope.endScanAndPrewarm();
-  pages[currentPageOffset]->render(renderer, fontId, marginLeft + offsetX, marginTop + offset);
+  // The vertical renderer places glyphs through its own cell geometry and is drawn unclipped,
+  // as the reader draws it; the horizontal page is clipped to the safe area as before.
+  if (!vertical()) renderer.setClipRect(safe.x, safe.y, safe.width, safe.height);
+  drawPage(offsetX, offset);
   if (wordCount != 0) drawSelection();
   renderer.setClipRect(clip[0], clip[1], clip[2], clip[3]);
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), rangeStart < 0 ? tr(STR_SELECT) : tr(STR_DONE),
                                             tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // No hint bar on a vertical page: the text is full-bleed and a label bar would cover the last
+  // cells of every column (the word-lookup panel makes the same call).
+  if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 
   lastRenderedPageOffset = currentPageOffset;

@@ -589,7 +589,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void openDictionaryWordSelect();
   void startClipSelection(int initialX = -1, int initialY = -1);
   int clippingAtPoint(const Page& page, int x, int y) const;
-  // Vertical pages: the same flow over character cells (see VerticalClipSelectionActivity).
+  // Vertical pages: the same selection over character cells (ClipSelectionActivity, vertical form).
   void startVerticalClipSelection(int initialX, int initialY);
   int verticalClippingAtPoint(const VerticalPage& vpage, int x, int y) const;
   void drawVerticalClippingHighlights(const VerticalPage& vpage, int orientedMarginTop, int orientedMarginLeft) const;
