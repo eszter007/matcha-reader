@@ -109,6 +109,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SIDE_BTN_FOOTNOTES = 5,
     SIDE_BTN_WORD_LOOKUP = 6,
     SIDE_BTN_NONE = 7,
+    SIDE_BTN_CREATE_CLIPPING = 8,
     SIDE_BUTTON_ACTION_COUNT
   };
   static_assert(static_cast<uint8_t>(SideButtonAction::Default) == SIDE_BTN_DEFAULT);
@@ -119,6 +120,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static_assert(static_cast<uint8_t>(SideButtonAction::Footnotes) == SIDE_BTN_FOOTNOTES);
   static_assert(static_cast<uint8_t>(SideButtonAction::WordLookup) == SIDE_BTN_WORD_LOOKUP);
   static_assert(static_cast<uint8_t>(SideButtonAction::None) == SIDE_BTN_NONE);
+  static_assert(static_cast<uint8_t>(SideButtonAction::CreateClipping) == SIDE_BTN_CREATE_CLIPPING);
   static_assert(static_cast<uint8_t>(SideButtonAction::Count) == SIDE_BUTTON_ACTION_COUNT);
 
   // Pre-1.5 single "Side Button Layout" setting, kept only so fromJson() can migrate a stored

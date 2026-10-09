@@ -15,6 +15,7 @@ enum class SideButtonAction : uint8_t {
   // "Off": the button does nothing in the reader. Restores what the pre-1.5
   // "Side Button Layout = Disabled" option used to do.
   None,
+  CreateClipping,
   Count
 };
 

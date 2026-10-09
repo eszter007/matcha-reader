@@ -434,7 +434,7 @@ open a list when selected.
 
 - **Upper / Lower Side Button in Reader** (X3/X4 only, in Shortcuts): What the upper (Side Up) or lower (Side Down)
   button does while reading: Default (previous page on Upper, next page on Lower), Sleep, Previous Page, Next Page,
-  Refresh Screen, Footnotes, Word Lookup or Off.
+  Refresh Screen, Footnotes, Word Lookup, Create Clipping or Off.
 
   - A button with a custom action does only that action. Outside the reader both buttons keep their normal role.
   - Inside Word Lookup, a button set to Previous or Next Page moves the cursor back or forward.

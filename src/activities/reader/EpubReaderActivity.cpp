@@ -1267,6 +1267,11 @@ void EpubReaderActivity::readerLoop() {
 
   // auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
 
+  if (!endOfBookMenuOpen && mappedInput.sideActionFired(CrossPointSettings::SIDE_BTN_CREATE_CLIPPING)) {
+    startClipSelection();
+    return;
+  }
+
   // Handle short power button press for footnotes
   if ((!endOfBookMenuOpen && mappedInput.homeButtonAction() == HomeButtonAction::Footnotes) ||
       (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&

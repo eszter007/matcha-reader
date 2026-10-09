@@ -489,25 +489,28 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         // Last in the Shortcuts sub-screen: fixed physical mapping (Upper = BTN_UP,
         // Lower = BTN_DOWN). Every board profile defines that pair and sideActionFired() reads
         // those two keys directly, so the rows are offered everywhere -- they were X3/X4 only for
-        // no reason the input path shares. The option order matches SIDE_BUTTON_ACTION.
-        SettingInfo::Enum(
-            upperSideButtonLabel(), &CrossPointSettings::upperSideButtonAction,
-            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
-             StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
-            "upperSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+        // no reason the input path shares. Labels are indexed by stored value (Create Clipping was
+        // appended after Off); withEnumOrder() offers Off last.
+        SettingInfo::Enum(upperSideButtonLabel(), &CrossPointSettings::upperSideButtonAction,
+                          {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE,
+                           StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
+                           StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF, StrId::STR_SAVE_CLIPPING},
+                          "upperSideButtonAction", StrId::STR_CAT_SHORTCUTS)
             .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
                             CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
                             CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
-                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_NONE}),
-        SettingInfo::Enum(
-            lowerSideButtonLabel(), &CrossPointSettings::lowerSideButtonAction,
-            {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
-             StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF},
-            "lowerSideButtonAction", StrId::STR_CAT_SHORTCUTS)
+                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_CREATE_CLIPPING,
+                            CrossPointSettings::SIDE_BTN_NONE}),
+        SettingInfo::Enum(lowerSideButtonLabel(), &CrossPointSettings::lowerSideButtonAction,
+                          {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE,
+                           StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
+                           StrId::STR_WORD_LOOKUP, StrId::STR_STATE_OFF, StrId::STR_SAVE_CLIPPING},
+                          "lowerSideButtonAction", StrId::STR_CAT_SHORTCUTS)
             .withEnumOrder({CrossPointSettings::SIDE_BTN_DEFAULT, CrossPointSettings::SIDE_BTN_PREV_PAGE,
                             CrossPointSettings::SIDE_BTN_NEXT_PAGE, CrossPointSettings::SIDE_BTN_SLEEP,
                             CrossPointSettings::SIDE_BTN_REFRESH, CrossPointSettings::SIDE_BTN_FOOTNOTES,
-                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_NONE}),
+                            CrossPointSettings::SIDE_BTN_WORD_LOOKUP, CrossPointSettings::SIDE_BTN_CREATE_CLIPPING,
+                            CrossPointSettings::SIDE_BTN_NONE}),
         // Last row in Shortcuts.
         SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
                             "backShortToFileBrowser", StrId::STR_CAT_SHORTCUTS),
