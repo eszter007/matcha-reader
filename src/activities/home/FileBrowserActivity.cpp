@@ -12,6 +12,7 @@
 #include <functional>
 #include <iterator>  // std::back_inserter, in the recency sort
 
+#include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
@@ -301,8 +302,7 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
 
   if (!file.isDirectory()) {
     file.close();
-    clearBookCache(fullPath);
-    return Storage.remove(fullPath.c_str());
+    return removeBookFile(fullPath);
   }
   file.close();
 
@@ -359,8 +359,7 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
       if (isDir) {
         stack.push_back({std::move(entryPath), false});
       } else {
-        clearBookCache(entryPath);
-        if (!Storage.remove(entryPath.c_str())) {
+        if (!removeBookFile(entryPath)) {
           LOG_ERR("FileBrowser", "Failed to remove file: %s", entryPath.c_str());
           return false;
         }

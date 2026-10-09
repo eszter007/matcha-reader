@@ -33,6 +33,9 @@ class EpdFontFamily {
   // SD transactions once fallback fonts entered the measurement path.
   const EpdGlyph* getGlyphResident(uint32_t cp, Style style = REGULAR) const;
   const EpdFontData* getDataForGlyph(uint32_t cp, Style style = REGULAR) const;
+  const EpdGlyph* getGlyphMetrics(uint32_t cp, EpdGlyph& solidFallback, Style style = REGULAR) const {
+    return getFont(style)->getGlyphMetrics(cp, solidFallback);
+  }
   /// Returns true if the resolved style's font can render `cp` directly
   /// (interval coverage only — see EpdFont::hasCodepoint).
   bool hasCodepoint(uint32_t cp, Style style = REGULAR) const;

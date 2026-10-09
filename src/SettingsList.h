@@ -2,6 +2,7 @@
 
 #include <BoardConfig.h>
 #include <HalClock.h>
+#include <HalFrontlight.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <SdCardFontRegistry.h>
@@ -208,10 +209,38 @@ inline SettingInfo buildWordLookupFontSizeSetting() {
 }
 
 inline std::vector<StrId> buildLongPressMenuValues() {
-  static constexpr StrId VALUES[] = {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION,
-                                     StrId::STR_DICTIONARY, StrId::STR_READER_MENU};
-  const size_t count = BoardConfig::hasHomeKey() ? std::size(VALUES) : std::size(VALUES) - 1;
-  return {VALUES, VALUES + count};
+  std::vector<StrId> values = {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION,
+                               StrId::STR_DICTIONARY};
+  values.reserve(CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT);
+  if (BoardConfig::hasHomeKey()) values.push_back(StrId::STR_READER_MENU);
+  values.push_back(StrId::STR_SAVE_CLIPPING);
+  return values;
+}
+
+inline uint8_t longPressMenuDisplayValue() {
+  const uint8_t raw = SETTINGS.longPressMenuFunction;
+  if (raw <= CrossPointSettings::LP_MENU_DICTIONARY) return raw;
+  if (raw == CrossPointSettings::LP_MENU_READER_MENU) {
+    return BoardConfig::hasHomeKey() ? 4 : CrossPointSettings::LP_MENU_DISABLED;
+  }
+  if (raw == CrossPointSettings::LP_MENU_CREATE_CLIPPING) return BoardConfig::hasHomeKey() ? 5 : 4;
+  return CrossPointSettings::LP_MENU_DISABLED;
+}
+
+inline void setLongPressMenuFromDisplayValue(const uint8_t displayValue) {
+  if (displayValue <= CrossPointSettings::LP_MENU_DICTIONARY) {
+    SETTINGS.longPressMenuFunction = displayValue;
+  } else if (BoardConfig::hasHomeKey()) {
+    SETTINGS.longPressMenuFunction =
+        displayValue == 4 ? CrossPointSettings::LP_MENU_READER_MENU : CrossPointSettings::LP_MENU_CREATE_CLIPPING;
+  } else {
+    SETTINGS.longPressMenuFunction = CrossPointSettings::LP_MENU_CREATE_CLIPPING;
+  }
+}
+
+inline SettingInfo buildLongPressMenuSetting() {
+  return SettingInfo::DynamicEnum(StrId::STR_LONG_PRESS_MENU, buildLongPressMenuValues(), longPressMenuDisplayValue,
+                                  setLongPressMenuFromDisplayValue, "longPressMenuFunction", StrId::STR_CAT_SHORTCUTS);
 }
 
 inline std::vector<StrId> homeThemeValues() {
@@ -429,15 +458,14 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
                            StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
                           "longPressButtonBehavior", StrId::STR_CAT_SHORTCUTS),
-        SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
-                          buildLongPressMenuValues(), "longPressMenuFunction", StrId::STR_CAT_SHORTCUTS),
+        buildLongPressMenuSetting(),
         SettingInfo::Toggle(StrId::STR_POWER_UP_CLOCK_SYNC, &CrossPointSettings::powerUpClockSync, "powerUpClockSync",
                             StrId::STR_CAT_SHORTCUTS),
         // Erased below unless the board is an X4 Pro.
         SettingInfo::Toggle(StrId::STR_DBL_CLICK_PWR_LIGHT, &CrossPointSettings::doubleClickPwrLight,
                             "doubleClickPwrLight", StrId::STR_CAT_SHORTCUTS),
         // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
-        // Confirm is appended at 6 (upstream put it at 5); Previous Page is appended at 7.
+        // Confirm is appended at 6 (upstream put it at 5); Previous Page at 7; Save Clipping at 8.
         // The indices are identical on touch and button boards so a stored value keeps its
         // meaning across them; Confirm simply has no handler where a front Confirm key exists.
         // Labels stay indexed BY STORED VALUE; withEnumOrder() only decides what the menu offers
@@ -445,12 +473,13 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         // reading it seven rows below Next Page was confusing -- so the two are offered together.
         SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
                           {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
-                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE},
+                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE,
+                           StrId::STR_SAVE_CLIPPING},
                           "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
             .withEnumOrder({CrossPointSettings::IGNORE, CrossPointSettings::PWR_PREV_PAGE,
                             CrossPointSettings::PAGE_TURN, CrossPointSettings::SLEEP, CrossPointSettings::FORCE_REFRESH,
                             CrossPointSettings::FOOTNOTES, CrossPointSettings::WORD_LOOKUP,
-                            CrossPointSettings::PWR_CONFIRM}),
+                            CrossPointSettings::CREATE_CLIPPING, CrossPointSettings::PWR_CONFIRM}),
         // Erased below unless the QMI8658 IMU is present (X3).
         SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
                           {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED}, "tiltPageTurn",
@@ -543,6 +572,14 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
             },
             "koServerUrl", StrId::STR_KOREADER_SYNC),
         SettingInfo::DynamicEnum(
+            StrId::STR_SERVER_TYPE, {StrId::STR_CROSSPOINT, StrId::STR_KOSYNC_SERVER, StrId::STR_OTHER},
+            [] { return static_cast<uint8_t>(KOREADER_STORE.getServerType()); },
+            [](uint8_t v) {
+              KOREADER_STORE.setServerType(static_cast<KOReaderServerType>(v));
+              KOREADER_STORE.saveToFile();
+            },
+            "koServerType", StrId::STR_KOREADER_SYNC),
+        SettingInfo::DynamicEnum(
             StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY},
             [] { return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod()); },
             [](uint8_t v) {
@@ -566,6 +603,15 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
               KOREADER_STORE.saveToFile();
             },
             "koSyncBehavior", StrId::STR_KOREADER_SYNC),
+        SettingInfo::DynamicEnum(
+            StrId::STR_SYNC_CLIPPINGS, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
+            [] { return static_cast<uint8_t>(KOREADER_STORE.getSyncClippings()); },
+            [](uint8_t v) {
+              if (KOREADER_STORE.getSyncClippings() == (v != 0)) return;
+              KOREADER_STORE.setSyncClippings(v != 0);
+              KOREADER_STORE.saveToFile();
+            },
+            "koSyncClippings", StrId::STR_KOREADER_SYNC),
         // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
         SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
                             "statusBarChapterPageCount", StrId::STR_CUSTOMISE_STATUS_BAR),
@@ -694,6 +740,15 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                                     s.nameId == StrId::STR_SUNLIGHT_FADING_FIX ||
                                     s.nameId == StrId::STR_BACK_SHORT_TO_FILE_BROWSER;
                            }),
+            v.end());
+  }
+  // Frontlit and lightless variants of a board share one binary (EEGO A4);
+  // presence is the I2C probe result from Frontlight.begin(). UI-only: persistence
+  // walks settingsBaseList() directly, so the key survives on a board whose probe
+  // has not run yet.
+  if (!Frontlight.present()) {
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [](const SettingInfo& s) { return s.nameId == StrId::STR_RESTORE_LIGHT_ON_WAKE; }),
             v.end());
   }
   if (registry && registry->getFamilyCount() > 0) {

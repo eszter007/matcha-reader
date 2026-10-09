@@ -888,6 +888,13 @@ void loop() {
 
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
+  // Under the render lock, so a step never overlaps the themes' gauge reads.
+  static bool gaugeCapacityPending = true;
+  if (gaugeCapacityPending) {
+    RenderLock lock(RenderLock::Try{});
+    if (lock.held()) gaugeCapacityPending = BatteryMonitor::loadDesignCapacity();
+  }
+
   // The sunlight workaround was designed for X4. On X3, powering the panel off after
   // every update forces the stronger wake waveform on the next refresh and causes severe
   // grain/ghosting.

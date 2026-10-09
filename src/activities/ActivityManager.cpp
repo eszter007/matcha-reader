@@ -368,6 +368,7 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
     goToFileBrowser("/");
     return;
   }
+
   auto activity = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   if (!activity) {
     LOG_ERR("ACT", "OOM: reader activity");

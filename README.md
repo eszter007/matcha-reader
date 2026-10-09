@@ -129,6 +129,7 @@ A wallpaper laid over the page you were reading, so the book shows through. See 
 
 ### Also in this fork
 
+- Clippings and highlights (from upstream) work in vertical text too: select character cells with the buttons or by tapping
 - Reader settings remembered per book
 - **Optimize EPUB** on upload: splits single-file novels into chapters and fits images to the screen
 - More of the book's own CSS: heading sizes, line spacing, page breaks, boxed asides, drop caps, margins

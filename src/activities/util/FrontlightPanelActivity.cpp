@@ -266,7 +266,11 @@ void FrontlightPanelActivity::loop() {
     }
   }
   if (draggingSlider) {
-    if (!touch.snap.touchHeld) draggingSlider = false;
+    if (!touch.snap.touchHeld) {
+      draggingSlider = false;
+      cleanRefreshPending = true;
+      requestUpdate();
+    }
     return;
   }
 

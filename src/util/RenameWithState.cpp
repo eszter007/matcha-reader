@@ -7,6 +7,7 @@
 
 #include <functional>
 
+#include "ClippingStore.h"
 #include "RecentBooksStore.h"
 #include "util/BookmarkUtil.h"
 
@@ -141,7 +142,8 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
 
   // Pass 2: the rename itself, last -- while it is still undone, the walk above can re-derive
   // every book path from oldPath. Once it succeeds there is nothing left that can fail.
-  if (!Storage.rename(oldPath.c_str(), newPath.c_str())) {
+  // ClippingStore::moveBook renames the path and carries every clipping store under it along.
+  if (!ClippingStore::moveBook(oldPath, newPath)) {
     LOG_ERR(logTag, "Failed to rename: %s -> %s", oldPath.c_str(), newPath.c_str());
     rollBackState();
     return false;

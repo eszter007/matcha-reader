@@ -22,6 +22,11 @@ class ChapterXPathResolver {
    * Resolve a zero-based visible-codepoint offset in a spine item to its real
    * XHTML ancestry path plus text-node offset.
    *
+   * Offsets count every body codepoint the way ChapterHtmlSlimParser does, so the
+   * text may live in any element (<p>, <div>, <span>, <li>, headings, ...).
+   * Whitespace-only runs are never used as anchors; a target inside one resolves
+   * at the start of the next text run.
+   *
    * Returns a KOReader-compatible path like:
    * /body/DocFragment[8]/body/div[2]/section[1]/p[4]/text()[1].0
    *
@@ -37,6 +42,7 @@ class ChapterXPathResolver {
 
   /**
    * Resolve intra-spine progress to a real XHTML ancestry path plus text offset.
+   * Progress is measured over all visible body text (see findXPathForVisibleTextOffset).
    *
    * Returns a KOReader-compatible path like:
    * /body/DocFragment[8]/body/div[2]/section[1]/p[4]/text().96

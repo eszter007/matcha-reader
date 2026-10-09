@@ -45,6 +45,9 @@ class DictionaryWordSelectActivity final : public Activity {
 
   // The book and the next page's text, so a looked-up word can be saved for sentence mining.
   void setMiningContext(sentencemining::BookContext context) { mining_ = std::move(context); }
+  // Looks this text up straight away instead of a word on the page (a clipping selection's
+  // Look Up); closing the definition returns to the page.
+  void setLookupText(std::string text) { lookupText = std::move(text); }
 
   void onEnter() override;
   void loop() override;
@@ -115,6 +118,7 @@ class DictionaryWordSelectActivity final : public Activity {
   uint16_t rowCount = 0;
   bool confirmPressSeen = false;
   unsigned long lastHorizontalMoveTime = 0;
+  std::string lookupText;
 
   // One dictionary of the lookup, opened (and its index built) the first time a word is looked up.
   struct DictSlot {
