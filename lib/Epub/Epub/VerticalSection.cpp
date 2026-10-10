@@ -93,7 +93,10 @@ namespace {
 // down a column), part of cache validation.
 // v142: the header gains the right margin (px), which decides how much the first column holds
 // back for its ruby.
-constexpr uint8_t VSECTION_FILE_VERSION = 142;
+// v143: no format change. Ellipsis/dash ink boxes match the drawer, a column's slide survives a
+// layout batch boundary, and line adjustment squeezes brackets on their white side only;
+// caches built before it can hold characters drawn over the one before them.
+constexpr uint8_t VSECTION_FILE_VERSION = 143;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.

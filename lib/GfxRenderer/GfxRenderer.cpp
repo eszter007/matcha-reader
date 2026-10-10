@@ -3272,13 +3272,8 @@ bool GfxRenderer::verticalPunctInkBox(const int fontId, const uint32_t cp, const
   *inkTop = INT32_MIN;
   drawCharVerticalRotatedInCell(fontId, 0, cellTopY, cellSize, cp, shiftType, true, style, inkTop, inkHeight);
   if (*inkTop == INT32_MIN) return false;  // no glyph / font missing
-  // VerticalTextBlock applies these extra drops at the call site, so mirror them here or the
-  // layout would read an ink box the drawer never uses.
-  if (cp == 0x2025 || cp == 0x2026) {
-    *inkTop += std::max(1, (cellSize * 7) / 8);
-  } else if (shiftType == 4) {
-    *inkTop += std::max(1, (cellSize * 3) / 8);
-  }
+  // The box the drawer itself reports: VerticalTextBlock places every shape where
+  // drawCharVerticalRotatedInCell does, with no drop of its own to mirror here.
   return true;
 }
 
