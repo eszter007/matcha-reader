@@ -1217,19 +1217,21 @@ void BaseTheme::drawSelectionHandle(const GfxRenderer& renderer, const Rect rect
                     radius - border, radius - border, false);
 }
 
-// One card, three actions, each an outline icon over its label (the stock reader's selection
+// One card, four actions, each an outline icon over its label (the stock reader's selection
 // bar). The hit areas stay selectionGeometry::button(); only the drawing changed.
 void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rect, const int anchorX) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int font = uiScaleSpec().smallFontId;
-  const char* labels[] = {tr(STR_LOOKUP), tr(STR_CLIP), tr(STR_BOOKMARK_OPTION)};
-  const freeink::Icon* icons[] = {&icon_clip_lookup_40, &icon_clip_clip_40, &icon_clip_bookmark_40};
+  const char* labels[SELECTION_ACTION_COUNT] = {tr(STR_LOOKUP), tr(STR_TRANSLATE), tr(STR_CLIP),
+                                                tr(STR_BOOKMARK_OPTION)};
+  const freeink::Icon* icons[SELECTION_ACTION_COUNT] = {&icon_clip_lookup_40, &icon_clip_translate_40,
+                                                        &icon_clip_clip_40, &icon_clip_bookmark_40};
   renderer.fillRoundedRect(rect.x, rect.y, rect.width, rect.height, SELECTION_ACTION_RADIUS_PX, Color::White);
   renderer.drawRoundedRect(rect.x, rect.y, rect.width, rect.height, 1, SELECTION_ACTION_RADIUS_PX, true);
   // Generated icons are not pre-rotated (drawIcon expects the old blit layout); the FreeInkUI
   // target draws them orientation-correct.
   freeink::ui::GfxRendererTarget target = makeUiTarget(renderer);
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < SELECTION_ACTION_COUNT; ++i) {
     const Rect slot = selectionGeometry::button(rect, i, SELECTION_ACTION_PAD_PX);
     const int iconX = slot.x + (slot.width - SELECTION_ACTION_ICON_PX) / 2;
     const int iconY = rect.y + SELECTION_ACTION_VPAD_PX;

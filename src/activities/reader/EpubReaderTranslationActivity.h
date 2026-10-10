@@ -1,5 +1,7 @@
 #pragma once
 
+#include <I18n.h>
+
 #include <string>
 
 #include "activities/Activity.h"
@@ -21,7 +23,8 @@ class EpubReaderTranslationActivity final : public Activity {
   // is a real error, not fragmentation, so it must show the message instead of
   // restart-looping.
   explicit EpubReaderTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string sourceText,
-                                         std::string preTranslatedText = "", bool resumedAfterRestart = false);
+                                         std::string preTranslatedText = "", bool resumedAfterRestart = false,
+                                         StrId title = StrId::STR_TRANSLATE_PAGE);
 
   void onEnter() override;
   void onExit() override;
@@ -44,6 +47,7 @@ class EpubReaderTranslationActivity final : public Activity {
   std::string errorMessage;
   bool hasPreTranslation = false;
   bool resumedAfterRestart = false;
+  StrId title;  // panel heading: the page, or a selection
 
   // Write sourceText to TRANSLATE_STASH_PATH and silent-restart into a fresh-heap
   // translation (see SilentRestart.h). Returns false if the stash could not be

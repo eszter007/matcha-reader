@@ -38,7 +38,8 @@ inline Rect actions(const Rect safe, const int textTop, const int height, const 
 }
 
 inline Rect button(const Rect actions, const int index, const int padding) {
-  const int width = (actions.width - padding * 4) / 3;
+  constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
+  const int width = (actions.width - padding * (count + 1)) / count;
   return Rect{actions.x + padding + index * (width + padding), actions.y + padding, width,
               actions.height - padding * 2};
 }
@@ -48,7 +49,7 @@ inline bool contains(const Rect rect, const int x, const int y) {
 }
 
 inline int actionAt(const Rect actions, const int padding, const int x, const int y) {
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < BaseTheme::SELECTION_ACTION_COUNT; ++i) {
     if (contains(button(actions, i, padding), x, y)) return i;
   }
   return -1;

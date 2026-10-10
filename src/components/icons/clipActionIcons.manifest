@@ -7,5 +7,6 @@
 #     --sizes 40 --out src/components/icons/clipActionIcons.h
 clip-lookup = search
 # quote-clip.svg (next to this manifest) is Tabler's quote cropped to its ink; copy it into the svgdir.
+clip-translate = language
 clip-clip = quote-clip
 clip-bookmark = bookmark

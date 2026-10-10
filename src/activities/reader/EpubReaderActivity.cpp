@@ -792,6 +792,12 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
       openDictionaryWordSelect(/*pageOnScreen=*/true, -1, -1, clipping.text);
       return;
     }
+    if (clipping.action == ClippingResult::Action::Translate) {
+      // Repaint the page first so the selection card is gone from the panel's background.
+      pendingTranslationText = clipping.text;
+      openPanelAfterRender(PanelAfterRender::Translation);
+      return;
+    }
     const uint16_t paragraphIndex =
         section ? section->getParagraphIndexForPage(startPage).value_or(UINT16_MAX) : UINT16_MAX;
     const auto addResult = CLIPPINGS.addClipping(
@@ -5013,6 +5019,12 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
       openDictionaryWordSelect(/*pageOnScreen=*/true, -1, -1, clipping.text);
       return;
     }
+    if (clipping.action == ClippingResult::Action::Translate) {
+      // Repaint the page first so the selection card is gone from the panel's background.
+      pendingTranslationText = clipping.text;
+      openPanelAfterRender(PanelAfterRender::Translation);
+      return;
+    }
     const auto addResult =
         CLIPPINGS.addClipping(spineIndex, pageNumber, pageNumber, pageCount, clipping.startWordIndex,
                               clipping.endWordIndex, clipping.wordCount, chapterTitle.c_str(), UINT16_MAX,
@@ -5359,6 +5371,12 @@ void EpubReaderActivity::openPanelAfterRender(const PanelAfterRender panel) {
 }
 
 void EpubReaderActivity::openTranslationPanel() {
+  if (!pendingTranslationText.empty()) {
+    std::string text = std::move(pendingTranslationText);
+    pendingTranslationText.clear();
+    openTranslationFor(std::move(text), StrId::STR_TRANSLATE);
+    return;
+  }
   std::string pageText;
   if (verticalSection) {
     RenderLock lock(*this);  // shared page slot -- see openReaderMenu()
@@ -5369,23 +5387,26 @@ void EpubReaderActivity::openTranslationPanel() {
   } else if (section) {
     pageText = section->getTextFromSectionFile();
   }
-  if (!pageText.empty()) {
-    // The extracted text is all Translation needs -- the Section/VerticalSection object
-    // itself (current page's resident glyphs, page index) is dead weight for the duration of
-    // the activity, and Translation's TLS handshake needs every contiguous byte it can get
-    // (see MIN_HEAP_FOR_TLS in EpubReaderTranslationActivity.cpp). Sync nextPageNumber first
-    // so the normal reload-from-cache path in render() resumes on the same page when we
-    // return -- same pattern as the page-turn/spine-change call sites in this file.
-    nextPageNumber = verticalSection ? verticalSection->currentPage : section ? section->currentPage : nextPageNumber;
-    {
-      RenderLock lock(*this);  // the render task may still be in its warm tail
-      section.reset();
-      verticalSection.reset();
-      releaseReloadableMemory();
-    }
-    startActivityForResult(std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pageText)),
-                           [this](const ActivityResult&) { requestUpdate(); });
+  if (!pageText.empty()) openTranslationFor(std::move(pageText), StrId::STR_TRANSLATE_PAGE);
+}
+
+void EpubReaderActivity::openTranslationFor(std::string text, const StrId title) {
+  // The extracted text is all Translation needs -- the Section/VerticalSection object
+  // itself (current page's resident glyphs, page index) is dead weight for the duration of
+  // the activity, and Translation's TLS handshake needs every contiguous byte it can get
+  // (see MIN_HEAP_FOR_TLS in EpubReaderTranslationActivity.cpp). Sync nextPageNumber first
+  // so the normal reload-from-cache path in render() resumes on the same page when we
+  // return -- same pattern as the page-turn/spine-change call sites in this file.
+  nextPageNumber = verticalSection ? verticalSection->currentPage : section ? section->currentPage : nextPageNumber;
+  {
+    RenderLock lock(*this);  // the render task may still be in its warm tail
+    section.reset();
+    verticalSection.reset();
+    releaseReloadableMemory();
   }
+  startActivityForResult(
+      std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(text), "", false, title),
+      [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void EpubReaderActivity::openFootnotesPanel() {

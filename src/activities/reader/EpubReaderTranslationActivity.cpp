@@ -64,10 +64,11 @@ constexpr int TRANSLATION_FONT_ID = UI_12_FONT_ID;
 
 EpubReaderTranslationActivity::EpubReaderTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                              std::string sourceText, std::string preTranslatedText,
-                                                             const bool resumedAfterRestart)
+                                                             const bool resumedAfterRestart, const StrId title)
     : Activity("Translation", renderer, mappedInput),
       sourceText(std::move(sourceText)),
-      resumedAfterRestart(resumedAfterRestart) {
+      resumedAfterRestart(resumedAfterRestart),
+      title(title) {
   if (!preTranslatedText.empty()) {
     translatedText = std::move(preTranslatedText);
     hasPreTranslation = true;
@@ -506,7 +507,7 @@ void EpubReaderTranslationActivity::render(RenderLock&&) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, textPages.pageCount());
   }
   const auto layout =
-      DictionaryPanel::draw(renderer, tr(STR_TRANSLATE_PAGE), hasPreTranslation ? "" : "Gemini", counter);
+      DictionaryPanel::draw(renderer, I18n::getInstance().get(title), hasPreTranslation ? "" : "Gemini", counter);
 
   if (state == SHOWING_RESULT) {
     auto* fcm = renderer.getFontCacheManager();

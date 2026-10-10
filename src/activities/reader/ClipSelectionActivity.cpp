@@ -34,8 +34,10 @@ constexpr size_t FONT_PREWARM_TEXT_MAX = 2048;
 constexpr int TOUCH_DRAG_MOVEMENT_PX = 4;
 constexpr unsigned long TOUCH_PAGE_ADVANCE_HOLD_MS = 1000;
 constexpr int TOUCH_PAGE_END_DWELL_SLOP_PX = 8;
-constexpr ClippingResult::Action SELECTION_ACTIONS[] = {ClippingResult::Action::Lookup, ClippingResult::Action::Clip,
-                                                        ClippingResult::Action::Bookmark};
+// Slot order of the action bar; drawn by BaseTheme::drawSelectionActions in the same order.
+constexpr ClippingResult::Action SELECTION_ACTIONS[BaseTheme::SELECTION_ACTION_COUNT] = {
+    ClippingResult::Action::Lookup, ClippingResult::Action::Translate, ClippingResult::Action::Clip,
+    ClippingResult::Action::Bookmark};
 
 const char* cleanWordStart(const char* text) {
   if (!text) return "";
@@ -739,12 +741,13 @@ Rect ClipSelectionActivity::actionRect() const {
   safe.height = bottomEdge - safe.y;
   const int font = uiScaleSpec().smallFontId;
   const int labelWidth =
-      std::max({renderer.getTextWidth(font, tr(STR_LOOKUP)), renderer.getTextWidth(font, tr(STR_CLIP)),
-                renderer.getTextWidth(font, tr(STR_BOOKMARK_OPTION))});
+      std::max({renderer.getTextWidth(font, tr(STR_LOOKUP)), renderer.getTextWidth(font, tr(STR_TRANSLATE)),
+                renderer.getTextWidth(font, tr(STR_CLIP)), renderer.getTextWidth(font, tr(STR_BOOKMARK_OPTION))});
   const int padding = BaseTheme::SELECTION_ACTION_PAD_PX;
   // Each slot holds an icon over its label; the widest label sets the slot width.
   const int slotWidth = std::max(labelWidth, BaseTheme::SELECTION_ACTION_ICON_PX) + padding * 4;
-  const int width = std::min(safe.width, 3 * slotWidth + padding * 4);
+  constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
+  const int width = std::min(safe.width, count * slotWidth + padding * (count + 1));
   const int height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX +
                      renderer.getLineHeight(font) + 2 * BaseTheme::SELECTION_ACTION_VPAD_PX;
   int first = std::min(rangeStart, selected);

@@ -626,6 +626,11 @@ class EpubReaderActivity final : public ReaderActivity {
   std::atomic<bool> panelPageReady{false};
   void openPanelAfterRender(PanelAfterRender panel);
   void openTranslationPanel();
+  // Opens the translation panel on the given text, releasing the section first (see the .cpp).
+  void openTranslationFor(std::string text, StrId title);
+  // A selection to translate instead of the page; consumed by openTranslationPanel() once the
+  // page has been repainted without the selection UI.
+  std::string pendingTranslationText;
   // Repaints the current page, vertical or horizontal (body + status bar), for the word-lookup
   // panel's select view, which owns no page of its own -- a VerticalPage copy would cost ~15KB,
   // the same headroom the scan and the dictionary caches need. Called from the panel's render(),

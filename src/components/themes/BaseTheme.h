@@ -321,6 +321,7 @@ class BaseTheme {
   enum class HandleCorner : uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
   static void drawSelectionHandle(const GfxRenderer& renderer, Rect rect, HandleCorner corner);
   // Selection action bar: a 24px outline icon over its label in each slot (see drawSelectionActions).
+  static constexpr int SELECTION_ACTION_COUNT = 4;
   static constexpr int SELECTION_ACTION_ICON_PX = 40;
   static constexpr int SELECTION_ACTION_GAP_PX = 4;
   // Air above the icons and below the labels.
