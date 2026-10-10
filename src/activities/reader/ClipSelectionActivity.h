@@ -59,6 +59,10 @@ class ClipSelectionActivity final : public Activity {
   bool isReaderActivity() const override { return true; }
   bool handleHomeGesture() override;
 
+  // Heap the vertical selection allocates on entry, for the reader's pre-check: one WordBox per
+  // cell plus five text bytes each.
+  static size_t verticalCellBytes();
+
  private:
   struct WordBox {
     int16_t x = 0;

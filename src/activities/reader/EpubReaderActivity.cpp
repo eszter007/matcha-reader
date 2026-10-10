@@ -836,6 +836,13 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
       return;
     }
     const auto& clipping = std::get<ClippingResult>(result.data);
+    if (clipping.action == ClippingResult::Action::Unavailable) {
+      clippingMessage = StrId::STR_LOW_MEMORY_RETRY;
+      showClippingMessage = true;
+      clippingMessageTime = millis();
+      requestUpdate();
+      return;
+    }
     const uint16_t startPage = static_cast<uint16_t>(pageNumber + clipping.startPageOffset);
     const uint16_t endPage = static_cast<uint16_t>(pageNumber + clipping.endPageOffset);
     if (section && currentSpineIndex == spineIndex && endPage < section->pageCount) {
@@ -5032,9 +5039,20 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
     }
     // The copy is the page's glyph vector plus its text pool; refuse rather than abort on a heap
     // that cannot hold it (vector copies are not nothrow).
+    // Three blocks go on the heap for a selection: this page copy, the activity's cell boxes and
+    // its text pool. Font caches are what splits the heap after a long session (device: 58 KB
+    // free, 20 KB largest block, and the boxes still failed); the activity prewarms the page's
+    // glyphs again anyway, so dropping them first costs nothing.
+    releaseReloadableMemory();
+    LOG_DBG("CLIP", "Vertical selection: maxAlloc after reclaim = %u", ESP.getMaxAllocHeap());
     const size_t copyBytes = vpage->glyphs.size() * sizeof(VerticalGlyph) + 4 * 1024;
-    if (ESP.getMaxAllocHeap() < copyBytes + 8 * 1024) {
+    const size_t cellBytes = ClipSelectionActivity::verticalCellBytes();
+    if (ESP.getMaxAllocHeap() < std::max(copyBytes, cellBytes) + 4 * 1024 ||
+        ESP.getFreeHeap() < copyBytes + cellBytes + 8 * 1024) {
       LOG_ERR("CLIP", "Not enough heap to copy the vertical page (%u bytes)", static_cast<unsigned>(copyBytes));
+      clippingMessage = StrId::STR_LOW_MEMORY_RETRY;
+      showClippingMessage = true;
+      clippingMessageTime = millis();
       requestUpdate();
       return;
     }
@@ -5050,6 +5068,9 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
   }
   if (!activity) {
     LOG_ERR("CLIP", "OOM: vertical clipping selection");
+    clippingMessage = StrId::STR_LOW_MEMORY_RETRY;
+    showClippingMessage = true;
+    clippingMessageTime = millis();
     requestUpdate();
     return;
   }
@@ -5080,6 +5101,13 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
       return;
     }
     const auto& clipping = std::get<ClippingResult>(result.data);
+    if (clipping.action == ClippingResult::Action::Unavailable) {
+      clippingMessage = StrId::STR_LOW_MEMORY_RETRY;
+      showClippingMessage = true;
+      clippingMessageTime = millis();
+      requestUpdate();
+      return;
+    }
     if (clipping.action == ClippingResult::Action::Bookmark) {
       addBookmark();
       showBookmarkMessage = true;
