@@ -365,8 +365,15 @@ bool CoverLibraryActivity::stepLibraryScan() {
                          result->coverKnownAbsent);
       }
       const bool completed = result->completed;
+      if (matches && completed && !result->hasGridThumb && !result->coverKnownAbsent) {
+        CoverWorker::noteRetryableFailure(book.path);
+      }
       coverWorker_.consumeResult();
       if (matches && completed) scan_.thumbIndex++;
+      return false;
+    }
+    if (CoverWorker::failedThisSession(book.path)) {
+      scan_.thumbIndex++;
       return false;
     }
     // A [HEIGHT]-templated path does NOT mean the thumb exists at the height this theme asks

@@ -1186,7 +1186,12 @@ void loop() {
       const unsigned long idleStart = millis();
       while (millis() - idleStart < 50) {
         delay(10);
-        if (gpio.rawInputActive()) break;
+        if (gpio.rawInputActive()) {
+          // Back to full clock before the press is even debounced: the poll, the activity's
+          // handler and the render that follows would otherwise all start at 10 MHz.
+          powerManager.setPowerSaving(false);
+          break;
+        }
       }
     } else {
       // Short delay to prevent tight loop while still being responsive
