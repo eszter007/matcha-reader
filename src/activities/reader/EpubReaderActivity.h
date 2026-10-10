@@ -78,6 +78,7 @@ class EpubReaderActivity final : public ReaderActivity {
     uint8_t orientation = 0;
     bool operator==(const ReaderPrefs&) const = default;
   };
+  std::string paceFilePath() const override { return epub ? epub->getCachePath() + "/pace.bin" : std::string(); }
   ReaderPrefs globalPrefsSnapshot;
   // Text profiles: a CJK book reads with the CJK profile (CrossPointSettings::cjkTextProfile).
   // latinTextProfile_ is the Latin profile as it was on open; openTextProfile_ the four values the

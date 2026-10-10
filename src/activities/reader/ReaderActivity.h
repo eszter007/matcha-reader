@@ -6,6 +6,7 @@
 
 #include "EndOfBookOptions.h"
 #include "ReaderSessionReporter.h"
+#include "ReadingPace.h"
 #include "activities/Activity.h"
 
 class ReaderActivity : public Activity {
@@ -17,6 +18,14 @@ class ReaderActivity : public Activity {
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
   std::atomic<bool> endOfBookOptionsReady{false};
   ReaderSessionReporter sessionReporter;
+  // Time-left speed: fed with forward pages in markPageRendered() (render task), saved with the
+  // session. paceFilePath() names the book's cache file; empty for readers that keep none.
+  ReadingPace readingPace;
+  virtual std::string paceFilePath() const { return {}; }
+  std::atomic<bool> paceForwardPending{false};
+  uint32_t paceAnchorMs = 0;
+  int paceAnchorBp = 0;
+  bool paceHasAnchor = false;
   std::atomic<bool> pageRendered{false};
   bool bookRemembered = false;
   void markPageRendered();
