@@ -1767,7 +1767,7 @@ void CoverLibraryActivity::render(RenderLock&&) {
   }
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS),
-                 nullptr, HomeTabBar::showsBackButton(true));
+                 nullptr, HomeTabBar::showsBackButton(true), UiTabBand::drawsTopRule() ? 0 : -1);
 
   const int tabBarY = metrics.topPadding + metrics.headerHeight;
   {

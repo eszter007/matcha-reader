@@ -20,9 +20,13 @@ struct Options {
   bool focused = false;
   bool hasTouch = false;
   // When > 0, each pill is capped at its label width plus this padding per side, centred in its
-  // equal-width slot (themes other than Cover Grid).
+  // equal-width slot (RoundedRaff; Lyra tabs are label-width already).
   int16_t pillMaxPad = 0;
 };
+
+// Whether the band draws the rule along its top edge itself (Lyra), full width. A header sitting
+// on the band then draws none: its own rule is inset from the screen edges, and two would stack.
+bool drawsTopRule();
 
 void build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const freeink::ui::TabItem* tabs, int count,
            const Options& options);
