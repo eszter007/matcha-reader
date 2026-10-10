@@ -19,6 +19,12 @@ struct Layout {
   Rect addButton;  // tap target of the save-sentence button in the top-right corner
 };
 
+// Keeps the panel clear of a band of the page -- the looked-up word and its selection handles --
+// by moving it into the larger free area above or below the band and shrinking it to fit. An
+// empty band restores the centred panel. Set by the lookup panel that owns the screen, before it
+// lays out or draws, and cleared when it leaves; every caller of compute() then agrees.
+void setAvoid(Rect band);
+
 // The panel's rectangles for the current orientation. Pure geometry, no drawing, so callers
 // can lay text out (wrap, paginate) before any pixels exist.
 Layout compute(const GfxRenderer& renderer);

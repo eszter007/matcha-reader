@@ -316,8 +316,25 @@ class BaseTheme {
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon) const;
-  static void drawSelectionHandle(const GfxRenderer& renderer, Rect rect, bool left);
-  static void drawSelectionActions(const GfxRenderer& renderer, Rect rect);
+  // A selection handle: a white disc with a black outline and one square corner, the corner being
+  // the point that aims at the selected text.
+  enum class HandleCorner : uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
+  static void drawSelectionHandle(const GfxRenderer& renderer, Rect rect, HandleCorner corner);
+  static int selectionHandleSize();
+  // Selection action bar: a 24px outline icon over its label in each slot (see drawSelectionActions).
+  static constexpr int SELECTION_ACTION_COUNT = 4;
+  static constexpr int SELECTION_ACTION_ICON_PX = 40;
+  static constexpr int SELECTION_ACTION_GAP_PX = 4;
+  // Air above the icons and below the labels.
+  static constexpr int SELECTION_ACTION_VPAD_PX = 12;
+  // The pointer under the bar: this tall, twice this wide, aimed at anchorX.
+  static constexpr int SELECTION_ACTION_TAIL_PX = 8;
+  // Air around each slot and between slots, and the card's corner radius: tighter and rounder than
+  // the generic menu metrics, so the three actions read as one compact bubble.
+  static constexpr int SELECTION_ACTION_PAD_PX = 4;
+  static constexpr int SELECTION_ACTION_RADIUS_PX = 12;
+  // anchorX < 0 draws no pointer.
+  static void drawSelectionActions(const GfxRenderer& renderer, Rect rect, int anchorX = -1);
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   static void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,

@@ -69,6 +69,15 @@ void DictionaryWordSelectActivity::onEnter() {
     const int hit = wordAt(lookupAtX, lookupAtY);
     if (hit >= 0) {
       selected = hit;
+      {
+        // The definition opens over the reader's page without this screen ever rendering, so mark
+        // the word on that page here: it then reads as selected beside the handles.
+        RenderLock lock(*this);
+        const WordBox& word = words[selected];
+        renderer.getFontCacheManager()->prewarmCache(
+            word.fontId, word.text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(word.style) & 0x03)));
+        drawHighlightWithSnapshot();
+      }
       requestUpdate();
       performLookup();
       return;
@@ -381,7 +390,22 @@ void DictionaryWordSelectActivity::performLookup() {
       LOG_ERR("DICT", "OOM: definition view");
       return;
     }
+    if (mappedInput.hasTouch()) {
+      const WordBox& box = words[selected];
+      const Rect wordRect{box.x, box.y, box.width, wordHeight(box)};
+      LookupClipHandles handles;
+      handles.set(wordRect, wordRect, /*isVertical=*/false);
+      definitionView->setClipHandles(handles);
+    }
     startActivityForResult(std::move(definitionView), [this](const ActivityResult& result) {
+      // A drag on the word's handles: the reader opens clip selection on it.
+      if (std::holds_alternative<ClipStartResult>(result.data)) {
+        ActivityResult forward;
+        forward.data = result.data;
+        setResult(std::move(forward));
+        finish();
+        return;
+      }
       // The definition view cancels when its power click asked to leave the dictionary
       // entirely, rather than step back to this selection.
       if (result.isCancelled) {

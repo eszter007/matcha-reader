@@ -587,10 +587,13 @@ class EpubReaderActivity final : public ReaderActivity {
   void activateMoreRow(int row);
   void openFootnoteSelect(bool reopenMenuOnCancel);
   void openDictionaryWordSelect();
-  void startClipSelection(int initialX = -1, int initialY = -1);
+  // initialX/Y selects the word there; dragX/Y (a lookup handle's press) keeps following the finger.
+  void startClipSelection(int initialX = -1, int initialY = -1, int dragX = -1, int dragY = -1);
+  // Result of a word-lookup panel: a drag on its word handles opens clip selection there.
+  void onLookupPanelResult(const ActivityResult& result);
   int clippingAtPoint(const Page& page, int x, int y) const;
   // Vertical pages: the same selection over character cells (ClipSelectionActivity, vertical form).
-  void startVerticalClipSelection(int initialX, int initialY);
+  void startVerticalClipSelection(int initialX, int initialY, int dragX, int dragY);
   int verticalClippingAtPoint(const VerticalPage& vpage, int x, int y) const;
   void drawVerticalClippingHighlights(const VerticalPage& vpage, int orientedMarginTop, int orientedMarginLeft) const;
   void openClippings();
@@ -626,11 +629,22 @@ class EpubReaderActivity final : public ReaderActivity {
   std::atomic<bool> panelPageReady{false};
   void openPanelAfterRender(PanelAfterRender panel);
   void openTranslationPanel();
+  // Opens the translation panel on the given text, releasing the section first (see the .cpp).
+  void openTranslationFor(std::string text, StrId title);
+  // A selection to translate instead of the page; consumed by openTranslationPanel() once the
+  // page has been repainted without the selection UI.
+  std::string pendingTranslationText;
   // Repaints the current page, vertical or horizontal (body + status bar), for the word-lookup
   // panel's select view, which owns no page of its own -- a VerticalPage copy would cost ~15KB,
   // the same headroom the scan and the dictionary caches need. Called from the panel's render(),
   // i.e. under the render lock, which is what the section's shared single-page slot requires.
   static bool repaintPageForPanelThunk(void* ctx);
+  // Clip selection on a vertical page: the text range [start, end) its handles span, painted by
+  // drawVerticalClippingHighlights() under the text exactly like a saved clipping. start >= end
+  // clears it.
+  static void setLiveSelectionThunk(void* ctx, uint32_t start, uint32_t end);
+  uint32_t liveSelectionStart = UINT32_MAX;
+  uint32_t liveSelectionEnd = 0;
   bool repaintPageForPanel();
   static constexpr uint16_t kSpineProbeFailed = 0xFFFF;  // session marker: cache probe failed, don't retry
   // Page numbering across the logical ToC chapter: spine files without their own ToC entry

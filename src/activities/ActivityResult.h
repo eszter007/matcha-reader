@@ -44,7 +44,7 @@ struct PageResult {
 };
 
 struct ClippingResult {
-  enum class Action : uint8_t { Clip, Lookup, Bookmark };
+  enum class Action : uint8_t { Clip, Lookup, Bookmark, Translate };
   Action action = Action::Clip;
   std::string text;
   uint16_t startPageOffset = 0;
@@ -54,6 +54,15 @@ struct ClippingResult {
   uint16_t wordCount = 0;
   uint32_t startOffset = UINT32_MAX;
   uint32_t endOffset = UINT32_MAX;
+};
+
+// A drag started on a lookup panel's word handles: clip selection opens on that word and keeps
+// following the finger, which is still down.
+struct ClipStartResult {
+  int16_t wordX = -1;  // a point inside the looked-up word
+  int16_t wordY = -1;
+  int16_t touchX = -1;  // where the finger pressed the handle
+  int16_t touchY = -1;
 };
 
 struct ProgressChangeResult {
@@ -83,9 +92,9 @@ struct FilePathResult {
   std::string path;
 };
 
-using ResultVariant =
-    std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
-                 PageResult, ClippingResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult>;
+using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
+                                   IntervalResult, PageResult, ClippingResult, ClipStartResult, ProgressChangeResult,
+                                   NetworkModeResult, FootnoteResult, FilePathResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

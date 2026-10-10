@@ -36,6 +36,20 @@ class ClipSelectionActivity final : public Activity {
     repaintPage = fn;
   }
 
+  // Hands the selected text range to the reader, whose page repaint paints it under the text like
+  // a saved clipping -- the same look as a horizontal selection.
+  void setLiveSelection(void* ctx, void (*fn)(void*, uint32_t, uint32_t)) {
+    liveSelectionCtx = ctx;
+    liveSelection = fn;
+  }
+
+  // Opened from a lookup panel's handle with the finger still down: the selection starts as the
+  // initial word and follows that finger as a handle drag, from the point it pressed.
+  void continueDragFrom(const int touchX, const int touchY) {
+    dragFromX = touchX;
+    dragFromY = touchY;
+  }
+
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;
@@ -102,6 +116,18 @@ class ClipSelectionActivity final : public Activity {
   void prewarmWord(int index) const;
 
   std::vector<std::unique_ptr<Page>> pages;
+  void* liveSelectionCtx = nullptr;
+  void (*liveSelection)(void*, uint32_t, uint32_t) = nullptr;
+  void publishLiveSelection() const;
+  // A vertical range is redrawn by the reader, clipped to the cells a step changed: their union
+  // collects here and flushDirtyCells() repaints it once, before the refresh.
+  bool rangeRepaintedByReader() const { return vertical() && rangeStart >= 0 && liveSelection && repaintPage; }
+  void markDirty(const WordBox& word) const;
+  void flushDirtyCells();
+  mutable int dirtyLeft = 0;
+  mutable int dirtyTop = 0;
+  mutable int dirtyRight = 0;
+  mutable int dirtyBottom = 0;
   void* repaintCtx = nullptr;
   bool (*repaintPage)(void*) = nullptr;
   VerticalPage ownedVerticalPage;
@@ -128,6 +154,8 @@ class ClipSelectionActivity final : public Activity {
   uint16_t rowCount = 0;
   bool touchDragSelecting = false;
   bool ignoreInitialTouch = false;
+  int dragFromX = -1;
+  int dragFromY = -1;
   int dragOffsetX = 0;
   int dragOffsetY = 0;
   bool touchDragHasMoved = false;

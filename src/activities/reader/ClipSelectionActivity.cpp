@@ -34,8 +34,10 @@ constexpr size_t FONT_PREWARM_TEXT_MAX = 2048;
 constexpr int TOUCH_DRAG_MOVEMENT_PX = 4;
 constexpr unsigned long TOUCH_PAGE_ADVANCE_HOLD_MS = 1000;
 constexpr int TOUCH_PAGE_END_DWELL_SLOP_PX = 8;
-constexpr ClippingResult::Action SELECTION_ACTIONS[] = {ClippingResult::Action::Lookup, ClippingResult::Action::Clip,
-                                                        ClippingResult::Action::Bookmark};
+// Slot order of the action bar; drawn by BaseTheme::drawSelectionActions in the same order.
+constexpr ClippingResult::Action SELECTION_ACTIONS[BaseTheme::SELECTION_ACTION_COUNT] = {
+    ClippingResult::Action::Lookup, ClippingResult::Action::Translate, ClippingResult::Action::Clip,
+    ClippingResult::Action::Bookmark};
 
 const char* cleanWordStart(const char* text) {
   if (!text) return "";
@@ -99,7 +101,18 @@ void ClipSelectionActivity::onEnter() {
       return;
     }
     selected = rangeStart = hit;
-    ignoreInitialTouch = true;
+    if (dragFromX >= 0) {
+      // The drag a lookup panel handed over: same state as pressing one of this screen's handles.
+      dragOffsetX = words[hit].x + words[hit].width / 2 - dragFromX;
+      dragOffsetY = words[hit].y + textOffset() + words[hit].height / 2 - dragFromY;
+      touchDragSelecting = true;
+      touchDragHasMoved = false;
+      touchDragStartX = dragFromX;
+      touchDragStartY = dragFromY;
+      touchDragPageEndIndex = -1;
+    } else {
+      ignoreInitialTouch = true;
+    }
   }
   requestUpdate();
 }
@@ -540,8 +553,7 @@ void ClipSelectionActivity::loop() {
   }
   if (!touchDragSelecting && mappedInput.wasScreenTapped(touchX, touchY)) {
     if (rangeStart >= 0) {
-      const int action =
-          selectionGeometry::actionAt(actionRect(), UITheme::getInstance().getMetrics().menuSpacing, touchX, touchY);
+      const int action = selectionGeometry::actionAt(actionRect(), BaseTheme::SELECTION_ACTION_PAD_PX, touchX, touchY);
       if (action >= 0) {
         confirmSelection(SELECTION_ACTIONS[action]);
         return;
@@ -602,8 +614,7 @@ void ClipSelectionActivity::loop() {
   } else if (mappedInput.wasScreenTouchPressed(touchX, touchY)) {
     if (rangeStart >= 0) {
       const Rect actions = actionRect();
-      if (selectionGeometry::actionAt(actions, UITheme::getInstance().getMetrics().menuSpacing, touchX, touchY) >= 0)
-        return;
+      if (selectionGeometry::actionAt(actions, BaseTheme::SELECTION_ACTION_PAD_PX, touchX, touchY) >= 0) return;
       const int first = std::min(rangeStart, selected);
       const int last = std::max(rangeStart, selected);
       for (int endpoint = 0; endpoint < 2; ++endpoint) {
@@ -702,18 +713,9 @@ bool ClipSelectionActivity::handleButtons(const uint8_t buttons) {
 
 Rect ClipSelectionActivity::handleRect(const int index, const bool start) const {
   const WordBox& word = words[index];
-  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const int size = std::max(24, UITheme::getInstance().getMetrics().verticalSpacing * 2);
-  if (vertical()) {
-    // The start handle sits above the first cell, the end handle below the last.
-    const int edge = start ? word.y - size : word.y + word.height;
-    return Rect{std::clamp(word.x + word.width / 2 - size / 2, safe.x, safe.x + safe.width - size),
-                std::clamp(edge + textOffset(), safe.y, safe.y + safe.height - size), size, size};
-  }
-  const bool left = start != word.isRtl;
-  const int edge = left ? word.x : word.x + word.width;
-  return Rect{std::clamp(edge - (left ? size : 0), safe.x, safe.x + safe.width - size),
-              std::clamp(word.y + textOffset() + word.height, safe.y, safe.y + safe.height - size), size, size};
+  return selectionGeometry::handle(Rect{word.x, word.y + textOffset(), word.width, word.height}, start, vertical(),
+                                   word.isRtl, UITheme::getInstance().getScreenSafeArea(renderer, true, false),
+                                   BaseTheme::selectionHandleSize());
 }
 
 int ClipSelectionActivity::selectionTop() const {
@@ -723,6 +725,8 @@ int ClipSelectionActivity::selectionTop() const {
   for (int i = first; i <= last; ++i) {
     if (words[i].pageOffset == currentPageOffset) top = std::min(top, static_cast<int>(words[i].y));
   }
+  // On a vertical page the start handle sits above the first cell; the bar goes above the handle.
+  if (vertical()) top -= BaseTheme::selectionHandleSize();
   return top;
 }
 
@@ -739,17 +743,26 @@ Rect ClipSelectionActivity::actionRect() const {
   safe.height = bottomEdge - safe.y;
   const int font = uiScaleSpec().smallFontId;
   const int labelWidth =
-      std::max({renderer.getTextWidth(font, tr(STR_LOOKUP)), renderer.getTextWidth(font, tr(STR_CLIP)),
-                renderer.getTextWidth(font, tr(STR_BOOKMARK_OPTION))});
-  const int padding = metrics.menuSpacing;
-  const int width = std::min(safe.width, 3 * (labelWidth + padding * 2) + padding * 4);
-  const int lines = labelWidth > (width - padding * 4) / 3 ? 2 : 1;
-  const int height = std::max(36, renderer.getLineHeight(font) * lines + padding * 2);
+      std::max({renderer.getTextWidth(font, tr(STR_LOOKUP)), renderer.getTextWidth(font, tr(STR_TRANSLATE)),
+                renderer.getTextWidth(font, tr(STR_CLIP)), renderer.getTextWidth(font, tr(STR_BOOKMARK_OPTION))});
+  const int padding = BaseTheme::SELECTION_ACTION_PAD_PX;
+  // Each slot holds an icon over its label; the widest label sets the slot width.
+  const int slotWidth = std::max(labelWidth, BaseTheme::SELECTION_ACTION_ICON_PX) + padding * 4;
+  constexpr int count = BaseTheme::SELECTION_ACTION_COUNT;
+  const int width = std::min(safe.width, count * slotWidth + padding * (count + 1));
+  const int height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX +
+                     renderer.getLineHeight(font) + 2 * BaseTheme::SELECTION_ACTION_VPAD_PX;
   int first = std::min(rangeStart, selected);
   const int last = std::max(rangeStart, selected);
   while (first < last && words[first].pageOffset < currentPageOffset) ++first;
-  return selectionGeometry::actions(safe, selectionTop(), height + padding * 2, metrics.verticalSpacing, width,
-                                    words[first].x - padding);
+  // The gap below the card holds the pointer plus a little air before the selected word.
+  const int gap = BaseTheme::SELECTION_ACTION_TAIL_PX + 2;
+  // The card hangs left-aligned with the first selected word, but never so far right that the
+  // pointer, which must clear the rounded corner, could not sit exactly on the word's centre.
+  const int wordX = words[first].x + textXOffset();
+  const int apexInset = BaseTheme::SELECTION_ACTION_RADIUS_PX + BaseTheme::SELECTION_ACTION_TAIL_PX;
+  const int barX = std::min(wordX - padding, wordX + words[first].width / 2 - apexInset);
+  return selectionGeometry::actions(safe, selectionTop(), height, gap, width, barX);
 }
 
 int ClipSelectionActivity::textOffset() const {
@@ -803,6 +816,10 @@ void ClipSelectionActivity::drawWordClean(const int index, const int offsetX, co
   if (index < 0 || index >= static_cast<int>(wordCount)) return;
   const WordBox& word = words[index];
   if (word.pageOffset != currentPageOffset) return;
+  if (rangeRepaintedByReader()) {
+    markDirty(word);
+    return;
+  }
   if (vertical()) {
     invertWord(word, offsetX, offset);  // undoes the highlight's inversion
     return;
@@ -827,6 +844,10 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
   if (index < 0 || index >= static_cast<int>(wordCount)) return;
   const WordBox& word = words[index];
   if (word.pageOffset != currentPageOffset) return;
+  if (rangeRepaintedByReader()) {
+    markDirty(word);
+    return;
+  }
   if (vertical()) {
     invertWord(word, offsetX, offset);
     return;
@@ -875,6 +896,11 @@ bool ClipSelectionActivity::renderIncremental() {
 
   // Case 2: Transition from rangeStart < 0 to rangeStart >= 0 (user just confirmed rangeStart)
   if (rangeStart >= 0 && lastRenderedRangeStart < 0 && rangeStart == selected && selected == lastRenderedSelected) {
+    // The inverted cursor cell becomes the first cell of a gray range.
+    if (rangeRepaintedByReader()) {
+      markDirty(words[selected]);
+      flushDirtyCells();
+    }
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -917,6 +943,7 @@ bool ClipSelectionActivity::renderIncremental() {
       const WordBox& cursor = words[selected];
       renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
     }
+    flushDirtyCells();
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -939,7 +966,8 @@ void ClipSelectionActivity::drawSelection() const {
     const WordBox& word = words[i];
     if (word.pageOffset != currentPageOffset) continue;
     if (vertical()) {
-      invertWord(word, offsetX, offset);
+      // A range is already on the page (publishLiveSelection); only the lone cursor is inverted.
+      if (rangeStart < 0 || !liveSelection) invertWord(word, offsetX, offset);
       continue;
     }
     if (previous) ditherGapBetween(*previous, word, offsetX, offset);
@@ -949,10 +977,17 @@ void ClipSelectionActivity::drawSelection() const {
   }
   if (rangeStart >= 0 && mappedInput.hasTouch()) {
     if (words[first].pageOffset == currentPageOffset)
-      GUI.drawSelectionHandle(renderer, handleRect(first, true), !words[first].isRtl);
+      GUI.drawSelectionHandle(renderer, handleRect(first, true),
+                              selectionGeometry::handleCorner(true, vertical(), words[first].isRtl));
     if (words[last].pageOffset == currentPageOffset)
-      GUI.drawSelectionHandle(renderer, handleRect(last, false), words[last].isRtl);
-    if (!touchDragSelecting) GUI.drawSelectionActions(renderer, actionRect());
+      GUI.drawSelectionHandle(renderer, handleRect(last, false),
+                              selectionGeometry::handleCorner(false, vertical(), words[last].isRtl));
+    if (!touchDragSelecting) {
+      // The pointer aims at the first selected word on this page (its cell, on a vertical page).
+      int anchor = std::min(rangeStart, selected);
+      while (anchor < last && words[anchor].pageOffset != currentPageOffset) ++anchor;
+      GUI.drawSelectionActions(renderer, actionRect(), words[anchor].x + offsetX + words[anchor].width / 2);
+    }
   } else if (!vertical()) {
     const WordBox& cursor = words[selected];
     renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
@@ -961,6 +996,48 @@ void ClipSelectionActivity::drawSelection() const {
 
 void ClipSelectionActivity::invertWord(const WordBox& word, const int offsetX, const int offset) const {
   renderer.invertRect(word.x + offsetX, word.y + offset, word.width, word.height);
+}
+
+void ClipSelectionActivity::markDirty(const WordBox& word) const {
+  const int right = word.x + word.width;
+  const int bottom = word.y + word.height;
+  if (dirtyRight <= dirtyLeft) {
+    dirtyLeft = word.x;
+    dirtyTop = word.y;
+    dirtyRight = right;
+    dirtyBottom = bottom;
+    return;
+  }
+  dirtyLeft = std::min(dirtyLeft, static_cast<int>(word.x));
+  dirtyTop = std::min(dirtyTop, static_cast<int>(word.y));
+  dirtyRight = std::max(dirtyRight, right);
+  dirtyBottom = std::max(dirtyBottom, bottom);
+}
+
+// One reader repaint clipped to the changed cells: the gray under them and their glyphs come out
+// exactly as a full repaint draws them, without redrawing the rest of the page.
+void ClipSelectionActivity::flushDirtyCells() {
+  if (dirtyRight <= dirtyLeft || dirtyBottom <= dirtyTop) return;
+  const unsigned long started = millis();
+  publishLiveSelection();
+  const auto clip = renderer.getClipRect();
+  renderer.setClipRect(dirtyLeft, dirtyTop, dirtyRight - dirtyLeft, dirtyBottom - dirtyTop);
+  renderer.fillRect(dirtyLeft, dirtyTop, dirtyRight - dirtyLeft, dirtyBottom - dirtyTop, false);
+  repaintPage(repaintCtx);
+  renderer.setClipRect(clip[0], clip[1], clip[2], clip[3]);
+  LOG_DBG("CLIP", "Cell repaint %dx%d in %lums", dirtyRight - dirtyLeft, dirtyBottom - dirtyTop, millis() - started);
+  dirtyLeft = dirtyTop = dirtyRight = dirtyBottom = 0;
+}
+
+void ClipSelectionActivity::publishLiveSelection() const {
+  if (!vertical() || !liveSelection) return;
+  if (rangeStart < 0) {
+    liveSelection(liveSelectionCtx, UINT32_MAX, 0);
+    return;
+  }
+  const int first = std::min(rangeStart, selected);
+  const int last = std::max(rangeStart, selected);
+  liveSelection(liveSelectionCtx, words[first].startOffset, words[last].endOffset);
 }
 
 void ClipSelectionActivity::drawPage(const int offsetX, const int offsetY) {
@@ -1000,6 +1077,7 @@ void ClipSelectionActivity::render(RenderLock&&) {
   // The vertical renderer places glyphs through its own cell geometry and is drawn unclipped,
   // as the reader draws it; the horizontal page is clipped to the safe area as before.
   if (!vertical()) renderer.setClipRect(safe.x, safe.y, safe.width, safe.height);
+  publishLiveSelection();
   drawPage(offsetX, offset);
   if (wordCount != 0) drawSelection();
   renderer.setClipRect(clip[0], clip[1], clip[2], clip[3]);

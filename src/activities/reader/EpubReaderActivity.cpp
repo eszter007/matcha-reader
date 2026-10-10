@@ -702,12 +702,20 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
   }
   wordSelect->setMiningContext({getBookTitle(), getBookAuthor(), std::move(nextPageText), {}, bookPath});
   if (!lookupText.empty()) wordSelect->setLookupText(lookupText);
-  startActivityForResult(std::move(wordSelect), [this](const ActivityResult&) { requestUpdate(); });
+  startActivityForResult(std::move(wordSelect), [this](const ActivityResult& result) { onLookupPanelResult(result); });
 }
 
-void EpubReaderActivity::startClipSelection(const int initialX, const int initialY) {
+void EpubReaderActivity::onLookupPanelResult(const ActivityResult& result) {
+  if (const auto* clip = std::get_if<ClipStartResult>(&result.data); clip && !result.isCancelled) {
+    startClipSelection(clip->wordX, clip->wordY, clip->touchX, clip->touchY);
+    return;
+  }
+  requestUpdate();
+}
+
+void EpubReaderActivity::startClipSelection(const int initialX, const int initialY, const int dragX, const int dragY) {
   if (verticalSection) {
-    startVerticalClipSelection(initialX, initialY);
+    startVerticalClipSelection(initialX, initialY, dragX, dragY);
     return;
   }
   if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return;
@@ -721,7 +729,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
        ++pageOffset) {
     auto page = section->loadPage(pageNumber + pageOffset);
     if (!page) break;
-    if (pageOffset == 0 && initialX >= 0 && CLIPPINGS.hasClippings()) {
+    if (pageOffset == 0 && initialX >= 0 && dragX < 0 && CLIPPINGS.hasClippings()) {
       RenderLock lock;
       const int clippingIndex = clippingAtPoint(*page, initialX, initialY);
       if (clippingIndex >= 0) {
@@ -767,6 +775,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
     requestUpdate();
     return;
   }
+  if (dragX >= 0) activity->continueDragFrom(dragX, dragY);
   startActivityForResult(std::move(activity), [this, spineIndex, pageNumber, pageCount, layoutSignature,
                                                bookTitle = std::move(bookTitle), author = std::move(author),
                                                chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
@@ -790,6 +799,12 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
     }
     if (clipping.action == ClippingResult::Action::Lookup) {
       openDictionaryWordSelect(/*pageOnScreen=*/true, -1, -1, clipping.text);
+      return;
+    }
+    if (clipping.action == ClippingResult::Action::Translate) {
+      // Repaint the page first so the selection card is gone from the panel's background.
+      pendingTranslationText = clipping.text;
+      openPanelAfterRender(PanelAfterRender::Translation);
       return;
     }
     const uint16_t paragraphIndex =
@@ -4859,6 +4874,8 @@ struct VerticalClipMatch {
   // highlight pass
   const GfxRenderer* renderer = nullptr;
   size_t highlighted = 0;
+  uint32_t liveStart = UINT32_MAX;  // a clip selection in progress, drawn like a saved clipping
+  uint32_t liveEnd = 0;
 };
 
 int clippingIndexForCell(const VerticalClipMatch& m, const uint16_t cellIndex, const VerticalClipCell& cell) {
@@ -4894,7 +4911,7 @@ int EpubReaderActivity::verticalClippingAtPoint(const VerticalPage& vpage, const
 
 void EpubReaderActivity::drawVerticalClippingHighlights(const VerticalPage& vpage, const int orientedMarginTop,
                                                         const int orientedMarginLeft) const {
-  if (!verticalSection || !CLIPPINGS.hasClippings() || verticalSection->currentPage < 0 ||
+  if (!verticalSection || verticalSection->currentPage < 0 ||
       verticalSection->currentPage >= verticalSection->pageCount) {
     return;
   }
@@ -4902,17 +4919,21 @@ void EpubReaderActivity::drawVerticalClippingHighlights(const VerticalPage& vpag
   for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
     if (CLIPPINGS.clippingAt(i)->spineIndex == currentSpineIndex) ++chapterClippings;
   }
-  if (!chapterClippings) return;
+  const bool live = liveSelectionStart < liveSelectionEnd;
+  if (!chapterClippings && !live) return;
 
   const auto started = millis();
   VerticalClipMatch m{currentSpineIndex, static_cast<uint16_t>(verticalSection->currentPage),
                       verticalSection->pageCount,
                       readerRenderSpecSignature(readerSpec(buildViewportWidth, buildViewportHeight))};
   m.renderer = &renderer;
+  m.liveStart = liveSelectionStart;
+  m.liveEnd = liveSelectionEnd;
   forEachVerticalClipCell(renderer, vpage, effectiveReaderFontId(), orientedMarginLeft, orientedMarginTop, &m,
                           [](void* ctx, const VerticalClipCell& cell) {
                             auto& m = *static_cast<VerticalClipMatch*>(ctx);
-                            const bool inClipping = clippingIndexForCell(m, m.cellIndex++, cell) >= 0;
+                            const bool inSelection = cell.startOffset < m.liveEnd && m.liveStart < cell.endOffset;
+                            const bool inClipping = clippingIndexForCell(m, m.cellIndex++, cell) >= 0 || inSelection;
                             if (inClipping) {
                               m.renderer->fillRectDither(cell.x, cell.y, cell.width, cell.height, Color::LightGray);
                               m.highlighted++;
@@ -4923,7 +4944,8 @@ void EpubReaderActivity::drawVerticalClippingHighlights(const VerticalPage& vpag
           static_cast<unsigned>(chapterClippings), static_cast<unsigned>(m.highlighted), millis() - started);
 }
 
-void EpubReaderActivity::startVerticalClipSelection(const int initialX, const int initialY) {
+void EpubReaderActivity::startVerticalClipSelection(const int initialX, const int initialY, const int dragX,
+                                                    const int dragY) {
   if (!verticalSection || !epub) return;
   // The page is copied below; a running build could still replace the section underneath.
   if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
@@ -4944,7 +4966,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
       requestUpdate();
       return;
     }
-    if (initialX >= 0 && CLIPPINGS.hasClippings()) {
+    if (initialX >= 0 && dragX < 0 && CLIPPINGS.hasClippings()) {
       const int clippingIndex = verticalClippingAtPoint(*vpage, initialX, initialY);
       if (clippingIndex >= 0) {
         const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
@@ -4980,6 +5002,8 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
     return;
   }
   activity->setRepaintPage(this, &repaintPageForPanelThunk);
+  activity->setLiveSelection(this, &setLiveSelectionThunk);
+  if (dragX >= 0) activity->continueDragFrom(dragX, dragY);
   if (buildViewportWidth == 0 || buildViewportHeight == 0) {
     LOG_ERR("CLIP", "Cannot anchor clipping before the reader viewport is initialized");
     requestUpdate();
@@ -4997,6 +5021,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
   startActivityForResult(std::move(activity), [this, spineIndex, pageNumber, pageCount, layoutSignature,
                                                bookTitle = std::move(bookTitle), author = std::move(author),
                                                chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
+    setLiveSelectionThunk(this, UINT32_MAX, 0);  // the page goes back to saved clippings only
     if (result.isCancelled) {
       requestUpdate();
       return;
@@ -5011,6 +5036,12 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
     }
     if (clipping.action == ClippingResult::Action::Lookup) {
       openDictionaryWordSelect(/*pageOnScreen=*/true, -1, -1, clipping.text);
+      return;
+    }
+    if (clipping.action == ClippingResult::Action::Translate) {
+      // Repaint the page first so the selection card is gone from the panel's background.
+      pendingTranslationText = clipping.text;
+      openPanelAfterRender(PanelAfterRender::Translation);
       return;
     }
     const auto addResult =
@@ -5108,6 +5139,12 @@ int EpubReaderActivity::effectiveReaderFontId() const {
   // answer -- it used to ask getReaderFontId() directly and drew a Japanese book in the built-in
   // face at a size the built-in does not have, disagreeing with the page on both counts.
   return sdFontSystem.effectiveReaderFontId(fontScript());
+}
+
+void EpubReaderActivity::setLiveSelectionThunk(void* ctx, const uint32_t start, const uint32_t end) {
+  auto* reader = static_cast<EpubReaderActivity*>(ctx);
+  reader->liveSelectionStart = start;
+  reader->liveSelectionEnd = end;
 }
 
 bool EpubReaderActivity::repaintPageForPanelThunk(void* ctx) {
@@ -5231,7 +5268,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       }
     }
     if (panel) {
-      startActivityForResult(std::move(panel), [this](const ActivityResult&) { requestUpdate(); });
+      startActivityForResult(std::move(panel), [this](const ActivityResult& result) { onLookupPanelResult(result); });
     }
   } else if (section) {
     // loadPage(), not loadPageAt(): with the incremental build the current page often lives only
@@ -5339,7 +5376,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         return;
       }
       lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
-      startActivityForResult(std::move(lookup), [this](const ActivityResult&) { requestUpdate(); });
+      startActivityForResult(std::move(lookup), [this](const ActivityResult& result) { onLookupPanelResult(result); });
     }
   }
 }
@@ -5359,6 +5396,12 @@ void EpubReaderActivity::openPanelAfterRender(const PanelAfterRender panel) {
 }
 
 void EpubReaderActivity::openTranslationPanel() {
+  if (!pendingTranslationText.empty()) {
+    std::string text = std::move(pendingTranslationText);
+    pendingTranslationText.clear();
+    openTranslationFor(std::move(text), StrId::STR_TRANSLATE);
+    return;
+  }
   std::string pageText;
   if (verticalSection) {
     RenderLock lock(*this);  // shared page slot -- see openReaderMenu()
@@ -5369,23 +5412,26 @@ void EpubReaderActivity::openTranslationPanel() {
   } else if (section) {
     pageText = section->getTextFromSectionFile();
   }
-  if (!pageText.empty()) {
-    // The extracted text is all Translation needs -- the Section/VerticalSection object
-    // itself (current page's resident glyphs, page index) is dead weight for the duration of
-    // the activity, and Translation's TLS handshake needs every contiguous byte it can get
-    // (see MIN_HEAP_FOR_TLS in EpubReaderTranslationActivity.cpp). Sync nextPageNumber first
-    // so the normal reload-from-cache path in render() resumes on the same page when we
-    // return -- same pattern as the page-turn/spine-change call sites in this file.
-    nextPageNumber = verticalSection ? verticalSection->currentPage : section ? section->currentPage : nextPageNumber;
-    {
-      RenderLock lock(*this);  // the render task may still be in its warm tail
-      section.reset();
-      verticalSection.reset();
-      releaseReloadableMemory();
-    }
-    startActivityForResult(std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(pageText)),
-                           [this](const ActivityResult&) { requestUpdate(); });
+  if (!pageText.empty()) openTranslationFor(std::move(pageText), StrId::STR_TRANSLATE_PAGE);
+}
+
+void EpubReaderActivity::openTranslationFor(std::string text, const StrId title) {
+  // The extracted text is all Translation needs -- the Section/VerticalSection object
+  // itself (current page's resident glyphs, page index) is dead weight for the duration of
+  // the activity, and Translation's TLS handshake needs every contiguous byte it can get
+  // (see MIN_HEAP_FOR_TLS in EpubReaderTranslationActivity.cpp). Sync nextPageNumber first
+  // so the normal reload-from-cache path in render() resumes on the same page when we
+  // return -- same pattern as the page-turn/spine-change call sites in this file.
+  nextPageNumber = verticalSection ? verticalSection->currentPage : section ? section->currentPage : nextPageNumber;
+  {
+    RenderLock lock(*this);  // the render task may still be in its warm tail
+    section.reset();
+    verticalSection.reset();
+    releaseReloadableMemory();
   }
+  startActivityForResult(
+      std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(text), "", false, title),
+      [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void EpubReaderActivity::openFootnotesPanel() {

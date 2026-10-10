@@ -14,6 +14,7 @@ class Page;
 
 #include "WordSelectionScan.h"
 #include "activities/Activity.h"
+#include "clippings/LookupClipHandles.h"
 #include "util/ButtonNavigator.h"
 #include "util/SentenceMining.h"
 
@@ -150,6 +151,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // inverted debris on the page.
   HighlightBox drawnBoxes[kMaxHighlightBoxes];
   int drawnBoxCount = 0;
+  // Handles on the word behind the definition card (touch boards): written by the render task
+  // under boxMux, read by the loop's hit test. They are opaque, so moving them repaints the page.
+  LookupClipHandles clipHandles;
 
   // The reader opens the panel on a long press, so the Confirm release that follows belongs to
   // that press, not to a selection. Ignore it until a fresh press is seen.
