@@ -54,6 +54,7 @@ class ClipSelectionActivity final : public Activity {
   }
 
   void onEnter() override;
+  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool isReaderActivity() const override { return true; }
@@ -116,6 +117,12 @@ class ClipSelectionActivity final : public Activity {
   bool buildSelectedText(int first, int last, std::string& text) const;
   void drawSelection() const;
   bool renderIncremental();
+  // Touch: the refresh is fired deferred, so the loop keeps reading the finger while the panel
+  // runs its waveform instead of waiting ~500 ms behind the render lock for every drag sample.
+  // settleRefresh() waits it out and reseeds the diff baseline before anything draws again.
+  void pushRefresh(HalDisplay::RefreshMode mode);
+  void settleRefresh();
+  bool refreshPending = false;
   void drawWordHighlight(int index, int firstSelected, int lastSelected, int offsetX, int offset) const;
   void drawWordClean(int index, int offsetX, int offset) const;
   void ditherGapBetween(const WordBox& a, const WordBox& b, int offsetX, int offset) const;
