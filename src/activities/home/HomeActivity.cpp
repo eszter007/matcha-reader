@@ -231,7 +231,7 @@ void HomeActivity::postNextCoverJob(const int coverHeight) {
     // the card then skipped regeneration and drew a placeholder forever.
     const bool coverMissing =
         !coverIsThumb || !FsHelpers::hasCompleteBmp("HOME", UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight));
-    if (!coverMissing) {
+    if (!coverMissing || CoverWorker::failedThisSession(book.path)) {
       coverScanIndex_++;
       continue;
     }
@@ -295,6 +295,7 @@ void HomeActivity::applyCoverResult() {
       // would turn one low-heap moment into a permanent verdict: the entry loses its path, the
       // "is it missing?" test above skips it from then on, and the cover never comes back.
       LOG_ERR("HOME", "Cover thumb failed for %s; keeping path to retry", path.c_str());
+      if (completed) CoverWorker::noteRetryableFailure(path);
     }
   }
   if (completed) coverScanIndex_++;

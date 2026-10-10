@@ -83,6 +83,13 @@ class CoverWorker {
   // frame.
   static bool thumbHeightValid(const std::string& thumbPath, int h);
 
+  // Books whose job ran to completion this session without a thumbnail and without a permanent
+  // verdict (a protected book missing its key, a decode that did not fit). Each attempt releases
+  // every font cache ahead of the decode and the next render reloads them from SD, so such a
+  // book is retried after the next boot rather than on every visit. RAM only: nothing persists.
+  static void noteRetryableFailure(const std::string& path);
+  static bool failedThisSession(const std::string& path);
+
  private:
   static void trampoline(void* ctx);
   static bool shouldCancel(void* ctx);
