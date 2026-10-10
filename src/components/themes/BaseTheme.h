@@ -172,7 +172,7 @@ enum UIIcon {
 namespace BaseMetrics {
 constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .batteryHeight = 12,
-                                 .topPadding = 5,
+                                 .topPadding = 10,
                                  .batteryBarHeight = 20,
                                  .headerHeight = 84,
                                  .verticalSpacing = 10,
