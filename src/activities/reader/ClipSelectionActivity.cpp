@@ -816,6 +816,10 @@ void ClipSelectionActivity::drawWordClean(const int index, const int offsetX, co
   if (index < 0 || index >= static_cast<int>(wordCount)) return;
   const WordBox& word = words[index];
   if (word.pageOffset != currentPageOffset) return;
+  if (rangeRepaintedByReader()) {
+    markDirty(word);
+    return;
+  }
   if (vertical()) {
     invertWord(word, offsetX, offset);  // undoes the highlight's inversion
     return;
@@ -840,6 +844,10 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
   if (index < 0 || index >= static_cast<int>(wordCount)) return;
   const WordBox& word = words[index];
   if (word.pageOffset != currentPageOffset) return;
+  if (rangeRepaintedByReader()) {
+    markDirty(word);
+    return;
+  }
   if (vertical()) {
     invertWord(word, offsetX, offset);
     return;
@@ -860,8 +868,6 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
 
 bool ClipSelectionActivity::renderIncremental() {
   if (actionPopup.isActive() || mappedInput.hasTouch()) return false;
-  // A vertical range is painted under the text by the reader's page repaint (publishLiveSelection).
-  if (vertical() && (rangeStart >= 0 || lastRenderedRangeStart >= 0)) return false;
   if (lastRenderedPageOffset < 0 || lastRenderedPageOffset != currentPageOffset) return false;
   const int offset = textOffset();
   const int offsetX = textXOffset();
@@ -890,6 +896,11 @@ bool ClipSelectionActivity::renderIncremental() {
 
   // Case 2: Transition from rangeStart < 0 to rangeStart >= 0 (user just confirmed rangeStart)
   if (rangeStart >= 0 && lastRenderedRangeStart < 0 && rangeStart == selected && selected == lastRenderedSelected) {
+    // The inverted cursor cell becomes the first cell of a gray range.
+    if (rangeRepaintedByReader()) {
+      markDirty(words[selected]);
+      flushDirtyCells();
+    }
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -932,6 +943,7 @@ bool ClipSelectionActivity::renderIncremental() {
       const WordBox& cursor = words[selected];
       renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
     }
+    flushDirtyCells();
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -984,6 +996,37 @@ void ClipSelectionActivity::drawSelection() const {
 
 void ClipSelectionActivity::invertWord(const WordBox& word, const int offsetX, const int offset) const {
   renderer.invertRect(word.x + offsetX, word.y + offset, word.width, word.height);
+}
+
+void ClipSelectionActivity::markDirty(const WordBox& word) const {
+  const int right = word.x + word.width;
+  const int bottom = word.y + word.height;
+  if (dirtyRight <= dirtyLeft) {
+    dirtyLeft = word.x;
+    dirtyTop = word.y;
+    dirtyRight = right;
+    dirtyBottom = bottom;
+    return;
+  }
+  dirtyLeft = std::min(dirtyLeft, static_cast<int>(word.x));
+  dirtyTop = std::min(dirtyTop, static_cast<int>(word.y));
+  dirtyRight = std::max(dirtyRight, right);
+  dirtyBottom = std::max(dirtyBottom, bottom);
+}
+
+// One reader repaint clipped to the changed cells: the gray under them and their glyphs come out
+// exactly as a full repaint draws them, without redrawing the rest of the page.
+void ClipSelectionActivity::flushDirtyCells() {
+  if (dirtyRight <= dirtyLeft || dirtyBottom <= dirtyTop) return;
+  const unsigned long started = millis();
+  publishLiveSelection();
+  const auto clip = renderer.getClipRect();
+  renderer.setClipRect(dirtyLeft, dirtyTop, dirtyRight - dirtyLeft, dirtyBottom - dirtyTop);
+  renderer.fillRect(dirtyLeft, dirtyTop, dirtyRight - dirtyLeft, dirtyBottom - dirtyTop, false);
+  repaintPage(repaintCtx);
+  renderer.setClipRect(clip[0], clip[1], clip[2], clip[3]);
+  LOG_DBG("CLIP", "Cell repaint %dx%d in %lums", dirtyRight - dirtyLeft, dirtyBottom - dirtyTop, millis() - started);
+  dirtyLeft = dirtyTop = dirtyRight = dirtyBottom = 0;
 }
 
 void ClipSelectionActivity::publishLiveSelection() const {

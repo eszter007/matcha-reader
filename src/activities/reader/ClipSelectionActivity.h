@@ -119,6 +119,15 @@ class ClipSelectionActivity final : public Activity {
   void* liveSelectionCtx = nullptr;
   void (*liveSelection)(void*, uint32_t, uint32_t) = nullptr;
   void publishLiveSelection() const;
+  // A vertical range is redrawn by the reader, clipped to the cells a step changed: their union
+  // collects here and flushDirtyCells() repaints it once, before the refresh.
+  bool rangeRepaintedByReader() const { return vertical() && rangeStart >= 0 && liveSelection && repaintPage; }
+  void markDirty(const WordBox& word) const;
+  void flushDirtyCells();
+  mutable int dirtyLeft = 0;
+  mutable int dirtyTop = 0;
+  mutable int dirtyRight = 0;
+  mutable int dirtyBottom = 0;
   void* repaintCtx = nullptr;
   bool (*repaintPage)(void*) = nullptr;
   VerticalPage ownedVerticalPage;
