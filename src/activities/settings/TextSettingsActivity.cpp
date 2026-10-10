@@ -75,13 +75,48 @@ static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MI
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                            const SdCardFontRegistry* registry, Tab initialTab,
-                                           const CjkScript bookScript, const bool verticalText)
+                                           const CjkScript bookScript, const bool verticalText,
+                                           const bool profileChoice)
     : UiTabListActivity("TextSettings", renderer, mappedInput),
       registry_(registry),
       tab_(initialTab),
       bookScript_(bookScript),
       cjkBook_(bookScript != CjkScript::None),
-      verticalText_(verticalText) {}
+      verticalText_(verticalText),
+      profileChoice_(profileChoice) {}
+
+// Leaving with the CJK profile on screen: its values go back to the CJK profile and the Latin
+// ones, which are the live settings everywhere else, come back.
+void TextSettingsActivity::onExit() {
+  if (editingCjk_) {
+    RenderLock lock;
+    SETTINGS.setCjkTextProfile(SETTINGS.liveTextProfile());
+    SETTINGS.setLiveTextProfile(latinWhileEditingCjk_);
+    editingCjk_ = false;
+    sdFontSystem.ensureLoaded(renderer);
+  }
+  UiTabListActivity::onExit();
+}
+
+void TextSettingsActivity::toggleProfile() {
+  {
+    // Swapping the size reloads the SD font, which the render task may be reading.
+    RenderLock lock;
+    if (editingCjk_) {
+      SETTINGS.setCjkTextProfile(SETTINGS.liveTextProfile());
+      SETTINGS.setLiveTextProfile(latinWhileEditingCjk_);
+    } else {
+      latinWhileEditingCjk_ = SETTINGS.liveTextProfile();
+      SETTINGS.setLiveTextProfile(SETTINGS.cjkTextProfile());
+    }
+    editingCjk_ = !editingCjk_;
+    sdFontSystem.ensureLoaded(renderer);
+  }
+  rebuildSizeList();
+  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1 + 1;
+  rebuildRowItems();
+  requestUpdate();
+}
 
 const char* TextSettingsActivity::tabLabel(const int index) const { return I18N.get(TAB_NAME_IDS[index]); }
 
@@ -104,7 +139,7 @@ void TextSettingsActivity::onEnter() {
   // remembered selection (Family/Size open on the current item).
   for (auto& n : tabNavs) n.selected = 1;  // default to the first list row
   tabNavs[static_cast<int>(Tab::Family)].selected = currentFamilyIndex_ + 1;
-  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1;
+  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1 + (profileChoice_ ? 1 : 0);
   tabNavs[static_cast<int>(tab_)].selected = 0;  // screen opens with the tab bar focused, not a list row
 
   rebuildRowItems();
@@ -149,19 +184,26 @@ void TextSettingsActivity::rebuildRowItems() {
   rowValues_.assign(count, std::string());
   rowItems_.clear();
   rowItems_.reserve(count);
+  const int pr = profileRows();
   for (int i = 0; i < count; i++) {
     fui::ListItem item;
+    if (i < pr) {
+      item.label = tr(STR_TEXT_PROFILE);
+      item.actionValue = static_cast<int16_t>(i);
+      rowItems_.push_back(item);
+      continue;
+    }
     switch (tab_) {
       case Tab::Family:
         item.label = fonts_[i].name.c_str();
         break;
       case Tab::Size:
-        item.label = sizes_[i].name.c_str();
+        item.label = sizes_[i - pr].name.c_str();
         break;
       case Tab::Layout:
         // Visible position -> LayoutRow: not every row is shown for every book, so `i` is not
         // the enum value (see visibleLayoutRows()).
-        item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i))]);
+        item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i - pr))]);
         break;
       case Tab::Style:
         item.label = I18N.get(STYLE_ROW_NAME_IDS[static_cast<int>(styleRowAt(i))]);
@@ -260,21 +302,27 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   // assigning into the existing rowValues_ strings (no vector growth) rather
   // than building a new items/values vector on every render.
   const int count = listCount();
+  const int pr = profileRows();
   for (int i = 0; i < count; i++) {
     bool checked = false;
     rowItems_[i].toggle = false;
     // Cleared up front so a row that sets no value can't keep the previous tab's text.
     rowValues_[i].clear();
+    if (i < pr) {
+      rowValues_[i] = editingCjk_ ? tr(STR_TEXT_PROFILE_CJK) : tr(STR_TEXT_PROFILE_LATIN);
+      rowItems_[i].value = rowValues_[i].c_str();
+      continue;
+    }
     switch (tab_) {
       case Tab::Family:
         rowValues_[i] = (i == currentFamilyIndex_) ? tr(STR_SELECTED) : "";
         break;
       case Tab::Size:
-        rowValues_[i] = (i == currentSizeIndex_) ? tr(STR_SELECTED) : "";
+        rowValues_[i] = (i - pr == currentSizeIndex_) ? tr(STR_SELECTED) : "";
         break;
       case Tab::Layout: {
         // Visible position -> LayoutRow, as the labels do (see visibleLayoutRows()).
-        const int layoutRow = static_cast<int>(layoutRowAt(i));
+        const int layoutRow = static_cast<int>(layoutRowAt(i - pr));
         rowItems_[i].toggle = layoutRowIsSwitch(layoutRow, checked);
         if (!rowItems_[i].toggle) rowValues_[i] = layoutValueText(layoutRow);
         break;
@@ -311,10 +359,11 @@ const char* TextSettingsActivity::confirmLabelText() const {
     // Confirm on the tab bar advances to the next tab.
     return I18N.get(TAB_NAME_IDS[(static_cast<int>(tab_) + 1) % tabCount()]);
   }
+  if (ringPos() - 1 < profileRows()) return tr(STR_SELECT);
   switch (tab_) {
     case Tab::Layout: {
       // The two booleans toggle in place; every other row opens a picker.
-      const LayoutRow row = layoutRowAt(ringPos() - 1);
+      const LayoutRow row = layoutRowAt(ringPos() - 1 - profileRows());
       return (row == LayoutRow::ParaSpacing || row == LayoutRow::BookSideMargins) ? tr(STR_TOGGLE) : tr(STR_SELECT);
     }
     case Tab::Style:
@@ -339,10 +388,12 @@ void TextSettingsActivity::drawChrome() {
   // the reader passes its script and useVerticalText() separately. A forced-vertical book with no
   // CJK tag previews in the Japanese face, the same face the page renders with.
   // cppcheck-suppress knownConditionTrueFalse
-  const CjkScript previewScript =
-      bookScript_ != CjkScript::None ? bookScript_ : (verticalText_ ? CjkScript::Japanese : CjkScript::None);
+  const CjkScript previewScript = bookScript_ != CjkScript::None   ? bookScript_
+                                  : (verticalText_ || editingCjk_) ? CjkScript::Japanese
+                                                                   : CjkScript::None;
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(previewScript));
+                              previewHeight, familyName, sizeName, sdFontSystem.effectiveReaderFontId(previewScript),
+                              editingCjk_);
 }
 
 // Button hints live here rather than at the end of drawChrome(): UiListActivity draws the footer
@@ -393,10 +444,15 @@ void TextSettingsActivity::applyFamily(int listIndex) {
   // snapped the selection into it, so the Size tab's list and its nav position
   // both have to be rebuilt.
   rebuildSizeList();
-  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1;
+  tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1 + (profileChoice_ ? 1 : 0);
 }
 
 void TextSettingsActivity::activateRow(int row) {
+  if (row < profileRows()) {
+    toggleProfile();
+    return;
+  }
+  row -= profileRows();
   switch (tab_) {
     case Tab::Family:
       if (isManageFontsRow(row)) {
@@ -615,9 +671,9 @@ int TextSettingsActivity::listCount() const {
     case Tab::Family:
       return static_cast<int>(fonts_.size());
     case Tab::Size:
-      return static_cast<int>(sizes_.size());
+      return static_cast<int>(sizes_.size()) + profileRows();
     case Tab::Layout:
-      return visibleLayoutRows(nullptr);
+      return visibleLayoutRows(nullptr) + profileRows();
     case Tab::Style:
       // CJK books keep Embedded Style and Anti-Aliasing; vertical text renders both too.
       return cjkBook_ ? 2 : static_cast<int>(StyleRow::Count);

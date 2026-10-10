@@ -319,6 +319,42 @@ EpubReaderActivity::ReaderPrefs EpubReaderActivity::capturePrefsFromSettings() {
   return p;
 }
 
+// The language is known only now, after the per-book prefs went in: a CJK book switches the four
+// profile settings to the CJK profile, keeping what the book pinned for itself (size, line spacing).
+void EpubReaderActivity::applyBookTextProfile() {
+  latinTextProfile_ = SETTINGS.liveTextProfile();
+  latinTextProfile_.fontPointSize = globalPrefsSnapshot.fontPointSize;
+  latinTextProfile_.lineSpacing = globalPrefsSnapshot.lineSpacing;
+  textProfileCjk_ = isCjkBook();
+  if (textProfileCjk_) {
+    CrossPointSettings::TextProfile profile = SETTINGS.cjkTextProfile();
+    if (bookPrefsApplied_) {
+      profile.fontPointSize = SETTINGS.fontPointSize;
+      profile.lineSpacing = SETTINGS.lineSpacing;
+    }
+    SETTINGS.setLiveTextProfile(profile);
+    sdFontSystem.ensureLoaded(renderer);
+    LOG_DBG("ERS", "CJK text profile");
+  }
+  openTextProfile_ = SETTINGS.liveTextProfile();
+}
+
+// Whatever the reader changed while the book was open becomes its profile's value; values the
+// book merely pinned for itself do not.
+void EpubReaderActivity::storeBookTextProfile() {
+  const auto now = SETTINGS.liveTextProfile();
+  CrossPointSettings::TextProfile profile = textProfileCjk_ ? SETTINGS.cjkTextProfile() : latinTextProfile_;
+  if (now.fontPointSize != openTextProfile_.fontPointSize) profile.fontPointSize = now.fontPointSize;
+  if (now.lineSpacing != openTextProfile_.lineSpacing) profile.lineSpacing = now.lineSpacing;
+  if (now.characterSpacing != openTextProfile_.characterSpacing) profile.characterSpacing = now.characterSpacing;
+  if (now.wordSpacing != openTextProfile_.wordSpacing) profile.wordSpacing = now.wordSpacing;
+  if (textProfileCjk_) {
+    SETTINGS.setCjkTextProfile(profile);
+  } else {
+    latinTextProfile_ = profile;
+  }
+}
+
 void EpubReaderActivity::applyPrefsToSettings(const ReaderPrefs& prefs) {
   SETTINGS.fontFamily = prefs.fontFamily;
   strncpy(SETTINGS.sdFontFamilyName, prefs.sdFontFamilyName, sizeof(SETTINGS.sdFontFamilyName) - 1);
@@ -424,7 +460,8 @@ void EpubReaderActivity::onReaderEnter() {
   globalPrefsSnapshot = capturePrefsFromSettings();
   {
     ReaderPrefs bookPrefs;
-    if (loadBookPrefs(bookPrefs) && !(bookPrefs == globalPrefsSnapshot)) {
+    bookPrefsApplied_ = loadBookPrefs(bookPrefs);
+    if (bookPrefsApplied_ && !(bookPrefs == globalPrefsSnapshot)) {
       LOG_DBG("ERS", "Applying per-book reader prefs");
       applyPrefsToSettings(bookPrefs);
     }
@@ -490,6 +527,7 @@ void EpubReaderActivity::onReaderEnter() {
   loadLanguageChoice();
   sniffLanguageIfNeeded();
   applyLanguageState();
+  applyBookTextProfile();
 
   loadLinkStack();
   loadCachedBookmarks();
@@ -553,8 +591,10 @@ void EpubReaderActivity::onReaderExit() {
     if (!loadBookPrefs(existing) || !(existing == current)) {
       saveBookPrefs(current);
     }
-    if (!(current == globalPrefsSnapshot)) {
+    storeBookTextProfile();
+    if (!(current == globalPrefsSnapshot) || textProfileCjk_) {
       applyPrefsToSettings(globalPrefsSnapshot);
+      SETTINGS.setLiveTextProfile(latinTextProfile_);
       SETTINGS.saveToFile();
       // Re-sync the loaded SD font to the restored globals so the next
       // consumer (home UI thumbnails, TXT/XTC readers) sees a consistent state.

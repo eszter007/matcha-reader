@@ -30,7 +30,7 @@ CssTextAlign toCssAlign(uint8_t align) {
 }
 
 // Lay the sample text out through the reader engine into layout.lines
-void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth) {
+void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth, bool cjkSample) {
   layout.lines.clear();
 
   BlockStyle style;
@@ -41,7 +41,7 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
                     SETTINGS.paragraphIndentSpaces);
 
   // Feed one space-separated word at a time; addWord handles NFC/CJK/RTL/focus splitting
-  const char* text = I18N.get(StrId::STR_FONT_PREVIEW_TEXT);
+  const char* text = I18N.get(cjkSample ? StrId::STR_FONT_PREVIEW_TEXT_CJK : StrId::STR_FONT_PREVIEW_TEXT);
   std::string word;
   for (const char* p = text;; p++) {
     if (*p == ' ' || *p == '\0') {
@@ -64,7 +64,7 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
 }  // namespace
 
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName, const int fontId) {
+                   int height, const char* familyName, const char* sizeName, const int fontId, const bool cjkSample) {
   const int left = previewPadding;
   const int width = renderer.getScreenWidth() - (previewPadding * 2);
   if (width <= 0 || height <= 0) return;
@@ -107,12 +107,13 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
                        .characterSpacing = SETTINGS.getCharacterSpacing(),
                        .wordSpacingPercent = SETTINGS.wordSpacing,
                        .focusReading = SETTINGS.focusReadingEnabled != 0,
-                       .hyphenation = SETTINGS.hyphenationEnabled != 0};
+                       .hyphenation = SETTINGS.hyphenationEnabled != 0,
+                       .cjkSample = cjkSample};
   if (key != layout.key) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->prewarmCache(fontId, I18N.get(StrId::STR_FONT_PREVIEW_TEXT), SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
     }
-    relayout(layout, renderer, fontId, textWidth);
+    relayout(layout, renderer, fontId, textWidth, cjkSample);
     layout.key = key;
   }
 

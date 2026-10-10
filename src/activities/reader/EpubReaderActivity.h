@@ -79,6 +79,15 @@ class EpubReaderActivity final : public ReaderActivity {
     bool operator==(const ReaderPrefs&) const = default;
   };
   ReaderPrefs globalPrefsSnapshot;
+  // Text profiles: a CJK book reads with the CJK profile (CrossPointSettings::cjkTextProfile).
+  // latinTextProfile_ is the Latin profile as it was on open; openTextProfile_ the four values the
+  // book opened with, so on close only what the reader changed goes back into the book's profile.
+  bool textProfileCjk_ = false;
+  bool bookPrefsApplied_ = false;
+  CrossPointSettings::TextProfile latinTextProfile_{};
+  CrossPointSettings::TextProfile openTextProfile_{};
+  void applyBookTextProfile();
+  void storeBookTextProfile();
   static ReaderPrefs capturePrefsFromSettings();
   static void applyPrefsToSettings(const ReaderPrefs& prefs);
   bool loadBookPrefs(ReaderPrefs& out) const;

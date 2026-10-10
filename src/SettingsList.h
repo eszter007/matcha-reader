@@ -544,6 +544,17 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                           {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
                           "opdsFilenameFormat"),
 
+        // CJK text profile: persisted, category-less so hidden from the Settings screen (edited
+        // through Text Settings' "Edit for" row and by reading CJK books).
+        SettingInfo::Value(StrId::STR_FONT_SIZE, &CrossPointSettings::cjkFontPointSize, {6, 72, 1}, "cjkFontPointSize"),
+        SettingInfo::Value(StrId::STR_LINE_SPACING, &CrossPointSettings::cjkLineSpacing, {0, 3, 1}, "cjkLineSpacing"),
+        SettingInfo::Value(StrId::STR_CHARACTER_SPACING, &CrossPointSettings::cjkCharacterSpacing, {0, 4, 1},
+                           "cjkCharacterSpacing"),
+        SettingInfo::Value(StrId::STR_WORD_SPACING, &CrossPointSettings::cjkWordSpacing,
+                           {CrossPointSettings::WORD_SPACING_MIN, CrossPointSettings::WORD_SPACING_MAX,
+                            CrossPointSettings::WORD_SPACING_STEP},
+                           "cjkWordSpacing"),
+
         // Frontlight quick-panel state: persisted and web-exposed, but hidden
         // from the on-device Settings screen because the swipe panel owns it.
         SettingInfo::Value(StrId::STR_BRIGHTNESS, &CrossPointSettings::frontlightBrightness, {0, 100, 5},
