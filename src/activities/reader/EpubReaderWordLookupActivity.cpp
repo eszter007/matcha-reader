@@ -155,7 +155,16 @@ void EpubReaderWordLookupActivity::runInitialBurst(const char* label) {
     uint16_t midColumn = 0;
     uint16_t midRow = 0;
     size_t firstGlyph = 0;
-    if (middleTarget(midColumn, midRow, firstGlyph)) scan.aimAtGlyph(firstGlyph);
+    // A hold names its word: aim there, not at the middle. The walk from the middle round to the
+    // held cell can be most of the page, and on a slow card that is seconds of SD reads before
+    // the definition can open (X4 Pro report: 5 s on the stock card).
+    if (selectCtx.lookupAtX >= 0 && selectCtx.lookupAtY >= 0 &&
+        nearestGlyphToPoint(selectCtx.lookupAtX, selectCtx.lookupAtY, firstGlyph)) {
+      openAimGlyph = firstGlyph;
+      scan.aimAtGlyph(firstGlyph);
+    } else if (middleTarget(midColumn, midRow, firstGlyph)) {
+      scan.aimAtGlyph(firstGlyph);
+    }
   }
   while (!scan.isDone() && scan.selectableGlyphs.empty() && millis() - scanStart < 1500) {
     stepScan(50);
@@ -934,9 +943,11 @@ bool EpubReaderWordLookupActivity::resolveOpenPoint() {
   int hit = selectableIndexAtPoint(openAtX, openAtY);
   bool openDefinition = hit >= 0;
   if (hit < 0) {
-    // Snap only once the page is fully mapped: before that, the word the finger is really on may
-    // simply not be segmented yet, and snapping would pick its already-mapped neighbour.
-    if (!scan.isDone()) return false;
+    // Snap only once the cells around the hold are mapped: before that, the word the finger is
+    // really on may simply not be segmented yet, and snapping would pick its already-mapped
+    // neighbour. The rest of the page can still be cold -- waiting for all of it was the whole
+    // hold-to-definition delay on a slow card.
+    if (!scan.isDone() && !heldNeighbourhoodMapped()) return false;
     int distance = 0;
     hit = nearestSelectableToPoint(openAtX, openAtY, distance);
     // Nothing selectable on the page at all: leave the panel where the caller put it.
@@ -967,6 +978,40 @@ bool EpubReaderWordLookupActivity::resolveOpenPoint() {
   cursorIndex = hit;
   refreshCursorBoxes();
   enterDefinition();
+  return true;
+}
+
+bool EpubReaderWordLookupActivity::nearestGlyphToPoint(const int x, const int y, size_t& outGlyph) const {
+  const int cellPx = selectCtx.cellPx;
+  int bestDistance = INT_MAX;
+  size_t best = SIZE_MAX;
+  for (size_t i = 0; i < scan.onPageGlyphCount(); i++) {
+    const auto& g = scan.allGlyphs[i];
+    const int bx = g.x + selectCtx.marginLeft;
+    const int by = g.y + selectCtx.marginTop;
+    const int bw = selectCtx.lines ? glyphWidth(g) : cellPx;
+    const int dx = x < bx ? bx - x : (x >= bx + bw ? x - (bx + bw - 1) : 0);
+    const int dy = y < by ? by - y : (y >= by + cellPx ? y - (by + cellPx - 1) : 0);
+    const int distance = std::max(dx, dy);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = i;
+    }
+  }
+  if (best == SIZE_MAX) return false;
+  outGlyph = best;
+  return true;
+}
+
+bool EpubReaderWordLookupActivity::heldNeighbourhoodMapped() const {
+  if (openAimGlyph == SIZE_MAX || openAimGlyph >= scan.onPageGlyphCount()) return false;
+  const uint16_t column = scan.allGlyphs[openAimGlyph].column;
+  const size_t reach = static_cast<size_t>(WordSelectionScan::kMaxLookupChars);
+  const size_t end = std::min(scan.onPageGlyphCount(), openAimGlyph + reach + 1);
+  for (size_t i = openAimGlyph; i < end; i++) {
+    if (scan.allGlyphs[i].column != column) break;
+    if (!scan.isGlyphMapped(i)) return false;
+  }
   return true;
 }
 
