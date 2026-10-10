@@ -47,6 +47,9 @@ class CoverLibraryActivity final : public Activity, public TabRing::Host {
   int ringActiveTopTab() const override { return selectedTab; }
   void ringSelectTopTab(int index) override;
   HomeTab ringBottomTab() const override { return HomeTab::Library; }
+  // As on every list with tabs (UiTabListActivity): Left/Right step the tabs only beside the
+  // bottom bar; elsewhere they are Previous/Next, as the hints say, and walk on into the covers.
+  bool ringTopTabsLeftRightStep() const override { return TabRing::hasBottomBar(*this); }
   bool ringHasContent() const override;
   TabRing::Focus ringFocus() const override;
   void ringSetFocus(TabRing::Focus focus, bool atEnd) override;

@@ -15,6 +15,9 @@ constexpr int16_t PILL_PAD_H_MIN = 8;
 constexpr int16_t PILL_INSET_V = 4;
 constexpr int16_t PILL_GAP = 10;
 constexpr int16_t PILL_LEADING = 4;
+// Lyra's tab: its label plus this much on each side, the pill width its equal slots used to cap at.
+constexpr int16_t LYRA_TAB_PAD = 16;
+constexpr int16_t LYRA_TAB_MIN_PAD = 4;
 
 // Cover Grid's tab band: content-width pills packed from the leading edge. Idle pills are a grey
 // outline, the selected one is filled solid black with white text -- no underline and no rule
@@ -128,6 +131,12 @@ void buildPills(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const 
 
 }  // namespace
 
+bool UiTabBand::drawsTopRule() {
+  // Only where headers carry a rule (Lyra): Classic has none, so neither does its band.
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return !HomeTabBar::enabled() && !metrics.tabPillFullSlot && metrics.headerUnderlineSize > 0;
+}
+
 void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const fui::TabItem* tabs,
                       const int count, const Options& opt) {
   if (HomeTabBar::enabled()) {
@@ -141,9 +150,9 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
   tabProps.count = static_cast<uint16_t>(count);
   tabProps.action = opt.action;
   tabProps.inputMask = fui::InputTouch;
-  // Pill shape and label size are theme-driven. Lyra uses equal-width slots
-  // with small labels so wide text (e.g. "Controls") still fits at large UI scales.
-  // Full-slot (RoundedRaff): the pill fills its slot like the legacy layout
+  // Pill shape and label size are theme-driven. Lyra packs tabs at their label width from the
+  // leading edge, as its own tab row did; tabBar() falls back to equal slots when a row is too
+  // wide for that. Full-slot (RoundedRaff): the pill fills its slot like the legacy layout
   // (slot minus a 4px frame, 8px clearance above the divider) with
   // body-size labels; zero horizontal contentInset disables the tabBar's
   // label-width shrink.
@@ -157,8 +166,8 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
     // Unfocused state: no bottom inset, so the pill (and the 2px selected
     // underline drawn along its bottom edge) reaches the band's 1px divider —
     // legacy Lyra drew the underline sitting on that rule, not floating above.
-    tabProps.tabInset = tabsFocused ? fui::Insets{2, 4, 4, 4} : fui::Insets{2, 4, 0, 4};
-    tabProps.contentInset = fui::Insets{2, 0, 2, 0};
+    tabProps.tabInset = tabsFocused ? fui::Insets{2, 0, 4, 0} : fui::Insets{2, 0, 0, 0};
+    tabProps.layout = fui::TabBarLayout::ContentWidth;
   }
   // Equal slots narrower than the widest label would clip it: show the window of tabs that fits,
   // ending on the selected one.
@@ -178,11 +187,25 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
       tabProps.count = static_cast<uint16_t>(fits);
     }
   }
+  if (tabProps.layout == fui::TabBarLayout::ContentWidth) {
+    // The widest padding the row still fits at, as Cover Grid's pills choose theirs. Past the
+    // narrowest, tabBar() falls back to equal slots, which cut long labels short.
+    const int available = screen.frame().screen().width - 2 * metrics.contentSidePadding;
+    int16_t pad = LYRA_TAB_PAD;
+    for (; pad > LYRA_TAB_MIN_PAD; pad = static_cast<int16_t>(pad - 4)) {
+      int row = tabProps.gap * (tabProps.count - 1);
+      for (int i = 0; i < tabProps.count; ++i) {
+        row += screen.target().measureText(tabProps.text.font, tabProps.tabs[i].label, tabProps.text).width + 2 * pad;
+      }
+      if (row <= available) break;
+    }
+    tabProps.contentInset = fui::Insets{2, pad, 2, pad};
+  }
   const int16_t tabLineHeight = screen.target().lineHeight(tabProps.text.font);
   const auto preferredTabHeight = static_cast<int16_t>(tabBandHeight(metrics, opt.hasTouch));
   const int16_t tabBand = preferredTabHeight > tabLineHeight + 10 ? preferredTabHeight : tabLineHeight + 10;
 
-  if (opt.pillMaxPad > 0) {
+  if (opt.pillMaxPad > 0 && metrics.tabPillFullSlot) {
     // Cap each pill at its label plus this padding: the equal-width slots (and
     // so the tab positions) stay exactly where they were, only the pill stops
     // stretching across the whole slot. The SDK shrinks the pill to content
@@ -242,6 +265,11 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
   fui::tabBar(screen.frame(), slotsRect, tabProps);
   screen.target().fill(fui::Rect{tabRect.x, static_cast<int16_t>(tabRect.bottom() - 1), tabRect.width, 1},
                        fui::Paint::solid(fui::Color::Black));
+  if (drawsTopRule()) {
+    // The theme's header rule, as thick as under any other header (Plugins, say).
+    const auto rule = static_cast<int16_t>(std::max(1, metrics.headerUnderlineSize));
+    screen.target().fill(fui::Rect{tabRect.x, tabRect.y, tabRect.width, rule}, fui::Paint::solid(fui::Color::Black));
+  }
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 }
 
