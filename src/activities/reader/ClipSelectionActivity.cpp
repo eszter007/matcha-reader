@@ -80,8 +80,16 @@ void ClipSelectionActivity::onEnter() {
   Activity::onEnter();
   if (fontId < 0) fontId = SETTINGS.getReaderFontId();
   lineHeight = renderer.getLineHeight(fontId);
-  if (!extractWords() || wordCount == 0) {
-    if (wordCount == 0) LOG_ERR("CLIP", "No selectable words on current page");
+  if (!extractWords()) {
+    // Out of memory, not "nothing here": say so instead of closing silently.
+    ClippingResult unavailable;
+    unavailable.action = ClippingResult::Action::Unavailable;
+    setResult(std::move(unavailable));
+    finish();
+    return;
+  }
+  if (wordCount == 0) {
+    LOG_ERR("CLIP", "No selectable words on current page");
     cancel();
     return;
   }
@@ -239,17 +247,21 @@ void ClipSelectionActivity::prewarmVerticalPage() {
   fcm->prewarmCache(fontId, pageText.c_str(), styleMask);
 }
 
+size_t ClipSelectionActivity::verticalCellBytes() { return MAX_SELECTABLE_CELLS * (sizeof(WordBox) + 5); }
+
 bool ClipSelectionActivity::extractVerticalCells() {
   wordCount = 0;
   rowCount = 0;
-  prewarmVerticalPage();
+  // The boxes are the largest block this screen needs; claim them before the font prewarm
+  // scatters its caches across the heap.
   words = makeUniqueNoThrow<WordBox[]>(MAX_SELECTABLE_CELLS);
   // Five bytes per cell is the most a single codepoint and its NUL can take.
   verticalTextPool = makeUniqueNoThrow<char[]>(MAX_SELECTABLE_CELLS * 5);
   if (!words || !verticalTextPool) {
-    LOG_ERR("CLIP", "OOM: vertical selection cells");
+    LOG_ERR("CLIP", "OOM: vertical selection cells (%u bytes)", static_cast<unsigned>(verticalCellBytes()));
     return false;
   }
+  prewarmVerticalPage();
   struct Ctx {
     ClipSelectionActivity* self;
     size_t poolUsed = 0;

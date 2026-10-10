@@ -44,7 +44,9 @@ struct PageResult {
 };
 
 struct ClippingResult {
-  enum class Action : uint8_t { Clip, Lookup, Bookmark, Translate };
+  // Unavailable: the selection could not be set up (its buffers did not fit the heap); nothing
+  // was selected and the reader tells the user to try again.
+  enum class Action : uint8_t { Clip, Lookup, Bookmark, Translate, Unavailable };
   Action action = Action::Clip;
   std::string text;
   uint16_t startPageOffset = 0;
