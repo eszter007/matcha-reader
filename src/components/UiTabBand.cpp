@@ -17,6 +17,7 @@ constexpr int16_t PILL_GAP = 10;
 constexpr int16_t PILL_LEADING = 4;
 // Lyra's tab: its label plus this much on each side, the pill width its equal slots used to cap at.
 constexpr int16_t LYRA_TAB_PAD = 16;
+constexpr int16_t LYRA_TAB_MIN_PAD = 4;
 
 // Cover Grid's tab band: content-width pills packed from the leading edge. Idle pills are a grey
 // outline, the selected one is filled solid black with white text -- no underline and no rule
@@ -131,7 +132,9 @@ void buildPills(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const 
 }  // namespace
 
 bool UiTabBand::drawsTopRule() {
-  return !HomeTabBar::enabled() && !UITheme::getInstance().getMetrics().tabPillFullSlot;
+  // Only where headers carry a rule (Lyra): Classic has none, so neither does its band.
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return !HomeTabBar::enabled() && !metrics.tabPillFullSlot && metrics.headerUnderlineSize > 0;
 }
 
 void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, const fui::TabItem* tabs,
@@ -165,7 +168,6 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
     // legacy Lyra drew the underline sitting on that rule, not floating above.
     tabProps.tabInset = tabsFocused ? fui::Insets{2, 0, 4, 0} : fui::Insets{2, 0, 0, 0};
     tabProps.layout = fui::TabBarLayout::ContentWidth;
-    tabProps.contentInset = fui::Insets{2, LYRA_TAB_PAD, 2, LYRA_TAB_PAD};
   }
   // Equal slots narrower than the widest label would clip it: show the window of tabs that fits,
   // ending on the selected one.
@@ -184,6 +186,20 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
       tabProps.tabs = tabs + first;
       tabProps.count = static_cast<uint16_t>(fits);
     }
+  }
+  if (tabProps.layout == fui::TabBarLayout::ContentWidth) {
+    // The widest padding the row still fits at, as Cover Grid's pills choose theirs. Past the
+    // narrowest, tabBar() falls back to equal slots, which cut long labels short.
+    const int available = screen.frame().screen().width - 2 * metrics.contentSidePadding;
+    int16_t pad = LYRA_TAB_PAD;
+    for (; pad > LYRA_TAB_MIN_PAD; pad = static_cast<int16_t>(pad - 4)) {
+      int row = tabProps.gap * (tabProps.count - 1);
+      for (int i = 0; i < tabProps.count; ++i) {
+        row += screen.target().measureText(tabProps.text.font, tabProps.tabs[i].label, tabProps.text).width + 2 * pad;
+      }
+      if (row <= available) break;
+    }
+    tabProps.contentInset = fui::Insets{2, pad, 2, pad};
   }
   const int16_t tabLineHeight = screen.target().lineHeight(tabProps.text.font);
   const auto preferredTabHeight = static_cast<int16_t>(tabBandHeight(metrics, opt.hasTouch));

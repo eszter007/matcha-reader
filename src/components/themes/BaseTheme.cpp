@@ -592,6 +592,11 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   props.borderEdges = showRule ? fui::EdgeBottom : fui::EdgesNone;
   props.titleText = tokens.titleText;
   props.titleText.align = tokens.headerTitleAlign;
+  // A centred title is kept clear of the right label on both sides, so a long one (the version in
+  // Settings) cut it to a few letters in Classic. Beside a right label the title leads instead.
+  if (subtitle != nullptr && subtitle[0] != '\0' && props.titleText.align == fui::TextAlign::Center) {
+    props.titleText.align = fui::TextAlign::Left;
+  }
   props.subtitleText = tokens.smallText;
   props.styles = tokens.popup;
   props.sidePadding = tokens.headerSidePadding;
@@ -602,12 +607,21 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
     // enough on every theme.
     props.styles.normal.border = fui::Paint::none();
     props.styles.normal.borderWidth = 0;
-  } else if (title != nullptr && props.styles.normal.border.kind == fui::PaintKind::None &&
-             tokens.headerUnderline > 0) {
-    props.styles.normal.border = fui::Paint::solid(fui::Color::Black);
-    props.styles.normal.borderWidth = tokens.headerUnderline;
   }
+  // The rule runs the full width, like the tab band's: only the header's content is inset from the
+  // bezel. So the band draws none, and the rule is filled across the whole header rect after it.
+  const int rule = !showRule || title == nullptr                             ? 0
+                   : props.styles.normal.border.kind != fui::PaintKind::None ? props.styles.normal.borderWidth
+                                                                             : tokens.headerUnderline;
+  props.styles.normal.border = fui::Paint::none();
+  props.styles.normal.borderWidth = 0;
+  props.borderEdges = fui::EdgesNone;
   fui::header(ui.frame, band, props);
+  if (rule > 0) {
+    ui.target.fill(fui::Rect{static_cast<int16_t>(rect.x), static_cast<int16_t>(rect.y + rect.height - rule),
+                             static_cast<int16_t>(rect.width), static_cast<int16_t>(rule)},
+                   fui::Paint::solid(fui::Color::Black));
+  }
 }
 
 void BaseTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label, const char* rightLabel) const {
