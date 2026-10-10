@@ -245,6 +245,13 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Middle column/row of the page and the allGlyphs index that column starts at -- where the
   // wrapped walk begins. False when the page has no glyphs. Layout data only, no dictionary work.
   bool middleTarget(uint16_t& outColumn, uint16_t& outRow, size_t& outFirstGlyph) const;
+  // Nearest on-page glyph to a screen point, mapped or not: where to aim the scan for a hold.
+  bool nearestGlyphToPoint(int x, int y, size_t& outGlyph) const;
+  // The cells the held word can occupy -- its own and kMaxLookupChars on along its column -- are
+  // all segmented, so a snap to the nearest word cannot pick a neighbour the walk has simply not
+  // reached yet. Cells before the aim point are context only (see WordSelectionScan::aimAtGlyph).
+  bool heldNeighbourhoodMapped() const;
+  size_t openAimGlyph = SIZE_MAX;  // glyph under the opening hold the scan was aimed at
 
   int cursorIndex = 0;
 
