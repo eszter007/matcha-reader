@@ -52,11 +52,14 @@ struct LookupClipHandles {
   }
 
   // A touch-down on a visible handle (one outside the panel card).
-  bool pressed(const GfxRenderer& renderer, const MappedInputManager& input, ClipStartResult& out) const {
+  // panelShown: the definition card covers part of the page, so a press inside it is the card's;
+  // the word picker shows no card and takes a handle anywhere.
+  bool pressed(const GfxRenderer& renderer, const MappedInputManager& input, ClipStartResult& out,
+               const bool panelShown = true) const {
     int x = 0;
     int y = 0;
     if (!valid() || !input.hasTouch() || !input.wasScreenTouchPressed(x, y)) return false;
-    if (selectionGeometry::contains(DictionaryPanel::compute(renderer).box, x, y)) return false;
+    if (panelShown && selectionGeometry::contains(DictionaryPanel::compute(renderer).box, x, y)) return false;
     for (const bool start : {true, false}) {
       if (!selectionGeometry::contains(handle(renderer, start), x, y)) continue;
       out.wordX = static_cast<int16_t>(first.x + first.width / 2);

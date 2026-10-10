@@ -501,6 +501,14 @@ void DictionaryWordSelectActivity::loop() {
 
   if (words.empty()) return;
 
+  // A press on one of the highlighted word's handles: the reader opens clip selection on it.
+  if (ClipStartResult clip; pageHandles.pressed(renderer, mappedInput, clip, /*panelShown=*/false)) {
+    ActivityResult result;
+    result.data = clip;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
   // Touch: a touch-down moves the highlight to the touched word (differential
   // repaint), a tap on a word selects and looks it up in one go.
   int tx = 0;
@@ -571,7 +579,29 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
     hy = 0;
   }
 
+  // The black box stays the word's own; the saved region below may grow past it.
+  const int boxX = hx;
+  const int boxY = hy;
+  const int boxW = hw;
+  const int boxH = hh;
+
   bool saved = false;
+  // The handles sit outside the word's box; the saved region covers them too, so a move of the
+  // highlight restores the page under the old handles along with the old highlight.
+  refreshPageHandles();
+  if (pageHandles.valid()) {
+    int right = hx + hw;
+    int bottom = hy + hh;
+    for (const bool start : {true, false}) {
+      const Rect h = pageHandles.handle(renderer, start);
+      hx = std::max(0, std::min(hx, h.x));
+      hy = std::max(0, std::min(hy, h.y));
+      right = std::min(renderer.getScreenWidth(), std::max(right, h.x + h.width));
+      bottom = std::min(renderer.getScreenHeight(), std::max(bottom, h.y + h.height));
+    }
+    hw = right - hx;
+    hh = bottom - hy;
+  }
   if (!partner && snapshot && hw > 0 && hh > 0) {
     saved = renderer.readFramebufferRegion(hx, hy, hw, hh, snapshot.get(), SNAPSHOT_CAPACITY) > 0;
   }
@@ -581,7 +611,7 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   snapshotH = static_cast<int16_t>(hh);
   snapshotIdx = saved ? selected : -1;
 
-  renderer.fillRect(hx, hy, hw, hh, true);
+  renderer.fillRect(boxX, boxY, boxW, boxH, true);
   // word.fontId, NOT the reader's font: the box was measured with the font the page laid this
   // word out in, so drawing it in a different size spills white glyphs past the black panel and
   // over the neighbouring words (the page's own ink is only erased inside the box).
@@ -604,7 +634,18 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
       renderer.drawText(partner->fontId, partner->x, partner->y, partner->text, false, partner->style);
     }
   }
+  pageHandles.draw(renderer);
   return saved;
+}
+
+void DictionaryWordSelectActivity::refreshPageHandles() {
+  if (!mappedInput.hasTouch() || words.empty() || selected < 0 || selected >= static_cast<int>(words.size())) {
+    pageHandles = LookupClipHandles{};
+    return;
+  }
+  const WordBox& box = words[selected];
+  const Rect rect{box.x, box.y, box.width, wordHeight(box)};
+  pageHandles.set(rect, rect, /*isVertical=*/false);
 }
 
 // Front-button bar (Back/Confirm/Left/Right). Drawn last on every repaint
