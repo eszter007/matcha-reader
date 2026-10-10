@@ -380,6 +380,35 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // available size (and persists the snap) whenever the family changes.
   uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
   uint8_t lineSpacing = NORMAL;
+  // CJK text profile: the four settings Japanese and Chinese books keep apart from Latin ones. The
+  // live fields (fontPointSize, lineSpacing, characterSpacing, wordSpacing) hold the Latin profile;
+  // a CJK book swaps these in while it is open (EpubReaderActivity). A settings file without them
+  // starts the CJK profile as a copy of the Latin one.
+  uint8_t cjkFontPointSize = DEFAULT_FONT_POINT_SIZE;
+  uint8_t cjkLineSpacing = NORMAL;
+  uint8_t cjkCharacterSpacing = CHARACTER_SPACING_OFFSET;
+  uint8_t cjkWordSpacing = 100;
+  struct TextProfile {
+    uint8_t fontPointSize;
+    uint8_t lineSpacing;
+    uint8_t characterSpacing;
+    uint8_t wordSpacing;
+    bool operator==(const TextProfile&) const = default;
+  };
+  TextProfile liveTextProfile() const { return {fontPointSize, lineSpacing, characterSpacing, wordSpacing}; }
+  void setLiveTextProfile(const TextProfile& p) {
+    fontPointSize = p.fontPointSize;
+    lineSpacing = p.lineSpacing;
+    characterSpacing = p.characterSpacing;
+    wordSpacing = p.wordSpacing;
+  }
+  TextProfile cjkTextProfile() const { return {cjkFontPointSize, cjkLineSpacing, cjkCharacterSpacing, cjkWordSpacing}; }
+  void setCjkTextProfile(const TextProfile& p) {
+    cjkFontPointSize = p.fontPointSize;
+    cjkLineSpacing = p.lineSpacing;
+    cjkCharacterSpacing = p.characterSpacing;
+    cjkWordSpacing = p.wordSpacing;
+  }
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;

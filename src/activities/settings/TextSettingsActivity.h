@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "CrossPointSettings.h"
 #include "TextSettingsPreview.h"
 #include "activities/UiTabListActivity.h"
 #include "components/OptionPopup.h"
@@ -31,9 +32,11 @@ class TextSettingsActivity final : public UiTabListActivity {
   };
 
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,
-                       Tab initialTab = Tab::Family, CjkScript bookScript = CjkScript::None, bool verticalText = false);
+                       Tab initialTab = Tab::Family, CjkScript bookScript = CjkScript::None, bool verticalText = false,
+                       bool profileChoice = false);
 
   void onEnter() override;
+  void onExit() override;
   void render(RenderLock&&) override;
 
  private:
@@ -109,6 +112,15 @@ class TextSettingsActivity final : public UiTabListActivity {
   const CjkScript bookScript_ = CjkScript::None;
   const bool cjkBook_ = false;
   const bool verticalText_ = false;
+
+  // Text profiles (Settings, not a book): an "Edit for" row heads the Size and Layout tabs and
+  // switches which profile -- Latin or CJK -- the four profile rows edit. While CJK is chosen its
+  // values sit in the live fields (as when reading a CJK book) and the Latin ones wait here.
+  const bool profileChoice_ = false;
+  bool editingCjk_ = false;
+  CrossPointSettings::TextProfile latinWhileEditingCjk_{};
+  int profileRows() const { return profileChoice_ && (tab_ == Tab::Size || tab_ == Tab::Layout) ? 1 : 0; }
+  void toggleProfile();
 
   // Row storage for the active tab: rowItems_ (label/actionValue) is
   // rebuilt only when the tab or its backing data changes (rebuildRowItems(),

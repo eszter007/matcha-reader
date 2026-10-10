@@ -196,6 +196,13 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   paragraphIndentSpaces = migrateParagraphIndentSpaces(hasSavedWidth, savedWidth, extraParagraphSpacing != 0);
   if (!hasSavedWidth || savedWidth < 0 || savedWidth > 5) needsResave = true;
 
+  // No CJK text profile saved yet: start it from the current settings, so nothing changes until
+  // the reader adjusts one profile.
+  if (doc["cjkFontPointSize"].isNull()) {
+    setCjkTextProfile(liveTextProfile());
+    needsResave = true;
+  }
+
   // Older files stored one combined touch mode under "touchReaderControls": 0=off, 1=tap,
   // 2=swipe, 3=inverted tap, 4=inverted swipe (Matcha-only, for right-to-left vertical text).
   // Split it into the master toggle plus the per-direction gesture pair (the generic loop above

@@ -692,7 +692,8 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::TextSettings:
         startActivityForResult(
             std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                   TextSettingsActivity::Tab::Family, bookScript, verticalTextState),
+                                                   TextSettingsActivity::Tab::Family, bookScript, verticalTextState,
+                                                   /*profileChoice=*/!finishOnBack),
             [this](const ActivityResult&) {
               saveSettings();
               rebuildSettingsLists();
