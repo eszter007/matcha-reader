@@ -116,6 +116,10 @@ class ClipSelectionActivity final : public Activity {
   void cancel();
   bool buildSelectedText(int first, int last, std::string& text) const;
   void drawSelection() const;
+  // Mid-drag range on a vertical page: one inverted bar per column, from the first cell's top to
+  // the last cell's bottom, so the bar is unbroken whatever the cells' own heights. Updates invert
+  // the old spans and then the new ones: the part in both flips twice and stays put.
+  void invertColumnSpans(int first, int last, int offsetX, int offset) const;
   bool renderIncremental();
   // Touch: the refresh is fired deferred, so the loop keeps reading the finger while the panel
   // runs its waveform instead of waiting ~500 ms behind the render lock for every drag sample.

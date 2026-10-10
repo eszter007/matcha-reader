@@ -940,6 +940,14 @@ bool ClipSelectionActivity::renderIncremental() {
       return false;
     }
 
+    if (vertical() && dragging()) {
+      invertColumnSpans(firstOld, lastOld, offsetX, offset);
+      invertColumnSpans(firstNew, lastNew, offsetX, offset);
+      pushRefresh(HalDisplay::FAST_REFRESH);
+      lastRenderedSelected = selected;
+      return true;
+    }
+
     for (int i = firstOld; i <= lastOld; ++i) {
       if (i < firstNew || i > lastNew) {
         drawWordClean(i, offsetX, offset);
@@ -999,6 +1007,10 @@ void ClipSelectionActivity::drawSelection() const {
   const int offsetX = textXOffset();
   const int first = rangeStart < 0 ? selected : std::min(rangeStart, selected);
   const int last = rangeStart < 0 ? selected : std::max(rangeStart, selected);
+  if (vertical() && dragging() && rangeStart >= 0) {
+    invertColumnSpans(first, last, offsetX, offset);
+    return;
+  }
   const WordBox* previous = nullptr;
   for (int i = first; i <= last; ++i) {
     const WordBox& word = words[i];
@@ -1031,6 +1043,32 @@ void ClipSelectionActivity::drawSelection() const {
   } else if (!vertical()) {
     const WordBox& cursor = words[selected];
     renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
+  }
+}
+
+void ClipSelectionActivity::invertColumnSpans(const int first, const int last, const int offsetX,
+                                              const int offset) const {
+  int i = first;
+  while (i <= last) {
+    const WordBox& head = words[i];
+    if (head.pageOffset != currentPageOffset) {
+      ++i;
+      continue;
+    }
+    int x = head.x;
+    int width = head.width;
+    int top = head.y;
+    int bottom = head.y + head.height;
+    int j = i + 1;
+    while (j <= last && words[j].pageOffset == currentPageOffset && words[j].row == head.row) {
+      x = std::min<int>(x, words[j].x);
+      width = std::max<int>(width, words[j].width);
+      top = std::min<int>(top, words[j].y);
+      bottom = std::max<int>(bottom, words[j].y + words[j].height);
+      ++j;
+    }
+    renderer.invertRect(x + offsetX, top + offset, width, bottom - top);
+    i = j;
   }
 }
 
