@@ -250,7 +250,9 @@ void UiTabBand::build(UiAppHost::UiScreen& screen, const GfxRenderer& renderer, 
   screen.target().fill(fui::Rect{tabRect.x, static_cast<int16_t>(tabRect.bottom() - 1), tabRect.width, 1},
                        fui::Paint::solid(fui::Color::Black));
   if (drawsTopRule()) {
-    screen.target().fill(fui::Rect{tabRect.x, tabRect.y, tabRect.width, 1}, fui::Paint::solid(fui::Color::Black));
+    // The theme's header rule, as thick as under any other header (Plugins, say).
+    const auto rule = static_cast<int16_t>(std::max(1, metrics.headerUnderlineSize));
+    screen.target().fill(fui::Rect{tabRect.x, tabRect.y, tabRect.width, rule}, fui::Paint::solid(fui::Color::Black));
   }
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 }
