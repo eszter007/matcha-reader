@@ -881,7 +881,10 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
 }
 
 bool ClipSelectionActivity::renderIncremental() {
-  if (actionPopup.isActive() || mappedInput.hasTouch()) return false;
+  if (actionPopup.isActive()) return false;
+  // Touch takes the incremental path only mid-drag; the drag's first and last frames (the style
+  // switch to and from inverted cells, handles and bar) are full renders.
+  if (mappedInput.hasTouch() && (!dragging() || dragging() != lastRenderedDragging)) return false;
   if (lastRenderedPageOffset < 0 || lastRenderedPageOffset != currentPageOffset) return false;
   const int offset = textOffset();
   const int offsetX = textXOffset();
@@ -902,7 +905,7 @@ bool ClipSelectionActivity::renderIncremental() {
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    pushRefresh(HalDisplay::FAST_REFRESH);
 
     lastRenderedSelected = selected;
     return true;
@@ -917,7 +920,7 @@ bool ClipSelectionActivity::renderIncremental() {
     }
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    pushRefresh(HalDisplay::FAST_REFRESH);
 
     lastRenderedRangeStart = rangeStart;
     return true;
@@ -937,6 +940,14 @@ bool ClipSelectionActivity::renderIncremental() {
       return false;
     }
 
+    if (vertical() && dragging()) {
+      invertColumnSpans(firstOld, lastOld, offsetX, offset);
+      invertColumnSpans(firstNew, lastNew, offsetX, offset);
+      pushRefresh(HalDisplay::FAST_REFRESH);
+      lastRenderedSelected = selected;
+      return true;
+    }
+
     for (int i = firstOld; i <= lastOld; ++i) {
       if (i < firstNew || i > lastNew) {
         drawWordClean(i, offsetX, offset);
@@ -949,7 +960,8 @@ bool ClipSelectionActivity::renderIncremental() {
       }
     }
 
-    if (lastRenderedSelected >= firstNew && lastRenderedSelected <= lastNew) {
+    // Vertical cells are XOR-inverted, so a cell still in range must not be touched twice.
+    if (!vertical() && lastRenderedSelected >= firstNew && lastRenderedSelected <= lastNew) {
       drawWordHighlight(lastRenderedSelected, firstNew, lastNew, offsetX, offset);
     }
 
@@ -961,7 +973,7 @@ bool ClipSelectionActivity::renderIncremental() {
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    pushRefresh(HalDisplay::FAST_REFRESH);
 
     lastRenderedSelected = selected;
     return true;
@@ -970,18 +982,42 @@ bool ClipSelectionActivity::renderIncremental() {
   return false;
 }
 
+void ClipSelectionActivity::pushRefresh(const HalDisplay::RefreshMode mode) {
+  if (mode == HalDisplay::FAST_REFRESH && mappedInput.hasTouch() && renderer.supportsAsyncRefresh()) {
+    renderer.displayBufferAsync(mode);
+    refreshPending = true;
+    return;
+  }
+  renderer.displayBuffer(mode);
+}
+
+void ClipSelectionActivity::settleRefresh() {
+  if (!refreshPending) return;
+  refreshPending = false;
+  renderer.cleanupGrayscaleWithFrameBuffer();  // waits, then reseeds the diff baseline
+}
+
+void ClipSelectionActivity::onExit() {
+  settleRefresh();
+  Activity::onExit();
+}
+
 void ClipSelectionActivity::drawSelection() const {
   const int offset = textOffset();
   const int offsetX = textXOffset();
   const int first = rangeStart < 0 ? selected : std::min(rangeStart, selected);
   const int last = rangeStart < 0 ? selected : std::max(rangeStart, selected);
+  if (vertical() && dragging() && rangeStart >= 0) {
+    invertColumnSpans(first, last, offsetX, offset);
+    return;
+  }
   const WordBox* previous = nullptr;
   for (int i = first; i <= last; ++i) {
     const WordBox& word = words[i];
     if (word.pageOffset != currentPageOffset) continue;
     if (vertical()) {
       // A range is already on the page (publishLiveSelection); only the lone cursor is inverted.
-      if (rangeStart < 0 || !liveSelection) invertWord(word, offsetX, offset);
+      if (rangeStart < 0 || !liveSelection || dragging()) invertWord(word, offsetX, offset);
       continue;
     }
     if (previous) ditherGapBetween(*previous, word, offsetX, offset);
@@ -989,7 +1025,9 @@ void ClipSelectionActivity::drawSelection() const {
     clippingDrawWord(renderer, word.font, word.x + offsetX, word.y + offset, word.text, word.style);
     previous = &word;
   }
-  if (rangeStart >= 0 && mappedInput.hasTouch()) {
+  // Handles and the action bar wait for the finger to lift: while it drags they would only chase
+  // the range around the page, one full refresh per hop.
+  if (rangeStart >= 0 && mappedInput.hasTouch() && !(touchDragSelecting && touchDragHasMoved)) {
     if (words[first].pageOffset == currentPageOffset)
       GUI.drawSelectionHandle(renderer, handleRect(first, true),
                               selectionGeometry::handleCorner(true, vertical(), words[first].isRtl));
@@ -1005,6 +1043,32 @@ void ClipSelectionActivity::drawSelection() const {
   } else if (!vertical()) {
     const WordBox& cursor = words[selected];
     renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);
+  }
+}
+
+void ClipSelectionActivity::invertColumnSpans(const int first, const int last, const int offsetX,
+                                              const int offset) const {
+  int i = first;
+  while (i <= last) {
+    const WordBox& head = words[i];
+    if (head.pageOffset != currentPageOffset) {
+      ++i;
+      continue;
+    }
+    int x = head.x;
+    int width = head.width;
+    int top = head.y;
+    int bottom = head.y + head.height;
+    int j = i + 1;
+    while (j <= last && words[j].pageOffset == currentPageOffset && words[j].row == head.row) {
+      x = std::min<int>(x, words[j].x);
+      width = std::max<int>(width, words[j].width);
+      top = std::min<int>(top, words[j].y);
+      bottom = std::max<int>(bottom, words[j].y + words[j].height);
+      ++j;
+    }
+    renderer.invertRect(x + offsetX, top + offset, width, bottom - top);
+    i = j;
   }
 }
 
@@ -1045,7 +1109,7 @@ void ClipSelectionActivity::flushDirtyCells() {
 
 void ClipSelectionActivity::publishLiveSelection() const {
   if (!vertical() || !liveSelection) return;
-  if (rangeStart < 0) {
+  if (rangeStart < 0 || dragging()) {
     liveSelection(liveSelectionCtx, UINT32_MAX, 0);
     return;
   }
@@ -1074,6 +1138,7 @@ void ClipSelectionActivity::drawPage(const int offsetX, const int offsetY) {
 }
 
 void ClipSelectionActivity::render(RenderLock&&) {
+  settleRefresh();
   if (actionPopup.processRender(renderer, mappedInput)) {
     lastRenderedPageOffset = -1;
     return;
@@ -1101,11 +1166,12 @@ void ClipSelectionActivity::render(RenderLock&&) {
   // No hint bar on a vertical page: the text is full-bleed and a label bar would cover the last
   // cells of every column (the word-lookup panel makes the same call).
   if (!vertical()) GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  pushRefresh(HalDisplay::FAST_REFRESH);
 
   lastRenderedPageOffset = currentPageOffset;
   lastRenderedTextOffset = offset;
   lastRenderedTextXOffset = offsetX;
   lastRenderedRangeStart = rangeStart;
   lastRenderedSelected = selected;
+  lastRenderedDragging = dragging();
 }
