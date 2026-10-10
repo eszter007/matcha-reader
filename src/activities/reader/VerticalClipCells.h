@@ -26,5 +26,7 @@ struct VerticalClipCell {
 // Offsets are derived from the page's first offset by counting the codepoints the cells carry,
 // which is how the layout assigned them; inline images and ruby carry none.
 using VerticalClipCellVisitor = bool (*)(void* ctx, const VerticalClipCell& cell);
+// cellPx > 0 gives the cell size, measured where the reader font is loaded: measured after it is
+// released, the reference glyph reports the line height and every cell comes out too narrow.
 void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& page, int fontId, int marginLeft,
-                             int marginTop, void* ctx, VerticalClipCellVisitor visit);
+                             int marginTop, void* ctx, VerticalClipCellVisitor visit, int cellPx = 0);

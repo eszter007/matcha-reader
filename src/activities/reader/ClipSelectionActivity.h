@@ -31,6 +31,9 @@ class ClipSelectionActivity final : public Activity {
 
   // Vertical pages are repainted by the reader (the same body draw and glyph prewarm it uses for
   // its own page and for the word-lookup panel), so the selection never drifts from the page.
+  // The reader's cell size for this page, measured while its font is loaded (see VerticalClipCells).
+  void setCellPx(const int px) { cellPx = px; }
+
   void setRepaintPage(void* ctx, bool (*fn)(void*)) {
     repaintCtx = ctx;
     repaintPage = fn;
@@ -145,6 +148,7 @@ class ClipSelectionActivity final : public Activity {
   size_t pendingButtonCount = 0;
   WordSelectionInput selectionInput;
   int fontId = 0;
+  int cellPx = 0;
   int lineHeight = 0;
   std::unique_ptr<WordBox[]> words;
   size_t wordCount = 0;

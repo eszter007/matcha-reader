@@ -16,9 +16,9 @@ uint32_t countCodepoints(const std::string& text) {
 }  // namespace
 
 void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& page, const int fontId,
-                             const int marginLeft, const int marginTop, void* ctx,
-                             const VerticalClipCellVisitor visit) {
-  const int cellPx = verticalCellPx(renderer, fontId);
+                             const int marginLeft, const int marginTop, void* ctx, const VerticalClipCellVisitor visit,
+                             const int knownCellPx) {
+  const int cellPx = knownCellPx > 0 ? knownCellPx : verticalCellPx(renderer, fontId);
   // Punctuation and small kana are drawn shifted inside their cell, so their glyph x is not the
   // column's. Anchor every cell to the leftmost upright glyph of its column (or the leftmost glyph
   // when a column has none), so a selection reads as one straight column.

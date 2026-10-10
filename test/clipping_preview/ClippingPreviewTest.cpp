@@ -333,11 +333,15 @@ TEST(SelectionGeometry, HandlesSitBesideTheWordAndPointAtIt) {
   const Rect bottom = selectionGeometry::handle(word, false, true, false, safe, 24);
   EXPECT_EQ(top.y + top.height, word.y);
   EXPECT_EQ(bottom.y, word.y + word.height);
-  EXPECT_EQ(top.x + top.width / 2, word.x + word.width / 2);
+  EXPECT_EQ(top.x + top.width, word.x + word.width);  // point on the top-right corner
+  EXPECT_EQ(bottom.x, word.x);                        // point on the bottom-left corner
   EXPECT_EQ(selectionGeometry::handleCorner(true, true, false), BaseTheme::HandleCorner::BottomRight);
   EXPECT_EQ(selectionGeometry::handleCorner(false, true, false), BaseTheme::HandleCorner::TopLeft);
-  // Never off screen.
-  const Rect edge = selectionGeometry::handle(Rect{0, 790, 20, 10}, true, false, false, safe, 24);
-  EXPECT_GE(edge.x, safe.x);
-  EXPECT_LE(edge.y + edge.height, safe.y + safe.height);
+  // At the screen edge it stays beside the word rather than on it, at least half on screen.
+  const Rect atTop = selectionGeometry::handle(Rect{200, 6, 30, 30}, true, true, false, safe, 24);
+  EXPECT_EQ(atTop.y + atTop.height, 6);
+  const Rect bottom2 = selectionGeometry::handle(Rect{200, 780, 30, 15}, false, true, false, safe, 24);
+  EXPECT_EQ(bottom2.y, 795);
+  // Across the column it still stays inside.
+  EXPECT_GE(selectionGeometry::handle(Rect{0, 300, 20, 30}, true, true, false, safe, 24).x, safe.x);
 }

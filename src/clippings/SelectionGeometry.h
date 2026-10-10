@@ -46,21 +46,21 @@ inline Rect button(const Rect actions, const int index, const int padding) {
 
 // A selection handle beside a word box: under its leading (start) or trailing (end) edge on a
 // line, above the first or below the last cell of a column. Clip selection and the lookup panels
-// both place their handles here.
+// both place their handles here. A handle always touches its word on the side away from the text,
+// even where that runs past the screen edge: pulled inside, it would sit on the word itself (the
+// first cell of a column). Across that direction it stays inside the safe area.
 inline Rect handle(const Rect word, const bool start, const bool vertical, const bool rtl, const Rect safe,
                    const int size) {
   if (vertical) {
-    const int edge = start ? word.y - size : word.y + word.height;
-    return Rect{std::clamp(word.x + word.width / 2 - size / 2, safe.x, safe.x + safe.width - size),
-                std::clamp(edge, safe.y, safe.y + safe.height - size), size, size};
+    // The pointed corner meets the highlight's corner, as on a line: the start handle's (bottom
+    // right) its top-right corner, the end handle's (top left) its bottom-left one.
+    return Rect{std::clamp(start ? word.x + word.width - size : word.x, safe.x, safe.x + safe.width - size),
+                start ? word.y - size : word.y + word.height, size, size};
   }
   const bool left = start != rtl;
-  const int edge = left ? word.x : word.x + word.width;
-  return Rect{std::clamp(edge - (left ? size : 0), safe.x, safe.x + safe.width - size),
-              std::clamp(word.y + word.height, safe.y, safe.y + safe.height - size), size, size};
+  return Rect{left ? word.x - size : word.x + word.width, word.y + word.height, size, size};
 }
 
-// The handle's pointed corner aims at the text: inward along the line, or down/up the column.
 inline BaseTheme::HandleCorner handleCorner(const bool start, const bool vertical, const bool rtl) {
   if (vertical) return start ? BaseTheme::HandleCorner::BottomRight : BaseTheme::HandleCorner::TopLeft;
   return start != rtl ? BaseTheme::HandleCorner::TopRight : BaseTheme::HandleCorner::TopLeft;
