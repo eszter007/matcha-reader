@@ -2,6 +2,7 @@
 
 #include <FontCacheManager.h>
 #include <FreeInkUIGfxRenderer.h>
+#include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalGPIO.h>
@@ -22,6 +23,7 @@
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
 #include "components/icons/bookmark.h"
+#include "components/icons/clipActionIcons.h"
 #include "components/icons/cover.h"
 #include "components/icons/headerIcons.h"
 #include "fontIds.h"
@@ -1200,20 +1202,56 @@ void BaseTheme::drawTextField(const GfxRenderer& renderer, Rect rect, const int 
   }
 }
 
-void BaseTheme::drawSelectionHandle(const GfxRenderer& renderer, const Rect rect, const bool left) {
+void BaseTheme::drawSelectionHandle(const GfxRenderer& renderer, const Rect rect, const HandleCorner corner) {
+  constexpr int border = 2;
   const int radius = rect.width / 2;
+  const bool right = corner == HandleCorner::TopRight || corner == HandleCorner::BottomRight;
+  const bool bottom = corner == HandleCorner::BottomLeft || corner == HandleCorner::BottomRight;
+  // Outline: the disc plus the square corner, in black; then the same shape inset by the border
+  // in white, so the point stays outlined too.
   renderer.fillRoundedRect(rect.x, rect.y, rect.width, rect.height, radius, Color::Black);
-  renderer.fillRect(left ? rect.x + radius : rect.x, rect.y, radius, radius);
+  renderer.fillRect(right ? rect.x + radius : rect.x, bottom ? rect.y + radius : rect.y, radius, radius, true);
+  renderer.fillRoundedRect(rect.x + border, rect.y + border, rect.width - 2 * border, rect.height - 2 * border,
+                           radius - border, Color::White);
+  renderer.fillRect(right ? rect.x + radius : rect.x + border, bottom ? rect.y + radius : rect.y + border,
+                    radius - border, radius - border, false);
 }
 
-void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rect) {
+// One card, three actions, each an outline icon over its label (the stock reader's selection
+// bar). The hit areas stay selectionGeometry::button(); only the drawing changed.
+void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rect, const int anchorX) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  const int font = uiScaleSpec().smallFontId;
   const char* labels[] = {tr(STR_LOOKUP), tr(STR_CLIP), tr(STR_BOOKMARK_OPTION)};
+  const freeink::Icon* icons[] = {&icon_clip_lookup_40, &icon_clip_clip_40, &icon_clip_bookmark_40};
+  renderer.fillRoundedRect(rect.x, rect.y, rect.width, rect.height, SELECTION_ACTION_RADIUS_PX, Color::White);
+  renderer.drawRoundedRect(rect.x, rect.y, rect.width, rect.height, 1, SELECTION_ACTION_RADIUS_PX, true);
+  // Generated icons are not pre-rotated (drawIcon expects the old blit layout); the FreeInkUI
+  // target draws them orientation-correct.
+  freeink::ui::GfxRendererTarget target = makeUiTarget(renderer);
   for (int i = 0; i < 3; ++i) {
-    const Rect button = selectionGeometry::button(rect, i, metrics.menuSpacing);
-    renderer.fillRoundedRect(button.x, button.y, button.width, button.height, metrics.controlRadius, Color::White);
-    renderer.drawRoundedRect(button.x, button.y, button.width, button.height, 1, metrics.controlRadius, true);
-    UITheme::drawCenteredWrappedText(renderer, button, uiScaleSpec().smallFontId, labels[i], 2, true,
-                                     EpdFontFamily::REGULAR, UITheme::TextVerticalAlignment::CENTER);
+    const Rect slot = selectionGeometry::button(rect, i, SELECTION_ACTION_PAD_PX);
+    const int iconX = slot.x + (slot.width - SELECTION_ACTION_ICON_PX) / 2;
+    const int iconY = rect.y + SELECTION_ACTION_VPAD_PX;
+    target.bitmap(freeink::ui::Rect{static_cast<int16_t>(iconX), static_cast<int16_t>(iconY),
+                                    static_cast<int16_t>(SELECTION_ACTION_ICON_PX),
+                                    static_cast<int16_t>(SELECTION_ACTION_ICON_PX)},
+                  freeink::ui::bitmapFromIcon(*icons[i]), freeink::ui::BitmapMode::Center);
+    const int labelWidth = renderer.getTextWidth(font, labels[i]);
+    renderer.drawText(font, slot.x + (slot.width - labelWidth) / 2,
+                      iconY + SELECTION_ACTION_ICON_PX + SELECTION_ACTION_GAP_PX, labels[i]);
   }
+  if (anchorX < 0) return;
+  // Pointer: a white triangle hanging from the bottom edge, outlined like the card, its base
+  // opening the border so bubble and tail read as one shape.
+  constexpr int tail = SELECTION_ACTION_TAIL_PX;
+  const int cx = std::clamp(anchorX, rect.x + SELECTION_ACTION_RADIUS_PX + tail,
+                            rect.x + rect.width - SELECTION_ACTION_RADIUS_PX - tail - 1);
+  const int baseY = rect.y + rect.height - 1;
+  for (int dy = 0; dy <= tail; ++dy) {
+    const int half = tail - dy;
+    renderer.drawLine(cx - half, baseY + dy, cx + half, baseY + dy, false);
+  }
+  renderer.drawLine(cx - tail, baseY, cx, baseY + tail, true);
+  renderer.drawLine(cx + tail, baseY, cx, baseY + tail, true);
 }

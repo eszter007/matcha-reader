@@ -540,8 +540,7 @@ void ClipSelectionActivity::loop() {
   }
   if (!touchDragSelecting && mappedInput.wasScreenTapped(touchX, touchY)) {
     if (rangeStart >= 0) {
-      const int action =
-          selectionGeometry::actionAt(actionRect(), UITheme::getInstance().getMetrics().menuSpacing, touchX, touchY);
+      const int action = selectionGeometry::actionAt(actionRect(), BaseTheme::SELECTION_ACTION_PAD_PX, touchX, touchY);
       if (action >= 0) {
         confirmSelection(SELECTION_ACTIONS[action]);
         return;
@@ -602,8 +601,7 @@ void ClipSelectionActivity::loop() {
   } else if (mappedInput.wasScreenTouchPressed(touchX, touchY)) {
     if (rangeStart >= 0) {
       const Rect actions = actionRect();
-      if (selectionGeometry::actionAt(actions, UITheme::getInstance().getMetrics().menuSpacing, touchX, touchY) >= 0)
-        return;
+      if (selectionGeometry::actionAt(actions, BaseTheme::SELECTION_ACTION_PAD_PX, touchX, touchY) >= 0) return;
       const int first = std::min(rangeStart, selected);
       const int last = std::max(rangeStart, selected);
       for (int endpoint = 0; endpoint < 2; ++endpoint) {
@@ -723,6 +721,8 @@ int ClipSelectionActivity::selectionTop() const {
   for (int i = first; i <= last; ++i) {
     if (words[i].pageOffset == currentPageOffset) top = std::min(top, static_cast<int>(words[i].y));
   }
+  // On a vertical page the start handle sits above the first cell; the bar goes above the handle.
+  if (vertical()) top -= std::max(24, UITheme::getInstance().getMetrics().verticalSpacing * 2);
   return top;
 }
 
@@ -741,15 +741,23 @@ Rect ClipSelectionActivity::actionRect() const {
   const int labelWidth =
       std::max({renderer.getTextWidth(font, tr(STR_LOOKUP)), renderer.getTextWidth(font, tr(STR_CLIP)),
                 renderer.getTextWidth(font, tr(STR_BOOKMARK_OPTION))});
-  const int padding = metrics.menuSpacing;
-  const int width = std::min(safe.width, 3 * (labelWidth + padding * 2) + padding * 4);
-  const int lines = labelWidth > (width - padding * 4) / 3 ? 2 : 1;
-  const int height = std::max(36, renderer.getLineHeight(font) * lines + padding * 2);
+  const int padding = BaseTheme::SELECTION_ACTION_PAD_PX;
+  // Each slot holds an icon over its label; the widest label sets the slot width.
+  const int slotWidth = std::max(labelWidth, BaseTheme::SELECTION_ACTION_ICON_PX) + padding * 4;
+  const int width = std::min(safe.width, 3 * slotWidth + padding * 4);
+  const int height = BaseTheme::SELECTION_ACTION_ICON_PX + BaseTheme::SELECTION_ACTION_GAP_PX +
+                     renderer.getLineHeight(font) + 2 * BaseTheme::SELECTION_ACTION_VPAD_PX;
   int first = std::min(rangeStart, selected);
   const int last = std::max(rangeStart, selected);
   while (first < last && words[first].pageOffset < currentPageOffset) ++first;
-  return selectionGeometry::actions(safe, selectionTop(), height + padding * 2, metrics.verticalSpacing, width,
-                                    words[first].x - padding);
+  // The gap below the card holds the pointer plus a little air before the selected word.
+  const int gap = BaseTheme::SELECTION_ACTION_TAIL_PX + 2;
+  // The card hangs left-aligned with the first selected word, but never so far right that the
+  // pointer, which must clear the rounded corner, could not sit exactly on the word's centre.
+  const int wordX = words[first].x + textXOffset();
+  const int apexInset = BaseTheme::SELECTION_ACTION_RADIUS_PX + BaseTheme::SELECTION_ACTION_TAIL_PX;
+  const int barX = std::min(wordX - padding, wordX + words[first].width / 2 - apexInset);
+  return selectionGeometry::actions(safe, selectionTop(), height, gap, width, barX);
 }
 
 int ClipSelectionActivity::textOffset() const {
@@ -949,10 +957,22 @@ void ClipSelectionActivity::drawSelection() const {
   }
   if (rangeStart >= 0 && mappedInput.hasTouch()) {
     if (words[first].pageOffset == currentPageOffset)
-      GUI.drawSelectionHandle(renderer, handleRect(first, true), !words[first].isRtl);
+      // The point aims at the text: inward along the line, or down/up the column.
+      GUI.drawSelectionHandle(renderer, handleRect(first, true),
+                              vertical()            ? BaseTheme::HandleCorner::BottomRight
+                              : !words[first].isRtl ? BaseTheme::HandleCorner::TopRight
+                                                    : BaseTheme::HandleCorner::TopLeft);
     if (words[last].pageOffset == currentPageOffset)
-      GUI.drawSelectionHandle(renderer, handleRect(last, false), words[last].isRtl);
-    if (!touchDragSelecting) GUI.drawSelectionActions(renderer, actionRect());
+      GUI.drawSelectionHandle(renderer, handleRect(last, false),
+                              vertical()          ? BaseTheme::HandleCorner::TopLeft
+                              : words[last].isRtl ? BaseTheme::HandleCorner::TopRight
+                                                  : BaseTheme::HandleCorner::TopLeft);
+    if (!touchDragSelecting) {
+      // The pointer aims at the first selected word on this page (its cell, on a vertical page).
+      int anchor = std::min(rangeStart, selected);
+      while (anchor < last && words[anchor].pageOffset != currentPageOffset) ++anchor;
+      GUI.drawSelectionActions(renderer, actionRect(), words[anchor].x + offsetX + words[anchor].width / 2);
+    }
   } else if (!vertical()) {
     const WordBox& cursor = words[selected];
     renderer.drawRect(cursor.x + offsetX, cursor.y + offset, cursor.width, cursor.height, true);

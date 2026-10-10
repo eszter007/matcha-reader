@@ -1,0 +1,11 @@
+# Tabler outline icons (https://github.com/tabler/tabler-icons, icons/outline/*.svg), not Lucide:
+# the clipping action bar follows the look of the Xteink stock reader's selection bar.
+# Regenerate from the repository root with the Tabler SVGs in <tabler>/icons/outline:
+#   python3 freeink-sdk/libs/assets/Icons/tools/gen_icons.py \
+#     --manifest src/components/icons/clipActionIcons.manifest \
+#     --svgdir <tabler>/icons/outline \
+#     --sizes 40 --out src/components/icons/clipActionIcons.h
+clip-lookup = search
+# quote-clip.svg (next to this manifest) is Tabler's quote cropped to its ink; copy it into the svgdir.
+clip-clip = quote-clip
+clip-bookmark = bookmark
