@@ -315,10 +315,16 @@ int HomeActivity::coverTargetHeight() const {
   return coverGridUi->thumbHeightMeasured() ? coverGridUi->thumbHeightFor() : 0;
 }
 
+bool HomeActivity::backResumes() const {
+  return SETTINGS.homeBackResumes && CrossPointSettings::homeBackResumesSupported() && hasContinueReading &&
+         !recentBooks.empty();
+}
+
 void HomeActivity::onEnter() {
   Activity::onEnter();
   coverScanIndex_ = 0;
   recentsLoaded = false;
+  backPressSeen = false;
   coverWorker_.start("HomeCover");
 
   hasOpdsServers = OPDS_STORE.hasServers();
@@ -402,6 +408,7 @@ void HomeActivity::loop() {
   // A real key press must not wait for a conversion; the abandoned job is retried on a later tick
   // and the heights already written to disk are kept.
   if (mappedInput.anyButtonDownRaw()) coverWorker_.requestCancel();
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
   applyCoverResult();
   // Only once a card has measured the slot it draws into: a job at any other height writes a
   // thumb no card ever asks for, and every slot keeps drawing the placeholder.
@@ -474,6 +481,16 @@ void HomeActivity::loop() {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
     requestUpdate();
     return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    const bool pressedHere = backPressSeen;
+    backPressSeen = false;
+    // recentBooks is most-recent-first and already pruned of files missing from the card.
+    if (pressedHere && backResumes()) {
+      onSelectBook(recentBooks[0].path);
+      return;
+    }
   }
 
   if (coverGridUi) {
@@ -678,10 +695,9 @@ void HomeActivity::render(RenderLock&&) {
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 
-  // Back carries no action on the home menu, so it gets no hint. It used to open
-  // the most recent book, which sits under a button the reader otherwise treats
-  // as "go back" and was too easy to hit by accident.
-  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  // Back is unlabelled unless Back Resumes Last Book is on and there is a book to reopen.
+  const auto labels =
+      mappedInput.mapLabels(backResumes() ? tr(STR_RESUME) : "", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Captured before lastRenderValid is set: it is this fork's firstRenderDone, and the

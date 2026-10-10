@@ -353,6 +353,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // ReaderPrefs entry: it lives in the Controls screen, which a book cannot reach, so a per-book
   // copy could never be changed once that book had prefs saved.
   uint8_t reversePageTurn = 0;
+  // Back on Home reopens the most recent book, and its hint says Resume. Off by default: Back is a
+  // "go back" button everywhere else, which made the shortcut too easy to hit by accident.
+  uint8_t homeBackResumes = 0;
+  // Only boards whose front row carries a Back key under the screen's bottom-left hint: the X3,
+  // the plain X4 and the X4 Classic. Elsewhere the setting is neither listed nor acted on.
+  static bool homeBackResumesSupported() {
+    const auto board = BoardConfig::ACTIVE.board;
+    return board == BoardConfig::Board::XteinkX4 || board == BoardConfig::Board::XteinkX3 ||
+           board == BoardConfig::Board::XteinkX3Uc8279 || board == BoardConfig::Board::XteinkX4Classic;
+  }
   // Default ON: with it off, rotating the screen leaves every directional button pointing the way it
   // did in portrait, which reads as broken rather than as a preference. Saved settings keep whatever
   // they already store, so only new installs (and users who never touched it) see the change.

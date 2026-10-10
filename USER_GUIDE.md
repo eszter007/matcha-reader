@@ -425,6 +425,7 @@ open a list when selected.
 - **Haptic Intensity**: Low, Medium or High.
 
 - **Reversed page turn (Vertical & Manga)** (off by default): Flips which button turns the page forward, for the two things that are read right-to-left.
+- **Back Resumes Last Book** (off by default; X3, X4 and X4 Classic): On the Home screen, **Back** reopens the book you read last, and its button hint reads **Resume**.
 
   - In a **vertical (tategaki) Japanese book**, the button that normally goes back turns forward instead.
   - In **manga**, the left button advances (into the page's panels and on through the pages) and the right button goes back.
