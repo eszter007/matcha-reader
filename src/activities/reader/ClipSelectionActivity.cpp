@@ -130,7 +130,6 @@ bool ClipSelectionActivity::extractWords() {
 
       const size_t lineStart = wordCount;
       const bool isRtl = block->getBlockStyle().isRtl;
-      const int8_t characterSpacing = block->getBlockStyle().characterSpacing;
       const size_t remaining = MAX_SELECTABLE_WORDS - lineStart;
       size_t rtlWordCount = 0;
       const int rubyShift = block->getRubyShift(renderer.getFontAscenderSize(fontId));
@@ -140,7 +139,8 @@ bool ClipSelectionActivity::extractWords() {
         if (!clippingText::hasVisibleText(text)) continue;
 
         const auto style = static_cast<EpdFontFamily::Style>(block->wordStyle(i) & ~EpdFontFamily::UNDERLINE);
-        int width = renderer.getTextAdvanceX(fontId, text, style, characterSpacing);
+        const ClippingWordFont wordFont = clippingWordFont(*block, i, fontId);
+        int width = clippingWordWidth(renderer, wordFont, text, style);
         if (width <= 0) continue;
         if (i + 1 < block->wordCount() && block->wordXpos(i + 1) > block->wordXpos(i)) {
           width = std::min(width, static_cast<int>(block->wordXpos(i + 1) - block->wordXpos(i)));
@@ -161,7 +161,7 @@ bool ClipSelectionActivity::extractWords() {
         word.endOffset = block->wordSourceRange(i).end;
         word.text = text;
         word.style = style;
-        word.characterSpacing = characterSpacing;
+        word.font = wordFont;
         word.paragraphStart = false;
         word.isRtl = isRtl;
         word.discretionaryHyphen = block->wordHasDiscretionaryHyphen(i);
@@ -230,9 +230,9 @@ bool ClipSelectionActivity::extractVerticalCells() {
   wordCount = 0;
   rowCount = 0;
   prewarmVerticalPage();
-  words = makeUniqueNoThrow<WordBox[]>(MAX_SELECTABLE_WORDS);
+  words = makeUniqueNoThrow<WordBox[]>(MAX_SELECTABLE_CELLS);
   // Five bytes per cell is the most a single codepoint and its NUL can take.
-  verticalTextPool = makeUniqueNoThrow<char[]>(MAX_SELECTABLE_WORDS * 5);
+  verticalTextPool = makeUniqueNoThrow<char[]>(MAX_SELECTABLE_CELLS * 5);
   if (!words || !verticalTextPool) {
     LOG_ERR("CLIP", "OOM: vertical selection cells");
     return false;
@@ -245,8 +245,8 @@ bool ClipSelectionActivity::extractVerticalCells() {
       renderer, *verticalPage, fontId, marginLeft, marginTop, &ctx, [](void* raw, const VerticalClipCell& cell) {
         auto& ctx = *static_cast<Ctx*>(raw);
         auto& self = *ctx.self;
-        if (self.wordCount == MAX_SELECTABLE_WORDS) {
-          LOG_ERR("CLIP", "Selectable cell cap hit (%u); page truncated", static_cast<unsigned>(MAX_SELECTABLE_WORDS));
+        if (self.wordCount == MAX_SELECTABLE_CELLS) {
+          LOG_ERR("CLIP", "Selectable cell cap hit (%u); page truncated", static_cast<unsigned>(MAX_SELECTABLE_CELLS));
           return false;
         }
         const VerticalGlyph& g = self.verticalPage->glyphs[cell.glyphIndex];
@@ -270,7 +270,7 @@ bool ClipSelectionActivity::extractVerticalCells() {
           word.text = out;
         }
         word.style = static_cast<EpdFontFamily::Style>(g.style);
-        word.characterSpacing = 0;
+        word.font = {self.fontId, TextBlock::WORD_SCALE_ONE, 0};
         word.paragraphStart = cell.paragraphStart;
         word.isRtl = false;
         word.discretionaryHyphen = false;
@@ -774,7 +774,8 @@ void ClipSelectionActivity::prewarmWord(const int index) const {
   if (vertical()) return;
   if (index >= 0 && index < static_cast<int>(wordCount) && words[index].text) {
     renderer.getFontCacheManager()->prewarmCache(
-        fontId, words[index].text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[index].style) & 0x03)));
+        words[index].font.fontId, words[index].text,
+        static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[index].style) & 0x03)));
   }
 }
 
@@ -818,8 +819,7 @@ void ClipSelectionActivity::drawWordClean(const int index, const int offsetX, co
     clearGapBetween(word, words[index + 1], offsetX, offset);
   }
 
-  renderer.drawText(fontId, word.x + offsetX, word.y + offset, word.text, true, word.style,
-                    BidiUtils::BidiBaseDir::AUTO, word.characterSpacing);
+  clippingDrawWord(renderer, word.font, word.x + offsetX, word.y + offset, word.text, word.style);
 }
 
 void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSelected, const int lastSelected,
@@ -842,8 +842,7 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
   }
 
   renderer.fillRectDither(word.x + offsetX, word.y + offset, word.width, word.height, Color::LightGray);
-  renderer.drawText(fontId, word.x + offsetX, word.y + offset, word.text, true, word.style,
-                    BidiUtils::BidiBaseDir::AUTO, word.characterSpacing);
+  clippingDrawWord(renderer, word.font, word.x + offsetX, word.y + offset, word.text, word.style);
 }
 
 bool ClipSelectionActivity::renderIncremental() {
@@ -945,8 +944,7 @@ void ClipSelectionActivity::drawSelection() const {
     }
     if (previous) ditherGapBetween(*previous, word, offsetX, offset);
     renderer.fillRectDither(word.x + offsetX, word.y + offset, word.width, word.height, Color::LightGray);
-    renderer.drawText(fontId, word.x + offsetX, word.y + offset, word.text, true, word.style,
-                      BidiUtils::BidiBaseDir::AUTO, word.characterSpacing);
+    clippingDrawWord(renderer, word.font, word.x + offsetX, word.y + offset, word.text, word.style);
     previous = &word;
   }
   if (rangeStart >= 0 && mappedInput.hasTouch()) {

@@ -12,6 +12,7 @@
 
 #include "VerticalClipCells.h"
 #include "activities/Activity.h"
+#include "clippings/ClippingWordFont.h"
 #include "components/OptionPopup.h"
 #include "components/themes/BaseTheme.h"
 #include "util/WordSelectionInput.h"
@@ -49,7 +50,7 @@ class ClipSelectionActivity final : public Activity {
     int16_t height = 0;
     uint16_t row = 0;
     uint8_t pageOffset = 0;
-    int8_t characterSpacing = 0;
+    ClippingWordFont font;
     uint16_t pageWordIndex = 0;
     uint32_t startOffset = UINT32_MAX;
     uint32_t endOffset = UINT32_MAX;
@@ -61,6 +62,9 @@ class ClipSelectionActivity final : public Activity {
   };
 
   static constexpr size_t MAX_SELECTABLE_WORDS = 240;
+  // A vertical page is one page of character cells (a dense one holds ~450); 512 WordBoxes stay
+  // under 24KB on the C3, and the nothrow allocation cancels the selection when even that is short.
+  static constexpr size_t MAX_SELECTABLE_CELLS = 512;
 
   bool extractWords();
   bool extractVerticalCells();
