@@ -1071,10 +1071,15 @@ struct VerticalParsedText::LayoutCursor {
   // em, and a paragraph's leading ideographic space. Aozora-derived books write that indent as a
   // U+3000 GLYPH rather than CSS, so it is a full em sitting in the column -- giving up half of it
   // still reads as an indent, and it is very often the only thing a short column has to offer.
+  // Only 。、 and brackets (types 1-3): dashes and ー (type 4) and centred 。， (type 5) fill their
+  // em, and taking from them pulls the next character into their ink.
   static bool isHalfEmMark(const uint32_t cp) {
     const int shift = Kinsoku::verticalShiftType(cp);
-    return shift != 0 && shift != 5;  // type 5 (centred 。，) fills its em
+    return shift >= 1 && shift <= 3;
   }
+  // An opening bracket is set in the second half of its em, so its white half is the one BEFORE
+  // it: giving that up moves the bracket itself, not the character after it into its ink.
+  static bool givesLeadingSpace(const uint32_t cp) { return Kinsoku::verticalShiftType(cp) == 3; }
   static bool isReducible(const uint32_t cp) { return isHalfEmMark(cp) || cp == 0x3000; }
 
   // How much room a character actually needs at the end of a column. A half-em mark (a closing
@@ -1111,15 +1116,19 @@ struct VerticalParsedText::LayoutCursor {
     int remainingMarks = marks;
     int applied = 0;
     for (size_t i = first; i < page.glyphs.size(); i++) {
+      const bool gives = needed > 0 && i + 1 < page.glyphs.size() && isReducible(page.glyphs[i].codepoint);
+      const bool leading = gives && givesLeadingSpace(page.glyphs[i].codepoint);
+      const auto give = [&] {
+        const int g = std::min(maxPerMark, (needed + remainingMarks - 1) / remainingMarks);
+        applied += g;
+        needed -= g;
+        remainingMarks--;
+      };
+      if (leading) give();  // the bracket rises into its own white half
       if (applied > 0) {
         page.glyphs[i].y = static_cast<uint16_t>(std::max(0, static_cast<int>(page.glyphs[i].y) - applied));
       }
-      if (needed > 0 && i + 1 < page.glyphs.size() && isReducible(page.glyphs[i].codepoint)) {
-        const int give = std::min(maxPerMark, (needed + remainingMarks - 1) / remainingMarks);
-        applied += give;
-        needed -= give;
-        remainingMarks--;
-      }
+      if (gives && !leading) give();  // what follows rises into the mark's trailing half
     }
     return applied;
   }
@@ -1596,8 +1605,9 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
   // The whole remainder of the column slides up by that amount, not just the next character --
   // moving one character only relocates the gap. Spacing stays even and this column's tail sits
   // slightly higher than its neighbours'.
-  int columnYShift = 0;
-  uint16_t shiftColumn = UINT16_MAX;
+  // Carried across batches with the row: a resumed batch continues the same column.
+  int& columnYShift = pendingColumnYShift_;
+  uint16_t& shiftColumn = pendingShiftColumn_;
 
   LayoutCursor cur{*this,       geom,         inkMemo,     pendingPage_,  pages, pendingColumn_,
                    pendingRow_, columnYShift, shiftColumn, glyphsPerPage, ctx,   onPageReady};
@@ -1613,6 +1623,8 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
     cur.reservePageGlyphs(pendingPage_);
     pendingColumn_ = 0;
     pendingRow_ = 0;
+    pendingColumnYShift_ = 0;
+    pendingShiftColumn_ = UINT16_MAX;
     pendingPageValid_ = true;
   }
   VerticalPage& page = pendingPage_;

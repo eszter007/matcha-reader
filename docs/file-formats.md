@@ -516,7 +516,7 @@ if (parsedSize != fileSize) {
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
 
-### Version 142
+### Version 143
 
 The page index (`pageCount` × `u32` file offsets) is followed by the **anchor table**, which lets
 TOC and footnote jumps land on their page:
@@ -548,6 +548,9 @@ validation, so changing the setting rebuilds the chapter. v140 caches are rebuil
 
 v142 adds a `u16` after it: the margin right of the text area in px. With furigana on, the layout
 holds back whatever part of half an em that margin cannot give the first column's ruby.
+
+v143 changes no bytes. The layout changed: no slide after "……", brackets squeezed only on their
+white side, and a slide that survives a layout batch boundary. v142 caches are rebuilt once.
 
 ## `ruby.bin`
 

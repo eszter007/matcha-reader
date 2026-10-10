@@ -441,6 +441,10 @@ class VerticalParsedText {
   bool pendingTrailingBreak_ = false;
   uint16_t pendingColumn_ = 0;
   uint16_t pendingRow_ = 0;
+  // The current column's slide (see layoutPages()): carried like the row, or a batch boundary
+  // inside a slid column drops it and the next glyph lands on the one before (#415).
+  int pendingColumnYShift_ = 0;
+  uint16_t pendingShiftColumn_ = UINT16_MAX;
   bool pendingPageValid_ = false;  // false until the first layoutPages() call initializes pendingPage_
   // True once any page (streamed via callback or returned) has been produced across the whole
   // chapter, i.e. across every layoutPages() call since construction. Used only at the final flush
