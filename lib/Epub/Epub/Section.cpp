@@ -7,10 +7,10 @@
 #include <Memory.h>
 #include <Serialization.h>
 
-#include "Epub/FootnoteHrefIo.h"
-#include "Epub/RubyGlossary.h"
 #include <algorithm>
 
+#include "Epub/FootnoteHrefIo.h"
+#include "Epub/RubyGlossary.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 

@@ -71,9 +71,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // only refreshes the rows whose value reflects live state (rotation,
   // page-turn interval, night mode, frontlight).
   // 20 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
-  // Reader Settings on top of upstream's set, plus upstream's Night Mode and Frontlight, plus Create/View Clippings); 22
-  // leaves headroom for one more without a silent truncation, which a fixed-capacity array
-  // cannot report.
+  // Reader Settings on top of upstream's set, plus upstream's Night Mode and Frontlight, plus Create/View Clippings);
+  // 22 leaves headroom for one more without a silent truncation, which a fixed-capacity array cannot report.
   static constexpr size_t MAX_MENU_ITEMS = 22;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
   void buildMenuRowItems();

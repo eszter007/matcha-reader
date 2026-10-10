@@ -1290,8 +1290,8 @@ int ParsedText::calculateRubyExtraEndOffset(const size_t lineStartIdx, const siz
   // Measure the group.
   int groupActualWidth = 0;
   for (size_t k = leaderIdx; k < lineBreakIdx; ++k) {
-    groupActualWidth += measureWordWidth(renderer, fontId, wordAt(k), getWordStyleAt(k), blockStyle.letterSpacing, false,
-                                         wordSpacingPercent);
+    groupActualWidth += measureWordWidth(renderer, fontId, wordAt(k), getWordStyleAt(k), blockStyle.letterSpacing,
+                                         false, wordSpacingPercent);
   }
   const int rubyWidth =
       renderer.getTextAdvanceX(fontId, rubyTexts[leaderIdx].c_str(), EpdFontFamily::SUP, blockStyle.letterSpacing);
@@ -2233,12 +2233,13 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         TextBlock::isWordScaleTag(slot) ? static_cast<uint16_t>(-slot) : TextBlock::WORD_SCALE_ONE;
     outBoundaries.push_back(boundary);
     outSuffixX.push_back(
-        boundary == 0 ? 0
-                      : scaleWordWidth(measureFocusPrefixAdvance(renderer, wordFont, lineWords[i],
-                                                                 static_cast<EpdFontFamily::Style>(
-                                                                     lineWordStyles[i] & ~TextBlock::DISCRETIONARY_HYPHEN_FLAG),
-                                                                 boundary, blockStyle.letterSpacing),
-                                       wordScale));
+        boundary == 0
+            ? 0
+            : scaleWordWidth(measureFocusPrefixAdvance(renderer, wordFont, lineWords[i],
+                                                       static_cast<EpdFontFamily::Style>(
+                                                           lineWordStyles[i] & ~TextBlock::DISCRETIONARY_HYPHEN_FLAG),
+                                                       boundary, blockStyle.letterSpacing),
+                             wordScale));
   }
 
   auto block = makeUniqueNoThrow<TextBlock>(lineWords, lineXPos, lineWordStyles, outBoundaries, outSuffixX, blockStyle,
