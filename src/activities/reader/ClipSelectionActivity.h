@@ -135,7 +135,14 @@ class ClipSelectionActivity final : public Activity {
   void publishLiveSelection() const;
   // A vertical range is redrawn by the reader, clipped to the cells a step changed: their union
   // collects here and flushDirtyCells() repaints it once, before the refresh.
-  bool rangeRepaintedByReader() const { return vertical() && rangeStart >= 0 && liveSelection && repaintPage; }
+  // A finger drag in progress. The range is then drawn as inverted cells by this activity and only
+  // the cells that change are flipped per sample: a page repaint through the reader (vertical) or
+  // the handles and action bar would cost a full render per hop on top of the panel's refresh.
+  bool dragging() const { return touchDragSelecting && touchDragHasMoved; }
+  bool lastRenderedDragging = false;
+  bool rangeRepaintedByReader() const {
+    return vertical() && rangeStart >= 0 && liveSelection && repaintPage && !dragging();
+  }
   void markDirty(const WordBox& word) const;
   void flushDirtyCells();
   mutable int dirtyLeft = 0;

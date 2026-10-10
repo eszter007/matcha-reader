@@ -881,7 +881,10 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
 }
 
 bool ClipSelectionActivity::renderIncremental() {
-  if (actionPopup.isActive() || mappedInput.hasTouch()) return false;
+  if (actionPopup.isActive()) return false;
+  // Touch takes the incremental path only mid-drag; the drag's first and last frames (the style
+  // switch to and from inverted cells, handles and bar) are full renders.
+  if (mappedInput.hasTouch() && (!dragging() || dragging() != lastRenderedDragging)) return false;
   if (lastRenderedPageOffset < 0 || lastRenderedPageOffset != currentPageOffset) return false;
   const int offset = textOffset();
   const int offsetX = textXOffset();
@@ -949,7 +952,8 @@ bool ClipSelectionActivity::renderIncremental() {
       }
     }
 
-    if (lastRenderedSelected >= firstNew && lastRenderedSelected <= lastNew) {
+    // Vertical cells are XOR-inverted, so a cell still in range must not be touched twice.
+    if (!vertical() && lastRenderedSelected >= firstNew && lastRenderedSelected <= lastNew) {
       drawWordHighlight(lastRenderedSelected, firstNew, lastNew, offsetX, offset);
     }
 
@@ -1001,7 +1005,7 @@ void ClipSelectionActivity::drawSelection() const {
     if (word.pageOffset != currentPageOffset) continue;
     if (vertical()) {
       // A range is already on the page (publishLiveSelection); only the lone cursor is inverted.
-      if (rangeStart < 0 || !liveSelection) invertWord(word, offsetX, offset);
+      if (rangeStart < 0 || !liveSelection || dragging()) invertWord(word, offsetX, offset);
       continue;
     }
     if (previous) ditherGapBetween(*previous, word, offsetX, offset);
@@ -1067,7 +1071,7 @@ void ClipSelectionActivity::flushDirtyCells() {
 
 void ClipSelectionActivity::publishLiveSelection() const {
   if (!vertical() || !liveSelection) return;
-  if (rangeStart < 0) {
+  if (rangeStart < 0 || dragging()) {
     liveSelection(liveSelectionCtx, UINT32_MAX, 0);
     return;
   }
@@ -1131,4 +1135,5 @@ void ClipSelectionActivity::render(RenderLock&&) {
   lastRenderedTextXOffset = offsetX;
   lastRenderedRangeStart = rangeStart;
   lastRenderedSelected = selected;
+  lastRenderedDragging = dragging();
 }
