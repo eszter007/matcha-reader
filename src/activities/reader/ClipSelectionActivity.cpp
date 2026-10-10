@@ -110,11 +110,13 @@ void ClipSelectionActivity::onEnter() {
     }
     selected = rangeStart = hit;
     if (dragFromX >= 0) {
-      // The drag a lookup panel handed over: same state as pressing one of this screen's handles.
+      // The drag a lookup panel handed over: same state as pressing one of this screen's handles,
+      // and already moving -- the first paint is the drag style, so the first sample that arrives
+      // takes the incremental path instead of paying a second full render to switch to it.
       dragOffsetX = words[hit].x + words[hit].width / 2 - dragFromX;
       dragOffsetY = words[hit].y + textOffset() + words[hit].height / 2 - dragFromY;
       touchDragSelecting = true;
-      touchDragHasMoved = false;
+      touchDragHasMoved = true;
       touchDragStartX = dragFromX;
       touchDragStartY = dragFromY;
       touchDragPageEndIndex = -1;
