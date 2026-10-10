@@ -60,6 +60,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
   - [5. Reader Menu](#5-reader-menu)
       - [5.1 Chapter Selection](#51-chapter-selection)
       - [5.2 Bookmarks](#52-bookmarks)
+      - [5.3 Clippings and Highlights](#53-clippings-and-highlights)
   - [6. Language Learning Features](#6-language-learning-features)
     - [6.1 Word Lookup](#61-word-lookup)
     - [6.2 Page Translation](#62-page-translation)
@@ -433,7 +434,7 @@ open a list when selected.
 
 - **Upper / Lower Side Button in Reader** (X3/X4 only, in Shortcuts): What the upper (Side Up) or lower (Side Down)
   button does while reading: Default (previous page on Upper, next page on Lower), Sleep, Previous Page, Next Page,
-  Refresh Screen, Footnotes, Word Lookup or Off.
+  Refresh Screen, Footnotes, Word Lookup, Create Clipping or Off.
 
   - A button with a custom action does only that action. Outside the reader both buttons keep their normal role.
   - Inside Word Lookup, a button set to Previous or Next Page moves the cursor back or forward.
@@ -448,8 +449,9 @@ open a list when selected.
   - "Page Scroll" - Long-pressing scrolls a page up/down
 - **Long-press Menu**: What holding Confirm does while reading an EPUB. A short press always opens the reader menu:
   - "Bookmark" (default) - Hold Confirm (~0.4 second) to drop a bookmark at the current page.
-  - "KOSync" - Hold Confirm (~1 second) to launch KOReader sync directly.
+  - "CrossPoint Sync" - Hold Confirm (~1 second) to launch KOReader sync directly.
   - "Dictionary" - Hold Confirm (~0.4 second) to start dictionary word selection on the current page (see [docs/dictionary.md](docs/dictionary.md)).
+  - "Create Clipping" - Hold Confirm (~0.4 second) to start clipping selection on the current page.
   - "Disabled" - Long-press is ignored; only short-press opens the reader menu.
 
 - **Power + Up Syncs Clock** (off by default): Pressing Power and Side Up together opens Sync Clock from any screen. See [Syncing the Clock](#syncing-the-clock).
@@ -482,7 +484,7 @@ open a list when selected.
 
 - **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers and firmware updates.
 
-- **KOReader Sync**: Options for setting up KOReader for syncing book progress. **Smart sync** is the default for new configurations and auto-resolves simple push/pull decisions. Existing credential files retain **Ask every time** when migrated; you can switch Sync Behavior at any time if you prefer manual confirmation.
+- **CrossPoint Sync**: Settings for syncing book progress with CrossPoint Sync or a compatible KOSync server. **Smart sync** is the default for new configurations and auto-resolves simple push/pull decisions. Existing credential files retain **Ask every time** when migrated; you can switch Sync Behavior at any time if you prefer manual confirmation.
 
 - **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries) below.
 
@@ -569,17 +571,27 @@ Behavior notes:
 CrossPoint can sync reading progress with KOReader-compatible sync servers.
 It also interoperates with KOReader apps/devices when they use the same server and credentials.
 
+**Server Type** controls which progress and metadata format CrossPoint sends:
+
+- **CrossPoint** - For the default service or a self-hosted CrossPoint-compatible sync server. Sends standard KOReader progress plus CrossPoint's richer reading position when available.
+- **KoSync** - For standard KOReader Sync servers such as `sync.koreader.rocks` or `koreader/kosync`. Uses the strict standard payload without CrossPoint-specific rich position data.
+- **Other** - For custom servers that explicitly support CrossPoint's enhanced payload. Rich position is enabled, and when **Send Metadata** is on CrossPoint may also send recognized ISBN, ASIN, series name, and series index in addition to title/author metadata.
+
+**Send Metadata** remains the privacy switch for bibliographic data. Turn it off if you want to sync progress without sending title, author, ISBN/ASIN, or series information.
+
 ##### Option A: CrossPoint Sync Server (`sync.crosspointreader.com`, default)
 
 When **Sync Server URL** is left empty, CrossPoint uses the free CrossPoint sync server at `https://sync.crosspointreader.com`. It speaks the standard KOReader sync protocol (so KOReader apps can use it too). CrossPoint records page starts as chapter-content offsets and sends the corresponding standard KOReader XPath, so devices with different fonts or layouts can return to the same text.
 
 1. On each CrossPoint device:
 
-   - Go to **Settings -> System -> KOReader Sync**.
+   - Go to **Settings -> System -> CrossPoint Sync**.
 
    - Set **Username** and **Password** (enter the plain password; CrossPoint computes MD5 internally, and use the same values on all devices).
 
    - Leave **Sync Server URL** empty (or set it to `https://sync.crosspointreader.com`).
+
+   - Set **Server Type** to **CrossPoint**.
 
    - On the first device, run **Sign Up** once to create the account directly from the device. On every other device, just run **Authenticate**.
 
@@ -591,9 +603,11 @@ Use this if you already sync KOReader devices against the official public server
 
 1. On each CrossPoint device:
 
-   - Go to **Settings -> System -> KOReader Sync**.
+   - Go to **Settings -> System -> CrossPoint Sync**.
 
    - Set **Sync Server URL** to `https://sync.koreader.rocks` (required; an empty URL now points at the CrossPoint server instead).
+
+   - Set **Server Type** to **KoSync**.
 
    - Set **Username** and **Password** to your existing KOReader Sync credentials.
 
@@ -677,11 +691,13 @@ If this returns `HTTP 402` with `{"code":2002,"message":"Username is already reg
 
 4. On each CrossPoint device:
    
-   - Go to **Settings -> System -> KOReader Sync**.
+   - Go to **Settings -> System -> CrossPoint Sync**.
    
    - Set **Username** and **Password** (enter the plain password; CrossPoint computes MD5 internally, and use the same values on all devices).
    
    - Set **Sync Server URL** to `http://<server-ip>:17200`.
+
+   - Set **Server Type** to **KoSync**.
    
    - Run **Authenticate**.
 
@@ -689,8 +705,9 @@ If you use the HTTPS listener, use `https://<server-ip>:7200` (`curl -k` only fo
 
 ##### Syncing While Reading
 
-Once any of the options above is set up, press **Confirm** while reading to open the reader menu, then select **Sync Progress**. Alternatively, set **Settings -> Controls -> Long-press Menu** to **KOSync** and hold Confirm to launch sync directly.
+Once any of the options above is set up, press **Confirm** while reading to open the reader menu, then select **Sync Progress**. Alternatively, set **Settings -> Controls -> Long-press Menu** to **CrossPoint Sync** and hold Confirm to launch sync directly.
 
+- **Sync Clippings** is off by default. Enable it only for a compatible CrossPoint Sync server; manual **Sync Progress** then uploads and downloads this book’s clippings too. Leave it off for ordinary KOSync servers.
 - With **Sync Behavior** set to **Ask every time**, choose **Apply Remote** to jump to remote progress or **Upload Local** to push current progress.
 - With **Sync Behavior** set to **Smart sync**, CrossPoint auto-resolves simple cases: upload when no remote progress exists, confirm and leave both unchanged when local and remote progress are already synchronized, upload when local progress is further ahead, or apply remote when remote progress is further ahead.
 
@@ -861,7 +878,7 @@ See [docs/dictionary.md](docs/dictionary.md) for supported formats, setup, and w
 * **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
 * **Return to Browse Files:** Press and hold the **Back** button to close the book and return to the **[Browse Files](#33-browse-files-screen)** screen.
 * **Reader Menu:** Press **Confirm** to open the **[Reader Menu](#5-reader-menu)**, which includes chapter navigation, reading options, and more.
-* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#363-controls)**: "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Disabled" does nothing. A short press always opens the Reader Menu.
+* **Long-press Confirm (configurable):** Holding **Confirm** runs the function chosen by the **Long-press Menu** setting in **[Controls Settings](#363-controls)**: "Bookmark" (default) drops a bookmark, "KOSync" launches KOReader Sync, "Dictionary" starts a word lookup, "Create Clipping" starts a text selection, "Disabled" does nothing. A short press always opens the Reader Menu.
 
 ### Supported Languages
 
@@ -886,6 +903,8 @@ Available options include:
 - **Select Chapter**: Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
 - **Links and footnotes**: Select an internal link on the current page. This option appears when the page contains links.
 - **Look Up**: Select a word on the current page and show its dictionary definition (see [docs/dictionary.md](docs/dictionary.md)). Requires a dictionary to be selected in **Settings → Reader → Dictionary**.
+- **Create Clipping**: Select a range of text on the current page and save it as a highlighted clipping (see [5.3](#53-clippings-and-highlights)).
+- **View Clippings**: Open this book's saved clippings (shown once one exists).
 - **Reading Orientation**: Cycle through screen orientations without leaving the reader.
 - **Auto Turn (Pages Per Minute)**: Cycle through automatic page turn speed options for hands-free reading.
 - **Go to %**: Jump to a specific position in the book by percentage.
@@ -920,6 +939,29 @@ To create a bookmark, hold **Confirm** for about half a second while inside a bo
 To open bookmarks, press **Confirm** while inside a book. Then navigate to the **Bookmarks** menu. Bookmarks can be opened by navigating to them and pressing **Confirm**, which will redirect you to that place in the book. You can delete bookmarks by holding **Confirm** for about 0.7 seconds, and then pressing **Confirm** again to confirm deletion, or **Back** to cancel.
 
 Bookmarks are stored in the `.crosspoint/bookmarks` folder in the JSON format.
+
+### 5.3 Clippings and Highlights
+
+Reader menu → **Create Clipping**. Move to the first word and press **Confirm**, then move to the last word and press
+**Confirm** again to choose **Look Up**, **Clip** or **Bookmark**. **Back** closes that popup and keeps the selection.
+On a touch device, drag either handle to adjust the range, then tap the action above it. Holding the end handle on
+the last word for a second extends the selection onto the next page; a selection can span up to three pages of one
+chapter. Holding a word while reading opens the dictionary (see [6.1](#61-word-lookup)); holding highlighted text
+removes that clipping.
+
+Saved clippings stay highlighted on the page, also after a change of font, spacing, orientation or pagination.
+**View Clippings** lists this book's clippings: **Confirm** opens one or jumps to its passage, and holding
+**Confirm** deletes it. Each clipping keeps up to 4 KiB of text under `.crosspoint/clippings`, and the first 2,000
+bytes are also appended to `My Clippings.txt` in the root of the SD card in Kindle format. Moving or renaming a
+book carries its clippings along; deleting the book deletes them, while the text export is left as it is.
+
+With a CrossPoint Sync server, **Sync Clippings** in the KOReader Sync settings uploads and downloads them with
+**Sync Progress**. Leave it off for an ordinary KOSync server.
+
+**Vertical text.** The same selection works on a vertical page; the unit is the character (a run of Latin text
+or digits counts as one). The side buttons step down the column and Left / Right jump between columns (Left runs
+forward, with the text); on touch, the handles sit above and below the selection. A vertical selection stays
+within one page.
 
 ## 6. Language Learning Features
 

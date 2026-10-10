@@ -95,6 +95,15 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 99 (fork numbering)
+
+Absorbs upstream's versions 52 to 55. Each TextBlock arena starts with one 8-byte source range per
+word (two uint32 chapter-visible codepoint offsets, start inclusive and end exclusive, codepoints
+absorbed by NFC composition included), and the block header gains a uint16 `paragraphStartWord`
+after `textBytes` (the visual index of the paragraph's first logical word, or `UINT16_MAX`). Both
+anchor clippings. The high bit of a word's style byte marks a discretionary hyphen. Older sections
+are rebuilt; book metadata and progress are kept.
+
 ### Version 98 (fork numbering)
 
 Absorbs upstream's version 51. The layout is unchanged: a long paragraph laid out in several
@@ -282,7 +291,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 97
+#define EXPECTED_VERSION 99
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -342,19 +351,29 @@ struct BlockStyle {
     s8 characterSpacing;
 };
 
+struct SourceRange {
+    u32 start [[comment("Chapter-visible codepoint offset, inclusive")]];
+    u32 end [[comment("Chapter-visible codepoint offset, exclusive")]];
+};
+
 struct TextBlock {
     u16 wordCount;
-    u8 hasFocus;
+    u8 flags [[comment("bit 0: focus arrays present, bit 1: per-word font array present")]];
     u16 textBytes [[comment("Total size of text[], including one NUL per word")]];
+    u16 paragraphStartWord [[comment("Visual index of the paragraph's first word, 0xFFFF for a continuation line")]];
 
     if (wordCount > 0) {
+        SourceRange sourceRange[wordCount];
+        if ((flags & 2) != 0) {
+            s32 wordFont[wordCount] [[comment("Font id, or a negative 256-based scale tag; 0 = block font")]];
+        }
         u16 textOff[wordCount] [[comment("Byte offset of word i's text within text[]")]];
         s16 wordXPos[wordCount];
-        if (hasFocus != 0) {
+        if ((flags & 1) != 0) {
             u16 wordFocusSuffixX[wordCount] [[comment("Suffix x offset from word start")]];
         }
-        WordStyle wordStyle[wordCount];
-        if (hasFocus != 0) {
+        WordStyle wordStyle[wordCount] [[comment("High bit: discretionary hyphen")]];
+        if ((flags & 1) != 0) {
             u8 wordFocusBoundary[wordCount] [[comment("UTF-8 byte boundary between bold prefix and suffix")]];
         }
         char text[textBytes] [[comment("All words back to back, each NUL-terminated")]];
@@ -673,3 +692,25 @@ make a real book disappear.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.
+
+## Clipping store (`/.crosspoint/clippings/epub_<path-hash>.bin`)
+
+Version 4 retains the version 3 header and page-local range fields. After each
+record's layout signature it stores `startOffset` and `endOffset` (uint32 chapter
+codepoint range, end exclusive; UINT32_MAX means unavailable), `syncRevision`
+(uint64), `pendingUpload` (one byte), and a 65-byte NUL-terminated sync ID. The
+chapter title, text length, and text follow. Versions 1–3 remain readable.
+
+Stable IDs are saved before upload. A sibling `.deleted` file stores fixed
+65-byte IDs awaiting server acknowledgement. Deletions are queued before the
+local record is removed and retried on the next enabled manual sync. A `.bak`
+file is recovered if power interrupted replacement of the main store.
+
+Clipping header strings are limited to 4 KiB on both reads and writes. A failed
+load leaves no usable index and disables writes until a successful load. The
+index is allocated with checked, bounded growth and released on unload.
+
+Book moves rename the store and its `.deleted` journal (plus recovery sidecars)
+together. The stored source path is informational and is refreshed on the next
+save; the current file path selects the store. Local book deletion cleans up all
+of these sidecars but preserves the independent `My Clippings.txt` export.

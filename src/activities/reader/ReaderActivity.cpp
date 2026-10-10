@@ -36,7 +36,7 @@ std::unique_ptr<Activity> ReaderActivity::create(GfxRenderer& renderer, MappedIn
     return makeUniqueNoThrow<MangaReaderActivity>(renderer, mappedInput, std::move(path));
   }
 
-  if (FsHelpers::hasBmpExtension(path) || FsHelpers::hasPngExtension(path)) {
+  if (FsHelpers::hasImageExtension(path)) {
     return makeUniqueNoThrow<BmpViewerActivity>(renderer, mappedInput, std::move(path));
   }
 

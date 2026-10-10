@@ -50,6 +50,8 @@ class DictionaryDefinitionActivity final : public Activity {
 
   // Usable body-text area: the panel's inner rectangle.
   struct BodyArea {
+    int x;
+    int y;
     int width;
     int height;
   };

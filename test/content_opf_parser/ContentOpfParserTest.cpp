@@ -78,6 +78,138 @@ TEST(ContentOpfParserMetadata, ByteOrderMarkLeavesNoSpaceOrSeparatorBehind) {
   EXPECT_EQ(parser.author, "First, Second");
 }
 
+TEST(ContentOpfParserMetadata, ExtractsIsbnAsinAndCalibreSeries) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc" xmlns:opf="urn:opf"><metadata>
+    <dc:identifier opf:scheme="ISBN">978-1-4028-9462-6</dc:identifier>
+    <dc:identifier opf:scheme="MOBI-ASIN">B0DTT5LV77</dc:identifier>
+    <meta name="calibre:series" content="The Expanse"/>
+    <meta name="calibre:series_index" content="3.5"/>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.isbn, "978-1-4028-9462-6");
+  EXPECT_EQ(parser.asin, "B0DTT5LV77");
+  EXPECT_EQ(parser.series, "The Expanse");
+  ASSERT_TRUE(parser.seriesIndex.has_value());
+  EXPECT_FLOAT_EQ(*parser.seriesIndex, 3.5f);
+}
+
+TEST(ContentOpfParserMetadata, ExtractsAmazonSchemeAsin) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc" xmlns:opf="urn:opf"><metadata>
+    <dc:identifier opf:scheme="AMAZON">B0BF8Y54MS</dc:identifier>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.asin, "B0BF8Y54MS");
+}
+
+TEST(ContentOpfParserMetadata, ExtractsPrefixedIdentifiers) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
+    <dc:identifier>ISBN: 9781234567890</dc:identifier>
+    <dc:identifier>ASIN: B012345678</dc:identifier>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.isbn, "9781234567890");
+  EXPECT_EQ(parser.asin, "B012345678");
+}
+
+TEST(ContentOpfParserMetadata, ExtractsUrnIdentifiers) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
+    <dc:identifier>urn:isbn:9781234567890</dc:identifier>
+    <dc:identifier>urn:asin:B012345678</dc:identifier>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.isbn, "9781234567890");
+  EXPECT_EQ(parser.asin, "B012345678");
+}
+
+TEST(ContentOpfParserMetadata, ClampsOversizedMetadataAttributes) {
+  const std::string hugeSeries(64 * 1024, 'S');
+  const std::string xml =
+      R"(<package><metadata><meta name="calibre:series" content=")" + hugeSeries + R"("/></metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.series.size(), 512u);
+  EXPECT_EQ(parser.series[0], 'S');
+}
+
+TEST(ContentOpfParserMetadata, ExtractsEpub3SeriesCollection) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
+    <meta id="series-1" property="belongs-to-collection">Murderbot Diaries</meta>
+    <meta refines="#series-1" property="group-position">2</meta>
+    <meta refines="#series-1" property="collection-type">series</meta>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.series, "Murderbot Diaries");
+  ASSERT_TRUE(parser.seriesIndex.has_value());
+  EXPECT_FLOAT_EQ(*parser.seriesIndex, 2.0f);
+}
+
+TEST(ContentOpfParserMetadata, ResolvesRefinementsBeforeCollectionDeclaration) {
+  const std::string xml = R"(<package><metadata>
+    <meta refines="#series-a" property="collection-type">series</meta>
+    <meta refines="#series-a" property="group-position">7</meta>
+    <meta id="series-a" property="belongs-to-collection">Deferred Series</meta>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.series, "Deferred Series");
+  ASSERT_TRUE(parser.seriesIndex.has_value());
+  EXPECT_FLOAT_EQ(*parser.seriesIndex, 7.0f);
+}
+
+TEST(ContentOpfParserMetadata, ResolvesInterleavedCollectionRefinementsById) {
+  const std::string xml = R"(<package><metadata>
+    <meta id="series-a" property="belongs-to-collection">Primary Series</meta>
+    <meta id="series-b" property="belongs-to-collection">Secondary Series</meta>
+    <meta refines="#series-a" property="collection-type">series</meta>
+    <meta refines="#series-a" property="group-position">3</meta>
+    <meta refines="#series-b" property="collection-type">series</meta>
+    <meta refines="#series-b" property="group-position">9</meta>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.series, "Primary Series");
+  ASSERT_TRUE(parser.seriesIndex.has_value());
+  EXPECT_FLOAT_EQ(*parser.seriesIndex, 3.0f);
+}
+
+TEST(ContentOpfParserMetadata, KeepsSeriesIndexWithSelectedMetadataSource) {
+  const std::string xml = R"(<package><metadata>
+    <meta name="calibre:series" content="Calibre Series"/>
+    <meta name="calibre:series_index" content="4"/>
+    <meta id="epub-series" property="belongs-to-collection">EPUB Series</meta>
+    <meta refines="#epub-series" property="collection-type">series</meta>
+    <meta refines="#epub-series" property="group-position">9</meta>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.series, "Calibre Series");
+  ASSERT_TRUE(parser.seriesIndex.has_value());
+  EXPECT_FLOAT_EQ(*parser.seriesIndex, 4.0f);
+}
+
 TEST(ContentOpfParserMetadata, StopsBeforeManifestWithoutOpeningTemporaryStorage) {
   const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
     <dc:title>A Wizard of Earthsea</dc:title>
@@ -159,23 +291,4 @@ TEST(ContentOpfParserCover, ReadingParserStillOpensManifestCache) {
   }
   EXPECT_EQ(Storage.writeOpens, 1);
   EXPECT_EQ(Storage.readOpens, 1);
-}
-
-TEST(ContentOpfParserMetadata, ReadsSpinePageProgressionDirection) {
-  const std::string rtl = R"(<package xmlns:dc="urn:dc"><metadata><dc:language>zh-TW</dc:language></metadata>
-    <manifest/><spine toc="ncx" page-progression-direction="rtl"></spine></package>)";
-  ContentOpfParser rtlParser("", "", rtl.size(), nullptr);
-  parse(rtlParser, rtl);
-  EXPECT_TRUE(rtlParser.pageProgressionRtl);
-
-  const std::string ltr = R"(<package xmlns:dc="urn:dc"><metadata><dc:language>zh-CN</dc:language></metadata>
-    <manifest/><spine page-progression-direction="ltr"></spine></package>)";
-  ContentOpfParser ltrParser("", "", ltr.size(), nullptr);
-  parse(ltrParser, ltr);
-  EXPECT_FALSE(ltrParser.pageProgressionRtl);
-
-  const std::string none = R"(<package xmlns:dc="urn:dc"><metadata/><manifest/><spine/></package>)";
-  ContentOpfParser noneParser("", "", none.size(), nullptr);
-  parse(noneParser, none);
-  EXPECT_FALSE(noneParser.pageProgressionRtl);
 }

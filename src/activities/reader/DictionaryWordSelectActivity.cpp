@@ -47,6 +47,10 @@ void indexBuildYield(void*) { vTaskDelay(1); }
 void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
   lineHeight = renderer.getLineHeight(fontId);
+  if (!lookupText.empty()) {
+    performLookup();
+    return;
+  }
   // No null check: a failed allocation just disables the differential
   // fast path (drawHighlightWithSnapshot skips the read), keeping the
   // full-repaint path as the fallback.
@@ -332,7 +336,7 @@ void DictionaryWordSelectActivity::performLookup() {
   // Every dictionary is asked; each that has the word adds an entry, in dictionary order. The
   // failure reported when none does is the first dictionary's that could not answer.
   std::string joined;
-  const char* word = lookupTextFor(static_cast<size_t>(selected), joined);
+  const char* word = !lookupText.empty() ? lookupText.c_str() : lookupTextFor(static_cast<size_t>(selected), joined);
   std::vector<DictionaryDefinitionActivity::Entry> entries;
   entries.reserve(dictCount);
   bool ok = false;
@@ -387,7 +391,7 @@ void DictionaryWordSelectActivity::performLookup() {
       // A long press opened the definition directly, so closing it returns to the
       // page. Word selection was never a step the reader asked for, and stopping
       // here would strand them in a screen they did not open.
-      if (lookupAtX >= 0 && lookupAtY >= 0) {
+      if ((lookupAtX >= 0 && lookupAtY >= 0) || !lookupText.empty()) {
         finish();
         return;
       }

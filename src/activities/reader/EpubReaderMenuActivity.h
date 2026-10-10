@@ -21,6 +21,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
     BOOKMARKS,
+    SAVE_CLIPPING,
+    VIEW_CLIPPINGS,
     TOGGLE_BOOKMARK,
     SCREENSHOT,
     DISPLAY_QR,
@@ -43,7 +45,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
                                               bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
-                                              bool showPanelsOnlyToggle);
+                                              bool showPanelsOnlyToggle, bool hasClippings = false);
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
@@ -53,7 +55,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
                                   const bool hasPageText = true, const bool imageReaderMinimal = false,
                                   const bool mangaMode = false, const bool hideGenericLookup = false,
                                   const bool showPanelsOnlyToggle = false, const bool panelsOnlyEnabled = false,
-                                  const bool scrubOnEnter = false);
+                                  const bool scrubOnEnter = false, const bool hasClippings = false);
 
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
@@ -68,11 +70,10 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // are set once in the constructor (buildMenuRowItems()); buildScreen()
   // only refreshes the rows whose value reflects live state (rotation,
   // page-turn interval, night mode, frontlight).
-  // 18 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
-  // Reader Settings on top of upstream's set, plus upstream's Night Mode and Frontlight); 20
-  // leaves headroom for one more without a silent truncation, which a fixed-capacity array
-  // cannot report.
-  static constexpr size_t MAX_MENU_ITEMS = 20;
+  // 20 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
+  // Reader Settings on top of upstream's set, plus upstream's Night Mode and Frontlight, plus Create/View Clippings);
+  // 22 leaves headroom for one more without a silent truncation, which a fixed-capacity array cannot report.
+  static constexpr size_t MAX_MENU_ITEMS = 22;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
   void buildMenuRowItems();
 

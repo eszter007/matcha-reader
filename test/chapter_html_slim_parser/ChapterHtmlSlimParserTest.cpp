@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "src/activities/settings/TextSettingsPreview.h"
+#include "src/clippings/ClippingText.h"
 #include "src/util/ParagraphIndentMigration.h"
 
 // ChapterHtmlSlimParser.h and its own includes' STL dependencies, explicit here so the
@@ -33,14 +34,24 @@
 #undef private
 #undef class
 
-// Recorded by the TextBlock test double in ParserLinkStubs.cpp: this binary links a stub
-// constructor (the real one flattens into an arena whose render path needs a full renderer),
-// so the per-word data a line was built from is read back from there. Global scope on
-// purpose -- an extern inside the anonymous namespace would name a different symbol.
+// Per-line word data, refilled from the real TextBlocks after each DropCapTest layout. Global
+// scope on purpose -- an extern inside the anonymous namespace would name a different symbol.
 extern std::vector<std::vector<std::string>> stubLineWords;
 extern std::vector<std::vector<int16_t>> stubLineXPos;
 
 namespace {
+
+// Records one extracted line's words and x positions into the capture vectors.
+void captureLine(const TextBlock& block) {
+  std::vector<std::string> words;
+  std::vector<int16_t> xpos;
+  for (uint16_t i = 0; i < block.wordCount(); ++i) {
+    words.emplace_back(block.wordText(i));
+    xpos.push_back(block.wordXpos(i));
+  }
+  stubLineWords.push_back(std::move(words));
+  stubLineXPos.push_back(std::move(xpos));
+}
 
 // A hardcoded "/tmp" isn't portable (Windows runners, sandboxes without a writable /tmp) --
 // mirrors the css_parser test's use of std::filesystem::temp_directory_path().
@@ -107,15 +118,6 @@ TEST_F(ChapterHtmlSlimParserTest, RubySurvivesPartialParagraphExtraction) {
 }
 
 TEST_F(ChapterHtmlSlimParserTest, UnequalTableCellsAndRubySurvivePageBreaks) {
-  // Upstream runs this against the real TextBlock, reading words back through the arena
-  // accessors (wordCount()/wordText()). This fork links a TextBlock double instead, so the
-  // parser tests can inspect each emitted line via stubLineWords/stubLineXPos -- the double
-  // never fills an arena, so those accessors report an empty block here and the word-set
-  // comparison below cannot hold. The page-break and ruby behaviour it covers is exercised on
-  // device; restoring it needs the harness to link the real TextBlock, which would cost the
-  // line-level assertions the rest of this file depends on.
-  GTEST_SKIP() << "needs the real TextBlock arena; this fork's harness links a double";
-
   parser.viewportWidth = 240;
   parser.viewportHeight = 32;
   parser.tableRowCells.reserve(2);
@@ -405,6 +407,9 @@ class DropCapTest : public ::testing::Test {
     parser->currentTextBlock->layoutAndExtractLines(
         renderer, 0, static_cast<uint16_t>(renderer.getScreenWidth()),
         [this](std::unique_ptr<TextBlock> line, uint32_t) { lines.push_back(std::move(line)); }, true, lineCompression);
+    stubLineWords.clear();
+    stubLineXPos.clear();
+    for (const auto& line : lines) captureLine(*line);
   }
 };
 
@@ -839,10 +844,8 @@ TEST_F(ChapterHtmlSlimParserTest, PassesIndentSettingsToNewTextBlock) {
 
 }  // namespace
 
-// This fork's harness links a TextBlock double (see UnequalTableCellsAndRubySurvivePageBreaks):
-// the double records each line as it is built and never fills the block's own arena, so a line's
-// x positions are read back from that record. The line just emitted is the last one recorded.
-static int16_t firstWordX() { return stubLineXPos.back().front(); }
+// The x position of the first word of the line just emitted.
+static int16_t firstWordX(const TextBlock& line) { return line.wordXpos(0); }
 
 TEST(ParagraphIndentation, OverridesNonnegativeCssAndPreservesHangingIndent) {
   GfxRenderer renderer;
@@ -857,7 +860,7 @@ TEST(ParagraphIndentation, OverridesNonnegativeCssAndPreservesHangingIndent) {
       bool sawLine = false;
       text.layoutAndExtractLines(renderer, 0, 200, [&](std::unique_ptr<TextBlock> line, auto) {
         sawLine = true;
-        EXPECT_EQ(firstWordX(), cssIndent < 0 ? cssIndent : 4 * spaces);
+        EXPECT_EQ(firstWordX(*line), cssIndent < 0 ? cssIndent : 4 * spaces);
       });
       EXPECT_TRUE(sawLine);
     }
@@ -867,8 +870,8 @@ TEST(ParagraphIndentation, OverridesNonnegativeCssAndPreservesHangingIndent) {
     style.alignment = CssTextAlign::Left;
     ParsedText text(false, false, style, spaces);
     text.addWord("word", EpdFontFamily::REGULAR);
-    text.layoutAndExtractLines(renderer, 0, 200,
-                               [&](std::unique_ptr<TextBlock> line, auto) { EXPECT_EQ(firstWordX(), 4 * spaces); });
+    text.layoutAndExtractLines(
+        renderer, 0, 200, [&](std::unique_ptr<TextBlock> line, auto) { EXPECT_EQ(firstWordX(*line), 4 * spaces); });
   }
 }
 
@@ -884,9 +887,9 @@ TEST(ParagraphIndentation, PreservesAlignmentEligibilityAndScaledSpaceRounding) 
       text.addWord("word", EpdFontFamily::REGULAR);
       text.layoutAndExtractLines(renderer, 0, 200, [&](std::unique_ptr<TextBlock> line, auto) {
         if (alignment == CssTextAlign::Left)
-          EXPECT_EQ(firstWordX(), 4 * spaces);
+          EXPECT_EQ(firstWordX(*line), 4 * spaces);
         else
-          EXPECT_EQ(firstWordX(), 84);
+          EXPECT_EQ(firstWordX(*line), 84);
       });
     }
   }
@@ -895,7 +898,7 @@ TEST(ParagraphIndentation, PreservesAlignmentEligibilityAndScaledSpaceRounding) 
   ParsedText text(false, false, style, 2);
   text.addWord("word", EpdFontFamily::REGULAR);
   text.layoutAndExtractLines(
-      renderer, 0, 200, [&](std::unique_ptr<TextBlock> line, auto) { EXPECT_EQ(firstWordX(), 6); }, true,
+      renderer, 0, 200, [&](std::unique_ptr<TextBlock> line, auto) { EXPECT_EQ(firstWordX(*line), 6); }, true,
       /*lineCompression=*/1.0f, /*characterSpacing=*/0, /*wordSpacingPercent=*/75);
 }
 
@@ -944,15 +947,17 @@ TEST(TextSpacingLayout, TrackingSeparatesCjkTokensAndScalesWordSpaces) {
     text.addWord("一二三", EpdFontFamily::REGULAR);
     text.addWord("四五", EpdFontFamily::REGULAR);
     unsigned lines = 0;
-    stubLineXPos.clear();
+    std::vector<int16_t> xpos;
     text.layoutAndExtractLines(
-        renderer, 0, 200, [&](std::unique_ptr<TextBlock>, auto) { ++lines; }, true, 1.0f, -1, 150);
+        renderer, 0, 200,
+        [&](std::unique_ptr<TextBlock> block, auto) {
+          ++lines;
+          for (uint16_t i = 0; i < block->wordCount(); ++i) xpos.push_back(block->wordXpos(i));
+        },
+        true, 1.0f, -1, 150);
     EXPECT_EQ(lines, 1u);
     // 8 px glyph with -1 px tracking, and a 4 px space scaled to 150% between the two tokens.
-    // Read from the double's capture: this fork's TextBlock stub never fills an arena, so the
-    // block's own accessors report nothing (see ParserLinkStubs.cpp).
-    ASSERT_FALSE(stubLineXPos.empty());
-    EXPECT_EQ(stubLineXPos[0], (std::vector<int16_t>{0, 7, 14, 28, 35}));
+    EXPECT_EQ(xpos, (std::vector<int16_t>{0, 7, 14, 28, 35}));
   }
   EXPECT_EQ(renderer.getTextAdvanceX(0, "ab", EpdFontFamily::REGULAR), 16);
   EXPECT_EQ(renderer.getSpaceWidth(0, EpdFontFamily::REGULAR), 4);
@@ -975,12 +980,9 @@ TEST(TextSpacingLayout, WordSpacingChangesWrapThreshold) {
 }
 
 TEST(TextSpacingLayout, CachedPageRestoresSpacing) {
-  // Page::serialize() writes through TextBlock::serialize(), which lives in TextBlock.cpp -- a
-  // translation unit this harness cannot link (its render() wants a GfxRenderer far richer than
-  // the stub), so the double has no serializer and the write fails. Same limitation as
-  // UnequalTableCellsAndRubySurvivePageBreaks above. The spacing that survives a cached page is
-  // covered on device; restoring this needs the harness to link the real TextBlock.
-  GTEST_SKIP() << "needs the real TextBlock; this fork's harness links a double";
+  // Character spacing is a reader-wide setting here (part of the ReaderRenderSpec the section
+  // header validates), not a per-block property: TextBlock serializes the CSS letter-spacing only.
+  GTEST_SKIP() << "this fork keeps character spacing in the section header, not in each block";
 
   GfxRenderer renderer;
   BlockStyle style;
@@ -1032,20 +1034,136 @@ TEST_F(ChapterHtmlSlimParserTest, ParserAppliesTextSpacingToParagraphs) {
   parser.makePages();
   ASSERT_NE(parser.currentPage, nullptr);
   unsigned lines = 0;
+  std::vector<int16_t> xpos;
   for (const auto& element : parser.currentPage->elements) {
     if (element->getTag() != TAG_PageLine) continue;
     const auto& block = *static_cast<const PageLine&>(*element).getBlock();
     ++lines;
     EXPECT_EQ(block.getBlockStyle().characterSpacing, -1);
+    for (uint16_t i = 0; i < block.wordCount(); ++i) xpos.push_back(block.wordXpos(i));
   }
   EXPECT_EQ(lines, 1u);
-  // x positions come from the double's capture, not the block: see the note in
-  // TrackingSeparatesCjkTokensAndScalesWordSpaces.
-  ASSERT_FALSE(stubLineXPos.empty());
-  const auto& xpos = stubLineXPos.back();
   ASSERT_EQ(xpos.size(), 5u);
   EXPECT_EQ(xpos[1] - xpos[0], 7);   // 8 px glyph, -1 px tracking
   EXPECT_EQ(xpos[3] - xpos[2], 14);  // glyph plus 150% of a 4 px space
+}
+
+TEST_F(ChapterHtmlSlimParserTest, NfdWordAcrossInlineStyleKeepsSourceRange) {
+  parser.beginParse();
+  ChapterHtmlSlimParser::startElement(&parser, "body", nullptr);
+  ChapterHtmlSlimParser::startElement(&parser, "p", nullptr);
+  const std::string prefix = "Cafe\xCC\x81";
+  ChapterHtmlSlimParser::characterData(&parser, prefix.c_str(), static_cast<int>(prefix.size()));
+  ChapterHtmlSlimParser::startElement(&parser, "b", nullptr);
+  ChapterHtmlSlimParser::characterData(&parser, "s", 1);
+  ChapterHtmlSlimParser::endElement(&parser, "b");
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  parser.makePages();
+  ASSERT_NE(parser.currentPage, nullptr);
+  std::string selected;
+  uint32_t previousEnd = 0;
+  unsigned words = 0;
+  for (const auto& element : parser.currentPage->elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+    for (uint16_t i = 0; i < block.wordCount(); ++i) {
+      const auto range = block.wordSourceRange(i);
+      EXPECT_EQ(range.start, words == 0 ? 0u : 5u);
+      EXPECT_EQ(range.end, words == 0 ? 5u : 6u);
+      ASSERT_TRUE(clippingText::append(selected, block.wordText(i), range.start > previousEnd ? ' ' : '\0', 4096,
+                                       block.wordHasDiscretionaryHyphen(i)));
+      previousEnd = range.end;
+      ++words;
+    }
+  }
+  EXPECT_EQ(words, 2u);
+  EXPECT_EQ(selected, "Caf\xC3\xA9s");
+}
+
+class ClippingParagraphTest : public ChapterHtmlSlimParserTest {};
+
+TEST_P(ClippingParagraphTest, CachedBlocksSeparateAdjacentParagraphs) {
+  const std::string html = std::string("<html><body>") + GetParam() + "</body></html>";
+  const std::string testId = std::to_string(std::hash<std::string>{}(html));
+  const auto tempDir = std::filesystem::temp_directory_path();
+  filepath = (tempDir / ("crosspoint-clipping-paragraphs-" + testId + ".xhtml")).string();
+  {
+    HalFile file;
+    ASSERT_TRUE(file.open(filepath.c_str(), "wb"));
+    ASSERT_EQ(file.write(html.data(), html.size()), html.size());
+  }
+  const auto cachePath = (tempDir / ("crosspoint-clipping-paragraphs-" + testId + ".bin")).string();
+  std::string selected;
+  uint32_t previousEnd = 0;
+  bool paragraphStartPending = false;
+  parser.completePageFn = [&](std::unique_ptr<Page> page, auto, auto, auto) {
+    {
+      HalFile file;
+      ASSERT_TRUE(file.open(cachePath.c_str(), "wb"));
+      ASSERT_TRUE(page->serialize(file));
+    }
+    HalFile file;
+    ASSERT_TRUE(file.open(cachePath.c_str(), "rb"));
+    auto cached = Page::deserialize(file);
+    ASSERT_NE(cached, nullptr);
+    for (const auto& element : cached->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+      for (uint16_t i = 0; i < block.wordCount(); ++i) {
+        if (block.wordStartsParagraph(i)) paragraphStartPending = true;
+        if (!clippingText::hasVisibleText(block.wordText(i))) continue;
+        const auto range = block.wordSourceRange(i);
+        const char separator = paragraphStartPending ? '\n' : range.start > previousEnd ? ' ' : '\0';
+        ASSERT_TRUE(clippingText::append(selected, block.wordText(i), separator, 4096));
+        paragraphStartPending = false;
+        previousEnd = range.end;
+      }
+    }
+    EXPECT_EQ(file.position(), file.size());
+  };
+  parser.paragraphIndentSpaces = 0;
+  ASSERT_TRUE(parser.parseAndBuildPages());
+  EXPECT_EQ(selected, "one\ntwo");
+  std::filesystem::remove(filepath);
+  std::filesystem::remove(cachePath);
+}
+
+INSTANTIATE_TEST_SUITE_P(ClippingBoundaries, ClippingParagraphTest,
+                         ::testing::Values("<p>one</p><p>two</p>", "<p>one</p>\n  <p>two</p>",
+                                           "<div>one</div><div>two</div>", "<div>one</div>\n  <div>two</div>",
+                                           "<p>one<br/>two</p>", "<p>o<b>ne</b></p><p>two</p>",
+                                           "<p>one</p><p>&#160;two</p>", "<p>one</p><p>&#8239;two</p>"));
+
+TEST(TextSpacingLayout, ParagraphMarkerSurvivesBidiAndOnlyMarksFirstExtractedLine) {
+  GfxRenderer renderer;
+  for (const bool focus : {false, true}) {
+    BlockStyle style;
+    style.isRtl = true;
+    style.directionDefined = true;
+    style.alignment = CssTextAlign::Right;
+    ParsedText text(false, focus, style, 0);
+    text.addWord("אחד", EpdFontFamily::REGULAR);
+    text.addWord("alpha", EpdFontFamily::REGULAR);
+    text.addWord("beta", EpdFontFamily::REGULAR);
+    text.addWord("שני", EpdFontFamily::REGULAR);
+    unsigned lines = 0;
+    unsigned starts = 0;
+    auto inspect = [&](std::unique_ptr<TextBlock> block, auto) {
+      for (uint16_t i = 0; i < block->wordCount(); ++i) {
+        if (!block->wordStartsParagraph(i)) continue;
+        EXPECT_EQ(lines, 0u);
+        EXPECT_STREQ(block->wordText(i), "אחד");
+        ++starts;
+      }
+      ++lines;
+    };
+    text.layoutAndExtractLines(renderer, 0, 100, inspect, false);
+    ASSERT_GT(lines, 0u);
+    ASSERT_GT(text.size(), 0u);
+    text.layoutAndExtractLines(renderer, 0, 100, inspect);
+    EXPECT_EQ(starts, 1u);
+    EXPECT_GT(lines, 1u);
+  }
 }
 
 TEST(KoreanLayout, HangulWordsStayWholeAndWrapAtSpaces) {
@@ -1059,11 +1177,8 @@ TEST(KoreanLayout, HangulWordsStayWholeAndWrapAtSpaces) {
     text.addWord("라마", EpdFontFamily::REGULAR);
     text.addWord("3개를", EpdFontFamily::REGULAR);
     text.addWord("iPhone을", EpdFontFamily::REGULAR);
-    // stubLineWords, not the block's own accessors: this fork links a TextBlock double, which
-    // records the words handed to each line instead of flattening them into an arena the double
-    // has no code to read back (see ParserLinkStubs.cpp).
     stubLineWords.clear();
-    text.layoutAndExtractLines(renderer, 0, 60, [](std::unique_ptr<TextBlock>, auto) {});
+    text.layoutAndExtractLines(renderer, 0, 60, [](std::unique_ptr<TextBlock> block, auto) { captureLine(*block); });
     // 가나다 라마 is 24 + 4 + 16 px; adding 3개를 would need 72 px, and no break exists inside it.
     const std::vector<std::vector<std::string>> expected{{"가나다", "라마"}, {"3개를"}, {"iPhone을"}};
     EXPECT_EQ(stubLineWords, expected);
@@ -1079,7 +1194,10 @@ TEST(KoreanLayout, JustifiedHangulStretchesOnlyWordSpaces) {
   for (const char* word : {"가나", "다라", "마바", "사아"}) text.addWord(word, EpdFontFamily::REGULAR);
   unsigned lines = 0;
   stubLineXPos.clear();
-  text.layoutAndExtractLines(renderer, 0, 60, [&](std::unique_ptr<TextBlock>, auto) { lines++; });
+  text.layoutAndExtractLines(renderer, 0, 60, [&](std::unique_ptr<TextBlock> block, auto) {
+    lines++;
+    captureLine(*block);
+  });
   EXPECT_EQ(lines, 2u);
   // 3 x 16 px words + 2 x 4 px spaces leave 4 px, split across the two spaces only.
   ASSERT_FALSE(stubLineXPos.empty());
@@ -1096,7 +1214,7 @@ TEST(KoreanLayout, HangulGluedAcrossInlineStyleIsUnbreakable) {
   text.addWord("한국", EpdFontFamily::REGULAR);
   text.addWord("어", EpdFontFamily::BOLD, false, /*attachToPrevious=*/true);
   stubLineWords.clear();
-  text.layoutAndExtractLines(renderer, 0, 40, [](std::unique_ptr<TextBlock>, auto) {});
+  text.layoutAndExtractLines(renderer, 0, 40, [](std::unique_ptr<TextBlock> block, auto) { captureLine(*block); });
   // 가나 한국 fits in 36 px, but 어 is glued to 한국, so the whole word moves down.
   const std::vector<std::vector<std::string>> expected{{"가나"}, {"한국", "어"}};
   EXPECT_EQ(stubLineWords, expected);

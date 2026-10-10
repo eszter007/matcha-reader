@@ -7,6 +7,8 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include <algorithm>
+
 #include "Epub/FootnoteHrefIo.h"
 #include "Epub/RubyGlossary.h"
 #include "Epub/css/CssParser.h"
@@ -266,7 +268,11 @@ namespace {
 // v98: upstream merge (their v51). A long paragraph that is laid out in several chunks keeps
 //      its first-line indent and its top spacing to the first chunk, instead of repeating them
 //      mid-paragraph. Lines move on any page holding such a paragraph. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 98;
+// v99: upstream merge (their v52 to v55). Each TextBlock arena starts with one source range per
+//      word (chapter-visible codepoint offsets, NFC-absorbed codepoints included) and the block
+//      header gains paragraphStartWord after textBytes, both for clippings; the style byte's high
+//      bit marks a discretionary hyphen. The page body grew, so a v98 cache does not parse.
+constexpr uint8_t SECTION_FILE_VERSION = 99;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -1566,18 +1572,27 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
     return std::nullopt;
   }
 
-  f.seek(visibleLutOffset);
+  if (!f.seek(visibleLutOffset)) {
+    LOG_ERR("SCT", "Failed to seek visible-text LUT");
+    return std::nullopt;
+  }
   uint16_t result = 0;
   uint32_t lastPageStart = 0;
-  for (uint16_t page = 0; page < count; page++) {
-    uint32_t pageStart;
-    serialization::readPod(f, pageStart);
-    lastPageStart = pageStart;
-    if (preferFirstAtOffset && pageStart == offset) {
-      return page;
+  constexpr uint32_t BATCH_PAGE_COUNT = 32;
+  uint32_t starts[BATCH_PAGE_COUNT];  // 128-byte stack buffer; offsets stay in file order for ties.
+  for (uint32_t base = 0; base < count; base += BATCH_PAGE_COUNT) {
+    const uint32_t batch = std::min<uint32_t>(BATCH_PAGE_COUNT, count - base);
+    const size_t bytes = batch * sizeof(uint32_t);
+    if (f.read(starts, bytes) != static_cast<int>(bytes)) {
+      LOG_ERR("SCT", "Failed to read visible-text LUT batch");
+      return std::nullopt;
     }
-    if (pageStart > offset) break;
-    result = page;
+    for (uint32_t i = 0; i < batch; ++i) {
+      lastPageStart = starts[i];
+      if (lastPageStart > offset) return result;
+      result = static_cast<uint16_t>(base + i);
+      if (preferFirstAtOffset && lastPageStart == offset) return result;
+    }
   }
   if (partial && offset > lastPageStart) {
     return std::nullopt;

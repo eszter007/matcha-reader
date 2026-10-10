@@ -117,6 +117,9 @@ class EpubReaderActivity final : public ReaderActivity {
   bool showDictionaryMessage = false;
   unsigned long dictionaryMessageTime = 0UL;
   bool ignoreNextConfirmRelease = false;
+  bool showClippingMessage = false;
+  StrId clippingMessage = StrId::STR_CLIPPING_SAVED;
+  unsigned long clippingMessageTime = 0UL;
   bool currentPageBookmarked = false;
   // Idle-time glyph prewarm: after a page settles, scan the LIKELY next page
   // (scan mode draws nothing) and load its missing glyphs from SD during idle,
@@ -584,13 +587,22 @@ class EpubReaderActivity final : public ReaderActivity {
   void activateMoreRow(int row);
   void openFootnoteSelect(bool reopenMenuOnCancel);
   void openDictionaryWordSelect();
+  void startClipSelection(int initialX = -1, int initialY = -1);
+  int clippingAtPoint(const Page& page, int x, int y) const;
+  // Vertical pages: the same selection over character cells (ClipSelectionActivity, vertical form).
+  void startVerticalClipSelection(int initialX, int initialY);
+  int verticalClippingAtPoint(const VerticalPage& vpage, int x, int y) const;
+  void drawVerticalClippingHighlights(const VerticalPage& vpage, int orientedMarginTop, int orientedMarginLeft) const;
+  void openClippings();
+  void applyProgressChange(const ProgressChangeResult& progress);
   unsigned long confirmLongPressThreshold() const;
   // pageOnScreen: the framebuffer still holds the reader page, so the vertical word-lookup panel
   // can draw its cursor straight onto it instead of paying for a page repaint first. False when
   // something else was on screen (the reader menu).
   // lookupAtX/Y: screen point of a long press on a word. -1 opens ordinary word
   // selection; a point selects that word and shows its definition immediately.
-  void openDictionaryWordSelect(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1);
+  void openDictionaryWordSelect(bool pageOnScreen, int lookupAtX = -1, int lookupAtY = -1,
+                                const std::string& lookupText = {});
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
   bool launchKOReaderSync();
@@ -719,6 +731,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // per-book setting changed).
   void dropSectionsKeepingPosition();
 
+  void drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
   // The orientation the current layout was built for. The control center's
   // orientation tile can move SETTINGS.orientation while this reader sits on
   // the activity stack, and Pop restores it without onEnter(), so the drift has

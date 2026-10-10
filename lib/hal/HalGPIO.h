@@ -91,6 +91,7 @@ class HalGPIO {
 
   // Start button GPIO and setup SPI for screen and SD card
   void begin();
+  void prepareForDeepSleep();
 
   // Button input methods
   void update();
