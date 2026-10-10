@@ -33,8 +33,14 @@ class EpdFontFamily {
   // SD transactions once fallback fonts entered the measurement path.
   const EpdGlyph* getGlyphResident(uint32_t cp, Style style = REGULAR) const;
   const EpdFontData* getDataForGlyph(uint32_t cp, Style style = REGULAR) const;
+  // getGlyph(), except that a solid block the font lacks becomes a synthetic glyph. Everything
+  // else resolves through the fallback chain like getGlyph(), so it pairs with getDataForGlyph():
+  // asking only the primary font handed callers one font's glyph with another font's data, and
+  // the renderer dropped every glyph a UI font gets from its fallback (all UI Japanese).
   const EpdGlyph* getGlyphMetrics(uint32_t cp, EpdGlyph& solidFallback, Style style = REGULAR) const {
-    return getFont(style)->getGlyphMetrics(cp, solidFallback);
+    const EpdFont* f = getFont(style);
+    if (syntheticGlyph::isSolid(cp) && !f->hasCodepoint(cp)) return f->getGlyphMetrics(cp, solidFallback);
+    return getGlyph(cp, style);
   }
   /// Returns true if the resolved style's font can render `cp` directly
   /// (interval coverage only — see EpdFont::hasCodepoint).
