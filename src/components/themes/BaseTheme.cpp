@@ -1220,7 +1220,6 @@ void BaseTheme::drawSelectionHandle(const GfxRenderer& renderer, const Rect rect
 // One card, four actions, each an outline icon over its label (the stock reader's selection
 // bar). The hit areas stay selectionGeometry::button(); only the drawing changed.
 void BaseTheme::drawSelectionActions(const GfxRenderer& renderer, const Rect rect, const int anchorX) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
   const int font = uiScaleSpec().smallFontId;
   const char* labels[SELECTION_ACTION_COUNT] = {tr(STR_LOOKUP), tr(STR_TRANSLATE), tr(STR_CLIP),
                                                 tr(STR_BOOKMARK_OPTION)};
