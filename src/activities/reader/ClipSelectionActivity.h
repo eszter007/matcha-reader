@@ -36,6 +36,13 @@ class ClipSelectionActivity final : public Activity {
     repaintPage = fn;
   }
 
+  // Hands the selected text range to the reader, whose page repaint paints it under the text like
+  // a saved clipping -- the same look as a horizontal selection.
+  void setLiveSelection(void* ctx, void (*fn)(void*, uint32_t, uint32_t)) {
+    liveSelectionCtx = ctx;
+    liveSelection = fn;
+  }
+
   // Opened from a lookup panel's handle with the finger still down: the selection starts as the
   // initial word and follows that finger as a handle drag, from the point it pressed.
   void continueDragFrom(const int touchX, const int touchY) {
@@ -109,6 +116,9 @@ class ClipSelectionActivity final : public Activity {
   void prewarmWord(int index) const;
 
   std::vector<std::unique_ptr<Page>> pages;
+  void* liveSelectionCtx = nullptr;
+  void (*liveSelection)(void*, uint32_t, uint32_t) = nullptr;
+  void publishLiveSelection() const;
   void* repaintCtx = nullptr;
   bool (*repaintPage)(void*) = nullptr;
   VerticalPage ownedVerticalPage;

@@ -639,6 +639,12 @@ class EpubReaderActivity final : public ReaderActivity {
   // the same headroom the scan and the dictionary caches need. Called from the panel's render(),
   // i.e. under the render lock, which is what the section's shared single-page slot requires.
   static bool repaintPageForPanelThunk(void* ctx);
+  // Clip selection on a vertical page: the text range [start, end) its handles span, painted by
+  // drawVerticalClippingHighlights() under the text exactly like a saved clipping. start >= end
+  // clears it.
+  static void setLiveSelectionThunk(void* ctx, uint32_t start, uint32_t end);
+  uint32_t liveSelectionStart = UINT32_MAX;
+  uint32_t liveSelectionEnd = 0;
   bool repaintPageForPanel();
   static constexpr uint16_t kSpineProbeFailed = 0xFFFF;  // session marker: cache probe failed, don't retry
   // Page numbering across the logical ToC chapter: spine files without their own ToC entry

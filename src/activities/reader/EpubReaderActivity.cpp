@@ -4874,6 +4874,8 @@ struct VerticalClipMatch {
   // highlight pass
   const GfxRenderer* renderer = nullptr;
   size_t highlighted = 0;
+  uint32_t liveStart = UINT32_MAX;  // a clip selection in progress, drawn like a saved clipping
+  uint32_t liveEnd = 0;
 };
 
 int clippingIndexForCell(const VerticalClipMatch& m, const uint16_t cellIndex, const VerticalClipCell& cell) {
@@ -4909,7 +4911,7 @@ int EpubReaderActivity::verticalClippingAtPoint(const VerticalPage& vpage, const
 
 void EpubReaderActivity::drawVerticalClippingHighlights(const VerticalPage& vpage, const int orientedMarginTop,
                                                         const int orientedMarginLeft) const {
-  if (!verticalSection || !CLIPPINGS.hasClippings() || verticalSection->currentPage < 0 ||
+  if (!verticalSection || verticalSection->currentPage < 0 ||
       verticalSection->currentPage >= verticalSection->pageCount) {
     return;
   }
@@ -4917,17 +4919,21 @@ void EpubReaderActivity::drawVerticalClippingHighlights(const VerticalPage& vpag
   for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
     if (CLIPPINGS.clippingAt(i)->spineIndex == currentSpineIndex) ++chapterClippings;
   }
-  if (!chapterClippings) return;
+  const bool live = liveSelectionStart < liveSelectionEnd;
+  if (!chapterClippings && !live) return;
 
   const auto started = millis();
   VerticalClipMatch m{currentSpineIndex, static_cast<uint16_t>(verticalSection->currentPage),
                       verticalSection->pageCount,
                       readerRenderSpecSignature(readerSpec(buildViewportWidth, buildViewportHeight))};
   m.renderer = &renderer;
+  m.liveStart = liveSelectionStart;
+  m.liveEnd = liveSelectionEnd;
   forEachVerticalClipCell(renderer, vpage, effectiveReaderFontId(), orientedMarginLeft, orientedMarginTop, &m,
                           [](void* ctx, const VerticalClipCell& cell) {
                             auto& m = *static_cast<VerticalClipMatch*>(ctx);
-                            const bool inClipping = clippingIndexForCell(m, m.cellIndex++, cell) >= 0;
+                            const bool inSelection = cell.startOffset < m.liveEnd && m.liveStart < cell.endOffset;
+                            const bool inClipping = clippingIndexForCell(m, m.cellIndex++, cell) >= 0 || inSelection;
                             if (inClipping) {
                               m.renderer->fillRectDither(cell.x, cell.y, cell.width, cell.height, Color::LightGray);
                               m.highlighted++;
@@ -4996,6 +5002,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
     return;
   }
   activity->setRepaintPage(this, &repaintPageForPanelThunk);
+  activity->setLiveSelection(this, &setLiveSelectionThunk);
   if (dragX >= 0) activity->continueDragFrom(dragX, dragY);
   if (buildViewportWidth == 0 || buildViewportHeight == 0) {
     LOG_ERR("CLIP", "Cannot anchor clipping before the reader viewport is initialized");
@@ -5014,6 +5021,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
   startActivityForResult(std::move(activity), [this, spineIndex, pageNumber, pageCount, layoutSignature,
                                                bookTitle = std::move(bookTitle), author = std::move(author),
                                                chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
+    setLiveSelectionThunk(this, UINT32_MAX, 0);  // the page goes back to saved clippings only
     if (result.isCancelled) {
       requestUpdate();
       return;
@@ -5131,6 +5139,12 @@ int EpubReaderActivity::effectiveReaderFontId() const {
   // answer -- it used to ask getReaderFontId() directly and drew a Japanese book in the built-in
   // face at a size the built-in does not have, disagreeing with the page on both counts.
   return sdFontSystem.effectiveReaderFontId(fontScript());
+}
+
+void EpubReaderActivity::setLiveSelectionThunk(void* ctx, const uint32_t start, const uint32_t end) {
+  auto* reader = static_cast<EpubReaderActivity*>(ctx);
+  reader->liveSelectionStart = start;
+  reader->liveSelectionEnd = end;
 }
 
 bool EpubReaderActivity::repaintPageForPanelThunk(void* ctx) {

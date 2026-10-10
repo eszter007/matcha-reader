@@ -69,6 +69,15 @@ void DictionaryWordSelectActivity::onEnter() {
     const int hit = wordAt(lookupAtX, lookupAtY);
     if (hit >= 0) {
       selected = hit;
+      {
+        // The definition opens over the reader's page without this screen ever rendering, so mark
+        // the word on that page here: it then reads as selected beside the handles.
+        RenderLock lock(*this);
+        const WordBox& word = words[selected];
+        renderer.getFontCacheManager()->prewarmCache(
+            word.fontId, word.text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(word.style) & 0x03)));
+        drawHighlightWithSnapshot();
+      }
       requestUpdate();
       performLookup();
       return;

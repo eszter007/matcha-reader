@@ -5,8 +5,9 @@
 #     --manifest src/components/icons/clipActionIcons.manifest \
 #     --svgdir <tabler>/icons/outline \
 #     --sizes 40 --out src/components/icons/clipActionIcons.h
-clip-lookup = search
-# quote-clip.svg (next to this manifest) is Tabler's quote cropped to its ink; copy it into the svgdir.
+# search-clip.svg and quote-clip.svg (next to this manifest) are adjusted Tabler icons; copy them
+# into the svgdir first.
+clip-lookup = search-clip
 clip-translate = language
 clip-clip = quote-clip
 clip-bookmark = bookmark

@@ -860,6 +860,8 @@ void ClipSelectionActivity::drawWordHighlight(const int index, const int firstSe
 
 bool ClipSelectionActivity::renderIncremental() {
   if (actionPopup.isActive() || mappedInput.hasTouch()) return false;
+  // A vertical range is painted under the text by the reader's page repaint (publishLiveSelection).
+  if (vertical() && (rangeStart >= 0 || lastRenderedRangeStart >= 0)) return false;
   if (lastRenderedPageOffset < 0 || lastRenderedPageOffset != currentPageOffset) return false;
   const int offset = textOffset();
   const int offsetX = textXOffset();
@@ -952,7 +954,8 @@ void ClipSelectionActivity::drawSelection() const {
     const WordBox& word = words[i];
     if (word.pageOffset != currentPageOffset) continue;
     if (vertical()) {
-      invertWord(word, offsetX, offset);
+      // A range is already on the page (publishLiveSelection); only the lone cursor is inverted.
+      if (rangeStart < 0 || !liveSelection) invertWord(word, offsetX, offset);
       continue;
     }
     if (previous) ditherGapBetween(*previous, word, offsetX, offset);
@@ -981,6 +984,17 @@ void ClipSelectionActivity::drawSelection() const {
 
 void ClipSelectionActivity::invertWord(const WordBox& word, const int offsetX, const int offset) const {
   renderer.invertRect(word.x + offsetX, word.y + offset, word.width, word.height);
+}
+
+void ClipSelectionActivity::publishLiveSelection() const {
+  if (!vertical() || !liveSelection) return;
+  if (rangeStart < 0) {
+    liveSelection(liveSelectionCtx, UINT32_MAX, 0);
+    return;
+  }
+  const int first = std::min(rangeStart, selected);
+  const int last = std::max(rangeStart, selected);
+  liveSelection(liveSelectionCtx, words[first].startOffset, words[last].endOffset);
 }
 
 void ClipSelectionActivity::drawPage(const int offsetX, const int offsetY) {
@@ -1020,6 +1034,7 @@ void ClipSelectionActivity::render(RenderLock&&) {
   // The vertical renderer places glyphs through its own cell geometry and is drawn unclipped,
   // as the reader draws it; the horizontal page is clipped to the safe area as before.
   if (!vertical()) renderer.setClipRect(safe.x, safe.y, safe.width, safe.height);
+  publishLiveSelection();
   drawPage(offsetX, offset);
   if (wordCount != 0) drawSelection();
   renderer.setClipRect(clip[0], clip[1], clip[2], clip[3]);
