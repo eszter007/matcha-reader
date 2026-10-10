@@ -587,10 +587,13 @@ class EpubReaderActivity final : public ReaderActivity {
   void activateMoreRow(int row);
   void openFootnoteSelect(bool reopenMenuOnCancel);
   void openDictionaryWordSelect();
-  void startClipSelection(int initialX = -1, int initialY = -1);
+  // initialX/Y selects the word there; dragX/Y (a lookup handle's press) keeps following the finger.
+  void startClipSelection(int initialX = -1, int initialY = -1, int dragX = -1, int dragY = -1);
+  // Result of a word-lookup panel: a drag on its word handles opens clip selection there.
+  void onLookupPanelResult(const ActivityResult& result);
   int clippingAtPoint(const Page& page, int x, int y) const;
   // Vertical pages: the same selection over character cells (ClipSelectionActivity, vertical form).
-  void startVerticalClipSelection(int initialX, int initialY);
+  void startVerticalClipSelection(int initialX, int initialY, int dragX, int dragY);
   int verticalClippingAtPoint(const VerticalPage& vpage, int x, int y) const;
   void drawVerticalClippingHighlights(const VerticalPage& vpage, int orientedMarginTop, int orientedMarginLeft) const;
   void openClippings();

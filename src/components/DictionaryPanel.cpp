@@ -46,6 +46,11 @@ constexpr int ADD_TAP_SLOP = 12;
 constexpr int TITLE_GAP = 8;
 constexpr int FOOTER_GAP = 16;
 
+// Smallest panel worth moving into a gap; a smaller gap keeps the centred panel over the word.
+constexpr int MIN_AVOID_HEIGHT = 160;
+
+Rect avoidBand;
+
 int panelRadius(const ThemeMetrics& metrics) { return std::max(metrics.popupCornerRadius, MIN_RADIUS); }
 
 // Copy `text` into `out`, trimmed to maxWidth with a trailing ellipsis when it does not fit.
@@ -85,6 +90,18 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   const int wanted = renderer.getScreenHeight() * HEIGHT_PERCENT / 100;
   layout.box.height = std::min(wanted, std::max(0, safe.height - 2 * MIN_TOP_MARGIN));
   layout.box.y = safe.y + (safe.height - layout.box.height) / 2;
+  const bool overlaps = avoidBand.height > 0 && layout.box.y < avoidBand.y + avoidBand.height &&
+                        avoidBand.y < layout.box.y + layout.box.height;
+  if (overlaps) {
+    const int above = avoidBand.y - safe.y - 2 * MIN_TOP_MARGIN;
+    const int below = safe.y + safe.height - (avoidBand.y + avoidBand.height) - 2 * MIN_TOP_MARGIN;
+    const int room = std::max(above, below);
+    if (room >= MIN_AVOID_HEIGHT) {
+      layout.box.height = std::min(layout.box.height, room);
+      layout.box.y = above >= below ? avoidBand.y - MIN_TOP_MARGIN - layout.box.height
+                                    : avoidBand.y + avoidBand.height + MIN_TOP_MARGIN;
+    }
+  }
 
   // Headword line, then the divider, then the body; a second divider and the dictionary name
   // close the panel.
@@ -110,6 +127,8 @@ DictionaryPanel::Layout DictionaryPanel::compute(const GfxRenderer& renderer) {
   layout.addButton = Rect{tapLeft, tapTop, tapRight - tapLeft, tapBottom - tapTop};
   return layout;
 }
+
+void DictionaryPanel::setAvoid(const Rect band) { avoidBand = band; }
 
 void DictionaryPanel::clearButtonHints(const GfxRenderer& renderer) {
   const auto& metrics = UITheme::getInstance().getMetrics();

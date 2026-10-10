@@ -282,6 +282,7 @@ void EpubReaderWordLookupActivity::onEnter() {
 }
 
 void EpubReaderWordLookupActivity::onExit() {
+  DictionaryPanel::setAvoid(Rect{});
   LOG_INF("WLA", "onExit heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   // Hand the glyph slab back to the UI (see setSlabEnabled): it is suspended for the whole panel
   // session, where it earns little and costs 24KB of exactly the contiguous heap the dictionary
@@ -765,6 +766,9 @@ void EpubReaderWordLookupActivity::enterDefinition() {
 void EpubReaderWordLookupActivity::returnToSelect() {
   mode = Mode::Select;
   selectPageDrawn = false;  // the definition overdrew the page; it has to be painted again
+  portENTER_CRITICAL(&boxMux);
+  clipHandles = LookupClipHandles{};  // the repaint takes them off the page
+  portEXIT_CRITICAL(&boxMux);
   // The definition view has its own word navigation, so the cursor may have moved while it was up.
   refreshCursorBoxes();
   initialRenderDone = false;
@@ -1028,6 +1032,13 @@ void EpubReaderWordLookupActivity::refreshCursorBoxes() {
   for (int i = 0; i < count; i++) cursorBoxes[i] = boxes[i];
   cursorBoxCount = count;
   portEXIT_CRITICAL(&boxMux);
+  // The definition card steps aside from the word and its handles (touch boards, which have them).
+  if (mappedInput.hasTouch() && count > 0) {
+    LookupClipHandles handles;
+    handles.set(Rect{boxes[0].x, boxes[0].y, boxes[0].w, boxes[0].h},
+                Rect{boxes[count - 1].x, boxes[count - 1].y, boxes[count - 1].w, boxes[count - 1].h}, !selectCtx.lines);
+    DictionaryPanel::setAvoid(handles.band(renderer));
+  }
 }
 
 void EpubReaderWordLookupActivity::invertBoxes(const HighlightBox* boxes, const int count) const {
@@ -1591,6 +1602,18 @@ void EpubReaderWordLookupActivity::loop() {
 }
 
 bool EpubReaderWordLookupActivity::handleDefinitionInput() {
+  // A drag on the word's handles turns the lookup into a clip selection of that word.
+  portENTER_CRITICAL(&boxMux);
+  const LookupClipHandles handles = clipHandles;
+  portEXIT_CRITICAL(&boxMux);
+  ClipStartResult clip;
+  if (handles.pressed(renderer, mappedInput, clip)) {
+    ActivityResult result;
+    result.data = clip;
+    setResult(std::move(result));
+    finish();
+    return false;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     // Back steps out of the definition and onto the page it came from, keeping the scan, the
     // cursor and the page pixels' place in the flow; only leaving select mode ends the panel.
@@ -2048,6 +2071,13 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   // chapter build used as scratch -- the card then sat on a blank screen on the first lookup
   // after opening a book. A failed repaint leaves the flag clear, so the next render retries.
   bool pageJustRepainted = false;
+  if (pageBehindCard && mappedInput.hasTouch()) {
+    portENTER_CRITICAL(&boxMux);
+    const bool handlesMoved = clipHandles.valid() && cursorBoxCount > 0 &&
+                              (cursorBoxes[0].x != clipHandles.first.x || cursorBoxes[0].y != clipHandles.first.y);
+    portEXIT_CRITICAL(&boxMux);
+    if (handlesMoved) pageBehindCard = false;  // the old handles go with the repaint
+  }
   if (selectCtx.valid() && !pageBehindCard) {
     renderer.clearScreen();
     pageBehindCard = selectCtx.repaintPage(selectCtx.repaintCtx);
@@ -2068,6 +2098,16 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
     portEXIT_CRITICAL(&boxMux);
     drawnBoxCount = boxes;
     invertBoxes(drawnBoxes, drawnBoxCount);
+    if (mappedInput.hasTouch() && boxes > 0) {
+      const HighlightBox& a = drawnBoxes[0];
+      const HighlightBox& b = drawnBoxes[boxes - 1];
+      LookupClipHandles handles;
+      handles.set(Rect{a.x, a.y, a.w, a.h}, Rect{b.x, b.y, b.w, b.h}, !selectCtx.lines);
+      handles.draw(renderer);
+      portENTER_CRITICAL(&boxMux);
+      clipHandles = handles;
+      portEXIT_CRITICAL(&boxMux);
+    }
   }
 
   // Counter, right-aligned on the headword line. Paged mode counts pages of the definition;

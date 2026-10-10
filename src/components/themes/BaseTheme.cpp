@@ -1202,6 +1202,8 @@ void BaseTheme::drawTextField(const GfxRenderer& renderer, Rect rect, const int 
   }
 }
 
+int BaseTheme::selectionHandleSize() { return std::max(24, UITheme::getInstance().getMetrics().verticalSpacing * 2); }
+
 void BaseTheme::drawSelectionHandle(const GfxRenderer& renderer, const Rect rect, const HandleCorner corner) {
   constexpr int border = 2;
   const int radius = rect.width / 2;

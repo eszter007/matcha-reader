@@ -36,6 +36,13 @@ class ClipSelectionActivity final : public Activity {
     repaintPage = fn;
   }
 
+  // Opened from a lookup panel's handle with the finger still down: the selection starts as the
+  // initial word and follows that finger as a handle drag, from the point it pressed.
+  void continueDragFrom(const int touchX, const int touchY) {
+    dragFromX = touchX;
+    dragFromY = touchY;
+  }
+
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;
@@ -128,6 +135,8 @@ class ClipSelectionActivity final : public Activity {
   uint16_t rowCount = 0;
   bool touchDragSelecting = false;
   bool ignoreInitialTouch = false;
+  int dragFromX = -1;
+  int dragFromY = -1;
   int dragOffsetX = 0;
   int dragOffsetY = 0;
   bool touchDragHasMoved = false;

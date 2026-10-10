@@ -702,12 +702,20 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
   }
   wordSelect->setMiningContext({getBookTitle(), getBookAuthor(), std::move(nextPageText), {}, bookPath});
   if (!lookupText.empty()) wordSelect->setLookupText(lookupText);
-  startActivityForResult(std::move(wordSelect), [this](const ActivityResult&) { requestUpdate(); });
+  startActivityForResult(std::move(wordSelect), [this](const ActivityResult& result) { onLookupPanelResult(result); });
 }
 
-void EpubReaderActivity::startClipSelection(const int initialX, const int initialY) {
+void EpubReaderActivity::onLookupPanelResult(const ActivityResult& result) {
+  if (const auto* clip = std::get_if<ClipStartResult>(&result.data); clip && !result.isCancelled) {
+    startClipSelection(clip->wordX, clip->wordY, clip->touchX, clip->touchY);
+    return;
+  }
+  requestUpdate();
+}
+
+void EpubReaderActivity::startClipSelection(const int initialX, const int initialY, const int dragX, const int dragY) {
   if (verticalSection) {
-    startVerticalClipSelection(initialX, initialY);
+    startVerticalClipSelection(initialX, initialY, dragX, dragY);
     return;
   }
   if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return;
@@ -721,7 +729,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
        ++pageOffset) {
     auto page = section->loadPage(pageNumber + pageOffset);
     if (!page) break;
-    if (pageOffset == 0 && initialX >= 0 && CLIPPINGS.hasClippings()) {
+    if (pageOffset == 0 && initialX >= 0 && dragX < 0 && CLIPPINGS.hasClippings()) {
       RenderLock lock;
       const int clippingIndex = clippingAtPoint(*page, initialX, initialY);
       if (clippingIndex >= 0) {
@@ -767,6 +775,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
     requestUpdate();
     return;
   }
+  if (dragX >= 0) activity->continueDragFrom(dragX, dragY);
   startActivityForResult(std::move(activity), [this, spineIndex, pageNumber, pageCount, layoutSignature,
                                                bookTitle = std::move(bookTitle), author = std::move(author),
                                                chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
@@ -4929,7 +4938,8 @@ void EpubReaderActivity::drawVerticalClippingHighlights(const VerticalPage& vpag
           static_cast<unsigned>(chapterClippings), static_cast<unsigned>(m.highlighted), millis() - started);
 }
 
-void EpubReaderActivity::startVerticalClipSelection(const int initialX, const int initialY) {
+void EpubReaderActivity::startVerticalClipSelection(const int initialX, const int initialY, const int dragX,
+                                                    const int dragY) {
   if (!verticalSection || !epub) return;
   // The page is copied below; a running build could still replace the section underneath.
   if (verticalBuildInProgress_.load(std::memory_order_relaxed)) {
@@ -4950,7 +4960,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
       requestUpdate();
       return;
     }
-    if (initialX >= 0 && CLIPPINGS.hasClippings()) {
+    if (initialX >= 0 && dragX < 0 && CLIPPINGS.hasClippings()) {
       const int clippingIndex = verticalClippingAtPoint(*vpage, initialX, initialY);
       if (clippingIndex >= 0) {
         const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
@@ -4986,6 +4996,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
     return;
   }
   activity->setRepaintPage(this, &repaintPageForPanelThunk);
+  if (dragX >= 0) activity->continueDragFrom(dragX, dragY);
   if (buildViewportWidth == 0 || buildViewportHeight == 0) {
     LOG_ERR("CLIP", "Cannot anchor clipping before the reader viewport is initialized");
     requestUpdate();
@@ -5243,7 +5254,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
       }
     }
     if (panel) {
-      startActivityForResult(std::move(panel), [this](const ActivityResult&) { requestUpdate(); });
+      startActivityForResult(std::move(panel), [this](const ActivityResult& result) { onLookupPanelResult(result); });
     }
   } else if (section) {
     // loadPage(), not loadPageAt(): with the incremental build the current page often lives only
@@ -5351,7 +5362,7 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
         return;
       }
       lookup->setMiningContext({getBookTitle(), getBookAuthor(), std::move(miningTail), effectiveLanguage(), bookPath});
-      startActivityForResult(std::move(lookup), [this](const ActivityResult&) { requestUpdate(); });
+      startActivityForResult(std::move(lookup), [this](const ActivityResult& result) { onLookupPanelResult(result); });
     }
   }
 }

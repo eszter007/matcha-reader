@@ -32,7 +32,7 @@ Comics, sentence mining and page translation work in every column.
 
 ### Word lookup
 
-Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is scanned first, so the cursor only lands on words that have an entry. The definition opens in a panel floating over the page. On a touch device, long-press a word to open it directly. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
+Look up any word on the page, in vertical or horizontal text. In Japanese and Chinese the page is scanned first, so the cursor only lands on words that have an entry. The definition opens in a panel floating over the page. On a touch device, long-press a word to open it directly, then drag one of the handles beside the word to turn the lookup into a clipping selection. See [Guide §6.1](USER_GUIDE.md#61-word-lookup).
 
 <p align="center">
   <img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page of たのしいムーミン一家: 用意 with its reading, part of speech, definition and an example sentence">

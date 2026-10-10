@@ -943,11 +943,14 @@ Bookmarks are stored in the `.crosspoint/bookmarks` folder in the JSON format.
 ### 5.3 Clippings and Highlights
 
 Reader menu → **Create Clipping**. Move to the first word and press **Confirm**, then move to the last word and press
-**Confirm** again to choose **Look Up**, **Clip** or **Bookmark**. **Back** closes that popup and keeps the selection.
-On a touch device, drag either handle to adjust the range, then tap the action above it. Holding the end handle on
-the last word for a second extends the selection onto the next page; a selection can span up to three pages of one
-chapter. Holding a word while reading opens the dictionary (see [6.1](#61-word-lookup)); holding highlighted text
-removes that clipping.
+**Confirm** again to save the clipping. **Back** clears the selection, and a second **Back** leaves.
+
+On a touch device the quickest way in is the dictionary: hold a word, and its definition opens with a handle on each
+side of the word. Drag either handle to turn the lookup into a selection. You can also open selection from the reader
+menu. Drag the handles to adjust the range, then tap an action in the bar above it: **Look Up**, **Translate** (the
+selection, with Gemini; see [6.2](#62-page-translation)), **Clip** or **Bookmark**. Holding the end handle on the last
+word for a second extends the selection onto the next page; a selection can span up to three pages of one chapter.
+Holding highlighted text removes that clipping.
 
 Saved clippings stay highlighted on the page, also after a change of font, spacing, orientation or pagination.
 **View Clippings** lists this book's clippings: **Confirm** opens one or jumps to its passage, and holding

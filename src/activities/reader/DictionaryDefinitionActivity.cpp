@@ -77,6 +77,7 @@ DictionaryDefinitionActivity::DictionaryDefinitionActivity(GfxRenderer& renderer
 }
 
 void DictionaryDefinitionActivity::onEnter() {
+  DictionaryPanel::setAvoid(clipHandles.band(renderer));  // before the entries are laid out
   ensureGlyphFallback();
   Activity::onEnter();
   if (entries.empty()) {
@@ -136,6 +137,7 @@ bool DictionaryDefinitionActivity::stepPage(const int direction) {
 }
 
 void DictionaryDefinitionActivity::onExit() {
+  DictionaryPanel::setAvoid(Rect{});
   Activity::onExit();
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseAllFontMemory();
@@ -196,6 +198,13 @@ void DictionaryDefinitionActivity::loop() {
     finish();
     return;
   }
+  if (ClipStartResult clip; clipHandles.pressed(renderer, mappedInput, clip)) {
+    ActivityResult result;
+    result.data = clip;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     saveSentence();
     return;
@@ -244,6 +253,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
   }
   const auto& entry = entries[currentEntry];
+  clipHandles.draw(renderer);  // under the card, beside the word on the page
   const bool showStatus = miningStatus_ != MiningStatus::None;
   const char* statusText = miningStatus_ == MiningStatus::Saved ? tr(STR_MINING_SAVED) : tr(STR_MINING_SAVE_FAILED);
   const auto layout =

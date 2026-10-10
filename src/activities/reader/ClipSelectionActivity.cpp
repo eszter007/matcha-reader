@@ -101,7 +101,18 @@ void ClipSelectionActivity::onEnter() {
       return;
     }
     selected = rangeStart = hit;
-    ignoreInitialTouch = true;
+    if (dragFromX >= 0) {
+      // The drag a lookup panel handed over: same state as pressing one of this screen's handles.
+      dragOffsetX = words[hit].x + words[hit].width / 2 - dragFromX;
+      dragOffsetY = words[hit].y + textOffset() + words[hit].height / 2 - dragFromY;
+      touchDragSelecting = true;
+      touchDragHasMoved = false;
+      touchDragStartX = dragFromX;
+      touchDragStartY = dragFromY;
+      touchDragPageEndIndex = -1;
+    } else {
+      ignoreInitialTouch = true;
+    }
   }
   requestUpdate();
 }
@@ -702,18 +713,9 @@ bool ClipSelectionActivity::handleButtons(const uint8_t buttons) {
 
 Rect ClipSelectionActivity::handleRect(const int index, const bool start) const {
   const WordBox& word = words[index];
-  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const int size = std::max(24, UITheme::getInstance().getMetrics().verticalSpacing * 2);
-  if (vertical()) {
-    // The start handle sits above the first cell, the end handle below the last.
-    const int edge = start ? word.y - size : word.y + word.height;
-    return Rect{std::clamp(word.x + word.width / 2 - size / 2, safe.x, safe.x + safe.width - size),
-                std::clamp(edge + textOffset(), safe.y, safe.y + safe.height - size), size, size};
-  }
-  const bool left = start != word.isRtl;
-  const int edge = left ? word.x : word.x + word.width;
-  return Rect{std::clamp(edge - (left ? size : 0), safe.x, safe.x + safe.width - size),
-              std::clamp(word.y + textOffset() + word.height, safe.y, safe.y + safe.height - size), size, size};
+  return selectionGeometry::handle(Rect{word.x, word.y + textOffset(), word.width, word.height}, start, vertical(),
+                                   word.isRtl, UITheme::getInstance().getScreenSafeArea(renderer, true, false),
+                                   BaseTheme::selectionHandleSize());
 }
 
 int ClipSelectionActivity::selectionTop() const {
@@ -724,7 +726,7 @@ int ClipSelectionActivity::selectionTop() const {
     if (words[i].pageOffset == currentPageOffset) top = std::min(top, static_cast<int>(words[i].y));
   }
   // On a vertical page the start handle sits above the first cell; the bar goes above the handle.
-  if (vertical()) top -= std::max(24, UITheme::getInstance().getMetrics().verticalSpacing * 2);
+  if (vertical()) top -= BaseTheme::selectionHandleSize();
   return top;
 }
 
@@ -960,16 +962,11 @@ void ClipSelectionActivity::drawSelection() const {
   }
   if (rangeStart >= 0 && mappedInput.hasTouch()) {
     if (words[first].pageOffset == currentPageOffset)
-      // The point aims at the text: inward along the line, or down/up the column.
       GUI.drawSelectionHandle(renderer, handleRect(first, true),
-                              vertical()            ? BaseTheme::HandleCorner::BottomRight
-                              : !words[first].isRtl ? BaseTheme::HandleCorner::TopRight
-                                                    : BaseTheme::HandleCorner::TopLeft);
+                              selectionGeometry::handleCorner(true, vertical(), words[first].isRtl));
     if (words[last].pageOffset == currentPageOffset)
       GUI.drawSelectionHandle(renderer, handleRect(last, false),
-                              vertical()          ? BaseTheme::HandleCorner::TopLeft
-                              : words[last].isRtl ? BaseTheme::HandleCorner::TopRight
-                                                  : BaseTheme::HandleCorner::TopLeft);
+                              selectionGeometry::handleCorner(false, vertical(), words[last].isRtl));
     if (!touchDragSelecting) {
       // The pointer aims at the first selected word on this page (its cell, on a vertical page).
       int anchor = std::min(rangeStart, selected);

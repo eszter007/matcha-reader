@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "clippings/LookupClipHandles.h"
 #include "components/PanelTextPages.h"
 #include "util/ButtonNavigator.h"
 #include "util/SentenceMining.h"
@@ -32,12 +33,16 @@ class DictionaryDefinitionActivity final : public Activity {
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::vector<Entry> entries);
 
+  // Handles on the looked-up word behind the panel; a drag on one finishes with ClipStartResult.
+  void setClipHandles(const LookupClipHandles& handles) { clipHandles = handles; }
+
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
+  LookupClipHandles clipHandles;
   enum class MiningStatus : uint8_t { None, Saved, Failed };
   MiningStatus miningStatus_ = MiningStatus::None;
   void saveSentence();

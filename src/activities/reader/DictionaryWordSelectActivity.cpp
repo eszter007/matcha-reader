@@ -381,7 +381,22 @@ void DictionaryWordSelectActivity::performLookup() {
       LOG_ERR("DICT", "OOM: definition view");
       return;
     }
+    if (mappedInput.hasTouch()) {
+      const WordBox& box = words[selected];
+      const Rect wordRect{box.x, box.y, box.width, wordHeight(box)};
+      LookupClipHandles handles;
+      handles.set(wordRect, wordRect, /*isVertical=*/false);
+      definitionView->setClipHandles(handles);
+    }
     startActivityForResult(std::move(definitionView), [this](const ActivityResult& result) {
+      // A drag on the word's handles: the reader opens clip selection on it.
+      if (std::holds_alternative<ClipStartResult>(result.data)) {
+        ActivityResult forward;
+        forward.data = result.data;
+        setResult(std::move(forward));
+        finish();
+        return;
+      }
       // The definition view cancels when its power click asked to leave the dictionary
       // entirely, rather than step back to this selection.
       if (result.isCancelled) {

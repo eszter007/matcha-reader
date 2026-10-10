@@ -314,3 +314,30 @@ TEST(SelectionGeometry, KeepsCursorClearOfHintsOnEitherAxis) {
   EXPECT_EQ(selectionGeometry::keepVisible(735, 20, 40, 700), -15);
   EXPECT_EQ(selectionGeometry::keepVisible(100, 20, 40, 700), 0);
 }
+
+TEST(SelectionGeometry, HandlesSitBesideTheWordAndPointAtIt) {
+  const Rect safe{0, 0, 480, 800};
+  const Rect word{100, 200, 60, 30};
+  // A line: start under the leading edge, end under the trailing edge, both below the word.
+  const Rect start = selectionGeometry::handle(word, true, false, false, safe, 24);
+  const Rect end = selectionGeometry::handle(word, false, false, false, safe, 24);
+  EXPECT_EQ(start.x + start.width, word.x);
+  EXPECT_EQ(end.x, word.x + word.width);
+  EXPECT_EQ(start.y, word.y + word.height);
+  EXPECT_EQ(selectionGeometry::handleCorner(true, false, false), BaseTheme::HandleCorner::TopRight);
+  EXPECT_EQ(selectionGeometry::handleCorner(false, false, false), BaseTheme::HandleCorner::TopLeft);
+  // Right-to-left mirrors the sides.
+  EXPECT_EQ(selectionGeometry::handle(word, true, false, true, safe, 24).x, word.x + word.width);
+  // A column: start above the first cell pointing down, end below the last pointing up.
+  const Rect top = selectionGeometry::handle(word, true, true, false, safe, 24);
+  const Rect bottom = selectionGeometry::handle(word, false, true, false, safe, 24);
+  EXPECT_EQ(top.y + top.height, word.y);
+  EXPECT_EQ(bottom.y, word.y + word.height);
+  EXPECT_EQ(top.x + top.width / 2, word.x + word.width / 2);
+  EXPECT_EQ(selectionGeometry::handleCorner(true, true, false), BaseTheme::HandleCorner::BottomRight);
+  EXPECT_EQ(selectionGeometry::handleCorner(false, true, false), BaseTheme::HandleCorner::TopLeft);
+  // Never off screen.
+  const Rect edge = selectionGeometry::handle(Rect{0, 790, 20, 10}, true, false, false, safe, 24);
+  EXPECT_GE(edge.x, safe.x);
+  EXPECT_LE(edge.y + edge.height, safe.y + safe.height);
+}

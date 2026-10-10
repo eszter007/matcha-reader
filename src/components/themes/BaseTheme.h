@@ -320,6 +320,7 @@ class BaseTheme {
   // the point that aims at the selected text.
   enum class HandleCorner : uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
   static void drawSelectionHandle(const GfxRenderer& renderer, Rect rect, HandleCorner corner);
+  static int selectionHandleSize();
   // Selection action bar: a 24px outline icon over its label in each slot (see drawSelectionActions).
   static constexpr int SELECTION_ACTION_COUNT = 4;
   static constexpr int SELECTION_ACTION_ICON_PX = 40;
