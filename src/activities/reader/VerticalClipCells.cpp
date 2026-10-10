@@ -1,6 +1,7 @@
 #include "VerticalClipCells.h"
 
 #include <GfxRenderer.h>
+#include <Kinsoku.h>
 
 #include <algorithm>
 #include <string>
@@ -34,6 +35,27 @@ void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& pa
       columnX[g.column] = g.x;
     }
   }
+  // A glyph's y is where its ink is drawn. For a full-size upright glyph that is the cell top; a
+  // small kana is centred in its frame (JLREQ A.11), so its y lies half a row down, and a cell
+  // taken from it starts there and drags the cell above into stretching to meet it. Columns do
+  // not share one row grid (a half-width bracket shifts everything after it), so the cell top
+  // comes from the nearest full-size neighbour in the same column: one cell above the next, or
+  // one cell below the previous.
+  const auto isFullUpright = [](const VerticalGlyph& g) {
+    return g.renderKind == VerticalGlyph::Upright && !VerticalParsedText::isImageMarker(g.codepoint) &&
+           !Kinsoku::isSmallKana(g.codepoint);
+  };
+  const auto cellTop = [&](const size_t i) -> int {
+    const VerticalGlyph& g = page.glyphs[i];
+    if (!Kinsoku::isSmallKana(g.codepoint) || g.renderKind != VerticalGlyph::Upright) return g.y;
+    for (size_t j = i + 1; j < page.glyphs.size() && page.glyphs[j].column == g.column; j++) {
+      if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) - cellPx;
+    }
+    for (size_t j = i; j-- > 0 && page.glyphs[j].column == g.column;) {
+      if (isFullUpright(page.glyphs[j])) return static_cast<int>(page.glyphs[j].y) + cellPx;
+    }
+    return g.y;
+  };
   uint32_t offset = page.visibleTextOffset;
   uint32_t previousParagraph = UINT32_MAX;
   // Cells are handed over one behind, so a cell can be stretched down to the next one in its
@@ -69,7 +91,7 @@ void forEachVerticalClipCell(const GfxRenderer& renderer, const VerticalPage& pa
     VerticalClipCell cell;
     const int x = g.column < columnX.size() && columnX[g.column] >= 0 ? columnX[g.column] : g.x;
     cell.x = static_cast<int16_t>(x + marginLeft);
-    cell.y = static_cast<int16_t>(g.y + marginTop);
+    cell.y = static_cast<int16_t>(cellTop(i) + marginTop);
     cell.width = static_cast<int16_t>(cellPx);
     cell.height = static_cast<int16_t>(height);
     cell.column = g.column;
