@@ -427,6 +427,8 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                             "wordLookupSideButtons", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_REVERSED_PAGE_TURN, &CrossPointSettings::reversePageTurn, "reversePageTurn",
                             StrId::STR_CAT_CONTROLS),
+        SettingInfo::Toggle(StrId::STR_HOME_BACK_RESUMES, &CrossPointSettings::homeBackResumes, "homeBackResumes",
+                            StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                             "touchReaderControls", StrId::STR_CAT_CONTROLS),
         // Inverted Swipe is Matcha-only, for right-to-left vertical reading. It is stored after
@@ -665,6 +667,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
     };
     // Double-click power frontlight shortcut only exists on the X4 Pro.
     if (!BoardConfig::isX4Pro()) eraseEntry(StrId::STR_DBL_CLICK_PWR_LIGHT);
+    if (!CrossPointSettings::homeBackResumesSupported()) eraseEntry(StrId::STR_HOME_BACK_RESUMES);
     // Tilt page turn needs the QMI8658 IMU (X3).
     if (!halTiltSensor.isAvailable()) eraseEntry(StrId::STR_TILT_PAGE_TURN);
     return v;

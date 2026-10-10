@@ -20,6 +20,11 @@ class HomeActivity final : public Activity {
   int selectorIndex = 0;
   // True once the cover scan has walked every recent book. Reset when the slot height changes.
   bool recentsLoaded = false;
+  // Back was pressed while this screen was up. With Back Resumes Last Book on, its release opens the
+  // last book -- and a release left over from the Back that brought the user here (Settings leaves
+  // on the press) must not.
+  bool backPressSeen = false;
+  bool backResumes() const;
   // Set after the cover grid's first paint: that pass uses a clean HALF refresh, later ones FAST.
   bool firstRenderDone = false;
   // Partial-redraw state: after a full render, a cursor move between two MENU rows only erases
