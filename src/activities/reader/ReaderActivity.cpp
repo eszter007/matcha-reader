@@ -50,6 +50,7 @@ std::unique_ptr<Activity> ReaderActivity::create(GfxRenderer& renderer, MappedIn
 
 void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
   sessionReporter.noteTurn(forward, succeeded);
+  paceForwardPending.store(forward && succeeded, std::memory_order_release);
 }
 
 // The one place every reader here reports a page reaching the panel -- horizontal and vertical
@@ -57,7 +58,18 @@ void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
 // rather than from each render path.
 void ReaderActivity::markPageRendered() {
   pageRendered.store(true, std::memory_order_release);
-  sessionReporter.pageRendered(getProgressBasisPoints());
+  const int progressBp = getProgressBasisPoints();
+  sessionReporter.pageRendered(progressBp);
+  // A forward page counts toward the reading speed when it was on screen between 2 s and 30 min,
+  // the reading session's own bounds: shorter is skimming, longer is the reader away.
+  const uint32_t now = millis();
+  if (paceForwardPending.exchange(false, std::memory_order_acq_rel) && paceHasAnchor) {
+    const uint32_t seconds = (now - paceAnchorMs) / 1000;
+    if (seconds >= 2 && seconds <= 1800) readingPace.addPage(seconds, progressBp - paceAnchorBp);
+  }
+  paceAnchorMs = now;
+  paceAnchorBp = progressBp;
+  paceHasAnchor = true;
 }
 
 void ReaderActivity::onEnter() {
@@ -146,7 +158,11 @@ void ReaderActivity::onExit() {
 
 void ReaderActivity::prepareForSleep() { flushReaderSession(); }
 
-void ReaderActivity::flushReaderSession() { sessionReporter.flush(bookPath, bookPath); }
+void ReaderActivity::flushReaderSession() {
+  sessionReporter.flush(bookPath, bookPath);
+  const std::string pacePath = paceFilePath();
+  if (!pacePath.empty()) readingPace.save(pacePath);
+}
 
 void ReaderActivity::loop() {
   if (handleLoadFailureInput()) return;

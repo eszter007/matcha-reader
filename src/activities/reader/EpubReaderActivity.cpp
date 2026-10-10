@@ -453,6 +453,7 @@ void EpubReaderActivity::onReaderEnter() {
   });
 
   epub->setupCacheDir();
+  readingPace.load(paceFilePath());
 
   // Per-book reader prefs: snapshot the global defaults, then pin this book's
   // saved settings if it has been opened before. Must run before orientation
@@ -5161,8 +5162,15 @@ void EpubReaderActivity::renderStatusBar() const {
   // section is null in vertical mode (verticalSection owns the chapter there), and null again
   // between chapters -- upstream can't hit either case, so its call was unguarded.
   const bool building = section && section->isBuilding();
+  int timeLeftSeconds = -1;
+  if (sb.timeLeftMode == CrossPointSettings::TIME_LEFT_CHAPTER) {
+    // The page on screen counts: it is still to be read.
+    timeLeftSeconds = readingPace.secondsForPages(std::max(1, pageCount - currentPage + 1));
+  } else if (sb.timeLeftMode == CrossPointSettings::TIME_LEFT_BOOK) {
+    timeLeftSeconds = readingPace.secondsForProgress(std::max(0, 10000 - static_cast<int>(bookProgress * 100)));
+  }
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
-                    building);
+                    building, timeLeftSeconds);
 }
 
 ReaderRenderSpec EpubReaderActivity::readerSpec(const uint16_t viewportWidth, const uint16_t viewportHeight) const {

@@ -292,6 +292,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
   // Clock display in status bar (any board whose RTC probe succeeds)
   uint8_t statusBarClock = STATUS_BAR_CLOCK_HIDE;
+  // Time left in the status bar, from the reading speed in this book (ReadingPace).
+  enum STATUS_BAR_TIME_LEFT : uint8_t { TIME_LEFT_CHAPTER = 0, TIME_LEFT_BOOK = 1, TIME_LEFT_HIDE = 2 };
+  uint8_t statusBarTimeLeft = TIME_LEFT_HIDE;
   // LEGACY, kept for migration only: quarter-hour UTC offset biased by 48
   // (48 = UTC+0). Superseded by clockTimezone; read once by
   // timezones::activeIndex() when clockTimezone is unset.
@@ -567,6 +570,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     uint8_t progressBarMode = HIDE_PROGRESS;  // STATUS_BAR_PROGRESS_BAR
     uint8_t progressBarHeightPx = 0;          // (thickness+1)*2; 0 when the bar is hidden
     uint8_t xtcMode = XTC_STATUS_BAR_HIDE;    // XTC_STATUS_BAR_MODE
+    uint8_t timeLeftMode = TIME_LEFT_HIDE;    // STATUS_BAR_TIME_LEFT
 
     bool showsProgressBar() const { return progressBarMode != HIDE_PROGRESS; }
     bool showsTitle() const { return titleMode != HIDE_TITLE; }
@@ -574,8 +578,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // Visibility of the text lane. Whether a clock can be read is the caller's
     // concern: pass halClock.hasTime(), or true for layout reservation.
     bool textLaneVisible(bool clockAvailable) const {
-      return showChapterPageCount || showBookProgressPercent || showsTitle() || showBattery ||
-             (showsClock() && clockAvailable);
+      return showChapterPageCount || showBookProgressPercent || timeLeftMode != TIME_LEFT_HIDE || showsTitle() ||
+             showBattery || (showsClock() && clockAvailable);
     }
   };
   StatusBarSpec statusBarSpec() const;

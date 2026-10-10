@@ -589,7 +589,6 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   // Cover Grid drops the rule under every header: its screens carry their own band (tabs, a
   // grid) right below the title, and the two lines stacked read as a drawing fault.
   const bool showRule = underline < 0 ? !UITheme::hasCoverGridHome() : underline != 0;
-  props.borderEdges = showRule ? fui::EdgeBottom : fui::EdgesNone;
   props.titleText = tokens.titleText;
   props.titleText.align = tokens.headerTitleAlign;
   // A centred title is kept clear of the right label on both sides, so a long one (the version in
@@ -1047,7 +1046,8 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
 
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const int textYOffset,
-                              const bool fillMargin, const bool isPageBookmarked, const bool pageCountEstimated) {
+                              const bool fillMargin, const bool isPageBookmarked, const bool pageCountEstimated,
+                              const int timeLeftSeconds) {
   auto metrics = UITheme::getInstance().getMetrics();
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
@@ -1091,6 +1091,25 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     renderer.drawText(SMALL_FONT_ID, progressX + estimateWidth + estimateSpacing, textY, progressStr);
 
     rightClusterWidth += estimateWidth + estimateSpacing + progressTextWidth;
+  }
+
+  // Time left, ahead of the page count and percent: whole minutes, so it does not change on every
+  // page; -1 (not enough reading measured yet) leaves the slot empty.
+  if (sb.timeLeftMode != CrossPointSettings::TIME_LEFT_HIDE && timeLeftSeconds >= 0) {
+    char timeStr[32];
+    const int minutes = (timeLeftSeconds + 30) / 60;
+    if (minutes < 1) {
+      snprintf(timeStr, sizeof(timeStr), "%s", tr(STR_TIME_LEFT_UNDER_MIN));
+    } else if (minutes < 60) {
+      snprintf(timeStr, sizeof(timeStr), tr(STR_TIME_LEFT_MIN), minutes);
+    } else {
+      snprintf(timeStr, sizeof(timeStr), tr(STR_TIME_LEFT_H_MIN), minutes / 60, minutes % 60);
+    }
+    // The same gap the page count and percent keep between them.
+    const int gap = rightClusterWidth > 0 ? renderer.getTextWidth(SMALL_FONT_ID, "  ") : 0;
+    const int timeWidth = renderer.getTextWidth(SMALL_FONT_ID, timeStr);
+    renderer.drawText(SMALL_FONT_ID, rightClusterX - rightClusterWidth - gap - timeWidth, textY, timeStr);
+    rightClusterWidth += gap + timeWidth;
   }
 
   // Draw Progress Bar

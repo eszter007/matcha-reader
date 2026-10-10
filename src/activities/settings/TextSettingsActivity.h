@@ -116,7 +116,7 @@ class TextSettingsActivity final : public UiTabListActivity {
   // Text profiles (Settings, not a book): an "Edit for" row heads the Size and Layout tabs and
   // switches which profile -- Latin or CJK -- the four profile rows edit. While CJK is chosen its
   // values sit in the live fields (as when reading a CJK book) and the Latin ones wait here.
-  const bool profileChoice_ = false;
+  const bool profileChoice_;
   bool editingCjk_ = false;
   CrossPointSettings::TextProfile latinWhileEditingCjk_{};
   int profileRows() const { return profileChoice_ && (tab_ == Tab::Size || tab_ == Tab::Layout) ? 1 : 0; }

@@ -331,6 +331,7 @@ open a list when selected.
 - **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep; from 1 to 30 minutes, or Never.
 
 - **Status Bar**: Set up under **Reader Settings → Customise Status Bar**, piece by piece: the chapter page count, the book progress percentage, a progress bar (for the book, for the chapter, or hidden) and its thickness, the title, and the battery.
+  - **Time Left**: an estimate of the reading time left in the chapter or the book (default: hidden). It is shown before the page count, e.g. "12 min". It learns from how long you stay on each page as you turn forward, ignoring pages you skip past in under 2 seconds or leave open for more than 30 minutes. Each book keeps its own reading speed, and the estimate appears once about five pages have been timed.
 
 - **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
   
