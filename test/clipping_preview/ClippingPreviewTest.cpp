@@ -333,7 +333,8 @@ TEST(SelectionGeometry, HandlesSitBesideTheWordAndPointAtIt) {
   const Rect bottom = selectionGeometry::handle(word, false, true, false, safe, 24);
   EXPECT_EQ(top.y + top.height, word.y);
   EXPECT_EQ(bottom.y, word.y + word.height);
-  EXPECT_EQ(top.x + top.width / 2, word.x + word.width / 2);
+  EXPECT_EQ(top.x + top.width, word.x + word.width);  // point on the top-right corner
+  EXPECT_EQ(bottom.x, word.x);                        // point on the bottom-left corner
   EXPECT_EQ(selectionGeometry::handleCorner(true, true, false), BaseTheme::HandleCorner::BottomRight);
   EXPECT_EQ(selectionGeometry::handleCorner(false, true, false), BaseTheme::HandleCorner::TopLeft);
   // At the screen edge it stays beside the word rather than on it, at least half on screen.

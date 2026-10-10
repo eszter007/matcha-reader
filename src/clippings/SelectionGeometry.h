@@ -52,7 +52,9 @@ inline Rect button(const Rect actions, const int index, const int padding) {
 inline Rect handle(const Rect word, const bool start, const bool vertical, const bool rtl, const Rect safe,
                    const int size) {
   if (vertical) {
-    return Rect{std::clamp(word.x + word.width / 2 - size / 2, safe.x, safe.x + safe.width - size),
+    // The pointed corner meets the highlight's corner, as on a line: the start handle's (bottom
+    // right) its top-right corner, the end handle's (top left) its bottom-left one.
+    return Rect{std::clamp(start ? word.x + word.width - size : word.x, safe.x, safe.x + safe.width - size),
                 start ? word.y - size : word.y + word.height, size, size};
   }
   const bool left = start != rtl;

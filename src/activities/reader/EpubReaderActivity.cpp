@@ -5003,6 +5003,7 @@ void EpubReaderActivity::startVerticalClipSelection(const int initialX, const in
   }
   activity->setRepaintPage(this, &repaintPageForPanelThunk);
   activity->setLiveSelection(this, &setLiveSelectionThunk);
+  activity->setCellPx(verticalCellPx(renderer, effectiveReaderFontId()));
   if (dragX >= 0) activity->continueDragFrom(dragX, dragY);
   if (buildViewportWidth == 0 || buildViewportHeight == 0) {
     LOG_ERR("CLIP", "Cannot anchor clipping before the reader viewport is initialized");

@@ -255,7 +255,8 @@ bool ClipSelectionActivity::extractVerticalCells() {
     size_t poolUsed = 0;
   } ctx{this};
   forEachVerticalClipCell(
-      renderer, *verticalPage, fontId, marginLeft, marginTop, &ctx, [](void* raw, const VerticalClipCell& cell) {
+      renderer, *verticalPage, fontId, marginLeft, marginTop, &ctx,
+      [](void* raw, const VerticalClipCell& cell) {
         auto& ctx = *static_cast<Ctx*>(raw);
         auto& self = *ctx.self;
         if (self.wordCount == MAX_SELECTABLE_CELLS) {
@@ -290,7 +291,8 @@ bool ClipSelectionActivity::extractVerticalCells() {
         self.wordCount++;
         self.rowCount = std::max<uint16_t>(self.rowCount, static_cast<uint16_t>(cell.column + 1));
         return true;
-      });
+      },
+      cellPx);
   return true;
 }
 
