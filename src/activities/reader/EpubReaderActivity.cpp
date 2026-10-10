@@ -706,6 +706,12 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
   DictionaryRegistry::foldersForLanguage(bookLanguage, SETTINGS.dictionaryName,
                                          DictionaryWordSelectActivity::MAX_DICTIONARIES, dictionaryFolders);
   if (dictionaryFolders.empty()) {
+    // No dictionary for this language: a hold on a word is then a clipping on that word, finger
+    // still down so it can be dragged out at once, rather than a message that leads nowhere.
+    if (lookupAtX >= 0 && lookupAtY >= 0 && lookupText.empty()) {
+      startClipSelection(lookupAtX, lookupAtY, lookupAtX, lookupAtY);
+      return;
+    }
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
     requestUpdate();
@@ -5267,6 +5273,11 @@ void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int 
   requestVerticalBuildNotice();
   if (!epub) return;
   if (!DictIndex::isAvailable()) {
+    // As for the StarDict path: without a dictionary a hold on a word starts a clipping on it.
+    if (lookupAtX >= 0 && lookupAtY >= 0) {
+      startClipSelection(lookupAtX, lookupAtY, lookupAtX, lookupAtY);
+      return;
+    }
     LOG_ERR("ERS", "Word lookup: no dictionary (%s / %s)", DictIndex::vocabIdxPath(), DictIndex::vocabDatPath());
     // Say so on the page, as the other-language lookup does when it finds no dictionary.
     showDictionaryMessage = true;
