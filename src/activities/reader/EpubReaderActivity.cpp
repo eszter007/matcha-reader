@@ -484,9 +484,17 @@ void EpubReaderActivity::onReaderEnter() {
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
     // Fork layout: [0-5] spine/page/count, [6] vertical, [7] furigana, [8] percent,
     // [9-12] optional visible-text offset (upstream #2805, appended after the fork bytes).
+    // A file stock CrossPoint wrote has the offset at [6-9] instead (see ProgressFile): read
+    // as the fork layout, its low offset byte became a vertical override, and a Japanese
+    // book opened once under CrossPoint then stayed horizontal for good.
     uint8_t data[13];
     const int dataSize = f.read(data, sizeof(data));
-    if (dataSize >= 8) {
+    const bool stockLayout = ProgressFile::isStockLayout(dataSize);
+    const auto readLe32 = [&data](const int at) {
+      return static_cast<uint32_t>(data[at]) | (static_cast<uint32_t>(data[at + 1]) << 8) |
+             (static_cast<uint32_t>(data[at + 2]) << 16) | (static_cast<uint32_t>(data[at + 3]) << 24);
+    };
+    if (dataSize >= 4) {
       currentSpineIndex = data[0] + (data[1] << 8);
       nextPageNumber = data[2] + (data[3] << 8);
       if (nextPageNumber == UINT16_MAX) {
@@ -494,7 +502,13 @@ void EpubReaderActivity::onReaderEnter() {
         nextPageNumber = 0;
       }
       cachedSpineIndex = currentSpineIndex;
-      cachedChapterTotalPageCount = data[4] + (data[5] << 8);
+    }
+    if (dataSize >= 6) cachedChapterTotalPageCount = data[4] + (data[5] << 8);
+    if (stockLayout) {
+      // Stock keeps no per-book vertical or furigana choice; the overrides stay on auto.
+      if (dataSize == 10) cachedVisibleTextOffset = readLe32(6);
+      LOG_DBG("ERS", "Loaded stock-layout cache: spine=%d page=%d", currentSpineIndex, nextPageNumber);
+    } else if (dataSize >= 8) {
       verticalOverride = static_cast<int8_t>(data[6]);
       furiganaOverride = static_cast<int8_t>(data[7]);
       // Drop a forced-vertical flag stored against a non-CJK book (set before
@@ -503,10 +517,7 @@ void EpubReaderActivity::onReaderEnter() {
       // keeps the stored state honest, so the reader menu shows what is in effect.
       // Rewritten to progress.bin by the next save.
       // Checked again below once the book's language (override, tag or sniff) is settled.
-      if (dataSize >= 13) {
-        cachedVisibleTextOffset = static_cast<uint32_t>(data[9]) | (static_cast<uint32_t>(data[10]) << 8) |
-                                  (static_cast<uint32_t>(data[11]) << 16) | (static_cast<uint32_t>(data[12]) << 24);
-      }
+      if (dataSize >= 13) cachedVisibleTextOffset = readLe32(9);
       LOG_DBG("ERS", "Loaded cache: spine=%d page=%d vertical=%d furigana=%d", currentSpineIndex, nextPageNumber,
               verticalOverride, furiganaOverride);
     }
