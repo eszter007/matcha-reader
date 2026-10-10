@@ -303,16 +303,16 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   // than building a new items/values vector on every render.
   const int count = listCount();
   const int pr = profileRows();
-  for (int i = 0; i < count; i++) {
+  if (pr > 0) {
+    rowItems_[0].toggle = false;
+    rowValues_[0] = editingCjk_ ? tr(STR_TEXT_PROFILE_CJK) : tr(STR_TEXT_PROFILE_LATIN);
+    rowItems_[0].value = rowValues_[0].c_str();
+  }
+  for (int i = pr; i < count; i++) {
     bool checked = false;
     rowItems_[i].toggle = false;
     // Cleared up front so a row that sets no value can't keep the previous tab's text.
     rowValues_[i].clear();
-    if (i < pr) {
-      rowValues_[i] = editingCjk_ ? tr(STR_TEXT_PROFILE_CJK) : tr(STR_TEXT_PROFILE_LATIN);
-      rowItems_[i].value = rowValues_[i].c_str();
-      continue;
-    }
     switch (tab_) {
       case Tab::Family:
         rowValues_[i] = (i == currentFamilyIndex_) ? tr(STR_SELECTED) : "";

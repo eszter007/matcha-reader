@@ -589,7 +589,6 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   // Cover Grid drops the rule under every header: its screens carry their own band (tabs, a
   // grid) right below the title, and the two lines stacked read as a drawing fault.
   const bool showRule = underline < 0 ? !UITheme::hasCoverGridHome() : underline != 0;
-  props.borderEdges = showRule ? fui::EdgeBottom : fui::EdgesNone;
   props.titleText = tokens.titleText;
   props.titleText.align = tokens.headerTitleAlign;
   // A centred title is kept clear of the right label on both sides, so a long one (the version in
