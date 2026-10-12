@@ -711,7 +711,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
     // Double-click power frontlight shortcut only exists on the X4 Pro.
     if (!BoardConfig::isX4Pro()) eraseEntry(StrId::STR_DBL_CLICK_PWR_LIGHT);
     if (!CrossPointSettings::homeBackResumesSupported()) eraseEntry(StrId::STR_HOME_BACK_RESUMES);
-    // Tilt page turn needs the QMI8658 IMU (X3).
+    // Tilt page turn needs an IMU with a gyroscope.
     if (!halTiltSensor.isAvailable()) eraseEntry(StrId::STR_TILT_PAGE_TURN);
     return v;
   }();
