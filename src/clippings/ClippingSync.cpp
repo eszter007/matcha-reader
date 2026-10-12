@@ -13,9 +13,13 @@
 #include "ClippingStore.h"
 
 namespace {
-// One item per response: 4 KiB text may occupy 24 KiB when JSON-escaped.
-// Reuse one checked heap buffer for requests and responses; it cannot fit on the task stack.
-constexpr size_t BUFFER_SIZE = 32 * 1024;
+// One item per response: 4 KiB of text is at most 12 KiB as JSON (a 4-byte UTF-8 character
+// escapes to a 12-byte surrogate pair), plus metadata. Reuse one checked heap buffer for requests
+// and responses; it cannot fit on the task stack. An item that still overflows fails the sync cleanly.
+constexpr size_t BUFFER_SIZE = 16 * 1024;
+// Left after the buffer for the TLS handshake; the same floor KOReaderSyncClient applies.
+constexpr size_t MIN_FREE_FOR_TLS = 35000;
+constexpr size_t MIN_BLOCK_FOR_TLS = 20000;
 
 bool request(freeink::SecureHttpClient& http, const std::string& url, char* buffer, JsonDocument& doc,
              const bool upload = false) {
@@ -139,8 +143,9 @@ bool clippingSync::run(const std::string& bookPath, const std::string& documentH
   auto buffer = makeUniqueNoThrow<char[]>(BUFFER_SIZE);
   auto http = makeUniqueNoThrow<freeink::SecureHttpClient>();
   const auto heap = HalMemory::getDefaultHeap();
-  if (!buffer || !http || heap.freeBytes < 40000 || heap.largestBlockBytes < 20000) {
-    LOG_ERR("CLIP", "Insufficient heap for clipping sync");
+  if (!buffer || !http || heap.freeBytes < MIN_FREE_FOR_TLS || heap.largestBlockBytes < MIN_BLOCK_FOR_TLS) {
+    LOG_ERR("CLIP", "Insufficient heap for clipping sync: %zu free, %zu max block", heap.freeBytes,
+            heap.largestBlockBytes);
     return false;
   }
   http->setInsecure();
