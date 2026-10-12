@@ -8,6 +8,9 @@
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#if FREEINK_CAP_TOUCH
+#include "components/UiAppHelpers.h"
+#endif
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
@@ -24,6 +27,10 @@ void UiListActivity::onEnter() {
   resetUi();
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
   app.on(ACTION_TAB, &UiListActivity::tabActionTrampoline, this);
+#if FREEINK_CAP_TOUCH
+  revealedIndex.store(-1);
+  app.on(ACTION_SWIPE_DELETE, &UiListActivity::swipeDeleteTrampoline, this);
+#endif
   app.setScreen(&UiListActivity::screenTrampoline, this);
   requestUpdate();
 }
@@ -35,6 +42,13 @@ void UiListActivity::screenTrampoline(UiScreen& screen, void* user) {
 void UiListActivity::rowActionTrampoline(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<UiListActivity*>(user);
   if (event.value < 0 || event.value >= self->listCount()) return;
+#if FREEINK_CAP_TOUCH
+  if (self->revealedIndex.load() >= 0) {
+    self->closeSwipeDelete();
+    self->app.clearTapFlash();
+    return;
+  }
+#endif
   self->onRowAction(event);
 }
 
@@ -48,6 +62,82 @@ void UiListActivity::onTabAction(const int index) {
   app.clearTapFlash();
   if (index != ringActiveTopTab()) ringSelectTopTab(index);
 }
+
+#if FREEINK_CAP_TOUCH
+void UiListActivity::swipeDeleteTrampoline(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<UiListActivity*>(user);
+  if (event.value != self->revealedIndex.load() || !self->canSwipeDelete(event.value)) return;
+  self->closeSwipeDelete();
+  self->app.clearTapFlash();
+  self->swipeDelete(event.value);
+}
+
+void UiListActivity::closeSwipeDelete() {
+  if (revealedIndex.exchange(-1) >= 0) requestUpdate();
+}
+
+void UiListActivity::configureSwipeDelete(UiScreen& screen, fui::ListProps& props) {
+  const int row = revealedIndex.load();
+  if (row < 0 || row >= listCount() || !canSwipeDelete(row)) return;
+  swipeReveal.index = static_cast<int16_t>(row);
+  swipeReveal.action = ACTION_SWIPE_DELETE;
+  swipeReveal.icon = fui::bitmapFromIcon(icon_trash_2_24);
+  swipeReveal.width = static_cast<int16_t>(screen.theme().rowHeight + screen.theme().spaceSm * 2);
+  props.reveal = &swipeReveal;
+}
+
+bool UiListActivity::handleSwipeDeleteInput() {
+  if (!mappedInput.hasTouch()) return false;
+  const int openRow = revealedIndex.load();
+  if (openRow >= 0) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      closeSwipeDelete();
+      return true;
+    }
+    int x = 0;
+    int y = 0;
+    if (mappedInput.wasScreenTapped(x, y)) {
+      fui::Interaction hit;
+      bool onDelete;
+      {
+        RenderLock lock(*this);
+        onDelete = routingReady() && app.hitPublished(x, y, ACTION_SWIPE_DELETE, hit) && hit.value == openRow;
+        if (!onDelete && routingReady())
+          app.route(fui::InputSnapshot{.touchReleased = true, .touchX = -1, .touchY = -1});
+      }
+      if (!onDelete) {
+        closeSwipeDelete();
+        return true;
+      }
+    }
+  }
+
+  int x = 0;
+  int y = 0;
+  const auto swipe = mappedInput.wasSwipe(&x, &y);
+  if (swipe == MappedInputManager::SwipeDir::Right && openRow >= 0) {
+    UiAppHost::routeTouch(mappedInput, wantsTouchLongPress);
+    closeSwipeDelete();
+    return true;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+    closeSwipeDelete();
+    return false;
+  }
+  if (swipe != MappedInputManager::SwipeDir::Left) return false;
+
+  fui::Interaction hit;
+  {
+    RenderLock lock(*this);
+    if (!routingReady() || !app.hitPublished(x, y, ACTION_ROW, hit) || !canSwipeDelete(hit.value)) return false;
+  }
+  UiAppHost::routeTouch(mappedInput, wantsTouchLongPress);
+  revealedIndex.store(hit.value);
+  requestUpdate();
+  return true;
+}
+#endif
 
 void UiListActivity::onRowAction(const fui::ActionEvent& event) {
   activeNav().selected = event.value;
@@ -87,6 +177,9 @@ int UiListActivity::selectionCursor() {
 }
 
 void UiListActivity::moveSelectionTo(const int index) {
+#if FREEINK_CAP_TOUCH
+  closeSwipeDelete();
+#endif
   {
     // TRY the lock, never block on it. The render task holds it for the whole render INCLUDING
     // the panel wait (~502ms for a FAST refresh), and buttons are polled -- InputManager::update()
@@ -120,6 +213,9 @@ void UiListActivity::loop() {
   }
 
   if (handleCustomInput()) return;
+#if FREEINK_CAP_TOUCH
+  if (handleSwipeDeleteInput()) return;
+#endif
   if (handleTabBarInput()) return;
   if (handleButtons()) return;
   if (routeListTouch()) return;
