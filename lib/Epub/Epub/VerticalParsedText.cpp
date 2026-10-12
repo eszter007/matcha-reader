@@ -1089,46 +1089,74 @@ struct VerticalParsedText::LayoutCursor {
 
   // Returns the pixels actually recovered (0 when the column has nothing to give). The caller
   // places its character `applied` px above the grid row, since the tail moved up by that much.
+  //
+  // A column can be squeezed more than once (……？ pulls in two characters that may not start a
+  // line), so what a mark may still give is read from where its neighbours sit now: a mark keeps
+  // at least half its em whatever earlier squeezes took, or the next character lands in its ink.
   int squeezeColumnForOneMore(const uint16_t col, const int neededPx) {
     size_t first = page.glyphs.size();
     while (first > 0 && page.glyphs[first - 1].column == col) first--;
     if (first == page.glyphs.size()) return 0;
 
-    // The LAST glyph's trailing space is what the new character will occupy, so it is not itself
-    // reducible.
-    int marks = 0;
-    for (size_t i = first; i + 1 < page.glyphs.size(); i++) {
-      if (isReducible(page.glyphs[i].codepoint)) marks++;
-    }
-    if (marks == 0) return 0;
-
     // A mark may give up to the half em it carries. Round that cap UP: on an odd cell, two floored
     // halves sum to one pixel less than the whole (14 + 14 against a 29px cell), which made every
     // two-mark column miss by a pixel and fail.
     const int maxPerMark = (geom.cellPx + 1) / 2;
-    if (marks * maxPerMark < neededPx) return 0;
+    const int keep = geom.cellPx - maxPerMark;
 
-    // Spread the space being recovered across the marks rather than taking a fixed step from each:
-    // it lands on exactly what is needed, and with four or more marks nobody gives more than the
-    // quarter em 3.8 prefers. The share is rounded up so the remainder shrinks to zero on the last
-    // mark.
-    int needed = neededPx;
-    int remainingMarks = marks;
+    // The LAST glyph's trailing space is what the new character will occupy, so it is not itself
+    // reducible. A column is at most a few dozen cells; more marks than this is not a real column.
+    static constexpr size_t MAX_MARKS = 64;
+    int16_t avail[MAX_MARKS];
+    size_t marks = 0;
+    int total = 0;
+    for (size_t i = first; i + 1 < page.glyphs.size(); i++) {
+      const uint32_t cp = page.glyphs[i].codepoint;
+      if (!isReducible(cp)) continue;
+      if (marks == MAX_MARKS) return 0;
+      // The white half before an opening bracket sits between it and the previous glyph; every
+      // other mark's white half is between it and the next one.
+      int gap = geom.cellPx;
+      if (!givesLeadingSpace(cp)) {
+        gap = page.glyphs[i + 1].y - page.glyphs[i].y;
+      } else if (i > first) {
+        gap = page.glyphs[i].y - page.glyphs[i - 1].y;
+      }
+      const int a = std::clamp(gap - keep, 0, maxPerMark);
+      avail[marks++] = static_cast<int16_t>(a);
+      total += a;
+    }
+    if (total < neededPx) return 0;
+
+    // Spread the space being recovered evenly: the smallest per-mark level that covers what is
+    // needed, then trim the overshoot from the last marks at that level. With four or more marks
+    // nobody gives more than the quarter em 3.8 prefers.
+    int level = 0;
+    int covered = 0;
+    while (covered < neededPx) {
+      level++;
+      covered = 0;
+      for (size_t k = 0; k < marks; k++) covered += std::min<int>(avail[k], level);
+    }
+    for (size_t k = 0; k < marks; k++) avail[k] = static_cast<int16_t>(std::min<int>(avail[k], level));
+    for (size_t k = marks; k > 0 && covered > neededPx; k--) {
+      if (avail[k - 1] == level) {
+        avail[k - 1]--;
+        covered--;
+      }
+    }
+
     int applied = 0;
+    size_t k = 0;
     for (size_t i = first; i < page.glyphs.size(); i++) {
-      const bool gives = needed > 0 && i + 1 < page.glyphs.size() && isReducible(page.glyphs[i].codepoint);
+      const bool gives = i + 1 < page.glyphs.size() && isReducible(page.glyphs[i].codepoint);
+      const int give = gives ? avail[k++] : 0;
       const bool leading = gives && givesLeadingSpace(page.glyphs[i].codepoint);
-      const auto give = [&] {
-        const int g = std::min(maxPerMark, (needed + remainingMarks - 1) / remainingMarks);
-        applied += g;
-        needed -= g;
-        remainingMarks--;
-      };
-      if (leading) give();  // the bracket rises into its own white half
+      if (leading) applied += give;  // the bracket rises into its own white half
       if (applied > 0) {
         page.glyphs[i].y = static_cast<uint16_t>(std::max(0, static_cast<int>(page.glyphs[i].y) - applied));
       }
-      if (gives && !leading) give();  // what follows rises into the mark's trailing half
+      if (gives && !leading) applied += give;  // what follows rises into the mark's trailing half
     }
     return applied;
   }
@@ -2182,11 +2210,43 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         // Only safe when that glyph is this batch's previous stream entry: streamed layout can
         // leave glyphs from an earlier batch on the page, which are not ours to re-place. And only
         // when the pair actually fits, so a short column cannot strand the bracket instead.
-        if (idx > 0 && row + 1 < cur.rowsAvailable() && prev.byteOffset == stream_[idx - 1].byteOffset &&
-            prev.paragraphIndex == stream_[idx - 1].paragraphIndex) {
-          page.glyphs.pop_back();
-          cur.placeUprightAt(stream_[idx - 1], column, row);
-          row++;
+        //
+        // The character before may itself be the second half of an inseparable pair (…… ‥‥ ——,
+        // JLREQ 3.1.11): then both halves move, or ？ after …… would split the dots across columns.
+        const auto isInseparable = [](const uint32_t cp) {
+          return cp == 0x2026 || cp == 0x2025 || cp == 0x2014 || cp == 0x2015;
+        };
+        const auto isStreamEntry = [&](const VerticalGlyph& g, const size_t at) {
+          return g.byteOffset == stream_[at].byteOffset && g.paragraphIndex == stream_[at].paragraphIndex;
+        };
+        size_t moving = 1;
+        if (idx > 1 && page.glyphs.size() >= 2 && isInseparable(prev.codepoint)) {
+          const VerticalGlyph& before = page.glyphs[page.glyphs.size() - 2];
+          if (before.codepoint == prev.codepoint && before.column == prev.column && isStreamEntry(before, idx - 2)) {
+            moving = 2;
+          }
+        }
+        if (idx >= moving && row + moving < cur.rowsAvailable() && isStreamEntry(prev, idx - 1)) {
+          page.glyphs.resize(page.glyphs.size() - moving);
+          for (size_t k = moving; k > 0; k--) {
+            cur.placeUprightAt(stream_[idx - k], column, row);
+            row++;
+          }
+          // A moved ellipsis needs the same clearance the normal path gives one: its dots sit low
+          // in their cell, and this character would otherwise print into them.
+          const PendingChar& moved = stream_[idx - 1];
+          int inkTop = 0, inkHeight = 0;
+          const int nextInkOffset = cur.nextGlyphInkOffset(idx, pc.paragraphIndex);
+          if ((moved.codepoint == 0x2026 || moved.codepoint == 0x2025) && nextInkOffset >= 0 &&
+              renderer_.verticalPunctInkBox(fontId_, moved.codepoint, static_cast<EpdFontFamily::Style>(moved.style),
+                                            geom.rowTopPx(row - 1), cellPx, Kinsoku::verticalShiftType(moved.codepoint),
+                                            &inkTop, &inkHeight)) {
+            const int deficit = (inkTop + inkHeight + inkGapPx) - (geom.rowTopPx(row) + nextInkOffset);
+            if (deficit > 0) {
+              columnYShift -= deficit;
+              shiftColumn = column;
+            }
+          }
           // Fall through: this character is placed normally, now one row below its partner.
         }
       }
