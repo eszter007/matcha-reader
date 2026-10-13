@@ -12,6 +12,8 @@
 #include <Utf8.h>
 #include <ZipFile.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -22,6 +24,78 @@
 #include "Epub/parsers/TocNcxParser.h"
 
 namespace {
+// Case-insensitive search for an ASCII needle in [from, end) of `text`.
+size_t findAsciiCaseless(const std::string_view text, const std::string_view needle, const size_t from = 0) {
+  if (needle.empty() || text.size() < needle.size()) return std::string_view::npos;
+  for (size_t i = from; i + needle.size() <= text.size(); ++i) {
+    if (std::equal(needle.begin(), needle.end(), text.begin() + static_cast<std::ptrdiff_t>(i),
+                   [](const char a, const char b) { return std::tolower(static_cast<unsigned char>(a)) == b; })) {
+      return i;
+    }
+  }
+  return std::string_view::npos;
+}
+
+// The value of attribute `name` (lowercase, with its '=') inside one tag's text, unquoted.
+std::string_view tagAttribute(const std::string_view tag, const std::string_view name) {
+  size_t at = 0;
+  while ((at = findAsciiCaseless(tag, name, at)) != std::string_view::npos) {
+    // Only a whole attribute name: `data-href=` must not answer for `href=`.
+    const bool wordStart = at == 0 || std::isspace(static_cast<unsigned char>(tag[at - 1]));
+    at += name.size();
+    if (!wordStart || at >= tag.size()) continue;
+    const char quote = tag[at];
+    if (quote == '"' || quote == '\'') {
+      const size_t end = tag.find(quote, at + 1);
+      if (end == std::string_view::npos) return {};
+      return tag.substr(at + 1, end - at - 1);
+    }
+    const size_t end = tag.find_first_of(" \t\r\n/>", at);
+    return tag.substr(at, end == std::string_view::npos ? std::string_view::npos : end - at);
+  }
+  return {};
+}
+
+// The archive paths of the stylesheets an (X)HTML file's head links. Only the head is read: links
+// that matter come before <body>, and a chapter is otherwise hundreds of KB.
+void collectLinkedStylesheets(const std::string& htmlPath, const std::string& chapterHref,
+                              std::vector<std::string>& out) {
+  out.clear();
+  constexpr size_t HEAD_BYTES = 4096;
+  constexpr size_t MAX_LINKS = 16;
+  HalFile file;
+  if (!Storage.openFileForRead("EBP", htmlPath, file)) return;
+  // Heap, not stack: far past the stack budget, and released before the build allocates.
+  auto buf = makeUniqueNoThrow<char[]>(HEAD_BYTES);
+  if (!buf) {
+    LOG_ERR("EBP", "OOM: %u bytes for stylesheet link scan", static_cast<unsigned>(HEAD_BYTES));
+    return;  // empty: the chapter gets every stylesheet, as before
+  }
+  const int n = file.read(reinterpret_cast<uint8_t*>(buf.get()), HEAD_BYTES);
+  if (n <= 0) return;
+  std::string_view head(buf.get(), static_cast<size_t>(n));
+  if (const size_t body = findAsciiCaseless(head, "<body"); body != std::string_view::npos) {
+    head = head.substr(0, body);
+  }
+  const size_t slash = chapterHref.find_last_of('/');
+  const std::string chapterDir = slash == std::string::npos ? "" : chapterHref.substr(0, slash + 1);
+  out.reserve(4);
+  size_t at = 0;
+  while (out.size() < MAX_LINKS && (at = findAsciiCaseless(head, "<link", at)) != std::string_view::npos) {
+    const size_t end = head.find('>', at);
+    if (end == std::string_view::npos) break;
+    const std::string_view tag = head.substr(at, end - at);
+    at = end;
+    if (findAsciiCaseless(tagAttribute(tag, "rel="), "stylesheet") == std::string_view::npos) continue;
+    std::string_view href = tagAttribute(tag, "href=");
+    href = href.substr(0, href.find_first_of("#?"));
+    if (href.empty() || findAsciiCaseless(href, "://") != std::string_view::npos) continue;
+    const std::string decoded = FsHelpers::decodeUriEscapes(std::string(href));
+    if (decoded.empty()) continue;
+    out.push_back(FsHelpers::normalisePath(decoded[0] == '/' ? decoded : chapterDir + decoded));
+  }
+}
+
 constexpr size_t COVER_WRITE_BUFFER_SIZE = 16 * 1024;
 
 class BufferedFilePrint final : public Print {
@@ -400,7 +474,20 @@ void Epub::parseCssFiles() const {
   // partial -- was never written, re-triggering this whole parse at each book open.
   bool skippedFileForHeap = false;
   size_t totalRulesParsed = 0;
-  bool cacheOk = cssParser->beginCacheAppend();
+  // Each stylesheet's rules are tagged with its index, so a chapter can apply only the ones it
+  // links. An identical copy is not parsed again (below); its alias points chapters that link it
+  // at the original's rules. Paths are stored normalised, the form the chapter links resolve to.
+  std::vector<std::string> sourcePaths;
+  sourcePaths.reserve(std::min(cssFiles.size(), CssParser::StylesheetFilter::MAX_TRACKED));
+  uint8_t aliases[CssParser::StylesheetFilter::MAX_TRACKED];
+  for (size_t i = 0; i < cssFiles.size() && i < CssParser::StylesheetFilter::MAX_TRACKED; i++) {
+    sourcePaths.push_back(FsHelpers::normalisePath(cssFiles[i]));
+    aliases[i] = static_cast<uint8_t>(i);
+    if (dedupKeys[i] == 0) continue;
+    const auto first = std::find(dedupKeys.begin(), dedupKeys.begin() + static_cast<std::ptrdiff_t>(i), dedupKeys[i]);
+    aliases[i] = static_cast<uint8_t>(first - dedupKeys.begin());
+  }
+  bool cacheOk = cssParser->beginCacheAppend(&sourcePaths, aliases);
   if (!cacheOk) {
     LOG_ERR("EBP", "Could not open CSS cache for writing; parsing without caching");
   }
@@ -416,6 +503,7 @@ void Epub::parseCssFiles() const {
       seenKeys.push_back(dedupKey);
     }
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
+    cssParser->setSource(cssIndex);
 
     // Check heap before parsing - CSS parsing allocates heavily. The window check is the one that
     // matters: without it the extraction below is attempted, fails on exactly this block, and the
@@ -586,8 +674,10 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvert
           LOG_ERR("EBP", "Failed to reload cache after CSS rebuild");
           return false;
         }
-        // Invalidate section caches so they are rebuilt with the new CSS
+        // Invalidate section caches so they are rebuilt with the new CSS -- vertical ones too,
+        // which apply the same rules through collectVerticalStyles().
         Storage.removeDir((cachePath + "/sections").c_str());
+        Storage.removeDir((cachePath + "/vsections").c_str());
       }
       // Nothing is kept resident here: validateCache never materializes rules, and
       // parseCssFiles clears the map after each per-file cache flush. Only horizontal section
@@ -1429,4 +1519,12 @@ int Epub::resolveHrefToSpineIndex(const std::string& href) const {
     if (spineFilename == targetFilename) return i;
   }
   return -1;
+}
+
+CssParser::StylesheetFilter Epub::stylesheetFilterFor(const std::string& htmlPath,
+                                                      const std::string& chapterHref) const {
+  if (!cssParser) return {};
+  std::vector<std::string> linked;
+  collectLinkedStylesheets(htmlPath, chapterHref, linked);
+  return cssParser->stylesheetFilterFor(linked);
 }

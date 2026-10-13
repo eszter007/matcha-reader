@@ -1607,11 +1607,14 @@ bool CssParser::saveToCache() const {
   // Write rule count
   const auto storedRules = static_cast<uint16_t>(entryCount_);
   file.write(reinterpret_cast<const uint8_t*>(&storedRules), sizeof(storedRules));
+  // An empty stylesheet table: the in-memory map has merged its sources, so every record is
+  // written without one and applies to every chapter.
+  file.write(static_cast<uint8_t>(0));
 
   // Write each rule: selector string + CssStyle fields. entries_ is sorted, so records go out
   // in selector order -- stable across runs, unlike the map's bucket order.
   for (uint16_t i = 0; i < entryCount_; ++i) {
-    writeRuleRecord(file, selectorAt(i), styleAt(i));
+    writeRuleRecord(file, SOURCE_UNKNOWN, selectorAt(i), styleAt(i));
   }
 
   LOG_DBG("CSS", "Saved %u rules to cache", storedRules);
@@ -1708,7 +1711,9 @@ void CssParser::encodeStyleWire(const CssStyle& style, uint8_t* out) {
   (void)at;
 }
 
-void CssParser::writeRuleRecord(HalFile& file, const std::string_view selector, const CssStyle& style) {
+void CssParser::writeRuleRecord(HalFile& file, const uint8_t source, const std::string_view selector,
+                                const CssStyle& style) {
+  file.write(source);
   const auto selectorLen = static_cast<uint16_t>(selector.size());
   file.write(reinterpret_cast<const uint8_t*>(&selectorLen), sizeof(selectorLen));
   file.write(reinterpret_cast<const uint8_t*>(selector.data()), selectorLen);
@@ -1737,6 +1742,8 @@ bool CssParser::validateCache() const {
 
   uint16_t ruleCount = 0;
   if (file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount)) return false;
+  StylesheetFilter unusedFilter;
+  if (!readStylesheetTable(file, nullptr, unusedFilter)) return false;
   // An empty table is what a book without a stylesheet publishes (endCacheAppend); nothing may
   // follow it.
   if (ruleCount == 0) return file.available() == 0;
@@ -1745,8 +1752,10 @@ bool CssParser::validateCache() const {
     return false;
   }
 
-  // selectorLen is followed by RULE_FIXED_BYTES fixed bytes (see writeRuleRecord).
+  // source(1) + selectorLen(2), then the selector and RULE_FIXED_BYTES (see writeRuleRecord).
   for (uint16_t i = 0; i < ruleCount; ++i) {
+    uint8_t source = 0;
+    if (file.read(&source, 1) != 1) return false;
     uint16_t selectorLen = 0;
     if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) return false;
     if (selectorLen == 0 || selectorLen > MAX_SELECTOR_LENGTH) {
@@ -1776,7 +1785,8 @@ uint32_t CssParser::blockSelectorHash(const char* s, const size_t len) {
   return h == 0 ? 1 : h;  // 0 is the "any tag" / "no class" marker
 }
 
-size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, const size_t maxOut) const {
+size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, const size_t maxOut,
+                                        const StylesheetFilter* stylesheets) const {
   out.clear();
   if (cachePath.empty()) return 0;
 
@@ -1788,6 +1798,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
   uint16_t ruleCount = 0;
   if (file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount)) return 0;
   if (ruleCount > MAX_CACHED_RULES) return 0;
+  StylesheetFilter applied;
+  if (!readStylesheetTable(file, stylesheets, applied)) return 0;
 
   auto emOf = [](const float v, const uint8_t unit) -> float {
     return unit == static_cast<uint8_t>(CssUnit::Em) || unit == static_cast<uint8_t>(CssUnit::Rem) ? v : 0.0f;
@@ -1801,6 +1813,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
 
   std::string selector;
   for (uint16_t i = 0; i < ruleCount && out.size() < maxOut; i++) {
+    uint8_t source = 0;
+    if (file.read(&source, 1) != 1) break;
     uint16_t selectorLen = 0;
     if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) break;
     if (selectorLen == 0 || selectorLen > MAX_SELECTOR_LENGTH) break;
@@ -1843,6 +1857,8 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
         file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
+    // Read in full first: skipping must leave the stream at the next record.
+    if (!applied.allows(source)) continue;
 
     // Only unscoped and "v|"-scoped selectors feed the vertical engine.
     if (selector.size() >= 2 && selector[1] == '|') {
@@ -1910,9 +1926,10 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
   return out.size();
 }
 
-bool CssParser::beginCacheAppend() {
+bool CssParser::beginCacheAppend(const std::vector<std::string>* sources, const uint8_t* aliases) {
   appendedRuleCount_ = 0;
   cacheAppendActive_ = false;
+  currentSource_ = SOURCE_UNKNOWN;
   if (cachePath.empty()) return false;
   if (!Storage.openFileForWrite("CSS", cachePath + rulesCacheTmp, cacheAppendFile_)) return false;
   cacheAppendFile_.write(CssParser::CSS_CACHE_VERSION);
@@ -1920,8 +1937,82 @@ bool CssParser::beginCacheAppend() {
   // seek-back write lands in place -- same pattern as VerticalSection's header patch).
   const uint16_t placeholder = 0;
   cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&placeholder), sizeof(placeholder));
+  // Stylesheet table: count, then per stylesheet its alias and its path.
+  const size_t count = sources ? std::min(sources->size(), StylesheetFilter::MAX_TRACKED) : 0;
+  cacheAppendFile_.write(static_cast<uint8_t>(count));
+  for (size_t i = 0; i < count; ++i) {
+    const std::string& path = (*sources)[i];
+    const auto pathLen = static_cast<uint16_t>(std::min<size_t>(path.size(), MAX_SELECTOR_LENGTH));
+    cacheAppendFile_.write(aliases && aliases[i] < count ? aliases[i] : static_cast<uint8_t>(i));
+    cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&pathLen), sizeof(pathLen));
+    cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(path.data()), pathLen);
+  }
   cacheAppendActive_ = true;
   return true;
+}
+
+bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective) {
+  uint8_t count = 0;
+  if (file.read(&count, 1) != 1 || count > StylesheetFilter::MAX_TRACKED) return false;
+  uint8_t aliases[StylesheetFilter::MAX_TRACKED];
+  for (uint8_t i = 0; i < count; ++i) {
+    uint16_t pathLen = 0;
+    if (file.read(&aliases[i], 1) != 1 || file.read(&pathLen, sizeof(pathLen)) != sizeof(pathLen) ||
+        pathLen > MAX_SELECTOR_LENGTH || !file.seekCur(pathLen)) {
+      return false;
+    }
+  }
+  effective = StylesheetFilter{};
+  if (requested == nullptr || requested->all) return true;
+  effective.all = false;
+  for (size_t i = 0; i < StylesheetFilter::MAX_TRACKED; ++i) {
+    if (((requested->linked >> i) & 1u) == 0) continue;
+    effective.link(i);
+    if (i < count) effective.link(aliases[i]);
+  }
+  return true;
+}
+
+CssParser::StylesheetFilter CssParser::stylesheetFilterFor(const std::vector<std::string>& linkedPaths) const {
+  StylesheetFilter filter;
+  if (linkedPaths.empty() || cachePath.empty()) return filter;
+  HalFile file;
+  if (!Storage.openFileForRead("CSS", cachePath + rulesCache, file)) return filter;
+  uint8_t version = 0;
+  uint16_t ruleCount = 0;
+  uint8_t count = 0;
+  if (file.read(&version, 1) != 1 || version != CSS_CACHE_VERSION ||
+      file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount) || file.read(&count, 1) != 1 ||
+      count > StylesheetFilter::MAX_TRACKED) {
+    return filter;
+  }
+  // Heap, not stack: a full-length path is the project's whole stack budget for one function.
+  auto path = makeUniqueNoThrow<char[]>(MAX_SELECTOR_LENGTH);
+  if (!path) {
+    LOG_ERR("CSS", "OOM: %u bytes for stylesheet paths; applying all", static_cast<unsigned>(MAX_SELECTOR_LENGTH));
+    return filter;
+  }
+  StylesheetFilter matched;
+  for (uint8_t i = 0; i < count; ++i) {
+    uint8_t alias = 0;
+    uint16_t pathLen = 0;
+    if (file.read(&alias, 1) != 1 || file.read(&pathLen, sizeof(pathLen)) != sizeof(pathLen) ||
+        pathLen > MAX_SELECTOR_LENGTH || file.read(reinterpret_cast<uint8_t*>(path.get()), pathLen) != pathLen) {
+      return filter;
+    }
+    const std::string_view stored(path.get(), pathLen);
+    if (std::any_of(linkedPaths.begin(), linkedPaths.end(),
+                    [&stored](const std::string& linked) { return linked == stored; })) {
+      matched.link(i);
+    }
+  }
+  // Nothing resolved: more likely a path this resolver gets wrong than a chapter that really
+  // wants no styling, so keep the old book-wide behaviour rather than strip the chapter bare.
+  if (matched.all) {
+    LOG_DBG("CSS", "No linked stylesheet matched the book's %u; applying all", static_cast<unsigned>(count));
+    return filter;
+  }
+  return matched;
 }
 
 bool CssParser::appendRulesToCache() {
@@ -1931,7 +2022,7 @@ bool CssParser::appendRulesToCache() {
       LOG_DBG("CSS", "Reached max cached rules limit (%zu), dropping remainder", MAX_CACHED_RULES);
       break;
     }
-    writeRuleRecord(cacheAppendFile_, selectorAt(i), styleAt(i));
+    writeRuleRecord(cacheAppendFile_, currentSource_, selectorAt(i), styleAt(i));
     ++appendedRuleCount_;
   }
   return true;
@@ -1968,7 +2059,7 @@ bool CssParser::endCacheAppend(const bool discard) {
   return true;
 }
 
-bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
+bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const StylesheetFilter* stylesheets) {
   cacheLoadFailedForHeap_ = false;
   if (cachePath.empty()) {
     return false;
@@ -2004,6 +2095,11 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     clear();
     return false;
   }
+  StylesheetFilter applied;
+  if (!readStylesheetTable(file, stylesheets, applied)) {
+    clear();
+    return false;
+  }
 
   // A chapter-filtered load keeps only a small subset of a book-wide cache. Reserving the
   // book's full rule count here defeats that filter and can consume the last contiguous block
@@ -2030,15 +2126,26 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses) {
     // The RAM bound applies to EVERY load, filtered or not: a chapter touching enough classes
     // could otherwise pull more than MAX_RULES out of a cache file that may now hold 4000.
     if (entryCount_ >= MAX_RULES) break;
+    uint8_t source = 0;
     // Read selector string
     uint16_t selectorLen = 0;
-    if (!hasRemainingBytes(sizeof(selectorLen))) {
+    if (!hasRemainingBytes(1 + sizeof(selectorLen))) {
       clear();
       return false;
     }
-    if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) {
+    if (file.read(&source, 1) != 1 || file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen)) {
       clear();
       return false;
+    }
+    // A stylesheet this chapter does not link: step over the record without reading it.
+    if (!applied.allows(source)) {
+      const size_t skip = selectorLen + RULE_FIXED_BYTES;
+      if (selectorLen == 0 || selectorLen > MAX_SELECTOR_LENGTH || !hasRemainingBytes(skip) ||
+          !file.seekCur(static_cast<int64_t>(skip))) {
+        clear();
+        return false;
+      }
+      continue;
     }
 
     if (selectorLen == 0 || selectorLen > MAX_SELECTOR_LENGTH || !hasRemainingBytes(selectorLen)) {

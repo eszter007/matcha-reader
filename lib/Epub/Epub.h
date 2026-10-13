@@ -128,6 +128,9 @@ class Epub {
   size_t getBookSize() const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;
   CssParser* getCssParser() const { return cssParser.get(); }
+  // The stylesheets the chapter at chapterHref links, read from its HTML already extracted to
+  // htmlPath, as a filter for the CSS cache loads (see CssParser::StylesheetFilter).
+  CssParser::StylesheetFilter stylesheetFilterFor(const std::string& htmlPath, const std::string& chapterHref) const;
   // Whether the parsed-CSS cache exists (always true for TXT/MD, which have none to build);
   // load() rebuilds it when missing.
   bool hasCssCache() const;

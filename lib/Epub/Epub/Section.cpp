@@ -698,7 +698,10 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       std::vector<std::string> usedClasses;
       collectHtmlClasses(ctx->parsePath, usedClasses, 64);
       LOG_DBG("SCT", "%u distinct classes in chapter html", static_cast<unsigned>(usedClasses.size()));
-      if (!ctx->cssParser->loadFromCache(&usedClasses)) {
+      // ...and only the stylesheets it links: rules from a stylesheet meant for other pages (an
+      // image page's centred body) must not apply here.
+      const CssParser::StylesheetFilter stylesheets = epub->stylesheetFilterFor(ctx->parsePath, localPath);
+      if (!ctx->cssParser->loadFromCache(&usedClasses, &stylesheets)) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
         // Low heap is the one failure where retrying can succeed: the cache file is VALID, the
         // rule table just doesn't fit right now. Building anyway would persist this chapter
