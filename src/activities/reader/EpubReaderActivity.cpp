@@ -925,8 +925,16 @@ void EpubReaderActivity::readerLoop() {
   // stamp per decode block, so the wait stays in the milliseconds).
   if (mappedInput.wasAnyPressed()) {
     imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
-    pendingImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+    const bool refineWasPending =
+        pendingImageRefine_.exchange(NO_IMAGE_REFINE, std::memory_order_relaxed) != NO_IMAGE_REFINE;
     requestedImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
+    // The image's pixel cache (up to 96 KB) was kept for that refine alone. Free it now, or it
+    // stays resident under whatever the press opens next -- the reader menu found 7 KB free.
+    // Try, never wait: a render still holding the lock frees it on its own way out.
+    if (refineWasPending) {
+      RenderLock lock{RenderLock::Try{}};
+      if (lock.held()) ImageBlock::releaseRenderCache();
+    }
   }
 
   // Someone else turned the screen while this reader was stacked (the control
@@ -2967,6 +2975,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // Re-assert the claim for the page the body just prewarmed (it cleared it above).
         if (!vGlyphsWarm) prewarmedVPage_ = verticalSection->currentPage;
       }
+      // The image pixel cache outlives the page only for a gray refine already queued for it,
+      // which reuses and then frees it. Otherwise it would sit resident for good: an image page
+      // with no gray tones queues no refine, and a text page never touches the slot at all.
+      if (pendingImageRefine_.load(std::memory_order_relaxed) != imageRefineKey(verticalSection->currentPage)) {
+        ImageBlock::releaseRenderCache();
+      }
       LOG_DBG("ERS", "Rendered vertical page in %dms", millis() - start);
       // The idle image refine (readerLoop) counts its wait from here.
       lastRenderCompleteMs = millis();
@@ -4788,8 +4802,10 @@ void EpubReaderActivity::earlyRenderVerticalPage(const VerticalPage& page, const
   renderer.displayBuffer();
   earlyPageActuallyDisplayed_ = true;
   // The build resumes the moment this returns and needs its headroom back: the prewarm above
-  // re-claimed font page slots and the glyph slab that the build path released before starting.
+  // re-claimed font page slots and the glyph slab that the build path released before starting,
+  // and an image on the page loaded up to 96 KB of pixel cache that nothing else frees mid-build.
   releaseRenderFontMemory();
+  ImageBlock::releaseRenderCache();
   LOG_DBG("ERS", "Early first render of page %d in %dms", pageIndex, millis() - start);
 }
 
