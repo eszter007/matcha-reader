@@ -1759,7 +1759,8 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec&
               static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));
       lastBuildUnstyledForHeap_ = true;
     } else {
-      epub->getCssParser()->collectVerticalStyles(blockStyles);
+      const CssParser::StylesheetFilter stylesheets = epub->stylesheetFilterFor(tmpHtmlPath, localPath);
+      epub->getCssParser()->collectVerticalStyles(blockStyles, STYLED_BLOCK_TABLE_ENTRIES, &stylesheets);
       if (!blockStyles.empty()) {
         LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(blockStyles.size()));
       }

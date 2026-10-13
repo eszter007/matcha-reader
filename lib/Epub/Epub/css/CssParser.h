@@ -68,7 +68,28 @@ class CssParser {
   //      leave drop caps off with no way to notice.
   // v23: the CSS 2.1 one-colon spelling `X:first-letter` is accepted too. Framing is unchanged;
   //      same reason as v22 -- a v22 cache was written by a parser that dropped those rules.
-  static constexpr uint8_t CSS_CACHE_VERSION = 23;
+  // v24: each record leads with the index of the stylesheet it came from, and the header lists the
+  //      stylesheets (path + the index whose rules an identical copy shares), so a chapter applies
+  //      only the stylesheets it links.
+  static constexpr uint8_t CSS_CACHE_VERSION = 24;
+
+  // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
+  // stylesheet the chapter does not link is skipped on load: an image-page stylesheet's
+  // `body { text-align: center }` must not centre every text chapter. Records with no recorded
+  // source, and stylesheets past the tracked range, always apply. Default: everything applies.
+  struct StylesheetFilter {
+    static constexpr size_t MAX_TRACKED = 64;
+    uint64_t linked = 0;
+    bool all = true;
+    void link(const size_t index) {
+      all = false;
+      if (index < MAX_TRACKED) linked |= uint64_t{1} << index;
+    }
+    [[nodiscard]] bool allows(const uint8_t source) const {
+      return all || source >= MAX_TRACKED || ((linked >> source) & 1u) != 0;
+    }
+  };
+  static constexpr uint8_t SOURCE_UNKNOWN = 0xFF;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -209,7 +230,8 @@ class CssParser {
    * a few dozen. Tag-type selectors are always loaded.
    * @return true if cache was loaded successfully
    */
-  bool loadFromCache(const std::vector<std::string>* usedClasses = nullptr);
+  bool loadFromCache(const std::vector<std::string>* usedClasses = nullptr,
+                     const StylesheetFilter* stylesheets = nullptr);
 
   /**
    * Structurally validate the cache file WITHOUT materializing the rule map. Book open only
@@ -229,8 +251,19 @@ class CssParser {
    * Duplicate selectors across files are resolved at load time (loadFromCache merges like the
    * parser does).
    */
-  bool beginCacheAppend();
+  // sources: the book's stylesheet paths, in the order setSource() indexes them. aliases[i] is the
+  // stylesheet whose rules stylesheet i shares: itself, or the original it is an identical copy of
+  // (copies are parsed once). Both may be null for a cache that records no sources.
+  bool beginCacheAppend(const std::vector<std::string>* sources = nullptr, const uint8_t* aliases = nullptr);
+  // Tags the rules appended next with the stylesheet they came from.
+  void setSource(const size_t index) {
+    currentSource_ = index < StylesheetFilter::MAX_TRACKED ? static_cast<uint8_t>(index) : SOURCE_UNKNOWN;
+  }
   bool appendRulesToCache();
+
+  // The filter for a chapter that links `linkedPaths` (resolved archive paths). A chapter that
+  // links no stylesheet, or none the cache knows, gets every rule -- as before this existed.
+  [[nodiscard]] StylesheetFilter stylesheetFilterFor(const std::vector<std::string>& linkedPaths) const;
   bool endCacheAppend(bool discard);
 
   /**
@@ -265,7 +298,8 @@ class CssParser {
    * least one vertical-relevant property, without materializing the rule map. Returns the number
    * collected (bounded by maxOut).
    */
-  size_t collectVerticalStyles(std::vector<VerticalBlockRule>& out, size_t maxOut = 256) const;
+  size_t collectVerticalStyles(std::vector<VerticalBlockRule>& out, size_t maxOut = 256,
+                               const StylesheetFilter* stylesheets = nullptr) const;
 
  private:
   // Lookup key for a multi-piece selector: the pieces are hashed and compared as if
@@ -342,8 +376,12 @@ class CssParser {
   HalFile cacheAppendFile_;
   uint16_t appendedRuleCount_ = 0;
   bool cacheAppendActive_ = false;
+  uint8_t currentSource_ = SOURCE_UNKNOWN;
 
-  static void writeRuleRecord(HalFile& file, std::string_view selector, const CssStyle& style);
+  static void writeRuleRecord(HalFile& file, uint8_t source, std::string_view selector, const CssStyle& style);
+  // Reads the header's stylesheet table and returns `requested` widened to the stylesheets its
+  // linked ones share rules with. The file must be positioned just after the rule count.
+  static bool readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective);
   // Fixed-size style body in the cache record's byte order; `out` must hold RULE_FIXED_BYTES.
   static void encodeStyleWire(const CssStyle& style, uint8_t* out);
 

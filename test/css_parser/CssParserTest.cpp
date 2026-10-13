@@ -5,7 +5,9 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <vector>
 
 #include "CssParser.h"
 
@@ -130,6 +132,67 @@ TEST_F(CssParserTest, IncrementalAppendRoundTripsAndMergesAcrossFlushes) {
   const CssStyle style = reader.resolveStyle("p", "");
   EXPECT_TRUE(style.defined.textAlign);
   EXPECT_TRUE(style.defined.fontWeight);
+}
+
+// Writes the Matcha E-Book shape: a text stylesheet the chapters link, and an image-page one whose
+// `body { text-align: center }` they do not. `copy.css` is an identical copy of `text.css`.
+void writeTwoStylesheetCache(CssParser& writer, const std::function<bool(const std::string&)>& load) {
+  const std::vector<std::string> sources{"OPS/css/text.css", "OPS/css/image.css", "OPS/css/copy.css"};
+  const uint8_t aliases[] = {0, 1, 0};
+  ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+  writer.setSource(0);
+  ASSERT_TRUE(load("p { font-weight: bold; }\n"));
+  ASSERT_TRUE(writer.appendRulesToCache());
+  writer.clear();
+  writer.setSource(1);
+  ASSERT_TRUE(load("body { text-align: center; }\n"));
+  ASSERT_TRUE(writer.appendRulesToCache());
+  writer.clear();
+  ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+}
+
+TEST_F(CssParserTest, ChapterAppliesOnlyTheStylesheetsItLinks) {
+  {
+    CssParser writer(cachePath());
+    writeTwoStylesheetCache(writer, [&](const std::string& css) { return loadCss(writer, css); });
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.validateCache());
+  const auto filter = reader.stylesheetFilterFor({"OPS/css/text.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+  EXPECT_FALSE(reader.resolveStyle("body", "").defined.textAlign) << "an unlinked stylesheet leaked into the chapter";
+
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  reader.collectVerticalStyles(vertical, 256, &filter);
+  EXPECT_TRUE(vertical.empty()) << "the vertical engine centred a chapter from an unlinked stylesheet";
+}
+
+TEST_F(CssParserTest, LinkingAnIdenticalCopyAppliesTheOriginalsRules) {
+  {
+    CssParser writer(cachePath());
+    writeTwoStylesheetCache(writer, [&](const std::string& css) { return loadCss(writer, css); });
+  }
+  CssParser reader(cachePath());
+  const auto filter = reader.stylesheetFilterFor({"OPS/css/copy.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+  EXPECT_FALSE(reader.resolveStyle("body", "").defined.textAlign);
+}
+
+TEST_F(CssParserTest, ChapterWithNoKnownLinkKeepsEveryStylesheet) {
+  {
+    CssParser writer(cachePath());
+    writeTwoStylesheetCache(writer, [&](const std::string& css) { return loadCss(writer, css); });
+  }
+  CssParser reader(cachePath());
+  for (const std::vector<std::string>& links :
+       {std::vector<std::string>{}, std::vector<std::string>{"OPS/css/missing.css"}}) {
+    const auto filter = reader.stylesheetFilterFor(links);
+    ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+    EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+    EXPECT_TRUE(reader.resolveStyle("body", "").defined.textAlign);
+  }
 }
 
 // The reason the append writes to a temp file at all.
