@@ -79,7 +79,9 @@ add_subdirectory(sentence_mining)
 add_subdirectory(cjk_script)
 
 add_subdirectory(inflate_stream)
+add_subdirectory(zip_file)
 add_subdirectory(fs_helpers)
+add_subdirectory(http_header)
 add_subdirectory(txt_to_html)
 
 add_subdirectory(absolute_grayscale)
@@ -91,6 +93,7 @@ add_subdirectory(glyph_bitmap)
 add_subdirectory(clipping_store)
 add_subdirectory(reader_session)
 add_subdirectory(plugin_manifest_classification)
+add_subdirectory(plugin_picker_layout)
 add_subdirectory(protected_paths)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

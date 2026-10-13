@@ -1,6 +1,7 @@
 #include "CssParser.h"
 
 #include <Arduino.h>
+#include <AsciiText.h>
 #include <Logging.h>
 #include <Memory.h>
 
@@ -88,15 +89,6 @@ constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
 static_assert(RULE_FIXED_BYTES == 88, "CSS v19 rule framing must stay in sync with writeRuleRecord");
 
-// Check if character is CSS whitespace
-constexpr bool isCssWhitespace(const char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
-
-constexpr std::string_view trimCssWhitespace(std::string_view s) {
-  while (!s.empty() && isCssWhitespace(s.front())) s.remove_prefix(1);
-  while (!s.empty() && isCssWhitespace(s.back())) s.remove_suffix(1);
-  return s;
-}
-
 constexpr char asciiToLower(const char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; }
 
 // Case-insensitive equality on ASCII. lowercaseKeyword MUST already be
@@ -115,7 +107,7 @@ void forEachDelimitedToken(std::string_view s, Pred isDelimiter, F&& fn) {
   size_t start = 0;
   for (size_t i = 0; i <= s.size(); ++i) {
     if (i == s.size() || isDelimiter(s[i])) {
-      const std::string_view trimmed = trimCssWhitespace(s.substr(start, i - start));
+      const std::string_view trimmed = trimAsciiWhitespace(s.substr(start, i - start));
       if (!trimmed.empty()) {
         fn(trimmed);
       }
@@ -158,7 +150,7 @@ bool tryParseNumber(std::string_view s, T& out) {
 // fallback rule using the returned count.
 size_t collectEdgeValueTokens(std::string_view s, std::string_view (&out)[4]) {
   size_t count = 0;
-  forEachDelimitedToken(s, isCssWhitespace, [&](std::string_view tok) {
+  forEachDelimitedToken(s, isAsciiWhitespace, [&](std::string_view tok) {
     if (count < 4) out[count++] = tok;
   });
   return count;
@@ -170,14 +162,14 @@ size_t collectEdgeValueTokens(std::string_view s, std::string_view (&out)[4]) {
 // has to be told apart afterwards. Looking at the last character is enough: every unit this
 // parser understands (em, rem, pt, px, %) ends in something that is not a digit or a dot.
 constexpr bool isUnitlessNumber(std::string_view v) {
-  v = trimCssWhitespace(v);
+  v = trimAsciiWhitespace(v);
   return !v.empty() && ((v.back() >= '0' && v.back() <= '9') || v.back() == '.');
 }
 
 std::string_view stripTrailingImportant(std::string_view value) {
   constexpr std::string_view IMPORTANT = "!important";
 
-  while (!value.empty() && isCssWhitespace(value.back())) {
+  while (!value.empty() && isAsciiWhitespace(value.back())) {
     value.remove_suffix(1);
   }
 
@@ -191,7 +183,7 @@ std::string_view stripTrailingImportant(std::string_view value) {
   }
 
   value.remove_suffix(IMPORTANT.size());
-  while (!value.empty() && isCssWhitespace(value.back())) {
+  while (!value.empty() && isAsciiWhitespace(value.back())) {
     value.remove_suffix(1);
   }
   return value;
@@ -286,7 +278,7 @@ bool tryParseHexColorLuma(const std::string_view s, uint8_t& lumaOut) {
 bool tryParseRgbFunctionLuma(const std::string_view s, uint8_t& lumaOut) {
   const size_t open = s.find('(');
   if (open == std::string_view::npos || s.empty() || s.back() != ')') return false;
-  const std::string_view fn = trimCssWhitespace(s.substr(0, open));
+  const std::string_view fn = trimAsciiWhitespace(s.substr(0, open));
   if (!iequalsAscii(fn, "rgb") && !iequalsAscii(fn, "rgba")) return false;
 
   const std::string_view args = s.substr(open + 1, s.size() - open - 2);
@@ -294,7 +286,7 @@ bool tryParseRgbFunctionLuma(const std::string_view s, uint8_t& lumaOut) {
   size_t count = 0;
   bool malformed = false;
   forEachDelimitedToken(
-      args, [](const char c) { return c == ',' || c == '/' || isCssWhitespace(c); },
+      args, [](const char c) { return c == ',' || c == '/' || isAsciiWhitespace(c); },
       [&](std::string_view token) {
         if (malformed || count >= 3) return;  // 4th token is alpha; ignored
         float channelValue = 0.0f;
@@ -320,7 +312,7 @@ bool tryParseRgbFunctionLuma(const std::string_view s, uint8_t& lumaOut) {
 // property UNSET rather than guessing. Never persist a guess: an ink mode is stored in the CSS
 // cache and would then be believed forever.
 bool tryParseColorLuma(std::string_view val, uint8_t& lumaOut) {
-  val = trimCssWhitespace(stripTrailingImportant(val));
+  val = trimAsciiWhitespace(stripTrailingImportant(val));
   if (val.empty()) return false;
   if (val.front() == '#') return tryParseHexColorLuma(val.substr(1), lumaOut);
   if (val.find('(') != std::string_view::npos) return tryParseRgbFunctionLuma(val, lumaOut);
@@ -337,7 +329,7 @@ bool tryParseColorLuma(std::string_view val, uint8_t& lumaOut) {
 // first token that parses as one.
 bool tryParseBackgroundShorthandLuma(const std::string_view val, uint8_t& lumaOut) {
   bool found = false;
-  forEachDelimitedToken(stripTrailingImportant(val), isCssWhitespace, [&](const std::string_view token) {
+  forEachDelimitedToken(stripTrailingImportant(val), isAsciiWhitespace, [&](const std::string_view token) {
     if (!found && tryParseColorLuma(token, lumaOut)) found = true;
   });
   return found;
@@ -547,7 +539,7 @@ CssParser::RuleInsertResult CssParser::insertOrMerge(const std::string_view sele
 // Property value interpreters
 
 CssTextAlign CssParser::interpretAlignment(std::string_view val) {
-  val = trimCssWhitespace(val);
+  val = trimAsciiWhitespace(val);
 
   if (iequalsAscii(val, "left") || iequalsAscii(val, "start")) return CssTextAlign::Left;
   if (iequalsAscii(val, "right") || iequalsAscii(val, "end")) return CssTextAlign::Right;
@@ -558,14 +550,14 @@ CssTextAlign CssParser::interpretAlignment(std::string_view val) {
 }
 
 CssFontStyle CssParser::interpretFontStyle(std::string_view val) {
-  val = trimCssWhitespace(val);
+  val = trimAsciiWhitespace(val);
 
   if (iequalsAscii(val, "italic") || iequalsAscii(val, "oblique")) return CssFontStyle::Italic;
   return CssFontStyle::Normal;
 }
 
 CssFontWeight CssParser::interpretFontWeight(std::string_view val) {
-  val = trimCssWhitespace(val);
+  val = trimAsciiWhitespace(val);
 
   // Named values
   if (iequalsAscii(val, "bold") || iequalsAscii(val, "bolder")) return CssFontWeight::Bold;
@@ -586,7 +578,7 @@ CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
   // so malformed values like "notunderline" do not accidentally enable a line.
   CssTextDecoration result = CssTextDecoration::None;
   bool explicitNone = false;
-  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+  forEachDelimitedToken(val, isAsciiWhitespace, [&](const std::string_view token) {
     if (iequalsAscii(token, "none")) {
       explicitNone = true;
     } else if (iequalsAscii(token, "underline")) {
@@ -608,7 +600,7 @@ CssTextEmphasis CssParser::interpretTextEmphasis(std::string_view val) {
   bool none = false, open = false;
   CssTextEmphasis shape = CssTextEmphasis::FilledSesame;
   bool haveShape = false;
-  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+  forEachDelimitedToken(val, isAsciiWhitespace, [&](const std::string_view token) {
     if (iequalsAscii(token, "none")) {
       none = true;
     } else if (iequalsAscii(token, "open")) {
@@ -653,7 +645,7 @@ CssListStyleType CssParser::interpretListStyleType(std::string_view val) {
   // Whole-keyword comparison, not substring: a @counter-style name containing "circle" is not
   // list-style-type: circle, and the ordered families are matched by their real CSS names.
   CssListStyleType result = CssListStyleType::Disc;
-  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+  forEachDelimitedToken(val, isAsciiWhitespace, [&](const std::string_view token) {
     if (iequalsAscii(token, "none")) {
       result = CssListStyleType::NoMarker;
     } else if (iequalsAscii(token, "square")) {
@@ -685,7 +677,7 @@ CssLength CssParser::interpretLength(std::string_view val) {
 }
 
 bool CssParser::tryInterpretLength(std::string_view val, CssLength& out) {
-  val = trimCssWhitespace(val);
+  val = trimAsciiWhitespace(val);
   if (val.empty()) {
     out = CssLength{};
     return false;
@@ -724,7 +716,7 @@ bool CssParser::tryInterpretLength(std::string_view val, CssLength& out) {
 
 CssBorderLineStyle borderLineStyleFrom(const std::string_view value) {
   CssBorderLineStyle result = CssBorderLineStyle::Solid;
-  forEachDelimitedToken(value, isCssWhitespace, [&result](const std::string_view token) {
+  forEachDelimitedToken(value, isAsciiWhitespace, [&result](const std::string_view token) {
     if (iequalsAscii(token, "dotted")) {
       result = CssBorderLineStyle::Dotted;
     } else if (iequalsAscii(token, "dashed")) {
@@ -738,7 +730,7 @@ CssBorderLineStyle borderLineStyleFrom(const std::string_view value) {
 
 uint8_t borderLineWidthFrom(const std::string_view value) {
   uint8_t result = 1;
-  forEachDelimitedToken(value, isCssWhitespace, [&result](const std::string_view token) {
+  forEachDelimitedToken(value, isAsciiWhitespace, [&result](const std::string_view token) {
     size_t numericEnd = 0;
     while (numericEnd < token.size() && (std::isdigit(token[numericEnd]) || token[numericEnd] == '.' ||
                                          token[numericEnd] == '+' || token[numericEnd] == '-')) {
@@ -758,8 +750,8 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
   const size_t colonPos = decl.find(':');
   if (colonPos == std::string_view::npos || colonPos == 0) return;
 
-  const std::string_view name = trimCssWhitespace(decl.substr(0, colonPos));
-  std::string_view value = trimCssWhitespace(decl.substr(colonPos + 1));
+  const std::string_view name = trimAsciiWhitespace(decl.substr(0, colonPos));
+  std::string_view value = trimAsciiWhitespace(decl.substr(colonPos + 1));
 
   if (name.empty() || value.empty()) return;
 
@@ -1023,7 +1015,7 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     // weight keywords render here -- size and family are the reader's settings. Matching whole
     // tokens rather than substrings also stops a family name like "BoldFace" from registering
     // as bold.
-    forEachDelimitedToken(value, isCssWhitespace, [&style](const std::string_view token) {
+    forEachDelimitedToken(value, isAsciiWhitespace, [&style](const std::string_view token) {
       if (iequalsAscii(token, "italic") || iequalsAscii(token, "oblique")) {
         style.fontStyle = CssFontStyle::Italic;
         style.defined.fontStyle = 1;
@@ -1321,7 +1313,7 @@ bool CssParser::loadFromStream(HalFile& source) {
     }
 
     if (bodyDepth == 0) {
-      if (selector.empty() && isCssWhitespace(c)) {
+      if (selector.empty() && isAsciiWhitespace(c)) {
         return;
       }
       if (c == '@' && selector.empty()) {

@@ -144,6 +144,18 @@ struct TextExtractor {
   // base -> rubyText.
   ParagraphSink* sink = nullptr;
 
+  // Slice deadline for an incremental build (VerticalSection::buildSomeMore): once it passes, the
+  // parser is suspended after the current callback and the slice hands the task back. A 4KB parse
+  // buffer is about half a second of layout, far too coarse a slice for a menu to open within.
+  XML_Parser parser = nullptr;
+  uint32_t sliceDeadlineMs = 0;  // 0: no deadline
+  void yieldIfSliceOver() {
+    if (sliceDeadlineMs != 0 && parser && static_cast<int32_t>(millis() - sliceDeadlineMs) >= 0) {
+      sliceDeadlineMs = 0;  // one stop per slice; expat ignores a second call anyway
+      XML_StopParser(parser, XML_TRUE);
+    }
+  }
+
   std::vector<RubyRun> currentRuns;
   std::string currentText;
   int blockDepth = 0;
@@ -487,6 +499,7 @@ struct TextExtractor {
   static void XMLCALL startElement(void* userData, const char* name, const char** atts) {
     auto* self = static_cast<TextExtractor*>(userData);
     self->checkHeap("startElement", name);
+    self->yieldIfSliceOver();
     self->elementDepth++;
     if (self->skipDepth >= 0) {
       self->skipDepth++;
@@ -625,6 +638,7 @@ struct TextExtractor {
   static void XMLCALL endElement(void* userData, const char* name) {
     auto* self = static_cast<TextExtractor*>(userData);
     self->checkHeap("endElement", name);
+    self->yieldIfSliceOver();
     self->elementDepth--;
     if (self->skipDepth > 0) {
       self->skipDepth--;
@@ -710,6 +724,7 @@ struct TextExtractor {
   static void XMLCALL characterData(void* userData, const char* s, int len) {
     auto* self = static_cast<TextExtractor*>(userData);
     self->checkHeap("characterData");
+    self->yieldIfSliceOver();
     // Position bookkeeping first, and independent of every layout-side early return below:
     // the count must track the DOCUMENT, not what this layout chooses to render. Dropped
     // inter-tag whitespace and text past a forced split still occupy source positions, and
@@ -1125,6 +1140,18 @@ struct LayoutPageSink final : ParagraphSink {
   // on-demand reserve; preallocating a second full page here starved the actual layout page.
   VerticalPage servePage_;
 
+  // Glyphs the font decompressor starved while a page was DRAWN mid-build. The build counts its
+  // own starved measurements to judge whether its layout is approximate; a draw's misses are not
+  // layout, and counting them stamped a correct chapter stale for a rebuild on the next open.
+  uint32_t starvedWhileDrawing = 0;
+  void renderEarly(const VerticalPage& page, const int pageIndex) {
+    FontDecompressor* fd = nullptr;
+    if (auto* fcm = renderer.getFontCacheManager()) fd = fcm->getDecompressor();
+    const uint32_t before = fd ? fd->getStarvedGlyphCount() : 0;
+    earlyRenderFn(earlyRenderCtx, page, pageIndex);
+    if (fd) starvedWhileDrawing += fd->getStarvedGlyphCount() - before;
+  }
+
   LayoutPageSink(VerticalParsedText& layout, HalFile& out, std::vector<uint32_t>& pageOffsets, Epub& epub,
                  GfxRenderer& renderer, const std::string& chapterDir, const std::string& imageBasePath,
                  uint16_t viewportWidth, uint16_t viewportHeight)
@@ -1409,7 +1436,7 @@ struct LayoutPageSink final : ParagraphSink {
     }
     if (req == lastBuilt) {
       pageRequest->store(-1, std::memory_order_relaxed);
-      if (!justWritten.isImagePage()) earlyRenderFn(earlyRenderCtx, justWritten, req);
+      if (!justWritten.isImagePage()) renderEarly(justWritten, req);
       return;
     }
     // A refused read-back under an UNCHANGED heap state will be refused again -- don't
@@ -1464,7 +1491,7 @@ struct LayoutPageSink final : ParagraphSink {
       return;
     }
     pageRequest->store(-1, std::memory_order_relaxed);
-    if (!servePage_.isImagePage()) earlyRenderFn(earlyRenderCtx, servePage_, req);
+    if (!servePage_.isImagePage()) renderEarly(servePage_, req);
   }
 
   // Reads an already-extracted image's size from its header bytes alone, without a decoder.
@@ -1644,23 +1671,109 @@ constexpr size_t STYLED_BLOCK_TABLE_ENTRIES = 256;  // must match collectVertica
 constexpr uint32_t MIN_MAX_ALLOC_FOR_STYLED_BLOCKS =
     static_cast<uint32_t>(STYLED_BLOCK_TABLE_ENTRIES * sizeof(CssParser::VerticalBlockRule)) + 12 * 1024;
 
-bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec& spec) {
+namespace {
+uint32_t starvedGlyphCount(GfxRenderer& renderer) {
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    if (auto* fd = fcm->getDecompressor()) return fd->getStarvedGlyphCount();
+  }
+  return 0;
+}
+}  // namespace
+
+struct VerticalSection::BuildContext {
+  BuildContext(VerticalSection& section, const ReaderRenderSpec& spec, std::string localPath, std::string tmpHtmlPath,
+               std::string chapterDir, std::string imageBasePath)
+      : spec(spec),
+        localPath(std::move(localPath)),
+        tmpHtmlPath(std::move(tmpHtmlPath)),
+        chapterDir(std::move(chapterDir)),
+        imageBasePath(std::move(imageBasePath)),
+        layout(section.renderer, spec.fontId, spec.viewportWidth, spec.viewportHeight),
+        sink(layout, out, section.pageOffsets_, *section.epub, section.renderer, this->chapterDir, this->imageBasePath,
+             spec.viewportWidth, spec.viewportHeight) {}
+  ~BuildContext() {
+    if (parser) destroyXmlParser(parser);
+  }
+  BuildContext(const BuildContext&) = delete;
+  BuildContext& operator=(const BuildContext&) = delete;
+
+  ReaderRenderSpec spec;
+  // Same reason as Section::buildSomeMore: a chapter layout outlasts IDLE_POWER_SAVING_MS, and the
+  // throttle would otherwise land in the middle of it. Held from start to finish, across slices.
+  HalPowerManager::Lock powerLock;
+  HalFile out;  // the section file being written; declared before the sink that writes to it
+  uint32_t buildStartMs = 0;
+  uint32_t starvedGlyphsAtStart = 0;
+  // Glyph measurements this build's own layout took without ink data (see buildSomeMore()).
+  uint32_t starvedInLayout = 0;
+  // A page was drawn between two slices (see notePageDrawnBetweenSlices()).
+  bool drawnBetweenSlices = false;
+  std::string localPath;
+  std::string tmpHtmlPath;
+  std::string chapterDir;
+  std::string imageBasePath;
+  VerticalParsedText layout;
+  LayoutPageSink sink;
+  std::vector<CssParser::VerticalBlockRule> blockStyles;
+  TextExtractor extractor;
+  std::vector<std::string> tocAnchors;
+  XML_Parser parser = nullptr;
+  HalFile htmlFile;
+  bool firstChunk = true;  // the prolog is inspected once; see XhtmlDoctype.h
+  bool parseDone = false;
+  // A slice deadline suspended the parser mid-buffer; it is resumed before more is read.
+  bool suspended = false;
+  bool suspendedOnFinalBuffer = false;
+};
+
+VerticalSection::VerticalSection(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRenderer& renderer)
+    : epub(epub),
+      spineIndex(spineIndex),
+      renderer(renderer),
+      filePath(epub->getCachePath() + "/vsections/" + std::to_string(spineIndex) + ".bin") {}
+
+VerticalSection::~VerticalSection() { abandonBuild(); }
+
+void VerticalSection::notePageDrawnBetweenSlices() {
+  if (build_) build_->drawnBetweenSlices = true;
+}
+
+void VerticalSection::abandonBuild() {
+  if (!build_) return;
+  const std::string tmpHtmlPath = build_->tmpHtmlPath;
+  build_.reset();  // closes both files and frees the parser
+  Storage.remove(tmpHtmlPath.c_str());
+  Storage.remove(filePath.c_str());
+  pageOffsets_.clear();
+  pageCount = 0;
+  loadedPageIndex_ = -1;
+}
+
+bool VerticalSection::createSectionFile(const ReaderRenderSpec& spec) {
+  if (!startBuild(spec)) return false;
+  BuildStep step;
+  while ((step = buildSomeMore(0)) == BuildStep::InProgress) {
+  }
+  return step == BuildStep::Done;
+}
+
+bool VerticalSection::startBuild(const ReaderRenderSpec& spec) {
+  abandonBuild();
   const int fontId = spec.fontId;
   const uint16_t viewportWidth = spec.viewportWidth;
   const uint16_t viewportHeight = spec.viewportHeight;
   const uint8_t lineSpacing = spec.lineSpacingLevel;
   const bool furiganaEnabled = spec.furiganaEnabled;
+  const auto vsectionsDir = epub->getCachePath() + "/vsections";
+  Storage.mkdir(vsectionsDir.c_str());
+
+  pageOffsets_.clear();
+  loadedPageIndex_ = -1;
+  pageCount = 0;
+  lastBuildCancelled_ = false;
   lastBuildDroppedForHeap_ = false;
   lastBuildUnstyledForHeap_ = false;
-  // Same reason as Section::buildSomeMore: a chapter layout outlasts IDLE_POWER_SAVING_MS, and
-  // the throttle would otherwise land in the middle of it.
-  HalPowerManager::Lock powerLock;
-  // Diagnostic: the "sparse page" investigation found maxAlloc already down at the very first
-  // paragraph flush, staying flat for the rest of the chapter -- logging both metrics here checks
-  // whether that low contiguous budget is a fresh drop from THIS chapter's own parsing, or whether
-  // the heap was already this fragmented (from earlier chapters/navigation this session) before
-  // this chapter's build even started. free=getFreeHeap() (total) was already logged; maxAlloc=
-  // getMaxAllocHeap() (largest contiguous block) is new.
+
   const uint32_t buildStartMs = millis();
   // Kept for the stale-retry decision at the end: how much headroom THIS build had to work with.
   lastBuildStartMaxAlloc_ = ESP.getMaxAllocHeap();
@@ -1670,7 +1783,7 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec&
   // squeeze deficits), and those measurements go through the font decompressor. A heap too tight for a
   // glyph group makes them fall back to nominal metrics silently, and the result is written to the
   // section cache where nothing re-examines it. Sample the starved count across the build and treat any
-  // increase as heap degradation, which the stale stamp below turns into a rebuild on next open.
+  // increase as heap degradation, which the stale stamp in finishBuild() turns into a rebuild.
   uint32_t starvedGlyphsAtStart = 0;
   if (auto* fcm = renderer.getFontCacheManager()) {
     if (auto* fd = fcm->getDecompressor()) starvedGlyphsAtStart = fd->getStarvedGlyphCount();
@@ -1720,16 +1833,48 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec&
   LOG_DBG("VSC", "after readItemContentsToStream: maxAlloc=%u", ESP.getMaxAllocHeap());
 
   // Resolve image paths relative to the chapter's directory in the EPUB.
-  const auto& spineItem = epub->getSpineItem(spineIndex);
   std::string chapterDir;
   {
-    const size_t slash = spineItem.href.rfind('/');
-    if (slash != std::string::npos) chapterDir = spineItem.href.substr(0, slash + 1);
+    const size_t slash = localPath.rfind('/');
+    if (slash != std::string::npos) chapterDir = localPath.substr(0, slash + 1);
   }
-  const std::string imageBasePath = epub->getCachePath() + "/img_v" + std::to_string(spineIndex) + "_";
+  std::string imageBasePath = epub->getCachePath() + "/img_v" + std::to_string(spineIndex) + "_";
 
-  VerticalParsedText layout(renderer, fontId, viewportWidth, viewportHeight);
-  layout.preallocateStream();
+  // Heap, not the render task's stack: the build now outlives this call, across slices. One
+  // allocation for the objects streamParseAndLayout() used to keep on its stack.
+  build_ = makeUniqueNoThrow<BuildContext>(*this, spec, localPath, tmpHtmlPath, std::move(chapterDir),
+                                           std::move(imageBasePath));
+  if (!build_) {
+    LOG_ERR("VSC", "OOM: build context");
+    Storage.remove(tmpHtmlPath.c_str());
+    return false;
+  }
+  BuildContext& b = *build_;
+  b.buildStartMs = buildStartMs;
+  b.starvedGlyphsAtStart = starvedGlyphsAtStart;
+
+  if (!Storage.openFileForWrite("VSC", filePath, b.out)) {
+    abandonBuild();
+    return false;
+  }
+  // Header with placeholders; pageCount and the offset-table location aren't known until all
+  // pages have been streamed out, so finishBuild() patches them by seeking back. The write mode
+  // is O_RDWR (not append), so the seek-back write lands in place.
+  serialization::writePod(b.out, VSECTION_FILE_VERSION);
+  serialization::writePod(b.out, fontId);
+  serialization::writePod(b.out, viewportWidth);
+  serialization::writePod(b.out, viewportHeight);
+  serialization::writePod(b.out, lineSpacing);
+  const uint8_t furiganaFlag = furiganaEnabled ? 1 : 0;
+  serialization::writePod(b.out, furiganaFlag);
+  serialization::writePod(b.out, spec.characterSpacing);
+  serialization::writePod(b.out, spec.rightMarginPx);
+  const uint16_t pageCountPlaceholder = 0;
+  const uint32_t indexOffsetPlaceholder = 0;
+  serialization::writePod(b.out, pageCountPlaceholder);
+  serialization::writePod(b.out, indexOffsetPlaceholder);
+
+  b.layout.preallocateStream();
   // Column gap (行間) in EMS -- the unit the constraint is stated in. Ruby is half an em (JLREQ
   // 3.3.3) and is drawn in this gap beside its base column, so with furigana ON the floor is half
   // an em, and the settings span the half-to-full em Japanese body text conventionally uses. With
@@ -1742,36 +1887,33 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec&
   static constexpr int kGapQuarterEmsPlain[] = {1, 2, 3};     // Tight 1/4, Normal 1/2, Wide 3/4 em
   const int gapQuarterEms =
       furiganaEnabled ? kGapQuarterEmsWithRuby[clampedLineSpacing] : kGapQuarterEmsPlain[clampedLineSpacing];
-  layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
-  layout.setCharacterSpacingPx(spec.characterSpacing);
+  b.layout.setColumnGapPx(std::max(2, emPx * gapQuarterEms / 4));
+  b.layout.setCharacterSpacingPx(spec.characterSpacing);
   // The first column's ruby sits in the right margin (JLREQ Fig 2.37) and is half an em wide.
   // Where the margin is narrower than that -- a large font at a small screen margin -- the ruby
   // would be drawn back over its own base characters, so the text area gives up the shortfall
   // and no more: at a margin that already holds the ruby, the column stays flush right.
   if (furiganaEnabled) {
-    layout.setRightPaddingPx(std::max(0, (emPx + 1) / 2 - static_cast<int>(spec.rightMarginPx)));
+    b.layout.setRightPaddingPx(std::max(0, (emPx + 1) / 2 - static_cast<int>(spec.rightMarginPx)));
   }
 
-  LayoutPageSink sink(layout, out, pageOffsets_, *epub, renderer, chapterDir, imageBasePath, viewportWidth,
-                      viewportHeight);
-  sink.earlyRenderFn = earlyRenderFn_;
-  sink.earlyRenderCtx = earlyRenderCtx_;
+  b.sink.earlyRenderFn = earlyRenderFn_;
+  b.sink.earlyRenderCtx = earlyRenderCtx_;
   // Seed the shared page-request slot with the initial early-render target; page turns
   // recorded while the build runs simply overwrite it (latest wins).
   buildPageRequest_.store(earlyRenderFn_ ? earlyRenderTargetPage_ : -1, std::memory_order_relaxed);
-  sink.pageRequest = &buildPageRequest_;
-  sink.noticeFlag = &buildNoticePending_;
-  sink.buildNoticeFn = buildNoticeFn_;
-  sink.buildNoticeCtx = buildNoticeCtx_;
-  sink.cancelFn = cancelFn_;
-  sink.cancelCtx = cancelCtx_;
+  b.sink.pageRequest = &buildPageRequest_;
+  b.sink.noticeFlag = &buildNoticePending_;
+  b.sink.buildNoticeFn = buildNoticeFn_;
+  b.sink.buildNoticeCtx = buildNoticeCtx_;
+  b.sink.cancelFn = cancelFn_;
+  b.sink.cancelCtx = cancelCtx_;
 
   // Styled blocks (borders, start offsets, hanging indents, centering, gaps): collect the
   // vertical-relevant selectors. Streams the on-disk CSS cache -- does NOT materialize the
   // rule map (heap!). The table lives for the whole build (~10-15KB for a full EBPAJ book),
   // so under heap pressure it is bounded down or skipped entirely: correct TEXT layout beats
   // styling fidelity on a tight (X3) heap, and the release below reclaims font memory first.
-  std::vector<CssParser::VerticalBlockRule> blockStyles;
   if (epub->getCssParser()) {
     if (ESP.getMaxAllocHeap() < 64 * 1024) {
       if (auto* fcm = renderer.getFontCacheManager()) {
@@ -1793,41 +1935,39 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec&
               static_cast<unsigned>(MIN_MAX_ALLOC_FOR_STYLED_BLOCKS));
       lastBuildUnstyledForHeap_ = true;
     } else {
-      const CssParser::StylesheetFilter stylesheets = epub->stylesheetFilterFor(tmpHtmlPath, localPath);
-      epub->getCssParser()->collectVerticalStyles(blockStyles, STYLED_BLOCK_TABLE_ENTRIES, &stylesheets);
-      if (!blockStyles.empty()) {
-        LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(blockStyles.size()));
+      const CssParser::StylesheetFilter stylesheets = epub->stylesheetFilterFor(b.tmpHtmlPath, b.localPath);
+      epub->getCssParser()->collectVerticalStyles(b.blockStyles, STYLED_BLOCK_TABLE_ENTRIES, &stylesheets);
+      if (!b.blockStyles.empty()) {
+        LOG_DBG("VSC", "%u styled-block selectors active", static_cast<unsigned>(b.blockStyles.size()));
       }
     }
   }
 
-  TextExtractor extractor;
-  extractor.sink = &sink;
-  extractor.rubyHarvest = &sink.rubyHarvest;
-  extractor.blockStyles = &blockStyles;
+  b.extractor.sink = &b.sink;
+  b.extractor.rubyHarvest = &b.sink.rubyHarvest;
+  b.extractor.blockStyles = &b.blockStyles;
   buildAnchors_.clear();
-  extractor.anchors = &buildAnchors_;
+  b.extractor.anchors = &buildAnchors_;
   // This spine's TOC targets (a handful: one per TOC entry pointing into the file).
-  std::vector<std::string> tocAnchors;
   if (const int firstToc = epub->getTocIndexForSpineIndex(spineIndex); firstToc >= 0) {
-    tocAnchors.reserve(8);
+    b.tocAnchors.reserve(8);
     for (int i = firstToc; i < epub->getTocItemsCount(); i++) {
       auto entry = epub->getTocItem(i);
       if (entry.spineIndex != spineIndex) break;
-      if (!entry.anchor.empty()) tocAnchors.push_back(std::move(entry.anchor));
+      if (!entry.anchor.empty()) b.tocAnchors.push_back(std::move(entry.anchor));
     }
   }
-  extractor.tocAnchors = &tocAnchors;
+  b.extractor.tocAnchors = &b.tocAnchors;
   // Pin every buffer that lives across the whole build to its worst case NOW, while the heap
   // is freshest -- mid-build growth (doubling alloc-copy-free) plants persistent blocks in
   // the region the per-flush transients need, shredding the largest contiguous block over the
   // chapter (observed live: maxAlloc 77K -> 4K -> abort on a novel shipped as one 238KB
   // file). The streaming cadence (SOFT_FLUSH_BYTES/SOFT_FLUSH_RUNS) keeps these worst cases
   // small; same rationale as VerticalParsedText::preallocateStream().
-  extractor.currentText.reserve(TextExtractor::SOFT_FLUSH_BYTES + 512);
-  extractor.currentRuns.reserve(TextExtractor::SOFT_FLUSH_RUNS + 8);
-  extractor.rubyBase.reserve(TextExtractor::RUBY_RESERVE_HINT);
-  extractor.rubyAnnotation.reserve(TextExtractor::RUBY_RESERVE_HINT);
+  b.extractor.currentText.reserve(TextExtractor::SOFT_FLUSH_BYTES + 512);
+  b.extractor.currentRuns.reserve(TextExtractor::SOFT_FLUSH_RUNS + 8);
+  b.extractor.rubyBase.reserve(TextExtractor::RUBY_RESERVE_HINT);
+  b.extractor.rubyAnnotation.reserve(TextExtractor::RUBY_RESERVE_HINT);
   // Initial allocation is guarded for the same reason as LayoutPageSink::writeOne()'s growth.
   constexpr size_t kInitialOffsetCapacity = 640;  // 2.5KB; a 240KB chapter yields ~500 pages
   constexpr size_t kOffsetHeadroom = 4 * 1024;
@@ -1847,155 +1987,169 @@ bool VerticalSection::streamParseAndLayout(HalFile& out, const ReaderRenderSpec&
     buildAnchors_.reserve(kInitialAnchorCapacity);
   }
 
-  XML_Parser parser = XML_ParserCreate(nullptr);
-  if (!parser) {
+  b.parser = XML_ParserCreate(nullptr);
+  if (!b.parser) {
     LOG_ERR("VSC", "OOM: XML parser");
-    Storage.remove(tmpHtmlPath.c_str());
+    abandonBuild();
     return false;
   }
   LOG_DBG("VSC", "after XML_ParserCreate: maxAlloc=%u", ESP.getMaxAllocHeap());
 
-  XML_SetDefaultHandlerExpand(parser, TextExtractor::defaultHandler);
-  XML_SetUserData(parser, &extractor);
-  XML_SetElementHandler(parser, TextExtractor::startElement, TextExtractor::endElement);
-  XML_SetCharacterDataHandler(parser, TextExtractor::characterData);
+  XML_SetDefaultHandlerExpand(b.parser, TextExtractor::defaultHandler);
+  XML_SetUserData(b.parser, &b.extractor);
+  XML_SetElementHandler(b.parser, TextExtractor::startElement, TextExtractor::endElement);
+  XML_SetCharacterDataHandler(b.parser, TextExtractor::characterData);
+  b.extractor.parser = b.parser;
 
-  HalFile htmlFile;
-  if (!Storage.openFileForRead("VSC", tmpHtmlPath, htmlFile)) {
-    destroyXmlParser(parser);
-    Storage.remove(tmpHtmlPath.c_str());
+  if (!Storage.openFileForRead("VSC", b.tmpHtmlPath, b.htmlFile)) {
+    abandonBuild();
     return false;
   }
+  b.starvedInLayout = starvedGlyphCount(renderer) - b.starvedGlyphsAtStart;
+  return true;
+}
+
+VerticalSection::BuildStep VerticalSection::buildSomeMore(const uint32_t maxMillis) {
+  if (!build_) return BuildStep::Failed;
+  BuildContext& b = *build_;
+  const uint32_t sliceStart = millis();
+  const auto sliceOver = [&] { return maxMillis != 0 && millis() - sliceStart >= maxMillis; };
+  b.extractor.sliceDeadlineMs = maxMillis != 0 ? std::max<uint32_t>(1, sliceStart + maxMillis) : 0;
+  // The starved-glyph counter is global: between slices the reader draws pages too (a menu, a
+  // turn), and inside one the early render does. Only what this slice's layout measured counts.
+  const uint32_t starvedBefore = starvedGlyphCount(renderer);
+  const uint32_t drawnBefore = b.sink.starvedWhileDrawing;
+  const auto accountStarved = [&] {
+    b.starvedInLayout += (starvedGlyphCount(renderer) - starvedBefore) - (b.sink.starvedWhileDrawing - drawnBefore);
+  };
+  const auto inProgress = [&] {
+    accountStarved();
+    pageCount = static_cast<uint16_t>(pageOffsets_.size());
+    return BuildStep::InProgress;
+  };
 
   bool parseOk = true;
-  bool firstChunk = true;  // the prolog is inspected once; see XhtmlDoctype.h
-  int done;
-  do {
-    void* const buf = XML_GetBuffer(parser, PARSE_BUFFER_SIZE);
+  if (b.suspended) {
+    const XML_Status status = XML_ResumeParser(b.parser);
+    if (status == XML_STATUS_SUSPENDED) return inProgress();
+    b.suspended = false;
+    if (status == XML_STATUS_ERROR) {
+      LOG_ERR("VSC", "XML parse error at line %lu: %s", XML_GetCurrentLineNumber(b.parser),
+              XML_ErrorString(XML_GetErrorCode(b.parser)));
+      parseOk = false;
+    } else if (b.suspendedOnFinalBuffer) {
+      b.parseDone = true;
+    }
+  }
+
+  // A cancelled or failed sink drops every page the rest of this file would produce, so parsing
+  // on is pure waste -- and for a cancel the whole point is to hand the task back.
+  while (parseOk && !b.parseDone && !b.sink.failed) {
+    if (sliceOver()) return inProgress();
+    void* const buf = XML_GetBuffer(b.parser, PARSE_BUFFER_SIZE);
     if (!buf) {
       LOG_ERR("VSC", "OOM: parse buffer");
       parseOk = false;
       break;
     }
-    const size_t len = htmlFile.read(buf, PARSE_BUFFER_SIZE);
-    if (len == 0 && htmlFile.available() > 0) {
+    const size_t len = b.htmlFile.read(buf, PARSE_BUFFER_SIZE);
+    if (len == 0 && b.htmlFile.available() > 0) {
       LOG_ERR("VSC", "File read error");
       parseOk = false;
       break;
     }
-    done = htmlFile.available() == 0;
-    if (firstChunk) {
-      firstChunk = false;
+    const int done = b.htmlFile.available() == 0;
+    if (b.firstChunk) {
+      b.firstChunk = false;
       const auto patch = xhtml::findDoctypePatch(static_cast<const char*>(buf), len);
       if (patch.inject) {
         // The buffer's tail is dropped with this call; the file resumes after the old DOCTYPE.
-        if (XML_ParseBuffer(parser, static_cast<int>(patch.keep), 0) == XML_STATUS_ERROR ||
-            XML_Parse(parser, xhtml::kExternalDoctype, sizeof(xhtml::kExternalDoctype) - 1, 0) == XML_STATUS_ERROR ||
-            !htmlFile.seek(patch.keep + patch.skip)) {
-          LOG_ERR("VSC", "XML parse error in prolog: %s", XML_ErrorString(XML_GetErrorCode(parser)));
+        // No slice deadline in here: a suspension mid-prolog would leave the DOCTYPE unsent.
+        const uint32_t deadline = b.extractor.sliceDeadlineMs;
+        b.extractor.sliceDeadlineMs = 0;
+        if (XML_ParseBuffer(b.parser, static_cast<int>(patch.keep), 0) == XML_STATUS_ERROR ||
+            XML_Parse(b.parser, xhtml::kExternalDoctype, sizeof(xhtml::kExternalDoctype) - 1, 0) == XML_STATUS_ERROR ||
+            !b.htmlFile.seek(patch.keep + patch.skip)) {
+          LOG_ERR("VSC", "XML parse error in prolog: %s", XML_ErrorString(XML_GetErrorCode(b.parser)));
           parseOk = false;
           break;
         }
-        done = 0;
+        b.extractor.sliceDeadlineMs = deadline;
         continue;
       }
     }
-    if (XML_ParseBuffer(parser, static_cast<int>(len), done) == XML_STATUS_ERROR) {
-      LOG_ERR("VSC", "XML parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
-              XML_ErrorString(XML_GetErrorCode(parser)));
+    const XML_Status status = XML_ParseBuffer(b.parser, static_cast<int>(len), done);
+    if (status == XML_STATUS_ERROR) {
+      LOG_ERR("VSC", "XML parse error at line %lu: %s", XML_GetCurrentLineNumber(b.parser),
+              XML_ErrorString(XML_GetErrorCode(b.parser)));
       parseOk = false;
       break;
     }
-    // A cancelled or failed sink drops every page the rest of this file would produce, so
-    // parsing on is pure waste -- and for a cancel the whole point is to hand the task back.
-    if (sink.failed) break;
-  } while (!done);
+    if (status == XML_STATUS_SUSPENDED) {
+      b.suspended = true;
+      b.suspendedOnFinalBuffer = done != 0;
+      return inProgress();
+    }
+    if (done) b.parseDone = true;
+  }
+  accountStarved();
+  return finishBuild(parseOk) ? BuildStep::Done : BuildStep::Failed;
+}
 
-  htmlFile.close();
-  destroyXmlParser(parser);
-  Storage.remove(tmpHtmlPath.c_str());
+bool VerticalSection::finishBuild(const bool parseOk) {
+  BuildContext& b = *build_;
+  b.htmlFile.close();
+  destroyXmlParser(b.parser);
+  b.parser = nullptr;
+  b.extractor.parser = nullptr;
+  Storage.remove(b.tmpHtmlPath.c_str());
 
-  if (!parseOk) return false;
-
-  extractor.flushParagraph();
-  sink.flushText(/*isFinalFlush=*/true);
-
-  if (sink.cancelled) {
-    lastBuildCancelled_ = true;
-    LOG_INF("VSC", "Speculative build cancelled after %zu pages (spine=%d)", pageOffsets_.size(), spineIndex);
+  if (!parseOk) {
+    abandonBuild();
     return false;
   }
-  if (sink.failed) return false;
+
+  b.extractor.flushParagraph();
+  b.sink.flushText(/*isFinalFlush=*/true);
+
+  if (b.sink.cancelled) {
+    lastBuildCancelled_ = true;
+    LOG_INF("VSC", "Speculative build cancelled after %zu pages (spine=%d)", pageOffsets_.size(), spineIndex);
+    abandonBuild();
+    return false;
+  }
+  if (b.sink.failed) {
+    abandonBuild();
+    return false;
+  }
 
   // OR, don't assign: the styled-block collect above may already have flagged this build
   // (unstyled fallback under heap pressure).
   // Emergency page splits count as heap degradation too: no content is lost, but pages end at
   // arbitrary fill levels, so the same usable-now/rebuild-next-open path applies (and the same
   // rebuildingFromStale_ guard breaks the loop when a retry degrades again).
-  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || layout.everDroppedForHeap() || layout.everSplitForHeap() ||
-                             extractor.droppedTextForHeap;
-  if (extractor.droppedTextForHeap) LOG_ERR("VSC", "Text dropped on low heap; chapter is incomplete");
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    if (auto* fd = fcm->getDecompressor()) {
-      const uint32_t starved = fd->getStarvedGlyphCount() - starvedGlyphsAtStart;
-      if (starved > 0) {
-        LOG_ERR("VSC", "%u glyph(s) measured without ink data on low heap; layout is approximate", starved);
-        lastBuildDroppedForHeap_ = true;
-      }
-    }
+  lastBuildDroppedForHeap_ = lastBuildDroppedForHeap_ || b.layout.everDroppedForHeap() || b.layout.everSplitForHeap() ||
+                             b.extractor.droppedTextForHeap;
+  if (b.extractor.droppedTextForHeap) LOG_ERR("VSC", "Text dropped on low heap; chapter is incomplete");
+  if (b.drawnBetweenSlices) {
+    // A full page render ran next to the layout's resident working set, and on device the
+    // pagination came out different without any starved-glyph trace (342 pages for a chapter that
+    // lays out to 321 untouched). Serve this session from it, but re-lay it out on the next open.
+    LOG_INF("VSC", "Pages were drawn between build slices; re-laying the chapter out on next open");
+    lastBuildDroppedForHeap_ = true;
+  }
+  if (b.starvedInLayout > 0) {
+    LOG_ERR("VSC", "%u glyph(s) measured without ink data on low heap; layout is approximate", b.starvedInLayout);
+    lastBuildDroppedForHeap_ = true;
   }
   // Persist harvested furigana pairs; runs after the parse buffers are freed, so the
   // transient merge buffer doesn't compete with layout's peak memory.
-  RubyGlossary::merge(epub->getCachePath(), sink.rubyHarvest);
-  LOG_INF("VSC", "streamParseAndLayout: %u ms", millis() - buildStartMs);
+  RubyGlossary::merge(epub->getCachePath(), b.sink.rubyHarvest);
+  LOG_INF("VSC", "streamParseAndLayout: %u ms", millis() - b.buildStartMs);
   LOG_INF("VSC", "streamParseAndLayout end spine=%d pages=%zu free=%u", spineIndex, pageOffsets_.size(),
           ESP.getFreeHeap());
-  return true;
-}
 
-bool VerticalSection::createSectionFile(const ReaderRenderSpec& spec) {
-  const int fontId = spec.fontId;
-  const uint16_t viewportWidth = spec.viewportWidth;
-  const uint16_t viewportHeight = spec.viewportHeight;
-  const uint8_t lineSpacing = spec.lineSpacingLevel;
-  const bool furiganaEnabled = spec.furiganaEnabled;
-  const auto vsectionsDir = epub->getCachePath() + "/vsections";
-  Storage.mkdir(vsectionsDir.c_str());
-
-  pageOffsets_.clear();
-  loadedPageIndex_ = -1;
-  pageCount = 0;
-  lastBuildCancelled_ = false;
-
-  HalFile file;
-  if (!Storage.openFileForWrite("VSC", filePath, file)) {
-    return false;
-  }
-
-  // Header with placeholders; pageCount and the offset-table location aren't known until all
-  // pages have been streamed out, so they're patched by the seek-back below. The write mode is
-  // O_RDWR (not append), so the seek-back write lands in place.
-  serialization::writePod(file, VSECTION_FILE_VERSION);
-  serialization::writePod(file, fontId);
-  serialization::writePod(file, viewportWidth);
-  serialization::writePod(file, viewportHeight);
-  serialization::writePod(file, lineSpacing);
-  const uint8_t furiganaFlag = furiganaEnabled ? 1 : 0;
-  serialization::writePod(file, furiganaFlag);
-  serialization::writePod(file, spec.characterSpacing);
-  serialization::writePod(file, spec.rightMarginPx);
-  const uint16_t pageCountPlaceholder = 0;
-  const uint32_t indexOffsetPlaceholder = 0;
-  serialization::writePod(file, pageCountPlaceholder);
-  serialization::writePod(file, indexOffsetPlaceholder);
-
-  if (!streamParseAndLayout(file, spec)) {
-    file.close();
-    Storage.remove(filePath.c_str());
-    pageOffsets_.clear();
-    return false;
-  }
-
+  HalFile& file = b.out;
   const auto indexOffset = static_cast<uint32_t>(file.position());
   for (const uint32_t off : pageOffsets_) {
     serialization::writePod(file, off);
@@ -2011,10 +2165,7 @@ bool VerticalSection::createSectionFile(const ReaderRenderSpec& spec) {
 
   pageCount = static_cast<uint16_t>(pageOffsets_.size());
   if (!file.seek(HEADER_PAGECOUNT_OFFSET)) {
-    file.close();
-    Storage.remove(filePath.c_str());
-    pageOffsets_.clear();
-    pageCount = 0;
+    abandonBuild();
     return false;
   }
   serialization::writePod(file, pageCount);
@@ -2053,6 +2204,7 @@ bool VerticalSection::createSectionFile(const ReaderRenderSpec& spec) {
     LOG_ERR("VSC", "Stale-rebuild dropped glyphs again; keeping best-effort cache to break the rebuild loop");
   }
   file.close();
+  build_.reset();
   if (!lastBuildDroppedForHeap_ && Storage.exists(degradedPath().c_str())) Storage.remove(degradedPath().c_str());
 
   // Last page's source position. The horizontal build logs the same number ("SCT: chapter
@@ -2300,16 +2452,35 @@ const VerticalPage* VerticalSection::getPage(int pageIndex) const {
   // Fault the page in from the SD cache. The previous pointer returned by getPage() is
   // invalidated here -- all callers fetch-and-render one page at a time.
   loadedPageIndex_ = -1;
-  HalFile file;
-  if (!Storage.openFileForRead("VSC", filePath, file)) {
-    return nullptr;
-  }
-  if (!file.seek(pageOffsets_[static_cast<size_t>(pageIndex)])) {
+  ReadResult result;
+  if (build_) {
+    // Mid-build the section file is still open for writing: read the page back through that
+    // handle, as the sink's mid-build page serving does, and return the cursor to the end.
+    HalFile& out = build_->out;
+    const size_t endPos = out.position();
+    out.flush();  // pending writes first, or a backward seek reads stale bytes
+    if (!out.seek(pageOffsets_[static_cast<size_t>(pageIndex)])) {
+      out.seek(endPos);
+      return nullptr;
+    }
+    result = readPage(out, loadedPage_);
+    if (!out.seek(endPos)) {
+      LOG_ERR("VSC", "Failed to seek back to build position after page read-back");
+      build_->sink.failed = true;  // the write cursor is lost; the next slice fails the build cleanly
+      return nullptr;
+    }
+  } else {
+    HalFile file;
+    if (!Storage.openFileForRead("VSC", filePath, file)) {
+      return nullptr;
+    }
+    if (!file.seek(pageOffsets_[static_cast<size_t>(pageIndex)])) {
+      file.close();
+      return nullptr;
+    }
+    result = readPage(file, loadedPage_);
     file.close();
-    return nullptr;
   }
-  const ReadResult result = readPage(file, loadedPage_);
-  file.close();
   // Tell the reader whether a nullptr means "transient low heap, keep the cache" or a genuine
   // failure worth clearing/rebuilding -- see lastReadHeapRefused().
   lastReadHeapRefused_ = (result == ReadResult::HeapRefused);
