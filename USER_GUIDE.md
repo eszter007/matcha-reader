@@ -14,7 +14,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [Button Layout](#button-layout)
     - [Taking a Screenshot](#taking-a-screenshot)
     - [Syncing the Clock](#syncing-the-clock)
-    - [Frontlight (X4 Pro only)](#frontlight-x4-pro-only)
+    - [Frontlight (X4 Pro and Paper Mono)](#frontlight-x4-pro-and-paper-mono)
   - [2. Power \& Startup](#2-power--startup)
     - [Power On / Off](#power-on--off)
     - [First Launch](#first-launch)
@@ -103,13 +103,13 @@ Devices without a clock chip (the X4) drift while asleep and lose the time on a 
 
 **Settings → System → Clock → Show in Header** shows the time at the top left of every menu screen, opposite the battery. It updates whenever the screen redraws. On the X4 it shows the device's own time even when that has drifted, so a wrong time there is the cue to sync.
 
-### Frontlight (X4 Pro only)
+### Frontlight (X4 Pro and Paper Mono)
 
-The X4 Pro has a built-in frontlight with adjustable brightness and warmth. It is controlled from a swipe panel rather than the Settings menu:
+The X4 Pro and the M5Stack Paper Mono have a built-in frontlight. The X4 Pro has adjustable brightness and warmth; the Paper Mono has adjustable brightness only. It is controlled from a swipe panel rather than the Settings menu:
 
 * **Open or close the frontlight panel:** Swipe down from the top edge of the screen, from almost any screen (Home, Browse Files, Reading Mode, etc.). Drag the brightness and warmth sliders to adjust the light live, or tap the sun icon to turn it on or off. The same swipe (or a status-bar tap) closes the panel again, as does the **Back** button.
 * **Adjust brightness with the buttons:** While the panel is open, the **Up**/**Down** side buttons and the page-turn buttons step the brightness. Hold one to ramp continuously. On devices with edge-mounted side buttons the direction follows the physical layout, so the upper button always brightens.
-* **Quick toggle:** Double-click the **Power** button to turn the frontlight on or off instantly, without opening the panel.
+* **Quick toggle (X4 Pro only):** Double-click the **Power** button to turn the frontlight on or off instantly, without opening the panel.
 
 > [!NOTE]
 > Frontlight brightness and warmth are intentionally not listed in **[Display Settings](#361-display)**: the swipe panel is the only place to adjust them. The on/off state can also be toggled with the Power-button double-click above.

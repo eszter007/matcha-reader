@@ -1246,6 +1246,13 @@ void EpubReaderActivity::readerLoop() {
       case CrossPointSettings::LP_MENU_CREATE_CLIPPING:
         startClipSelection();
         return;
+      case CrossPointSettings::LP_MENU_FOOTNOTES:
+        if (footnoteDepth > 0) {
+          restoreSavedPosition();
+        } else {
+          openFootnoteSelect(false);
+        }
+        return;
       case CrossPointSettings::LP_MENU_READER_MENU:
       case CrossPointSettings::LP_MENU_DISABLED:
       default:
@@ -2182,6 +2189,7 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
     case CrossPointSettings::LP_MENU_BOOKMARK:
     case CrossPointSettings::LP_MENU_DICTIONARY:
     case CrossPointSettings::LP_MENU_CREATE_CLIPPING:
+    case CrossPointSettings::LP_MENU_FOOTNOTES:
       return ReaderUtils::BOOKMARK_HOLD_MS;
     case CrossPointSettings::LP_MENU_KOSYNC:
       return KOREADER_STORE.hasCredentials() ? ReaderUtils::GO_HOME_MS : 0;
@@ -5678,6 +5686,10 @@ void EpubReaderActivity::openTranslationFor(std::string text, const StrId title)
       std::make_unique<EpubReaderTranslationActivity>(renderer, mappedInput, std::move(text), "", false, title),
       [this](const ActivityResult&) { requestUpdate(); });
 }
+
+// The long-press shortcut's entry point. This reader shows footnotes as the panel the menu opens,
+// over the page that is already on screen, so there is no menu to return to on cancel.
+void EpubReaderActivity::openFootnoteSelect(const bool /*reopenMenuOnCancel*/) { openFootnotesPanel(); }
 
 void EpubReaderActivity::openFootnotesPanel() {
   refreshSectionFootnotesIfBuilt();
