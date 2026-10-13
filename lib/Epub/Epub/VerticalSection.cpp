@@ -19,6 +19,7 @@
 #include "Epub/RubyGlossary.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/parsers/XhtmlDoctype.h"
 #include "GfxRenderer.h"
 #include "VisibleTextUtils.h"
@@ -1466,6 +1467,21 @@ struct LayoutPageSink final : ParagraphSink {
     if (!servePage_.isImagePage()) earlyRenderFn(earlyRenderCtx, servePage_, req);
   }
 
+  // Reads an already-extracted image's size from its header bytes alone, without a decoder.
+  static bool probeCachedImage(const std::string& path, ImageDimensions& dims) {
+    HalFile file;
+    if (!Storage.exists(path.c_str()) || !Storage.openFileForRead("VSC", path, file) || file.size() == 0) {
+      return false;
+    }
+    ImageDimsProbe probe;
+    uint8_t buf[128];
+    int n;
+    while ((n = file.read(buf, sizeof(buf))) > 0) {
+      if (probe.write(buf, static_cast<size_t>(n)) < static_cast<size_t>(n)) break;  // header found or unusable
+    }
+    return probe.getDimensions(dims);
+  }
+
   VerticalPage makeImagePage(const std::string& src) {
     std::string resolvedSrc = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(chapterDir + src));
 
@@ -1475,97 +1491,115 @@ struct LayoutPageSink final : ParagraphSink {
     if (extPos != std::string::npos) ext = resolvedSrc.substr(extPos);
     const std::string cachedPath = imageBasePath + std::to_string(imgIdx++) + ext;
 
-    // Extract image from EPUB to cache if not already present. A previous attempt that failed
-    // partway (e.g. the zip inflate's 32KB ring buffer allocation failing under the same heap
-    // pressure this session spent all night fixing elsewhere) can leave behind a file that
-    // EXISTS but is empty/truncated -- Storage.exists() alone can't tell a genuinely-cached image
-    // from that broken leftover, so a broken file was never retried, permanently blanking that
-    // page. Checking size > 0 makes this self-healing for images broken by an earlier session.
-    bool needsExtraction = true;
-    if (Storage.exists(cachedPath.c_str())) {
-      HalFile existingFile;
-      if (Storage.openFileForRead("VSC", cachedPath, existingFile) && existingFile.size() > 0) {
-        needsExtraction = false;
-      }
+    // Sizes come from the image's header -- the cached file when an earlier build or render
+    // extracted it, otherwise the first few KB of its zip entry (an early-stopped inflate) -- the
+    // way the horizontal parser gets them. The image itself is extracted on its page's first draw
+    // (ImageBlock's lazy extractor, from imageSrcPath below). Extracting every image here (up to
+    // megabytes each, through a 32KB inflate window) and opening a full JPEG decoder just to read
+    // a size churned the heap mid-build until a chapter of illustrations could not finish at all:
+    // device log, largest block 78KB at the start, 5.8KB when the build stalled for good.
+    ImageDimensions dims = {0, 0};
+    bool gotDims = probeCachedImage(cachedPath, dims);
+    if (!gotDims) {
+      ImageDimsProbe probe;
+      epub.readItemContentsToStream(resolvedSrc, probe, 1024, /*allowEarlyStop=*/true);
+      gotDims = probe.getDimensions(dims);
     }
-    if (needsExtraction) {
-      // Extraction needs one contiguous 32KB block for the zip inflate window (InflateReader::
-      // init(true)) -- confirmed on a real device that this fails on chapters with both many
-      // images and dense text, where the font decompressor's hot-group buffer (regrown during
-      // this same chapter's column-fitting measurements) is still resident and competing for that
-      // headroom. Free it right before the allocation that actually needs it.
-      if (auto* fcm = renderer.getFontCacheManager()) {
-        fcm->releaseAllFontMemory();
-      }
-      HalFile cachedFile;
-      if (Storage.openFileForWrite("VSC", cachedPath, cachedFile)) {
-        bool extracted = false;
-        {
-          // ...and the reason freeing was not enough: the heap is FRAGMENTED, not full. Measured
-          // at the moment of failure: 89992 bytes free but a largest block of 30708, against the
-          // 32768 the window needs. Releasing more bytes cannot help when they come back in
-          // pieces -- font reclaim moved maxAlloc by 0, and so did suspending the section build.
-          //
-          // InflateStream::init() already has the answer: it claims the lent framebuffer via
-          // buildscratch (state ~11KB + window 32KB fit in 48KB) instead of the heap. That is why
-          // the blocking full build's extractions succeed -- it holds a loan for its whole
-          // duration -- while this path, which never took one, fails on the same book.
-          //
-          // Scoped to the extraction call alone: nothing may draw or display while the bytes are
-          // lent, and the early-render hook only fires at page boundaries, never inside this call.
-          // Restore hands back a white framebuffer, which the next page render repaints anyway;
-          // the panel keeps showing its last refreshed image throughout (e-ink is persistent).
-          const bool canLendFrameBuffer = renderer.hasFrameBuffer();
-          GfxRenderer::FrameBufferLoan loan(renderer);
-          // Prefer 16KB chunks when the framebuffer loan is available or the heap is already
-          // roomy; SD write throughput is per-chunk-latency bound. 4KB remains the fallback.
-          // The loan feeds InflateStream's 32KB window and state through buildscratch, but the
-          // two chunkSize buffers readItemContentsToStream allocates (file read + inflate output)
-          // are plain heap, so a loan alone does NOT make the fast path affordable. Require room
-          // for both before choosing it: on device, at maxAlloc=31732 the first 16KB buffer
-          // succeeded and the second failed, and the chapter then did not render at all --
-          // "Failed to allocate memory for output buffer" -> "Failed to stream chapter HTML" ->
-          // "Failed to build vertical section". The 4KB fallback would have loaded it fine.
-          constexpr size_t kFastChunk = 16384;
-          const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
-                                     ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
-          const size_t chunkSize = useFastChunks ? kFastChunk : 4096;
-          // A speculative build checks its cancel hook during the copy too: a full-page illustration
-          // is often over 1 MB, seconds of SD writes that would otherwise hold a page turn.
-          extracted = cancelFn ? epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize, false,
-                                                               &cancelDuringExtraction, this)
-                               : epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
+    if (!gotDims) {
+      // The inflate window did not fit the heap: the lent framebuffer holds it. Nothing draws
+      // during the loan -- the early-render hook only fires at page boundaries.
+      GfxRenderer::FrameBufferLoan loan(renderer);
+      ImageDimsProbe probe;
+      epub.readItemContentsToStream(resolvedSrc, probe, 1024, /*allowEarlyStop=*/true);
+      gotDims = probe.getDimensions(dims);
+    }
+    if (!gotDims) {
+      // No readable header (rare): extract the whole image and ask its decoder, as before.
+      bool needsExtraction = true;
+      if (Storage.exists(cachedPath.c_str())) {
+        HalFile existingFile;
+        if (Storage.openFileForRead("VSC", cachedPath, existingFile) && existingFile.size() > 0) {
+          needsExtraction = false;
         }
-        cachedFile.flush();
-        cachedFile.close();
-        if (!extracted) {
-          if (cancelled) {
-            LOG_DBG("VSC", "Image extraction cancelled; removing partial cache file %s", cachedPath.c_str());
-          } else {
-            LOG_ERR("VSC", "Failed to extract image %s; removing partial cache file", resolvedSrc.c_str());
+      }
+      if (needsExtraction) {
+        // Extraction needs one contiguous 32KB block for the zip inflate window (InflateReader::
+        // init(true)) -- confirmed on a real device that this fails on chapters with both many
+        // images and dense text, where the font decompressor's hot-group buffer (regrown during
+        // this same chapter's column-fitting measurements) is still resident and competing for that
+        // headroom. Free it right before the allocation that actually needs it.
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          fcm->releaseAllFontMemory();
+        }
+        HalFile cachedFile;
+        if (Storage.openFileForWrite("VSC", cachedPath, cachedFile)) {
+          bool extracted = false;
+          {
+            // ...and the reason freeing was not enough: the heap is FRAGMENTED, not full. Measured
+            // at the moment of failure: 89992 bytes free but a largest block of 30708, against the
+            // 32768 the window needs. Releasing more bytes cannot help when they come back in
+            // pieces -- font reclaim moved maxAlloc by 0, and so did suspending the section build.
+            //
+            // InflateStream::init() already has the answer: it claims the lent framebuffer via
+            // buildscratch (state ~11KB + window 32KB fit in 48KB) instead of the heap. That is why
+            // the blocking full build's extractions succeed -- it holds a loan for its whole
+            // duration -- while this path, which never took one, fails on the same book.
+            //
+            // Scoped to the extraction call alone: nothing may draw or display while the bytes are
+            // lent, and the early-render hook only fires at page boundaries, never inside this call.
+            // Restore hands back a white framebuffer, which the next page render repaints anyway;
+            // the panel keeps showing its last refreshed image throughout (e-ink is persistent).
+            const bool canLendFrameBuffer = renderer.hasFrameBuffer();
+            GfxRenderer::FrameBufferLoan loan(renderer);
+            // Prefer 16KB chunks when the framebuffer loan is available or the heap is already
+            // roomy; SD write throughput is per-chunk-latency bound. 4KB remains the fallback.
+            // The loan feeds InflateStream's 32KB window and state through buildscratch, but the
+            // two chunkSize buffers readItemContentsToStream allocates (file read + inflate output)
+            // are plain heap, so a loan alone does NOT make the fast path affordable. Require room
+            // for both before choosing it: on device, at maxAlloc=31732 the first 16KB buffer
+            // succeeded and the second failed, and the chapter then did not render at all --
+            // "Failed to allocate memory for output buffer" -> "Failed to stream chapter HTML" ->
+            // "Failed to build vertical section". The 4KB fallback would have loaded it fine.
+            constexpr size_t kFastChunk = 16384;
+            const bool useFastChunks = (canLendFrameBuffer || ESP.getMaxAllocHeap() >= 96 * 1024) &&
+                                       ESP.getMaxAllocHeap() >= 2 * kFastChunk + 4 * 1024;
+            const size_t chunkSize = useFastChunks ? kFastChunk : 4096;
+            // A speculative build checks its cancel hook during the copy too: a full-page illustration
+            // is often over 1 MB, seconds of SD writes that would otherwise hold a page turn.
+            extracted = cancelFn ? epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize, false,
+                                                                 &cancelDuringExtraction, this)
+                                 : epub.readItemContentsToStream(resolvedSrc, cachedFile, chunkSize);
           }
-          Storage.remove(cachedPath.c_str());
+          cachedFile.flush();
+          cachedFile.close();
+          if (!extracted) {
+            if (cancelled) {
+              LOG_DBG("VSC", "Image extraction cancelled; removing partial cache file %s", cachedPath.c_str());
+            } else {
+              LOG_ERR("VSC", "Failed to extract image %s; removing partial cache file", resolvedSrc.c_str());
+            }
+            Storage.remove(cachedPath.c_str());
+          }
         }
       }
+
+      ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedPath);
+      if (!decoder || !decoder->getDimensions(cachedPath, dims)) dims = {0, 0};
     }
 
-    // Get actual image dimensions. Store natural (unrotated) dimensions --
-    // ImageBlock::render handles rotation, scaling, and centering itself.
+    // ImageBlock::render handles rotation, scaling, and centering itself, so the natural
+    // (unrotated) size is stored.
     int displayW = viewportWidth;
     int displayH = viewportHeight;
     bool rotated = false;
-    ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedPath);
-    if (decoder) {
-      ImageDimensions dims = {0, 0};
-      if (decoder->getDimensions(cachedPath, dims) && dims.width > 0 && dims.height > 0) {
-        const bool viewportIsPortrait = (viewportHeight > viewportWidth);
-        const bool imageIsLandscape = (dims.width > dims.height);
-        // Rotated only when it fills the page; a smaller image stays upright at its own size.
-        rotated = (viewportIsPortrait == imageIsLandscape) &&
-                  ImageBlock::fillsPage(dims.width, dims.height, viewportWidth, viewportHeight);
-        displayW = dims.width;
-        displayH = dims.height;
-      }
+    if (dims.width > 0 && dims.height > 0) {
+      const bool viewportIsPortrait = (viewportHeight > viewportWidth);
+      const bool imageIsLandscape = (dims.width > dims.height);
+      // Rotated only when it fills the page; a smaller image stays upright at its own size.
+      rotated = (viewportIsPortrait == imageIsLandscape) &&
+                ImageBlock::fillsPage(dims.width, dims.height, viewportWidth, viewportHeight);
+      displayW = dims.width;
+      displayH = dims.height;
     }
 
     VerticalPage page;
