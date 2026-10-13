@@ -109,7 +109,7 @@ bool BookMetadataCache::beginTocPass() {
     return false;
   }
 
-  if (spineCount >= LARGE_SPINE_THRESHOLD) {
+  if (spineCount >= TOC_HREF_INDEX_THRESHOLD) {
     spineHrefIndex.clear();
     spineHrefIndex.resize(spineCount);
     spineFile.seek(0);
