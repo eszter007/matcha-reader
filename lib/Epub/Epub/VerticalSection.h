@@ -54,8 +54,6 @@ class VerticalSection {
   // a valid cache. See lastReadHeapRefused().
   mutable bool lastReadHeapRefused_ = false;
 
-  bool streamParseAndLayout(HalFile& out, const ReaderRenderSpec& spec);
-
   // Set by streamParseAndLayout when the layout dropped chars/glyphs on low heap. The pages that
   // made it to disk are readable (this session keeps working), but createSectionFile stamps the
   // file with version 0 so the next open sees a version mismatch and rebuilds the chapter --
@@ -91,15 +89,20 @@ class VerticalSection {
   const void* cancelCtx_ = nullptr;
   bool lastBuildCancelled_ = false;
 
+  // The state of a build in progress (see startBuild()): what streamParseAndLayout() once held
+  // on the stack, kept between buildSomeMore() slices. Null when no build is running.
+  struct BuildContext;
+  std::unique_ptr<BuildContext> build_;
+  bool finishBuild(bool parseOk);
+
  public:
   uint16_t pageCount = 0;
   int currentPage = 0;
 
-  explicit VerticalSection(const std::shared_ptr<Epub>& epub, int spineIndex, GfxRenderer& renderer)
-      : epub(epub),
-        spineIndex(spineIndex),
-        renderer(renderer),
-        filePath(epub->getCachePath() + "/vsections/" + std::to_string(spineIndex) + ".bin") {}
+  // Both out of line: BuildContext is only complete in the .cpp. The destructor abandons a build
+  // that is still running.
+  explicit VerticalSection(const std::shared_ptr<Epub>& epub, int spineIndex, GfxRenderer& renderer);
+  ~VerticalSection();
 
   // Early-first-render hook: when set, createSectionFile() invokes fn(ctx, page, pageIndex)
   // once, right after the page with index targetPage has been laid out and written to the
@@ -151,7 +154,30 @@ class VerticalSection {
   // The same spec the horizontal Section takes. Vertical reads fontId, the viewport,
   // lineSpacingLevel, furiganaEnabled and characterSpacing from it; all five are the cache key.
   bool loadSectionFile(const ReaderRenderSpec& spec, bool retryDegraded = false);
+  // A whole chapter in one call: startBuild(), then buildSomeMore() until it is done.
   bool createSectionFile(const ReaderRenderSpec& spec);
+
+  // Incremental build, so the reader stays responsive while a chapter is laid out. startBuild()
+  // extracts the chapter and sets up the layout and parser; each buildSomeMore() parses for up to
+  // maxMillis (0: to the end) and finalizes the cache once the chapter is done. Between slices,
+  // pageCount is the pages written so far and getPage() reads them back from the open build.
+  // The early-render and mid-build page-request hooks fire inside slices, as before.
+  enum class BuildStep : uint8_t { InProgress, Done, Failed };
+  bool startBuild(const ReaderRenderSpec& spec);
+  BuildStep buildSomeMore(uint32_t maxMillis);
+  bool isBuilding() const { return static_cast<bool>(build_); }
+  // Drops a running build and its partial file; the next load rebuilds the chapter.
+  void abandonBuild();
+  // The reader drew a page between two slices (a menu over the page): the build's result is then
+  // used for this session but stamped stale, see finishBuild().
+  void notePageDrawnBetweenSlices();
+  // The page a mid-build turn asked for and the build has not served yet, or -1.
+  int pendingPageRequest() const { return buildPageRequest_.load(std::memory_order_relaxed); }
+  // Frees the single-page read cache (getPage()); the next getPage() reads the page again.
+  void releasePageCache() const {
+    loadedPage_ = VerticalPage();  // move-assigning an empty page frees its buffers
+    loadedPageIndex_ = -1;
+  }
   bool clearCache() const;
   // Sidecar marking the cache as a best-effort low-heap build; holds lastLoadMaxAlloc_ of that open.
   std::string degradedPath() const { return filePath + ".deg"; }

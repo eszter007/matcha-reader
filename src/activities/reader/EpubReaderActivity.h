@@ -244,6 +244,7 @@ class EpubReaderActivity final : public ReaderActivity {
   //      when no new button press is involved.
   std::atomic<uint32_t> imageWarmInputStamp_{0};
   uint32_t imageWarmStampSnapshot_ = 0;  // render task only: stamp value at warm start
+  uint32_t renderInputStamp_ = 0;        // render task only: stamp value when render() began
   // The chapter whose every image cache the idle warm has already visited, so later render tails
   // only check the pages around the reader. Render task only.
   struct ImageWarmScope {
@@ -435,6 +436,18 @@ class EpubReaderActivity final : public ReaderActivity {
   // Loading notice for UI actions waiting behind a running build. Called between pages on the
   // render task, so it shares the framebuffer with the page render rather than racing it.
   static void buildNoticeThunk(void* ctx);
+  // One slice of a vertical chapter build that render() left running; finishes it when done.
+  void tickVerticalBuild();
+  // Set by tickVerticalBuild() when the build finished: the next render() positions the page in the
+  // finished section instead of loading it. Loop and render task share it under the RenderLock.
+  bool verticalBuildFinished_ = false;
+  // The page the last forward turn during a vertical build asked for, until the build shows it;
+  // -1 when none. Loop task only (turns, ticks, and the early render run inside a tick).
+  int midBuildTurnTarget_ = -1;
+  // Background-build accounting, logged when it finishes: ticks, time inside slices, wall time.
+  uint32_t verticalTickCount_ = 0;
+  uint32_t verticalTickBusyMs_ = 0;
+  uint32_t verticalTickWallStartMs_ = 0;
   void requestVerticalBuildNotice();
   void earlyRenderVerticalPage(const VerticalPage& page, int pageIndex);
   // True while a vertical chapter build runs on the render task. Read by pageTurn() on the
@@ -824,7 +837,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // will actually run this pass" instead. Read unlocked like the other power heuristics
   // (setPowerSaving/lightSleep): a stale read costs at most one loop pass either way.
   bool skipLoopDelay() override {
-    return overlay != Overlay::None ||
+    // A vertical chapter build left running by render() advances one slice per loop pass: no delay
+    // between passes, or the chapter takes several times as long to finish.
+    return overlay != Overlay::None || verticalBuildInProgress_.load(std::memory_order_relaxed) ||
            (section && section->isBuilding() && !buildHeapPaused &&
             (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD));
   }
