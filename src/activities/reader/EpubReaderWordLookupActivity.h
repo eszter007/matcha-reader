@@ -338,6 +338,8 @@ class EpubReaderWordLookupActivity final : public Activity {
   // really has), release the font caches once and restart the walk over the intact glyph list,
   // so a fragmented first open self-heals instead of the user having to reopen via the menu.
   bool stepScan(uint32_t budgetMs);
+  // Moves a provisional cursor onto the scanned word at (or after) its cell.
+  void settleProvisionalCursor();
   bool scanHealAttempted = false;
   void moveCursor(int delta);
   // Sentence mining: saves the visible entry with its sentence (Select, or the panel's + button).

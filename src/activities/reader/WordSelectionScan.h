@@ -146,6 +146,9 @@ class WordSelectionScan {
   // for whoever scans them properly. selectableGlyphs therefore grows out of reading order --
   // callers stepping word by word must order by selectToAllIdx.
   void aimAtGlyph(size_t glyphIndex);
+  // Selectable word covering `glyphIndex`, else the first one after it with every cell in between
+  // segmented; -1 while the walk has not got that far.
+  int wordAtOrAfter(size_t glyphIndex) const;
   // True when the cell at `glyphIndex` has been segmented. Exact for any walk order, which
   // comparing against scannedGlyphs() cannot be once the walk is re-aimed.
   bool isGlyphMapped(size_t glyphIndex) const {

@@ -746,7 +746,29 @@ void EpubReaderWordLookupActivity::resolvePendingMove() {
   }
 }
 
+// A provisional cell has not been segmented, and a lookup straight from it takes the longest raw
+// match, which can start mid-phrase: な行 out of 奇妙な行動, which the scan splits 奇妙|な|行動.
+void EpubReaderWordLookupActivity::settleProvisionalCursor() {
+  if (provisionalGlyph >= scan.onPageGlyphCount()) return;
+  const size_t glyph = provisionalGlyph;
+  // Start up to one window back, so a word that began before the cell is recorded as itself.
+  constexpr size_t back = WordSelectionScan::kMaxLookupChars - 1;
+  size_t from = glyph > back ? glyph - back : 0;
+  while (from < glyph && scan.isGlyphMapped(from)) from++;
+  scan.aimAtGlyph(from);
+  int word = scan.wordAtOrAfter(glyph);
+  while (word < 0 && !scan.isDone()) {
+    stepScan(50);
+    word = scan.wordAtOrAfter(glyph);
+  }
+  if (word < 0) return;
+  cursorIndex = word;
+  provisionalGlyph = SIZE_MAX;
+  refreshCursorBoxes();
+}
+
 void EpubReaderWordLookupActivity::enterDefinition() {
+  settleProvisionalCursor();
   pending = PendingMove{};
   // The definition view paints over the page, so the highlight goes with it. Clearing the record
   // of what is drawn is left to the render task, which owns it: selectPageDrawn = false already

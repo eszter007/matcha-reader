@@ -569,6 +569,25 @@ void WordSelectionScan::aimAtGlyph(const size_t glyphIndex) {
   skipUntil = scanPos;
 }
 
+int WordSelectionScan::wordAtOrAfter(const size_t glyphIndex) const {
+  int after = -1;
+  size_t afterStart = SIZE_MAX;
+  for (size_t i = 0; i < selectToAllIdx.size(); i++) {
+    const size_t start = selectToAllIdx[i];
+    const size_t len = std::max<size_t>(selectableGlyphs[i].matchLen, 1);
+    if (start <= glyphIndex && glyphIndex < start + len) return static_cast<int>(i);
+    if (start > glyphIndex && start < afterStart) {
+      after = static_cast<int>(i);
+      afterStart = start;
+    }
+  }
+  if (after < 0) return -1;
+  for (size_t g = glyphIndex; g < afterStart; g++) {
+    if (!isGlyphMapped(g)) return -1;
+  }
+  return after;
+}
+
 bool WordSelectionScan::step(const uint32_t maxMillis) {
   const uint32_t start = millis();
   while (phase != Phase::Done) {
@@ -1028,6 +1047,7 @@ void WordSelectionScan::scanOnePosition() {
     // A match that STARTS with a case/topic particle usually mis-segments: the particle should
     // stand alone and the character after it begins the real word. Two examples:
     //   にど (2) -> に + どっさり,   はあり (3, =羽蟻 "winged ant") -> は + ありません(ある).
+    // The na-adjective copula な counts too: 奇妙な行動 must split as 奇妙 な 行動, not 奇妙 な行 動.
     // Suppress the particle-led match (pass through so the next char starts the real word) only
     // when the word beginning one char later is AT LEAST AS LONG as this match. That length test
     // is what keeps genuine words that merely begin with a particle-kana intact: とても (3) has
@@ -1035,7 +1055,7 @@ void WordSelectionScan::scanOnePosition() {
     // ありません (5) >= 3 correctly loses to the split.
     auto isCaseParticle = [](uint32_t cp) {
       return cp == 0x306B || cp == 0x306E || cp == 0x3068 || cp == 0x304C || cp == 0x306F || cp == 0x3092 ||
-             cp == 0x3082 || cp == 0x3067 || cp == 0x3078 || cp == 0x3084 || cp == 0x304B;
+             cp == 0x3082 || cp == 0x3067 || cp == 0x3078 || cp == 0x3084 || cp == 0x304B || cp == 0x306A;
     };
     if (hasMatch && matchChars >= 2 && isCaseParticle(allGlyphs[scanStart].codepoint) &&
         scanStart + 1 < allGlyphs.size() && allGlyphs[scanStart + 1].paragraphIndex == paraIdx) {
