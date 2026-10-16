@@ -63,8 +63,6 @@ SesameMask makeSesameMask(const int cellPx) {
 // instead of re-deriving it -- every derivation probes the reference glyph out of the SD font.
 int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int offsetX, int offsetY, bool black) {
   const int cellPx = verticalCellPx(renderer, fontId);
-  // Measured once for the whole loop: each derivation probes the reference glyph out of the SD font.
-  const int inkGapPx = verticalNominalInkGapPx(renderer, fontId, cellPx);
   // VerticalGlyph::y is the cell's TOP for every kind (see layoutPages); the draw calls disagree
   // about what they want, so each converts:
   //   drawText              - a TOP, and it adds the ascender itself, so hand it baseline-ascender
@@ -154,10 +152,12 @@ int drawGlyphs(GfxRenderer& renderer, const VerticalPage& page, int fontId, int 
     renderer.drawText(fontId, dx, uprightDy, utf8Char.c_str(), black, static_cast<EpdFontFamily::Style>(g.style));
 
     if (g.emphasis) {
-      // Sesame dot beside the character, clear of its cell by the same ink gap a normal pair of
-      // characters leaves. Stamped from a mask, not drawn as U+FE45: the built-in fonts lack that
-      // block, so a glyph showed as the missing-character box without a Japanese SD font.
-      const int left = dx + cellPx + inkGapPx + cellPx / 4 - sesame.size / 2;
+      // Sesame dot centred in the half-em band beside the character, where ruby goes (JLREQ: an
+      // emphasis mark takes the ruby position). The ruby band starts at the cell's edge; adding an
+      // ink gap on top pushed the dot out between the columns, visibly apart from its character.
+      // Clamped to the panel like ruby, for the first column. Stamped from a mask, not drawn as
+      // U+FE45: the built-in fonts lack that block, so a glyph showed as the missing-character box.
+      const int left = std::min(dx + cellPx + cellPx / 4 - sesame.size / 2, renderer.getScreenWidth() - sesame.size);
       const int top = cellTop + (cellPx - sesame.size) / 2;
       for (int row = 0; row < sesame.size; ++row) {
         for (int col = 0; col < sesame.size; ++col) {
