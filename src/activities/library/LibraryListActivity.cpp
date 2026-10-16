@@ -994,8 +994,6 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
   // it.
   constexpr int READOUT_GAP = 4;  // the list's fold sits just above the readout's line box
   const int16_t readoutReserved = static_cast<int16_t>(renderer.getLineHeight(SMALL_FONT_ID) + READOUT_GAP);
-  const Rect area = UITheme::getContentArea(renderer);
-  const auto bottomInset = static_cast<int16_t>(renderer.getScreenHeight() - area.y - area.height);
   buildHeader(screen);
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                                 static_cast<int16_t>(HomeTabBar::bottomInset() + readoutReserved), 0});
