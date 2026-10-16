@@ -1,5 +1,6 @@
 #include "LibraryListActivity.h"
 
+#include <BoardConfig.h>
 #include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -980,17 +981,21 @@ void LibraryListActivity::buildHeader(UiScreen& screen) {
   }
   const auto frameRect = screen.frame().screen();
   // Header and tabs share a screen-relative boundary, independent of bezel insets.
-  fui::header(screen.frame(),
-              fui::Rect{frameRect.x, static_cast<int16_t>(metrics.topPadding), frameRect.width,
-                        static_cast<int16_t>(metrics.headerHeight)},
-              header);
+  const fui::Rect band = BaseTheme::headerBand(renderer,
+                                               fui::Rect{frameRect.x, static_cast<int16_t>(metrics.topPadding),
+                                                         frameRect.width, static_cast<int16_t>(metrics.headerHeight)},
+                                               header);
+  fui::header(screen.frame(), band, header);
 }
 
 void LibraryListActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // The position readout owns the line above the hints; rows must not overlap
   // it.
-  const int16_t readoutReserved = static_cast<int16_t>(renderer.getLineHeight(SMALL_FONT_ID) + metrics.verticalSpacing);
+  constexpr int READOUT_GAP = 4;  // the list's fold sits just above the readout's line box
+  const int16_t readoutReserved = static_cast<int16_t>(renderer.getLineHeight(SMALL_FONT_ID) + READOUT_GAP);
+  const Rect area = UITheme::getContentArea(renderer);
+  const auto bottomInset = static_cast<int16_t>(renderer.getScreenHeight() - area.y - area.height);
   buildHeader(screen);
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                                 static_cast<int16_t>(HomeTabBar::bottomInset() + readoutReserved), 0});

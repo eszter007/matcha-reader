@@ -114,8 +114,9 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT});
   }
   // Free-form dictionary lookup doesn't apply to manga (Word Lookup covers OCR'd text) or to
-  // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense.
-  if (!mangaMode && !hideGenericLookup) {
+  // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense. Without a
+  // StarDict dictionary configured it has nothing to search.
+  if (!mangaMode && !hideGenericLookup && SETTINGS.dictionaryName[0] != '\0') {
     items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
   }
   // Text Settings is not re-added here even though upstream lists it: this fork reaches it

@@ -75,7 +75,7 @@ void normalizeIndexHeadword(char* word) {
 // headers are tiny and both keys always appear early when present.
 struct IfoFacts {
   bool offsets64 = false;        // idxoffsetbits=64 (unsupported)
-  bool htmlDefinitions = false;  // sametypesequence=h (definitions are HTML)
+  bool htmlDefinitions = false;  // sametypesequence=h or x (HTML or XDXF)
   std::string bookName;          // bookname=, shown in the definition panel's footer
 };
 
@@ -93,9 +93,8 @@ IfoFacts readIfoFacts(const std::string& ifoPath) {
   line = strstr(buf, "sametypesequence");
   eq = line ? strchr(line, '=') : nullptr;
   if (eq) {
-    // Only the single-field sequence "h" is treated as HTML; multi-type
-    // entries keep the plain-text viewing path.
-    facts.htmlDefinitions = eq[1] == 'h' && (eq[2] == '\0' || eq[2] == '\r' || eq[2] == '\n');
+    // HTML and XDXF share the styled renderer; multi-type entries stay plain text.
+    facts.htmlDefinitions = (eq[1] == 'h' || eq[1] == 'x') && (eq[2] == '\0' || eq[2] == '\r' || eq[2] == '\n');
   }
   // bookname= is the dictionary's own title; the folder name is the fallback at the call site.
   line = strstr(buf, "bookname");
@@ -591,6 +590,11 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out, 
   if (dict.read(&out[0], size) != static_cast<int>(size)) {
     out.clear();
     return fail(LookupResult::ReadError);
+  }
+  // Keep room for the viewer's plain-text fallback while retaining the input.
+  if (htmlDefinitions && ESP.getMaxAllocHeap() < out.size() + DEFINITION_HEAP_HEADROOM_BYTES) {
+    LOG_ERR("DICT", "Low heap for %lu byte definition fallback", static_cast<unsigned long>(out.size()));
+    return fail(LookupResult::LowMemory);
   }
   return true;
 }
