@@ -23,6 +23,8 @@
 #include <XteinkDetect.h>
 #include <builtinFonts/all.h>
 #include <esp_sntp.h>
+#include <esp_wifi.h>
+#include <time.h>
 
 #include <cstring>
 
@@ -567,6 +569,17 @@ void setup() {
   gpio.begin();
   powerManager.begin();
 
+  // Board TX-power ceiling. It can only be set once WiFi has started, so it is
+  // applied on every STA/AP start rather than at each place that brings WiFi up.
+  if (BoardConfig::ACTIVE.wifiMaxTxPower != 0) {
+    const auto applyTxCap = [](arduino_event_id_t, arduino_event_info_t) {
+      const esp_err_t err = esp_wifi_set_max_tx_power(static_cast<int8_t>(BoardConfig::ACTIVE.wifiMaxTxPower));
+      if (err != ESP_OK) LOG_ERR("WIFI", "TX power cap failed: %d", err);
+    };
+    WiFi.onEvent(applyTxCap, ARDUINO_EVENT_WIFI_STA_START);
+    WiFi.onEvent(applyTxCap, ARDUINO_EVENT_WIFI_AP_START);
+  }
+
   const auto wakeupReason = gpio.getWakeupReason();
   // Sample the wake hold now — a click wake is released within milliseconds of
   // boot — but defer the sleep-or-boot decision until SETTINGS is loaded below:
@@ -642,6 +655,18 @@ void setup() {
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   pluginevents::refreshSubscriptions();
+  // Seed the system clock from the battery-backed RTC: on RTC boards it is the
+  // only real clock across power-off, and time() is what plugin event
+  // timestamps, TLS and file dates read. Placed before trustedtime::init(),
+  // whose floor restore vetoes a lagging RTC and restores the floor instead.
+  struct tm rtcLocal;
+  if (halClock.localTime(rtcLocal)) {
+    // localTime() renders the RTC's UTC epoch under the TZ rule applied above,
+    // so mktime() inverts it exactly (tm_isdst included).
+    trustedtime::adopt(static_cast<int64_t>(mktime(&rtcLocal)));
+    LOG_INF("CLK", "RTC clock read: %04d-%02d-%02d %02d:%02d", rtcLocal.tm_year + 1900, rtcLocal.tm_mon + 1,
+            rtcLocal.tm_mday, rtcLocal.tm_hour, rtcLocal.tm_min);
+  }
   // Restore the monotonic clock floor before anything reads time() (event
   // timestamps, loan-expiry checks).
   trustedtime::init();

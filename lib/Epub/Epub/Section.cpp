@@ -272,7 +272,10 @@ namespace {
 //      word (chapter-visible codepoint offsets, NFC-absorbed codepoints included) and the block
 //      header gains paragraphStartWord after textBytes, both for clippings; the style byte's high
 //      bit marks a discretionary hyphen. The page body grew, so a v98 cache does not parse.
-constexpr uint8_t SECTION_FILE_VERSION = 99;
+// v100: upstream merge (their v56). In standard reading mode a word is split after an inner hyphen
+//      or dash ("foo—bar" into "foo—" and "bar"), so lines may break there and the token count
+//      changes. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 100;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

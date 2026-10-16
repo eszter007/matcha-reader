@@ -67,6 +67,7 @@ add_subdirectory(i18n_codegen)
 add_subdirectory(inflection_rules)
 add_subdirectory(chapter_html_slim_parser)
 add_subdirectory(korean_line_breaking)
+add_subdirectory(em_dash_line_breaking)
 add_subdirectory(ligature_guard)
 add_subdirectory(page_link)
 add_subdirectory(content_opf_parser)
@@ -98,3 +99,8 @@ add_subdirectory(protected_paths)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME TrustedTimeTimezone COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_trusted_time.py)
+
+add_test(NAME list_viewport COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_list_viewport.py)
+# Upstream also registers test_selection_buttons.py, test_clipping_highlight_planes.py and
+# test_clipping_selection_text.py. They compile snippets cut out of upstream's reader and selection
+# activities, which this fork has rewritten, so they cannot build here.
