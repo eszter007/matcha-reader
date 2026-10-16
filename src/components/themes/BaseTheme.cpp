@@ -1,7 +1,7 @@
 #include "BaseTheme.h"
 
-#include <FontCacheManager.h>
 #include <BoardConfig.h>
+#include <FontCacheManager.h>
 #include <FreeInkUIGfxRenderer.h>
 #include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
