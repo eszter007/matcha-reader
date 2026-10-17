@@ -73,6 +73,13 @@ See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 
 <p align="center"><img src="docs/images/screenshots/pinyin-ruby.png" width="260" alt="A page of 紅樓夢 (Project Gutenberg) with pinyin above every character"></p>
 
+| Simplified | Traditional | Traditional, vertical | Cantonese |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/images/screenshots/chinese-simplified.png" width="180" alt="西游记 chapter 1 in simplified Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional.png" width="180" alt="紅樓夢 chapter 1 in traditional Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional-vertical.png" width="180" alt="西遊記 chapter 1 in traditional Chinese, set vertically right to left"> | <img src="docs/images/screenshots/cantonese.png" width="180" alt="A short story in written Cantonese"> |
+| 西游记 | 紅樓夢 | 西遊記 | 落雨天 |
+
+<sub>西遊記 and 紅樓夢 from Project Gutenberg (public domain), the simplified page converted with OpenCC; 落雨天 is a short sample story written for this README. Fonts: Noto Serif SC and TC.</sub>
+
 See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
 
 ### For learners of other languages
