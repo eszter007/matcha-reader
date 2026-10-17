@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Generate the cat mascot bitmaps from the drawing in assets/images/cat-reading.png.
 
+The drawing carries a light gray sticker edge around the cat: the dark sleep screen shows it as the
+white rim that sets the black cat off the black screen; everywhere else it is dropped.
+
     python3 scripts/generate_mascot_assets.py
 
 Writes:
@@ -18,11 +21,11 @@ from PIL import Image, ImageFilter, ImageOps
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "assets" / "images" / "cat-reading.png"
 
-LOGO_WIDTH = 130
+LOGO_WIDTH = 137  # the cat itself is 130 px wide; the rest is room for the sticker edge
 EOB_SIZE = 152  # drawIcon is square; the cat is centred in it at full height
 WEB_SIZE = 128
-# Width of the white edge around the cat on the dark sleep screen.
-DARK_OUTLINE = 3
+# The sticker edge is drawn at gray 238; the cat's own whites are 255 and its ink near 0.
+EDGE_LEVEL = 230
 
 
 def shrink(art, width, height):
@@ -75,7 +78,7 @@ def bw(art, width, height):
     return Image.composite(inside, edge, interior)
 
 
-def build_logo(art):
+def build_logo(art, edged):
     height = round(art.size[1] * LOGO_WIDTH / art.size[0])
     coverage, _ = shrink(art, LOGO_WIDTH, height)
     ink = bw(art, LOGO_WIDTH, height)
@@ -91,8 +94,9 @@ def build_logo(art):
     for i in range(0, len(levels), 4):
         chunk = levels[i : i + 4] + [3] * (4 - len(levels[i : i + 4]))
         packed.append(chunk[0] << 6 | chunk[1] << 4 | chunk[2] << 2 | chunk[3])
-    # Footprint: the drawing with everything it encloses, grown by the outline width.
-    footprint = _fill_holes(ink.point(lambda v: 255 if v < 128 else 0)).filter(ImageFilter.MaxFilter(2 * DARK_OUTLINE + 1))
+    # Footprint: the cat, the books and the sticker edge around them.
+    footprint = _fill_holes(edged.point(lambda v: 255 if v < 250 else 0)).resize((LOGO_WIDTH, height), Image.BOX)
+    footprint = footprint.point(lambda v: 255 if v >= 128 else 0)
     row_bytes = (LOGO_WIDTH + 7) // 8
     mask = bytearray(row_bytes * height)
     for y in range(height):
@@ -161,8 +165,9 @@ def c_array(data, per_line=19):
 
 
 def main():
-    art = Image.open(SOURCE).convert("L")
-    width, height, logo, mask = build_logo(art)
+    edged = Image.open(SOURCE).convert("L")
+    art = edged.point(lambda v: 255 if v >= EDGE_LEVEL else v)
+    width, height, logo, mask = build_logo(art, edged)
     (ROOT / "src" / "images" / "CatLogo.h").write_text(
         "#pragma once\n#include <cstdint>\n\n"
         f"// {width}x{height} cat logo, 4-level grayscale, 2 bits/px packed MSB-first (4 px/byte),\n"

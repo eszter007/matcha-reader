@@ -20,8 +20,8 @@ class GfxRenderer;
 // books and a white edge around them) it keeps its own black, white and grays, gray pixels
 // starting black post-invert -- the calibrated start state the gray nudge expects.
 namespace GrayLogo {
-constexpr int WIDTH = 130;
-constexpr int HEIGHT = 187;
+constexpr int WIDTH = 137;
+constexpr int HEIGHT = 193;
 // Logo top for a screen of this height: the logo and the two text lines under it, centred as one.
 constexpr int top(const int pageHeight) { return (pageHeight - HEIGHT - 60) / 2; }
 
