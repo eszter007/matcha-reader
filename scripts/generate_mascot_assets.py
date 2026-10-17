@@ -4,15 +4,16 @@
 The drawing carries a light gray sticker edge around the cat: the dark sleep screen shows it as the
 white rim that sets the black cat off the black screen; everywhere else it is dropped.
 
-    python3 scripts/generate_mascot_assets.py [--stamp-font NotoSerifJP.ttf]
+    python3 scripts/generate_mascot_assets.py [--stamp-fonts DIR]
 
 Writes:
   src/images/CatLogo.h                      boot/sleep logo, 4-level gray with the footprint the
                                             dark sleep screen keeps lit, run-length coded
   src/components/icons/endOfBookCat.h       end-of-book graphic, 1 bpp drawIcon format
   src/network/html/assets/matcha-icon.svg   web header and favicon
-  src/components/icons/eobStamp.h           the 読了 hanko of the end-of-book screen, 1 bpp
-                                            (only with --stamp-font: Noto Serif JP, SIL OFL)
+  src/components/icons/eobStamp.h           the end-of-book hanko, one per wording, run-length
+                                            coded (only with --stamp-fonts: a folder holding
+                                            NotoSerif{JP,SC,TC,HK}.ttf, SIL OFL)
 """
 import argparse
 import base64
@@ -163,12 +164,23 @@ def _fill_holes(ink):
     return Image.frombytes("L", (w, h), bytes(0 if o else 255 for o in outside))
 
 
-STAMP_SIZE = 150
+STAMP_SIZE = 180
 
 
-def build_stamp(font_path):
-    """The 読了 hanko: a double ring and the two characters, worn like real ink. The date under them
-    is drawn by the firmware; the space for it is left empty."""
+# The stamp's wording per book language, each lettered in the Noto Serif cut for its region so the
+# glyphs take that region's forms. Japanese and every non-Chinese book get 読了.
+STAMPS = (
+    ("EobStampJa", "読了", "NotoSerifJP.ttf"),
+    ("EobStampZhHans", "读完", "NotoSerifSC.ttf"),
+    ("EobStampZhHant", "讀完", "NotoSerifTC.ttf"),
+    ("EobStampYue", "睇完", "NotoSerifHK.ttf"),
+)
+
+
+def build_stamp(font_path, text):
+    """A hanko: a double ring and two characters, worn like real ink. The date under them is drawn
+    by the firmware; the space for it is left empty. Returns the run-length coded bitmap: each byte
+    is (ink << 7) | (run - 1), runs of 1-128 pixels in row-major order, continuing across rows."""
     from PIL import ImageDraw, ImageFont
 
     scale = 4
@@ -180,22 +192,28 @@ def build_stamp(font_path):
     draw.ellipse([inner, inner, size - inner, size - inner], outline=255, width=2 * scale)
     font = ImageFont.truetype(str(font_path), int(size * 0.30))
     font.set_variation_by_axes([700])
-    text = "読了"
-    draw.text(((size - draw.textlength(text, font=font)) / 2, size * 0.17), text, fill=255, font=font)
+    # Centred by the glyphs' ink, not the font box. With the date drawn under them (at 60% height),
+    # the two lines sit as one block in the middle of the ring.
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    x = (size - (right - left)) / 2 - left
+    y = size * 0.40 - (bottom - top) / 2 - top
+    draw.text((x, y), text, fill=255, font=font)
     img = img.resize((STAMP_SIZE, STAMP_SIZE), Image.LANCZOS).point(lambda v: 255 if v > 110 else 0)
     # Worn ink: a fixed scatter of missing specks, the same on every build.
     rng = random.Random(3)
     px = img.load()
     for _ in range(STAMP_SIZE * STAMP_SIZE // 18):
         px[rng.randrange(STAMP_SIZE), rng.randrange(STAMP_SIZE)] = 0
-    row_bytes = (STAMP_SIZE + 7) // 8
-    packed = bytearray([0xFF] * (row_bytes * STAMP_SIZE))
-    for row in range(STAMP_SIZE):
-        for col in range(STAMP_SIZE):
-            # drawIcon plots stored (row, col) at screen (size - 1 - row, col).
-            if px[STAMP_SIZE - 1 - row, col]:
-                packed[row * row_bytes + (col >> 3)] &= ~(0x80 >> (col & 7)) & 0xFF
-    return packed
+    bits = [1 if v else 0 for v in img.tobytes()]
+    rle = bytearray()
+    i = 0
+    while i < len(bits):
+        run = 1
+        while i + run < len(bits) and bits[i + run] == bits[i] and run < 128:
+            run += 1
+        rle.append(bits[i] << 7 | (run - 1))
+        i += run
+    return rle
 
 
 def c_array(data, per_line=19):
@@ -207,16 +225,20 @@ def c_array(data, per_line=19):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stamp-font", type=Path, help="Noto Serif JP, to regenerate the 読了 stamp")
+    parser.add_argument("--stamp-fonts", type=Path, help="folder with NotoSerif{JP,SC,TC,HK}.ttf")
     args = parser.parse_args()
-    if args.stamp_font:
+    if args.stamp_fonts:
+        arrays = []
+        for name, text, font in STAMPS:
+            rle = build_stamp(args.stamp_fonts / font, text)
+            arrays.append(f"// {text}, lettered in {font[:-4]}\nstatic const uint8_t {name}[] = {{\n{c_array(rle)}\n}};\n")
         (ROOT / "src" / "components" / "icons" / "eobStamp.h").write_text(
             "#pragma once\n#include <cstdint>\n\n"
-            "// The 読了 (finished) hanko of the end-of-book screen, 1 bpp, drawn with GfxRenderer::drawIcon.\n"
-            "// Lettering from Noto Serif JP (SIL Open Font License). The date inside is drawn at runtime.\n"
-            "// Generated by scripts/generate_mascot_assets.py --stamp-font.\n"
-            f"static constexpr int EOB_STAMP_SIZE = {STAMP_SIZE};\n"
-            f"static const uint8_t EobStamp[] = {{\n{c_array(build_stamp(args.stamp_font))}\n}};\n"
+            "// The end-of-book hanko, one per wording. Run-length coded, row-major and upright: each byte is\n"
+            "// (ink << 7) | (run - 1), runs of 1-128 pixels continuing across rows. Lettered in Noto Serif\n"
+            "// (SIL Open Font License); the date inside is drawn at runtime.\n"
+            "// Generated by scripts/generate_mascot_assets.py --stamp-fonts.\n"
+            f"static constexpr int EOB_STAMP_SIZE = {STAMP_SIZE};\n\n" + "\n".join(arrays)
         )
     edged = Image.open(SOURCE).convert("L")
     art = edged.point(lambda v: 255 if v >= EDGE_LEVEL else v)

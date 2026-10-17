@@ -23,10 +23,12 @@
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
 #include "components/icons/endOfBookCat.h"
+#include "components/icons/eobIcons.h"
 #include "components/icons/eobStamp.h"
 #include "components/icons/tabBarIcons.h"
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
+#include "util/CjkScript.h"
 #include "util/NextBookFinder.h"
 
 namespace {
@@ -252,7 +254,35 @@ void turnPoint(const float x, const float y, const int w, const int h, const flo
   outY = cy + static_cast<int>(std::lround(std::sin(rad) * px + std::cos(rad) * py));
 }
 
-// The 32 px home icon in white, for the selected (black) Home button. drawIcon only draws ink.
+// The stamp's wording for the book's language: 読了 for Japanese and every non-Chinese book, 读完
+// (simplified) and 讀完 (traditional) for Chinese, 睇完 for Cantonese.
+const uint8_t* stampFor(const char* language) {
+  const std::string_view tag = language ? language : "";
+  const std::string_view primary = tag.substr(0, tag.find_first_of("-_"));
+  if (cjk::subtagIs(primary, "yue")) return EobStampYue;
+  switch (cjk::scriptForLanguage(tag)) {
+    case CjkScript::SimplifiedChinese:
+      return EobStampZhHans;
+    case CjkScript::TraditionalChinese:
+      return EobStampZhHant;
+    default:
+      return EobStampJa;
+  }
+}
+
+// Draws a run-length coded stamp (see eobStamp.h) upright at (x, y).
+void drawStamp(const GfxRenderer& renderer, const uint8_t* rle, const int x, const int y) {
+  int i = 0;
+  for (size_t b = 0; i < EOB_STAMP_SIZE * EOB_STAMP_SIZE; b++) {
+    const bool ink = rle[b] & 0x80;
+    const int run = (rle[b] & 0x7F) + 1;
+    for (int k = 0; k < run; k++, i++) {
+      if (ink) renderer.drawPixel(x + i % EOB_STAMP_SIZE, y + i / EOB_STAMP_SIZE, true);
+    }
+  }
+}
+
+// A 32 px icon in white, for a selected (black) button. drawIcon only draws ink.
 void drawIconWhite(const GfxRenderer& renderer, const uint8_t* bitmap, const int x, const int y, const int size) {
   const int rowBytes = (size + 7) / 8;
   for (int row = 0; row < size; row++) {
@@ -283,6 +313,7 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   const StatsWidgets::Today today = StatsWidgets::getToday();
   summary.streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
   summary.booksFinished = READING_STATS_STORE.getBooksFinished();
+  stamp_ = stampFor(bookLanguage);
   snprintf(summary.finishedOn, sizeof(summary.finishedOn), "%04u.%02u.%02u", static_cast<unsigned>(today.year),
            static_cast<unsigned>(today.month), static_cast<unsigned>(today.day));
 
@@ -321,7 +352,8 @@ void EndOfBookOptions::loadOnce(const std::string& currentBookPath, const std::s
       if (auto epub = makeUniqueNoThrow<Epub>(nextPath(), "/.crosspoint")) nextCoverTemplate = epub->getThumbBmpPath();
     }
   }
-  selector.store(0, std::memory_order_relaxed);
+  // Focus starts on Home; Continue is one press away.
+  selector.store(itemCount() - 1, std::memory_order_relaxed);
   // Release-publish so the main task, which gates all access on isLoaded, never observes a
   // partially built screen.
   isLoaded.store(true, std::memory_order_release);
@@ -462,7 +494,7 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
   const auto titleLines = renderer.wrappedText(UI_12_FONT_ID, title.c_str(), MIN_TOP_W - 24, 2, EpdFontFamily::BOLD);
   const int titleH = lineH * static_cast<int>(std::max<size_t>(1, titleLines.size()));
   const int topChrome = 12 + 8 + titleH + 10 + TEAR;
-  constexpr int TEAR_GAP = 6;  // the halves part a little at the tear
+  constexpr int TEAR_GAP = 16;  // the halves part a little at the tear
   const int maxCoverH = bottom - safe.y - 8 - topChrome - TEAR_GAP - stubH - 28;
   if (hasCover) {
     coverH = std::min(maxCoverH, COVER_HEIGHT);
@@ -487,9 +519,10 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
   // The stamp first, in a corner of the still blank screen: it is captured and put back last,
   // on top of the cover.
   Capture stamp;
-  renderer.drawIcon(EobStamp, safe.x, safe.y, EOB_STAMP_SIZE);
-  const int dateW = renderer.getTextWidth(UI_10_FONT_ID, summary.finishedOn, EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, safe.x + (EOB_STAMP_SIZE - dateW) / 2, safe.y + EOB_STAMP_SIZE * 60 / 100,
+  drawStamp(renderer, stamp_, safe.x, safe.y);
+  // The date in the space under 読了, kept inside the inner ring.
+  const int dateW = renderer.getTextWidth(SMALL_FONT_ID, summary.finishedOn, EpdFontFamily::BOLD);
+  renderer.drawText(SMALL_FONT_ID, safe.x + (EOB_STAMP_SIZE - dateW) / 2, safe.y + EOB_STAMP_SIZE * 60 / 100,
                     summary.finishedOn, true, EpdFontFamily::BOLD);
   const bool stampCaptured = capture(renderer, safe.x, safe.y, EOB_STAMP_SIZE, EOB_STAMP_SIZE, stamp);
 
@@ -523,9 +556,11 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
   if (stampCaptured) {
     int sx = 0;
     int sy = 0;
-    turnPoint(coverX - topX + coverW - 40, coverY - topY + coverH - 60, topW, topH, topCaptured ? TOP_ANGLE : 0, topCx,
-              topCy, sx, sy);
-    writeStamp(renderer, stamp, sx + 22, sy);
+    turnPoint(coverX - topX + coverW - 40, coverY - topY + coverH - EOB_STAMP_SIZE / 2, topW, topH,
+              topCaptured ? TOP_ANGLE : 0, topCx, topCy, sx, sy);
+    // Hanging off the cover's right edge, but never off the screen.
+    const int stampCx = std::min(sx + 52, safe.x + safe.width - EOB_STAMP_SIZE / 2 - 4);
+    writeStamp(renderer, stamp, stampCx, sy);
   }
 }
 
@@ -533,7 +568,7 @@ void EndOfBookOptions::drawButtons(const int x, const int y, const int w, const 
   constexpr int RADIUS = 10;
   constexpr int ICON = 32;
   const bool homeSelected = isHomeIndex(selected);
-  const int homeW = nextName.empty() ? w : 72;
+  const int homeW = nextName.empty() ? w : h;  // a square beside Continue
   homeRect = {x, y, homeW, h};
   if (homeSelected) {
     renderer.fillRoundedRect(x, y, homeW, h, RADIUS, Color::Black);
@@ -581,7 +616,8 @@ void EndOfBookOptions::drawButtons(const int x, const int y, const int w, const 
       if (drawn > 0) textX = cx + 10 + drawn + 14;
     }
   }
-  const int arrowW = renderer.getTextWidth(UI_12_FONT_ID, "›", EpdFontFamily::BOLD);
+  constexpr int CHEVRON = 32;
+  const int arrowW = CHEVRON;
   const int smallH = renderer.getLineHeight(SMALL_FONT_ID);
   const int bigH = renderer.getLineHeight(UI_12_FONT_ID);
   const int textTop = y + (h - smallH - bigH) / 2;
@@ -589,7 +625,13 @@ void EndOfBookOptions::drawButtons(const int x, const int y, const int w, const 
   const std::string name = renderer.truncatedText(UI_12_FONT_ID, displayName(nextName).c_str(),
                                                   cx + cw - 16 - arrowW - 10 - textX, EpdFontFamily::BOLD);
   renderer.drawText(UI_12_FONT_ID, textX, textTop + smallH, name.c_str(), !sel, EpdFontFamily::BOLD);
-  renderer.drawText(UI_12_FONT_ID, cx + cw - 16 - arrowW, y + (h - bigH) / 2, "›", !sel, EpdFontFamily::BOLD);
+  const int chevronX = cx + cw - 10 - CHEVRON;
+  const int chevronY = y + (h - CHEVRON) / 2;
+  if (sel) {
+    drawIconWhite(renderer, ChevronRightIcon, chevronX, chevronY, CHEVRON);
+  } else {
+    renderer.drawIcon(ChevronRightIcon, chevronX, chevronY, CHEVRON);
+  }
 }
 
 void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& input) {

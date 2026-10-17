@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,7 @@ class EndOfBookOptions {
   std::string folder;
   std::string title;
   std::string coverPath;
+  const uint8_t* stamp_ = nullptr;  // the 読了 / 读完 / 讀完 / 睇完 hanko for the book's language
   // The next book: its file name, and its cover thumbnail path template (empty if none).
   std::string nextName;
   std::string nextCoverTemplate;
