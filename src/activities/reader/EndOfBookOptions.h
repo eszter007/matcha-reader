@@ -41,6 +41,11 @@ class EndOfBookOptions {
   // Draws the full end screen onto a cleared buffer.
   void render(GfxRenderer& renderer, const MappedInputManager& input);
 
+  // When the only change since the last render is the selection, repaints just the buttons over the
+  // frame still in the buffer and returns true; the tilted ticket is not drawn again. Otherwise
+  // returns false and the caller does a full render().
+  bool repaintSelection(GfxRenderer& renderer);
+
  private:
   GfxRenderer& renderer;
   std::string folder;
@@ -77,6 +82,11 @@ class EndOfBookOptions {
   bool isHomeIndex(int index) const { return index == itemCount() - 1; }
 
   std::atomic<int> selector{0};
+  // Set by handleMenuInput when only the selection moved; consumed by repaintSelection().
+  std::atomic<bool> selectionMoved{false};
+  // Where render() put the button row, and whether a full frame with it is in the buffer.
+  int buttonsX = 0, buttonsY = 0, buttonsW = 0;
+  bool frameDrawn = false;
   std::atomic<bool> isLoaded{false};
 
   // Button hit rects in screen coordinates, published by render() for touch input.

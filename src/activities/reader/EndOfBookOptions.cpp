@@ -124,9 +124,14 @@ bool onBorder(const Shape shape, const int w, const int h, const int x, const in
          !inShape(shape, w, h, x - 2, y + 2) || !inShape(shape, w, h, x + 2, y + 2);
 }
 
+// Only a band CORNER + BORDER + TEAR deep along each side can hold outline, so the middle of a row
+// is skipped instead of testing ~100k interior pixels against the shape nine times each.
 void drawOutline(const GfxRenderer& renderer, const Shape shape, const int x0, const int y0, const int w, const int h) {
+  constexpr int M = CORNER + BORDER + TEAR;
   for (int y = 0; y < h; y++) {
+    const bool edgeRow = y < M || y >= h - M;
     for (int x = 0; x < w; x++) {
+      if (!edgeRow && x == M && w - M > M) x = w - M;
       if (onBorder(shape, w, h, x, y)) renderer.drawPixel(x0 + x, y0 + y, true);
     }
   }
@@ -168,32 +173,58 @@ bool capture(const GfxRenderer& renderer, const int x0, const int y0, const int 
   return true;
 }
 
-// Writes a captured piece back turned by `degrees` about its centre, which lands at (cx, cy). Each
-// screen pixel samples the piece 3x3: inside the shape for a majority it becomes paper, and ink
-// once a third of the paper samples are ink, so 1 px strokes survive the turn.
-void writeTilted(const GfxRenderer& renderer, const Capture& piece, const Shape shape, const float degrees,
-                 const int cx, const int cy) {
+// A rotation in Q16 fixed point. The C3 has no FPU, so the per-pixel work below stays in integers;
+// the one sin/cos per piece is the only floating point.
+struct Turn {
+  int32_t c;
+  int32_t s;
+};
+
+Turn turnFor(const float degrees) {
   const float rad = degrees * 3.14159265f / 180.0f;
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  const float hw = piece.w / 2.0f;
-  const float hh = piece.h / 2.0f;
-  const int reach = static_cast<int>(std::ceil(std::sqrt(hw * hw + hh * hh))) + 1;
-  for (int dy = -reach; dy <= reach; dy++) {
-    for (int dx = -reach; dx <= reach; dx++) {
+  return {static_cast<int32_t>(std::lround(std::cos(rad) * 65536.0f)),
+          static_cast<int32_t>(std::lround(std::sin(rad) * 65536.0f))};
+}
+
+// Writes a captured piece back turned about its centre, which lands at (cx, cy). Each screen pixel
+// samples the piece 3x3: inside the shape for a majority it becomes paper, and ink once a third of
+// the paper samples are ink, so 1 px strokes survive the turn. Only the turned piece's bounding box
+// is visited, and the source position steps along each row by addition.
+void writeTilted(const GfxRenderer& renderer, const Capture& piece, const Shape shape, const Turn t, const int cx,
+                 const int cy) {
+  const int w = piece.w;
+  const int h = piece.h;
+  const int32_t ac = std::abs(t.c);
+  const int32_t as = std::abs(t.s);
+  const int halfX = static_cast<int>((static_cast<int64_t>(ac) * w + static_cast<int64_t>(as) * h) >> 17) + 2;
+  const int halfY = static_cast<int>((static_cast<int64_t>(as) * w + static_cast<int64_t>(ac) * h) >> 17) + 2;
+  // The nine sub-pixel offsets, already turned into source space.
+  int32_t du[9];
+  int32_t dv[9];
+  for (int k = 0; k < 9; k++) {
+    const int64_t ox = (k % 3 - 1) * 65536 / 3;
+    const int64_t oy = (k / 3 - 1) * 65536 / 3;
+    du[k] = static_cast<int32_t>((t.c * ox + t.s * oy) >> 16);
+    dv[k] = static_cast<int32_t>((-t.s * ox + t.c * oy) >> 16);
+  }
+  const int32_t hw = w << 15;
+  const int32_t hh = h << 15;
+  for (int dy = -halfY; dy <= halfY; dy++) {
+    // Source of the row's first pixel (dx = -halfX); each step right adds (c, -s).
+    int32_t u = t.s * dy + hw - t.c * halfX;
+    int32_t v = t.c * dy + hh + t.s * halfX;
+    for (int dx = -halfX; dx <= halfX; dx++, u += t.c, v -= t.s) {
+      const int ux = u >> 16;
+      const int uy = v >> 16;
+      if (ux < -1 || uy < -1 || ux > w || uy > h) continue;
       int paper = 0;
       int ink = 0;
-      for (int sy = -1; sy <= 1; sy++) {
-        for (int sx = -1; sx <= 1; sx++) {
-          const float px = dx + sx / 3.0f;
-          const float py = dy + sy / 3.0f;
-          // Inverse rotation: from the screen back into the upright piece.
-          const int ux = static_cast<int>(std::floor(c * px + s * py + hw));
-          const int uy = static_cast<int>(std::floor(-s * px + c * py + hh));
-          if (!inShape(shape, piece.w, piece.h, ux, uy)) continue;
-          paper++;
-          if (piece.at(ux, uy)) ink++;
-        }
+      for (int k = 0; k < 9; k++) {
+        const int sx = (u + du[k]) >> 16;
+        const int sy = (v + dv[k]) >> 16;
+        if (!inShape(shape, w, h, sx, sy)) continue;
+        paper++;
+        if (piece.at(sx, sy)) ink++;
       }
       if (paper < 5) continue;
       renderer.drawPixel(cx + dx, cy + dy, ink * 3 >= paper);
@@ -203,43 +234,47 @@ void writeTilted(const GfxRenderer& renderer, const Capture& piece, const Shape 
 
 // The stamp is ink only: it is written tilted with a 2 px white halo around its strokes, so it
 // stays legible over a busy cover without blanking the cover under its open middle.
-void writeStamp(const GfxRenderer& renderer, const Capture& stamp, const int cx, const int cy) {
-  const float rad = STAMP_ANGLE * 3.14159265f / 180.0f;
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  const float hw = stamp.w / 2.0f;
-  const int reach = static_cast<int>(std::ceil(hw * 1.42f)) + 3;
+void writeStamp(const GfxRenderer& renderer, const Capture& stamp, const Turn t, const int cx, const int cy) {
+  const int size = stamp.w;
+  const int reach = size * 71 / 100 + 3;  // half the diagonal, and the halo
   const int side = reach * 2 + 1;
   Capture turned;
   turned.w = side;
   turned.h = side;
-  turned.ink = makeUniqueNoThrow<uint8_t[]>((static_cast<size_t>(side) * side + 7) / 8);
+  const size_t bytes = (static_cast<size_t>(side) * side + 7) / 8;
+  turned.ink = makeUniqueNoThrow<uint8_t[]>(bytes);
   if (!turned.ink) {
-    LOG_ERR("EOB", "OOM: stamp, skipped");
+    LOG_ERR("EOB", "OOM: %u bytes for the stamp, skipped", static_cast<unsigned>(bytes));
     return;
   }
-  memset(turned.ink.get(), 0, (static_cast<size_t>(side) * side + 7) / 8);
+  memset(turned.ink.get(), 0, bytes);
+  const int32_t half = size << 15;
   for (int dy = -reach; dy <= reach; dy++) {
-    for (int dx = -reach; dx <= reach; dx++) {
-      const int ux = static_cast<int>(std::floor(c * dx + s * dy + hw));
-      const int uy = static_cast<int>(std::floor(-s * dx + c * dy + hw));
-      if (stamp.at(ux, uy)) {
+    int32_t u = t.s * dy + half - t.c * reach;
+    int32_t v = t.c * dy + half + t.s * reach;
+    for (int dx = -reach; dx <= reach; dx++, u += t.c, v -= t.s) {
+      if (stamp.at(u >> 16, v >> 16)) {
         const int i = (dy + reach) * side + (dx + reach);
         turned.ink[i >> 3] |= 0x80 >> (i & 7);
       }
     }
   }
+  // Halo first, around ink only; then the ink over it.
+  const int x0 = cx - reach;
+  const int y0 = cy - reach;
   for (int y = 0; y < side; y++) {
     for (int x = 0; x < side; x++) {
-      if (turned.at(x, y)) {
-        renderer.drawPixel(cx - reach + x, cy - reach + y, true);
-        continue;
+      if (!turned.at(x, y)) continue;
+      for (int oy = -2; oy <= 2; oy++) {
+        for (int ox = -2; ox <= 2; ox++) {
+          if (!turned.at(x + ox, y + oy)) renderer.drawPixel(x0 + x + ox, y0 + y + oy, false);
+        }
       }
-      bool near = false;
-      for (int oy = -2; oy <= 2 && !near; oy++) {
-        for (int ox = -2; ox <= 2 && !near; ox++) near = turned.at(x + ox, y + oy);
-      }
-      if (near) renderer.drawPixel(cx - reach + x, cy - reach + y, false);
+    }
+  }
+  for (int y = 0; y < side; y++) {
+    for (int x = 0; x < side; x++) {
+      if (turned.at(x, y)) renderer.drawPixel(x0 + x, y0 + y, true);
     }
   }
 }
@@ -325,7 +360,9 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
     code[i] = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
   }
   if (code[0]) {
-    summary.languageBooksFinished = READING_STATS_STORE.getBooksFinished(code);
+    // The per-language count only sees books with reading time on record; the one just finished is
+    // in this language whatever its history, so it is at least the first.
+    summary.languageBooksFinished = std::max<uint16_t>(READING_STATS_STORE.getBooksFinished(code), 1);
     if (const char* name = I18n::languageNameForCode(code)) summary.languageName = name;
   }
 }
@@ -401,10 +438,12 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   };
   if (triggered(MappedInputManager::Button::NavPrevious)) {
     selector.store(ButtonNavigator::previousIndex(selectedIndex, itemCount()), std::memory_order_relaxed);
+    selectionMoved.store(true, std::memory_order_release);
     return Action::Redraw;
   }
   if (triggered(MappedInputManager::Button::NavNext)) {
     selector.store(ButtonNavigator::nextIndex(selectedIndex, itemCount()), std::memory_order_relaxed);
+    selectionMoved.store(true, std::memory_order_release);
     return Action::Redraw;
   }
   return Action::None;
@@ -447,14 +486,13 @@ void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int
   int count = 0;
   formatDuration(cells[count].value, sizeof(cells[0].value), summary.minutes);
   cells[count++].label = tr(STR_EOB_READING_TIME);
-  if (summary.daySpan > 0) {
-    snprintf(cells[count].value, sizeof(cells[0].value), "%d", summary.daySpan);
-    cells[count++].label = tr(STR_EOB_DAYS_TO_FINISH);
-  }
-  if (summary.streak > 0) {
-    snprintf(cells[count].value, sizeof(cells[0].value), "%d", summary.streak);
-    cells[count++].label = tr(STR_EOB_DAY_STREAK);
-  }
+  // The three headline stats always show, so the stub keeps its shape after a short read. A book
+  // finished the day it was started still took a day.
+  snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.daySpan, 1));
+  cells[count++].label = tr(STR_EOB_DAYS_TO_FINISH);
+  // Finishing the book today is reading today, so the streak is at least one day.
+  snprintf(cells[count].value, sizeof(cells[0].value), "%d", std::max(summary.streak, 1));
+  cells[count++].label = tr(STR_EOB_DAY_STREAK);
   const int valueY = y + TEAR + 10 + (summary.booksFinished > 0 ? renderer.getLineHeight(SMALL_FONT_ID) + 8 : 0);
   const int valueH = renderer.getLineHeight(UI_12_FONT_ID);
   const int colW = (w - 2 * pad) / count;
@@ -549,8 +587,10 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
 
   const int topCx = topX + topW / 2;
   const int topCy = topY + topH / 2;
-  if (topCaptured) writeTilted(renderer, top, Shape::Top, TOP_ANGLE, topCx, topCy);
-  if (stubCaptured) writeTilted(renderer, stub, Shape::Stub, STUB_ANGLE, stubX + stubW / 2, stubY + stubH / 2);
+  if (topCaptured) writeTilted(renderer, top, Shape::Top, turnFor(TOP_ANGLE), topCx, topCy);
+  if (stubCaptured) {
+    writeTilted(renderer, stub, Shape::Stub, turnFor(STUB_ANGLE), stubX + stubW / 2, stubY + stubH / 2);
+  }
 
   // Pressed on the cover's lower right corner, wherever the tilt carried it.
   if (stampCaptured) {
@@ -560,7 +600,7 @@ void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
               topCaptured ? TOP_ANGLE : 0, topCx, topCy, sx, sy);
     // Hanging off the cover's right edge, but never off the screen.
     const int stampCx = std::min(sx + 52, safe.x + safe.width - EOB_STAMP_SIZE / 2 - 4);
-    writeStamp(renderer, stamp, stampCx, sy);
+    writeStamp(renderer, stamp, turnFor(STAMP_ANGLE), stampCx, sy);
   }
 }
 
@@ -644,10 +684,26 @@ void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& i
   // The hints are drawn at the physical front buttons, which is a logical side/top edge in
   // the rotated orientations: lay out inside the safe area so nothing hides behind them.
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const int buttonsY = safe.y + safe.height - BUTTON_H - 10;
+  buttonsX = safe.x + 16;
+  buttonsY = safe.y + safe.height - BUTTON_H - 10;
+  buttonsW = safe.width - 32;
+  // A full render supersedes any pending selection-only repaint.
+  selectionMoved.store(false, std::memory_order_relaxed);
+  const unsigned long started = millis();
   drawTicket(safe, buttonsY - 12);
-  drawButtons(safe.x + 16, buttonsY, safe.width - 32, BUTTON_H, selector.load(std::memory_order_relaxed));
+  LOG_DBG("EOB", "Ticket drawn in %lu ms", millis() - started);
+  drawButtons(buttonsX, buttonsY, buttonsW, BUTTON_H, selector.load(std::memory_order_relaxed));
+  frameDrawn = true;
 
   const auto labels = input.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+bool EndOfBookOptions::repaintSelection(GfxRenderer& renderer) {
+  if (!frameDrawn || !selectionMoved.exchange(false, std::memory_order_acquire)) return false;
+  // The tilted ticket is the expensive part (a capture and a turned rewrite per half); a selection
+  // move changes only the button row, so that is all that gets cleared and drawn again.
+  renderer.fillRect(buttonsX, buttonsY, buttonsW, BUTTON_H, false);
+  drawButtons(buttonsX, buttonsY, buttonsW, BUTTON_H, selector.load(std::memory_order_relaxed));
+  return true;
 }

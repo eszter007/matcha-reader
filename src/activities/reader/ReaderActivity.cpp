@@ -236,6 +236,11 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
     endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
     if (!endOfBookOptions) LOG_ERR(logTag, "OOM: EndOfBookOptions");
   }
+  // A selection move repaints the button row on the frame already in the buffer.
+  if (endOfBookOptions && endOfBookOptions->repaintSelection(renderer)) {
+    renderer.displayBuffer();
+    return true;
+  }
   renderer.clearScreen();
   if (endOfBookOptions) {
     // Only the first render loads: the cover check reads the SD card, and every redraw comes here.
