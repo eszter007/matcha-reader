@@ -609,7 +609,7 @@ STR_TRANSLATION_ACCESS_DENIED: "המפתח אינו מורשה - בדוק חיו
 STR_TRANSLATION_FAILED: "התרגום נכשל"
 STR_TRANSLATION_KEY_REJECTED: "מפתח API נדחה - בדוק את gemini.key"
 STR_TRANSLATION_LOW_MEMORY: "אין מספיק זיכרון לתרגום"
-STR_TRANSLATION_NO_API_KEY: "אין מפתח API (שים gemini.key בתיקיית /system/)"
+STR_TRANSLATION_NO_API_KEY: "אין מפתח API (שים gemini.key בתיקיית /.system/)"
 STR_TRANSLATION_NO_TEXT: "אין טקסט בדף זה"
 STR_TRANSLATION_QUOTA: "המכסה נוצלה - נסה שוב מאוחר יותר"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini אינו זמין - נסה שוב מאוחר יותר"

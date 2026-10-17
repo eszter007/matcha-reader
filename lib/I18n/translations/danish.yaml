@@ -501,7 +501,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Nøgle ikke godkendt - tjek fakturering i AI Stu
 STR_TRANSLATION_QUOTA: "Kvote nået - prøv igen senere"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini utilgængelig - prøv igen senere"
 STR_TRANSLATION_LOW_MEMORY: "Ikke nok hukommelse til oversættelse"
-STR_TRANSLATION_NO_API_KEY: "Ingen API-nøgle (læg gemini.key i /system/)"
+STR_TRANSLATION_NO_API_KEY: "Ingen API-nøgle (læg gemini.key i /.system/)"
 STR_TRANSLATION_NO_TEXT: "Ingen tekst på denne side"
 STR_TRANSLATION_WIFI_FAILED: "Wi-Fi-forbindelsen mislykkedes"
 STR_UPDATE_ALL: "Opdater alle"

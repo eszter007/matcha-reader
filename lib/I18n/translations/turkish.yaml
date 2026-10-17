@@ -542,7 +542,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Anahtar yetkili değil - AI Studio'da faturaland
 STR_TRANSLATION_QUOTA: "Kota doldu - daha sonra tekrar deneyin"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini kullanılamıyor - daha sonra tekrar deneyin"
 STR_TRANSLATION_LOW_MEMORY: "Çeviri için yeterli bellek yok"
-STR_TRANSLATION_NO_API_KEY: "API anahtarı yok (gemini.key dosyasını /system/ içine koyun)"
+STR_TRANSLATION_NO_API_KEY: "API anahtarı yok (gemini.key dosyasını /.system/ içine koyun)"
 STR_TRANSLATION_NO_TEXT: "Bu sayfada metin yok"
 STR_TRANSLATION_WIFI_FAILED: "WiFi bağlantısı başarısız"
 STR_IN_THIS_BOOK: "Bu kitapta:"

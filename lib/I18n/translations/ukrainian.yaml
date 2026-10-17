@@ -539,7 +539,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Ключ не авторизовано - пер�
 STR_TRANSLATION_QUOTA: "Квоту вичерпано - спробуйте пізніше"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini недоступний - спробуйте пізніше"
 STR_TRANSLATION_LOW_MEMORY: "Недостатньо пам'яті для перекладу"
-STR_TRANSLATION_NO_API_KEY: "Немає API-ключа (розмістіть gemini.key у /system/)"
+STR_TRANSLATION_NO_API_KEY: "Немає API-ключа (розмістіть gemini.key у /.system/)"
 STR_TRANSLATION_NO_TEXT: "На цій сторінці немає тексту"
 STR_TRANSLATION_WIFI_FAILED: "Помилка підключення Wi-Fi"
 STR_IN_THIS_BOOK: "У цій книзі:"

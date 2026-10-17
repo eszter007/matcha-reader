@@ -501,7 +501,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Cheie neautorizată - verificați facturarea în
 STR_TRANSLATION_QUOTA: "Cotă atinsă - încercați mai târziu"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini indisponibil - încercați mai târziu"
 STR_TRANSLATION_LOW_MEMORY: "Memorie insuficientă pentru traducere"
-STR_TRANSLATION_NO_API_KEY: "Nicio cheie API (puneţi gemini.key în /system/)"
+STR_TRANSLATION_NO_API_KEY: "Nicio cheie API (puneţi gemini.key în /.system/)"
 STR_TRANSLATION_NO_TEXT: "Niciun text pe această pagină"
 STR_TRANSLATION_WIFI_FAILED: "Conexiune WiFi eşuată"
 STR_UPDATE_ALL: "Actualizează tot"

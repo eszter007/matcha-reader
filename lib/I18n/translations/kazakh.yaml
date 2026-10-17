@@ -501,7 +501,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Кілт рұқсат етілмеген - AI St
 STR_TRANSLATION_QUOTA: "Квота таусылды - кейінірек қайталаңыз"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini қолжетімсіз - кейінірек қайталаңыз"
 STR_TRANSLATION_LOW_MEMORY: "Аудару үшін жад жеткіліксіз"
-STR_TRANSLATION_NO_API_KEY: "API кілті жоқ (gemini.key файлын /system/ қалтасына қойыңыз)"
+STR_TRANSLATION_NO_API_KEY: "API кілті жоқ (gemini.key файлын /.system/ қалтасына қойыңыз)"
 STR_TRANSLATION_NO_TEXT: "Бұл бетте мәтін жоқ"
 STR_TRANSLATION_WIFI_FAILED: "WiFi қосылымы сәтсіз"
 STR_UPDATE_ALL: "Барлығын жаңарту"

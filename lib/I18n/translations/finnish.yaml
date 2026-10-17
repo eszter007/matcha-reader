@@ -502,7 +502,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Avaimella ei ole oikeuksia - tarkista laskutus A
 STR_TRANSLATION_QUOTA: "Kiintiö täynnä - yritä myöhemmin uudelleen"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini ei ole käytettävissä - yritä myöhemmin uudelleen"
 STR_TRANSLATION_LOW_MEMORY: "Muisti ei riitä kääntämiseen"
-STR_TRANSLATION_NO_API_KEY: "Ei API-avainta (aseta gemini.key kansioon /system/)"
+STR_TRANSLATION_NO_API_KEY: "Ei API-avainta (aseta gemini.key kansioon /.system/)"
 STR_TRANSLATION_NO_TEXT: "Ei tekstiä tällä sivulla"
 STR_TRANSLATION_WIFI_FAILED: "Wi-Fi-yhteys epäonnistui"
 STR_UPDATE_ALL: "Päivitä kaikki"

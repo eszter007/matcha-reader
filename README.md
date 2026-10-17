@@ -193,7 +193,7 @@ The Chinese zips are attached from 1.7.0-nightly-1 on. To convert another font, 
 **5. Optional extras.**
 
 - **Interface language:** Settings → System → Language. Languages marked *Needs pack* need `language-packs.zip` from the release. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
-- **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/system/gemini.key` on the card.
+- **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/.system/gemini.key` on the card.
 
 ## Building from source
 

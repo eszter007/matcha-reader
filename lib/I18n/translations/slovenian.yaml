@@ -536,7 +536,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Ključ ni pooblaščen - preverite obračun v AI
 STR_TRANSLATION_QUOTA: "Kvota dosežena - poskusite pozneje"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini ni na voljo - poskusite pozneje"
 STR_TRANSLATION_LOW_MEMORY: "Premalo pomnilnika za prevajanje"
-STR_TRANSLATION_NO_API_KEY: "Ni API ključa (namestite gemini.key v /system/)"
+STR_TRANSLATION_NO_API_KEY: "Ni API ključa (namestite gemini.key v /.system/)"
 STR_TRANSLATION_NO_TEXT: "Na tej strani ni besedila"
 STR_TRANSLATION_WIFI_FAILED: "Povezava Wi-Fi ni uspela"
 STR_UPDATE_ALL: "Posodobi vse"

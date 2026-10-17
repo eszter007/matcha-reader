@@ -589,7 +589,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Chave não autorizada - verifique a faturação 
 STR_TRANSLATION_FAILED: "A tradução falhou"
 STR_TRANSLATION_KEY_REJECTED: "Chave API rejeitada - verifique gemini.key"
 STR_TRANSLATION_LOW_MEMORY: "Memória insuficiente para traduzir"
-STR_TRANSLATION_NO_API_KEY: "Sem chave de API (coloque gemini.key em /system/)"
+STR_TRANSLATION_NO_API_KEY: "Sem chave de API (coloque gemini.key em /.system/)"
 STR_TRANSLATION_NO_TEXT: "Sem texto nesta página"
 STR_TRANSLATION_QUOTA: "Quota atingida - tente mais tarde"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini indisponível - tente mais tarde"

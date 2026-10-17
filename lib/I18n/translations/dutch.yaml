@@ -501,7 +501,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Sleutel niet geautoriseerd - controleer facturer
 STR_TRANSLATION_QUOTA: "Quota bereikt - probeer het later opnieuw"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini niet beschikbaar - probeer het later opnieuw"
 STR_TRANSLATION_LOW_MEMORY: "Niet genoeg geheugen om te vertalen"
-STR_TRANSLATION_NO_API_KEY: "Geen API-sleutel (plaats gemini.key in /system/)"
+STR_TRANSLATION_NO_API_KEY: "Geen API-sleutel (plaats gemini.key in /.system/)"
 STR_TRANSLATION_NO_TEXT: "Geen tekst op deze pagina"
 STR_TRANSLATION_WIFI_FAILED: "Wi-Fi-verbinding mislukt"
 STR_UPDATE_ALL: "Alles bijwerken"

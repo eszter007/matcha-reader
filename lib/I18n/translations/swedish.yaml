@@ -541,7 +541,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Nyckeln är inte behörig - kontrollera fakturer
 STR_TRANSLATION_QUOTA: "Kvoten är nådd - försök igen senare"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini är otillgänglig - försök igen senare"
 STR_TRANSLATION_LOW_MEMORY: "Inte tillräckligt med minne för översättning"
-STR_TRANSLATION_NO_API_KEY: "Ingen API-nyckel (lägg gemini.key i /system/)"
+STR_TRANSLATION_NO_API_KEY: "Ingen API-nyckel (lägg gemini.key i /.system/)"
 STR_TRANSLATION_NO_TEXT: "Ingen text på denna sida"
 STR_TRANSLATION_WIFI_FAILED: "WiFi-anslutning misslyckades"
 STR_IN_THIS_BOOK: "I den här boken:"
