@@ -99,22 +99,6 @@ EpdFont notoserif12ItalicFont(&notoserif_12_italic);
 EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
 EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
                                     &notoserif12BoldItalicFont);
-// No bold-italic at 16/18pt: the two largest reader sizes cost ~298KB of flash for a style
-// combination books use rarely, and that flash carries the 8pt CJK subset the UI needs at
-// every screen plus the headroom diagnostics builds need. Restoring them fits (release goes
-// to 98.6%, debug to 99.4%) but leaves no room to work in. EpdFontFamily::getFont falls back
-// to bold when boldItalic is null.
-EpdFont notoserif16RegularFont(&notoserif_16_regular);
-EpdFont notoserif16BoldFont(&notoserif_16_bold);
-EpdFont notoserif16ItalicFont(&notoserif_16_italic);
-EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont);
-// 18pt ships regular only: its bold and italic cuts cost ~304 KB of flash between the two
-// families, and this is the one size where the C3 build has no room for them. EpdFontFamily::
-// getFont() resolves a missing style to regular, so emphasis flattens rather than breaking; an
-// installed SD family carries all four styles and restores it.
-EpdFont notoserif18RegularFont(&notoserif_18_regular);
-EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont);
-
 EpdFont notosans12RegularFont(&notosans_12_regular);
 EpdFont notosans12BoldFont(&notosans_12_bold);
 EpdFont notosans12ItalicFont(&notosans_12_italic);
@@ -127,38 +111,27 @@ EpdFont notosans14ItalicFont(&notosans_14_italic);
 EpdFont notosans14BoldItalicFont(&notosans_14_bolditalic);
 EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, &notosans14ItalicFont,
                                    &notosans14BoldItalicFont);
-EpdFont notosans16RegularFont(&notosans_16_regular);
-EpdFont notosans16BoldFont(&notosans_16_bold);
-EpdFont notosans16ItalicFont(&notosans_16_italic);
-EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont);
-// Regular only, for the same reason as Noto Serif 18 above.
-EpdFont notosans18RegularFont(&notosans_18_regular);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont);
+// No 16 or 18pt faces are compiled in: those sizes draw the 14pt face enlarged (FaceScale, set
+// up in setupDisplayAndFonts()), freeing ~470 KB of flash. An SD family carries real cuts.
 
 #endif  // OMIT_FONTS
-
-EpdFont smallFont(&notosans_8_regular);
-EpdFontFamily smallFontFamily(&smallFont);
 
 // Curated Joyo-kanji + kana + CJK punctuation subset (not the full CJK Unified
 // Ideographs block) -- see docs for why: the full block doesn't fit in flash
 // alongside everything else. No bold variant; EpdFontFamily::getFont() falls
 // back to regular when bold is null, which is fine for an occasional-use
 // fallback font.
-// Two built-in CJK subsets, 8pt and 12pt. The SD font system would rather use the card's own
-// font at UI sizes, but no .cpfont ships 8 or 10pt (sd-fonts.yaml generates 12/14/16/18), so
-// these built-ins are what EVERY device renders UI Japanese with -- not just the ones without
-// an SD font. 8pt serves both the 8pt rows (library titles, list subtitles) and the 10pt ones
-// (the Continue Reading author): a hair small there, where 12pt was glaringly large.
-EpdFont cjk8RegularFont(&notosansjp_joyo_8_regular);
-EpdFontFamily cjk8FontFamily(&cjk8RegularFont);
-
+// One built-in CJK subset, 12pt. The UI's small and 10pt rows draw it at 8pt (FaceScale), where
+// a separate 8pt cut used to cost ~240 KB of flash. No .cpfont ships a UI size, so this is what
+// every device renders UI Japanese with -- not just the ones without an SD font.
 EpdFont cjk12RegularFont(&notosansjp_joyo_12_regular);
 EpdFontFamily cjk12FontFamily(&cjk12RegularFont);
 
 EpdFont ui10RegularFont(&ubuntu_10_regular);
 EpdFont ui10BoldFont(&ubuntu_10_bold);
 EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
+// The small UI size: the 10pt face drawn at 80% (FaceScale), in place of a separate 8pt font.
+EpdFontFamily smallFontFamily(&ui10RegularFont);
 
 EpdFont ui12RegularFont(&ubuntu_12_regular);
 EpdFont ui12BoldFont(&ubuntu_12_bold);
@@ -578,27 +551,32 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(NOTOSERIF_14_FONT_ID, notoserif14FontFamily);
 #ifndef OMIT_FONTS
   notoserif12FontFamily.setFallback(&cjk12FontFamily);
-  notoserif16FontFamily.setFallback(&cjk12FontFamily);
-  notoserif18FontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(NOTOSERIF_12_FONT_ID, notoserif12FontFamily);
-  renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif16FontFamily);
-  renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif18FontFamily);
+  // 16 and 18pt are the 14pt face enlarged; its CJK fallback stays at 12pt, as it was beside
+  // the real 16/18pt cuts.
+  renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif14FontFamily);
+  renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif14FontFamily);
+  renderer.setFaceScale(NOTOSERIF_16_FONT_ID, 16 * 256 / 14, 256);
+  renderer.setFaceScale(NOTOSERIF_18_FONT_ID, 18 * 256 / 14, 256);
 
   notosans12FontFamily.setFallback(&cjk12FontFamily);
   notosans14FontFamily.setFallback(&cjk12FontFamily);
-  notosans16FontFamily.setFallback(&cjk12FontFamily);
-  notosans18FontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
-  renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
-  renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
+  renderer.insertFont(NOTOSANS_16_FONT_ID, notosans14FontFamily);
+  renderer.insertFont(NOTOSANS_18_FONT_ID, notosans14FontFamily);
+  renderer.setFaceScale(NOTOSANS_16_FONT_ID, 16 * 256 / 14, 256);
+  renderer.setFaceScale(NOTOSANS_18_FONT_ID, 18 * 256 / 14, 256);
 #endif  // OMIT_FONTS
-  ui10FontFamily.setFallback(&cjk8FontFamily);
+  ui10FontFamily.setFallback(&cjk12FontFamily);
   ui12FontFamily.setFallback(&cjk12FontFamily);
-  smallFontFamily.setFallback(&cjk8FontFamily);
+  smallFontFamily.setFallback(&cjk12FontFamily);
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  // The 12pt CJK cut at 8pt beside the 10pt and small UI faces; the small face itself at 80%.
+  renderer.setFaceScale(UI_10_FONT_ID, 256, 8 * 256 / 12, /*sizeFallbacks=*/true);
+  renderer.setFaceScale(SMALL_FONT_ID, 8 * 256 / 10, 8 * 256 / 12, /*sizeFallbacks=*/true);
 
   // Set the CJK built-in font as the global last-resort fallback so SD card
   // fonts (and any other font without a per-family fallback) can still render

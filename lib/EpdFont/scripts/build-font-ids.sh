@@ -26,23 +26,11 @@ ruby -rdigest -e 'puts [
 ].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
 ))"
 
-echo "#define NOTOSERIF_16_FONT_ID ($(
-ruby -rdigest -e 'puts [
-  "./notoserif_16_regular.h",
-  "./notoserif_16_bold.h",
-  "./notoserif_16_bolditalic.h",
-  "./notoserif_16_italic.h",
-].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
-))"
+# NOTOSERIF_16_FONT_ID keeps the id of the font it replaced: these sizes are now scaled faces (FaceScale).
+echo "#define NOTOSERIF_16_FONT_ID (17214534)"
 
-echo "#define NOTOSERIF_18_FONT_ID ($(
-ruby -rdigest -e 'puts [
-  "./notoserif_18_regular.h",
-  "./notoserif_18_bold.h",
-  "./notoserif_18_bolditalic.h",
-  "./notoserif_18_italic.h",
-].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
-))"
+# NOTOSERIF_18_FONT_ID keeps the id of the font it replaced: these sizes are now scaled faces (FaceScale).
+echo "#define NOTOSERIF_18_FONT_ID (840051567)"
 
 echo "#define NOTOSANS_12_FONT_ID ($(
 ruby -rdigest -e 'puts [
@@ -62,23 +50,11 @@ ruby -rdigest -e 'puts [
 ].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
 ))"
 
-echo "#define NOTOSANS_16_FONT_ID ($(
-ruby -rdigest -e 'puts [
-  "./notosans_16_regular.h",
-  "./notosans_16_bold.h",
-  "./notosans_16_bolditalic.h",
-  "./notosans_16_italic.h",
-].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
-))"
+# NOTOSANS_16_FONT_ID keeps the id of the font it replaced: these sizes are now scaled faces (FaceScale).
+echo "#define NOTOSANS_16_FONT_ID (116566294)"
 
-echo "#define NOTOSANS_18_FONT_ID ($(
-ruby -rdigest -e 'puts [
-  "./notosans_18_regular.h",
-  "./notosans_18_bold.h",
-  "./notosans_18_bolditalic.h",
-  "./notosans_18_italic.h",
-].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
-))"
+# NOTOSANS_18_FONT_ID keeps the id of the font it replaced: these sizes are now scaled faces (FaceScale).
+echo "#define NOTOSANS_18_FONT_ID (-348426591)"
 
 echo "#define UI_10_FONT_ID ($(
 ruby -rdigest -e 'puts [
@@ -94,11 +70,8 @@ ruby -rdigest -e 'puts [
 ].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
 ))"
 
-echo "#define SMALL_FONT_ID ($(
-ruby -rdigest -e 'puts [
-  "./notosans_8_regular.h",
-].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
-))"
+# SMALL_FONT_ID keeps the id of the font it replaced: these sizes are now scaled faces (FaceScale).
+echo "#define SMALL_FONT_ID (1465627787)"
 
 FONT_ID_NAMES=(
   NOTOSERIF_12_FONT_ID

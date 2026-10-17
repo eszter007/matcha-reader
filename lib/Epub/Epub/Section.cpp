@@ -275,7 +275,9 @@ namespace {
 // v100: upstream merge (their v56). In standard reading mode a word is split after an inner hyphen
 //      or dash ("foo—bar" into "foo—" and "bar"), so lines may break there and the token count
 //      changes. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 100;
+// v101: the built-in 16 and 18pt reader faces are the 14pt face enlarged, so headings and those
+//      sizes lay out with new glyph metrics. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 101;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

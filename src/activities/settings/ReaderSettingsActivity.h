@@ -9,11 +9,10 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "SettingInfo.h"
 #include "activities/UiTabListActivity.h"
 #include "components/OptionPopup.h"
 #include "util/CjkScript.h"
-
-#include "SettingInfo.h"
 
 class ReaderSettingsActivity final : public UiTabListActivity {
   int initialCategory = 0;
@@ -135,11 +134,11 @@ class ReaderSettingsActivity final : public UiTabListActivity {
   // mangaMode hides settings that do not apply to image-based manga books.
   // hideMangaOnlySettings hides Rotate Panels in non-manga embedded Reader Settings.
   explicit ReaderSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory = 0,
-                            const bool finishOnBack = false, const CjkScript bookScript = CjkScript::None,
-                            std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
-                            const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
-                            const bool mangaMode = false, const bool hideMangaOnlySettings = false,
-                            const StrId submenuCategory = StrId::STR_NONE_OPT, const int8_t languageChoice = -1)
+                                  const bool finishOnBack = false, const CjkScript bookScript = CjkScript::None,
+                                  std::string dictionaryLanguage = {}, const bool showReaderToggles = false,
+                                  const bool verticalTextEnabled = false, const bool furiganaEnabled = false,
+                                  const bool mangaMode = false, const bool hideMangaOnlySettings = false,
+                                  const StrId submenuCategory = StrId::STR_NONE_OPT, const int8_t languageChoice = -1)
       : UiTabListActivity("Settings", renderer, mappedInput),
         initialCategory(initialCategory),
         finishOnBack(finishOnBack),

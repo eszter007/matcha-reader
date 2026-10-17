@@ -118,11 +118,11 @@ struct SettingInfo {
   SettingInfo& withEnumOrder(std::vector<uint8_t> order) {
     enumOrder = std::move(order);
     return *this;
-  }  SettingInfo& withWebHidden() {
+  }
+  SettingInfo& withWebHidden() {
     webHidden = true;
     return *this;
   }
-
 
   static SettingInfo Toggle(StrId nameId, uint8_t CrossPointSettings::* ptr, const char* key = nullptr,
                             StrId category = StrId::STR_NONE_OPT) {

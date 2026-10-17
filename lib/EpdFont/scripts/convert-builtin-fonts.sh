@@ -5,8 +5,9 @@ set -e
 cd "$(dirname "$0")"
 
 READER_FONT_STYLES=("Regular" "Italic" "Bold" "BoldItalic")
-NOTOSERIF_FONT_SIZES=(12 14 16 18)
-NOTOSANS_FONT_SIZES=(12 14 16 18)
+# 16 and 18pt draw the 14pt face enlarged (FaceScale in main.cpp); no cuts are generated.
+NOTOSERIF_FONT_SIZES=(12 14)
+NOTOSANS_FONT_SIZES=(12 14)
 
 for size in ${NOTOSERIF_FONT_SIZES[@]}; do
   for style in ${READER_FONT_STYLES[@]}; do
@@ -80,11 +81,7 @@ for size in ${UI_FONT_SIZES[@]}; do
   done
 done
 
-python fontconvert.py notosans_8_regular 8 \
-  ../builtinFonts/source/NotoSans/NotoSans-Regular.ttf \
-  ../builtinFonts/source/NotoSansHebrew/NotoSansHebrew-Regular.ttf \
-  ../builtinFonts/source/NotoSansArabic/NotoSansArabic-Regular.ttf \
-  --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" > ../builtinFonts/notosans_8_regular.h
+# The small UI size draws Ubuntu 10 at 80% (FaceScale in main.cpp); no 8pt cut is generated.
 
 echo ""
 echo "Running compression verification..."

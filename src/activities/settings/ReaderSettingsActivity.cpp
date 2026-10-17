@@ -611,15 +611,15 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
         const StrId category = setting.action == SettingAction::LibrarySettings ? StrId::STR_CAT_LIBRARY
                                : setting.action == SettingAction::SleepSettings ? StrId::STR_CAT_SLEEP
                                                                                 : StrId::STR_CAT_SHORTCUTS;
-        startActivityForResult(
-            std::make_unique<ReaderSettingsActivity>(renderer, mappedInput, /*initialCategory=*/0, /*finishOnBack=*/true,
-                                               CjkScript::None, std::string{}, /*showReaderToggles=*/false,
-                                               /*verticalTextEnabled=*/false, /*furiganaEnabled=*/false,
-                                               /*mangaMode=*/false, /*hideMangaOnlySettings=*/false, category),
-            [this](const ActivityResult&) {
-              saveSettings();
-              rebuildSettingsLists();
-            });
+        startActivityForResult(std::make_unique<ReaderSettingsActivity>(
+                                   renderer, mappedInput, /*initialCategory=*/0, /*finishOnBack=*/true, CjkScript::None,
+                                   std::string{}, /*showReaderToggles=*/false,
+                                   /*verticalTextEnabled=*/false, /*furiganaEnabled=*/false,
+                                   /*mangaMode=*/false, /*hideMangaOnlySettings=*/false, category),
+                               [this](const ActivityResult&) {
+                                 saveSettings();
+                                 rebuildSettingsLists();
+                               });
         break;
       }
       case SettingAction::HomeButton: {
@@ -749,7 +749,8 @@ void ReaderSettingsActivity::toggleCurrentSetting() {
   activeNav().selected = std::min(ringPos(), settingsCount);
 }
 
-void ReaderSettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged) {
+void ReaderSettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged,
+                                                                  bool quickResumeTimeoutChanged) {
   if (quickResumeTimeoutChanged) {
     preserveQuickResumeTimeoutOn =
         SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
