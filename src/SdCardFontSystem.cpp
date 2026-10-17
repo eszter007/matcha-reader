@@ -623,12 +623,13 @@ std::vector<uint8_t> SdCardFontSystem::rowPointSizes() const {
   return readerFontPointSizes(&registry_, SETTINGS.sdFontFamilyName, standIns, count);
 }
 
-// Does the face this row renders with ship `pt` itself? An empty name is a built-in family,
-// which exists at exactly BUILTIN_READER_POINT_SIZES.
+// Does the face this row renders with ship `pt` itself? An empty name is a built-in family, which
+// has real cuts at BUILTIN_NATIVE_POINT_SIZES only: its other sizes are the 14pt face enlarged, so
+// a stand-in on the card that ships the size is the better face and is preferred.
 bool SdCardFontSystem::faceShipsSize(const std::string& familyName, const uint8_t pt) const {
   if (familyName.empty()) {
-    return std::find(std::begin(BUILTIN_READER_POINT_SIZES), std::end(BUILTIN_READER_POINT_SIZES), pt) !=
-           std::end(BUILTIN_READER_POINT_SIZES);
+    return std::find(std::begin(BUILTIN_NATIVE_POINT_SIZES), std::end(BUILTIN_NATIVE_POINT_SIZES), pt) !=
+           std::end(BUILTIN_NATIVE_POINT_SIZES);
   }
   const auto* family = registry_.findFamily(familyName);
   return family && family->hasSize(pt);
