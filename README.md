@@ -118,12 +118,13 @@ Every book on the card as a cover grid, manga beside EPUBs, with a **Shelves** t
 
 ### Reading stats
 
-Streak, minutes this week, books finished and a calendar, split by language. Each book has its own stats, and finishing one opens a summary with the next books in its folder. See [Guide §7](USER_GUIDE.md#7-reading-stats).
+Streak, minutes this week, books finished and a calendar, split by language. Each book has its own stats, and finishing one opens a summary with the next books in its folder. The **Stats** sleep screen puts your hours read, streak and minutes this week on a split-flap board. See [Guide §7](USER_GUIDE.md#7-reading-stats) and [§3.7](USER_GUIDE.md#37-sleep-screen).
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">
   <img src="docs/images/screenshots/book-stats.png" width="240" alt="Per-book stats for one book">
   <img src="docs/images/screenshots/end-of-book.png" width="240" alt="End-of-book screen: the finished book as a torn ticket with a 読了 stamp, its stats, and the next book">
+  <img src="docs/images/screenshots/sleep-screen-departures.png" width="240" alt="Departures sleep screen: hours read, day streak and minutes this week on split-flap tiles, with the cat">
 </p>
 
 ### Transparent sleep screen
@@ -213,4 +214,4 @@ This fork tracks upstream CrossPoint and merges new releases. Nearly everything 
 
 Built on [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader), open-source e-reader firmware, community-built and fully hackable.
 
-Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. Icons by [Tabler Icons](https://tabler.io/icons) (MIT). The end-of-book stamps (読了, 读完, 讀完, 睇完) are lettered in Noto Serif [JP](https://fonts.google.com/noto/specimen/Noto+Serif+JP), [SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC) and [HK](https://fonts.google.com/noto/specimen/Noto+Serif+HK) (SIL Open Font License).
+Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. Icons by [Tabler Icons](https://tabler.io/icons) (MIT). The end-of-book stamps (読了, 读完, 讀完, 睇完) are lettered in Noto Serif [JP](https://fonts.google.com/noto/specimen/Noto+Serif+JP), [SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC) and [HK](https://fonts.google.com/noto/specimen/Noto+Serif+HK) (SIL Open Font License). The Stats sleep screen is lettered in [Barlow Condensed](https://github.com/jpt/barlow) and [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (SIL Open Font License).

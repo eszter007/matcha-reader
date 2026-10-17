@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 class GfxRenderer;
 
 // Draws the 4-level grayscale boot/sleep logo (images/CatLogo.h) using the same two-plane
@@ -22,6 +24,11 @@ class GfxRenderer;
 namespace GrayLogo {
 constexpr int WIDTH = 230;
 constexpr int HEIGHT = 324;
+// The smaller copy, for the Departures sleep screen on short panels.
+constexpr int SMALL_WIDTH = 130;
+constexpr int SMALL_HEIGHT = 183;
+
+enum class Size : uint8_t { Regular, Small };
 // Wordmark and status line sit at the bottom of the screen, under the poster-size cat.
 constexpr int WORDMARK_FROM_BOTTOM = 96;
 constexpr int STATUS_FROM_BOTTOM = 62;
@@ -33,7 +40,7 @@ constexpr int top(const int pageHeight) {
   return centred < lowest ? centred : (lowest > 0 ? lowest : 0);
 }
 
-void drawBase(const GfxRenderer& renderer, int x, int y, bool invertedScreen);
+void drawBase(const GfxRenderer& renderer, int x, int y, bool invertedScreen, Size size = Size::Regular);
 // Plain 1-bit rendering (dark gray -> black, light gray -> white), no gray passes needed.
 // Used on the boot screen: wake-from-sleep reboots through it, so it must stay fast, and its
 // full refresh is what wipes the sleep screen's gray charge states -- putting gray-nudged
@@ -42,5 +49,5 @@ void drawBase(const GfxRenderer& renderer, int x, int y, bool invertedScreen);
 void drawBw(const GfxRenderer& renderer, int x, int y);
 // Call AFTER displayGrayscaleBase(). Destroys the BW framebuffer contents (plane scratch),
 // same as the sleep-cover flow -- callers redraw from scratch anyway. Restores BW render mode.
-void flushGrayPasses(GfxRenderer& renderer, int x, int y, bool invertedScreen);
+void flushGrayPasses(GfxRenderer& renderer, int x, int y, bool invertedScreen, Size size = Size::Regular);
 }  // namespace GrayLogo
