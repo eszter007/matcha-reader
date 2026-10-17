@@ -650,8 +650,8 @@ void EndOfBookOptions::drawButtons(const int x, const int y, const int w, const 
     int thumbSrcH = 0;
     if (UITheme::getCoverThumbSize(thumb, &thumbW, &thumbSrcH) && thumbSrcH > 0) {
       // White behind it: on the selected (black) button the cover's own ink would vanish.
-      const int w = thumbW * thumbH / thumbSrcH;
-      renderer.fillRect(cx + 10, y + 7, w, thumbH, false);
+      const int thumbDrawW = thumbW * thumbH / thumbSrcH;
+      renderer.fillRect(cx + 10, y + 7, thumbDrawW, thumbH, false);
       const int drawn = UITheme::drawCoverThumb(renderer, thumb, cx + 10, y + 7, thumbH);
       if (drawn > 0) textX = cx + 10 + drawn + 14;
     }
@@ -699,7 +699,7 @@ void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& i
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-bool EndOfBookOptions::repaintSelection(GfxRenderer& renderer) {
+bool EndOfBookOptions::repaintSelection(const GfxRenderer& renderer) {
   if (!frameDrawn || !selectionMoved.exchange(false, std::memory_order_acquire)) return false;
   // The tilted ticket is the expensive part (a capture and a turned rewrite per half); a selection
   // move changes only the button row, so that is all that gets cleared and drawn again.

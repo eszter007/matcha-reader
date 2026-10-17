@@ -44,7 +44,7 @@ class EndOfBookOptions {
   // When the only change since the last render is the selection, repaints just the buttons over the
   // frame still in the buffer and returns true; the tilted ticket is not drawn again. Otherwise
   // returns false and the caller does a full render().
-  bool repaintSelection(GfxRenderer& renderer);
+  bool repaintSelection(const GfxRenderer& renderer);
 
  private:
   GfxRenderer& renderer;
