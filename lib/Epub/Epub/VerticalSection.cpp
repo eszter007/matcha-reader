@@ -4,6 +4,7 @@
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
+#include <GaijiText.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>

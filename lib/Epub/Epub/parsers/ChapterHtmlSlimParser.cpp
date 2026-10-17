@@ -1,6 +1,7 @@
 #include "ChapterHtmlSlimParser.h"
 
 #include <FsHelpers.h>
+#include <GaijiText.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>

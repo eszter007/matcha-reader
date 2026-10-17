@@ -40,6 +40,18 @@ class GfxRenderer {
     uint16_t nonCjk = 256;
     bool identity() const { return cjk == 256 && nonCjk == 256; }
   };
+  // A font id drawn at a fixed scale (8.8 fixed point, 256 = as is): its own glyphs at `own`,
+  // those it takes from its fallback family at `fallback`. Lets one bitmap face serve as a
+  // smaller UI size, and a CJK fallback cut serve beside a smaller Latin face.
+  struct FaceScale {
+    uint16_t own = 256;
+    uint16_t fallback = 256;
+    // A UI face: every glyph from outside the face lands at the fallback cut's scaled size, even
+    // one from another font (an SD font at the reader's size). Off for reader faces, whose
+    // global fallback is the book's own CJK font at the reader's size.
+    bool sizeFallbacks = false;
+    bool identity() const { return own == 256 && fallback == 256; }
+  };
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
   // Logical screen orientation from the perspective of callers
@@ -138,6 +150,23 @@ class GfxRenderer {
   // app-level SD font setup when an SD family is loaded. See resolveTextFontId().
   std::map<int, int> fallbackFontMap_;
   std::map<int, FallbackScale> fallbackScaleMap_;  // primary font id -> scales its fallback draws at
+  std::map<int, FaceScale> faceScales_;            // font id -> the scale it is always drawn at
+
+  // The metrics as the font data holds them, before a FaceScale. The scaled walk applies its own
+  // scale to these; the public getters return them scaled.
+  int rawFontAscender(int fontId) const;
+  int rawFontInkHeight(int fontId) const;
+  int rawLineHeight(int fontId) const;
+  int rawTextHeight(int fontId) const;
+  int rawSpaceWidth(int fontId, EpdFontFamily::Style style, int8_t letterSpacing) const;
+  int rawSpaceAdvance(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style,
+                      int8_t letterSpacing) const;
+  int rawKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style, int8_t tracking) const;
+  bool rawGlyphMetrics(int fontId, uint32_t cp, EpdFontFamily::Style style, int* left, int* width, int* top,
+                       int* height) const;
+  // Rotated draw of a FaceScale font: the scaled walk turned through 90 degrees.
+  void drawTextRotatedScaled(int fontId, int x, int y, const char* text, bool black, EpdFontFamily::Style style,
+                             bool clockwise, FaceScale scale) const;
 
   // If `text` contains a CJK codepoint that `fontId` cannot render and `fontId`
   // has a registered fallback, returns the fallback id; otherwise returns
@@ -273,6 +302,18 @@ class GfxRenderer {
     } else {
       fallbackScaleMap_[primaryFontId] = {scale, nonCjkScale};
     }
+  }
+  // Draw and measure fontId at a fixed scale from now on (see FaceScale).
+  void setFaceScale(int fontId, uint16_t own, uint16_t fallback, bool sizeFallbacks = false) {
+    if (own == 256 && fallback == 256) {
+      faceScales_.erase(fontId);
+    } else {
+      faceScales_[fontId] = {own, fallback, sizeFallbacks};
+    }
+  }
+  FaceScale faceScaleFor(int fontId) const {
+    const auto it = faceScales_.find(fontId);
+    return it == faceScales_.end() ? FaceScale{} : it->second;
   }
   void clearFallbackFonts() {
     fallbackFontMap_.clear();

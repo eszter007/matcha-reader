@@ -19,7 +19,7 @@
 #include "KOReaderCredentialStore.h"
 #include "ReaderFontSizes.h"
 #include "SdCardFontSystem.h"
-#include "activities/settings/SettingsActivity.h"
+#include "activities/settings/SettingInfo.h"
 #include "components/UITheme.h"
 #include "util/DictionaryRegistry.h"
 
@@ -283,7 +283,7 @@ inline StrId lowerSideButtonLabel() {
 // persistence path can walk it WITHOUT materializing a copy -- see forEachPersistableSetting().
 // Upper bound on the table's rows (rows under a disabled capability are not built), so the
 // vector is allocated once.
-constexpr size_t SETTINGS_TABLE_ROWS = 88;
+constexpr size_t SETTINGS_TABLE_ROWS = 90;
 
 inline const std::vector<SettingInfo>& settingsBaseList() {
   static const std::vector<SettingInfo> baseList = [] {
@@ -537,6 +537,13 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
           // Last row in Shortcuts.
           SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
                               "backShortToFileBrowser", StrId::STR_CAT_SHORTCUTS),
+
+          // Persisted here; set from the Plugins popup.
+          SettingInfo::Toggle(StrId::STR_PLUGINS, &CrossPointSettings::pluginsEnabled, "pluginsEnabled")
+              .withWebHidden(),
+          SettingInfo::Toggle(StrId::STR_PLUGIN_HUB, &CrossPointSettings::pluginHubPromptHidden,
+                              "pluginHubPromptHidden")
+              .withWebHidden(),
 
           // --- System ---
           SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
