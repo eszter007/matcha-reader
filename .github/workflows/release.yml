@@ -23,11 +23,10 @@ jobs:
   build-release:
     runs-on: ubuntu-latest
     # One name for the environment this job builds, because four steps have to agree on it:
-    # the build, the asset copy and the two artifact paths all read `.pio/build/<env>/`, and a
-    # prerelease builds the `_rc` variant (LOG_LEVEL=1, RC hash in the version) rather than the
-    # release one. Derived from pio_env so a renamed env cannot leave one step behind.
-    env:
-      PIO_ENV: ${{ github.event.release.prerelease && format('{0}_rc', matrix.pio_env) || matrix.pio_env }}
+    # the build, the asset copy and the two artifact paths all read `.pio/build/<env>/`. A
+    # release builds pio_env, an rc prerelease its `_rc` variant (LOG_LEVEL=1, RC hash in the
+    # version), and a nightly the debug env (LOG_LEVEL=2, "matcha-reader-<version>-debug").
+    # Set by the "Choose environment" step, which needs platformio.ini to tell a nightly apart.
     strategy:
       fail-fast: false
       matrix:
@@ -36,23 +35,43 @@ jobs:
           # the combined X3/X4 C3 image published as x4old-x3. Renaming one here without
           # the matching change in OtaUpdater.cpp silently breaks over-the-air updates.
           - pio_env: gh_release
+            debug_env: default
             asset: x4old-x3-firmware.bin
           - pio_env: x4c-gh_release
+            debug_env: x4c
             asset: x4c-firmware.bin
           - pio_env: sticky-gh_release
+            debug_env: sticky
             asset: sticky-firmware.bin
           - pio_env: x4pro-gh_release
+            debug_env: x4pro
             asset: x4pro-firmware.bin
           - pio_env: papermono-gh_release
+            debug_env: papermono
             asset: papermono-firmware.bin
           - pio_env: metalio_eink4-gh_release
+            debug_env: metalio_eink4
             asset: metalio_eink4-firmware.bin
           - pio_env: eego_a4-gh_release
+            debug_env: eego_a4
             asset: eego_a4-firmware.bin
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Choose environment
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          case "$PRERELEASE:$version" in
+            true:*-nightly-*) env_name="${{ matrix.debug_env }}" ;;
+            true:*) env_name="${{ matrix.pio_env }}_rc" ;;
+            *) env_name="${{ matrix.pio_env }}" ;;
+          esac
+          echo "Building $env_name for $version"
+          echo "PIO_ENV=$env_name" >> "$GITHUB_ENV"
 
       - name: Validate release version
         env:
