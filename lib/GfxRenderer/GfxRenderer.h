@@ -397,6 +397,9 @@ class GfxRenderer {
     clipBottom_ = y + height;
   }
   void drawPixel(int x, int y, bool state = true) const;
+  // Whether the pixel at logical (x, y) is ink in the BW framebuffer. False off-panel and while a
+  // grayscale strip is being rendered, which has no whole frame to read back.
+  bool readPixel(int x, int y) const;
   // Draw glyph ink with clipping and orientation resolved once per glyph.
   void drawGlyphBitmap(const uint8_t* bitmap, int width, int height, const glyphBitmap::Frame& frame, bool twoBit,
                        RenderMode mode, bool state) const;

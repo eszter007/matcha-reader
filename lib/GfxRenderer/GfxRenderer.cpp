@@ -961,6 +961,16 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   }
 }
 
+bool GfxRenderer::readPixel(const int x, const int y) const {
+  if (_stripActive) return false;
+  int phyX = 0;
+  int phyY = 0;
+  rotateCoordinates(orientation, x, y, &phyX, &phyY, panelWidth, panelHeight);
+  if (phyX < 0 || phyX >= panelWidth || phyY < 0 || phyY >= panelHeight) return false;
+  const uint8_t byte = frameBuffer[static_cast<uint32_t>(phyY) * panelWidthBytes + (phyX / 8)];
+  return ((byte >> (7 - (phyX % 8))) & 1) == 0;  // a cleared bit is ink, as drawPixel writes it
+}
+
 int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style,
                               const BidiUtils::BidiBaseDir baseDir, const int8_t letterSpacing) const {
   if (text == nullptr || *text == '\0') {

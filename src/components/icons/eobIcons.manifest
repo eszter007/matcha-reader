@@ -1,0 +1,5 @@
+# Manifest for src/components/icons/eobIcons.h — regenerate with:
+#   python3 scripts/convert_icon.py --manifest src/components/icons/eobIcons.manifest \
+#     --svgdir assets/icons/tabler --size 32 --out src/components/icons/eobIcons.h
+# then ./bin/clang-format-fix -g. Needs cairosvg and Pillow. Tabler icons (MIT).
+ChevronRightIcon = chevron-right

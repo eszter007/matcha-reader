@@ -123,7 +123,7 @@ Streak, minutes this week, books finished and a calendar, split by language. Eac
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">
   <img src="docs/images/screenshots/book-stats.png" width="240" alt="Per-book stats for one book">
-  <img src="docs/images/screenshots/end-of-book.png" width="240" alt="End-of-book screen with the book's stats and the next books">
+  <img src="docs/images/screenshots/end-of-book.png" width="240" alt="End-of-book screen: the finished book as a torn ticket with a 読了 stamp, its stats, and the next book">
 </p>
 
 ### Transparent sleep screen
@@ -213,4 +213,4 @@ This fork tracks upstream CrossPoint and merges new releases. Nearly everything 
 
 Built on [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader), open-source e-reader firmware, community-built and fully hackable.
 
-Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. Icons by [Tabler Icons](https://tabler.io/icons) (MIT).
+Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. Icons by [Tabler Icons](https://tabler.io/icons) (MIT). The end-of-book stamps (読了, 读完, 讀完, 睇完) are lettered in Noto Serif [JP](https://fonts.google.com/noto/specimen/Noto+Serif+JP), [SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC) and [HK](https://fonts.google.com/noto/specimen/Noto+Serif+HK) (SIL Open Font License).

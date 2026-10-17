@@ -236,9 +236,18 @@ bool ReaderActivity::renderEndOfBook(const char* logTag) {
     endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
     if (!endOfBookOptions) LOG_ERR(logTag, "OOM: EndOfBookOptions");
   }
+  // A selection move repaints the button row on the frame already in the buffer.
+  if (endOfBookOptions && endOfBookOptions->repaintSelection(renderer)) {
+    renderer.displayBuffer();
+    return true;
+  }
   renderer.clearScreen();
   if (endOfBookOptions) {
-    endOfBookOptions->loadOnce(bookPath, getBookTitle(), getBookLanguage());
+    // Only the first render loads: the cover check reads the SD card, and every redraw comes here.
+    if (!endOfBookOptions->menuActive()) {
+      endOfBookOptions->loadOnce(bookPath, getBookTitle(), getBookLanguage(),
+                                 prepareEndOfBookCover(EndOfBookOptions::COVER_HEIGHT));
+    }
     // Release-publish AFTER loadOnce() so the main task's acquire load can't
     // observe an object whose names/selector are still being populated.
     endOfBookOptionsReady.store(true, std::memory_order_release);
