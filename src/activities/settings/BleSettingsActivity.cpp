@@ -11,6 +11,7 @@
 #include "I18nKeys.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 
 namespace fui = freeink::ui;
 
@@ -361,6 +362,7 @@ void BleSettingsActivity::buildScreen(UiScreen& screen) {
   props.count = static_cast<uint16_t>(rows.size());
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch | fui::InputLongPress;  // physical buttons stay in loop()
+  applySwitchStyle(props);                                  // pill switches, as everywhere else
   syncListViewport(screen, props);
   screen.list(props);
 }
