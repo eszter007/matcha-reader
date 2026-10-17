@@ -658,8 +658,17 @@ std::string SdCardFontSystem::resolveSelectedFamily() const {
   const SdCardFontFamilyInfo* standIns[MAX_STAND_INS];
   const uint8_t count =
       readerStandInFamilies(&registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily, standIns, MAX_STAND_INS);
+  //
+  // Except a CJK extension at a size the built-in row draws itself (its 14pt face enlarged): the
+  // extension's CJK tables cost ~56 KB of resident RAM on an X4 for a Latin book, which is what
+  // left a reader with the Bluetooth radio up at under 5 KB. A coverage variant is Latin-sized.
+  const bool rowDrawsSize =
+      selected.empty() && std::find(std::begin(BUILTIN_READER_POINT_SIZES), std::end(BUILTIN_READER_POINT_SIZES),
+                                    SETTINGS.fontPointSize) != std::end(BUILTIN_READER_POINT_SIZES);
   for (uint8_t i = 0; i < count; i++) {
-    if (standIns[i] && faceShipsSize(standIns[i]->name, SETTINGS.fontPointSize)) return standIns[i]->name;
+    if (!standIns[i] || !faceShipsSize(standIns[i]->name, SETTINGS.fontPointSize)) continue;
+    if (rowDrawsSize && extensionScript(standIns[i]->name) != CjkScript::None) continue;
+    return standIns[i]->name;
   }
   return resolved;
 }
