@@ -64,8 +64,6 @@ struct SizeStep {
 };
 constexpr SizeStep SERIF_LADDER[] = {
     {12, NOTOSERIF_12_FONT_ID}, {14, NOTOSERIF_14_FONT_ID}, {16, NOTOSERIF_16_FONT_ID}, {18, NOTOSERIF_18_FONT_ID}};
-constexpr SizeStep SANS_LADDER[] = {
-    {12, NOTOSANS_12_FONT_ID}, {14, NOTOSANS_14_FONT_ID}, {16, NOTOSANS_16_FONT_ID}, {18, NOTOSANS_18_FONT_ID}};
 
 // Ladder containing baseFontId, plus the base's point size. Null when the reader font is
 // not a built-in family (SD-card font, or the JP companion): those are resident at exactly
@@ -76,13 +74,6 @@ const SizeStep* ladderFor(const int baseFontId, size_t& count, uint8_t& basePt) 
       count = std::size(SERIF_LADDER);
       basePt = step.pt;
       return SERIF_LADDER;
-    }
-  }
-  for (const auto& step : SANS_LADDER) {
-    if (step.fontId == baseFontId) {
-      count = std::size(SANS_LADDER);
-      basePt = step.pt;
-      return SANS_LADDER;
     }
   }
   return nullptr;

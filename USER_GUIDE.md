@@ -360,7 +360,6 @@ open a list when selected.
 - **Reader Font Family**: Choose the font used for reading:
   
   - "Noto Serif" (default) - Google's serif font
-  - "Noto Sans" - Google's sans-serif font
   - Installed SD card families
 
 - **Reader Font Size**: Choose a point size. Built-in and direct TTF/OTF/TTC fonts offer 12, 14, 16, and 18 pt. A `.cpfont` family offers the sizes installed for that family.
@@ -777,6 +776,11 @@ Artwork along one edge, as below, keeps most of the page readable.
 ---
 
 ### 3.8 Custom Fonts (SD Card)
+
+Noto Sans is an optional SD card font. Install the `NotoSans` family to use the former built-in
+sans-serif. On upgrade, an existing Noto Sans selection uses `NotoSans` if installed; otherwise
+the reader uses Noto Serif. A Noto Sans JP, SC, TC or HK font pairs with the `NotoSans` family
+the same way the Noto Serif ones pair with the built-in serif.
 
 CrossPoint loads additional fonts from the SD card. Custom fonts can add Chinese, Japanese, Korean, and other scripts that the built-in reader fonts lack. If your device have external RAM, you can copy `.ttf`, `.otf`, and `.ttc` files directly. Otherwise, use `.cpfont` files made from those fonts. 
 

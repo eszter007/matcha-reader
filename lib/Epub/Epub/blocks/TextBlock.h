@@ -184,10 +184,6 @@ class TextBlock final : public Block {
   static_assert(!(NOTOSERIF_14_FONT_ID >= -512 && NOTOSERIF_14_FONT_ID <= -32), "font id in scale-tag range");
   static_assert(!(NOTOSERIF_16_FONT_ID >= -512 && NOTOSERIF_16_FONT_ID <= -32), "font id in scale-tag range");
   static_assert(!(NOTOSERIF_18_FONT_ID >= -512 && NOTOSERIF_18_FONT_ID <= -32), "font id in scale-tag range");
-  static_assert(!(NOTOSANS_12_FONT_ID >= -512 && NOTOSANS_12_FONT_ID <= -32), "font id in scale-tag range");
-  static_assert(!(NOTOSANS_14_FONT_ID >= -512 && NOTOSANS_14_FONT_ID <= -32), "font id in scale-tag range");
-  static_assert(!(NOTOSANS_16_FONT_ID >= -512 && NOTOSANS_16_FONT_ID <= -32), "font id in scale-tag range");
-  static_assert(!(NOTOSANS_18_FONT_ID >= -512 && NOTOSANS_18_FONT_ID <= -32), "font id in scale-tag range");
   static_assert(!(UI_10_FONT_ID >= -512 && UI_10_FONT_ID <= -32), "font id in scale-tag range");
   static_assert(!(UI_12_FONT_ID >= -512 && UI_12_FONT_ID <= -32), "font id in scale-tag range");
   static_assert(!(SMALL_FONT_ID >= -512 && SMALL_FONT_ID <= -32), "font id in scale-tag range");

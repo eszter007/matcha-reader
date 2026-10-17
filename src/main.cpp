@@ -99,18 +99,6 @@ EpdFont notoserif12ItalicFont(&notoserif_12_italic);
 EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
 EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
                                     &notoserif12BoldItalicFont);
-EpdFont notosans12RegularFont(&notosans_12_regular);
-EpdFont notosans12BoldFont(&notosans_12_bold);
-EpdFont notosans12ItalicFont(&notosans_12_italic);
-EpdFont notosans12BoldItalicFont(&notosans_12_bolditalic);
-EpdFontFamily notosans12FontFamily(&notosans12RegularFont, &notosans12BoldFont, &notosans12ItalicFont,
-                                   &notosans12BoldItalicFont);
-EpdFont notosans14RegularFont(&notosans_14_regular);
-EpdFont notosans14BoldFont(&notosans_14_bold);
-EpdFont notosans14ItalicFont(&notosans_14_italic);
-EpdFont notosans14BoldItalicFont(&notosans_14_bolditalic);
-EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, &notosans14ItalicFont,
-                                   &notosans14BoldItalicFont);
 // No 16 or 18pt faces are compiled in: those sizes draw the 14pt face enlarged (FaceScale, set
 // up in setupDisplayAndFonts()), freeing ~470 KB of flash. An SD family carries real cuts.
 
@@ -559,14 +547,6 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.setFaceScale(NOTOSERIF_16_FONT_ID, 16 * 256 / 14, 256);
   renderer.setFaceScale(NOTOSERIF_18_FONT_ID, 18 * 256 / 14, 256);
 
-  notosans12FontFamily.setFallback(&cjk12FontFamily);
-  notosans14FontFamily.setFallback(&cjk12FontFamily);
-  renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
-  renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
-  renderer.insertFont(NOTOSANS_16_FONT_ID, notosans14FontFamily);
-  renderer.insertFont(NOTOSANS_18_FONT_ID, notosans14FontFamily);
-  renderer.setFaceScale(NOTOSANS_16_FONT_ID, 16 * 256 / 14, 256);
-  renderer.setFaceScale(NOTOSANS_18_FONT_ID, 18 * 256 / 14, 256);
 #endif  // OMIT_FONTS
   ui10FontFamily.setFallback(&cjk12FontFamily);
   ui12FontFamily.setFallback(&cjk12FontFamily);
