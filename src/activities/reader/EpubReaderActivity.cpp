@@ -2592,8 +2592,19 @@ std::string EpubReaderActivity::prepareEndOfBookCover(const int height) {
   if (!epub) return "";
   const std::string path = epub->getThumbBmpPath(height);
   if (FsHelpers::hasCompleteBmp("ERS", path)) return path;
+  // The JPEG decoder wants ~52 KB free, and at the end of a book the reading font and its glyph
+  // caches still hold part of that. The ticket draws in the built-in UI fonts, so lend the decode
+  // the SD fonts' memory and put them back afterwards: Back returns to the last page, which must
+  // draw in the font it was laid out in.
+  const bool lendFonts = ESP.getFreeHeap() < END_OF_BOOK_COVER_FREE_HEAP;
+  if (lendFonts) {
+    LOG_INF("ERS", "Low heap for the end-of-book cover (free=%u); releasing resident fonts", ESP.getFreeHeap());
+    sdFontSystem.releaseAllResidentFonts(renderer);
+  }
   // A failed conversion is not recorded anywhere: the next finished book simply tries again.
-  return epub->generateThumbBmp(height) ? path : "";
+  const bool made = epub->generateThumbBmp(height);
+  if (lendFonts) sdFontSystem.ensureLoaded(renderer);
+  return made ? path : "";
 }
 
 void EpubReaderActivity::onReturnFromEndOfBook() {
