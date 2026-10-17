@@ -646,13 +646,14 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  const int logoX = (pageWidth - GrayLogo::SIZE) / 2;
-  const int logoY = (pageHeight - GrayLogo::SIZE) / 2 - 24;
+  const int logoX = (pageWidth - GrayLogo::WIDTH) / 2;
+  const int logoY = GrayLogo::top(pageHeight);
   const bool inverted = SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT;
   renderer.clearScreen();
   GrayLogo::drawBase(renderer, logoX, logoY, inverted);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
+  renderer.drawCenteredText(UI_10_FONT_ID, logoY + GrayLogo::HEIGHT + 14, tr(STR_CROSSPOINT), true,
+                            EpdFontFamily::BOLD);
+  renderer.drawCenteredText(SMALL_FONT_ID, logoY + GrayLogo::HEIGHT + 39, tr(STR_SLEEPING));
 
   if (inverted) renderer.invertScreen();
   renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
