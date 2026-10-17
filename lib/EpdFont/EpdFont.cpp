@@ -211,41 +211,11 @@ uint32_t EpdFont::applyLigatures(uint32_t cp, const char*& text) const {
   return cp;
 }
 
-bool EpdFont::hasGlyph(const uint32_t cp) const {
-  const int count = data->intervalCount;
-  if (count == 0) return false;
-  const EpdUnicodeInterval* intervals = data->intervals;
-  const auto* end = intervals + count;
-  const auto it = std::upper_bound(
-      intervals, end, cp, [](uint32_t value, const EpdUnicodeInterval& interval) { return value < interval.first; });
-  if (it != intervals) {
-    const auto& interval = *(it - 1);
-    if (cp <= interval.last) return true;
-  }
-  return false;
-}
+bool EpdFont::hasGlyph(const uint32_t cp) const { return epdGlyphIndex(data, cp) >= 0; }
 
 const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
-  const int count = data->intervalCount;
-  if (count == 0 && !data->glyphMissHandler) return nullptr;
-
-  if (count > 0) {
-    const EpdUnicodeInterval* intervals = data->intervals;
-    const auto* end = intervals + count;
-
-    // upper_bound: range lookup. Finds the first interval with first > cp, so the
-    // interval just before it is the last one with first <= cp. That's the only
-    // candidate that could contain cp. Then we verify cp <= candidate.last.
-    const auto it = std::upper_bound(
-        intervals, end, cp, [](uint32_t value, const EpdUnicodeInterval& interval) { return value < interval.first; });
-
-    if (it != intervals) {
-      const auto& interval = *(it - 1);
-      if (cp <= interval.last) {
-        return &data->glyph[interval.offset + (cp - interval.first)];
-      }
-    }
-  }
+  const int32_t index = epdGlyphIndex(data, cp);
+  if (index >= 0) return &data->glyph[index];
 
   // Codepoint not in interval table — try on-demand loading (SD card fonts).
   if (data->glyphMissHandler) {
@@ -260,14 +230,7 @@ const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
 }
 
 bool EpdFont::hasCodepoint(const uint32_t cp) const {
-  const int count = data->intervalCount;
-  if (count > 0) {
-    const EpdUnicodeInterval* intervals = data->intervals;
-    const auto* end = intervals + count;
-    const auto it = std::upper_bound(
-        intervals, end, cp, [](uint32_t value, const EpdUnicodeInterval& interval) { return value < interval.first; });
-    if (it != intervals && cp <= (it - 1)->last) return true;
-  }
+  if (epdGlyphIndex(data, cp) >= 0) return true;
 
   // Interval table miss. SD card fonts only keep the current page's glyphs in
   // their interval table — ask their full RAM-resident coverage index instead.

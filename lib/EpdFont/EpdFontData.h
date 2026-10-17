@@ -2,6 +2,8 @@
 // https://github.com/vroland/epdiy/blob/c61e9e923ce2418150d54f88cea5d196cdc40c54/src/epd_internals.h
 
 #pragma once
+
+#include <algorithm>
 #include <cstdint>
 
 /// Font metrics use "fixed-point 4" (4 fractional bits, i.e. 1/16-pixel
@@ -255,7 +257,38 @@ typedef struct {
   /// none). Shares glyphMissCtx. nullptr for built-in and SD fonts, whose
   /// kerning is baked into the tables above (all fonts zero-init this).
   int8_t (*kernHandler)(void* ctx, uint32_t leftCp, uint32_t rightCp);
+
+  /// Sorted BMP codepoint list, used instead of `intervals` (left null) by built-in fonts whose
+  /// coverage is scattered: glyph i is codepoints[i]. A Joyo kanji font holds ~4,200 glyphs in
+  /// ~2,400 intervals, 1,900 of them a single codepoint, so 12 bytes per interval come to 29 KB
+  /// against 8 KB for the list.
+  const uint16_t* codepoints;
+  uint32_t codepointCount;
+  /// 257 entries: codepoints with high byte p sit at [codepointPages[p], codepointPages[p + 1]).
+  /// The search then covers one 256-codepoint page -- a few dozen entries instead of thousands --
+  /// which makes the list faster to search than the interval table it replaces.
+  const uint16_t* codepointPages;
 } EpdFontData;
+
+/// Index of `cp` in `data->glyph`, or -1 when the font's resident tables do not cover it. The one
+/// lookup for both coverage forms: the codepoint list above, or the interval table.
+inline int32_t epdGlyphIndex(const EpdFontData* data, const uint32_t cp) {
+  if (data->codepoints) {
+    if (cp > 0xFFFF) return -1;
+    const uint16_t* begin = data->codepoints + data->codepointPages[cp >> 8];
+    const uint16_t* end = data->codepoints + data->codepointPages[(cp >> 8) + 1];
+    const uint16_t* it = std::lower_bound(begin, end, static_cast<uint16_t>(cp));
+    return it != end && *it == cp ? static_cast<int32_t>(it - data->codepoints) : -1;
+  }
+  const EpdUnicodeInterval* intervals = data->intervals;
+  const uint32_t count = data->intervalCount;
+  if (count == 0) return -1;
+  // upper_bound: the interval just before the first with first > cp is the only candidate.
+  const EpdUnicodeInterval* it = std::upper_bound(
+      intervals, intervals + count, cp, [](uint32_t value, const EpdUnicodeInterval& iv) { return value < iv.first; });
+  if (it == intervals || cp > (it - 1)->last) return -1;
+  return static_cast<int32_t>((it - 1)->offset + (cp - (it - 1)->first));
+}
 
 // Solid Unicode symbols can be drawn as rectangles when the font lacks them.
 namespace syntheticGlyph {

@@ -99,9 +99,14 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     // isn't stored, but the interval table is sorted with contiguous offsets, so the last
     // interval gives it in O(1). Only reached for built-in compressed fonts, whose interval
     // table is always complete (SD fonts have groups == nullptr and never get here).
-    if (fontData->intervals && fontData->intervalCount > 0) {
+    uint32_t glyphCount = 0;
+    if (fontData->codepoints) {
+      glyphCount = fontData->codepointCount;
+    } else if (fontData->intervals && fontData->intervalCount > 0) {
       const EpdUnicodeInterval& lastIv = fontData->intervals[fontData->intervalCount - 1];
-      const uint32_t glyphCount = lastIv.offset + (lastIv.last - lastIv.first + 1);
+      glyphCount = lastIv.offset + (lastIv.last - lastIv.first + 1);
+    }
+    if (glyphCount > 0) {
       if (glyph < fontData->glyph || glyphIndex >= glyphCount) {
         LOG_ERR("GFX", "Glyph/fontData mismatch (index %u, count %u); dropping glyph", glyphIndex, glyphCount);
         return nullptr;
