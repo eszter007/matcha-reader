@@ -11,7 +11,7 @@ It includes everything in upstream CrossPoint. You can try it in the [simulator]
   <img src="docs/images/screenshots/insights.png" width="200" alt="Reading stats, split by language across the tabs">
 </p>
 
-**Runs on:** Xteink X4, X3, X4 Pro and X4 Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97".
+**Runs on:** Xteink X4, X3, X4 Pro and X4 Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio 3.97", EEGO A4.
 
 This page is the short version. How to use everything is in the [User Guide](USER_GUIDE.md).
 
@@ -77,8 +77,6 @@ See [Guide §6.3](USER_GUIDE.md#63-japanese-books).
 |:---:|:---:|:---:|:---:|
 | <img src="docs/images/screenshots/chinese-simplified.png" width="180" alt="西游记 chapter 1 in simplified Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional.png" width="180" alt="紅樓夢 chapter 1 in traditional Chinese, horizontal"> | <img src="docs/images/screenshots/chinese-traditional-vertical.png" width="180" alt="西遊記 chapter 1 in traditional Chinese, set vertically right to left"> | <img src="docs/images/screenshots/cantonese.png" width="180" alt="A short story in written Cantonese"> |
 | 西游记 | 紅樓夢 | 西遊記 | 落雨天 |
-
-<sub>西遊記 and 紅樓夢 from Project Gutenberg (public domain), the simplified page converted with OpenCC; 落雨天 is a short sample story written for this README. Fonts: Noto Serif SC and TC.</sub>
 
 See [Guide §6.4](USER_GUIDE.md#64-chinese-books).
 
