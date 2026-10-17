@@ -519,7 +519,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Klucz bez uprawnień - sprawdź płatności w AI
 STR_TRANSLATION_QUOTA: "Limit wyczerpany - spróbuj później"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini niedostępny - spróbuj później"
 STR_TRANSLATION_LOW_MEMORY: "Za mało pamięci na tłumaczenie"
-STR_TRANSLATION_NO_API_KEY: "Brak klucza API (umieść gemini.key w /system/)"
+STR_TRANSLATION_NO_API_KEY: "Brak klucza API (umieść gemini.key w /.system/)"
 STR_TRANSLATION_NO_TEXT: "Brak tekstu na tej stronie"
 STR_TRANSLATION_WIFI_FAILED: "Połączenie WiFi nieudane"
 STR_IN_THIS_BOOK: "W tej książce:"

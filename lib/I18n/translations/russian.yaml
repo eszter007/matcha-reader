@@ -590,7 +590,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Ключ не авторизован - пров�
 STR_TRANSLATION_FAILED: "Ошибка перевода"
 STR_TRANSLATION_KEY_REJECTED: "Ключ API отклонён - проверьте gemini.key"
 STR_TRANSLATION_LOW_MEMORY: "Недостаточно памяти для перевода"
-STR_TRANSLATION_NO_API_KEY: "Нет API-ключа (поместите gemini.key в /system/)"
+STR_TRANSLATION_NO_API_KEY: "Нет API-ключа (поместите gemini.key в /.system/)"
 STR_TRANSLATION_NO_TEXT: "На этой странице нет текста"
 STR_TRANSLATION_QUOTA: "Квота исчерпана - попробуйте позже"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini недоступен - попробуйте позже"

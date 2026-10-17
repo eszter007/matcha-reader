@@ -538,7 +538,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Raktas neturi teisių - patikrinkite atsiskaitym
 STR_TRANSLATION_QUOTA: "Kvota išnaudota - bandykite vėliau"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini nepasiekiamas - bandykite vėliau"
 STR_TRANSLATION_LOW_MEMORY: "Nepakanka atminties vertimui"
-STR_TRANSLATION_NO_API_KEY: "Nėra API rakto (įdėkite gemini.key į /system/)"
+STR_TRANSLATION_NO_API_KEY: "Nėra API rakto (įdėkite gemini.key į /.system/)"
 STR_TRANSLATION_NO_TEXT: "Šiame puslapyje teksto nėra"
 STR_TRANSLATION_WIFI_FAILED: "Nepavyko prisijungti prie WiFi"
 STR_VALIDATING_FIRMWARE: "Tikrinama programinė aparatinė įranga..."

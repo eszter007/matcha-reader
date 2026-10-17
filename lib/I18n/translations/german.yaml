@@ -609,7 +609,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Schlüssel nicht berechtigt - Abrechnung in AI S
 STR_TRANSLATION_FAILED: "Übersetzung fehlgeschlagen"
 STR_TRANSLATION_KEY_REJECTED: "API-Schlüssel abgelehnt - gemini.key prüfen"
 STR_TRANSLATION_LOW_MEMORY: "Nicht genug Speicher zum Übersetzen"
-STR_TRANSLATION_NO_API_KEY: "Kein API-Schlüssel (gemini.key in /system/ ablegen)"
+STR_TRANSLATION_NO_API_KEY: "Kein API-Schlüssel (gemini.key in /.system/ ablegen)"
 STR_TRANSLATION_NO_TEXT: "Kein Text auf dieser Seite"
 STR_TRANSLATION_QUOTA: "Kontingent erreicht - später erneut versuchen"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini nicht erreichbar - später erneut versuchen"

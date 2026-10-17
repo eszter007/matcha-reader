@@ -505,7 +505,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Kľúč nemá oprávnenie - skontrolujte faktur�
 STR_TRANSLATION_QUOTA: "Kvóta vyčerpaná - skúste to neskôr"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini nie je dostupný - skúste to neskôr"
 STR_TRANSLATION_LOW_MEMORY: "Nedostatok pamäte na preklad"
-STR_TRANSLATION_NO_API_KEY: "Chýba API kľúč (umiestnite gemini.key do /system/)"
+STR_TRANSLATION_NO_API_KEY: "Chýba API kľúč (umiestnite gemini.key do /.system/)"
 STR_TRANSLATION_NO_TEXT: "Na tejto stránke nie je žiadny text"
 STR_TRANSLATION_WIFI_FAILED: "Pripojenie k Wi-Fi zlyhalo"
 STR_IN_THIS_BOOK: "V tejto knihe:"

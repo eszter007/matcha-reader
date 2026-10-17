@@ -589,7 +589,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Khóa không được phép - kiểm tra thanh t
 STR_TRANSLATION_FAILED: "Dịch thất bại"
 STR_TRANSLATION_KEY_REJECTED: "Khóa API bị từ chối - kiểm tra gemini.key"
 STR_TRANSLATION_LOW_MEMORY: "Không đủ bộ nhớ để dịch"
-STR_TRANSLATION_NO_API_KEY: "Không có khóa API (đặt gemini.key vào /system/)"
+STR_TRANSLATION_NO_API_KEY: "Không có khóa API (đặt gemini.key vào /.system/)"
 STR_TRANSLATION_NO_TEXT: "Trang này không có văn bản"
 STR_TRANSLATION_QUOTA: "Đã hết hạn mức - thử lại sau"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini không khả dụng - thử lại sau"

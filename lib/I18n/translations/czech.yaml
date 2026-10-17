@@ -527,7 +527,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Klíč nemá oprávnění - zkontrolujte faktura
 STR_TRANSLATION_QUOTA: "Kvóta vyčerpána - zkuste to později"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini není dostupný - zkuste to později"
 STR_TRANSLATION_LOW_MEMORY: "Nedostatek paměti pro překlad"
-STR_TRANSLATION_NO_API_KEY: "Chybí API klíč (umístěte gemini.key do /system/)"
+STR_TRANSLATION_NO_API_KEY: "Chybí API klíč (umístěte gemini.key do /.system/)"
 STR_TRANSLATION_NO_TEXT: "Na této stránce není žádný text"
 STR_TRANSLATION_WIFI_FAILED: "Připojení Wi-Fi selhalo"
 STR_TRANSPARENT: "Průhledný"

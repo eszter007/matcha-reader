@@ -20,8 +20,8 @@ const char* dir();
 std::string path(const char* leaf);
 
 // For a file the USER puts in the folder rather than one the firmware writes (the API key): the
-// resolved folder's copy if it has one, else the other spelling's. On a fresh card dir() creates
-// "/.system", so someone following an on-screen "/system/" hint would otherwise never be found.
+// resolved folder's copy if it has one, else the other spelling's, so a key placed in "/system"
+// is still found on a card whose state lives in "/.system".
 // Falls back to path(leaf) when neither has it, so the caller's not-found message still applies.
 std::string findUserFile(const char* leaf);
 

@@ -591,7 +591,7 @@ STR_TRANSLATION_ACCESS_DENIED: "Clau no autoritzada - comprova la facturació a 
 STR_TRANSLATION_FAILED: "Ha fallat la traducció"
 STR_TRANSLATION_KEY_REJECTED: "Clau API rebutjada - comprova gemini.key"
 STR_TRANSLATION_LOW_MEMORY: "No hi ha prou memòria per a la traducció"
-STR_TRANSLATION_NO_API_KEY: "No hi ha clau API (poseu gemini.key en /system/)"
+STR_TRANSLATION_NO_API_KEY: "No hi ha clau API (poseu gemini.key en /.system/)"
 STR_TRANSLATION_NO_TEXT: "No hi ha text en esta pàgina"
 STR_TRANSLATION_QUOTA: "Quota exhaurida - torna-ho a provar més tard"
 STR_TRANSLATION_SERVICE_DOWN: "Gemini no disponible - torna-ho a provar més tard"
