@@ -560,6 +560,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
+  applySwitchStyle(props);            // pill switches, as everywhere else
   // Touch uses the standard list sizing, as in Bluetooth; buttons keep compact labels.
   // maxLines also marks smallText as explicit so the list does not replace it with bodyText.
   props.labelText = mappedInput.hasTouch() ? screen.theme().bodyText : screen.theme().smallText;
