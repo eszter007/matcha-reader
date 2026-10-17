@@ -40,33 +40,59 @@ def is_ink(value, on_body):
     return value < 70 if on_body else value < 215
 
 
+def atkinson(gray):
+    """1-bit Atkinson dither: smooth edges without the grain Floyd-Steinberg leaves on line art."""
+    w, h = gray.size
+    px = [float(v) for v in gray.tobytes()]
+    out = bytearray(w * h)
+    for y in range(h):
+        for x in range(w):
+            old = px[y * w + x]
+            new = 0 if old < 128 else 255
+            out[y * w + x] = new
+            err = (old - new) / 8
+            for dx, dy in ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)):
+                if 0 <= x + dx < w and y + dy < h:
+                    px[(y + dy) * w + x + dx] += err
+    return Image.frombytes("L", (w, h), bytes(out))
+
+
 def bw(art, width, height):
+    """The drawing at 1 bpp: dithered outline, detail rules inside it."""
     coverage, body = shrink(art, width, height)
-    out = Image.new("L", (width, height), 255)
+    inside = Image.new("L", (width, height), 255)
     for i, (v, b) in enumerate(zip(coverage.tobytes(), body.tobytes())):
         if is_ink(v, b < 128):
-            out.putpixel((i % width, i // width), 0)
-    return out
+            inside.putpixel((i % width, i // width), 0)
+    # Per-pixel rules make the outer outline bumpy where body and paper meet; there the dither of
+    # the plain shrink follows the curve. 2 px inside the traced silhouette the detail rules take
+    # over again.
+    edge = atkinson(art.resize((width, height), Image.LANCZOS))
+    scale = art.size[0] / width
+    silhouette = _fill_holes(art.point(lambda v: 255 if v < 128 else 0))
+    silhouette = silhouette.filter(ImageFilter.GaussianBlur(scale * 0.5)).resize((width, height), Image.BOX)
+    interior = silhouette.point(lambda v: 255 if v >= 128 else 0).filter(ImageFilter.MinFilter(5))
+    return Image.composite(inside, edge, interior)
 
 
 def build_logo(art):
     height = round(art.size[1] * LOGO_WIDTH / art.size[0])
-    coverage, body = shrink(art, LOGO_WIDTH, height)
-    # The 1-bit boot logo draws levels 0-1 as ink, so ink/paper is decided by is_ink; the level
-    # inside each half only softens the sleep screen's grayscale rendering.
+    coverage, _ = shrink(art, LOGO_WIDTH, height)
+    ink = bw(art, LOGO_WIDTH, height)
+    # The 1-bit boot logo draws levels 0-1 as ink, so ink/paper is decided by bw(); the level inside
+    # each half only softens the sleep screen's grayscale rendering.
     levels = []
-    for v, b in zip(coverage.tobytes(), body.tobytes()):
-        if is_ink(v, b < 128):
-            levels.append(0 if v < 40 else 1)
+    for v, b in zip(coverage.tobytes(), ink.tobytes()):
+        if b < 128:
+            levels.append(0 if v < 64 else 1)
         else:
-            levels.append(3 if v > 235 else 2)
+            levels.append(3 if v > 192 else 2)
     packed = bytearray()
     for i in range(0, len(levels), 4):
         chunk = levels[i : i + 4] + [3] * (4 - len(levels[i : i + 4]))
         packed.append(chunk[0] << 6 | chunk[1] << 4 | chunk[2] << 2 | chunk[3])
     # Footprint: the drawing with everything it encloses, grown by the outline width.
-    ink = bw(art, LOGO_WIDTH, height).point(lambda v: 255 if v < 128 else 0)
-    footprint = _fill_holes(ink).filter(ImageFilter.MaxFilter(2 * DARK_OUTLINE + 1))
+    footprint = _fill_holes(ink.point(lambda v: 255 if v < 128 else 0)).filter(ImageFilter.MaxFilter(2 * DARK_OUTLINE + 1))
     row_bytes = (LOGO_WIDTH + 7) // 8
     mask = bytearray(row_bytes * height)
     for y in range(height):
