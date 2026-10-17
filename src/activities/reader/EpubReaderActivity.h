@@ -14,6 +14,7 @@
 #include "ChapterPosition.h"
 #include "ClipSelectionActivity.h"
 #include "EpubReaderMenuActivity.h"
+#include "LinkNoteTitle.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
@@ -527,6 +528,15 @@ class EpubReaderActivity final : public ReaderActivity {
   // A pause this long, caches already released, means the build's own context holds the heap below
   // the floors and no tick will ever run: suspend it (the partial stays) instead of holding it.
   static constexpr uint32_t BACKGROUND_BUILD_STALL_MS = 3000;
+  // Bluetooth page turner: every chapter build stops the radio until the chapter is built and its
+  // page is shown. False: the radio still holds or is taking the heap, and the build must not run.
+  std::atomic<bool> radioReleasedForBuild{false};
+  bool makeRoomForChapterBuild();
+  static constexpr uint32_t BUILD_ROOM_WAIT_MS = 5000;
+  static constexpr uint32_t BUILD_ROOM_STEP_MS = 50;
+  bool inputOverPage() const override { return overlay != Overlay::None || ReaderActivity::inputOverPage(); }
+  // "Connecting Bluetooth…" or "Bluetooth failed" in place of the status bar title.
+  mutable LinkNoteTitle linkNoteTitle;
   // Heap floor for optional render-adjacent work (idle prewarm). Page
   // deserialization (TextBlock word vectors/strings) and glyph caching allocate
   // through throwing paths that abort() on OOM; skip deferrable work below it.
@@ -636,7 +646,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   // True when the reader moved (or, mid-build, when the page was requested).
-  bool pageTurn(bool isForwardTurn);
+  bool pageTurn(bool isForwardTurn) override;
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
@@ -844,6 +854,7 @@ class EpubReaderActivity final : public ReaderActivity {
            (section && section->isBuilding() && !buildHeapPaused &&
             (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD));
   }
+  bool remoteShortcut(bool readerMenu) override;
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;
 };

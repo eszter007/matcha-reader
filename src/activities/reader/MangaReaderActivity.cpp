@@ -36,7 +36,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "WordSelectionScan.h"
-#include "activities/settings/SettingsActivity.h"
+#include "activities/settings/ReaderSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkFile.h"
@@ -2164,14 +2164,14 @@ void MangaReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction
         RenderLock lock;
         sdFontSystem.ensureLoaded(renderer);
       }
-      startActivityForResult(std::make_unique<SettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
-                                                                /*finishOnBack=*/true, mangaScript(book.get()),
-                                                                /*dictionaryLanguage=*/std::string{},
-                                                                /*showReaderToggles=*/false,
-                                                                /*verticalTextEnabled=*/false,
-                                                                /*furiganaEnabled=*/false,
-                                                                /*mangaMode=*/true,
-                                                                /*hideMangaOnlySettings=*/false),
+      startActivityForResult(std::make_unique<ReaderSettingsActivity>(renderer, mappedInput, /*initialCategory=*/1,
+                                                                      /*finishOnBack=*/true, mangaScript(book.get()),
+                                                                      /*dictionaryLanguage=*/std::string{},
+                                                                      /*showReaderToggles=*/false,
+                                                                      /*verticalTextEnabled=*/false,
+                                                                      /*furiganaEnabled=*/false,
+                                                                      /*mangaMode=*/true,
+                                                                      /*hideMangaOnlySettings=*/false),
                              [this](const ActivityResult&) {
                                ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
                                baseScreenW = renderer.getScreenWidth();

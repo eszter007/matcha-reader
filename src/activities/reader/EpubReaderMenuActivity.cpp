@@ -1,5 +1,6 @@
 #include "EpubReaderMenuActivity.h"
 
+#include <BlePageTurner.h>
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
 #include <I18n.h>
@@ -113,6 +114,9 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   if (Frontlight.present()) {
     items.push_back({MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT});
   }
+  if (bleturner::status().compiledIn) {
+    items.push_back({MenuAction::BLUETOOTH, StrId::STR_BT_PAGE_TURNER});
+  }
   // Free-form dictionary lookup doesn't apply to manga (Word Lookup covers OCR'd text) or to
   // unsegmented Japanese text, where Word Lookup is the only lookup that makes sense. Without a
   // StarDict dictionary configured it has nothing to search.
@@ -134,6 +138,15 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   return items;
+}
+
+void EpubReaderMenuActivity::toggleBluetooth() {
+  SETTINGS.ble.enabled = SETTINGS.ble.enabled ? 0 : 1;
+  if (!SETTINGS.ble.enabled) bleturner::switchOff();
+  SETTINGS.saveToFile();
+  // Enabling waits for the main-loop lifecycle's reader heap gates, then says in the status bar
+  // whether a remote linked.
+  if (SETTINGS.ble.enabled) bleturner::requestConnect();
 }
 
 void EpubReaderMenuActivity::closeCancelled() {
@@ -185,6 +198,12 @@ void EpubReaderMenuActivity::activateIndex(const int index) {
   if (selectedAction == MenuAction::NIGHT_MODE) {
     SETTINGS.screenInverted = SETTINGS.screenInverted == 0 ? 1 : 0;
     SETTINGS.saveToFile();
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::BLUETOOTH) {
+    toggleBluetooth();
     requestUpdate();
     return;
   }
@@ -275,6 +294,8 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
     } else if (action == MenuAction::NIGHT_MODE) {
       // A switch row draws its state in the switch, so the value slot stays empty.
       menuRowItems[i].toggleChecked = SETTINGS.screenInverted != 0;
+    } else if (action == MenuAction::BLUETOOTH) {
+      menuRowItems[i].toggleChecked = SETTINGS.ble.enabled != 0;
     } else if (action == MenuAction::FRONTLIGHT) {
       menuRowItems[i].value = I18N.get(Frontlight.isOn() ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
     }

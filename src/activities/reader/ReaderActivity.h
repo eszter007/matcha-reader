@@ -10,6 +10,8 @@
 #include "activities/Activity.h"
 
 class ReaderActivity : public Activity {
+  friend class ActivityManager;  // turns pages for a Bluetooth remote (ActivityManager::remoteTurn)
+
  protected:
   const std::string bookPath;
   int pagesUntilFullRefresh;
@@ -63,6 +65,11 @@ class ReaderActivity : public Activity {
   int getProgressPercent() const { return getScreenshotInfo().progressPercent; }
   virtual int getProgressBasisPoints() const { return getProgressPercent() * 100; }
 
+  // Entry points for a Bluetooth remote. A reader without them ignores the remote's turns.
+  virtual bool pageTurn(bool /*isForward*/) { return false; }
+  virtual bool skipPages(int amount) { return pageTurn(amount > 0); }
+  // A Bluetooth remote asks for the reader menu (true) or a new clipping (false).
+  virtual bool remoteShortcut(bool /*readerMenu*/) { return false; }
   virtual bool isAtEndOfBook() const { return false; }
   virtual void onReturnFromEndOfBook() {}
 
@@ -70,6 +77,8 @@ class ReaderActivity : public Activity {
   bool handleBackNavigation();
   /** True while the end-of-book suggestion menu is on screen and owning input. */
   bool endOfBookMenuActive() const;
+  /** True while a toolbar, panel or menu over the page owns the device keys: a remote turn is refused. */
+  virtual bool inputOverPage() const { return endOfBookMenuActive(); }
   bool handleEndOfBookMenu(bool suppressConfirmRelease = false);
   bool handleEndOfBookPageTurn(bool prevTriggered, bool nextTriggered);
   bool renderEndOfBook(const char* logTag);
@@ -89,6 +98,7 @@ class ReaderActivity : public Activity {
   void prepareForSleep() override;
 
   bool isReaderActivity() const final { return true; }
+  bool acceptsRemoteInput() const final { return pageRendered.load(std::memory_order_acquire); }
   bool handleForcedRefresh() final;
 
  private:

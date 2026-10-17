@@ -48,6 +48,9 @@ class CatalogActivity : public UiListActivity {
   // The restart that frees the Wi-Fi heap on exit. Default lands on Home; a catalog reached from
   // a tab lands back on that tab.
   virtual void restartAfterWifi();
+  virtual void wifiSelectionCancelled();
+  // Initial keyboard text when search opens (refining the active query).
+  virtual std::string searchPrefill() const { return {}; }
 
   bool handleCustomInput() override;
   void navigateButtons() override;
@@ -66,9 +69,14 @@ class CatalogActivity : public UiListActivity {
   void launchSearch();
   void beginDownload(const std::string& title);
   void finishDownload(HttpDownloader::DownloadError result);
+  // postBody non-null turns the transfer into a POST of that body (e.g. an
+  // LCP license to the fulfillment service), with postContentType as its
+  // Content-Type. Same heap gating and cancel/progress pump either way.
   HttpDownloader::DownloadError downloadFile(const std::string& url, const std::string& dest,
                                              const std::string& user = {}, const std::string& password = {},
-                                             const std::vector<HttpDownloader::Header>& headers = {});
+                                             const std::vector<HttpDownloader::Header>& headers = {},
+                                             const std::string* postBody = nullptr,
+                                             const char* postContentType = nullptr);
   void screenHeader(UiScreen& screen, const char* title);
   bool buildStatusScreen(UiScreen& screen, bool boldError = true, bool showDownloadTotal = false);
 

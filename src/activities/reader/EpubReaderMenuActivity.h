@@ -17,6 +17,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
     TEXT_SETTINGS,
     NIGHT_MODE,
     FRONTLIGHT,
+    BLUETOOTH,
     GO_TO_PERCENT,
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
@@ -43,6 +44,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
     StrId labelId;
   };
 
+  static void toggleBluetooth();
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasWordLookup,
                                               bool imageReaderMinimal, bool mangaMode, bool hideGenericLookup,
                                               bool showPanelsOnlyToggle, bool hasClippings = false);
@@ -59,6 +61,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
 
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
+  bool acceptsRemoteInput() const override { return routingReady(); }
 
  private:
   // Set when the reader page underneath drew images: its gray charge survives a FAST
@@ -69,11 +72,12 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // fixed-capacity array avoids any heap allocation for the row list. Labels
   // are set once in the constructor (buildMenuRowItems()); buildScreen()
   // only refreshes the rows whose value reflects live state (rotation,
-  // page-turn interval, night mode, frontlight).
-  // 20 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
-  // Reader Settings on top of upstream's set, plus upstream's Night Mode and Frontlight, plus Create/View Clippings);
-  // 22 leaves headroom for one more without a silent truncation, which a fixed-capacity array cannot report.
-  static constexpr size_t MAX_MENU_ITEMS = 22;
+  // page-turn interval, night mode, Bluetooth, frontlight).
+  // 21 rows at most in the fork's buildMenuItems() (Word Lookup, Translate Page, Panels Only and
+  // Reader Settings on top of upstream's set, plus upstream's Night Mode, Bluetooth and Frontlight,
+  // plus Create/View Clippings); 23 leaves headroom for one more without a silent truncation, which a
+  // fixed-capacity array cannot report.
+  static constexpr size_t MAX_MENU_ITEMS = 23;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
   void buildMenuRowItems();
 
