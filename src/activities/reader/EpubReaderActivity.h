@@ -541,6 +541,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // deserialization (TextBlock word vectors/strings) and glyph caching allocate
   // through throwing paths that abort() on OOM; skip deferrable work below it.
   static constexpr size_t RENDER_MIN_FREE_HEAP = 24 * 1024;
+  // Below this much free heap the end-of-book cover decode borrows the SD fonts' memory: the JPEG
+  // decoder asks for ~52 KB (MIN_FREE_HEAP_FOR_JPEG), and a little more leaves the ticket room.
+  static constexpr uint32_t END_OF_BOOK_COVER_FREE_HEAP = 56 * 1024;
   // How many pages to keep laid out ahead of the reader for a still-building section. A page
   // turn is ~1s on e-ink and a page builds in ~30ms, so the reader can't out-click the builder
   // -- a tiny buffer is enough. The background build stops once the watermark is this far
