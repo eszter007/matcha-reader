@@ -389,29 +389,7 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
 // --- Prewarm: pre-decompress glyph bitmaps for a page of text ---
 
 int32_t FontDecompressor::findGlyphIndex(const EpdFontData* fontData, uint32_t codepoint) {
-  const EpdUnicodeInterval* intervals = fontData->intervals;
-  const int count = fontData->intervalCount;
-
-  if (count == 0) return -1;
-
-  // Binary search
-  int left = 0;
-  int right = count - 1;
-
-  while (left <= right) {
-    const int mid = left + (right - left) / 2;
-    const EpdUnicodeInterval* interval = &intervals[mid];
-
-    if (codepoint < interval->first) {
-      right = mid - 1;
-    } else if (codepoint > interval->last) {
-      left = mid + 1;
-    } else {
-      return static_cast<int32_t>(interval->offset + (codepoint - interval->first));
-    }
-  }
-
-  return -1;
+  return epdGlyphIndex(fontData, codepoint);
 }
 
 int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8Text) {
