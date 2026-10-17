@@ -21,7 +21,7 @@ from PIL import Image, ImageFilter, ImageOps
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "assets" / "images" / "cat-reading.png"
 
-LOGO_WIDTH = 137  # the cat itself is 130 px wide; the rest is room for the sticker edge
+LOGO_WIDTH = 230  # sticker edge included; the poster-size cat of the boot and sleep screens
 EOB_SIZE = 152  # drawIcon is square; the cat is centred in it at full height
 WEB_SIZE = 128
 # The sticker edge is drawn at gray 238; the cat's own whites are 255 and its ink near 0.

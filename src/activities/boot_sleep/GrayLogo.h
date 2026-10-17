@@ -20,10 +20,18 @@ class GfxRenderer;
 // books and a white edge around them) it keeps its own black, white and grays, gray pixels
 // starting black post-invert -- the calibrated start state the gray nudge expects.
 namespace GrayLogo {
-constexpr int WIDTH = 137;
-constexpr int HEIGHT = 193;
-// Logo top for a screen of this height: the logo and the two text lines under it, centred as one.
-constexpr int top(const int pageHeight) { return (pageHeight - HEIGHT - 60) / 2; }
+constexpr int WIDTH = 230;
+constexpr int HEIGHT = 324;
+// Wordmark and status line sit at the bottom of the screen, under the poster-size cat.
+constexpr int WORDMARK_FROM_BOTTOM = 96;
+constexpr int STATUS_FROM_BOTTOM = 62;
+// Logo top: a little above the centre, and never closer than 12 px to the wordmark (landscape is
+// only 480 px tall).
+constexpr int top(const int pageHeight) {
+  const int centred = pageHeight * 45 / 100 - HEIGHT / 2;
+  const int lowest = pageHeight - WORDMARK_FROM_BOTTOM - 12 - HEIGHT;
+  return centred < lowest ? centred : (lowest > 0 ? lowest : 0);
+}
 
 void drawBase(const GfxRenderer& renderer, int x, int y, bool invertedScreen);
 // Plain 1-bit rendering (dark gray -> black, light gray -> white), no gray passes needed.

@@ -17,9 +17,9 @@ void BootActivity::onEnter() {
   // states left by the (grayscale) sleep screen when waking reboots through this activity.
   const int logoY = GrayLogo::top(pageHeight);
   GrayLogo::drawBw(renderer, (pageWidth - GrayLogo::WIDTH) / 2, logoY);
-  renderer.drawCenteredText(UI_10_FONT_ID, logoY + GrayLogo::HEIGHT + 14, tr(STR_CROSSPOINT), true,
+  renderer.drawCenteredText(UI_12_FONT_ID, pageHeight - GrayLogo::WORDMARK_FROM_BOTTOM, tr(STR_CROSSPOINT), true,
                             EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, logoY + GrayLogo::HEIGHT + 39, tr(STR_BOOTING));
+  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - GrayLogo::STATUS_FROM_BOTTOM, tr(STR_BOOTING));
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, CROSSPOINT_VERSION);
   renderer.displayBuffer();
 }
