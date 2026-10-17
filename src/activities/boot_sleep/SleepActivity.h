@@ -25,6 +25,7 @@ class SleepActivity final : public Activity {
   // Legacy fork overlay locations, retained so existing SD cards continue to work.
   bool renderLegacyTransparentOverlay() const;
   void renderBlankSleepScreen() const;
+  void renderDeparturesSleepScreen() const;
 
   bool fromTimeout = false;
 };

@@ -11,6 +11,7 @@
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <InflateReader.h>
 #include <Memory.h>
 #include <PNGdec.h>
 #include <Xtc.h>
@@ -27,10 +28,13 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "GrayLogo.h"
+#include "ReadingStatsStore.h"
 #include "SdCardFontSystem.h"
 #include "activities/reader/ReaderUtils.h"
+#include "components/StatsWidgets.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "images/DeparturesType.h"
 #include "images/MoonIcon.h"
 
 namespace {
@@ -578,6 +582,8 @@ void SleepActivity::onEnter() {
   switch (SETTINGS.sleepScreen) {
     case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
       return renderBlankSleepScreen();
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::DEPARTURES):
+      return renderDeparturesSleepScreen();
     case (CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM):
       return renderCustomSleepScreen();
     case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER):
@@ -950,4 +956,164 @@ void SleepActivity::renderLastScreenSleepScreen() const {
 void SleepActivity::renderBlankSleepScreen() const {
   renderer.clearScreen();
   renderer.displayBuffer(kSleepClean);
+}
+
+namespace {
+
+// The Departures screen is drawn light and inverted at the end, like the dark logo screen: what is
+// drawn as ink here shows white, so the tiles are ink and their digits and split lines are paper.
+constexpr int DEP_MARGIN = 40;
+constexpr int DEP_TILES = 4;
+constexpr int DEP_LABEL_GAP = 9;
+constexpr int DEP_MAX_ROW_STEP = 136;
+// Screens shorter than this use the compact tiles.
+constexpr int DEP_COMPACT_BELOW = 760;
+
+struct DepartureTiles {
+  int tileW;
+  int tileH;
+  int tileGap;
+  int firstRow;
+  const DepartureBitmap* digits;
+};
+
+constexpr DepartureTiles DEP_REGULAR = {58, 90, 6, 100, DepDigits};
+constexpr DepartureTiles DEP_COMPACT = {44, 68, 5, 88, DepDigitsCompact};
+
+struct DepartureCat {
+  GrayLogo::Size size;
+  int width;
+  int height;
+};
+
+// Largest first: the screen uses the biggest cat that leaves the rows room.
+constexpr DepartureCat DEP_CATS[] = {{GrayLogo::Size::Regular, GrayLogo::WIDTH, GrayLogo::HEIGHT},
+                                     {GrayLogo::Size::Small, GrayLogo::SMALL_WIDTH, GrayLogo::SMALL_HEIGHT}};
+
+// Draws one bitmap from the inflated lettering, a horizontal run of ink at a time.
+void drawDepartureBitmap(const GfxRenderer& renderer, const uint8_t* type, const DepartureBitmap& bitmap, const int x,
+                         const int y, const bool ink) {
+  const int rowBytes = (bitmap.width + 7) / 8;
+  const uint8_t* row = type + bitmap.offset;
+  for (int py = 0; py < bitmap.height; py++, row += rowBytes) {
+    int px = 0;
+    while (px < bitmap.width) {
+      if (!(row[px >> 3] & (0x80 >> (px & 7)))) {
+        px++;
+        continue;
+      }
+      const int start = px;
+      while (px < bitmap.width && (row[px >> 3] & (0x80 >> (px & 7)))) px++;
+      renderer.fillRect(x + start, y + py, px - start, 1, ink);
+    }
+  }
+}
+
+// A row of flap tiles showing value right-aligned, blank tiles in front; capped at 9999.
+void drawFlapRow(const GfxRenderer& renderer, const uint8_t* type, const DepartureTiles& layout, const int x,
+                 const int y, uint32_t value) {
+  if (value > 9999) value = 9999;
+  char digits[DEP_TILES + 1];
+  snprintf(digits, sizeof(digits), "%4u", static_cast<unsigned>(value));
+  for (int t = 0; t < DEP_TILES; t++) {
+    const int tx = x + t * (layout.tileW + layout.tileGap);
+    renderer.fillRoundedRect(tx, y, layout.tileW, layout.tileH, 5, Color::Black);
+    if (digits[t] != ' ') {
+      const DepartureBitmap& d = layout.digits[digits[t] - '0'];
+      drawDepartureBitmap(renderer, type, d, tx + (layout.tileW - d.width) / 2, y + (layout.tileH - d.height) / 2,
+                          false);
+    }
+    renderer.fillRect(tx, y + layout.tileH / 2 - 1, layout.tileW, 3, false);
+  }
+}
+
+}  // namespace
+
+void SleepActivity::renderDeparturesSleepScreen() const {
+  auto type = makeUniqueNoThrow<uint8_t[]>(DEP_TYPE_INFLATED_SIZE);
+  if (!type) {
+    LOG_ERR("SLP", "OOM: %d bytes for the Departures lettering", DEP_TYPE_INFLATED_SIZE);
+    return renderDefaultSleepScreen();
+  }
+  {
+    InflateReader reader;
+    reader.init(false);
+    reader.setSource(DepTypeDeflated, sizeof(DepTypeDeflated));
+    if (!reader.read(type.get(), DEP_TYPE_INFLATED_SIZE)) {
+      LOG_ERR("SLP", "Departures lettering failed to inflate");
+      return renderDefaultSleepScreen();
+    }
+  }
+
+  READING_STATS_STORE.loadFromFile();
+  const StatsWidgets::Today today = StatsWidgets::getToday();
+  const uint32_t hours = READING_STATS_STORE.getTotalMinutes() / 60;
+  const int streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
+  const uint16_t weekMinutes = READING_STATS_STORE.getMinutesThisWeek(today.year, today.month, today.day);
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const DepartureTiles& layout = pageHeight < DEP_COMPACT_BELOW ? DEP_COMPACT : DEP_REGULAR;
+  renderer.clearScreen();
+
+  const int headerY = layout.firstRow - 56;
+  drawDepartureBitmap(renderer, type.get(), DepWordDepartures, DEP_MARGIN, headerY, true);
+  drawDepartureBitmap(renderer, type.get(), DepWordShuppatsu, DEP_MARGIN + DepWordDepartures.width + 14,
+                      headerY + DepWordDepartures.height - DepWordShuppatsu.height + 2, true);
+
+  // The cat sits in the bottom-right corner with NEXT / ONE MORE CHAPTER centred on its height. The
+  // rows close up to clear that block, and, where the rows reach across into the cat's column, to
+  // keep their last label above the cat's top -- down to the point where a label would touch the
+  // next row's tiles. The biggest cat that allows that is used; with none the cat is left out.
+  const int labelH = DEP_LABEL_GAP + DepWordHoursRead.height;
+  const int minRowStep = layout.tileH + labelH + 3;
+  const int blockH = DepWordNext.height + 16 + DepWordOneMore.height + 14 + DepWordChapter.height;
+  const int rowsRight =
+      DEP_MARGIN + std::max<int>(DEP_TILES * (layout.tileW + layout.tileGap), DepWordMinutesThisWeek.width + 2);
+  const DepartureCat* cat = nullptr;
+  int catX = 0;
+  int catY = 0;
+  int rowStep = 0;
+  for (const DepartureCat& candidate : DEP_CATS) {
+    const int x = pageWidth - candidate.width - 10;
+    const int top = pageHeight - candidate.height - 10;
+    int limit = top + candidate.height / 2 - blockH / 2 - 16;
+    if (rowsRight + 8 > x) limit = std::min(limit, top + 8);
+    const int step = (limit - layout.firstRow - layout.tileH - labelH) / 2;
+    if (step >= minRowStep) {
+      cat = &candidate;
+      catX = x;
+      catY = top;
+      rowStep = step;
+      break;
+    }
+  }
+  if (!cat) rowStep = (pageHeight - blockH - 60 - layout.firstRow - layout.tileH) / 2;
+  rowStep = std::min(rowStep, DEP_MAX_ROW_STEP);
+
+  const DepartureBitmap* labels[] = {&DepWordHoursRead, &DepWordDayStreak, &DepWordMinutesThisWeek};
+  const uint32_t values[] = {hours, static_cast<uint32_t>(std::max(streak, 0)), weekMinutes};
+  for (int row = 0; row < 3; row++) {
+    const int y = layout.firstRow + row * rowStep;
+    drawFlapRow(renderer, type.get(), layout, DEP_MARGIN, y, values[row]);
+    drawDepartureBitmap(renderer, type.get(), *labels[row], DEP_MARGIN + 2, y + layout.tileH + DEP_LABEL_GAP, true);
+  }
+
+  // NEXT / ONE MORE CHAPTER, centred on the cat's height, or at the foot of the screen without it.
+  int y = cat ? catY + cat->height / 2 - blockH / 2 : pageHeight - 40 - blockH;
+  drawDepartureBitmap(renderer, type.get(), DepWordNext, DEP_MARGIN, y, true);
+  y += DepWordNext.height + 16;
+  drawDepartureBitmap(renderer, type.get(), DepWordOneMore, DEP_MARGIN, y, true);
+  y += DepWordOneMore.height + 14;
+  drawDepartureBitmap(renderer, type.get(), DepWordChapter, DEP_MARGIN, y, true);
+  type.reset();  // before the small cat inflates its own buffer
+  if (cat) GrayLogo::drawBase(renderer, catX, catY, true, cat->size);
+
+  renderer.invertScreen();
+  if (!cat) {
+    renderer.displayBuffer(kSleepClean);
+    return;
+  }
+  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  GrayLogo::flushGrayPasses(renderer, catX, catY, true, cat->size);
 }

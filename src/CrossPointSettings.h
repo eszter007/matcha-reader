@@ -29,6 +29,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // Upstream's name for what the fork called TRANSPARENT. Same slot 7, same meaning, so a
     // settings.json written before the merge still selects the overlay screen.
     TRANSPARENT_CUSTOM = 7,
+    DEPARTURES = 8,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
