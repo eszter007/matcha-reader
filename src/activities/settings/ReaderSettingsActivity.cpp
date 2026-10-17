@@ -902,14 +902,13 @@ void ReaderSettingsActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
 
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
-  // indicator; the rest of the screen renders through the app.
-  // Version rides in the header's trailing label slot: the footer position
-  // conflicts with button hints on non-touch devices.
+  // indicator; the rest of the screen renders through the app. No version string: Settings from
+  // Home shows it, and here it squeezed "Reader Settings" down to "Reader Se...".
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
                  isSubmenu()    ? I18N.get(submenuCategory)
                  : finishOnBack ? tr(STR_READER_SETTINGS)
                                 : tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION, HomeTabBar::showsBackButton(!isSubmenu() && !finishOnBack),
+                 nullptr, HomeTabBar::showsBackButton(!isSubmenu() && !finishOnBack),
                  // The rule only earns its place once a row has scrolled under it; at the top it
                  // is a second horizontal line stacked on the tab band.
                  activeNav().top > 0 ? 1 : 0);
