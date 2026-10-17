@@ -727,7 +727,7 @@ The **Sleep Screen** setting controls what is displayed when the device goes to 
 | **Cover + Custom** | The cover of the currently open book, shown only while actively reading. Falls back to **Custom** behavior when not reading. |
 | **Transparent**    | A BMP or PNG overlay drawn over the current screen. Supports PNG and 32-bit BGRA alpha transparency, and treats white as transparent in regular BMPs. Falls back to **Dark** if no valid overlay image is found. |
 | **None**           | A blank screen.                                                                                                              |
-| **Departures**     | Your reading stats on a split-flap departures board: total hours read, current day streak and minutes this week. The board's words stay in English and Japanese whatever the UI language. |
+| **Stats**          | Your reading stats on a split-flap departures board: total hours read, current day streak and minutes this week. The board's words stay in English and Japanese whatever the UI language. |
 
 #### Cover settings
 

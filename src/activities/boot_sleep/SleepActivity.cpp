@@ -582,7 +582,7 @@ void SleepActivity::onEnter() {
   switch (SETTINGS.sleepScreen) {
     case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
       return renderBlankSleepScreen();
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::DEPARTURES):
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::STATS):
       return renderDeparturesSleepScreen();
     case (CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM):
       return renderCustomSleepScreen();
