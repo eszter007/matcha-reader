@@ -1,12 +1,19 @@
 #include "EndOfBookOptions.h"
 
+#include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <I18n.h>
+#include <Logging.h>
+#include <Memory.h>
+
+#include <cmath>
+#include <cstring>
 
 #include "BookStats.h"
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "ReadingStatsStore.h"
 // ReaderUtils.h pulls in ActivityManager.h, which only forward-declares Activity while holding
@@ -15,17 +22,14 @@
 #include "activities/Activity.h"
 #include "components/StatsWidgets.h"
 #include "components/UITheme.h"
-#include "components/icons/dictionaryIcons.h"
 #include "components/icons/endOfBookCat.h"
-#include "components/icons/stats_icons.h"
+#include "components/icons/eobStamp.h"
+#include "components/icons/tabBarIcons.h"
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
 #include "util/NextBookFinder.h"
 
-namespace fui = freeink::ui;
-
 namespace {
-constexpr fui::ActionId ACTION_ROW = 1;
 
 // Display name without the file extension, mirroring the file browser rows
 std::string displayName(const std::string& filename) {
@@ -60,35 +64,209 @@ void formatDuration(char* buf, const size_t size, const uint32_t minutes) {
   }
 }
 
-struct StatCell {
-  const uint8_t* icon;
-  int iconSize;
-  char value[16];
-  const char* label;
+// --- Ticket geometry -------------------------------------------------------------------------
+// Each half is drawn upright, copied out, and written back tilted. A half's shape is analytic, so
+// the tilted write paints exactly its own paper and never the other half under its torn edge.
+
+constexpr int CORNER = 18;  // rounded corner radius
+constexpr int TEAR = 6;     // depth of the torn zig-zag
+constexpr int TEAR_PERIOD = 24;
+constexpr int BORDER = 3;
+// Degrees, clockwise on screen: the halves lean apart like a freshly torn ticket.
+constexpr float TOP_ANGLE = 3.5f;
+constexpr float STUB_ANGLE = -5.0f;
+constexpr float STAMP_ANGLE = 14.0f;
+constexpr int BUTTON_H = 80;
+constexpr int MIN_TOP_W = 280;
+
+enum class Shape { Top, Stub, Disc };
+
+// Height of the torn zig-zag at x: 0..TEAR.
+int tearAt(const int x) {
+  const int t = ((x % TEAR_PERIOD) + TEAR_PERIOD) % TEAR_PERIOD;
+  return std::abs(t - TEAR_PERIOD / 2) * TEAR * 2 / TEAR_PERIOD;
+}
+
+bool outsideCorner(const int x, const int y, const int cx, const int cy) {
+  const int dx = x - cx;
+  const int dy = y - cy;
+  return dx * dx + dy * dy > CORNER * CORNER;
+}
+
+// Whether local (x, y) is paper of a w x h piece: the top half has round top corners and a torn
+// bottom edge, the stub a torn top edge and round bottom corners.
+bool inShape(const Shape shape, const int w, const int h, const int x, const int y) {
+  if (x < 0 || y < 0 || x >= w || y >= h) return false;
+  if (shape == Shape::Disc) {
+    const int r = w / 2;
+    return (x - r) * (x - r) + (y - r) * (y - r) <= r * r;
+  }
+  if (shape == Shape::Top) {
+    if (y > h - 1 - TEAR + tearAt(x)) return false;
+    if (y < CORNER && x < CORNER && outsideCorner(x, y, CORNER, CORNER)) return false;
+    if (y < CORNER && x >= w - CORNER && outsideCorner(x, y, w - 1 - CORNER, CORNER)) return false;
+    return true;
+  }
+  if (y < tearAt(x)) return false;
+  if (y >= h - CORNER && x < CORNER && outsideCorner(x, y, CORNER, h - 1 - CORNER)) return false;
+  if (y >= h - CORNER && x >= w - CORNER && outsideCorner(x, y, w - 1 - CORNER, h - 1 - CORNER)) return false;
+  return true;
+}
+
+// Paper whose neighbourhood leaves the shape: the piece's outline.
+bool onBorder(const Shape shape, const int w, const int h, const int x, const int y) {
+  if (!inShape(shape, w, h, x, y)) return false;
+  return !inShape(shape, w, h, x - BORDER, y) || !inShape(shape, w, h, x + BORDER, y) ||
+         !inShape(shape, w, h, x, y - BORDER) || !inShape(shape, w, h, x, y + BORDER) ||
+         !inShape(shape, w, h, x - 2, y - 2) || !inShape(shape, w, h, x + 2, y - 2) ||
+         !inShape(shape, w, h, x - 2, y + 2) || !inShape(shape, w, h, x + 2, y + 2);
+}
+
+void drawOutline(const GfxRenderer& renderer, const Shape shape, const int x0, const int y0, const int w, const int h) {
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      if (onBorder(shape, w, h, x, y)) renderer.drawPixel(x0 + x, y0 + y, true);
+    }
+  }
+}
+
+// A drawn region copied out of the framebuffer as 1 bpp ink, so it can be written back tilted.
+struct Capture {
+  int w = 0;
+  int h = 0;
+  std::unique_ptr<uint8_t[]> ink;
+  bool at(const int x, const int y) const {
+    if (x < 0 || y < 0 || x >= w || y >= h) return false;
+    const int i = y * w + x;
+    return (ink[i >> 3] >> (7 - (i & 7))) & 1;
+  }
 };
 
-// One row of stat cells, each an icon over a bold value over a small label, centred in equal
-// columns. Returns the row height.
-int drawStatRow(const GfxRenderer& renderer, const Rect& area, const int y, const StatCell* cells, const int count) {
-  constexpr int ICON = 24;
-  const int valueH = renderer.getLineHeight(UI_12_FONT_ID);
-  const int labelH = renderer.getLineHeight(SMALL_FONT_ID);
-  const int colW = area.width / count;
-  for (int i = 0; i < count; i++) {
-    const int cx = area.x + colW * i + colW / 2;
-    const int iconY = y + (ICON - cells[i].iconSize) / 2;
-    renderer.drawIcon(cells[i].icon, cx - cells[i].iconSize / 2, iconY, cells[i].iconSize);
-    const int vw = renderer.getTextWidth(UI_12_FONT_ID, cells[i].value, EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, cx - vw / 2, y + ICON + 4, cells[i].value, true, EpdFontFamily::BOLD);
-    const std::string label = renderer.truncatedText(SMALL_FONT_ID, cells[i].label, colW - 8);
-    const int lw = renderer.getTextWidth(SMALL_FONT_ID, label.c_str());
-    renderer.drawText(SMALL_FONT_ID, cx - lw / 2, y + ICON + 4 + valueH, label.c_str(), true);
+// Copies the region out and clears it. False when the buffer cannot be had: the caller then leaves
+// the piece where it was drawn, upright.
+bool capture(const GfxRenderer& renderer, const int x0, const int y0, const int w, const int h, Capture& out) {
+  const size_t bytes = (static_cast<size_t>(w) * h + 7) / 8;
+  out.ink = makeUniqueNoThrow<uint8_t[]>(bytes);
+  if (!out.ink) {
+    LOG_ERR("EOB", "OOM: %u bytes for a ticket piece, drawn upright", static_cast<unsigned>(bytes));
+    return false;
   }
-  return ICON + 4 + valueH + labelH;
+  memset(out.ink.get(), 0, bytes);
+  out.w = w;
+  out.h = h;
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      if (renderer.readPixel(x0 + x, y0 + y)) {
+        const int i = y * w + x;
+        out.ink[i >> 3] |= 0x80 >> (i & 7);
+      }
+    }
+  }
+  renderer.fillRect(x0, y0, w, h, false);
+  return true;
 }
+
+// Writes a captured piece back turned by `degrees` about its centre, which lands at (cx, cy). Each
+// screen pixel samples the piece 3x3: inside the shape for a majority it becomes paper, and ink
+// once a third of the paper samples are ink, so 1 px strokes survive the turn.
+void writeTilted(const GfxRenderer& renderer, const Capture& piece, const Shape shape, const float degrees,
+                 const int cx, const int cy) {
+  const float rad = degrees * 3.14159265f / 180.0f;
+  const float c = std::cos(rad);
+  const float s = std::sin(rad);
+  const float hw = piece.w / 2.0f;
+  const float hh = piece.h / 2.0f;
+  const int reach = static_cast<int>(std::ceil(std::sqrt(hw * hw + hh * hh))) + 1;
+  for (int dy = -reach; dy <= reach; dy++) {
+    for (int dx = -reach; dx <= reach; dx++) {
+      int paper = 0;
+      int ink = 0;
+      for (int sy = -1; sy <= 1; sy++) {
+        for (int sx = -1; sx <= 1; sx++) {
+          const float px = dx + sx / 3.0f;
+          const float py = dy + sy / 3.0f;
+          // Inverse rotation: from the screen back into the upright piece.
+          const int ux = static_cast<int>(std::floor(c * px + s * py + hw));
+          const int uy = static_cast<int>(std::floor(-s * px + c * py + hh));
+          if (!inShape(shape, piece.w, piece.h, ux, uy)) continue;
+          paper++;
+          if (piece.at(ux, uy)) ink++;
+        }
+      }
+      if (paper < 5) continue;
+      renderer.drawPixel(cx + dx, cy + dy, ink * 3 >= paper);
+    }
+  }
+}
+
+// The stamp is ink only: it is written tilted with a 2 px white halo around its strokes, so it
+// stays legible over a busy cover without blanking the cover under its open middle.
+void writeStamp(const GfxRenderer& renderer, const Capture& stamp, const int cx, const int cy) {
+  const float rad = STAMP_ANGLE * 3.14159265f / 180.0f;
+  const float c = std::cos(rad);
+  const float s = std::sin(rad);
+  const float hw = stamp.w / 2.0f;
+  const int reach = static_cast<int>(std::ceil(hw * 1.42f)) + 3;
+  const int side = reach * 2 + 1;
+  Capture turned;
+  turned.w = side;
+  turned.h = side;
+  turned.ink = makeUniqueNoThrow<uint8_t[]>((static_cast<size_t>(side) * side + 7) / 8);
+  if (!turned.ink) {
+    LOG_ERR("EOB", "OOM: stamp, skipped");
+    return;
+  }
+  memset(turned.ink.get(), 0, (static_cast<size_t>(side) * side + 7) / 8);
+  for (int dy = -reach; dy <= reach; dy++) {
+    for (int dx = -reach; dx <= reach; dx++) {
+      const int ux = static_cast<int>(std::floor(c * dx + s * dy + hw));
+      const int uy = static_cast<int>(std::floor(-s * dx + c * dy + hw));
+      if (stamp.at(ux, uy)) {
+        const int i = (dy + reach) * side + (dx + reach);
+        turned.ink[i >> 3] |= 0x80 >> (i & 7);
+      }
+    }
+  }
+  for (int y = 0; y < side; y++) {
+    for (int x = 0; x < side; x++) {
+      if (turned.at(x, y)) {
+        renderer.drawPixel(cx - reach + x, cy - reach + y, true);
+        continue;
+      }
+      bool near = false;
+      for (int oy = -2; oy <= 2 && !near; oy++) {
+        for (int ox = -2; ox <= 2 && !near; ox++) near = turned.at(x + ox, y + oy);
+      }
+      if (near) renderer.drawPixel(cx - reach + x, cy - reach + y, false);
+    }
+  }
+}
+
+// Turns local point (x, y) of a w x h piece by `degrees` about its centre, placed at (cx, cy).
+void turnPoint(const float x, const float y, const int w, const int h, const float degrees, const int cx, const int cy,
+               int& outX, int& outY) {
+  const float rad = degrees * 3.14159265f / 180.0f;
+  const float px = x - w / 2.0f;
+  const float py = y - h / 2.0f;
+  outX = cx + static_cast<int>(std::lround(std::cos(rad) * px - std::sin(rad) * py));
+  outY = cy + static_cast<int>(std::lround(std::sin(rad) * px + std::cos(rad) * py));
+}
+
+// The 32 px home icon in white, for the selected (black) Home button. drawIcon only draws ink.
+void drawIconWhite(const GfxRenderer& renderer, const uint8_t* bitmap, const int x, const int y, const int size) {
+  const int rowBytes = (size + 7) / 8;
+  for (int row = 0; row < size; row++) {
+    for (int col = 0; col < size; col++) {
+      if (((bitmap[row * rowBytes + (col >> 3)] >> (7 - (col & 7))) & 1) == 0) {
+        renderer.drawPixel(x + (size - 1 - row), y + col, false);
+      }
+    }
+  }
+}
+
 }  // namespace
 
-EndOfBookOptions::EndOfBookOptions(GfxRenderer& renderer) : UiAppHost(renderer), renderer(renderer) {}
+EndOfBookOptions::EndOfBookOptions(GfxRenderer& renderer) : renderer(renderer) {}
 
 void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* bookLanguage) {
   READING_STATS_STORE.loadFromFile();
@@ -105,6 +283,8 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
   const StatsWidgets::Today today = StatsWidgets::getToday();
   summary.streak = READING_STATS_STORE.getStreak(today.year, today.month, today.day);
   summary.booksFinished = READING_STATS_STORE.getBooksFinished();
+  snprintf(summary.finishedOn, sizeof(summary.finishedOn), "%04u.%02u.%02u", static_cast<unsigned>(today.year),
+           static_cast<unsigned>(today.month), static_cast<unsigned>(today.day));
 
   // Primary subtag, lowercased, as the stats store buckets it ("ja-JP" -> "ja").
   char code[4] = {};
@@ -120,161 +300,98 @@ void EndOfBookOptions::loadSummary(const std::string& bookPath, const char* book
 }
 
 void EndOfBookOptions::loadOnce(const std::string& currentBookPath, const std::string& bookTitle,
-                                const char* bookLanguage) {
+                                const char* bookLanguage, const std::string& coverThumbPath) {
   if (isLoaded.load(std::memory_order_acquire)) {
     return;
   }
   loadSummary(currentBookPath, bookLanguage);
   folder = FsHelpers::extractFolderPath(currentBookPath);
+  coverPath = coverThumbPath;
   if (!bookTitle.empty()) {
     title = bookTitle;
   } else {
     const auto slash = currentBookPath.find_last_of('/');
     title = displayName(slash == std::string::npos ? currentBookPath : currentBookPath.substr(slash + 1));
   }
-  names = NextBookFinder::findNextBooks(currentBookPath, MAX_SUGGESTIONS);
+  const std::vector<std::string> next = NextBookFinder::findNextBooks(currentBookPath, 1);
+  if (!next.empty()) {
+    nextName = next.front();
+    // The constructor only derives the cache paths; nothing is parsed or generated.
+    if (FsHelpers::hasReflowableBookExtension(nextName)) {
+      if (auto epub = makeUniqueNoThrow<Epub>(nextPath(), "/.crosspoint")) nextCoverTemplate = epub->getThumbBmpPath();
+    }
+  }
   selector.store(0, std::memory_order_relaxed);
-  // One-time app setup on the render task, before the first render/route.
-  resetUi();
-  app.on(ACTION_ROW, &EndOfBookOptions::onRowEvent, this);
-  app.setScreen(&EndOfBookOptions::listScreen, this);
-  buildRowItems();
-  // Release-publish so the main task, which gates all access on isLoaded, never
-  // observes a partially built list (rowItems/rowLabels included)
+  // Release-publish so the main task, which gates all access on isLoaded, never observes a
+  // partially built screen.
   isLoaded.store(true, std::memory_order_release);
-}
-
-// Populates rowLabels/rowItems from names + the trailing "Home" row. Called
-// once here since names never changes after loadOnce() completes.
-void EndOfBookOptions::buildRowItems() {
-  rowCount = 0;
-  for (const auto& name : names) {
-    if (rowCount >= MAX_ROWS) break;
-    rowLabels[rowCount] = displayName(name);
-    fui::ListItem item;
-    item.label = rowLabels[rowCount].c_str();
-    item.actionValue = static_cast<int16_t>(rowCount);
-    rowItems[rowCount] = item;
-    rowCount++;
-  }
-  if (rowCount < MAX_ROWS) {
-    rowLabels[rowCount] = tr(STR_EOB_HOME);
-    fui::ListItem item;
-    item.label = rowLabels[rowCount].c_str();
-    item.actionValue = static_cast<int16_t>(rowCount);
-    rowItems[rowCount] = item;
-    rowCount++;
-  }
 }
 
 bool EndOfBookOptions::menuActive() const { return isLoaded.load(std::memory_order_acquire); }
 
-std::string EndOfBookOptions::fullPath(const size_t index) const {
-  if (index >= names.size()) {
-    return {};
-  }
-  return folder == "/" ? "/" + names[index] : folder + "/" + names[index];
-}
-
-void EndOfBookOptions::onRowEvent(const fui::ActionEvent& event, void* user) {
-  auto* self = static_cast<EndOfBookOptions*>(user);
-  if (event.value < 0 || event.value > static_cast<int16_t>(self->names.size())) return;
-  self->selector.store(event.value, std::memory_order_relaxed);
-  // The tapped row leaves this screen (open book or home); a lingering flash
-  // would gray an unrelated element on the next render.
-  self->app.clearTapFlash();
-  self->tappedRow = event.value;
+std::string EndOfBookOptions::nextPath() const {
+  if (nextName.empty()) return {};
+  return folder == "/" ? "/" + nextName : folder + "/" + nextName;
 }
 
 EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputManager& input, std::string* openPath) {
-  // Touch goes through the FreeInkApp: render() registered the row hit rects;
-  // route the snapshot and let onRowEvent record the tapped row.
-  tappedRow = -1;
-  const auto route = routeTouch(input);
-  // cppcheck can't see that route() dispatches into onRowEvent (registered via
-  // app.on(ACTION_ROW, ...)), which sets tappedRow, so it flags this as always false.
-  // cppcheck-suppress knownConditionTrueFalse
-  if (route && tappedRow >= 0) {
-    if (tappedRow < static_cast<int>(names.size())) {
-      if (openPath) {
-        *openPath = fullPath(tappedRow);
-      }
-      return Action::OpenBook;
-    }
-    return Action::GoHome;  // "Home" row tapped
-  }
-  if (route.routed && app.invalidated()) {
-    return Action::Redraw;
+  const auto activate = [&](const int index) {
+    if (isHomeIndex(index)) return Action::GoHome;
+    if (openPath) *openPath = nextPath();
+    return Action::OpenBook;
+  };
+
+  int tapX = 0;
+  int tapY = 0;
+  if (input.hasTouch() && input.wasScreenTapped(tapX, tapY)) {
+    if (!nextName.empty() && continueRect.contains(tapX, tapY)) return activate(0);
+    if (homeRect.contains(tapX, tapY)) return Action::GoHome;
   }
 
   const int selectedIndex = selector.load(std::memory_order_relaxed);
   if (input.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedIndex < static_cast<int>(names.size())) {
-      if (openPath) {
-        *openPath = fullPath(selectedIndex);
-      }
-      return Action::OpenBook;
-    }
-    return Action::GoHome;  // "Home" entry selected
+    return activate(selectedIndex);
   }
 
   // Short-press Back returns to the last page; a long press falls through to the
-  // reader's own handler (file browser). Home is reached through the list's Home entry.
+  // reader's own handler (file browser).
   if (input.wasReleased(MappedInputManager::Button::Back) && input.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     return Action::LastPage;
   }
 
-  // Selection movement on the standard list navigation buttons (side Up/Down plus front
-  // Left/Right, orientation swap included). It follows the reader's page-turn semantics
-  // (press-triggered by default, release-triggered when a long-press behavior is
-  // configured, same rule as ReaderUtils::detectPageTurn). This matters on entry: with
-  // press-triggered turns, the press that turned the final page already fired in the
-  // reader, and its release must not double-fire into this menu.
+  // Selection movement follows the reader's page-turn semantics (press-triggered by default,
+  // release-triggered when a long-press behavior is configured, same rule as
+  // ReaderUtils::detectPageTurn). This matters on entry: with press-triggered turns, the press
+  // that turned the final page already fired in the reader, and its release must not double-fire.
   const bool usePress = SETTINGS.longPressButtonBehavior == CrossPointSettings::OFF;
   const auto triggered = [&](const MappedInputManager::Button button) {
     return usePress ? input.wasPressed(button) : input.wasReleased(button);
   };
-  const int itemCount = static_cast<int>(names.size()) + 1;  // + "Home" entry
   if (triggered(MappedInputManager::Button::NavPrevious)) {
-    selector.store(ButtonNavigator::previousIndex(selectedIndex, itemCount), std::memory_order_relaxed);
+    selector.store(ButtonNavigator::previousIndex(selectedIndex, itemCount()), std::memory_order_relaxed);
     return Action::Redraw;
   }
   if (triggered(MappedInputManager::Button::NavNext)) {
-    selector.store(ButtonNavigator::nextIndex(selectedIndex, itemCount), std::memory_order_relaxed);
+    selector.store(ButtonNavigator::nextIndex(selectedIndex, itemCount()), std::memory_order_relaxed);
     return Action::Redraw;
   }
   return Action::None;
 }
 
-void EndOfBookOptions::listScreen(UiScreen& screen, void* user) {
-  static_cast<EndOfBookOptions*>(user)->buildListScreen(screen);
+int EndOfBookOptions::stubHeight() const {
+  const int small = renderer.getLineHeight(SMALL_FONT_ID);
+  int h = TEAR + 10 + (summary.booksFinished > 0 ? small + 8 : 0) + renderer.getLineHeight(UI_12_FONT_ID) + small + 14;
+  if (summary.lookups > 0 || summary.sentences > 0) h += 9 + 2 * renderer.getLineHeight(UI_10_FONT_ID) + 6;
+  return h + CORNER / 2;
 }
 
-void EndOfBookOptions::buildListScreen(UiScreen& screen) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  // The list band starts under the header render() drew (listTop), and stops above the
-  // button hints (the safe-area bottom edge).
-  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  screen.setContentMarginFromScreen(fui::Insets{
-      static_cast<int16_t>(listTop), static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
-      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height) + metrics.verticalSpacing),
-      static_cast<int16_t>(safe.x)});
+// The stub: the read in numbers. "No. 14" in the corner, the three headline stats, then the
+// dictionary counts and the language milestone.
+void EndOfBookOptions::drawStub(const int x, const int y, const int w, const int h) const {
+  drawOutline(renderer, Shape::Stub, x, y, w, h);
+  const int pad = 18;
 
-  // rowLabels/rowItems were built once in loadOnce() (see buildRowItems())
-  // and reused here on every repaint.
-  fui::ListProps props;
-  props.items = rowItems;
-  props.count = static_cast<uint16_t>(rowCount);
-  props.selectedIndex = static_cast<int16_t>(selector.load(std::memory_order_relaxed));
-  props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch;  // physical buttons stay in handleMenuInput()
-  screen.list(props);
-}
-
-int EndOfBookOptions::drawSummary(int y, const Rect& safe) const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-
-  // Milestone: "Your 12th book · 3rd in 日本語". Counts past this book's own finish only.
+  // Milestone across the top: "Your 14th book · 6th in 日本語".
   if (summary.booksFinished > 0) {
     char nth[16];
     formatOrdinal(nth, sizeof(nth), summary.booksFinished);
@@ -286,41 +403,196 @@ int EndOfBookOptions::drawSummary(int y, const Rect& safe) const {
       const size_t used = strlen(line);
       snprintf(line + used, sizeof(line) - used, tr(STR_EOB_NTH_IN_LANGUAGE), nthLang, summary.languageName.c_str());
     }
-    UITheme::drawCenteredText(renderer, safe, UI_10_FONT_ID, y, line);
-    y += renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing * 3;
+    const std::string shown = renderer.truncatedText(SMALL_FONT_ID, line, w - 2 * pad);
+    renderer.drawText(SMALL_FONT_ID, x + pad, y + TEAR + 10, shown.c_str(), true);
   }
 
-  const Rect area{safe.x + metrics.contentSidePadding, safe.y, safe.width - metrics.contentSidePadding * 2,
-                  safe.height};
-  StatCell cells[3];
+  struct Cell {
+    char value[16];
+    const char* label;
+  };
+  Cell cells[3];
   int count = 0;
-  cells[count] = {ClockIcon24, 24, {}, tr(STR_EOB_READING_TIME)};
-  formatDuration(cells[count++].value, sizeof(cells[0].value), summary.minutes);
+  formatDuration(cells[count].value, sizeof(cells[0].value), summary.minutes);
+  cells[count++].label = tr(STR_EOB_READING_TIME);
   if (summary.daySpan > 0) {
-    cells[count] = {CalendarIcon24, 24, {}, tr(STR_EOB_DAYS_TO_FINISH)};
-    snprintf(cells[count++].value, sizeof(cells[0].value), "%d", summary.daySpan);
+    snprintf(cells[count].value, sizeof(cells[0].value), "%d", summary.daySpan);
+    cells[count++].label = tr(STR_EOB_DAYS_TO_FINISH);
   }
   if (summary.streak > 0) {
-    cells[count] = {StreakIcon24, 24, {}, tr(STR_EOB_DAY_STREAK)};
-    snprintf(cells[count++].value, sizeof(cells[0].value), "%d", summary.streak);
+    snprintf(cells[count].value, sizeof(cells[0].value), "%d", summary.streak);
+    cells[count++].label = tr(STR_EOB_DAY_STREAK);
   }
-  y += drawStatRow(renderer, area, y, cells, count);
+  const int valueY = y + TEAR + 10 + (summary.booksFinished > 0 ? renderer.getLineHeight(SMALL_FONT_ID) + 8 : 0);
+  const int valueH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int colW = (w - 2 * pad) / count;
+  for (int i = 0; i < count; i++) {
+    const int cx = x + pad + colW * i + colW / 2;
+    const int vw = renderer.getTextWidth(UI_12_FONT_ID, cells[i].value, EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, cx - vw / 2, valueY, cells[i].value, true, EpdFontFamily::BOLD);
+    const std::string label = renderer.truncatedText(SMALL_FONT_ID, cells[i].label, colW - 6);
+    const int lw = renderer.getTextWidth(SMALL_FONT_ID, label.c_str());
+    renderer.drawText(SMALL_FONT_ID, cx - lw / 2, valueY + valueH, label.c_str(), true);
+  }
 
-  // The dictionary row only for books read with one.
-  if (summary.lookups > 0 || summary.sentences > 0) {
-    y += metrics.verticalSpacing * 2;
-    cells[0] = {DictLookupIcon, 24, {}, tr(STR_STAT_WORDS_LOOKED_UP)};
-    snprintf(cells[0].value, sizeof(cells[0].value), "%lu", static_cast<unsigned long>(summary.lookups));
-    cells[1] = {DictAddCardIcon, 24, {}, tr(STR_STAT_SENTENCES_SAVED)};
-    snprintf(cells[1].value, sizeof(cells[1].value), "%lu", static_cast<unsigned long>(summary.sentences));
-    y += drawStatRow(renderer, area, y, cells, 2);
+  if (summary.lookups == 0 && summary.sentences == 0) return;
+  const int ruleY = valueY + valueH + renderer.getLineHeight(SMALL_FONT_ID) + 10;
+  renderer.drawLine(x + pad, ruleY, x + w - pad, ruleY, true);
+  const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+  char line[64];
+  snprintf(line, sizeof(line), "%lu %s", static_cast<unsigned long>(summary.lookups), tr(STR_STAT_WORDS_LOOKED_UP));
+  renderer.drawText(UI_10_FONT_ID, x + pad, ruleY + 8, line, true);
+  snprintf(line, sizeof(line), "%lu %s", static_cast<unsigned long>(summary.sentences), tr(STR_STAT_SENTENCES_SAVED));
+  renderer.drawText(UI_10_FONT_ID, x + pad, ruleY + 8 + lineH, line, true);
+}
+
+void EndOfBookOptions::drawTicket(const Rect& safe, const int bottom) const {
+  const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int stubH = stubHeight();
+  const int stubW = std::min(380, safe.width - 40);
+
+  // The cover fills what is left once the stub, the title and the tilt's overhang are placed.
+  // Without a cover the cat stands in, at its own size.
+  int coverW = END_OF_BOOK_CAT_SIZE;
+  int coverH = END_OF_BOOK_CAT_SIZE;
+  int srcW = 0;
+  int srcH = 0;
+  const bool hasCover = !coverPath.empty() && UITheme::getCoverThumbSize(coverPath, &srcW, &srcH);
+  // Wrapped to the narrowest the top half gets, so the lines fit whatever the cover's width.
+  const auto titleLines = renderer.wrappedText(UI_12_FONT_ID, title.c_str(), MIN_TOP_W - 24, 2, EpdFontFamily::BOLD);
+  const int titleH = lineH * static_cast<int>(std::max<size_t>(1, titleLines.size()));
+  const int topChrome = 12 + 8 + titleH + 10 + TEAR;
+  constexpr int TEAR_GAP = 6;  // the halves part a little at the tear
+  const int maxCoverH = bottom - safe.y - 8 - topChrome - TEAR_GAP - stubH - 28;
+  if (hasCover) {
+    coverH = std::min(maxCoverH, COVER_HEIGHT);
+    coverW = srcW * coverH / srcH;
+    const int maxCoverW = safe.width - 90;
+    if (coverW > maxCoverW) {
+      coverW = maxCoverW;
+      coverH = srcH * coverW / srcW;
+    }
   }
-  return y;
+  const int topW = std::max(coverW + 24, MIN_TOP_W);
+  const int topH = 12 + coverH + 8 + titleH + 10 + TEAR;
+  // The two halves as one group, centred in the space above the buttons.
+  const int groupH = topH + TEAR_GAP + stubH;
+  const int topY = safe.y + std::max(8, (bottom - safe.y - groupH) / 2);
+  const int topX = safe.x + (safe.width - topW) / 2 - 12;
+  const int stubX = safe.x + (safe.width - stubW) / 2 + 14;
+  const int stubY = topY + topH + TEAR_GAP;
+  const int coverX = topX + (topW - coverW) / 2;
+  const int coverY = topY + 12;
+
+  // The stamp first, in a corner of the still blank screen: it is captured and put back last,
+  // on top of the cover.
+  Capture stamp;
+  renderer.drawIcon(EobStamp, safe.x, safe.y, EOB_STAMP_SIZE);
+  const int dateW = renderer.getTextWidth(UI_10_FONT_ID, summary.finishedOn, EpdFontFamily::BOLD);
+  renderer.drawText(UI_10_FONT_ID, safe.x + (EOB_STAMP_SIZE - dateW) / 2, safe.y + EOB_STAMP_SIZE * 60 / 100,
+                    summary.finishedOn, true, EpdFontFamily::BOLD);
+  const bool stampCaptured = capture(renderer, safe.x, safe.y, EOB_STAMP_SIZE, EOB_STAMP_SIZE, stamp);
+
+  // Top half: the cover (or the cat when there is none) and the title.
+  drawOutline(renderer, Shape::Top, topX, topY, topW, topH);
+  if (hasCover) {
+    UITheme::drawCoverThumb(renderer, coverPath, coverX, coverY, coverH);
+    renderer.drawRect(coverX, coverY, coverW, coverH, true);
+  } else {
+    renderer.drawIcon(EndOfBookCat, coverX, coverY, END_OF_BOOK_CAT_SIZE);
+  }
+  int titleY = coverY + coverH + 8;
+  for (const auto& line : titleLines) {
+    const int titleW = renderer.getTextWidth(UI_12_FONT_ID, line.c_str(), EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, topX + (topW - titleW) / 2, titleY, line.c_str(), true, EpdFontFamily::BOLD);
+    titleY += lineH;
+  }
+  Capture top;
+  const bool topCaptured = capture(renderer, topX, topY, topW, topH, top);
+
+  drawStub(stubX, stubY, stubW, stubH);
+  Capture stub;
+  const bool stubCaptured = capture(renderer, stubX, stubY, stubW, stubH, stub);
+
+  const int topCx = topX + topW / 2;
+  const int topCy = topY + topH / 2;
+  if (topCaptured) writeTilted(renderer, top, Shape::Top, TOP_ANGLE, topCx, topCy);
+  if (stubCaptured) writeTilted(renderer, stub, Shape::Stub, STUB_ANGLE, stubX + stubW / 2, stubY + stubH / 2);
+
+  // Pressed on the cover's lower right corner, wherever the tilt carried it.
+  if (stampCaptured) {
+    int sx = 0;
+    int sy = 0;
+    turnPoint(coverX - topX + coverW - 40, coverY - topY + coverH - 60, topW, topH, topCaptured ? TOP_ANGLE : 0, topCx,
+              topCy, sx, sy);
+    writeStamp(renderer, stamp, sx + 22, sy);
+  }
+}
+
+void EndOfBookOptions::drawButtons(const int x, const int y, const int w, const int h, const int selected) const {
+  constexpr int RADIUS = 10;
+  constexpr int ICON = 32;
+  const bool homeSelected = isHomeIndex(selected);
+  const int homeW = nextName.empty() ? w : 72;
+  homeRect = {x, y, homeW, h};
+  if (homeSelected) {
+    renderer.fillRoundedRect(x, y, homeW, h, RADIUS, Color::Black);
+  } else {
+    renderer.drawRoundedRect(x, y, homeW, h, 2, RADIUS, true);
+  }
+  int iconX = x + (homeW - ICON) / 2;
+  if (nextName.empty()) {
+    // Home alone: the house and its label, centred together.
+    const int labelW = renderer.getTextWidth(UI_12_FONT_ID, tr(STR_EOB_HOME));
+    iconX = x + (homeW - ICON - 12 - labelW) / 2;
+    const int labelY = y + (h - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
+    renderer.drawText(UI_12_FONT_ID, iconX + ICON + 12, labelY, tr(STR_EOB_HOME), !homeSelected);
+  }
+  if (homeSelected) {
+    drawIconWhite(renderer, HomeIcon, iconX, y + (h - ICON) / 2, ICON);
+  } else {
+    renderer.drawIcon(HomeIcon, iconX, y + (h - ICON) / 2, ICON);
+  }
+  if (nextName.empty()) {
+    continueRect = {};
+    return;
+  }
+
+  const int cx = x + homeW + 12;
+  const int cw = w - homeW - 12;
+  continueRect = {cx, y, cw, h};
+  const bool sel = !homeSelected;
+  if (sel) {
+    renderer.fillRoundedRect(cx, y, cw, h, RADIUS, Color::Black);
+  } else {
+    renderer.drawRoundedRect(cx, y, cw, h, 2, RADIUS, true);
+  }
+  int textX = cx + 16;
+  if (!nextCoverTemplate.empty()) {
+    const int thumbH = h - 14;
+    const std::string thumb = UITheme::getCoverThumbPath(nextCoverTemplate, thumbH);
+    int thumbW = 0;
+    int thumbSrcH = 0;
+    if (UITheme::getCoverThumbSize(thumb, &thumbW, &thumbSrcH) && thumbSrcH > 0) {
+      // White behind it: on the selected (black) button the cover's own ink would vanish.
+      const int w = thumbW * thumbH / thumbSrcH;
+      renderer.fillRect(cx + 10, y + 7, w, thumbH, false);
+      const int drawn = UITheme::drawCoverThumb(renderer, thumb, cx + 10, y + 7, thumbH);
+      if (drawn > 0) textX = cx + 10 + drawn + 14;
+    }
+  }
+  const int arrowW = renderer.getTextWidth(UI_12_FONT_ID, "›", EpdFontFamily::BOLD);
+  const int smallH = renderer.getLineHeight(SMALL_FONT_ID);
+  const int bigH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int textTop = y + (h - smallH - bigH) / 2;
+  renderer.drawText(SMALL_FONT_ID, textX, textTop, tr(STR_EOB_CONTINUE_WITH), !sel);
+  const std::string name = renderer.truncatedText(UI_12_FONT_ID, displayName(nextName).c_str(),
+                                                  cx + cw - 16 - arrowW - 10 - textX, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, textX, textTop + smallH, name.c_str(), !sel, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, cx + cw - 16 - arrowW, y + (h - bigH) / 2, "›", !sel, EpdFontFamily::BOLD);
 }
 
 void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& input) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-
   if (!menuActive()) {
     renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
                               EpdFontFamily::BOLD);
@@ -330,32 +602,10 @@ void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& i
   // The hints are drawn at the physical front buttons, which is a logical side/top edge in
   // the rotated orientations: lay out inside the safe area so nothing hides behind them.
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  int y = safe.y + metrics.verticalSpacing * 2;
-  renderer.drawIcon(EndOfBookCat, safe.x + (safe.width - END_OF_BOOK_CAT_SIZE) / 2, y, END_OF_BOOK_CAT_SIZE);
-  y += END_OF_BOOK_CAT_SIZE + metrics.verticalSpacing;
+  const int buttonsY = safe.y + safe.height - BUTTON_H - 10;
+  drawTicket(safe, buttonsY - 12);
+  drawButtons(safe.x + 16, buttonsY, safe.width - 32, BUTTON_H, selector.load(std::memory_order_relaxed));
 
-  const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  UITheme::drawCenteredText(renderer, safe, UI_12_FONT_ID, y, tr(STR_EOB_YOU_FINISHED), true, EpdFontFamily::BOLD);
-  y += titleLineHeight;
-  const int textWidth = safe.width - metrics.contentSidePadding * 2;
-  for (const auto& line : renderer.wrappedText(UI_12_FONT_ID, title.c_str(), textWidth, 2, EpdFontFamily::BOLD)) {
-    UITheme::drawCenteredText(renderer, safe, UI_12_FONT_ID, y, line.c_str(), true, EpdFontFamily::BOLD);
-    y += titleLineHeight;
-  }
-  y = drawSummary(y + metrics.verticalSpacing, safe);
-  y += metrics.verticalSpacing * 2;
-
-  if (!names.empty()) {
-    renderer.drawText(UI_10_FONT_ID, safe.x + metrics.contentSidePadding, y, tr(STR_EOB_CONTINUE_WITH));
-    y += renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;
-  }
-  listTop = y;
-
-  // The list renders through the FreeInkApp so its rows register touch hit
-  // rects; renderUi re-derives the device context, picking up any rotation
-  // since construction (reader menu rotate).
-  renderUi();
-
-  const auto labels = input.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = input.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

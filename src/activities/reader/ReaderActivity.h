@@ -40,6 +40,9 @@ class ReaderActivity : public Activity {
   virtual std::string getBookAuthor() const { return ""; }
   virtual std::string getBookThumbBmpPath() const { return ""; }
   virtual const char* getBookLanguage() const { return nullptr; }
+  // A cover thumbnail of this height for the end-of-book ticket, generated if missing. Empty when
+  // the format has none, or it could not be made now; the ticket then shows the cat instead.
+  virtual std::string prepareEndOfBookCover(int height) { return ""; }
   virtual void onReaderEnter() = 0;
   virtual void onReaderExit() = 0;
   virtual void readerLoop() = 0;

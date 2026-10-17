@@ -520,7 +520,7 @@ bool MangaReaderActivity::renderEndOfBook() {
   }
   renderer.clearScreen();
   if (endOfBookOptions) {
-    endOfBookOptions->loadOnce(book->getFolder(), book->getTitle(), book->getLanguage().c_str());
+    endOfBookOptions->loadOnce(book->getFolder(), book->getTitle(), book->getLanguage().c_str(), "");
     endOfBookOptions->render(renderer, mappedInput);
   } else {
     renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,

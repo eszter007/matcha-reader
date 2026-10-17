@@ -2529,6 +2529,14 @@ void EpubReaderActivity::beginLoanTimeSync() {
 
 bool EpubReaderActivity::isAtEndOfBook() const { return epub && currentSpineIndex >= epub->getSpineItemsCount(); }
 
+std::string EpubReaderActivity::prepareEndOfBookCover(const int height) {
+  if (!epub) return "";
+  const std::string path = epub->getThumbBmpPath(height);
+  if (FsHelpers::hasCompleteBmp("ERS", path)) return path;
+  // A failed conversion is not recorded anywhere: the next finished book simply tries again.
+  return epub->generateThumbBmp(height) ? path : "";
+}
+
 void EpubReaderActivity::onReturnFromEndOfBook() {
   currentSpineIndex = std::max(epub->getSpineItemsCount() - 1, 0);
   nextPageNumber = 0;

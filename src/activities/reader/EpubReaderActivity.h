@@ -797,6 +797,7 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }
   std::string getBookAuthor() const override { return epub ? epub->getAuthor() : ""; }
   std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : ""; }
+  std::string prepareEndOfBookCover(int height) override;
   // The language the book is read as (override, tag or sniff), so stats and sentence mining file
   // a sniffed Chinese book under zh, not under its wrong tag.
   const char* getBookLanguage() const override {
