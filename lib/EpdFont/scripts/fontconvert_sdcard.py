@@ -143,7 +143,10 @@ INTERVAL_PRESETS = {
 # (㗎 㩒 㖭), and CC-CEDICT and the MoE dictionary cite a few hundred of its characters; the
 # Japanese cuts leave it out because JIS does not encode it. Extension B stays out: its 42,000
 # characters would double the file for a handful of dictionary headwords.
-INTERVAL_PRESETS["cjk-zh"] = INTERVAL_PRESETS["cjk-ext"] + [(0x3400, 0x4DBF)]
+# Also the Vertical Forms (︐︑︒) and Small Form Variants (﹐﹑﹔﹖﹗): Chinese e-texts use the
+# small forms as ordinary punctuation -- Project Gutenberg's 西遊記 has 838 ﹔ -- and without them
+# every one drew as a missing-glyph box. 36 glyphs in the Noto CJK cuts.
+INTERVAL_PRESETS["cjk-zh"] = INTERVAL_PRESETS["cjk-ext"] + [(0x3400, 0x4DBF), (0xFE10, 0xFE1F), (0xFE50, 0xFE6F)]
 
 # Regex for parsing unnamed hex range intervals: (0xSTART-0xEND)
 _HEX_RANGE_PATTERN = re.compile(r'^\(0x([0-9a-fA-F]+)-0x([0-9a-fA-F]+)\)$')
