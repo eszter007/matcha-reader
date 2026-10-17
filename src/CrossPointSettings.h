@@ -130,7 +130,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum LEGACY_SIDE_BUTTON_LAYOUT { LEGACY_PREV_NEXT = 0, LEGACY_NEXT_PREV = 1, LEGACY_SIDE_DISABLED = 2 };
 
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
-  enum FONT_FAMILY { NOTOSERIF = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
+  enum FONT_FAMILY { NOTOSERIF = 0, FONT_FAMILY_COUNT };
+  // Persisted IDs of families that moved to the SD card; fromJson() maps them to sdFontFamilyName.
+  static constexpr uint8_t LEGACY_NOTOSANS = 1;
   static constexpr uint8_t LEGACY_OPENDYSLEXIC = 2;
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
   // Reader font size is a point size, not an enum slot — see fontPointSize.

@@ -8,14 +8,6 @@
 #include <builtinFonts/notoserif_14_bolditalic.h>
 #include <builtinFonts/notoserif_14_italic.h>
 #include <builtinFonts/notoserif_14_regular.h>
-#include <builtinFonts/notosans_12_bold.h>
-#include <builtinFonts/notosans_12_bolditalic.h>
-#include <builtinFonts/notosans_12_italic.h>
-#include <builtinFonts/notosans_12_regular.h>
-#include <builtinFonts/notosans_14_bold.h>
-#include <builtinFonts/notosans_14_bolditalic.h>
-#include <builtinFonts/notosans_14_italic.h>
-#include <builtinFonts/notosans_14_regular.h>
 #include <builtinFonts/ubuntu_10_bold.h>
 #include <builtinFonts/ubuntu_10_regular.h>
 #include <builtinFonts/ubuntu_12_bold.h>

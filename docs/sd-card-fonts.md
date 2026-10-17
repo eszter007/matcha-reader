@@ -68,8 +68,8 @@ they widen puts the same typeface on the font list twice, so they are folded
 into the base row instead — one typeface, one entry.
 
 A family is treated as a variant when its name is another family's name plus
-`Extended` or `IPA`, **and** that base family exists: either a built-in
-(`NotoSerif`, `NotoSans`) or another family installed on the card. A variant
+`Extended` or `IPA`, **and** that base family exists: either the built-in
+`NotoSerif` or another family installed on the card. A variant
 whose base is not installed keeps its own row, so hiding a row can never put
 its characters out of reach.
 

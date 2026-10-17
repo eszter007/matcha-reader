@@ -198,6 +198,17 @@ families:
 
   # ── Sans-serif ─────────────────────────────────────────────────────────
 
+  - name: NotoSans
+    description: "Former built-in sans-serif (Latin, Cyrillic)"
+    scripts: [latin, cyrillic]
+    intervals: builtin,(0x018F-0x018F),(0x0259-0x0259)
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {path: "builtinFonts/source/NotoSans/NotoSans-Regular.ttf"}
+      bold:       {path: "builtinFonts/source/NotoSans/NotoSans-Bold.ttf"}
+      italic:     {path: "builtinFonts/source/NotoSans/NotoSans-Italic.ttf"}
+      bolditalic: {path: "builtinFonts/source/NotoSans/NotoSans-BoldItalic.ttf"}
+
   - name: NotoSansExtended
     description: "Sans-serif (Latin, Greek, Cyrillic, Georgian, Armenian, Ethiopic)"
     scripts: [latin, cyrillic, greek, georgian, armenian, ethiopic]
