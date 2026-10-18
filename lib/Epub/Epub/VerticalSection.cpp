@@ -104,7 +104,10 @@ namespace {
 // v147: no format change. That second squeeze still took from 。、, measured from their ink
 // rather than their cell, and drew the next character over them; oidashi now carries the
 // character before a group that may not head a column (た。……, 者……).
-constexpr uint8_t VSECTION_FILE_VERSION = 147;
+// v148: no format change. A chapter applies the stylesheets its linked ones @import (EBPAJ boxes,
+// rules and indents), a block holding only an image no longer swallows the styled blocks after it,
+// and styled elements nested in a block before its first text merge into it.
+constexpr uint8_t VSECTION_FILE_VERSION = 148;
 // Top bit of an anchor's stored offset: no text lies between the anchor and the next image. An
 // image page adds no visible characters, so it shares its start offset with the text page after
 // it; this is what tells the two apart.
@@ -139,6 +142,8 @@ struct ParagraphSink {
   // Styled-block boundaries -- a block element whose CSS carries vertical layout parameters
   // (border box, start offset, hanging indent, centering, before/after gaps).
   virtual void onBlockStyleStart(const VerticalBlockParams& /*params*/) {}
+  // A styled element nested in the open block before any of its text: its params join the block's.
+  virtual void onBlockStyleMerge(const VerticalBlockParams& /*params*/) {}
   virtual void onBlockStyleEnd() {}
 };
 
@@ -176,6 +181,9 @@ struct TextExtractor {
   // boxOpenedAtDepth is the elementDepth of the styled element while inside one, else -1.
   const std::vector<CssParser::VerticalBlockRule>* blockStyles = nullptr;
   int boxOpenedAtDepth = -1;
+  // Whether the open styled block has had any text yet. Until it has, styled elements nested in it
+  // (EBPAJ wraps a rule in indent divs: start-1em > k-solid-top > start-1em) merge into it.
+  bool boxHasText = false;
 
   // Ruby parsing state
   bool inRuby = false;
@@ -531,7 +539,16 @@ struct TextExtractor {
         }
       }
     }
-    if (self->boxOpenedAtDepth < 0) {
+    if (self->boxOpenedAtDepth >= 0 && !self->boxHasText) {
+      VerticalBlockParams params;
+      if (self->resolveBlockStyle(name, atts, params) &&
+          (params.startEm > 0 || params.beforeEm > 0 || params.afterEm > 0 || params.hangEm > 0 || params.alignCenter ||
+           params.borderEdges != 0)) {
+        LOG_DBG("VSC", "styled block merge: <%s> start=%.1f hang=%.1f edges=0x%X", name, params.startEm, params.hangEm,
+                params.borderEdges);
+        if (self->sink) self->sink->onBlockStyleMerge(params);
+      }
+    } else if (self->boxOpenedAtDepth < 0) {
       VerticalBlockParams params;
       if (self->resolveBlockStyle(name, atts, params) &&
           (params.startEm > 0 || params.beforeEm > 0 || params.afterEm > 0 || params.hangEm > 0 || params.alignCenter ||
@@ -541,6 +558,7 @@ struct TextExtractor {
                 params.startEm, params.hangEm, params.beforeEm, params.afterEm, params.alignCenter, params.borderEdges);
         if (self->sink) self->sink->onBlockStyleStart(params);
         self->boxOpenedAtDepth = self->elementDepth;
+        self->boxHasText = false;
       }
     }
     if (isBlockTag(name)) {
@@ -772,6 +790,7 @@ struct TextExtractor {
           firstInk++;
         }
         if (firstInk == len) return;
+        if (self->boxOpenedAtDepth >= 0) self->boxHasText = true;
         s += firstInk;
         len -= firstInk;
         // The dropped whitespace was counted above, so the surviving text starts that many
@@ -1101,6 +1120,7 @@ struct LayoutPageSink final : ParagraphSink {
   std::vector<RubyGlossary::Pair> rubyHarvest;
 
   void onBlockStyleStart(const VerticalBlockParams& params) override { layout.markBlockStart(params); }
+  void onBlockStyleMerge(const VerticalBlockParams& params) override { layout.mergeIntoOpenBlock(params); }
   void onBlockStyleEnd() override { layout.markBlockEnd(); }
 
   // ~1-2 screens of text per layout batch. A batch boundary lands between paragraphs, which
