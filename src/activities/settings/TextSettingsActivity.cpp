@@ -169,6 +169,9 @@ void TextSettingsActivity::rebuildFamilyList() {
                         SdCardFontSystem::pickerLabel(families[i].name, registry_)});
     }
   }
+  // Built-in and SD families sort together by the label shown; Manage Fonts stays last.
+  std::sort(fonts_.begin(), fonts_.end(),
+            [](const FontEntry& a, const FontEntry& b) { return strcasecmp(a.displayName(), b.displayName()) < 0; });
   fonts_.push_back({I18N.get(StrId::STR_MANAGE_FONTS), false, MANAGE_FONTS_ROW});
 }
 
