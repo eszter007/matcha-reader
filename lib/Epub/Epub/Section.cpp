@@ -282,7 +282,10 @@ namespace {
 //      <br> lines, cell borders for bordered tables, and a light-gray PageBox fill for shaded
 //      blocks (PageBox's fill byte is now a kind: 0 none, 1 black, 2 light gray). Pages move, so
 //      older sections are rebuilt.
-constexpr uint8_t SECTION_FILE_VERSION = 102;
+// v103: upstream merge (their v60): text that runs straight into a block or heading start
+//      stays in its own paragraph instead of joining the new block's first word. The framing is
+//      unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 103;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
