@@ -686,7 +686,22 @@ std::string SdCardFontSystem::resolveSelectedFamily() const {
   // to load carries this book's text, so standing a coverage variant in here would only make it
   // the second resident SD font -- the pairing that does not reliably fit this heap. Leaving the
   // base built-in also keeps its `preferSans` ranking working, which reads an empty selection.
-  if (cjkFallbackNeeded()) return selected;
+  if (cjkFallbackNeeded()) {
+    // A Noto Sans CJK cut standing in for a missing NotoSans family covers every CJK book well
+    // enough that no companion is loaded, so it would set a Chinese book in Japanese forms. The
+    // cut for the book's own script takes over when it is installed.
+    const CjkScript selectedScript = extensionScript(selected);
+    const CjkScript bookScript = activeCjkScript();
+    if (selectedScript != CjkScript::None && selectedScript != bookScript &&
+        normalizedFamilyKey(selected).rfind("notosans", 0) == 0) {
+      for (const auto& fam : registry_.getFamilies()) {
+        if (extensionScript(fam.name) == bookScript && normalizedFamilyKey(fam.name).rfind("notosans", 0) == 0) {
+          return fam.name;
+        }
+      }
+    }
+    return selected;
+  }
   const std::string base = selected.empty() ? BUILTIN_FAMILY_DIR_NAME : selected;
   const auto* variant = findCoverageVariant(&registry_, base);
   const std::string resolved = variant ? variant->name : selected;
