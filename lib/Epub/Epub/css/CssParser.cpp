@@ -82,12 +82,13 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 // Bump CSS_CACHE_VERSION whenever any of these change. See writeRuleRecord.
 constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeight, decoration, direction
 constexpr size_t CSS_LENGTH_FIELD_COUNT = 14;  // CssLength members written, in order
-// display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks, textFlags
-constexpr size_t CSS_TRAILING_ENUM_BYTES = 9;
+// display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks, textFlags,
+// then the four per-side border specs
+constexpr size_t CSS_TRAILING_ENUM_BYTES = 13;
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
-static_assert(RULE_FIXED_BYTES == 88, "CSS v19 rule framing must stay in sync with writeRuleRecord");
+static_assert(RULE_FIXED_BYTES == 92, "CSS v26 rule framing must stay in sync with writeRuleRecord");
 
 constexpr char asciiToLower(const char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; }
 
@@ -999,6 +1000,12 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       if (styled(right)) edges |= CssStyle::BORDER_RIGHT;
       if (styled(bottom)) edges |= CssStyle::BORDER_BOTTOM;
       if (styled(left)) edges |= CssStyle::BORDER_LEFT;
+      // Each side takes its own token's style and keeps a width an earlier declaration gave it.
+      const std::string_view tokens[4] = {top, right, bottom, left};
+      for (size_t side = 0; side < 4; ++side) {
+        const uint8_t width = style.borderSides[side] ? CssStyle::lineWidthOf(style.borderSides[side]) : 1;
+        style.setBorderSide(side, styled(tokens[side]), borderLineStyleFrom(tokens[side]), width);
+      }
     }
     style.setBorderSpec(edges, borderLineStyleFrom(value), 1);
     style.defined.border = 1;
@@ -1008,6 +1015,7 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
         value.find("solid") != std::string_view::npos || value.find("double") != std::string_view::npos ||
         value.find("dashed") != std::string_view::npos || value.find("dotted") != std::string_view::npos;
     style.setBorderSpec(styled ? CssStyle::BORDER_ALL : 0, borderLineStyleFrom(value), borderLineWidthFrom(value));
+    style.setBorderSides(styled ? CssStyle::BORDER_ALL : 0, borderLineStyleFrom(value), borderLineWidthFrom(value));
     style.defined.border = 1;
   } else if (iequalsAscii(name, "border-top") || iequalsAscii(name, "border-bottom") ||
              iequalsAscii(name, "border-left") || iequalsAscii(name, "border-right")) {
@@ -1019,13 +1027,18 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
         value.find("solid") != std::string_view::npos || value.find("double") != std::string_view::npos ||
         value.find("dashed") != std::string_view::npos || value.find("dotted") != std::string_view::npos;
     uint8_t bit = CssStyle::BORDER_TOP;
+    size_t side = 0;
     if (iequalsAscii(name, "border-bottom")) {
       bit = CssStyle::BORDER_BOTTOM;
+      side = 2;
     } else if (iequalsAscii(name, "border-left")) {
       bit = CssStyle::BORDER_LEFT;
+      side = 3;
     } else if (iequalsAscii(name, "border-right")) {
       bit = CssStyle::BORDER_RIGHT;
+      side = 1;
     }
+    style.setBorderSide(side, styled, borderLineStyleFrom(value), borderLineWidthFrom(value));
     uint8_t edges = style.borderEdgeMask();
     edges = styled ? static_cast<uint8_t>(edges | bit) : static_cast<uint8_t>(edges & ~bit);
     if (styled) {
@@ -1652,8 +1665,8 @@ bool CssParser::saveToCache() const {
 
 // One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 14 CssLength
 // (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
-// fontVariant + listStyleType + inkMode + pageBreaks + textFlags + definedBits(4)
-// = selectorLen + 88 bytes.
+// fontVariant + listStyleType + inkMode + pageBreaks + textFlags + 4 border sides + definedBits(4)
+// = selectorLen + 92 bytes.
 // The framing constants (CSS_LEADING_ENUM_BYTES / CSS_LENGTH_FIELD_COUNT /
 // CSS_TRAILING_ENUM_BYTES, file scope) must describe exactly what this function writes --
 // every reader below is derived from them.
@@ -1702,6 +1715,7 @@ void CssParser::encodeStyleWire(const CssStyle& style, uint8_t* out) {
   putByte(static_cast<uint8_t>(style.inkMode));
   putByte(style.pageBreaks);
   putByte(style.textFlags);
+  for (const uint8_t side : style.borderSides) putByte(side);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -1880,10 +1894,12 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     // (letter-spacing is lens[13], skipped like the two lengths above: a column advances by a
     // cell grid, so a per-glyph tracking delta has no meaning there.)
     uint8_t inkModeVal, pageBreaksVal, textFlagsVal;
+    uint8_t sidesVal[4];  // per-side border specs (v26): the vertical engine draws the summary only
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
         file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
         file.read(&inkModeVal, 1) != 1 || file.read(&pageBreaksVal, 1) != 1 || file.read(&textFlagsVal, 1) != 1 ||
+        file.read(sidesVal, sizeof(sidesVal)) != sizeof(sidesVal) ||
         file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
@@ -2351,6 +2367,19 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     }
     style.textFlags = static_cast<uint8_t>(
         textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT | CSS_PRESERVE_WHITESPACE_BIT));
+
+    // Per-side border specs (v26+). A side keeps only its own edge bit, so a corrupt byte cannot
+    // draw a line on another edge.
+    uint8_t sidesVal[4];
+    if (file.read(sidesVal, sizeof(sidesVal)) != sizeof(sidesVal)) {
+      clear();
+      return false;
+    }
+    for (size_t side = 0; side < 4; ++side) {
+      const uint8_t bit = CssStyle::BORDER_SIDE_BITS[side];
+      style.borderSides[side] =
+          (sidesVal[side] & bit) ? static_cast<uint8_t>(sidesVal[side] & ~(CssStyle::BORDER_EDGE_MASK & ~bit)) : 0;
+    }
 
     // Read defined flags
     uint32_t definedBits = 0;

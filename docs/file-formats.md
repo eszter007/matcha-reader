@@ -95,6 +95,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 105 (fork numbering)
+
+`PageBox` stores one border spec per side, top, right, bottom and left, in place of its single
+spec byte; each is the `CssStyle` packed spec for that side alone, or 0 for no line. The record is
+three bytes longer. Older sections are rebuilt; book metadata and progress are kept.
+
 ### Version 104 (fork numbering)
 
 The serialized layout is unchanged. A bordered block inside another bordered block now draws its

@@ -13,26 +13,30 @@
 
 namespace {
 
+// A vertical edge thickens toward `inward` (+1 right, -1 left) so it stays inside its box:
+// GfxRenderer::drawLine's width only stacks lines downward, which leaves a vertical line 1px wide.
 void drawPatternedLine(GfxRenderer& renderer, const int x1, const int y1, const int x2, const int y2,
-                       const uint8_t borderSpec) {
+                       const uint8_t borderSpec, const int inward = 1) {
   const uint8_t thickness = CssStyle::lineWidthOf(borderSpec);
   const CssBorderLineStyle style = CssStyle::lineStyleOf(borderSpec);
+  const bool horizontal = y1 == y2;
+  const int width = style == CssBorderLineStyle::Double ? 1 : thickness;
+  const auto segment = [&](const int a, const int b) {
+    if (horizontal) {
+      renderer.drawLine(x1 + a, y1, x1 + b, y1, width, true);
+      return;
+    }
+    for (int i = 0; i < width; ++i) renderer.drawLine(x1 + i * inward, y1 + a, x1 + i * inward, y1 + b, 1, true);
+  };
+  const int length = horizontal ? std::abs(x2 - x1) + 1 : std::abs(y2 - y1) + 1;
   if (style == CssBorderLineStyle::Solid || style == CssBorderLineStyle::Double) {
-    renderer.drawLine(x1, y1, x2, y2, style == CssBorderLineStyle::Double ? 1 : thickness, true);
+    segment(0, length - 1);
     return;
   }
-
-  const bool horizontal = y1 == y2;
-  const int length = horizontal ? std::abs(x2 - x1) + 1 : std::abs(y2 - y1) + 1;
   const int on = style == CssBorderLineStyle::Dotted ? thickness : thickness * 3;
   const int gap = style == CssBorderLineStyle::Dotted ? thickness : thickness * 2;
   for (int offset = 0; offset < length; offset += on + gap) {
-    const int end = std::min(length - 1, offset + on - 1);
-    if (horizontal) {
-      renderer.drawLine(x1 + offset, y1, x1 + end, y1, thickness, true);
-    } else {
-      renderer.drawLine(x1, y1 + offset, x1, y1 + end, thickness, true);
-    }
+    segment(offset, std::min(length - 1, offset + on - 1));
   }
 }
 
@@ -125,6 +129,17 @@ void PageHorizontalRule::render(GfxRenderer& renderer, const int fontId, const i
   renderer.drawLine(xPos + xOffset, yPos + yOffset, xPos + xOffset + width - 1, yPos + yOffset, thickness, true);
 }
 
+PageBox::PageBox(const int16_t width, const int16_t height, const uint8_t borderSpec, const int16_t xPos,
+                 const int16_t yPos, const uint8_t fill)
+    : PageElement(xPos, yPos), width(width), height(height), sides{}, fill(fill) {
+  for (size_t i = 0; i < 4; ++i) {
+    const uint8_t bit = CssStyle::BORDER_SIDE_BITS[i];
+    if (borderSpec & bit) {
+      sides[i] = CssStyle::makeBorderSpec(bit, CssStyle::lineStyleOf(borderSpec), CssStyle::lineWidthOf(borderSpec));
+    }
+  }
+}
+
 void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
   (void)fontId;
   if (width <= 0 || height <= 0) return;
@@ -137,24 +152,30 @@ void PageBox::render(GfxRenderer& renderer, const int fontId, const int xOffset,
   } else if (fill == FILL_LIGHT_GRAY) {
     renderer.fillRectDither(x, y, width, height, Color::LightGray);
   }
-  const uint8_t edges = CssStyle::edgeMaskOf(borderSpec);
-  if (edges & CssStyle::BORDER_TOP) drawPatternedLine(renderer, x, y, x + width, y, borderSpec);
-  if (edges & CssStyle::BORDER_BOTTOM) {
-    drawPatternedLine(renderer, x, y + height, x + width, y + height, borderSpec);
-  }
-  if (edges & CssStyle::BORDER_LEFT) drawPatternedLine(renderer, x, y, x, y + height, borderSpec);
-  if (edges & CssStyle::BORDER_RIGHT) {
-    drawPatternedLine(renderer, x + width, y, x + width, y + height, borderSpec);
-  }
-  if (CssStyle::lineStyleOf(borderSpec) == CssBorderLineStyle::Double) {
-    constexpr int inset = 2;
-    if (edges & CssStyle::BORDER_TOP) drawPatternedLine(renderer, x, y + inset, x + width, y + inset, borderSpec);
-    if (edges & CssStyle::BORDER_BOTTOM) {
-      drawPatternedLine(renderer, x, y + height - inset, x + width, y + height - inset, borderSpec);
-    }
-    if (edges & CssStyle::BORDER_LEFT) drawPatternedLine(renderer, x + inset, y, x + inset, y + height, borderSpec);
-    if (edges & CssStyle::BORDER_RIGHT) {
-      drawPatternedLine(renderer, x + width - inset, y, x + width - inset, y + height, borderSpec);
+  // Each edge in its own style; a double edge adds a second line just inside the first.
+  const int right = x + width;
+  const int bottom = y + height;
+  constexpr int doubleInset = 2;
+  for (size_t i = 0; i < 4; ++i) {
+    const uint8_t spec = sides[i];
+    if (spec == 0) continue;
+    const int inset = CssStyle::lineStyleOf(spec) == CssBorderLineStyle::Double ? doubleInset : -1;
+    for (int pass = 0; pass < (inset > 0 ? 2 : 1); ++pass) {
+      const int d = pass == 0 ? 0 : inset;
+      switch (i) {
+        case 0:
+          drawPatternedLine(renderer, x, y + d, right, y + d, spec);
+          break;
+        case 1:
+          drawPatternedLine(renderer, right - d, y, right - d, bottom, spec, -1);
+          break;
+        case 2:
+          drawPatternedLine(renderer, x, bottom - d, right, bottom - d, spec);
+          break;
+        default:
+          drawPatternedLine(renderer, x + d, y, x + d, bottom, spec);
+          break;
+      }
     }
   }
 }
@@ -164,7 +185,7 @@ bool PageBox::serialize(HalFile& file) {
   serialization::writePod(file, yPos);
   serialization::writePod(file, width);
   serialization::writePod(file, height);
-  serialization::writePod(file, borderSpec);
+  for (const uint8_t side : sides) serialization::writePod(file, side);
   serialization::writePod(file, fill);
   return true;
 }
@@ -174,20 +195,25 @@ std::unique_ptr<PageBox> PageBox::deserialize(HalFile& file) {
   int16_t yPos = 0;
   int16_t width = 0;
   int16_t height = 0;
-  uint8_t borderSpec = 0;
+  uint8_t sides[4] = {};
   uint8_t fill = FILL_NONE;
   serialization::readPod(file, xPos);
   serialization::readPod(file, yPos);
   serialization::readPod(file, width);
   serialization::readPod(file, height);
-  serialization::readPod(file, borderSpec);
+  for (uint8_t& side : sides) serialization::readPod(file, side);
   serialization::readPod(file, fill);
   if (fill > FILL_LIGHT_GRAY) fill = FILL_NONE;
   if (width <= 0 || height <= 0) {
     LOG_ERR("PGE", "Deserialization failed: invalid box metadata (w=%d h=%d)", width, height);
     return nullptr;
   }
-  return std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, borderSpec, xPos, yPos, fill));
+  for (size_t i = 0; i < 4; ++i) {
+    if (!(sides[i] & CssStyle::BORDER_SIDE_BITS[i])) sides[i] = 0;
+  }
+  auto box = std::unique_ptr<PageBox>(new (std::nothrow) PageBox(width, height, sides, xPos, yPos));
+  if (box) box->fill = fill;
+  return box;
 }
 
 bool PageHorizontalRule::serialize(HalFile& file) {

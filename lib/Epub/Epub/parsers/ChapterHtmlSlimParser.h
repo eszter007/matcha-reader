@@ -59,7 +59,8 @@ class ChapterHtmlSlimParser {
   // Boxes nest: openBoxes[0] is the outermost, a fixed array so opening one never allocates.
   struct OpenBox {
     int depth = -1;
-    uint8_t borderSpec = 0;  // edge mask, dotted/dashed/solid style and 1..4px width
+    uint8_t borderSpec = 0;  // summary: edge mask, dotted/dashed/solid style and 1..4px width
+    uint8_t sides[4] = {};   // per-side specs (top, right, bottom, left) the frame is drawn with
     int16_t startY = 0;
     int16_t emptyAdvance = 0;
     int16_t left = 0;  // frame x extent; the outermost box spans the viewport
@@ -77,8 +78,7 @@ class ChapterHtmlSlimParser {
   uint8_t openBoxCount = 0;
   // Space between a nested frame and the frame or text around it.
   int16_t nestedFrameGap() const;
-  void openBox(int elementDepth, uint8_t borderSpec, bool shrinkToContent, int16_t emptyAdvance,
-               const BlockStyle& ownStyle);
+  void openBox(int elementDepth, const CssStyle& cssStyle, int16_t emptyAdvance, const BlockStyle& ownStyle);
   void fitStyleInsideBox(BlockStyle& accumulated) const;
   // Inverted-block panel tracking (CSS color/background-color, see CssInkMode). Each line of an
   // inverted block gets a filled PageBox pushed just before it, so the panel survives a page break

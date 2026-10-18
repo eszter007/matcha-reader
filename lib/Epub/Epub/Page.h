@@ -81,8 +81,9 @@ class PageHorizontalRule final : public PageElement {
 class PageBox final : public PageElement {
   int16_t width;
   int16_t height;
-  // Same packed byte as CssStyle::borderEdges: edge mask + line style + 1..4px width.
-  uint8_t borderSpec;
+  // One CssStyle border spec per side (top, right, bottom, left): that side's edge bit, line style
+  // and 1..4px width, or 0 for no line.
+  uint8_t sides[4];
   // Fill under the box, for a panel block: FILL_BLACK under an inverted block's white glyphs,
   // FILL_LIGHT_GRAY under a shaded block's black ones. The page's elements render in insertion
   // order, so a filled box is pushed immediately BEFORE the line it sits behind.
@@ -92,9 +93,13 @@ class PageBox final : public PageElement {
   static constexpr uint8_t FILL_NONE = 0;
   static constexpr uint8_t FILL_BLACK = 1;
   static constexpr uint8_t FILL_LIGHT_GRAY = 2;
-  PageBox(const int16_t width, const int16_t height, const uint8_t borderSpec, const int16_t xPos, const int16_t yPos,
-          const uint8_t fill = FILL_NONE)
-      : PageElement(xPos, yPos), width(width), height(height), borderSpec(borderSpec), fill(fill) {}
+  // One style for every edge in borderSpec's mask: table cells and panels.
+  PageBox(int16_t width, int16_t height, uint8_t borderSpec, int16_t xPos, int16_t yPos, uint8_t fill = FILL_NONE);
+  PageBox(const int16_t width, const int16_t height, const uint8_t (&sideSpecs)[4], const int16_t xPos,
+          const int16_t yPos)
+      : PageElement(xPos, yPos), width(width), height(height), sides{}, fill(FILL_NONE) {
+    for (size_t i = 0; i < 4; ++i) sides[i] = sideSpecs[i];
+  }
   [[nodiscard]] uint8_t fillKind() const { return fill; }
 
   // Grow the panel downward, to take in the block's bottom padding once the last line is known.

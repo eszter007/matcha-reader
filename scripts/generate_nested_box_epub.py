@@ -15,6 +15,11 @@ p { margin: 0.4em 0; }
 .dotted { border: 1px dotted black; padding: 0.4em; margin: 0.4em; }
 .rule { border-bottom: 1px solid black; }
 .chip { display: inline-block; border: 1px solid black; padding: 0.2em; }
+.topbottom { border-top: 1px solid black; border-bottom: 3px double black; padding: 0.3em 0; }
+.foursides { border-style: solid dashed dotted double; padding: 0.4em; margin: 0.6em 0; }
+.override { border: 1px solid black; border-bottom: 3px dashed black; padding: 0.4em; }
+.mixedinner { border-left: 4px solid black; border-top: 1px dotted black; border-right: 1px dotted black;
+  border-bottom: 1px dotted black; padding: 0.4em; margin: 0.4em; }
 """
 
 FILLER = "The quick brown fox jumps over the lazy dog while the reader turns the page."
@@ -38,6 +43,11 @@ SECTIONS = [
      para("Back in level one.") + "</div>"),
     ("Inline-block inside a box", '<div class="box">' + para("A box holding a chip:") + '<div class="chip">' +
      "chip</div>" + "</div>"),
+    ("Per-side styles", '<div class="topbottom">' + para("Thin top rule, thick double bottom.") + "</div>" +
+     '<div class="foursides">' + para("Solid top, dashed right, dotted bottom, double left.") + "</div>" +
+     '<div class="override">' + para("A solid box whose bottom is overridden to thick dashes.") + "</div>" +
+     '<div class="box">' + para("Outer box.") + '<div class="mixedinner">' +
+     para("Nested box with a thick left bar and dotted other sides.") + "</div>" + "</div>"),
     ("Across a page break", '<div class="box">' + para("Outer box before a long inner box.") +
      '<div class="inner">' + "".join(para(f"{i}. {FILLER}") for i in range(1, 25)) + "</div>" +
      para("Outer box after the long inner box.") + "</div>" + para("After the long boxes.")),

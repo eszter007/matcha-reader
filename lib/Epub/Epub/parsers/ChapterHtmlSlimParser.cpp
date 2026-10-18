@@ -839,13 +839,27 @@ int16_t ChapterHtmlSlimParser::nestedFrameGap() const {
   return static_cast<int16_t>(std::max(4, static_cast<int>(renderer.getLineHeight(fontId) * lineCompression) / 4));
 }
 
-void ChapterHtmlSlimParser::openBox(const int elementDepth, const uint8_t borderSpec, const bool shrinkToContent,
-                                    const int16_t emptyAdvance, const BlockStyle& ownStyle) {
+void ChapterHtmlSlimParser::openBox(const int elementDepth, const CssStyle& cssStyle, const int16_t emptyAdvance,
+                                    const BlockStyle& ownStyle) {
   OpenBox box;
   box.depth = elementDepth;
-  box.borderSpec = borderSpec;
+  box.borderSpec = cssStyle.borderEdges;
+  bool anySide = false;
+  for (size_t i = 0; i < 4; ++i) {
+    box.sides[i] = cssStyle.borderSides[i];
+    anySide = anySide || box.sides[i] != 0;
+  }
+  if (!anySide) {
+    // A style with only the summary spec draws every edge in that one style.
+    for (size_t i = 0; i < 4; ++i) {
+      const uint8_t bit = CssStyle::BORDER_SIDE_BITS[i];
+      if (cssStyle.borderEdges & bit) {
+        box.sides[i] = CssStyle::makeBorderSpec(bit, cssStyle.borderLineStyle(), cssStyle.borderLineWidth());
+      }
+    }
+  }
   box.emptyAdvance = emptyAdvance;
-  box.shrinkToContent = shrinkToContent;
+  box.shrinkToContent = cssStyle.display == CssDisplay::InlineBlock;
   box.awaitingFirstLine = true;
   box.firstElementIndex = currentPage ? currentPage->elements.size() : 0;
   if (openBoxCount == 0) {
@@ -908,9 +922,9 @@ int16_t ChapterHtmlSlimParser::emitBoxRect(OpenBox& box, const bool openBottom) 
                            ? static_cast<int16_t>(viewportHeight - 1)
                            : static_cast<int16_t>(std::min<int>(viewportHeight - 1, std::max<int>(yTop + 1, pulledUp)));
   if (yBottom <= yTop) return -1;
-  uint8_t edges = CssStyle::edgeMaskOf(box.borderSpec);
-  if (box.continued) edges &= static_cast<uint8_t>(~CssStyle::BORDER_TOP);
-  if (openBottom) edges &= static_cast<uint8_t>(~CssStyle::BORDER_BOTTOM);
+  // A page break slices the box: the edges at the slice are left open.
+  uint8_t sides[4] = {box.continued ? uint8_t{0} : box.sides[0], box.sides[1], openBottom ? uint8_t{0} : box.sides[2],
+                      box.sides[3]};
 
   int16_t x = box.left;
   int16_t width = static_cast<int16_t>(box.right - box.left);
@@ -949,9 +963,7 @@ int16_t ChapterHtmlSlimParser::emitBoxRect(OpenBox& box, const bool openBottom) 
     }
   }
 
-  const uint8_t borderSpec =
-      CssStyle::makeBorderSpec(edges, CssStyle::lineStyleOf(box.borderSpec), CssStyle::lineWidthOf(box.borderSpec));
-  auto rect = makeUniqueNoThrow<PageBox>(width, static_cast<int16_t>(yBottom - yTop), borderSpec, x, yTop);
+  auto rect = makeUniqueNoThrow<PageBox>(width, static_cast<int16_t>(yBottom - yTop), sides, x, yTop);
   if (!rect) {
     LOG_ERR("EHP", "OOM: PageBox");
     return -1;
@@ -2393,8 +2405,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     const auto emptyAdvance =
         static_cast<int16_t>(std::clamp(emptySpacing, std::max(1, self->renderer.getLineHeight(self->fontId) / 2),
                                         static_cast<int>(self->viewportHeight)));
-    self->openBox(self->depth, cssStyle.borderEdges, cssStyle.display == CssDisplay::InlineBlock, emptyAdvance,
-                  userAlignmentBlockStyle);
+    self->openBox(self->depth, cssStyle, emptyAdvance, userAlignmentBlockStyle);
     LOG_DBG("EHP", "border open: <%s class=%s> edges=0x%02x style=%u width=%u level=%u", name, classAttr.c_str(),
             cssStyle.borderEdgeMask(), static_cast<unsigned>(cssStyle.borderLineStyle()), cssStyle.borderLineWidth(),
             self->openBoxCount);

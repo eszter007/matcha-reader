@@ -72,9 +72,10 @@ class CssParser {
   //      stylesheets (path + the index whose rules an identical copy shares), so a chapter applies
   //      only the stylesheets it links.
   // v25: white-space (pre / pre-wrap / break-spaces) is stored: defined bit 29, value in textFlags.
+  // v26: each border side keeps its own style and width: four spec bytes after textFlags.
   //      Records are written in source order (selector-pool position), which the cascade uses
   //      to break specificity ties; a v24 cache holds them in selector order.
-  static constexpr uint8_t CSS_CACHE_VERSION = 25;
+  static constexpr uint8_t CSS_CACHE_VERSION = 26;
 
   // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
   // stylesheet the chapter does not link is skipped on load: an image-page stylesheet's
