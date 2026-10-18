@@ -1037,7 +1037,8 @@ struct VerticalParsedText::LayoutCursor {
   //
   // Two cases are deliberately left ragged:
   //   - the column ends where its PARAGRAPH ended (shortfall >= one cell). Not a fitting problem;
-  //     stretching it would space a two-character line down the whole page.
+  //     stretching it would space a two-character line down the whole page. A column oidashi
+  //     pushed characters out of ends short mid-paragraph, so it is spread whatever the shortfall.
   //   - the last glyph HANGS past the foot (burasage), i.e. leftover is negative.
   void spreadColumnToFoot(VerticalPage& pg, const uint16_t col) {
     int lastRow = -1;
@@ -1050,7 +1051,8 @@ struct VerticalParsedText::LayoutCursor {
     }
     if (lastRow < 1) return;  // nothing to spread across
     const int leftover = static_cast<int>(o.viewportHeight_) - (lastY + geom.cellPx);
-    if (leftover <= 0 || leftover >= geom.rowPitchPx) return;
+    const bool pushedOut = col < 64 && (o.oidashiColumns_ >> col) & 1u;
+    if (leftover <= 0 || (leftover >= geom.rowPitchPx && !pushedOut)) return;
     for (auto& g : pg.glyphs) {
       if (g.column != col) continue;
       g.y = static_cast<uint16_t>(static_cast<int>(g.y) + leftover * static_cast<int>(g.row) / lastRow);
@@ -1087,6 +1089,20 @@ struct VerticalParsedText::LayoutCursor {
   // enough for it -- demanding a whole one is what kept a lone 」 off the column it belongs to.
   int spaceNeededFor(const uint32_t cp) const { return isHalfEmMark(cp) ? (geom.cellPx + 1) / 2 : geom.cellPx; }
 
+  // Where a glyph's cell starts now. 。、 are positioned by their ink, so their y sits above
+  // their cell top; measuring a squeeze from it counts that offset as white space still to give,
+  // and a second squeeze then prints the next character over the mark.
+  int cellTopOf(const VerticalGlyph& g) {
+    if (g.renderKind != VerticalGlyph::Upright || Kinsoku::verticalShiftType(g.codepoint) != 1) return g.y;
+    const int gridTop = geom.rowTopPx(g.row);
+    int qx = 0, placedY = 0;
+    if (!rightAlignedInk(o.renderer_, o.fontId_, inkMemo, geom, g.codepoint, g.style, g.column, g.row,
+                         InkVAlign::HalfEmHead, &qx, &placedY)) {
+      placedY = std::max(0, gridTop - geom.cellPx / 2);
+    }
+    return static_cast<int>(g.y) + gridTop - placedY;
+  }
+
   // Returns the pixels actually recovered (0 when the column has nothing to give). The caller
   // places its character `applied` px above the grid row, since the tail moved up by that much.
   //
@@ -1118,9 +1134,9 @@ struct VerticalParsedText::LayoutCursor {
       // other mark's white half is between it and the next one.
       int gap = geom.cellPx;
       if (!givesLeadingSpace(cp)) {
-        gap = page.glyphs[i + 1].y - page.glyphs[i].y;
+        gap = cellTopOf(page.glyphs[i + 1]) - cellTopOf(page.glyphs[i]);
       } else if (i > first) {
-        gap = page.glyphs[i].y - page.glyphs[i - 1].y;
+        gap = cellTopOf(page.glyphs[i]) - cellTopOf(page.glyphs[i - 1]);
       }
       const int a = std::clamp(gap - keep, 0, maxPerMark);
       avail[marks++] = static_cast<int16_t>(a);
@@ -1229,6 +1245,7 @@ struct VerticalParsedText::LayoutCursor {
         o.boxContinuedFromPrevPage_ = true;
       }
       for (uint16_t c = 0; c < geom.columnsPerPage; c++) spreadColumnToFoot(page, c);
+      o.oidashiColumns_ = 0;
       pages.push_back(std::move(page));
       o.anyPageEverProduced_ = true;
       // Stream out everything except the single most-recently-completed page: the oikomi
@@ -2219,14 +2236,22 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
         const auto isStreamEntry = [&](const VerticalGlyph& g, const size_t at) {
           return g.byteOffset == stream_[at].byteOffset && g.paragraphIndex == stream_[at].paragraphIndex;
         };
+        //
+        // The same holds whenever the group's head may not start a line itself (the first … of a
+        // …… that only half fits, or the 。 before it): the character before joins, until the
+        // group opens on one that may head a column -- た。…… moves as one.
+        static constexpr size_t MAX_MOVING = 4;
         size_t moving = 1;
-        if (idx > 1 && page.glyphs.size() >= 2 && isInseparable(prev.codepoint)) {
-          const VerticalGlyph& before = page.glyphs[page.glyphs.size() - 2];
-          if (before.codepoint == prev.codepoint && before.column == prev.column && isStreamEntry(before, idx - 2)) {
-            moving = 2;
-          }
+        while (moving < MAX_MOVING && idx > moving && page.glyphs.size() > moving) {
+          const VerticalGlyph& head = page.glyphs[page.glyphs.size() - moving];
+          const VerticalGlyph& before = page.glyphs[page.glyphs.size() - moving - 1];
+          const bool samePair = isInseparable(head.codepoint) && before.codepoint == head.codepoint;
+          if (!samePair && !Kinsoku::isLineStartProhibited(head.codepoint)) break;
+          if (before.column != prev.column || !isStreamEntry(before, idx - moving - 1)) break;
+          moving++;
         }
         if (idx >= moving && row + moving < cur.rowsAvailable() && isStreamEntry(prev, idx - 1)) {
+          if (prev.column < 64) oidashiColumns_ |= uint64_t{1} << prev.column;
           page.glyphs.resize(page.glyphs.size() - moving);
           for (size_t k = moving; k > 0; k--) {
             cur.placeUprightAt(stream_[idx - k], column, row);
@@ -2354,6 +2379,7 @@ std::vector<VerticalPage> VerticalParsedText::layoutPages(void* ctx, PageReadyCa
 
   if (isFinalFlush) {
     for (uint16_t c = 0; c < columnsPerPage; c++) cur.spreadColumnToFoot(page, c);
+    oidashiColumns_ = 0;
     if (!page.glyphs.empty() || !anyPageEverProduced_) {
       pages.push_back(std::move(page));
       anyPageEverProduced_ = true;

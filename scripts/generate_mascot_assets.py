@@ -149,7 +149,7 @@ def build_web_icon(art):
     icon.save(buf, "PNG", optimize=True)
     data = base64.b64encode(buf.getvalue()).decode()
     return (
-        "<!-- The Matcha cat: all rights reserved, not MIT -- see assets/images/LICENSE. -->\n"
+        "<!-- The Matcha cat: all rights reserved, not MIT. See assets/images/LICENSE. -->\n"
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WEB_SIZE}" height="{WEB_SIZE}" '
         f'viewBox="0 0 {WEB_SIZE} {WEB_SIZE}"><image width="{WEB_SIZE}" height="{WEB_SIZE}" '
         f'href="data:image/png;base64,{data}"/></svg>\n'

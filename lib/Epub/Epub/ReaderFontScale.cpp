@@ -155,9 +155,17 @@ int8_t cssLetterSpacingPx(const CssStyle& style, const float emPx) {
       std::clamp(rounded, static_cast<int>(CSS_LETTER_SPACING_MIN_PX), static_cast<int>(CSS_LETTER_SPACING_MAX_PX)));
 }
 
-int32_t cssFontScaleTag(const CssStyle& style) {
-  const float scale = cssFontSizeScale(style);
+int32_t cssFontScaleTag(const CssStyle& style) { return fontScaleTagForScale(cssFontSizeScale(style)); }
+
+bool cssFontSizeIsParentRelative(const CssStyle& style) {
+  if (!style.hasFontSize()) return false;
+  const CssUnit unit = style.fontSize.unit;
+  return unit == CssUnit::Em || unit == CssUnit::Percent || unit == CssUnit::Number;
+}
+
+int32_t fontScaleTagForScale(float scale) {
   if (scale <= 0.0f) return 0;
+  scale = std::clamp(scale, MIN_SCALE, MAX_SCALE);
 
   constexpr int SCALE_ONE = 256;
   constexpr int SCALE_STEP = 32;  // 1/8 of the base size
@@ -168,8 +176,12 @@ int32_t cssFontScaleTag(const CssStyle& style) {
 }
 
 int cssBlockFontId(const CssStyle& style, const int baseFontId) {
-  const float scale = cssFontSizeScale(style);
+  return fontIdForScale(cssFontSizeScale(style), baseFontId);
+}
+
+int fontIdForScale(float scale, const int baseFontId) {
   if (scale <= 0.0f) return 0;
+  scale = std::clamp(scale, MIN_SCALE, MAX_SCALE);
 
   size_t count = 0;
   uint8_t basePt = 0;

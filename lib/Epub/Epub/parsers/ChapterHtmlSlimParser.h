@@ -103,6 +103,47 @@ class ChapterHtmlSlimParser {
   // addLineToPage so content positions survive the keep-together delay.
   std::vector<std::pair<std::unique_ptr<TextBlock>, uint32_t>> keepBuffer;
   void breakPage();
+  // white-space: pre / pre-wrap and <pre>. An inherited property, scoped by the element's depth on
+  // the CSS ancestor chain (pushed and popped exactly once per element). Inside it a newline
+  // breaks the line, a blank line keeps its height, and runs of spaces are kept: the first space
+  // between two words stays an ordinary breakable gap, the rest become visible space tokens.
+  struct WhitespaceScope {
+    uint16_t pathDepth;
+    bool preserve;
+  };
+  static constexpr uint8_t MAX_WHITESPACE_SCOPES = 8;
+  WhitespaceScope whitespaceScopes[MAX_WHITESPACE_SCOPES] = {};
+  uint8_t whitespaceScopeCount = 0;
+  uint8_t preSpaceRun = 0;
+  bool preJustOpened = false;  // HTML drops the newline directly after <pre>
+  [[nodiscard]] bool preserveWhitespaceActive() const {
+    return whitespaceScopeCount > 0 && whitespaceScopes[whitespaceScopeCount - 1].preserve;
+  }
+  void emitPreservedSpaces(uint32_t visibleOffset);
+  void preservedLineBreak();
+  // Widow/orphan control: a paragraph's lone first line, or its lone last line, moves to the next
+  // page with company instead of being stranded, and a heading's lines move with the first line
+  // of the block after it. Only plain trailing text lines move -- a line that brought a link, a
+  // footnote or a panel with it, or one inside an open box, falls back to an ordinary break.
+  static constexpr uint8_t MAX_CARRIED_LINES = 6;
+  struct RecentLine {
+    int16_t height;
+    uint32_t visibleOffset;
+    bool hasExtras;
+  };
+  RecentLine recentLines[MAX_CARRIED_LINES] = {};
+  uint8_t recentLineCount = 0;      // trailing lines of the page recorded above, newest last
+  size_t lastLineElementCount = 0;  // elements.size() after the newest recorded line
+  uint8_t paragraphLinesOnPage = 0;
+  uint8_t keepWithNextLines = 0;      // heading lines at the page tail, waiting for the next block
+  uint8_t paragraphHeadingLines = 0;  // heading lines directly above this paragraph on the page
+  bool currentBlockIsHeading = false;
+  const ParsedText* layoutParagraph = nullptr;  // the block makePages() is laying out
+  bool layoutParagraphHasDropCap = false;
+  uint8_t linesToCarry() const;
+  bool canCarry(uint8_t count) const;
+  void breakPageCarryingLines(uint8_t count);
+  void resetRecentLines();
   void beginKeepTogether(const BlockStyle& blockStyle);
   void finishKeepTogether();
   void flushKeepBuffer();
@@ -164,6 +205,7 @@ class ChapterHtmlSlimParser {
     // 0 with hasFontId set means "explicitly the block's own font" (a nested reset).
     bool hasFontId = false;
     int32_t fontIdOverride = 0;
+    float fontScale = 1.0f;  // this element's size relative to the reader's body size
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -204,6 +246,10 @@ class ChapterHtmlSlimParser {
   bool tableRowRtl = false;
   uint16_t tableRowsSpannedRemaining = 0;
   size_t tableCellTextBytes = 0;
+  // Border spec (CssStyle::makeBorderSpec) framing every grid cell: from <table border="N"> or a
+  // CSS border on the table or a cell. 0 keeps the plain rule under each row.
+  uint8_t tableBorderSpec = 0;
+  void emitTableCellBoxes(size_t columnCount, uint16_t cellWidth, int16_t top, int16_t bottom);
   std::vector<std::unique_ptr<ParsedText>> tableRowCells;
   std::array<std::vector<std::unique_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
   std::vector<uint32_t> tableLineVisibleOffsets;

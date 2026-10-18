@@ -30,6 +30,15 @@ float cssFontSizeScale(const CssStyle& style);
  */
 int cssBlockFontId(const CssStyle& style, int baseFontId);
 
+// The same two lookups for a scale already resolved against the body size -- an inline element's
+// em compounded through its sized ancestors (see cssFontSizeIsParentRelative).
+int fontIdForScale(float scale, int baseFontId);
+int32_t fontScaleTagForScale(float scale);
+
+// True when the declared font-size is relative to the PARENT's size (em, %, a bare number) rather
+// than to the reader's body size (rem, pt, px).
+bool cssFontSizeIsParentRelative(const CssStyle& style);
+
 // Bitmap scale for an inline font-size the LADDER cannot serve -- a single-size reader font (an
 // SD-card font has no 12/14/16/18pt siblings), or an ask that snaps back to the base. Returns a
 // NEGATIVE tag for the per-word font slot (see TextBlock::wordFontScale) carrying a 256-based

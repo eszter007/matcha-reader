@@ -314,7 +314,6 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
 
   struct DecorationLineTracker {
     EpdFontFamily::Style style;
-    int yOffset;
     int startX = -1;
     int endX = -1;
     int yPos = 0;
@@ -328,8 +327,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
   };
 
   DecorationLineTracker decorationLines[] = {
-      {EpdFontFamily::UNDERLINE, ascender + 2},
-      {EpdFontFamily::STRIKETHROUGH, ascender * 4 / 5},
+      {EpdFontFamily::UNDERLINE},
+      {EpdFontFamily::STRIKETHROUGH},
   };
 
   const auto flushDecoration = [&](DecorationLineTracker& line) {
@@ -449,13 +448,22 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
         }
       }
 
+      // Placed from this word's own glyphs: its font or scale, and the half-size SUP/SUB glyphs,
+      // which keep the baseline drawText was given. The underline sits just under the baseline;
+      // the strike crosses the middle of the x-height (about 27% of the ascender above it).
+      const int glyphAscender = wordScaled ? static_cast<int>((ascender * wordScale + 128) / WORD_SCALE_ONE)
+                                           : renderer.getFontAscenderSize(wordFontId);
+      const int baseline = wordY + glyphAscender;
+      const bool script = (currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+      const int inkAscender = script ? glyphAscender / 2 : glyphAscender;
       for (auto& line : decorationLines) {
         if ((currentStyle & line.style) == 0) {
           flushDecoration(line);
           continue;
         }
 
-        const int lineY = wordY + line.yOffset;
+        const int lineY =
+            line.style == EpdFontFamily::UNDERLINE ? baseline + (script ? 1 : 2) : baseline - inkAscender * 27 / 100;
         if (line.active() && line.yPos != lineY) {
           flushDecoration(line);
         }

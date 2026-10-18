@@ -83,15 +83,19 @@ class PageBox final : public PageElement {
   int16_t height;
   // Same packed byte as CssStyle::borderEdges: edge mask + line style + 1..4px width.
   uint8_t borderSpec;
-  // Solid black fill under the box, for a CssInkMode::Inverted block's panel. The page's elements
-  // render in insertion order, so a filled box is pushed immediately BEFORE the line it sits
-  // behind and the white glyphs land on top of it.
-  bool filled;
+  // Fill under the box, for a panel block: FILL_BLACK under an inverted block's white glyphs,
+  // FILL_LIGHT_GRAY under a shaded block's black ones. The page's elements render in insertion
+  // order, so a filled box is pushed immediately BEFORE the line it sits behind.
+  uint8_t fill;
 
  public:
+  static constexpr uint8_t FILL_NONE = 0;
+  static constexpr uint8_t FILL_BLACK = 1;
+  static constexpr uint8_t FILL_LIGHT_GRAY = 2;
   PageBox(const int16_t width, const int16_t height, const uint8_t borderSpec, const int16_t xPos, const int16_t yPos,
-          const bool filled = false)
-      : PageElement(xPos, yPos), width(width), height(height), borderSpec(borderSpec), filled(filled) {}
+          const uint8_t fill = FILL_NONE)
+      : PageElement(xPos, yPos), width(width), height(height), borderSpec(borderSpec), fill(fill) {}
+  [[nodiscard]] uint8_t fillKind() const { return fill; }
 
   // Grow the panel downward, to take in the block's bottom padding once the last line is known.
   void extendHeight(const int16_t extraPixels) { height = static_cast<int16_t>(height + extraPixels); }

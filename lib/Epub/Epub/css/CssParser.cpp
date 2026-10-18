@@ -881,6 +881,30 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.setHyphensNone(false);
       style.defined.hyphens = 1;
     }
+  } else if (iequalsAscii(name, "initial-letter") || iequalsAscii(name, "-webkit-initial-letter")) {
+    // `initial-letter: N [M]` asks for a drop cap N lines tall. The drop-cap path sizes the letter
+    // from its font-size multiple, so N lines is an N em initial -- unless the rule sets its own
+    // font-size, which wins whichever order the two are declared in.
+    const std::string_view ilValue = trimAsciiWhitespace(stripTrailingImportant(value));
+    char buf[8] = {};
+    const size_t n = std::min(ilValue.size(), sizeof(buf) - 1);
+    memcpy(buf, ilValue.data(), n);
+    const int lines = atoi(buf);
+    if (lines >= 2 && lines <= 6 && !style.defined.fontSize) {
+      style.fontSize = CssLength{static_cast<float>(lines), CssUnit::Em};
+      style.defined.fontSize = 1;
+    }
+  } else if (iequalsAscii(name, "white-space")) {
+    // Only the values that keep spaces and line breaks matter; nowrap/pre-line read as normal.
+    const std::string_view wsValue = stripTrailingImportant(value);
+    if (iequalsAscii(wsValue, "pre") || iequalsAscii(wsValue, "pre-wrap") || iequalsAscii(wsValue, "break-spaces")) {
+      style.setPreserveWhitespace(true);
+      style.defined.whiteSpace = 1;
+    } else if (iequalsAscii(wsValue, "normal") || iequalsAscii(wsValue, "nowrap") ||
+               iequalsAscii(wsValue, "pre-line")) {
+      style.setPreserveWhitespace(false);
+      style.defined.whiteSpace = 1;
+    }
   } else if (iequalsAscii(name, "hyphenate-limit-chars") || iequalsAscii(name, "hyphenate-limit-lines") ||
              iequalsAscii(name, "hyphenate-limit-zone") || iequalsAscii(name, "hyphenate-limit-last") ||
              iequalsAscii(name, "hyphenate-limit-before") || iequalsAscii(name, "hyphenate-limit-after") ||
@@ -1108,6 +1132,10 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
 // whatever the book intended, so a missed inversion costs only fidelity. Only Inverted can be
 // wrong in a way that hurts -- it commits a whole block to a black panel.
 constexpr int16_t INK_INVERT_MIN_LUMA_DELTA = 64;
+// A background between these lumas, under dark text, is drawn as a light gray panel. Near-white
+// backgrounds are the page itself; darker ones would bury black text on a 1-bit dither.
+constexpr int16_t INK_SHADE_MIN_BG_LUMA = 150;
+constexpr int16_t INK_SHADE_MAX_BG_LUMA = 240;
 
 void CssParser::resolveInkMode(CssStyle& style, const InkColors& ink) {
   // Said nothing about colour: leave the property unset so an ancestor's polarity still applies.
@@ -1119,7 +1147,14 @@ void CssParser::resolveInkMode(CssStyle& style, const InkColors& ink) {
   // the book's default BLACK text on a black panel.
   const int16_t textLuma = ink.textLuma != InkColors::UNSET ? ink.textLuma : 0;
   const int16_t bgLuma = ink.bgLuma != InkColors::UNSET ? ink.bgLuma : 255;
-  style.inkMode = (textLuma - bgLuma >= INK_INVERT_MIN_LUMA_DELTA) ? CssInkMode::Inverted : CssInkMode::Normal;
+  if (textLuma - bgLuma >= INK_INVERT_MIN_LUMA_DELTA) {
+    style.inkMode = CssInkMode::Inverted;
+  } else if (ink.bgLuma != InkColors::UNSET && bgLuma >= INK_SHADE_MIN_BG_LUMA && bgLuma <= INK_SHADE_MAX_BG_LUMA &&
+             bgLuma - textLuma >= INK_INVERT_MIN_LUMA_DELTA) {
+    style.inkMode = CssInkMode::Shaded;
+  } else {
+    style.inkMode = CssInkMode::Normal;
+  }
   style.defined.inkMode = 1;
 }
 
@@ -1432,24 +1467,23 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
   // than MAX_CANDIDATES rules has never been observed, and the overflow path drops the
   // LOWEST-specificity match, which is the one the rest would have overridden anyway.
   //
-  // Deviation from the real cascade: CSS breaks a specificity tie by document order, which
-  // this rule table does not preserve (the map is unordered, and the cache is written in map
-  // order and merged per selector on load). A tie therefore resolves to the last match in
-  // enumeration order -- simple before compound, outer ancestor before inner, descendant
-  // before child -- i.e. the more narrowly scoped rule wins. Same-selector rules from
-  // anywhere in the stylesheet(s) are still merged in source order by applyOver at parse and
-  // cache-load time, so the common `p {...} ... p {...}` case is unaffected.
+  // A specificity tie is broken by source order, as in CSS. A selector's position in the
+  // append-only selector pool is the order it first appeared (the cache is written in that
+  // order, so it survives a reload); a repeated selector is merged into its first occurrence,
+  // so it ranks there. An "h|" twin ranks after every unscoped rule of its specificity, since it
+  // restates its unscoped form for the horizontal engine.
   struct Candidate {
     const CssStyle* style;
     uint8_t spec;
+    uint32_t order;
   };
   constexpr size_t MAX_CANDIDATES = 16;
   Candidate candidates[MAX_CANDIDATES];
   size_t candidateCount = 0;
 
-  const auto addCandidate = [&](const CssStyle* style, const uint8_t spec) {
+  const auto addCandidate = [&](const CssStyle* style, const uint8_t spec, const uint32_t order) {
     if (candidateCount < MAX_CANDIDATES) {
-      candidates[candidateCount++] = Candidate{style, spec};
+      candidates[candidateCount++] = Candidate{style, spec, order};
       return;
     }
     size_t weakest = 0;
@@ -1458,24 +1492,24 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
     }
     if (candidates[weakest].spec >= spec) return;  // nothing to gain by swapping
     for (size_t i = weakest; i + 1 < candidateCount; ++i) candidates[i] = candidates[i + 1];
-    candidates[candidateCount - 1] = Candidate{style, spec};
+    candidates[candidateCount - 1] = Candidate{style, spec, order};
   };
 
   // A simple selector also has a "h|"-scoped twin (the EBPAJ template's `.hltr X`
   // horizontal-mode variant), which applies over its unscoped form at the same specificity:
   // this resolver feeds the HORIZONTAL layout engine, which renders exactly what those rules
   // describe. The vertical engine reads the "v|" scope through collectVerticalStyles().
+  constexpr uint32_t SCOPED_ORDER = 1u << 31;
   const auto emit = [&](const std::string_view* pieces, const size_t count, const uint8_t spec, const bool simple) {
-    if (const CssStyle* style = findStyle(pieces, count)) {
-      addCandidate(style, spec);
-    }
+    bool exact = false;
+    size_t index = lowerBound(pieces, count, exact);
+    if (exact) addCandidate(&stylePool_[entries_[index].styleIndex], spec, entries_[index].offset);
     if (!simple) return;
     std::string_view scoped[CssSelector::MAX_KEY_PIECES + 1];
     scoped[0] = "h|";
     for (size_t i = 0; i < count; ++i) scoped[i + 1] = pieces[i];
-    if (const CssStyle* style = findStyle(scoped, count + 1)) {
-      addCandidate(style, spec);
-    }
+    index = lowerBound(scoped, count + 1, exact);
+    if (exact) addCandidate(&stylePool_[entries_[index].styleIndex], spec, SCOPED_ORDER | entries_[index].offset);
   };
 
   // The ancestor walk is skipped entirely unless the table actually holds a compound rule,
@@ -1486,11 +1520,12 @@ CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::stri
       CssSelector::ElementRef{tagName, classAttr}, [path](const size_t i) { return path->ancestor(i); }, ancestorCount,
       walkAncestors && path->parentRecorded(), hasDescendantRules_, hasChildRules_, emit);
 
-  // Stable insertion sort, ascending specificity: equal specificities keep emission order.
+  // Insertion sort, ascending (specificity, source order): later rules apply over earlier ones.
   for (size_t i = 1; i < candidateCount; ++i) {
     const Candidate v = candidates[i];
     size_t j = i;
-    while (j > 0 && candidates[j - 1].spec > v.spec) {
+    while (j > 0 && (candidates[j - 1].spec > v.spec ||
+                     (candidates[j - 1].spec == v.spec && candidates[j - 1].order > v.order))) {
       candidates[j] = candidates[j - 1];
       --j;
     }
@@ -1603,10 +1638,12 @@ bool CssParser::saveToCache() const {
   // written without one and applies to every chapter.
   file.write(static_cast<uint8_t>(0));
 
-  // Write each rule: selector string + CssStyle fields. entries_ is sorted, so records go out
-  // in selector order -- stable across runs, unlike the map's bucket order.
+  // Records go out in source order, so a reload re-inserts them in that order and the selector
+  // pool positions the cascade breaks ties with survive the round trip.
+  const auto order = sourceOrder();
   for (uint16_t i = 0; i < entryCount_; ++i) {
-    writeRuleRecord(file, SOURCE_UNKNOWN, selectorAt(i), styleAt(i));
+    const uint16_t entry = order ? order[i] : i;
+    writeRuleRecord(file, SOURCE_UNKNOWN, selectorAt(entry), styleAt(entry));
   }
 
   LOG_DBG("CSS", "Saved %u rules to cache", storedRules);
@@ -1696,6 +1733,7 @@ void CssParser::encodeStyleWire(const CssStyle& style, uint8_t* out) {
   if (style.defined.textTransform) definedBits |= 1 << 26;
   if (style.defined.hyphens) definedBits |= 1 << 27;
   if (style.defined.letterSpacing) definedBits |= 1 << 28;
+  if (style.defined.whiteSpace) definedBits |= 1 << 29;
   memcpy(out + at, &definedBits, sizeof(definedBits));
   at += sizeof(definedBits);
 
@@ -2007,14 +2045,31 @@ CssParser::StylesheetFilter CssParser::stylesheetFilterFor(const std::vector<std
   return matched;
 }
 
+// Entry indices sorted by selector-pool position (source order). Null on OOM: the caller then
+// writes in selector order, which only loses tie-breaking, never rules.
+std::unique_ptr<uint16_t[]> CssParser::sourceOrder() const {
+  auto order = makeUniqueNoThrow<uint16_t[]>(entryCount_ > 0 ? entryCount_ : 1);
+  if (!order) {
+    LOG_ERR("CSS", "OOM: source order for %u rules", static_cast<unsigned>(entryCount_));
+    return order;
+  }
+  for (uint16_t i = 0; i < entryCount_; ++i) order[i] = i;
+  const SelectorEntry* entries = entries_.get();
+  std::sort(order.get(), order.get() + entryCount_,
+            [entries](const uint16_t a, const uint16_t b) { return entries[a].offset < entries[b].offset; });
+  return order;
+}
+
 bool CssParser::appendRulesToCache() {
   if (!cacheAppendActive_) return false;
+  const auto order = sourceOrder();
   for (uint16_t i = 0; i < entryCount_; ++i) {
     if (appendedRuleCount_ >= MAX_CACHED_RULES) {
       LOG_DBG("CSS", "Reached max cached rules limit (%zu), dropping remainder", MAX_CACHED_RULES);
       break;
     }
-    writeRuleRecord(cacheAppendFile_, currentSource_, selectorAt(i), styleAt(i));
+    const uint16_t entry = order ? order[i] : i;
+    writeRuleRecord(cacheAppendFile_, currentSource_, selectorAt(entry), styleAt(entry));
     ++appendedRuleCount_;
   }
   return true;
@@ -2268,8 +2323,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
       clear();
       return false;
     }
-    style.inkMode =
-        inkModeVal == static_cast<uint8_t>(CssInkMode::Inverted) ? CssInkMode::Inverted : CssInkMode::Normal;
+    style.inkMode = inkModeVal == static_cast<uint8_t>(CssInkMode::Inverted) ? CssInkMode::Inverted
+                    : inkModeVal == static_cast<uint8_t>(CssInkMode::Shaded) ? CssInkMode::Shaded
+                                                                             : CssInkMode::Normal;
 
     // Read the packed page-break byte (v15+). Bits 6-7 are unused and each 2-bit slot has one
     // undefined value (3), so the byte is masked down to slots the paginator understands rather
@@ -2293,7 +2349,8 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
       clear();
       return false;
     }
-    style.textFlags = static_cast<uint8_t>(textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT));
+    style.textFlags = static_cast<uint8_t>(
+        textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT | CSS_PRESERVE_WHITESPACE_BIT));
 
     // Read defined flags
     uint32_t definedBits = 0;
@@ -2330,6 +2387,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     style.defined.textTransform = (definedBits & 1 << 26) != 0;
     style.defined.hyphens = (definedBits & 1 << 27) != 0;
     style.defined.letterSpacing = (definedBits & 1 << 28) != 0;
+    style.defined.whiteSpace = (definedBits & 1 << 29) != 0;
 
     // Vertical-scoped rules ("v|...") are consumed exclusively through the streaming
     // collectVerticalStyles() -- loadFromCache feeds the HORIZONTAL layout engine only.
