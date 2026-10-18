@@ -1269,9 +1269,11 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int ba
   const size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
 
   for (size_t i = 0; i < lineCount; ++i) {
+    linesAfterCurrent = includeLastLine ? static_cast<int>(lineCount - 1 - i) : -1;
     extractLine(i, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, lineBreakIndices, processLine, renderer,
                 fontId);
   }
+  linesAfterCurrent = -1;
 
   // Remove consumed words so size() reflects only remaining words
   if (lineCount > 0) {

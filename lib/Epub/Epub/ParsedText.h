@@ -95,6 +95,9 @@ class ParsedText {
   // line" is spelled -- without this it would take the first-line text-indent a second time,
   // several lines into the paragraph.
   bool dropCapLinesEmitted = false;
+  // Lines of this paragraph after the one being emitted, or -1 when the end is not yet known
+  // (a soft flush, or the drop-cap lines).
+  int linesAfterCurrent = -1;
   // True once any word was dropped because the text arena could not allocate.
   bool droppedWords = false;
   bool firstLineConsumed = false;
@@ -161,6 +164,8 @@ class ParsedText {
   void consumeWords(size_t consumed);
 
  public:
+  [[nodiscard]] int linesAfterCurrentLine() const { return linesAfterCurrent; }
+  [[nodiscard]] bool hasDropCapLines() const { return dropCapLinesEmitted || blockStyle.hasDropCap(); }
   explicit ParsedText(const bool hyphenationEnabled = false, const bool focusReadingEnabled = false,
                       const BlockStyle& blockStyle = BlockStyle(), const uint8_t paragraphIndentSpaces = 2)
       : blockStyle(blockStyle),

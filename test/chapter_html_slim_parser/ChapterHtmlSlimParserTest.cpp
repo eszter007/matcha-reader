@@ -1371,4 +1371,85 @@ TEST_F(ChapterPagingTest, TerminalBreakAfterDoesNotCreateEmptyPage) {
   EXPECT_EQ(pages.size(), 1u);
 }
 
+
+// Widow/orphan control. Each word is wider than half the 480 px viewport, so every word is one
+// line; 19 px per line (the stub's 18 px ink plus the gap floor), so 5 lines fill 95 px.
+class ChapterWidowOrphanTest : public ChapterPagingTest {
+ protected:
+  static constexpr uint16_t FIVE_LINES = 95;
+  static std::string lineWord(const char tag, const int n) {
+    std::string w(55, tag);
+    w[0] = static_cast<char>('0' + n);
+    return w;
+  }
+  void lines(const char* tag, const char tagChar, const int count) {
+    open(tag);
+    for (int n = 1; n <= count; ++n) {
+      const std::string w = lineWord(tagChar, n) + " ";
+      text(w.c_str());
+    }
+    close(tag);
+  }
+  int pageOfLine(const char tagChar, const int n) const { return pageOf(lineWord(tagChar, n)); }
+};
+
+TEST_F(ChapterWidowOrphanTest, LoneFirstLineMovesToNextPage) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 4);
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 4), 0);
+  EXPECT_EQ(pageOfLine('b', 1), 1);
+  EXPECT_EQ(pageOfLine('b', 2), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, LoneLastLineTakesALineAlong) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 2);
+  lines("p", 'b', 4);
+  finish();
+  EXPECT_EQ(pageOfLine('b', 2), 0);
+  EXPECT_EQ(pageOfLine('b', 3), 1);
+  EXPECT_EQ(pageOfLine('b', 4), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, TwoLineParagraphMovesWhole) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 3);
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 3), 0);
+  EXPECT_EQ(pageOfLine('b', 1), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, HeadingMovesWithTheParagraphAfterIt) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 4);
+  lines("h2", 'h', 1);
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 4), 0);
+  EXPECT_EQ(pageOfLine('h', 1), 1);
+  EXPECT_EQ(pageOfLine('b', 1), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, HeadingStaysWhenFollowedOnItsPage) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 1);
+  lines("h2", 'h', 1);
+  lines("p", 'b', 6);
+  finish();
+  EXPECT_EQ(pageOfLine('h', 1), 0);
+  EXPECT_EQ(pageOfLine('b', 3), 0);
+  EXPECT_EQ(pageOfLine('b', 4), 1);
+}
+
+TEST_F(ChapterWidowOrphanTest, AnOrdinaryBreakIsUnchanged) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 8);
+  finish();
+  EXPECT_EQ(pageOfLine('a', 5), 0);
+  EXPECT_EQ(pageOfLine('a', 6), 1);
+}
+
 }  // namespace

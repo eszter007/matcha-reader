@@ -103,6 +103,29 @@ class ChapterHtmlSlimParser {
   // addLineToPage so content positions survive the keep-together delay.
   std::vector<std::pair<std::unique_ptr<TextBlock>, uint32_t>> keepBuffer;
   void breakPage();
+  // Widow/orphan control: a paragraph's lone first line, or its lone last line, moves to the next
+  // page with company instead of being stranded, and a heading's lines move with the first line
+  // of the block after it. Only plain trailing text lines move -- a line that brought a link, a
+  // footnote or a panel with it, or one inside an open box, falls back to an ordinary break.
+  static constexpr uint8_t MAX_CARRIED_LINES = 6;
+  struct RecentLine {
+    int16_t height;
+    uint32_t visibleOffset;
+    bool hasExtras;
+  };
+  RecentLine recentLines[MAX_CARRIED_LINES] = {};
+  uint8_t recentLineCount = 0;      // trailing lines of the page recorded above, newest last
+  size_t lastLineElementCount = 0;  // elements.size() after the newest recorded line
+  uint8_t paragraphLinesOnPage = 0;
+  uint8_t keepWithNextLines = 0;  // heading lines at the page tail, waiting for the next block
+  uint8_t paragraphHeadingLines = 0;  // heading lines directly above this paragraph on the page
+  bool currentBlockIsHeading = false;
+  const ParsedText* layoutParagraph = nullptr;  // the block makePages() is laying out
+  bool layoutParagraphHasDropCap = false;
+  uint8_t linesToCarry() const;
+  bool canCarry(uint8_t count) const;
+  void breakPageCarryingLines(uint8_t count);
+  void resetRecentLines();
   void beginKeepTogether(const BlockStyle& blockStyle);
   void finishKeepTogether();
   void flushKeepBuffer();
