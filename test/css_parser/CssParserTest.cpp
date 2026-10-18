@@ -180,6 +180,64 @@ TEST_F(CssParserTest, LinkingAnIdenticalCopyAppliesTheOriginalsRules) {
   EXPECT_FALSE(reader.resolveStyle("body", "").defined.textAlign);
 }
 
+// The EBPAJ shape: chapters link only book-style.css, whose rules are all @imported -- one level
+// through a "../" path, the next from inside the imported sheet.
+TEST_F(CssParserTest, LinkedStylesheetBringsInWhatItImports) {
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"item/style/book-style.css", "item/style/style-standard.css",
+                                           "item/style/style-advance.css", "item/style/image.css"};
+    const uint8_t aliases[] = {0, 1, 2, 3};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    const char* sheets[] = {
+        "@charset \"UTF-8\";\n@import url(\"../style/style-standard.css\");\n",
+        "@import \"style-advance.css\";\n.k-solid { border-style: solid solid solid solid; }\n",
+        ".start-1em { margin-top: 1em; }\n",
+        "body { text-align: center; }\n",
+    };
+    for (size_t i = 0; i < 4; ++i) {
+      writer.setSource(i);
+      ASSERT_TRUE(loadCss(writer, sheets[i]));
+      ASSERT_TRUE(writer.appendRulesToCache());
+      writer.clear();
+    }
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.validateCache());
+  const auto filter = reader.stylesheetFilterFor({"item/style/book-style.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("div", "k-solid").hasBorder()) << "an @imported stylesheet was filtered out";
+  EXPECT_TRUE(reader.resolveStyle("div", "start-1em").defined.marginTop) << "a nested @import was not followed";
+  EXPECT_FALSE(reader.resolveStyle("body", "").defined.textAlign) << "an unlinked stylesheet leaked into the chapter";
+
+  std::vector<CssParser::VerticalBlockRule> vertical;
+  reader.collectVerticalStyles(vertical, 256, &filter);
+  EXPECT_EQ(vertical.size(), 2u) << "the vertical engine must see the imported box and indent rules";
+}
+
+TEST_F(CssParserTest, ImportPathIsPercentDecoded) {
+  {
+    CssParser writer(cachePath());
+    const std::vector<std::string> sources{"OPS/book.css", "OPS/my sheet.css"};
+    const uint8_t aliases[] = {0, 1};
+    ASSERT_TRUE(writer.beginCacheAppend(&sources, aliases));
+    writer.setSource(0);
+    ASSERT_TRUE(loadCss(writer, "@import \"my%20sheet.css\";\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    writer.setSource(1);
+    ASSERT_TRUE(loadCss(writer, "p { font-weight: bold; }\n"));
+    ASSERT_TRUE(writer.appendRulesToCache());
+    writer.clear();
+    ASSERT_TRUE(writer.endCacheAppend(/*discard=*/false));
+  }
+  CssParser reader(cachePath());
+  const auto filter = reader.stylesheetFilterFor({"OPS/book.css"});
+  ASSERT_TRUE(reader.loadFromCache(nullptr, &filter));
+  EXPECT_TRUE(reader.resolveStyle("p", "").defined.fontWeight);
+}
+
 TEST_F(CssParserTest, ChapterWithNoKnownLinkKeepsEveryStylesheet) {
   {
     CssParser writer(cachePath());

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -124,6 +125,17 @@ struct VerticalBlockParams {
   bool alignCenter = false;
   uint8_t borderEdges = 0;  // CSS physical TOP/RIGHT/BOTTOM/LEFT bits (match DRAW_* order)
 };
+
+// Joins a nested styled element's params to its block's: indents add up as nested margins do, and
+// the border edges and gaps combine.
+inline void mergeBlockParams(VerticalBlockParams& into, const VerticalBlockParams& nested) {
+  into.startEm += nested.startEm;
+  into.beforeEm = std::max(into.beforeEm, nested.beforeEm);
+  into.afterEm = std::max(into.afterEm, nested.afterEm);
+  if (nested.hangEm > 0) into.hangEm = nested.hangEm;
+  into.alignCenter = into.alignCenter || nested.alignCenter;
+  into.borderEdges = static_cast<uint8_t>(into.borderEdges | nested.borderEdges);
+}
 
 struct VerticalPage {
   // Codepoint index, within the chapter's visible character data, of this page's first
@@ -296,8 +308,32 @@ class VerticalParsedText {
   void markBlockStart(const VerticalBlockParams& params) {
     boxStartsBeforeIndex_.push_back(stream_.size());
     blockParamsQueue_.push_back(params);
+    blockOpen_ = true;
   }
-  void markBlockEnd() { boxEndsBeforeIndex_.push_back(stream_.size()); }
+  // Replaces the params of the open block, still queued because it has no text yet: a nested
+  // styled element merged into it, or that merge undone when the element closed empty.
+  // ponytail: one block at a time, so two bordered blocks nested draw one after the other rather
+  // than one inside the other; that needs a block stack here, if a book ever needs it.
+  void setOpenBlockParams(const VerticalBlockParams& params) {
+    if (!blockOpen_ || blockParamsQueue_.empty()) return;
+    blockParamsQueue_.back() = params;
+  }
+  void markBlockEnd() {
+    // A block that holds no text (a figure with only a page image) ends where it starts. The
+    // layout loop reads ends before starts at one index, so it would open the block and never
+    // close it, and every later block start -- a bordered box included -- would be ignored.
+    const bool startHere = !boxStartsBeforeIndex_.empty() && boxStartsBeforeIndex_.back() == stream_.size();
+    const bool startCarried = boxStartsBeforeIndex_.empty() && boxStartCarry_ && stream_.empty();
+    if (blockOpen_ && (startHere || startCarried)) {
+      if (startHere) boxStartsBeforeIndex_.pop_back();
+      boxStartCarry_ = false;
+      if (!blockParamsQueue_.empty()) blockParamsQueue_.pop_back();
+      blockOpen_ = false;
+      return;
+    }
+    boxEndsBeforeIndex_.push_back(stream_.size());
+    blockOpen_ = false;
+  }
   // Whether ANY char/glyph was dropped for lack of heap across the whole build. Unlike oom_
   // this is never cleared by reset(): the section build reads it at the end, because a build
   // that dropped content produced sparse pages and must not be persisted as a VALID cache --
@@ -407,6 +443,7 @@ class VerticalParsedText {
   bool inBox_ = false;
   uint16_t boxStartCol_ = 0;
   std::vector<VerticalBlockParams> blockParamsQueue_;  // FIFO, one entry per markBlockStart
+  bool blockOpen_ = false;                             // a markBlockStart with no markBlockEnd yet
   VerticalBlockParams activeBlock_;                    // valid while inBox_
   bool blockContinuationColumn_ = false;               // current column wraps mid-paragraph
   // Geometry snapshot from the last layoutPages() call so finalizePendingPage() (called outside

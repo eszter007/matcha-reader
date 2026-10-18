@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 // Matches order of PARAGRAPH_ALIGNMENT in CrossPointSettings
 enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3, None = 4 };
@@ -301,6 +303,8 @@ struct CssStyle {
   static constexpr uint8_t BORDER_STYLE_MASK = 0x30;
   static constexpr uint8_t BORDER_WIDTH_SHIFT = 6;
   static constexpr uint8_t BORDER_WIDTH_MASK = 0xC0;
+  // Summary of the border: which edges, and the style and width last declared. The vertical engine
+  // and tables read it; borderSides below holds each side's own. A border property sets both.
   uint8_t borderEdges = 0;
   [[nodiscard]] static constexpr uint8_t makeBorderSpec(const uint8_t edges, const CssBorderLineStyle style,
                                                         const uint8_t width) {
@@ -325,6 +329,17 @@ struct CssStyle {
     borderEdges = static_cast<uint8_t>((borderEdges & ~BORDER_EDGE_MASK) | (edges & BORDER_EDGE_MASK));
   }
   [[nodiscard]] bool isFullBorderBox() const { return defined.border && borderEdgeMask() == BORDER_ALL; }
+
+  // Each side's own style and width, as a spec whose edge mask is that side's bit alone (0 = no
+  // line). borderEdges stays the summary the vertical engine and edge-mask callers read.
+  static constexpr uint8_t BORDER_SIDE_BITS[4] = {BORDER_TOP, BORDER_RIGHT, BORDER_BOTTOM, BORDER_LEFT};
+  uint8_t borderSides[4] = {};  // top, right, bottom, left
+  void setBorderSide(const size_t side, const bool drawn, const CssBorderLineStyle style, const uint8_t width) {
+    borderSides[side] = drawn ? makeBorderSpec(BORDER_SIDE_BITS[side], style, width) : 0;
+  }
+  void setBorderSides(const uint8_t edges, const CssBorderLineStyle style, const uint8_t width) {
+    for (size_t side = 0; side < 4; ++side) setBorderSide(side, edges & BORDER_SIDE_BITS[side], style, width);
+  }
 
   CssTextEmphasis textEmphasis = CssTextEmphasis::None;     // JP bouten marks
   CssFontVariant fontVariant = CssFontVariant::Normal;      // small-caps
@@ -444,6 +459,7 @@ struct CssStyle {
     }
     if (base.hasBorder()) {
       borderEdges = base.borderEdges;
+      memcpy(borderSides, base.borderSides, sizeof(borderSides));
       defined.border = 1;
     }
     if (base.hasTextEmphasis()) {
@@ -561,6 +577,7 @@ struct CssStyle {
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     borderEdges = 0;
+    memset(borderSides, 0, sizeof(borderSides));
     textEmphasis = CssTextEmphasis::None;
     fontVariant = CssFontVariant::Normal;
     listStyleType = CssListStyleType::Disc;

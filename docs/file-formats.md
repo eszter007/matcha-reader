@@ -95,6 +95,18 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 105 (fork numbering)
+
+`PageBox` stores one border spec per side, top, right, bottom and left, in place of its single
+spec byte; each is the `CssStyle` packed spec for that side alone, or 0 for no line. The record is
+three bytes longer. Older sections are rebuilt; book metadata and progress are kept.
+
+### Version 104 (fork numbering)
+
+The serialized layout is unchanged. A bordered block inside another bordered block now draws its
+own frame, inset within the outer one, and the lines around it move to make room for it. Older
+sections are rebuilt; book metadata and progress are kept.
+
 ### Version 103 (fork numbering)
 
 Absorbs upstream's version 60. The serialized layout is unchanged. Text that runs straight into a
@@ -530,6 +542,14 @@ if (parsedSize != fileSize) {
 
 One file per spine item laid out as vertical text. Unlike `section.bin` it is documented here by
 its trailer only; the page records are written and read by `VerticalSection.cpp`.
+
+### Versions 144 to 149
+
+No format change; each rebuilds the cached pages once for a layout fix. In 148, a chapter applies
+the stylesheets its linked ones `@import` (EBPAJ boxes, rules and indents), a block holding only an
+image no longer hides the styled blocks after it, and styled elements nested in a block before its
+first text merge into it. In 149, what follows a merged element continues with the outer element's
+params alone, so it is not framed with the element before it.
 
 ### Version 143
 

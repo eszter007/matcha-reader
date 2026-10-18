@@ -82,14 +82,87 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 // Bump CSS_CACHE_VERSION whenever any of these change. See writeRuleRecord.
 constexpr size_t CSS_LEADING_ENUM_BYTES = 5;   // textAlign, fontStyle, fontWeight, decoration, direction
 constexpr size_t CSS_LENGTH_FIELD_COUNT = 14;  // CssLength members written, in order
-// display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks, textFlags
-constexpr size_t CSS_TRAILING_ENUM_BYTES = 9;
+// display, verticalAlign, border, emphasis, variant, listType, inkMode, pageBreaks, textFlags,
+// then the four per-side border specs
+constexpr size_t CSS_TRAILING_ENUM_BYTES = 13;
 constexpr size_t RULE_FIXED_BYTES = CSS_LEADING_ENUM_BYTES +
                                     CSS_LENGTH_FIELD_COUNT * (sizeof(float) + sizeof(uint8_t)) +
                                     CSS_TRAILING_ENUM_BYTES + sizeof(uint32_t);
-static_assert(RULE_FIXED_BYTES == 88, "CSS v19 rule framing must stay in sync with writeRuleRecord");
+static_assert(RULE_FIXED_BYTES == 92, "CSS v26 rule framing must stay in sync with writeRuleRecord");
 
 constexpr char asciiToLower(const char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; }
+
+// The stylesheet path an @import target names, relative to the importing sheet at `from`, with
+// "." and ".." segments resolved -- the normalised form the stylesheet table stores.
+std::string resolveImportPath(const std::string& from, std::string_view target) {
+  // %XX escapes decoded, as Epub.cpp decodes a chapter's stylesheet links before normalising them.
+  std::string decoded;
+  decoded.reserve(target.size());
+  const auto hex = [](const char c) {
+    return c >= '0' && c <= '9'   ? c - '0'
+           : c >= 'a' && c <= 'f' ? c - 'a' + 10
+           : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                  : -1;
+  };
+  for (size_t i = 0; i < target.size(); ++i) {
+    if (target[i] == '%' && i + 2 < target.size() && hex(target[i + 1]) >= 0 && hex(target[i + 2]) >= 0) {
+      decoded.push_back(static_cast<char>(hex(target[i + 1]) * 16 + hex(target[i + 2])));
+      i += 2;
+    } else {
+      decoded.push_back(target[i]);
+    }
+  }
+  target = decoded;
+  std::string joined;
+  if (!target.empty() && target.front() == '/') {
+    joined.assign(target.substr(1));
+  } else {
+    const size_t slash = from.rfind('/');
+    joined = slash == std::string::npos ? std::string() : from.substr(0, slash + 1);
+    joined.append(target);
+  }
+  std::string out;
+  size_t start = 0;
+  while (start <= joined.size()) {
+    size_t end = joined.find('/', start);
+    if (end == std::string::npos) end = joined.size();
+    const std::string_view seg(joined.data() + start, end - start);
+    if (seg == "..") {
+      const size_t cut = out.rfind('/');
+      out.erase(cut == std::string::npos ? 0 : cut);
+    } else if (!seg.empty() && seg != ".") {
+      if (!out.empty()) out.push_back('/');
+      out.append(seg);
+    }
+    start = end + 1;
+  }
+  return out;
+}
+
+// The URL of an `@import` prelude (`import "a.css"`, `import url(a.css) screen`), or empty.
+std::string_view importTarget(std::string_view prelude) {
+  if (prelude.size() < 6 || !std::equal(prelude.begin(), prelude.begin() + 6, "import",
+                                        [](const char a, const char b) { return asciiToLower(a) == b; })) {
+    return {};
+  }
+  prelude.remove_prefix(6);
+  const size_t quote = prelude.find_first_of("\"'");
+  const size_t url = prelude.find("url(");
+  if (url != std::string_view::npos && (quote == std::string_view::npos || url < quote)) {
+    std::string_view inner = prelude.substr(url + 4);
+    inner = inner.substr(0, inner.find(')'));
+    while (!inner.empty() && (isAsciiWhitespace(inner.front()) || inner.front() == '"' || inner.front() == '\'')) {
+      inner.remove_prefix(1);
+    }
+    while (!inner.empty() && (isAsciiWhitespace(inner.back()) || inner.back() == '"' || inner.back() == '\'')) {
+      inner.remove_suffix(1);
+    }
+    return inner;
+  }
+  if (quote == std::string_view::npos) return {};
+  const size_t close = prelude.find(prelude[quote], quote + 1);
+  return close == std::string_view::npos ? std::string_view{} : prelude.substr(quote + 1, close - quote - 1);
+}
 
 // Case-insensitive equality on ASCII. lowercaseKeyword MUST already be
 // lowercase; CSS keywords are ASCII by spec so byte-wise tolower is safe.
@@ -999,6 +1072,12 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       if (styled(right)) edges |= CssStyle::BORDER_RIGHT;
       if (styled(bottom)) edges |= CssStyle::BORDER_BOTTOM;
       if (styled(left)) edges |= CssStyle::BORDER_LEFT;
+      // Each side takes its own token's style and keeps a width an earlier declaration gave it.
+      const std::string_view tokens[4] = {top, right, bottom, left};
+      for (size_t side = 0; side < 4; ++side) {
+        const uint8_t width = style.borderSides[side] ? CssStyle::lineWidthOf(style.borderSides[side]) : 1;
+        style.setBorderSide(side, styled(tokens[side]), borderLineStyleFrom(tokens[side]), width);
+      }
     }
     style.setBorderSpec(edges, borderLineStyleFrom(value), 1);
     style.defined.border = 1;
@@ -1008,6 +1087,7 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
         value.find("solid") != std::string_view::npos || value.find("double") != std::string_view::npos ||
         value.find("dashed") != std::string_view::npos || value.find("dotted") != std::string_view::npos;
     style.setBorderSpec(styled ? CssStyle::BORDER_ALL : 0, borderLineStyleFrom(value), borderLineWidthFrom(value));
+    style.setBorderSides(styled ? CssStyle::BORDER_ALL : 0, borderLineStyleFrom(value), borderLineWidthFrom(value));
     style.defined.border = 1;
   } else if (iequalsAscii(name, "border-top") || iequalsAscii(name, "border-bottom") ||
              iequalsAscii(name, "border-left") || iequalsAscii(name, "border-right")) {
@@ -1019,13 +1099,18 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
         value.find("solid") != std::string_view::npos || value.find("double") != std::string_view::npos ||
         value.find("dashed") != std::string_view::npos || value.find("dotted") != std::string_view::npos;
     uint8_t bit = CssStyle::BORDER_TOP;
+    size_t side = 0;
     if (iequalsAscii(name, "border-bottom")) {
       bit = CssStyle::BORDER_BOTTOM;
+      side = 2;
     } else if (iequalsAscii(name, "border-left")) {
       bit = CssStyle::BORDER_LEFT;
+      side = 3;
     } else if (iequalsAscii(name, "border-right")) {
       bit = CssStyle::BORDER_RIGHT;
+      side = 1;
     }
+    style.setBorderSide(side, styled, borderLineStyleFrom(value), borderLineWidthFrom(value));
     uint8_t edges = style.borderEdgeMask();
     edges = styled ? static_cast<uint8_t>(edges | bit) : static_cast<uint8_t>(edges & ~bit);
     if (styled) {
@@ -1326,6 +1411,10 @@ bool CssParser::loadFromStream(HalFile& source) {
 
   bool inAtRule = false;
   int atDepth = 0;
+  // Top-level at-rule text up to its ';' or '{': only @import is read from it. A longer prelude is
+  // cut short, so its path matches no stylesheet and the import is skipped (logged).
+  char atPrelude[96];
+  size_t atPreludeLen = 0;
 
   int bodyDepth = 0;
   bool skippingRule = false;
@@ -1343,6 +1432,10 @@ bool CssParser::loadFromStream(HalFile& source) {
         if (atDepth == 0) inAtRule = false;
       } else if (c == ';' && atDepth == 0) {
         inAtRule = false;
+        const std::string_view target = importTarget(std::string_view(atPrelude, atPreludeLen));
+        if (!target.empty()) recordImport(target);
+      } else if (atDepth == 0 && atPreludeLen < sizeof(atPrelude)) {
+        atPrelude[atPreludeLen++] = c;
       }
       return;
     }
@@ -1354,6 +1447,7 @@ bool CssParser::loadFromStream(HalFile& source) {
       if (c == '@' && selector.empty()) {
         inAtRule = true;
         atDepth = 0;
+        atPreludeLen = 0;
         return;
       }
       if (c == '{') {
@@ -1652,8 +1746,8 @@ bool CssParser::saveToCache() const {
 
 // One serialized rule record: selectorLen(2) + selector + 5 enum bytes + 14 CssLength
 // (float value + unit byte) + display + verticalAlign + borderEdges + textEmphasis +
-// fontVariant + listStyleType + inkMode + pageBreaks + textFlags + definedBits(4)
-// = selectorLen + 88 bytes.
+// fontVariant + listStyleType + inkMode + pageBreaks + textFlags + 4 border sides + definedBits(4)
+// = selectorLen + 92 bytes.
 // The framing constants (CSS_LEADING_ENUM_BYTES / CSS_LENGTH_FIELD_COUNT /
 // CSS_TRAILING_ENUM_BYTES, file scope) must describe exactly what this function writes --
 // every reader below is derived from them.
@@ -1702,6 +1796,7 @@ void CssParser::encodeStyleWire(const CssStyle& style, uint8_t* out) {
   putByte(static_cast<uint8_t>(style.inkMode));
   putByte(style.pageBreaks);
   putByte(style.textFlags);
+  for (const uint8_t side : style.borderSides) putByte(side);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -1880,10 +1975,12 @@ size_t CssParser::collectVerticalStyles(std::vector<VerticalBlockRule>& out, con
     // (letter-spacing is lens[13], skipped like the two lengths above: a column advances by a
     // cell grid, so a per-glyph tracking delta has no meaning there.)
     uint8_t inkModeVal, pageBreaksVal, textFlagsVal;
+    uint8_t sidesVal[4];  // per-side border specs (v26): the vertical engine draws the summary only
     uint32_t definedBits = 0;
     if (file.read(&displayVal, 1) != 1 || file.read(&verticalAlignVal, 1) != 1 || file.read(&borderVal, 1) != 1 ||
         file.read(&emphasisVal, 1) != 1 || file.read(&variantVal, 1) != 1 || file.read(&listTypeVal, 1) != 1 ||
         file.read(&inkModeVal, 1) != 1 || file.read(&pageBreaksVal, 1) != 1 || file.read(&textFlagsVal, 1) != 1 ||
+        file.read(sidesVal, sizeof(sidesVal)) != sizeof(sidesVal) ||
         file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       break;
     }
@@ -1970,18 +2067,56 @@ bool CssParser::beginCacheAppend(const std::vector<std::string>* sources, const 
   // Stylesheet table: count, then per stylesheet its alias and its path.
   const size_t count = sources ? std::min(sources->size(), StylesheetFilter::MAX_TRACKED) : 0;
   cacheAppendFile_.write(static_cast<uint8_t>(count));
+  size_t written = sizeof(uint8_t) + sizeof(placeholder) + sizeof(uint8_t);  // version, rule count, count
   for (size_t i = 0; i < count; ++i) {
     const std::string& path = (*sources)[i];
     const auto pathLen = static_cast<uint16_t>(std::min<size_t>(path.size(), MAX_SELECTOR_LENGTH));
+    written += sizeof(uint8_t) + sizeof(pathLen) + pathLen;
     cacheAppendFile_.write(aliases && aliases[i] < count ? aliases[i] : static_cast<uint8_t>(i));
     cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&pathLen), sizeof(pathLen));
     cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(path.data()), pathLen);
+  }
+  // Imports block, one mask per stylesheet: zeros now, patched by endCacheAppend.
+  importsOffset_ = written;
+  const uint64_t noImports = 0;
+  for (size_t i = 0; i < count; ++i) {
+    cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&noImports), sizeof(noImports));
+  }
+  appendSources_ = sources;
+  appendSourceCount_ = static_cast<uint8_t>(count);
+  appendImports_.reset();
+  if (count > 0) {
+    appendImports_ = makeUniqueNoThrow<uint64_t[]>(count);
+    if (!appendImports_) {
+      // A cache written without them would record "imports nothing" for good; parse uncached and
+      // retry the cache on the next open instead.
+      LOG_ERR("CSS", "OOM: %u import masks; not caching", static_cast<unsigned>(count));
+      cacheAppendFile_.close();
+      Storage.remove((cachePath + rulesCacheTmp).c_str());
+      appendSources_ = nullptr;
+      appendSourceCount_ = 0;
+      return false;
+    }
+    for (size_t i = 0; i < count; ++i) appendImports_[i] = 0;
   }
   cacheAppendActive_ = true;
   return true;
 }
 
-bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective) {
+void CssParser::recordImport(const std::string_view target) {
+  if (!cacheAppendActive_ || !appendImports_ || !appendSources_ || currentSource_ >= appendSourceCount_) return;
+  const std::string resolved = resolveImportPath((*appendSources_)[currentSource_], target);
+  for (uint8_t i = 0; i < appendSourceCount_; ++i) {
+    if ((*appendSources_)[i] == resolved) {
+      appendImports_[currentSource_] |= uint64_t{1} << i;
+      return;
+    }
+  }
+  LOG_DBG("CSS", "@import %.*s not among the book's stylesheets", static_cast<int>(target.size()), target.data());
+}
+
+bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective,
+                                    bool* heapShort) {
   uint8_t count = 0;
   if (file.read(&count, 1) != 1 || count > StylesheetFilter::MAX_TRACKED) return false;
   uint8_t aliases[StylesheetFilter::MAX_TRACKED];
@@ -1993,10 +2128,39 @@ bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* reque
     }
   }
   effective = StylesheetFilter{};
-  if (requested == nullptr || requested->all) return true;
+  if (requested == nullptr || requested->all) {
+    return file.seekCur(static_cast<int64_t>(count) * static_cast<int64_t>(sizeof(uint64_t)));
+  }
+  // Heap, not stack: 64 masks are twice this function's stack budget.
+  std::unique_ptr<uint64_t[]> imports = count > 0 ? makeUniqueNoThrow<uint64_t[]>(count) : nullptr;
+  if (count > 0 && !imports) {
+    LOG_ERR("CSS", "OOM: %u import masks", count);
+    if (heapShort) {
+      *heapShort = true;
+      return false;
+    }
+    // No way to report it: apply every stylesheet, the same fallback stylesheetFilterFor uses.
+    return file.seekCur(static_cast<int64_t>(count) * static_cast<int64_t>(sizeof(uint64_t)));
+  }
+  for (uint8_t i = 0; i < count; ++i) {
+    if (file.read(&imports[i], sizeof(uint64_t)) != sizeof(uint64_t)) return false;
+  }
   effective.all = false;
+  // A linked sheet brings in what it @imports, and so on down the chain. A copy shares its
+  // original's imports, since only the original was parsed.
+  uint64_t linked = requested->linked;
+  for (uint8_t pass = 0; pass < count; ++pass) {
+    uint64_t grown = linked;
+    for (uint8_t i = 0; i < count; ++i) {
+      if (((linked >> i) & 1u) == 0) continue;
+      grown |= imports[i];
+      if (aliases[i] < count) grown |= imports[aliases[i]];
+    }
+    if (grown == linked) break;
+    linked = grown;
+  }
   for (size_t i = 0; i < StylesheetFilter::MAX_TRACKED; ++i) {
-    if (((requested->linked >> i) & 1u) == 0) continue;
+    if (((linked >> i) & 1u) == 0) continue;
     effective.link(i);
     if (i < count) effective.link(aliases[i]);
   }
@@ -2078,12 +2242,24 @@ bool CssParser::appendRulesToCache() {
 bool CssParser::endCacheAppend(const bool discard) {
   if (!cacheAppendActive_) return false;
   cacheAppendActive_ = false;
+  auto imports = std::move(appendImports_);
+  const uint8_t importCount = appendSourceCount_;
+  appendSources_ = nullptr;
+  appendSourceCount_ = 0;
   // Every failure path drops only the half-written temp file. Whatever rulesCache already held
   // stays where it is: a partial parse is "could not produce it now", not "there is nothing to
   // produce", so it must not take a good cache down with it. A complete parse that found no
   // rules IS "nothing to produce": it is published as an empty table, or a book without a
   // stylesheet would re-parse on every open and fail every section's cache load.
   if (discard) {
+    cacheAppendFile_.close();
+    Storage.remove((cachePath + rulesCacheTmp).c_str());
+    return false;
+  }
+  if (imports && importCount > 0 &&
+      (!cacheAppendFile_.seek(importsOffset_) ||
+       cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(imports.get()), importCount * sizeof(uint64_t)) !=
+           importCount * sizeof(uint64_t))) {
     cacheAppendFile_.close();
     Storage.remove((cachePath + rulesCacheTmp).c_str());
     return false;
@@ -2143,8 +2319,10 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     return false;
   }
   StylesheetFilter applied;
-  if (!readStylesheetTable(file, stylesheets, applied)) {
+  bool heapShort = false;
+  if (!readStylesheetTable(file, stylesheets, applied, &heapShort)) {
     clear();
+    cacheLoadFailedForHeap_ = heapShort;  // a valid cache; only this load ran short
     return false;
   }
 
@@ -2351,6 +2529,19 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     }
     style.textFlags = static_cast<uint8_t>(
         textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT | CSS_PRESERVE_WHITESPACE_BIT));
+
+    // Per-side border specs (v26+). A side keeps only its own edge bit, so a corrupt byte cannot
+    // draw a line on another edge.
+    uint8_t sidesVal[4];
+    if (file.read(sidesVal, sizeof(sidesVal)) != sizeof(sidesVal)) {
+      clear();
+      return false;
+    }
+    for (size_t side = 0; side < 4; ++side) {
+      const uint8_t bit = CssStyle::BORDER_SIDE_BITS[side];
+      style.borderSides[side] =
+          (sidesVal[side] & bit) ? static_cast<uint8_t>(sidesVal[side] & ~(CssStyle::BORDER_EDGE_MASK & ~bit)) : 0;
+    }
 
     // Read defined flags
     uint32_t definedBits = 0;
