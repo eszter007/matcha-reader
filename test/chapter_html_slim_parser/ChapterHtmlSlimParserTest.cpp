@@ -1586,4 +1586,31 @@ TEST_F(ChapterTableBorderTest, UnborderedTableKeepsRowRule) {
   EXPECT_EQ(count(TAG_PageHorizontalRule), 1);
 }
 
+TEST_F(ChapterPagingTest, NestedEmSpansCompoundTheirSizes) {
+  makeParser(".s { font-size: 0.75em; }\n.r { font-size: 0.75rem; }\n");
+  open("p");
+  open("span", "s");
+  text("outer ");
+  open("span", "s");
+  text("inner ");
+  close("span");
+  open("span", "r");
+  text("rooted");
+  close("span");
+  close("span");
+  close("p");
+  finish();
+  ASSERT_EQ(pageObjects.size(), 1u);
+  std::vector<std::pair<std::string, uint16_t>> fonts;
+  for (const auto& element : pageObjects[0]->elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+    for (uint16_t w = 0; w < block.wordCount(); ++w) fonts.emplace_back(block.wordText(w), block.wordFontScale(w));
+  }
+  ASSERT_EQ(fonts.size(), 3u);
+  EXPECT_EQ(fonts[0].second, 192);  // 0.75 of the body
+  EXPECT_EQ(fonts[1].second, 160);  // 0.75 x 0.75 = 0.5625, snapped to the nearest 1/8
+  EXPECT_EQ(fonts[2].second, 192);  // rem ignores the sized ancestor
+}
+
 }  // namespace

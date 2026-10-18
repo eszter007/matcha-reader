@@ -205,6 +205,7 @@ class ChapterHtmlSlimParser {
     // 0 with hasFontId set means "explicitly the block's own font" (a nested reset).
     bool hasFontId = false;
     int32_t fontIdOverride = 0;
+    float fontScale = 1.0f;  // this element's size relative to the reader's body size
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements

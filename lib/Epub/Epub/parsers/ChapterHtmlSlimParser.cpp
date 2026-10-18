@@ -2602,17 +2602,28 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         entry.hasSmallCaps = true;
         entry.smallCaps = cssStyle.fontVariant == CssFontVariant::SmallCaps;
       }
-      if (cssStyle.hasFontSize()) {
+      if (cssStyle.hasFontSize() && cssFontSizeScale(cssStyle) > 0.0f) {
         entry.hasFontId = true;
-        // Body-relative, exactly like the block path (BlockStyle::fromCssStyle passes the
-        // reader's font as the em base): the ladder snaps to a resident 12/14/16/18pt size.
-        // 0 = no distinct size resident (or SD-card base font) -> the block font is kept.
-        entry.fontIdOverride = cssBlockFontId(cssStyle, self->fontId);
+        // em and % compound through the nearest sized inline ancestor (0.8em inside 0.8em is
+        // 0.64 of the body); rem, pt and px are relative to the reader's body size. The ladder
+        // snaps the result to a resident 12/14/16/18pt size; 0 = no distinct size resident (or
+        // an SD-card base font) -> the block font is kept.
+        float parentScale = 1.0f;
+        if (cssFontSizeIsParentRelative(cssStyle)) {
+          for (auto it = self->inlineStyleStack.rbegin(); it != self->inlineStyleStack.rend(); ++it) {
+            if (it->hasFontId) {
+              parentScale = it->fontScale;
+              break;
+            }
+          }
+        }
+        entry.fontScale = parentScale * cssFontSizeScale(cssStyle);
+        entry.fontIdOverride = fontIdForScale(entry.fontScale, self->fontId);
         if (entry.fontIdOverride == 0) {
           // No resident size can serve the ask: the reader font is a single-size SD-card font
           // with no ladder, or the nearest step IS the base. Scale the block font's bitmap
           // instead, so `<small>` really is small rather than silently rendering at body size.
-          entry.fontIdOverride = cssFontScaleTag(cssStyle);
+          entry.fontIdOverride = fontScaleTagForScale(entry.fontScale);
         }
       }
       self->inlineStyleStack.push_back(entry);
