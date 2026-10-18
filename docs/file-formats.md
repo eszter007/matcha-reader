@@ -95,6 +95,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 103 (fork numbering)
+
+Absorbs upstream's version 60. The serialized layout is unchanged. Text that runs straight into a
+block or heading start (`text<div>…`) now stays in its own paragraph instead of being joined to the
+first word of the new block. Older sections are rebuilt; book metadata and progress are kept.
+
 ### Version 102 (fork numbering)
 
 Absorbs upstream's version 57 and the layout parts of upstream #3891 that Matcha ports. The framing
