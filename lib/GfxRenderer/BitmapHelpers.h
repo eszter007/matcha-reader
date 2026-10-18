@@ -13,6 +13,8 @@ struct BmpHeader;
 uint8_t quantize(int gray, int x, int y);
 uint8_t quantizeSimple(int gray);
 uint8_t quantize1bit(int gray, int x, int y);
+// Tone curve applied before 1-bit thumbnail dithering (lifts midtones, keeps black and white).
+int liftThumbMidtones(int gray);
 int adjustPixel(int gray);
 
 struct GrayPlanePixel {
@@ -60,10 +62,10 @@ class Atkinson1BitDitherer {
   Atkinson1BitDitherer& operator=(const Atkinson1BitDitherer& other) = delete;
 
   uint8_t processPixel(int gray, int x) {
-    if (!isValid()) return adjustPixel(gray) < 128 ? 0 : 1;
+    if (!isValid()) return adjustPixel(liftThumbMidtones(gray)) < 128 ? 0 : 1;
 
     // Apply brightness/contrast/gamma adjustments
-    gray = adjustPixel(gray);
+    gray = adjustPixel(liftThumbMidtones(gray));
 
     // Add accumulated error
     int adjusted = gray + errorRow0[x + 2];
