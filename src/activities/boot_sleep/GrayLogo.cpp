@@ -6,6 +6,7 @@
 #include <InflateReader.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <SdSystemDir.h>
 
 #include <algorithm>
 #include <cstring>
@@ -20,11 +21,15 @@ static_assert(GrayLogo::SMALL_WIDTH == CAT_LOGO_SMALL_WIDTH && GrayLogo::SMALL_H
 
 namespace {
 
-constexpr char CUSTOM_LOGO_PATH[] = "/logo.bmp";
+constexpr char CUSTOM_LOGO_NAME[] = "logo.bmp";  // in the SD card's system folder
 // Every source row is read on every draw (boot decodes once, sleep twice), so cap the read at
 // roughly one screen.
 constexpr int CUSTOM_LOGO_MAX_SIDE = 800;
 constexpr uint8_t FOOTPRINT = 0x4;
+// White border kept around a custom logo; on the dark screen it becomes the sticker edge.
+constexpr int STICKER_EDGE = 4;
+// The background fill converges in a few sweeps for real drawings; the cap bounds a pathological one.
+constexpr int MAX_FILL_SWEEPS = 64;
 
 struct Art {
   int width = 0;
@@ -33,25 +38,33 @@ struct Art {
   int offsetX = 0;
   int offsetY = 0;
   // Exactly one is set. rle: the cat's run-length code. packed: a custom logo, 2 bits per pixel in
-  // row-major order, levels already final for the screen polarity, every pixel in the footprint.
+  // row-major order.
   const uint8_t* rle = nullptr;
   const uint8_t* packed = nullptr;
+  // A custom logo's footprint, 1 bit per pixel in the same order; only built for the dark screen.
+  const uint8_t* footprint = nullptr;
   std::unique_ptr<uint8_t[]> owned;  // the inflated small cat or the decoded custom logo
+  std::unique_ptr<uint8_t[]> ownedFootprint;
 };
+
+bool maskBit(const uint8_t* mask, const size_t i) { return mask[i >> 3] & (0x80 >> (i & 7)); }
+void setMaskBit(uint8_t* mask, const size_t i) { mask[i >> 3] |= 0x80 >> (i & 7); }
+uint8_t packedLevel(const uint8_t* packed, const size_t i) { return (packed[i >> 2] >> (6 - (i & 3) * 2)) & 0x3; }
 
 // Walks a logo in pixel order. Every pass visits the whole logo row by row, so a cursor that
 // expands one run at a time replaces random access without a decode buffer.
 class LogoCursor {
  public:
-  explicit LogoCursor(const Art& art) : rle(art.rle), packed(art.packed) {}
+  explicit LogoCursor(const Art& art) : rle(art.rle), packed(art.packed), footprint(art.footprint) {}
 
   // One pixel: bits 0-1 the level (0 = black, 1 = dark gray, 2 = light gray, 3 = white), bit 2
   // whether it lies in the footprint (the cat, the books and the sticker edge around them).
   uint8_t next() {
     if (packed) {
-      const uint8_t value = (packed[pos >> 2] >> (6 - (pos & 3) * 2)) & 0x3;
+      const bool inside = !footprint || maskBit(footprint, pos);
+      const uint8_t value = packedLevel(packed, pos);
       pos++;
-      return FOOTPRINT | value;
+      return (inside ? FOOTPRINT : 0) | value;
     }
     if (left == 0) {
       const uint8_t code = rle[pos++];
@@ -65,6 +78,7 @@ class LogoCursor {
  private:
   const uint8_t* rle;
   const uint8_t* packed;
+  const uint8_t* footprint;
   size_t pos = 0;
   uint8_t symbol = 0;
   uint8_t left = 0;
@@ -73,26 +87,109 @@ class LogoCursor {
 constexpr uint8_t level(const uint8_t symbol) { return symbol & 0x3; }
 constexpr bool inFootprint(const uint8_t symbol) { return symbol & FOOTPRINT; }
 
-// Decodes /logo.bmp, scaled down (never up) to fit the logo box. The whole image counts as footprint,
-// with its levels pre-inverted on the dark screen, so dark artwork on white shows light on black.
+// A custom logo's footprint, like the cat's: everything except the white background that reaches the
+// edge of the image, grown by STICKER_EDGE px so the dark screen shows a white sticker edge around it.
+bool buildFootprint(Art& art) {
+  const int w = art.width;
+  const int h = art.height;
+  const size_t count = static_cast<size_t>(w) * h;
+  const size_t maskSize = (count + 7) / 8;
+  // Two 1-bit masks, at most 230 * 324 / 8 = 9,315 bytes each; the scratch one is freed on return.
+  auto outside = makeUniqueNoThrow<uint8_t[]>(maskSize);
+  auto scratch = makeUniqueNoThrow<uint8_t[]>(maskSize);
+  if (!outside || !scratch) {
+    LOG_ERR("LOGO", "OOM: 2 x %u bytes for the logo footprint", static_cast<unsigned>(maskSize));
+    return false;
+  }
+  memset(outside.get(), 0, maskSize);
+  const uint8_t* packed = art.owned.get();
+  const auto white = [packed](const size_t i) { return packedLevel(packed, i) == 3; };
+
+  // Background: white pixels connected to the image border. Alternate forward and backward sweeps
+  // until nothing changes, which needs no fill stack.
+  for (int x = 0; x < w; x++) {
+    if (white(x)) setMaskBit(outside.get(), x);
+    const size_t bottom = static_cast<size_t>(h - 1) * w + x;
+    if (white(bottom)) setMaskBit(outside.get(), bottom);
+  }
+  for (int y = 0; y < h; y++) {
+    const size_t row = static_cast<size_t>(y) * w;
+    if (white(row)) setMaskBit(outside.get(), row);
+    if (white(row + w - 1)) setMaskBit(outside.get(), row + w - 1);
+  }
+  bool changed = true;
+  for (int sweep = 0; changed && sweep < MAX_FILL_SWEEPS; sweep++) {
+    changed = false;
+    for (size_t i = 0; i < count; i++) {
+      if (maskBit(outside.get(), i) || !white(i)) continue;
+      const int x = static_cast<int>(i % w);
+      if ((x > 0 && maskBit(outside.get(), i - 1)) || (i >= static_cast<size_t>(w) && maskBit(outside.get(), i - w))) {
+        setMaskBit(outside.get(), i);
+        changed = true;
+      }
+    }
+    for (size_t i = count; i-- > 0;) {
+      if (maskBit(outside.get(), i) || !white(i)) continue;
+      const int x = static_cast<int>(i % w);
+      if ((x < w - 1 && maskBit(outside.get(), i + 1)) || (i + w < count && maskBit(outside.get(), i + w))) {
+        setMaskBit(outside.get(), i);
+        changed = true;
+      }
+    }
+  }
+
+  // The footprint is the rest; grow it one pixel per step, alternating 4- and 8-neighbour steps so the
+  // edge comes out rounded rather than square.
+  for (size_t b = 0; b < maskSize; b++) outside[b] = ~outside[b];
+  uint8_t* footprint = outside.get();
+  for (int step = 0; step < STICKER_EDGE; step++) {
+    memcpy(scratch.get(), footprint, maskSize);
+    const bool diagonals = step % 2 == 1;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        const size_t i = static_cast<size_t>(y) * w + x;
+        if (maskBit(scratch.get(), i)) continue;
+        bool grow = false;
+        for (int dy = -1; dy <= 1 && !grow; dy++) {
+          for (int dx = -1; dx <= 1 && !grow; dx++) {
+            if ((dx == 0 && dy == 0) || (!diagonals && dx != 0 && dy != 0)) continue;
+            const int nx = x + dx;
+            const int ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            grow = maskBit(scratch.get(), static_cast<size_t>(ny) * w + nx);
+          }
+        }
+        if (grow) setMaskBit(footprint, i);
+      }
+    }
+  }
+  art.ownedFootprint = std::move(outside);
+  art.footprint = art.ownedFootprint.get();
+  return true;
+}
+
+// Decodes logo.bmp, scaled down (never up) to fit the logo box with a STICKER_EDGE white border.
+// On the dark screen it keeps its own colours inside its footprint, like the cat.
 bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& art) {
+  const std::string path = sdsystem::findUserFile(CUSTOM_LOGO_NAME);
+  if (!Storage.exists(path.c_str())) return false;
   HalFile file;
-  if (!Storage.openFileForRead("LOGO", CUSTOM_LOGO_PATH, file)) return false;
+  if (!Storage.openFileForRead("LOGO", path, file)) return false;
   Bitmap bitmap(file);
   const auto parsed = bitmap.parseHeaders();
   if (parsed != BmpReaderError::Ok) {
-    LOG_ERR("LOGO", "Invalid %s: %s", CUSTOM_LOGO_PATH, Bitmap::errorToString(parsed));
+    LOG_ERR("LOGO", "Invalid %s: %s", path.c_str(), Bitmap::errorToString(parsed));
     return false;
   }
 
   if (bitmap.getWidth() > CUSTOM_LOGO_MAX_SIDE || bitmap.getHeight() > CUSTOM_LOGO_MAX_SIDE) {
-    LOG_ERR("LOGO", "%s is %dx%d, over %d px a side", CUSTOM_LOGO_PATH, bitmap.getWidth(), bitmap.getHeight(),
+    LOG_ERR("LOGO", "%s is %dx%d, over %d px a side", path.c_str(), bitmap.getWidth(), bitmap.getHeight(),
             CUSTOM_LOGO_MAX_SIDE);
     return false;
   }
 
-  const int boxW = size == GrayLogo::Size::Regular ? GrayLogo::WIDTH : GrayLogo::SMALL_WIDTH;
-  const int boxH = size == GrayLogo::Size::Regular ? GrayLogo::HEIGHT : GrayLogo::SMALL_HEIGHT;
+  const int boxW = (size == GrayLogo::Size::Regular ? GrayLogo::WIDTH : GrayLogo::SMALL_WIDTH) - 2 * STICKER_EDGE;
+  const int boxH = (size == GrayLogo::Size::Regular ? GrayLogo::HEIGHT : GrayLogo::SMALL_HEIGHT) - 2 * STICKER_EDGE;
   const int srcW = bitmap.getWidth();
   const int srcH = bitmap.getHeight();
   int w = srcW;
@@ -107,25 +204,28 @@ bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& ar
     }
   }
 
+  // The art canvas adds the white border on every side.
+  const int canvasW = w + 2 * STICKER_EDGE;
+  const int canvasH = h + 2 * STICKER_EDGE;
   // Packed art: at most 230 * 324 / 4 = 18,630 bytes. Rows: one 2-bit output row plus one raw row
   // (at most 800 px * 4 bytes). Both live only for this draw.
-  const size_t packedSize = (static_cast<size_t>(w) * h + 3) / 4;
+  const size_t packedSize = (static_cast<size_t>(canvasW) * canvasH + 3) / 4;
   const size_t outRowSize = (srcW + 3) / 4;
   art.owned = makeUniqueNoThrow<uint8_t[]>(packedSize);
   auto rows = makeUniqueNoThrow<uint8_t[]>(outRowSize + bitmap.getRowBytes());
   if (!art.owned || !rows) {
     LOG_ERR("LOGO", "OOM: %u + %u bytes for %s", static_cast<unsigned>(packedSize),
-            static_cast<unsigned>(outRowSize + bitmap.getRowBytes()), CUSTOM_LOGO_PATH);
+            static_cast<unsigned>(outRowSize + bitmap.getRowBytes()), path.c_str());
     return false;
   }
-  memset(art.owned.get(), 0, packedSize);
+  memset(art.owned.get(), 0xFF, packedSize);
   uint8_t* outRow = rows.get();
   uint8_t* rawRow = outRow + outRowSize;
 
   for (int fileRow = 0; fileRow < srcH; fileRow++) {
     const auto rowResult = bitmap.readNextRow(outRow, rawRow);
     if (rowResult != BmpReaderError::Ok) {
-      LOG_ERR("LOGO", "Reading %s failed: %s", CUSTOM_LOGO_PATH, Bitmap::errorToString(rowResult));
+      LOG_ERR("LOGO", "Reading %s failed: %s", path.c_str(), Bitmap::errorToString(rowResult));
       return false;
     }
     // Nearest-neighbour: target row ty samples source row ty * srcH / h. Since h <= srcH, each
@@ -135,19 +235,21 @@ bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& ar
     if (ty >= h || ty * srcH / h != srcY) continue;
     for (int tx = 0; tx < w; tx++) {
       const int srcX = tx * srcW / w;
-      uint8_t value = (outRow[srcX >> 2] >> (6 - (srcX & 3) * 2)) & 0x3;
-      if (invertedScreen) value = 3 - value;
-      const size_t pos = static_cast<size_t>(ty) * w + tx;
-      art.owned[pos >> 2] |= value << (6 - (pos & 3) * 2);
+      const uint8_t value = packedLevel(outRow, srcX);
+      const size_t pos = static_cast<size_t>(ty + STICKER_EDGE) * canvasW + tx + STICKER_EDGE;
+      const int shift = 6 - (pos & 3) * 2;
+      art.owned[pos >> 2] = (art.owned[pos >> 2] & ~(0x3 << shift)) | (value << shift);
     }
   }
 
-  art.width = w;
-  art.height = h;
+  rows.reset();
+
+  art.width = canvasW;
+  art.height = canvasH;
   art.offsetX = (boxW - w) / 2;
   art.offsetY = (boxH - h) / 2;
   art.packed = art.owned.get();
-  return true;
+  return !invertedScreen || buildFootprint(art);
 }
 
 bool loadBuiltinArt(const GrayLogo::Size size, Art& art) {
@@ -178,10 +280,10 @@ bool loadBuiltinArt(const GrayLogo::Size size, Art& art) {
 // What drawBase drew, so flushGrayPasses nudges the same art.
 bool baseIsCustom = false;
 
-// The custom logo when /logo.bmp loads, the cat otherwise. Nothing is remembered between draws, so
+// The custom logo when logo.bmp loads, the cat otherwise. Nothing is remembered between draws, so
 // a logo that failed once is tried again next time.
 bool loadArt(const GrayLogo::Size size, const bool invertedScreen, Art& art) {
-  if (Storage.exists(CUSTOM_LOGO_PATH) && loadCustomArt(size, invertedScreen, art)) return true;
+  if (loadCustomArt(size, invertedScreen, art)) return true;
   art = Art{};
   return loadBuiltinArt(size, art);
 }

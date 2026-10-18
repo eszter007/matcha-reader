@@ -9,8 +9,8 @@ class GfxRenderer;
 // renderBitmapSleepScreen). drawImage can't be used: it writes 1-bit panel-native bytes and
 // ignores the grayscale render modes entirely.
 //
-// The logo is /logo.bmp on the SD card when that file loads, scaled down to fit and centred in the
-// WIDTH x HEIGHT (or SMALL_*) box, and the cat (images/CatLogo.h) otherwise.
+// The logo is logo.bmp in the SD card's system folder (sdsystem::dir(), beside the reading stats) when that file loads,
+// scaled down to fit and centred in the WIDTH x HEIGHT (or SMALL_*) box, and the cat (images/CatLogo.h) otherwise.
 //
 // Usage (mirrors the cover flow):
 //   renderer.clearScreen();
@@ -25,7 +25,7 @@ class GfxRenderer;
 // sleep mode). The artwork is not inverted with the screen: inside its footprint (the cat, the
 // books and a white edge around them) it keeps its own black, white and grays, gray pixels
 // starting black post-invert -- the calibrated start state the gray nudge expects. A custom logo
-// counts as all footprint, with its levels pre-inverted, so it shows inverted on the dark screen.
+// gets the same treatment: its footprint is computed from its white background on load.
 namespace GrayLogo {
 constexpr int WIDTH = 230;
 constexpr int HEIGHT = 324;

@@ -765,11 +765,11 @@ Transparent overlay files are intentionally separate from normal sleep images. R
 
 #### Custom logo
 
-To replace the cat on the boot screen and on the **Dark**, **Light** and **Stats** sleep screens, put a BMP named `logo.bmp` in the root of the SD card. No setting is needed; remove the file to get the cat back.
+To replace the cat on the boot screen and on the **Dark**, **Light** and **Stats** sleep screens, put a BMP named `logo.bmp` in the `system` folder at the root of the SD card, next to `reading_stats.bin` and `bookstats`. No setting is needed; remove the file to get the cat back.
 
 - Any BMP that sleep images accept works (1, 2, 4, 8, 24 or 32-bit, uncompressed). It is shown in 4 levels of gray.
-- Make it 230x324 pixels, the size of the logo area. Images up to 800 pixels a side are scaled down to fit; smaller ones are centred and not enlarged. The **Stats** screen may show it smaller, or leave it out when there is no room.
-- Draw dark artwork on a white background. On the dark screens the logo is inverted, so it shows light on black.
+- Make it 222x316 pixels: the logo area is 230x324, and a 4-pixel white border is added on every side. Images up to 800 pixels a side are scaled down to fit; smaller ones are centred and not enlarged. The **Stats** screen may show it smaller, or leave it out when there is no room.
+- Draw it on a plain white background, with no transparency. On the dark screens it keeps its own colours inside a white outline, like the cat: the white around the drawing turns black, and white areas enclosed by the drawing (a face, a book page) stay white.
 - The boot screen shows it in black and white only, to keep waking up fast, so light gray parts disappear there. Use dark lines.
 - If the file can't be read, the cat is shown instead.
 
