@@ -92,6 +92,60 @@ static_assert(RULE_FIXED_BYTES == 92, "CSS v26 rule framing must stay in sync wi
 
 constexpr char asciiToLower(const char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; }
 
+// The stylesheet path an @import target names, relative to the importing sheet at `from`, with
+// "." and ".." segments resolved -- the normalised form the stylesheet table stores.
+std::string resolveImportPath(const std::string& from, std::string_view target) {
+  std::string joined;
+  if (!target.empty() && target.front() == '/') {
+    joined.assign(target.substr(1));
+  } else {
+    const size_t slash = from.rfind('/');
+    joined = slash == std::string::npos ? std::string() : from.substr(0, slash + 1);
+    joined.append(target);
+  }
+  std::string out;
+  size_t start = 0;
+  while (start <= joined.size()) {
+    size_t end = joined.find('/', start);
+    if (end == std::string::npos) end = joined.size();
+    const std::string_view seg(joined.data() + start, end - start);
+    if (seg == "..") {
+      const size_t cut = out.rfind('/');
+      out.erase(cut == std::string::npos ? 0 : cut);
+    } else if (!seg.empty() && seg != ".") {
+      if (!out.empty()) out.push_back('/');
+      out.append(seg);
+    }
+    start = end + 1;
+  }
+  return out;
+}
+
+// The URL of an `@import` prelude (`import "a.css"`, `import url(a.css) screen`), or empty.
+std::string_view importTarget(std::string_view prelude) {
+  if (prelude.size() < 6 || !std::equal(prelude.begin(), prelude.begin() + 6, "import",
+                                        [](const char a, const char b) { return asciiToLower(a) == b; })) {
+    return {};
+  }
+  prelude.remove_prefix(6);
+  const size_t quote = prelude.find_first_of("\"'");
+  const size_t url = prelude.find("url(");
+  if (url != std::string_view::npos && (quote == std::string_view::npos || url < quote)) {
+    std::string_view inner = prelude.substr(url + 4);
+    inner = inner.substr(0, inner.find(')'));
+    while (!inner.empty() && (isAsciiWhitespace(inner.front()) || inner.front() == '"' || inner.front() == '\'')) {
+      inner.remove_prefix(1);
+    }
+    while (!inner.empty() && (isAsciiWhitespace(inner.back()) || inner.back() == '"' || inner.back() == '\'')) {
+      inner.remove_suffix(1);
+    }
+    return inner;
+  }
+  if (quote == std::string_view::npos) return {};
+  const size_t close = prelude.find(prelude[quote], quote + 1);
+  return close == std::string_view::npos ? std::string_view{} : prelude.substr(quote + 1, close - quote - 1);
+}
+
 // Case-insensitive equality on ASCII. lowercaseKeyword MUST already be
 // lowercase; CSS keywords are ASCII by spec so byte-wise tolower is safe.
 constexpr bool iequalsAscii(std::string_view value, std::string_view lowercaseKeyword) {
@@ -1339,6 +1393,9 @@ bool CssParser::loadFromStream(HalFile& source) {
 
   bool inAtRule = false;
   int atDepth = 0;
+  // Top-level at-rule text up to its ';' or '{': only @import is read from it.
+  char atPrelude[96];
+  size_t atPreludeLen = 0;
 
   int bodyDepth = 0;
   bool skippingRule = false;
@@ -1356,6 +1413,10 @@ bool CssParser::loadFromStream(HalFile& source) {
         if (atDepth == 0) inAtRule = false;
       } else if (c == ';' && atDepth == 0) {
         inAtRule = false;
+        const std::string_view target = importTarget(std::string_view(atPrelude, atPreludeLen));
+        if (!target.empty()) recordImport(target);
+      } else if (atDepth == 0 && atPreludeLen < sizeof(atPrelude)) {
+        atPrelude[atPreludeLen++] = c;
       }
       return;
     }
@@ -1367,6 +1428,7 @@ bool CssParser::loadFromStream(HalFile& source) {
       if (c == '@' && selector.empty()) {
         inAtRule = true;
         atDepth = 0;
+        atPreludeLen = 0;
         return;
       }
       if (c == '{') {
@@ -1986,15 +2048,47 @@ bool CssParser::beginCacheAppend(const std::vector<std::string>* sources, const 
   // Stylesheet table: count, then per stylesheet its alias and its path.
   const size_t count = sources ? std::min(sources->size(), StylesheetFilter::MAX_TRACKED) : 0;
   cacheAppendFile_.write(static_cast<uint8_t>(count));
+  size_t written = sizeof(uint8_t) + sizeof(placeholder) + sizeof(uint8_t);  // version, rule count, count
   for (size_t i = 0; i < count; ++i) {
     const std::string& path = (*sources)[i];
     const auto pathLen = static_cast<uint16_t>(std::min<size_t>(path.size(), MAX_SELECTOR_LENGTH));
+    written += sizeof(uint8_t) + sizeof(pathLen) + pathLen;
     cacheAppendFile_.write(aliases && aliases[i] < count ? aliases[i] : static_cast<uint8_t>(i));
     cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&pathLen), sizeof(pathLen));
     cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(path.data()), pathLen);
   }
+  // Imports block, one mask per stylesheet: zeros now, patched by endCacheAppend.
+  importsOffset_ = written;
+  const uint64_t noImports = 0;
+  for (size_t i = 0; i < count; ++i) {
+    cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(&noImports), sizeof(noImports));
+  }
+  appendSources_ = sources;
+  appendSourceCount_ = static_cast<uint8_t>(count);
+  appendImports_.reset();
+  if (count > 0) {
+    appendImports_ = makeUniqueNoThrow<uint64_t[]>(count);
+    if (appendImports_) {
+      for (size_t i = 0; i < count; ++i) appendImports_[i] = 0;
+    } else {
+      // Imports stay unrecorded: a chapter then gets only the sheets it links directly.
+      LOG_ERR("CSS", "OOM: %u import masks", static_cast<unsigned>(count));
+    }
+  }
   cacheAppendActive_ = true;
   return true;
+}
+
+void CssParser::recordImport(const std::string_view target) {
+  if (!cacheAppendActive_ || !appendImports_ || !appendSources_ || currentSource_ >= appendSourceCount_) return;
+  const std::string resolved = resolveImportPath((*appendSources_)[currentSource_], target);
+  for (uint8_t i = 0; i < appendSourceCount_; ++i) {
+    if ((*appendSources_)[i] == resolved) {
+      appendImports_[currentSource_] |= uint64_t{1} << i;
+      return;
+    }
+  }
+  LOG_DBG("CSS", "@import %.*s not among the book's stylesheets", static_cast<int>(target.size()), target.data());
 }
 
 bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective) {
@@ -2008,11 +2102,33 @@ bool CssParser::readStylesheetTable(HalFile& file, const StylesheetFilter* reque
       return false;
     }
   }
+  // Heap, not stack: 64 masks are twice this function's stack budget. Without them the chapter
+  // keeps just the sheets it links directly.
+  std::unique_ptr<uint64_t[]> imports = count > 0 ? makeUniqueNoThrow<uint64_t[]>(count) : nullptr;
+  if (count > 0 && !imports) LOG_ERR("CSS", "OOM: %u import masks; @imports not followed", count);
+  for (uint8_t i = 0; i < count; ++i) {
+    uint64_t mask = 0;
+    if (file.read(&mask, sizeof(mask)) != sizeof(mask)) return false;
+    if (imports) imports[i] = mask;
+  }
   effective = StylesheetFilter{};
   if (requested == nullptr || requested->all) return true;
   effective.all = false;
+  // A linked sheet brings in what it @imports, and so on down the chain. A copy shares its
+  // original's imports, since only the original was parsed.
+  uint64_t linked = requested->linked;
+  for (uint8_t pass = 0; imports && pass < count; ++pass) {
+    uint64_t grown = linked;
+    for (uint8_t i = 0; i < count; ++i) {
+      if (((linked >> i) & 1u) == 0) continue;
+      grown |= imports[i];
+      if (aliases[i] < count) grown |= imports[aliases[i]];
+    }
+    if (grown == linked) break;
+    linked = grown;
+  }
   for (size_t i = 0; i < StylesheetFilter::MAX_TRACKED; ++i) {
-    if (((requested->linked >> i) & 1u) == 0) continue;
+    if (((linked >> i) & 1u) == 0) continue;
     effective.link(i);
     if (i < count) effective.link(aliases[i]);
   }
@@ -2094,12 +2210,24 @@ bool CssParser::appendRulesToCache() {
 bool CssParser::endCacheAppend(const bool discard) {
   if (!cacheAppendActive_) return false;
   cacheAppendActive_ = false;
+  auto imports = std::move(appendImports_);
+  const uint8_t importCount = appendSourceCount_;
+  appendSources_ = nullptr;
+  appendSourceCount_ = 0;
   // Every failure path drops only the half-written temp file. Whatever rulesCache already held
   // stays where it is: a partial parse is "could not produce it now", not "there is nothing to
   // produce", so it must not take a good cache down with it. A complete parse that found no
   // rules IS "nothing to produce": it is published as an empty table, or a book without a
   // stylesheet would re-parse on every open and fail every section's cache load.
   if (discard) {
+    cacheAppendFile_.close();
+    Storage.remove((cachePath + rulesCacheTmp).c_str());
+    return false;
+  }
+  if (imports && importCount > 0 &&
+      (!cacheAppendFile_.seek(importsOffset_) ||
+       cacheAppendFile_.write(reinterpret_cast<const uint8_t*>(imports.get()), importCount * sizeof(uint64_t)) !=
+           importCount * sizeof(uint64_t))) {
     cacheAppendFile_.close();
     Storage.remove((cachePath + rulesCacheTmp).c_str());
     return false;

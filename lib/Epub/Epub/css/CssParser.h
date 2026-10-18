@@ -72,9 +72,11 @@ class CssParser {
   //      stylesheets (path + the index whose rules an identical copy shares), so a chapter applies
   //      only the stylesheets it links.
   // v25: white-space (pre / pre-wrap / break-spaces) is stored: defined bit 29, value in textFlags.
-  // v26: each border side keeps its own style and width: four spec bytes after textFlags.
   //      Records are written in source order (selector-pool position), which the cascade uses
   //      to break specificity ties; a v24 cache holds them in selector order.
+  // v26: each border side keeps its own style and width: four spec bytes after textFlags. The
+  //      stylesheet table is followed by one u64 per stylesheet: the stylesheets it @imports, so a
+  //      chapter linking only an EBPAJ book-style.css also applies the sheets it imports.
   static constexpr uint8_t CSS_CACHE_VERSION = 26;
 
   // The stylesheets one chapter links, as indices into the book's stylesheet list. A record from a
@@ -382,10 +384,18 @@ class CssParser {
   uint16_t appendedRuleCount_ = 0;
   bool cacheAppendActive_ = false;
   uint8_t currentSource_ = SOURCE_UNKNOWN;
+  // Which stylesheets each one @imports, as stylesheet bit masks, collected while the cache is
+  // built and patched into its imports block (at importsOffset_) when it is finished.
+  const std::vector<std::string>* appendSources_ = nullptr;
+  std::unique_ptr<uint64_t[]> appendImports_;
+  uint8_t appendSourceCount_ = 0;
+  size_t importsOffset_ = 0;
+  void recordImport(std::string_view target);
 
   static void writeRuleRecord(HalFile& file, uint8_t source, std::string_view selector, const CssStyle& style);
   // Reads the header's stylesheet table and returns `requested` widened to the stylesheets its
-  // linked ones share rules with. The file must be positioned just after the rule count.
+  // linked ones @import (transitively) and share rules with. The file must be positioned just
+  // after the rule count.
   static bool readStylesheetTable(HalFile& file, const StylesheetFilter* requested, StylesheetFilter& effective);
   // Fixed-size style body in the cache record's byte order; `out` must hold RULE_FIXED_BYTES.
   static void encodeStyleWire(const CssStyle& style, uint8_t* out);
