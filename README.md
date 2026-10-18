@@ -138,13 +138,9 @@ A wallpaper laid over the page you were reading, so the book shows through. See 
 - Clippings and highlights (from upstream) work in vertical text too, with the same buttons, handles and actions
 - The touch selection bar has a **Translate** action next to Look Up: it sends just the selected text to Gemini, in the same panel as page translation (same key and Wi-Fi setup)
 - Reader settings remembered per book
-- **Optimize EPUB** on upload: splits single-file novels into chapters and fits images to the screen
-- More of the book's own CSS: heading sizes, line spacing, page breaks, boxed asides, drop caps, margins
-- Instant image page turns
-- A **Power + Up** shortcut to sync the clock (Settings → Controls → Shortcuts)
-- Next-book suggestions at the end of every book
-- A file browser that shows everything on the card
-- Fully localised, in all the languages CrossPoint ships
+- Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
+- A Power + Up shortcut to sync the clock (Settings → Controls → Shortcuts)
+- Japanese & Chinese localization
 
 ## Setup
 
