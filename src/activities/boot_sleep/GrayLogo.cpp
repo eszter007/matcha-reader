@@ -120,7 +120,7 @@ bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& ar
   }
   memset(art.owned.get(), 0, packedSize);
   uint8_t* outRow = rows.get();
-  uint8_t* rawRow = rows.get() + outRowSize;
+  uint8_t* rawRow = outRow + outRowSize;
 
   for (int fileRow = 0; fileRow < srcH; fileRow++) {
     const auto rowResult = bitmap.readNextRow(outRow, rawRow);
@@ -196,8 +196,8 @@ void drawBase(const GfxRenderer& renderer, const int x, const int y, const bool 
   if (!loadArt(size, invertedScreen, art)) return;
   baseIsCustom = art.packed != nullptr;
   LogoCursor logo(art);
-  const int left = x + art.offsetX;
-  const int top = y + art.offsetY;
+  const int artX = x + art.offsetX;
+  const int artY = y + art.offsetY;
   for (int py = 0; py < art.height; py++) {
     for (int px = 0; px < art.width; px++) {
       const uint8_t symbol = logo.next();
@@ -207,11 +207,11 @@ void drawBase(const GfxRenderer& renderer, const int x, const int y, const bool 
         // targets inside the footprint are white artwork -> white, black -> black, grays -> black
         // start state for the nudge; outside it the background stays black. Pre-invert that means
         // painting only the footprint's white pixels.
-        if (val == 3 && inFootprint(symbol)) renderer.drawPixel(left + px, top + py, true);
+        if (val == 3 && inFootprint(symbol)) renderer.drawPixel(artX + px, artY + py, true);
       } else {
         // Same rule as GfxRenderer's grayscale bitmap base pass: everything but white starts
         // black; the nudge planes lighten the grays afterwards.
-        if (val < 3) renderer.drawPixel(left + px, top + py, true);
+        if (val < 3) renderer.drawPixel(artX + px, artY + py, true);
       }
     }
   }
@@ -221,12 +221,12 @@ void drawBw(const GfxRenderer& renderer, const int x, const int y) {
   Art art;
   if (!loadArt(Size::Regular, false, art)) return;
   LogoCursor logo(art);
-  const int left = x + art.offsetX;
-  const int top = y + art.offsetY;
+  const int artX = x + art.offsetX;
+  const int artY = y + art.offsetY;
   for (int py = 0; py < art.height; py++) {
     for (int px = 0; px < art.width; px++) {
       // Threshold between the two grays: dark shading keeps its ink, light shading drops out.
-      if (level(logo.next()) <= 1) renderer.drawPixel(left + px, top + py, true);
+      if (level(logo.next()) <= 1) renderer.drawPixel(artX + px, artY + py, true);
     }
   }
 }
@@ -239,8 +239,8 @@ void flushGrayPasses(GfxRenderer& renderer, const int x, const int y, const bool
     renderer.setRenderMode(GfxRenderer::BW);
     return;
   }
-  const int left = x + art.offsetX;
-  const int top = y + art.offsetY;
+  const int artX = x + art.offsetX;
+  const int artY = y + art.offsetY;
   // Plane semantics (identical to GfxRenderer::drawBitmap's grayscale modes): buffer cleared
   // to 0, then a set bit means "nudge this pixel". LSB plane = dark gray only; MSB plane =
   // dark or light gray. The dark screen keeps the artwork's own shades, so only its footprint
@@ -255,7 +255,7 @@ void flushGrayPasses(GfxRenderer& renderer, const int x, const int y, const bool
   LogoCursor lsb(art);
   for (int py = 0; py < art.height; py++) {
     for (int px = 0; px < art.width; px++) {
-      if (planeLevel(lsb.next()) == 1) renderer.drawPixel(left + px, top + py, false);
+      if (planeLevel(lsb.next()) == 1) renderer.drawPixel(artX + px, artY + py, false);
     }
   }
   renderer.copyGrayscaleLsbBuffers();
@@ -266,7 +266,7 @@ void flushGrayPasses(GfxRenderer& renderer, const int x, const int y, const bool
   for (int py = 0; py < art.height; py++) {
     for (int px = 0; px < art.width; px++) {
       const uint8_t val = planeLevel(msb.next());
-      if (val == 1 || val == 2) renderer.drawPixel(left + px, top + py, false);
+      if (val == 1 || val == 2) renderer.drawPixel(artX + px, artY + py, false);
     }
   }
   renderer.copyGrayscaleMsbBuffers();
