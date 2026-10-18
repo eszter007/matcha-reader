@@ -460,4 +460,19 @@ TEST_F(CssParserTest, HigherSpecificityStillBeatsLaterSource) {
   EXPECT_EQ(parser.resolveStyle("p", "note").textAlign, CssTextAlign::Right);
 }
 
+TEST_F(CssParserTest, LightBackgroundIsShadedAndSurvivesCache) {
+  {
+    CssParser writer(cachePath());
+    ASSERT_TRUE(loadCss(writer, ".note { background-color: #ddd; }\n.page { background-color: #fff; }\n"
+                                ".dark { color: #fff; background-color: #333; }\n"));
+    EXPECT_EQ(writer.resolveStyle("div", "note").inkMode, CssInkMode::Shaded);
+    EXPECT_EQ(writer.resolveStyle("div", "page").inkMode, CssInkMode::Normal);
+    EXPECT_EQ(writer.resolveStyle("div", "dark").inkMode, CssInkMode::Inverted);
+    ASSERT_TRUE(writer.saveToCache());
+  }
+  CssParser reader(cachePath());
+  ASSERT_TRUE(reader.loadFromCache());
+  EXPECT_EQ(reader.resolveStyle("div", "note").inkMode, CssInkMode::Shaded);
+}
+
 }  // namespace

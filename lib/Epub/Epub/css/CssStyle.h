@@ -115,6 +115,7 @@ enum class CssListStyleType : uint8_t { Disc = 0, Circle = 1, Square = 2, Decima
 enum class CssInkMode : uint8_t {
   Normal = 0,    // dark ink straight onto the page
   Inverted = 1,  // light ink on a filled dark panel
+  Shaded = 2,    // dark ink on a light gray panel (a light, non-white background-color)
 };
 
 // page-break-before / -after / -inside, and the modern break-before / -after / -inside aliases.

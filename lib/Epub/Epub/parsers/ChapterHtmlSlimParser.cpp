@@ -658,7 +658,7 @@ void ChapterHtmlSlimParser::emitInvertedPanel(const BlockStyle& blockStyle, cons
 
   auto panel = makeUniqueNoThrow<PageBox>(static_cast<int16_t>(right - left), static_cast<int16_t>(height),
                                           /*edges=*/0, static_cast<int16_t>(left), static_cast<int16_t>(top),
-                                          /*filled=*/true);
+                                          blockStyle.isInverted() ? PageBox::FILL_BLACK : PageBox::FILL_LIGHT_GRAY);
   if (!panel) {
     LOG_ERR("EHP", "OOM: inverted panel box");
     return;
@@ -3434,7 +3434,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
 
   // Panel BEFORE the line: page elements render in insertion order, so the fill has to be pushed
   // first or it would paint over the text it is meant to sit behind.
-  if (line->getBlockStyle().isInverted()) {
+  if (line->getBlockStyle().hasPanel()) {
     emitInvertedPanel(line->getBlockStyle(), static_cast<int16_t>(lineHeight));
   }
 
@@ -3524,7 +3524,7 @@ void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
 
   // Hand the block's top padding to its first panel line: currentPageNextY has already advanced
   // past it, so without this the panel would start below the padding it is meant to fill.
-  if (blockStyle.isInverted()) {
+  if (blockStyle.hasPanel()) {
     if (opensBlock) pendingPanelTopPad = std::max<int16_t>(0, blockStyle.paddingTop);
     // Every call: a box placed by an earlier chunk may sit on a page that has since been written.
     lastPanelBox = nullptr;
@@ -3559,7 +3559,7 @@ void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
   // ... and its bottom padding to the last one, which is only identifiable now the block is laid
   // out. The last line always sits on the still-open page (a page is completed on the NEXT line
   // that does not fit), so the box is still both alive and unwritten.
-  if (blockStyle.isInverted() && includeLastLine) {
+  if (blockStyle.hasPanel() && includeLastLine) {
     if (lastPanelBox && blockStyle.paddingBottom > 0) {
       lastPanelBox->extendHeight(std::min<int16_t>(
           blockStyle.paddingBottom, static_cast<int16_t>(std::max(0, viewportHeight - currentPageNextY))));

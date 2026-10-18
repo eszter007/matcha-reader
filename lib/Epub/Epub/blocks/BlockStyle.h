@@ -81,6 +81,8 @@ struct BlockStyle {
   bool inkModeDefined = false;  // distinguishes "unstyled" from "explicitly Normal" during cascade
 
   [[nodiscard]] bool isInverted() const { return inkMode == CssInkMode::Inverted; }
+  // Drawn on a per-line panel: black for an inverted block, light gray for a shaded one.
+  [[nodiscard]] bool hasPanel() const { return inkMode != CssInkMode::Normal; }
 
   // CSS page-break-{before,after,inside}, packed exactly as CssStyle::pageBreaks (2 bits each).
   // Only the `avoid` values are read from here, by ChapterHtmlSlimParser::makePages:

@@ -1512,4 +1512,26 @@ TEST_F(ChapterWhitespaceTest, NormalOverridesInheritedPre) {
   EXPECT_EQ(lines[0], (std::vector<std::string>{"a", "b", "c"}));
 }
 
+TEST_F(ChapterPagingTest, ShadedBlockGetsALightGrayPanelBehindEachLine) {
+  makeParser(".note { background-color: #e0e0e0; }\n");
+  para("before");
+  para("shaded text", "note");
+  finish();
+  ASSERT_EQ(pageObjects.size(), 1u);
+  int grayPanels = 0;
+  bool panelPrecedesShadedLine = false;
+  const auto& elements = pageObjects[0]->elements;
+  for (size_t i = 0; i < elements.size(); ++i) {
+    if (elements[i]->getTag() != TAG_PageBox) continue;
+    if (static_cast<const PageBox&>(*elements[i]).fillKind() != PageBox::FILL_LIGHT_GRAY) continue;
+    ++grayPanels;
+    if (i + 1 < elements.size() && elements[i + 1]->getTag() == TAG_PageLine) {
+      const auto& block = *static_cast<const PageLine&>(*elements[i + 1]).getBlock();
+      panelPrecedesShadedLine = block.wordCount() > 0 && std::string(block.wordText(0)) == "shaded";
+    }
+  }
+  EXPECT_EQ(grayPanels, 1);
+  EXPECT_TRUE(panelPrecedesShadedLine);
+}
+
 }  // namespace

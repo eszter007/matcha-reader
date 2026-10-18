@@ -1119,6 +1119,10 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
 // whatever the book intended, so a missed inversion costs only fidelity. Only Inverted can be
 // wrong in a way that hurts -- it commits a whole block to a black panel.
 constexpr int16_t INK_INVERT_MIN_LUMA_DELTA = 64;
+// A background between these lumas, under dark text, is drawn as a light gray panel. Near-white
+// backgrounds are the page itself; darker ones would bury black text on a 1-bit dither.
+constexpr int16_t INK_SHADE_MIN_BG_LUMA = 150;
+constexpr int16_t INK_SHADE_MAX_BG_LUMA = 240;
 
 void CssParser::resolveInkMode(CssStyle& style, const InkColors& ink) {
   // Said nothing about colour: leave the property unset so an ancestor's polarity still applies.
@@ -1130,7 +1134,14 @@ void CssParser::resolveInkMode(CssStyle& style, const InkColors& ink) {
   // the book's default BLACK text on a black panel.
   const int16_t textLuma = ink.textLuma != InkColors::UNSET ? ink.textLuma : 0;
   const int16_t bgLuma = ink.bgLuma != InkColors::UNSET ? ink.bgLuma : 255;
-  style.inkMode = (textLuma - bgLuma >= INK_INVERT_MIN_LUMA_DELTA) ? CssInkMode::Inverted : CssInkMode::Normal;
+  if (textLuma - bgLuma >= INK_INVERT_MIN_LUMA_DELTA) {
+    style.inkMode = CssInkMode::Inverted;
+  } else if (ink.bgLuma != InkColors::UNSET && bgLuma >= INK_SHADE_MIN_BG_LUMA && bgLuma <= INK_SHADE_MAX_BG_LUMA &&
+             bgLuma - textLuma >= INK_INVERT_MIN_LUMA_DELTA) {
+    style.inkMode = CssInkMode::Shaded;
+  } else {
+    style.inkMode = CssInkMode::Normal;
+  }
   style.defined.inkMode = 1;
 }
 
@@ -2299,8 +2310,9 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
       clear();
       return false;
     }
-    style.inkMode =
-        inkModeVal == static_cast<uint8_t>(CssInkMode::Inverted) ? CssInkMode::Inverted : CssInkMode::Normal;
+    style.inkMode = inkModeVal == static_cast<uint8_t>(CssInkMode::Inverted) ? CssInkMode::Inverted
+                    : inkModeVal == static_cast<uint8_t>(CssInkMode::Shaded) ? CssInkMode::Shaded
+                                                                               : CssInkMode::Normal;
 
     // Read the packed page-break byte (v15+). Bits 6-7 are unused and each 2-bit slot has one
     // undefined value (3), so the byte is masked down to slots the paginator understands rather
