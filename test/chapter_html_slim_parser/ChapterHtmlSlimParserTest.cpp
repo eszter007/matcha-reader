@@ -1301,8 +1301,8 @@ class ChapterPagingTest : public ::testing::Test {
     };
     parser = std::make_unique<ChapterHtmlSlimParser>(
         nullptr, filepath, renderer, 0, 1.0f, false, static_cast<uint8_t>(CssTextAlign::Left),
-        static_cast<uint16_t>(renderer.getScreenWidth()), viewportHeight, false, false, false, onPage, true, "", "",
-        0, std::vector<std::string>{}, std::function<void()>{}, &cssParser);
+        static_cast<uint16_t>(renderer.getScreenWidth()), viewportHeight, false, false, false, onPage, true, "", "", 0,
+        std::vector<std::string>{}, std::function<void()>{}, &cssParser);
     parser->currentTextBlock = std::make_unique<ParsedText>(false);
     parser->blockStyleStack.push_back(BlockStyle{});
     parser->insideBody = true;
@@ -1370,7 +1370,6 @@ TEST_F(ChapterPagingTest, TerminalBreakAfterDoesNotCreateEmptyPage) {
   finish();
   EXPECT_EQ(pages.size(), 1u);
 }
-
 
 // Widow/orphan control. Each word is wider than half the 480 px viewport, so every word is one
 // line; 19 px per line (the stub's 18 px ink plus the gap floor), so 5 lines fill 95 px.
@@ -1451,7 +1450,6 @@ TEST_F(ChapterWidowOrphanTest, AnOrdinaryBreakIsUnchanged) {
   EXPECT_EQ(pageOfLine('a', 5), 0);
   EXPECT_EQ(pageOfLine('a', 6), 1);
 }
-
 
 // Words of every PageLine, one vector per line, across all pages.
 class ChapterWhitespaceTest : public ChapterPagingTest {
@@ -1540,8 +1538,7 @@ class ChapterTableBorderTest : public ChapterPagingTest {
     const XML_Char* bordered[] = {"border", borderAttr, nullptr};
     const XML_Char* classed[] = {"class", tableClass, nullptr};
     const XML_Char* none[] = {nullptr};
-    ChapterHtmlSlimParser::startElement(parser.get(), "table",
-                                        borderAttr ? bordered : (tableClass ? classed : none));
+    ChapterHtmlSlimParser::startElement(parser.get(), "table", borderAttr ? bordered : (tableClass ? classed : none));
     open("tr");
     open("td");
     text("left");

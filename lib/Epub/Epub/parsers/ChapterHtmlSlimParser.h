@@ -135,7 +135,7 @@ class ChapterHtmlSlimParser {
   uint8_t recentLineCount = 0;      // trailing lines of the page recorded above, newest last
   size_t lastLineElementCount = 0;  // elements.size() after the newest recorded line
   uint8_t paragraphLinesOnPage = 0;
-  uint8_t keepWithNextLines = 0;  // heading lines at the page tail, waiting for the next block
+  uint8_t keepWithNextLines = 0;      // heading lines at the page tail, waiting for the next block
   uint8_t paragraphHeadingLines = 0;  // heading lines directly above this paragraph on the page
   bool currentBlockIsHeading = false;
   const ParsedText* layoutParagraph = nullptr;  // the block makePages() is laying out

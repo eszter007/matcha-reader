@@ -277,7 +277,12 @@ namespace {
 //      changes. The framing is unchanged.
 // v101: the built-in 16 and 18pt reader faces are the 14pt face enlarged, so headings and those
 //      sizes lay out with new glyph metrics. The framing is unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 101;
+// v102: upstream merge (their v57): widow/orphan control and headings kept with the next block,
+//      forced CSS page breaks honoured again, <pre>/white-space: pre, nested em sizes, repeated
+//      <br> lines, cell borders for bordered tables, and a light-gray PageBox fill for shaded
+//      blocks (PageBox's fill byte is now a kind: 0 none, 1 black, 2 light gray). Pages move, so
+//      older sections are rebuilt.
+constexpr uint8_t SECTION_FILE_VERSION = 102;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

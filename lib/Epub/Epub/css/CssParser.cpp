@@ -2325,7 +2325,7 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
     }
     style.inkMode = inkModeVal == static_cast<uint8_t>(CssInkMode::Inverted) ? CssInkMode::Inverted
                     : inkModeVal == static_cast<uint8_t>(CssInkMode::Shaded) ? CssInkMode::Shaded
-                                                                               : CssInkMode::Normal;
+                                                                             : CssInkMode::Normal;
 
     // Read the packed page-break byte (v15+). Bits 6-7 are unused and each 2-bit slot has one
     // undefined value (3), so the byte is masked down to slots the paginator understands rather
@@ -2349,8 +2349,8 @@ bool CssParser::loadFromCache(const std::vector<std::string>* usedClasses, const
       clear();
       return false;
     }
-    style.textFlags =
-        static_cast<uint8_t>(textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT | CSS_PRESERVE_WHITESPACE_BIT));
+    style.textFlags = static_cast<uint8_t>(
+        textFlagsVal & (CSS_TEXT_TRANSFORM_MASK | CSS_HYPHENS_NONE_BIT | CSS_PRESERVE_WHITESPACE_BIT));
 
     // Read defined flags
     uint32_t definedBits = 0;

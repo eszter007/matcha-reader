@@ -462,8 +462,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int baseFontId, const 
           continue;
         }
 
-        const int lineY = line.style == EpdFontFamily::UNDERLINE ? baseline + (script ? 1 : 2)
-                                                                 : baseline - inkAscender * 27 / 100;
+        const int lineY =
+            line.style == EpdFontFamily::UNDERLINE ? baseline + (script ? 1 : 2) : baseline - inkAscender * 27 / 100;
         if (line.active() && line.yPos != lineY) {
           flushDecoration(line);
         }

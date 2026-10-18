@@ -230,8 +230,8 @@ struct CssPropertyFlags {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || border || textEmphasis || fontVariant ||
-           listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens || letterSpacing ||
-           whiteSpace;
+           listStyleType || fontSize || inkMode || pageBreak || lineHeight || textTransform || hyphens ||
+           letterSpacing || whiteSpace;
   }
 
   void clearAll() {

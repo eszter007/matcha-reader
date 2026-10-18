@@ -64,8 +64,8 @@ constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 // HTML5 sectioning/grouping tags (aside, section, ...) are block-level in every browser and
 // publishers hang block CSS on them (e.g. <aside class="box"> with border+padding for call-out
 // boxes). Treating them as inline dropped their margins, borders and text-align entirely.
-constexpr const char* BLOCK_TAGS[] = {"p",  "li",    "div",     "br",      "blockquote", "ol",
-                                      "ul", "aside", "section", "article", "figure",     "figcaption", "pre"};
+constexpr const char* BLOCK_TAGS[] = {"p",     "li",      "div",     "br",     "blockquote", "ol", "ul",
+                                      "aside", "section", "article", "figure", "figcaption", "pre"};
 
 // UTF-8 mark glyph for a text-emphasis style (JP bouten), nullptr for none.
 const char* emphasisMarkUtf8(const CssTextEmphasis e) {
@@ -1329,7 +1329,8 @@ void ChapterHtmlSlimParser::finishTableRow() {
     if (!currentPage || pageFull) {
       if (pageFull) {
         if (bordered && segmentTop >= 0) {
-          emitTableCellBoxes(columnCount, cellWidth, segmentTop, static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP));
+          emitTableCellBoxes(columnCount, cellWidth, segmentTop,
+                             static_cast<int16_t>(currentPageNextY + CELL_FRAME_GAP));
         }
         segmentTop = -1;
         setCurrentPageVisibleOffset(lineVisibleOffset);
@@ -3529,8 +3530,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   // Floor for the box's closing edge: it may be pulled up into trailing spacing, never into text.
   if (boxDepth >= 0) boxLastLineBottomY = currentPageNextY;
 
-  const bool hasExtras = currentPage->footnotes.size() != footnotesBefore ||
-                         currentPage->links.size() != linksBefore ||
+  const bool hasExtras = currentPage->footnotes.size() != footnotesBefore || currentPage->links.size() != linksBefore ||
                          currentPage->elements.size() != elementsBefore + 1;
   if (recentLineCount == MAX_CARRIED_LINES) {
     std::move(recentLines + 1, recentLines + MAX_CARRIED_LINES, recentLines);

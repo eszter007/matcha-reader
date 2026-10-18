@@ -420,8 +420,9 @@ TEST_F(CssParserTest, ScopedFirstLetterRuleDoesNotLeakIntoTheElementCascade) {
 TEST_F(CssParserTest, PreservedWhitespaceSurvivesCacheAndNormalOverridesIt) {
   {
     CssParser writer(cachePath());
-    ASSERT_TRUE(loadCss(writer, ".code { white-space: pre-wrap; }\n.plain { white-space: normal; }\n"
-                                ".wrap { white-space: break-spaces; }\n.odd { white-space: inherit; }\n"));
+    ASSERT_TRUE(loadCss(writer,
+                        ".code { white-space: pre-wrap; }\n.plain { white-space: normal; }\n"
+                        ".wrap { white-space: break-spaces; }\n.odd { white-space: inherit; }\n"));
     ASSERT_TRUE(writer.saveToCache());
   }
   CssParser reader(cachePath());
@@ -440,8 +441,9 @@ TEST_F(CssParserTest, PreservedWhitespaceSurvivesCacheAndNormalOverridesIt) {
 TEST_F(CssParserTest, EqualSpecificityUsesSourceOrderAndSurvivesCache) {
   {
     CssParser writer(cachePath());
-    ASSERT_TRUE(loadCss(writer, ".zeta { text-align: right; }\n.alpha { text-align: center; }\n"
-                                ".late { font-weight: bold; }\n.early { font-weight: normal; }\n"));
+    ASSERT_TRUE(loadCss(writer,
+                        ".zeta { text-align: right; }\n.alpha { text-align: center; }\n"
+                        ".late { font-weight: bold; }\n.early { font-weight: normal; }\n"));
     // Later rule wins the tie, whatever the selectors' alphabetical order.
     EXPECT_EQ(writer.resolveStyle("p", "alpha zeta").textAlign, CssTextAlign::Center);
     EXPECT_EQ(writer.resolveStyle("p", "late early").fontWeight, CssFontWeight::Normal);
@@ -463,8 +465,9 @@ TEST_F(CssParserTest, HigherSpecificityStillBeatsLaterSource) {
 TEST_F(CssParserTest, LightBackgroundIsShadedAndSurvivesCache) {
   {
     CssParser writer(cachePath());
-    ASSERT_TRUE(loadCss(writer, ".note { background-color: #ddd; }\n.page { background-color: #fff; }\n"
-                                ".dark { color: #fff; background-color: #333; }\n"));
+    ASSERT_TRUE(loadCss(writer,
+                        ".note { background-color: #ddd; }\n.page { background-color: #fff; }\n"
+                        ".dark { color: #fff; background-color: #333; }\n"));
     EXPECT_EQ(writer.resolveStyle("div", "note").inkMode, CssInkMode::Shaded);
     EXPECT_EQ(writer.resolveStyle("div", "page").inkMode, CssInkMode::Normal);
     EXPECT_EQ(writer.resolveStyle("div", "dark").inkMode, CssInkMode::Inverted);
@@ -477,8 +480,9 @@ TEST_F(CssParserTest, LightBackgroundIsShadedAndSurvivesCache) {
 
 TEST_F(CssParserTest, InitialLetterSizesTheInitialUnlessFontSizeIsSet) {
   CssParser parser(cachePath());
-  ASSERT_TRUE(loadCss(parser, ".dc { initial-letter: 3; }\n.both { initial-letter: 3; font-size: 2em; }\n"
-                              ".one { initial-letter: 1; }\n"));
+  ASSERT_TRUE(loadCss(parser,
+                      ".dc { initial-letter: 3; }\n.both { initial-letter: 3; font-size: 2em; }\n"
+                      ".one { initial-letter: 1; }\n"));
   const CssStyle dc = parser.resolveStyle("span", "dc");
   ASSERT_TRUE(dc.hasFontSize());
   EXPECT_FLOAT_EQ(dc.fontSize.value, 3.0f);
