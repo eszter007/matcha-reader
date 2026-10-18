@@ -881,6 +881,19 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.setHyphensNone(false);
       style.defined.hyphens = 1;
     }
+  } else if (iequalsAscii(name, "initial-letter") || iequalsAscii(name, "-webkit-initial-letter")) {
+    // `initial-letter: N [M]` asks for a drop cap N lines tall. The drop-cap path sizes the letter
+    // from its font-size multiple, so N lines is an N em initial -- unless the rule sets its own
+    // font-size, which wins whichever order the two are declared in.
+    const std::string_view ilValue = trimAsciiWhitespace(stripTrailingImportant(value));
+    char buf[8] = {};
+    const size_t n = std::min(ilValue.size(), sizeof(buf) - 1);
+    memcpy(buf, ilValue.data(), n);
+    const int lines = atoi(buf);
+    if (lines >= 2 && lines <= 6 && !style.defined.fontSize) {
+      style.fontSize = CssLength{static_cast<float>(lines), CssUnit::Em};
+      style.defined.fontSize = 1;
+    }
   } else if (iequalsAscii(name, "white-space")) {
     // Only the values that keep spaces and line breaks matter; nowrap/pre-line read as normal.
     const std::string_view wsValue = stripTrailingImportant(value);

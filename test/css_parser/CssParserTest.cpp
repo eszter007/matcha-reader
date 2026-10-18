@@ -475,4 +475,16 @@ TEST_F(CssParserTest, LightBackgroundIsShadedAndSurvivesCache) {
   EXPECT_EQ(reader.resolveStyle("div", "note").inkMode, CssInkMode::Shaded);
 }
 
+TEST_F(CssParserTest, InitialLetterSizesTheInitialUnlessFontSizeIsSet) {
+  CssParser parser(cachePath());
+  ASSERT_TRUE(loadCss(parser, ".dc { initial-letter: 3; }\n.both { initial-letter: 3; font-size: 2em; }\n"
+                              ".one { initial-letter: 1; }\n"));
+  const CssStyle dc = parser.resolveStyle("span", "dc");
+  ASSERT_TRUE(dc.hasFontSize());
+  EXPECT_FLOAT_EQ(dc.fontSize.value, 3.0f);
+  EXPECT_EQ(dc.fontSize.unit, CssUnit::Em);
+  EXPECT_FLOAT_EQ(parser.resolveStyle("span", "both").fontSize.value, 2.0f);
+  EXPECT_FALSE(parser.resolveStyle("span", "one").hasFontSize());
+}
+
 }  // namespace
