@@ -56,18 +56,30 @@ class ChapterHtmlSlimParser {
 
   // Bordered-block tracking. Full boxes and partial top/bottom separators are all emitted only
   // after their content has landed, so a page break cannot strand a rule on the preceding page.
-  // The packed spec retains edge mask, dotted/dashed/solid style and 1..4px width.
-  int boxDepth = -1;
-  uint8_t boxBorderSpec = 0;
-  int16_t boxStartY = 0;
-  int16_t boxEmptyAdvance = 0;
-  size_t boxFirstElementIndex = 0;
-  bool boxShrinkToContent = false;
-  bool boxContinued = false;          // continued from the previous page: omit the top edge
-  bool boxAwaitingFirstLine = false;  // capture boxStartY from the first line the box lays out
-  // Bottom of the last line placed inside the open box. emitBoxRect() pulls its closing edge up
-  // toward the text, and this is the floor it must not cross -- see the comment there.
-  int16_t boxLastLineBottomY = 0;
+  // Boxes nest: openBoxes[0] is the outermost, a fixed array so opening one never allocates.
+  struct OpenBox {
+    int depth = -1;
+    uint8_t borderSpec = 0;  // edge mask, dotted/dashed/solid style and 1..4px width
+    int16_t startY = 0;
+    int16_t emptyAdvance = 0;
+    int16_t left = 0;  // frame x extent; the outermost box spans the viewport
+    int16_t right = 0;
+    size_t firstElementIndex = 0;
+    bool shrinkToContent = false;
+    bool continued = false;          // continued from the previous page: omit the top edge
+    bool awaitingFirstLine = false;  // capture startY from the first line the box lays out
+    // Bottom of the last line (or nested frame) inside the box. emitBoxRect() pulls the closing
+    // edge up toward the text, and this is the floor it must not cross -- see the comment there.
+    int16_t lastLineBottomY = 0;
+  };
+  static constexpr uint8_t MAX_OPEN_BOXES = 4;
+  OpenBox openBoxes[MAX_OPEN_BOXES];
+  uint8_t openBoxCount = 0;
+  // Space between a nested frame and the frame or text around it.
+  int16_t nestedFrameGap() const;
+  void openBox(int elementDepth, uint8_t borderSpec, bool shrinkToContent, int16_t emptyAdvance,
+               const BlockStyle& ownStyle);
+  void fitStyleInsideBox(BlockStyle& accumulated) const;
   // Inverted-block panel tracking (CSS color/background-color, see CssInkMode). Each line of an
   // inverted block gets a filled PageBox pushed just before it, so the panel survives a page break
   // and needs no knowledge of the block's total height. Only the block's own padding needs
@@ -149,7 +161,7 @@ class ChapterHtmlSlimParser {
   void flushKeepBuffer();
 
   void flushPendingBlockLayout();
-  void emitBoxRect(bool openBottom);
+  int16_t emitBoxRect(OpenBox& box, bool openBottom);
   void maybeEmitOpenBoxForPageBreak();
   void closeBoxBlock();
   int fontId;

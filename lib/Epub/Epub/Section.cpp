@@ -285,7 +285,9 @@ namespace {
 // v103: upstream merge (their v60): text that runs straight into a block or heading start
 //      stays in its own paragraph instead of joining the new block's first word. The framing is
 //      unchanged.
-constexpr uint8_t SECTION_FILE_VERSION = 103;
+// v104: bordered blocks nest: a bordered block inside another draws its own frame, inset in the
+//      outer one, and the content around it moves to make room. The framing is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 104;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
