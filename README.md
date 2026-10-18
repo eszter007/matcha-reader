@@ -1,6 +1,6 @@
 # Matcha Reader, a language-learning fork of CrossPoint
 
-A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware, built for reading books and comics in a language you are learning. It is set up first for **Japanese** and **Chinese** (Mandarin, simplified or traditional, and Cantonese), and gives learners of French, English and other languages the same lookup, sentence-mining and translation tools.
+A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware, built for reading books and comics in a language you are learning. It is set up first for **Japanese** and **Chinese** (simplified or traditional; both Mandarin & Cantonese), and gives learners of French, English and other languages the same lookup, sentence-mining and translation tools.
 
 It includes everything in upstream CrossPoint. You can try it in the [simulator](https://github.com/eszter007/crosspoint-simulator-ios) first, on a desktop or an iPhone, with no device.
 
@@ -136,15 +136,11 @@ A wallpaper laid over the page you were reading, so the book shows through. See 
 ### Also in this fork
 
 - Clippings and highlights (from upstream) work in vertical text too, with the same buttons, handles and actions
-- The touch selection bar has a **Translate** action next to Look Up: it sends just the selected text to Gemini, in the same panel as page translation (same key and Wi-Fi setup)
+- The touch selection bar has a Translate action next to Look Up: it sends just the selected text to Gemini, in the same panel as page translation (same key and Wi-Fi setup)
 - Reader settings remembered per book
-- **Optimize EPUB** on upload: splits single-file novels into chapters and fits images to the screen
-- More of the book's own CSS: heading sizes, line spacing, page breaks, boxed asides, drop caps, margins
-- Instant image page turns
-- A **Power + Up** shortcut to sync the clock (Settings → Controls → Shortcuts)
-- Next-book suggestions at the end of every book
-- A file browser that shows everything on the card
-- Fully localised, in all the languages CrossPoint ships
+- Optimize EPUB on upload: splits single-file novels into chapters and fits images to the screen
+- A Power + Up shortcut to sync the clock (Settings → Controls → Shortcuts)
+- Japanese & Chinese localization
 
 ## Setup
 
@@ -215,4 +211,4 @@ This fork tracks upstream CrossPoint and merges new releases. Nearly everything 
 
 Built on [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader), open-source e-reader firmware, community-built and fully hackable.
 
-Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. The Matcha cat is © Eszter Schuffert, all rights reserved, and not covered by the MIT License; see [assets/images/LICENSE](assets/images/LICENSE). Icons by [Tabler Icons](https://tabler.io/icons) (MIT). The end-of-book stamps (読了, 读完, 讀完, 睇完) are lettered in Noto Serif [JP](https://fonts.google.com/noto/specimen/Noto+Serif+JP), [SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC) and [HK](https://fonts.google.com/noto/specimen/Noto+Serif+HK) (SIL Open Font License). The Stats sleep screen is lettered in [Barlow Condensed](https://github.com/jpt/barlow) and [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (SIL Open Font License).
+Dictionary data from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and [Jitendex](https://github.com/stephenmk/Jitendex), under their respective licences. The Matcha cat is all rights reserved, and not covered by the MIT License; see [assets/images/LICENSE](assets/images/LICENSE). Icons by [Tabler Icons](https://tabler.io/icons) (MIT). The end-of-book stamps (読了, 读完, 讀完, 睇完) are lettered in Noto Serif [JP](https://fonts.google.com/noto/specimen/Noto+Serif+JP), [SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC) and [HK](https://fonts.google.com/noto/specimen/Noto+Serif+HK) (SIL Open Font License). The Stats sleep screen is lettered in [Barlow Condensed](https://github.com/jpt/barlow) and [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (SIL Open Font License).
