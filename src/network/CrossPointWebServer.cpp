@@ -84,6 +84,47 @@ class CrossPointHttpServer final : public WebServer {
     }
     _postArgsLen = 0;
   }
+
+#ifndef SIMULATOR  // the simulator's WebServer has none of these hooks
+  // WebServer serves one client at a time and waits up to 5 s (HTTP_MAX_DATA_WAIT) for an accepted
+  // client to send its request. Browsers open spare connections that stay silent until needed --
+  // Safari on the hotspot does -- and each one at the head of the queue holds every real request
+  // back for 5 s, long enough for iOS to decide the network does not work. On a local link a request
+  // follows its connect within milliseconds, so a client silent for longer is dropped; the browser
+  // opens a new connection when it needs one.
+  void handleClient() override {
+    if (_currentStatus == HC_WAIT_READ && millis() - _statusChange > IDLE_CLIENT_MS && !_currentClient.available()) {
+      LOG_DBG("WEB", "Dropped a connection that sent no request");
+      _currentClient.stop();
+      _currentStatus = HC_NONE;
+    }
+    WebServer::handleClient();
+  }
+
+ protected:
+  // WebServer ignores short writes, and a write comes back short only after about 10 s without
+  // progress (NetworkClient retries 10 x 1 s): the client stopped reading, e.g. a phone that left the
+  // hotspot. Close it, so the rest of the response returns at once instead of costing another 10 s
+  // per write on the main loop.
+  size_t _currentClientWrite(const char* data, const size_t length) override {
+    return closeIfStalled(_currentClient.write(data, length), length);
+  }
+  size_t _currentClientWrite_P(PGM_P data, const size_t length) override {
+    return closeIfStalled(_currentClient.write_P(data, length), length);
+  }
+
+ private:
+  static constexpr unsigned long IDLE_CLIENT_MS = 1000;
+
+  size_t closeIfStalled(const size_t written, const size_t length) {
+    if (written < length && _currentClient.connected()) {
+      LOG_ERR("WEB", "Client stopped reading (%u of %u bytes sent); closing the connection",
+              static_cast<unsigned>(written), static_cast<unsigned>(length));
+      _currentClient.stop();
+    }
+    return written;
+  }
+#endif
 };
 
 void releaseRequestArguments(WebServer* server) {
@@ -785,6 +826,10 @@ void CrossPointWebServer::streamFileToClient(HalFile& file) const {
       resetTaskWatchdogIfSubscribed();
       const size_t wrote = client.write(buffer.get() + totalWritten, bytesRead - totalWritten);
       if (wrote == 0) {
+        // Nothing sent for about 10 s: the client stopped reading. Close it rather than leave the
+        // socket to the next write.
+        LOG_ERR("WEB", "Download stalled; closing the connection");
+        client.stop();
         ok = false;
         break;
       }
