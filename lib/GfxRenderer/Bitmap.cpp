@@ -130,6 +130,11 @@ BmpReaderError Bitmap::parseHeaders() {
   if (colorsUsed == 0 && bpp <= 8) colorsUsed = 1u << bpp;
   if (colorsUsed > 256u) return BmpReaderError::PaletteTooLarge;
   file.seekCur(4);  // biClrImportant
+  hasAlpha = false;
+  if (bpp == 32 && biSize >= 56) {
+    file.seekCur(12);  // red, green and blue masks
+    hasAlpha = readLE32(file) == 0xFF000000u;
+  }
 
   if (width <= 0 || height <= 0) return BmpReaderError::BadDimensions;
 
@@ -220,6 +225,19 @@ bool Bitmap::preload() const {
 }
 
 // packed 2bpp output, 0 = black, 1 = dark gray, 2 = light gray, 3 = white
+BmpReaderError Bitmap::skipRow() const {
+  if (preloadBuf) {
+    if (preloadPos + static_cast<size_t>(rowBytes) > static_cast<size_t>(rowBytes) * height) {
+      return BmpReaderError::ShortReadRow;
+    }
+    preloadPos += rowBytes;
+  } else if (!file.seekCur(rowBytes)) {
+    return BmpReaderError::ShortReadRow;
+  }
+  prevRowY += 1;
+  return BmpReaderError::Ok;
+}
+
 BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   // Note: rowBuffer should be pre-allocated by the caller to size 'rowBytes'
   if (preloadBuf) {
@@ -247,7 +265,7 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
     } else if (fsDitherer) {
       color = fsDitherer->processPixel(adjustPixel(lum), currentX);
     } else {
-      if (nativePalette) {
+      if (nativePalette || evenLevels) {
         // Palette matches native gray levels: direct mapping (still apply brightness/contrast/gamma)
         color = static_cast<uint8_t>(adjustPixel(lum) >> 6);
       } else {
@@ -271,8 +289,10 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   switch (bpp) {
     case 32: {
       const uint8_t* p = rowBuffer;
+      const bool overWhite = transparentAsWhite && hasAlpha;
       for (int x = 0; x < width; x++) {
         lum = (77u * p[2] + 150u * p[1] + 29u * p[0]) >> 8;
+        if (overWhite) lum = static_cast<uint8_t>((lum * p[3] + 255u * (255u - p[3])) / 255u);
         packPixel(lum);
         p += 4;
       }

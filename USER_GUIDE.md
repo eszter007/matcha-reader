@@ -307,7 +307,7 @@ open a list when selected.
 
 - **Sleep Screen**: Which sleep screen to display when the device sleeps:
   
-  - "Dark" (default) - The default dark Crosspoint logo sleep screen
+  - "Dark" (default) - The logo (or your own `logo.bmp`) on a dark background
   - "Light" - The same default sleep screen, on a white background
   - "Custom" - Custom images from the SD card; see [Sleep Screen](#37-sleep-screen) below for more information
   - "Cover" - The book cover image (Note: this is experimental and may not work as expected)
@@ -721,8 +721,8 @@ The **Sleep Screen** setting controls what is displayed when the device goes to 
 
 | Mode               | Behavior                                                                                                                     |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Dark** (default) | The CrossPoint logo on a dark background.                                                                                    |
-| **Light**          | The CrossPoint logo on a white background.                                                                                   |
+| **Dark** (default) | The logo on a dark background. See [Custom logo](#custom-logo) to replace it.                                                |
+| **Light**          | The logo on a white background.                                                                                              |
 | **Custom**         | A custom image from the SD card (see below). Falls back to **Dark** if no custom image is found.                             |
 | **Cover**          | The cover of the currently open book. Falls back to **Dark** if no book is open.                                             |
 | **Cover + Custom** | The cover of the currently open book, shown only while actively reading. Falls back to **Custom** behavior when not reading. |
@@ -762,6 +762,16 @@ Transparent overlay files are intentionally separate from normal sleep images. R
 
 > [!TIP]
 > You can set an image as the sleep screen cover directly from the BMP image viewer in the **[Browse Files](#33-browse-files-screen)** screen.
+
+#### Custom logo
+
+To replace the cat on the boot screen and on the **Dark**, **Light** and **Stats** sleep screens, put a BMP named `logo.bmp` in the firmware's system folder at the root of the SD card, next to `reading_stats.bin` and `bookstats`. That folder is usually the hidden `.system`; a `system` folder works too. No setting is needed; remove the file to get the cat back.
+
+- Any BMP that sleep images accept works (1, 2, 4, 8, 24 or 32-bit, uncompressed). It is shown in 4 levels of gray, each pixel taking the nearest one: very light grays become white.
+- Make it 222x316 pixels: the logo area is 230x324, and a 4-pixel white border is added on every side. Images up to 800 pixels a side (a 480x800 sleep image works) are scaled down to fit; smaller ones are centred and not enlarged. The **Stats** screen may show it smaller, or leave it out when there is no room.
+- Draw it on a plain white background. A 32-bit BMP saved with transparency is placed on white. On the dark screens it keeps its own colours inside a white outline, like the cat: the white around the drawing turns black, and white areas enclosed by the drawing (a face, a book page) stay white.
+- The boot screen shows it in black and white only, to keep waking up fast, so light gray parts disappear there. Use dark lines.
+- If the cat still shows, the file is over 800 pixels a side, compressed, or can't be read. The serial log names the reason.
 
 #### Transparent sleep screen
 

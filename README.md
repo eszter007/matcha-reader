@@ -194,6 +194,7 @@ The Chinese zips are attached from 1.7.0-nightly-1 on. To convert another font, 
 
 - **Interface language:** Settings → System → Language. Languages marked *Needs pack* need `language-packs.zip` from the release. See [Guide §3.9](USER_GUIDE.md#39-language-packs-sd-card).
 - **Page translation:** save a key from [Google AI Studio](https://aistudio.google.com/apikey) as `/.system/gemini.key` on the card.
+- **Your own logo:** put a `logo.bmp` (222x316 pixels, on white) in the card's `.system` (or `system`) folder to replace the cat on the boot and sleep screens. See [Guide §3.7](USER_GUIDE.md#custom-logo).
 
 ## Building from source
 

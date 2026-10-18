@@ -4,6 +4,8 @@
 #include <Logging.h>
 
 #include <cstring>
+#include <initializer_list>
+#include <utility>
 
 namespace sdsystem {
 namespace {
@@ -47,6 +49,20 @@ std::string findUserFile(const char* leaf) {
     return other;
   }
   return resolved;
+}
+
+bool findExistingUserFile(const char* leaf, std::string& out) {
+  // The resolved folder first when there is one; otherwise the spelling dir() would pick.
+  const char* first = g_resolved ? g_resolved : HIDDEN;
+  const char* second = std::strcmp(first, HIDDEN) == 0 ? VISIBLE : HIDDEN;
+  for (const char* folder : {first, second}) {
+    std::string candidate = std::string(folder) + "/" + (leaf ? leaf : "");
+    if (Storage.exists(candidate.c_str())) {
+      out = std::move(candidate);
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace sdsystem
