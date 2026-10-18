@@ -28,7 +28,9 @@ struct Masks {
   std::vector<uint8_t> scratch;
   explicit Masks(const int w, const int h)
       : footprint((static_cast<size_t>(w) * h + 7) / 8), scratch((static_cast<size_t>(w) * h + 7) / 8) {}
-  bool at(const int w, const int x, const int y) const { return maskBit(footprint.data(), static_cast<size_t>(y) * w + x); }
+  bool at(const int w, const int x, const int y) const {
+    return maskBit(footprint.data(), static_cast<size_t>(y) * w + x);
+  }
 };
 
 }  // namespace
@@ -91,8 +93,8 @@ TEST(LogoArtFootprint, WhiteBackgroundIsOutsideAndEnclosedWhiteIsInside) {
   EXPECT_TRUE(buildFootprint(img.data(), W, H, 0, m.footprint.data(), m.scratch.data()));
   EXPECT_FALSE(m.at(W, 0, 0));
   EXPECT_FALSE(m.at(W, 4, 10));
-  EXPECT_TRUE(m.at(W, 5, 10));    // the ring
-  EXPECT_TRUE(m.at(W, 10, 10));   // white enclosed by it
+  EXPECT_TRUE(m.at(W, 5, 10));   // the ring
+  EXPECT_TRUE(m.at(W, 10, 10));  // white enclosed by it
 }
 
 TEST(LogoArtFootprint, GrowsByTheRequestedEdge) {
