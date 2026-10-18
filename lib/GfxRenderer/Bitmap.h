@@ -89,6 +89,11 @@ class Bitmap {
   // Map every pixel to the nearest of the four levels by luminance (the native-palette path)
   // instead of the photo thresholds, which turn light grays white. For line art such as a logo.
   void setEvenLevels(const bool enabled) { evenLevels = enabled; }
+  // Composite a 32-bit BMP that declares an alpha mask over white. Files without one keep their
+  // alpha byte unread: BI_RGB writers often leave it 0 meaning "unused".
+  void setTransparentAsWhite(const bool enabled) { transparentAsWhite = enabled; }
+  // Advance past the next row without decoding it (a seek, not a read).
+  BmpReaderError skipRow() const;
 
  private:
   static uint16_t readLE16(HalFile& f);
@@ -105,6 +110,8 @@ class Bitmap {
   uint32_t colorsUsed = 0;
   bool nativePalette = false;  // true if all palette entries map to native gray levels
   bool evenLevels = false;
+  bool transparentAsWhite = false;
+  bool hasAlpha = false;  // 32-bit with an 0xFF000000 alpha mask in a V3+ header
   int rowBytes = 0;
   uint8_t paletteLum[256] = {};
 

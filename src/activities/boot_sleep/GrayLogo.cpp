@@ -8,10 +8,10 @@
 #include <Memory.h>
 #include <SdSystemDir.h>
 
-#include <algorithm>
 #include <cstring>
 #include <memory>
 
+#include "LogoArt.h"
 #include "images/CatLogo.h"
 
 static_assert(GrayLogo::WIDTH == CAT_LOGO_WIDTH && GrayLogo::HEIGHT == CAT_LOGO_HEIGHT,
@@ -22,15 +22,11 @@ static_assert(GrayLogo::SMALL_WIDTH == CAT_LOGO_SMALL_WIDTH && GrayLogo::SMALL_H
 namespace {
 
 constexpr char CUSTOM_LOGO_NAME[] = "logo.bmp";  // in the SD card's system folder
-// Every source row is read on each decode (once per boot and once per sleep screen), so the
-// source may be at most twice the logo box a side.
-constexpr int CUSTOM_LOGO_MAX_WIDTH = 2 * GrayLogo::WIDTH;
-constexpr int CUSTOM_LOGO_MAX_HEIGHT = 2 * GrayLogo::HEIGHT;
+// Sources up to a screen a side, either orientation. Only the rows the scaled logo samples are read.
+constexpr int CUSTOM_LOGO_MAX_SIDE = 800;
 constexpr uint8_t FOOTPRINT = 0x4;
 // White border kept around a custom logo; on the dark screen it becomes the sticker edge.
 constexpr int STICKER_EDGE = 4;
-// The background fill converges in a few sweeps for real drawings; the cap bounds a pathological one.
-constexpr int MAX_FILL_SWEEPS = 64;
 
 struct Art {
   int width = 0;
@@ -48,9 +44,8 @@ struct Art {
   std::unique_ptr<uint8_t[]> ownedFootprint;
 };
 
-bool maskBit(const uint8_t* mask, const size_t i) { return mask[i >> 3] & (0x80 >> (i & 7)); }
-void setMaskBit(uint8_t* mask, const size_t i) { mask[i >> 3] |= 0x80 >> (i & 7); }
-uint8_t packedLevel(const uint8_t* packed, const size_t i) { return (packed[i >> 2] >> (6 - (i & 3) * 2)) & 0x3; }
+using logo_art::maskBit;
+using logo_art::packedLevel;
 
 // Walks a logo in pixel order. Every pass visits the whole logo row by row, so a cursor that
 // expands one run at a time replaces random access without a decode buffer.
@@ -91,80 +86,18 @@ constexpr bool inFootprint(const uint8_t symbol) { return symbol & FOOTPRINT; }
 // A custom logo's footprint, like the cat's: everything except the white background that reaches the
 // edge of the image, grown by STICKER_EDGE px so the dark screen shows a white sticker edge around it.
 bool buildFootprint(Art& art) {
-  const int w = art.width;
-  const int h = art.height;
-  const size_t count = static_cast<size_t>(w) * h;
-  const size_t maskSize = (count + 7) / 8;
   // Two 1-bit masks, at most 230 * 324 / 8 = 9,315 bytes each; the scratch one is freed on return.
-  auto outside = makeUniqueNoThrow<uint8_t[]>(maskSize);
+  const size_t maskSize = (static_cast<size_t>(art.width) * art.height + 7) / 8;
+  auto footprint = makeUniqueNoThrow<uint8_t[]>(maskSize);
   auto scratch = makeUniqueNoThrow<uint8_t[]>(maskSize);
-  if (!outside || !scratch) {
+  if (!footprint || !scratch) {
     LOG_ERR("LOGO", "OOM: 2 x %u bytes for the logo footprint", static_cast<unsigned>(maskSize));
     return false;
   }
-  memset(outside.get(), 0, maskSize);
-  const uint8_t* packed = art.owned.get();
-  const auto white = [packed](const size_t i) { return packedLevel(packed, i) == 3; };
-
-  // Background: white pixels connected to the image border. Alternate forward and backward sweeps
-  // until nothing changes, which needs no fill stack.
-  for (int x = 0; x < w; x++) {
-    if (white(x)) setMaskBit(outside.get(), x);
-    const size_t bottom = static_cast<size_t>(h - 1) * w + x;
-    if (white(bottom)) setMaskBit(outside.get(), bottom);
+  if (!logo_art::buildFootprint(art.owned.get(), art.width, art.height, STICKER_EDGE, footprint.get(), scratch.get())) {
+    LOG_INF("LOGO", "Footprint fill stopped early; some enclosed white may stay white on the dark screen");
   }
-  for (int y = 0; y < h; y++) {
-    const size_t row = static_cast<size_t>(y) * w;
-    if (white(row)) setMaskBit(outside.get(), row);
-    if (white(row + w - 1)) setMaskBit(outside.get(), row + w - 1);
-  }
-  bool changed = true;
-  for (int sweep = 0; changed && sweep < MAX_FILL_SWEEPS; sweep++) {
-    changed = false;
-    for (size_t i = 0; i < count; i++) {
-      if (maskBit(outside.get(), i) || !white(i)) continue;
-      const int x = static_cast<int>(i % w);
-      if ((x > 0 && maskBit(outside.get(), i - 1)) || (i >= static_cast<size_t>(w) && maskBit(outside.get(), i - w))) {
-        setMaskBit(outside.get(), i);
-        changed = true;
-      }
-    }
-    for (size_t i = count; i-- > 0;) {
-      if (maskBit(outside.get(), i) || !white(i)) continue;
-      const int x = static_cast<int>(i % w);
-      if ((x < w - 1 && maskBit(outside.get(), i + 1)) || (i + w < count && maskBit(outside.get(), i + w))) {
-        setMaskBit(outside.get(), i);
-        changed = true;
-      }
-    }
-  }
-
-  // The footprint is the rest; grow it one pixel per step, alternating 4- and 8-neighbour steps so the
-  // edge comes out rounded rather than square.
-  for (size_t b = 0; b < maskSize; b++) outside[b] = ~outside[b];
-  uint8_t* footprint = outside.get();
-  for (int step = 0; step < STICKER_EDGE; step++) {
-    memcpy(scratch.get(), footprint, maskSize);
-    const bool diagonals = step % 2 == 1;
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
-        const size_t i = static_cast<size_t>(y) * w + x;
-        if (maskBit(scratch.get(), i)) continue;
-        bool grow = false;
-        for (int dy = -1; dy <= 1 && !grow; dy++) {
-          for (int dx = -1; dx <= 1 && !grow; dx++) {
-            if ((dx == 0 && dy == 0) || (!diagonals && dx != 0 && dy != 0)) continue;
-            const int nx = x + dx;
-            const int ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-            grow = maskBit(scratch.get(), static_cast<size_t>(ny) * w + nx);
-          }
-        }
-        if (grow) setMaskBit(footprint, i);
-      }
-    }
-  }
-  art.ownedFootprint = std::move(outside);
+  art.ownedFootprint = std::move(footprint);
   art.footprint = art.ownedFootprint.get();
   return true;
 }
@@ -172,8 +105,8 @@ bool buildFootprint(Art& art) {
 // Decodes logo.bmp, scaled down (never up) to fit the logo box with a STICKER_EDGE white border.
 // On the dark screen it keeps its own colours inside its footprint, like the cat.
 bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& art) {
-  const std::string path = sdsystem::findUserFile(CUSTOM_LOGO_NAME);
-  if (!Storage.exists(path.c_str())) return false;
+  std::string path;
+  if (!sdsystem::findExistingUserFile(CUSTOM_LOGO_NAME, path)) return false;
   HalFile file;
   if (!Storage.openFileForRead("LOGO", path, file)) return false;
   Bitmap bitmap(file);
@@ -183,34 +116,27 @@ bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& ar
     return false;
   }
 
-  if (bitmap.getWidth() > CUSTOM_LOGO_MAX_WIDTH || bitmap.getHeight() > CUSTOM_LOGO_MAX_HEIGHT) {
-    LOG_ERR("LOGO", "%s is %dx%d, over %dx%d", path.c_str(), bitmap.getWidth(), bitmap.getHeight(),
-            CUSTOM_LOGO_MAX_WIDTH, CUSTOM_LOGO_MAX_HEIGHT);
+  if (bitmap.getWidth() > CUSTOM_LOGO_MAX_SIDE || bitmap.getHeight() > CUSTOM_LOGO_MAX_SIDE) {
+    LOG_ERR("LOGO", "%s is %dx%d, over %d px a side", path.c_str(), bitmap.getWidth(), bitmap.getHeight(),
+            CUSTOM_LOGO_MAX_SIDE);
     return false;
   }
   bitmap.setEvenLevels(true);
+  bitmap.setTransparentAsWhite(true);
 
   const int boxW = (size == GrayLogo::Size::Regular ? GrayLogo::WIDTH : GrayLogo::SMALL_WIDTH) - 2 * STICKER_EDGE;
   const int boxH = (size == GrayLogo::Size::Regular ? GrayLogo::HEIGHT : GrayLogo::SMALL_HEIGHT) - 2 * STICKER_EDGE;
   const int srcW = bitmap.getWidth();
   const int srcH = bitmap.getHeight();
-  int w = srcW;
-  int h = srcH;
-  if (w > boxW || h > boxH) {
-    if (srcW * boxH > srcH * boxW) {
-      w = boxW;
-      h = std::max(1, srcH * boxW / srcW);
-    } else {
-      h = boxH;
-      w = std::max(1, srcW * boxH / srcH);
-    }
-  }
+  const auto fit = logo_art::fitInBox(srcW, srcH, boxW, boxH);
+  const int w = fit.width;
+  const int h = fit.height;
 
   // The art canvas adds the white border on every side.
   const int canvasW = w + 2 * STICKER_EDGE;
   const int canvasH = h + 2 * STICKER_EDGE;
   // Packed art: at most 230 * 324 / 4 = 18,630 bytes, kept until the gray passes. Rows: one 2-bit
-  // output row plus one raw row (at most 460 px * 4 bytes), freed before drawing.
+  // output row plus one raw row (at most 800 px * 4 bytes), freed before drawing.
   const size_t packedSize = (static_cast<size_t>(canvasW) * canvasH + 3) / 4;
   const size_t outRowSize = (srcW + 3) / 4;
   art.owned = makeUniqueNoThrow<uint8_t[]>(packedSize);
@@ -225,16 +151,15 @@ bool loadCustomArt(const GrayLogo::Size size, const bool invertedScreen, Art& ar
   uint8_t* rawRow = outRow + outRowSize;
 
   for (int fileRow = 0; fileRow < srcH; fileRow++) {
-    const auto rowResult = bitmap.readNextRow(outRow, rawRow);
+    const int srcY = bitmap.isTopDown() ? fileRow : srcH - 1 - fileRow;
+    const int ty = logo_art::targetRow(srcY, srcH, h);
+    // Rows no target samples are skipped with a seek, so a large source costs little more to read.
+    const auto rowResult = ty < 0 ? bitmap.skipRow() : bitmap.readNextRow(outRow, rawRow);
     if (rowResult != BmpReaderError::Ok) {
       LOG_ERR("LOGO", "Reading %s failed: %s", path.c_str(), Bitmap::errorToString(rowResult));
       return false;
     }
-    // Nearest-neighbour: target row ty samples source row ty * srcH / h. Since h <= srcH, each
-    // source row feeds at most one target row.
-    const int srcY = bitmap.isTopDown() ? fileRow : srcH - 1 - fileRow;
-    const int ty = (srcY * h + srcH - 1) / srcH;
-    if (ty >= h || ty * srcH / h != srcY) continue;
+    if (ty < 0) continue;
     for (int tx = 0; tx < w; tx++) {
       const int srcX = tx * srcW / w;
       const uint8_t value = packedLevel(outRow, srcX);

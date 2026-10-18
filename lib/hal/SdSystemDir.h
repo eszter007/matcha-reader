@@ -25,4 +25,8 @@ std::string path(const char* leaf);
 // Falls back to path(leaf) when neither has it, so the caller's not-found message still applies.
 std::string findUserFile(const char* leaf);
 
+// Like findUserFile, but only reports a file that exists, logs nothing, and never creates the
+// folder: for a lookup that runs on every boot whether or not the user added the file.
+bool findExistingUserFile(const char* leaf, std::string& out);
+
 }  // namespace sdsystem
