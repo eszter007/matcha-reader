@@ -1,6 +1,8 @@
 .pio
 .idea
 .DS_Store
+__MACOSX/
+._*
 .vscode
 .zed
 open-x4-sdk
