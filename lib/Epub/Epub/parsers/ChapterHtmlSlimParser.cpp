@@ -3321,6 +3321,14 @@ void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
     layoutOom = true;
   }
 
+  // A pending `page-break-before/after: always` lands here, ahead of the block's own top spacing
+  // (a block that starts a page has no margin above it). It waits for a block with actual content
+  // so the break cannot be spent on an empty wrapper and leave the real content mid-page.
+  if (pendingForcedBreak && !currentTextBlock->isEmpty()) {
+    pendingForcedBreak = false;
+    breakPage();
+  }
+
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;

@@ -1257,3 +1257,118 @@ TEST(XhtmlDoctypeTest, FeedsADoctypeWhereTheChapterNamesNoDtd) {
   EXPECT_FALSE(patch("<!DOCTYPE html").inject);
   EXPECT_FALSE(patch("  \n").inject);
 }
+
+namespace {
+
+// Drives the parser through its real element callbacks with a stylesheet and collects the words
+// of every finished page, for layout behaviours that only show across page boundaries.
+class ChapterPagingTest : public ::testing::Test {
+ protected:
+  std::string filepath = "unused.xhtml";
+  GfxRenderer renderer;
+  CssParser cssParser{cssCacheDir()};
+  std::unique_ptr<ChapterHtmlSlimParser> parser;
+  std::vector<std::vector<std::string>> pages;
+  std::vector<std::unique_ptr<Page>> pageObjects;
+
+  std::string caseDir() const {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("matcha-paging-" + std::string(::testing::UnitTest::GetInstance()->current_test_info()->name()));
+    std::filesystem::create_directories(dir);
+    return dir.string();
+  }
+
+  void makeParser(const std::string& css, const uint16_t viewportHeight = 800) {
+    if (!css.empty()) {
+      const auto path = std::filesystem::path(caseDir()) / "paging.css";
+      std::FILE* f = std::fopen(path.string().c_str(), "wb");
+      ASSERT_NE(f, nullptr);
+      std::fwrite(css.data(), 1, css.size(), f);
+      std::fclose(f);
+      HalFile file;
+      ASSERT_TRUE(file.open(path.string().c_str(), "rb"));
+      ASSERT_TRUE(cssParser.loadFromStream(file));
+    }
+    auto onPage = [this](std::unique_ptr<Page> page, uint16_t, uint16_t, uint32_t) {
+      std::vector<std::string> words;
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+        for (uint16_t i = 0; i < block.wordCount(); ++i) words.emplace_back(block.wordText(i));
+      }
+      pages.push_back(std::move(words));
+      pageObjects.push_back(std::move(page));
+    };
+    parser = std::make_unique<ChapterHtmlSlimParser>(
+        nullptr, filepath, renderer, 0, 1.0f, false, static_cast<uint8_t>(CssTextAlign::Left),
+        static_cast<uint16_t>(renderer.getScreenWidth()), viewportHeight, false, false, false, onPage, true, "", "",
+        0, std::vector<std::string>{}, std::function<void()>{}, &cssParser);
+    parser->currentTextBlock = std::make_unique<ParsedText>(false);
+    parser->blockStyleStack.push_back(BlockStyle{});
+    parser->insideBody = true;
+  }
+
+  void open(const char* tag, const char* classAttr = nullptr) {
+    if (classAttr != nullptr) {
+      const XML_Char* attributes[] = {"class", classAttr, nullptr};
+      ChapterHtmlSlimParser::startElement(parser.get(), tag, attributes);
+    } else {
+      const XML_Char* attributes[] = {nullptr};
+      ChapterHtmlSlimParser::startElement(parser.get(), tag, attributes);
+    }
+  }
+  void text(const char* s) { ChapterHtmlSlimParser::characterData(parser.get(), s, static_cast<int>(strlen(s))); }
+  void close(const char* tag) { ChapterHtmlSlimParser::endElement(parser.get(), tag); }
+  void para(const char* s, const char* classAttr = nullptr) {
+    open("p", classAttr);
+    text(s);
+    close("p");
+  }
+  void finish() { ASSERT_TRUE(parser->finishParse()); }
+
+  // Index of the page holding `word`, or -1.
+  int pageOf(const std::string& word) const {
+    for (size_t p = 0; p < pages.size(); ++p) {
+      if (std::find(pages[p].begin(), pages[p].end(), word) != pages[p].end()) return static_cast<int>(p);
+    }
+    return -1;
+  }
+};
+
+TEST_F(ChapterPagingTest, BreakBeforeStartsNewPage) {
+  makeParser(".chapter { page-break-before: always; }\n");
+  para("one");
+  para("two", "chapter");
+  finish();
+  ASSERT_EQ(pages.size(), 2u);
+  EXPECT_EQ(pageOf("one"), 0);
+  EXPECT_EQ(pageOf("two"), 1);
+}
+
+TEST_F(ChapterPagingTest, BreakAfterAppliesToFollowingContent) {
+  makeParser(".end { break-after: page; }\n");
+  para("one", "end");
+  para("two");
+  finish();
+  EXPECT_EQ(pageOf("one"), 0);
+  EXPECT_EQ(pageOf("two"), 1);
+}
+
+TEST_F(ChapterPagingTest, EmptyBlockDoesNotConsumePendingBreak) {
+  makeParser(".chapter { page-break-before: always; }\n");
+  para("one");
+  open("div", "chapter");
+  close("div");
+  para("two");
+  finish();
+  EXPECT_EQ(pageOf("two"), 1);
+}
+
+TEST_F(ChapterPagingTest, TerminalBreakAfterDoesNotCreateEmptyPage) {
+  makeParser(".end { page-break-after: always; }\n");
+  para("one", "end");
+  finish();
+  EXPECT_EQ(pages.size(), 1u);
+}
+
+}  // namespace
