@@ -1664,4 +1664,49 @@ TEST_F(ChapterBreakSpacingTest, RepeatedSectionBreaksEachAddOneLine) {
   EXPECT_EQ(yOf("d") - yOf("c"), line + 2 * gap);
 }
 
+// A lone first line that carries a footnote link is NOT moved: its link rectangle and footnote
+// were recorded against this page, so it gets an ordinary break and both stay consistent.
+TEST_F(ChapterWidowOrphanTest, OrphanWithFootnoteLinkIsNotCarried) {
+  makeParser("", FIVE_LINES);
+  lines("p", 'a', 4);
+  open("p");
+  const XML_Char* link[] = {"href", "notes.xhtml#n1", nullptr};
+  ChapterHtmlSlimParser::startElement(parser.get(), "a", link);
+  text(lineWord('b', 1).c_str());
+  close("a");
+  for (int n = 2; n <= 3; ++n) text((" " + lineWord('b', n)).c_str());
+  close("p");
+  finish();
+  EXPECT_EQ(pageOfLine('b', 1), 0);  // stayed: the carry refused a line with a link
+  EXPECT_EQ(pageOfLine('b', 2), 1);
+  ASSERT_GE(pageObjects.size(), 2u);
+  ASSERT_EQ(pageObjects[0]->links.size(), 1u);
+  EXPECT_LT(pageObjects[0]->links[0].y, FIVE_LINES);
+  ASSERT_EQ(pageObjects[0]->footnotes.size(), 1u);
+  EXPECT_EQ(pageObjects[1]->footnotes.size(), 0u);
+  ASSERT_EQ(parser->sectionFootnoteData.size(), 1u);
+  EXPECT_EQ(parser->sectionFootnoteData[0].first, 0);  // recorded on the page its anchor is on
+}
+
+// A link higher up the page does not block carrying the plain lines below it, and its rectangle
+// stays on the page it was drawn on.
+TEST_F(ChapterWidowOrphanTest, LinkAboveTheCarryStaysOnItsPage) {
+  makeParser("", FIVE_LINES);
+  open("p");
+  const XML_Char* link[] = {"href", "notes.xhtml#n1", nullptr};
+  ChapterHtmlSlimParser::startElement(parser.get(), "a", link);
+  text(lineWord('a', 1).c_str());
+  close("a");
+  for (int n = 2; n <= 4; ++n) text((" " + lineWord('a', n)).c_str());
+  close("p");
+  lines("p", 'b', 3);
+  finish();
+  EXPECT_EQ(pageOfLine('b', 1), 1);  // orphan carried
+  ASSERT_GE(pageObjects.size(), 2u);
+  ASSERT_EQ(pageObjects[0]->links.size(), 1u);
+  EXPECT_EQ(pageObjects[1]->links.size(), 0u);
+  ASSERT_EQ(parser->sectionFootnoteData.size(), 1u);
+  EXPECT_EQ(parser->sectionFootnoteData[0].first, 0);
+}
+
 }  // namespace
